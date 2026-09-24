@@ -175,6 +175,12 @@ const IPC = {
   // fixed window coords, so the floating-chrome header (margin + radius) leaves
   // them stranded in empty space. Caller passes a {x,y} offset or null to reset.
   WINDOW_SET_TRAFFIC_LIGHT_POS: 'window:set-traffic-light-pos',
+  // Welcome back's in-app quit warning (design §4, plan T3) — must stay
+  // byte-identical to shared/types.ts (ipc-channels.test.ts's hand-written
+  // parity block for this trio; preload can't import that file directly).
+  WINDOW_CLOSE_REQUEST: 'window:close-request',
+  WINDOW_ANSWER_CLOSE: 'window:answer-close',
+  WINDOW_CLOSE_REQUEST_CANCELLED: 'window:close-request-cancelled',
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',
   ZOOM_RESET: 'zoom:reset',
@@ -1200,6 +1206,26 @@ contextBridge.exposeInMainWorld('claude', {
     // Returns this renderer's BrowserWindow webContents id — used by the detach
     // subsystem so a window can identify itself when resolving cross-window drops.
     getId: (): Promise<number> => ipcRenderer.invoke(IPC.WINDOW_GET_ID),
+    // Welcome back's in-app quit warning (design §4, plan T3). Main pushes
+    // this instead of showing an OS dialog when the closing window still owns
+    // active sessions; the renderer answers with `{requestId, close, reopen}`.
+    // Electron-only — no shim/Android twin (design §3).
+    onCloseRequest: (cb: (req: { requestId: string; sessions: number }) => void) => {
+      const wrapped = (_e: IpcRendererEvent, req: { requestId: string; sessions: number }) => cb(req);
+      ipcRenderer.on(IPC.WINDOW_CLOSE_REQUEST, wrapped);
+      return () => ipcRenderer.removeListener(IPC.WINDOW_CLOSE_REQUEST, wrapped);
+    },
+    answerClose: (answer: { requestId: string; close: boolean; reopen?: boolean }) =>
+      ipcRenderer.invoke(IPC.WINDOW_ANSWER_CLOSE, answer),
+    // Whole-app quit wins over a pending prompt (design §4 step 5): pushed
+    // when shutdownApp() settles a request the renderer was still waiting on,
+    // so the dialog does not sit open describing a window that is already
+    // closing.
+    onCloseRequestCancelled: (cb: (payload: { requestId: string }) => void) => {
+      const wrapped = (_e: IpcRendererEvent, payload: { requestId: string }) => cb(payload);
+      ipcRenderer.on(IPC.WINDOW_CLOSE_REQUEST_CANCELLED, wrapped);
+      return () => ipcRenderer.removeListener(IPC.WINDOW_CLOSE_REQUEST_CANCELLED, wrapped);
+    },
   },
   // Multi-window detach: drag a session pill to a new OS window, re-dock, etc.
   // Main owns a WindowRegistry (sessionId → windowId); per-session events route

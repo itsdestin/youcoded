@@ -3536,17 +3536,33 @@ function AppInner() {
     ? { ids: welcomeBackIds, onResumeMany: welcomeBackResumeMany, onDone: welcomeBackDone }
     : undefined), [welcomeBackIds, welcomeBackResumeMany, welcomeBackDone]);
 
-  // The in-app quit warning (Welcome back S-dialog). Main asks when a window
-  // that still owns sessions is closed; the answer says whether to close and
-  // whether those sessions come back next launch.
-  const [quitPrompt, setQuitPrompt] = useState<{ sessions: number } | null>(null);
+  // The in-app quit warning (Welcome back S-dialog, design §4). Main asks
+  // when a window that still owns sessions is closed; the answer says whether
+  // to close and whether those sessions come back next launch. `requestId`
+  // round-trips on the answer so main can match it to the right pending
+  // request (a second window closing at the same time gets its own).
+  const [quitPrompt, setQuitPrompt] = useState<{ requestId: string; sessions: number } | null>(null);
   useEffect(() => {
     const api = (window.claude as any).window;
-    return api?.onCloseRequest?.((req: { sessions: number }) => setQuitPrompt(req)) ?? undefined;
+    return api?.onCloseRequest?.((req: { requestId: string; sessions: number }) => setQuitPrompt(req)) ?? undefined;
+  }, []);
+  useEffect(() => {
+    // Whole-app quit wins over a pending prompt (design §4 step 5): main
+    // pushes this when shutdownApp() settles a request this window was still
+    // waiting on, so the dialog does not sit open describing a window that is
+    // already closing. Matched by requestId — an unrelated push (there is
+    // only ever one prompt per window, but belt-and-suspenders costs nothing)
+    // must not clear a DIFFERENT, still-live prompt.
+    const api = (window.claude as any).window;
+    return api?.onCloseRequestCancelled?.((payload: { requestId: string }) => {
+      setQuitPrompt((cur) => (cur && cur.requestId === payload.requestId ? null : cur));
+    }) ?? undefined;
   }, []);
   const answerClose = useCallback((answer: { close: boolean; reopen?: boolean }) => {
-    setQuitPrompt(null);
-    (window.claude as any).window?.answerClose?.(answer);
+    setQuitPrompt((cur) => {
+      if (cur) (window.claude as any).window?.answerClose?.({ requestId: cur.requestId, ...answer });
+      return null;
+    });
   }, []);
 
   const autoOpenedWelcome = useRef(false);

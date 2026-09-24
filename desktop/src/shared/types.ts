@@ -1839,6 +1839,13 @@ export const IPC = {
   // Repositions macOS traffic lights so they sit inside the floating chrome's
   // rounded header; null restores OS default. Called from theme-engine.
   WINDOW_SET_TRAFFIC_LIGHT_POS: 'window:set-traffic-light-pos',
+  // Welcome back's in-app quit warning (design §4, plan T3). Electron-only
+  // (window.claude.window) — no remote-shim/Android twin, same as the other
+  // WINDOW_* entries above: a phone or browser tab never owns a desktop
+  // session for this to ask about.
+  WINDOW_CLOSE_REQUEST: 'window:close-request',                       // Main -> Renderer (push): {requestId, sessions}
+  WINDOW_ANSWER_CLOSE: 'window:answer-close',                         // Renderer -> Main: {requestId, close, reopen?}
+  WINDOW_CLOSE_REQUEST_CANCELLED: 'window:close-request-cancelled',   // Main -> Renderer (push): {requestId}
   // Zoom controls
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',

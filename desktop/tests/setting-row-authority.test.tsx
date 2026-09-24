@@ -164,6 +164,7 @@ describe('setting row adoption', () => {
     // shared file (2026-09-16) so the Projects preview draws the same block.
     'ResumeOptions.tsx': { count: 2, why: 'the Resume browser\'s launch switches, shared with the Projects preview — same drawer styling, not a settings menu' },
     'CloseSessionPrompt.tsx': { count: 1, why: 'dialog footer: "Don\'t show again" beside the confirm button — a footer convention, not a settings row (P-15, 2026-08-26)' },
+    'QuitSessionsPrompt.tsx': { count: 1, why: 'Destin\'s dictated layout (welcome-back design review 2, B-quit): the switch sits on the SAME row as the Close window button, not in a settings list' },
   };
 
   function togglesOutsideARow(src: string): number {

@@ -1130,6 +1130,58 @@ describe('session:reopen-list / session:forget-reopen channel parity (Welcome ba
   });
 });
 
+// Welcome back (design 2026-09-24 §4, plan T3): the in-app quit warning.
+// HAND-WRITTEN parity block (design §6, same reason as the reopen-list block
+// above) — the automatic check only diffs preload.ts against shared/types.ts.
+// Electron-only (design §3: "window.claude.window is the documented
+// Electron-only namespace... so the close pair lives there and needs no
+// shim/Android twin") — unlike session:reopen-list, this trio must be ABSENT
+// from remote-shim.ts and SessionService.kt, not answered there.
+describe('window:close-request / window:answer-close / window:close-request-cancelled parity (Welcome back)', () => {
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+  const preload = read('src', 'main', 'preload.ts');
+  const sharedTypes = read('src', 'shared', 'types.ts');
+  const remoteShim = read('src', 'renderer', 'remote-shim.ts');
+  const ipcHandlers = read('src', 'main', 'ipc-handlers.ts');
+  const main = read('src', 'main', 'main.ts');
+  const kotlin = read('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+
+  it('preload.ts and shared/types.ts carry byte-identical channel strings', () => {
+    for (const [name, channel] of [
+      ['WINDOW_CLOSE_REQUEST', 'window:close-request'],
+      ['WINDOW_ANSWER_CLOSE', 'window:answer-close'],
+      ['WINDOW_CLOSE_REQUEST_CANCELLED', 'window:close-request-cancelled'],
+    ] as const) {
+      expect(preload).toContain(`${name}: '${channel}'`);
+      expect(sharedTypes).toContain(`${name}: '${channel}'`);
+    }
+  });
+
+  it('preload.ts exposes the pair on window.claude.window, not a shared namespace', () => {
+    expect(preload).toMatch(/onCloseRequest:.*ipcRenderer\.on\(IPC\.WINDOW_CLOSE_REQUEST/s);
+    expect(preload).toMatch(/answerClose:.*ipcRenderer\.invoke\(IPC\.WINDOW_ANSWER_CLOSE/s);
+    expect(preload).toMatch(/onCloseRequestCancelled:.*ipcRenderer\.on\(IPC\.WINDOW_CLOSE_REQUEST_CANCELLED/s);
+  });
+
+  it('main.ts pushes the request/cancelled pair and handles the answer', () => {
+    expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST');
+    expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST_CANCELLED');
+    expect(main).toMatch(/ipcMain\.handle\(IPC\.WINDOW_ANSWER_CLOSE,/);
+    // ipc-handlers.ts owns every OTHER window:* handler (WINDOW_CLOSE,
+    // WINDOW_GET_ID, ...) — this one is registered in main.ts instead because
+    // it must reach the module-scope closeRequests manager, not a per-window
+    // BrowserWindow the way the rest of that file's handlers do.
+    expect(ipcHandlers).not.toContain('WINDOW_ANSWER_CLOSE');
+  });
+
+  it('is absent from remote-shim.ts and SessionService.kt — Electron-only, no shim/Android twin', () => {
+    for (const channel of ['window:close-request', 'window:answer-close', 'window:close-request-cancelled']) {
+      expect(remoteShim).not.toContain(channel);
+      expect(kotlin).not.toContain(channel);
+    }
+  });
+});
+
 // Local llama.cpp engine (Plan B, Task 9). The engine:* IPC surface must carry
 // identical channel strings across all four parity files. ipc-handlers.ts
 // references the IPC.ENGINE_* CONSTANTS (not literal strings), so its assertion

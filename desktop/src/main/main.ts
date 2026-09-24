@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, safeStorage, screen, shell, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, protocol, safeStorage, screen, shell, webContents } from 'electron';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
 // an uncaught exception that kills the whole main process — the app dies with
@@ -83,6 +83,11 @@ import { startTagRegistry } from './conversations/tag-registry-service';
 // Welcome back (design 2026-09-24 §1): the per-install "sessions open at last
 // shutdown" list. Its own file (userData, never synced) — see T1's WHY there.
 import { createWelcomeBackStore, type WelcomeBackStore } from './welcome-back-store';
+// Welcome back (design §4, plan T3): the in-app quit warning's request/answer
+// state machine. Extracted so it can be unit-tested without a BrowserWindow —
+// see close-request-manager.ts's header WHY.
+import { createCloseRequestManager } from './close-request-manager';
+import { randomUUID } from 'crypto';
 import { createAuthStore } from './marketplace-auth-store';
 import { registerMarketplaceApiHandlers } from './marketplace-api-handlers';
 import { reconcileInstalls } from './install-reconcile';
@@ -199,6 +204,15 @@ let chatgptAuth: ChatGptAuth | null = null;
 // createWindow() — module scope so registerIpcHandlers (called INSIDE
 // createWindow) and runShutdown's flush (below) can both reach it.
 let welcomeBackStore: WelcomeBackStore | undefined;
+// Welcome back (design §4): the in-app quit warning's pending-request
+// tracker. Module scope, constructed eagerly (unlike welcomeBackStore, it
+// touches no disk) so createAppWindow's close handler can close over it
+// however early a window is created.
+const closeRequests = createCloseRequestManager({
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
+  genId: () => randomUUID(),
+});
 // Plan 2b Task 8: the conversation-lease client + this install's device identity.
 // Constructed inside createWindow (before registerIpcHandlers) but referenced
 // again in the app-ready sync block, so they live at module scope. The holder
@@ -955,6 +969,13 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // prompt, closing a window silently kills every session it owns — which is
   // easy to do by accident and impossible to undo. A guard flag prevents the
   // prompt from re-firing after the user confirms.
+  //
+  // Welcome back (design §4, plan T3): this used to be a native
+  // dialog.showMessageBox. Destin's review-2 call (S-dialog) replaced it with
+  // an in-app prompt so it can also ask "bring these back next launch?" — a
+  // native dialog can't render the app's own switch. Main now ASKS the
+  // renderer (window:close-request) and awaits its answer
+  // (window:answer-close) instead of blocking on the OS dialog itself.
   let confirmedClose = false;
   win.on('close', async (ev) => {
     // Buddy windows never own sessions (they only subscribe). Skip the
@@ -962,25 +983,37 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     // by a "kill sessions?" dialog that wouldn't make sense in that UI.
     if (opts?.buddy) return;
     if (confirmedClose) return;
+    // Whole-app quit wins over a pending prompt (design §4 step 5):
+    // settlePendingCloseRequests() (called at the top of shutdownApp(), which
+    // both before-quit and SIGTERM/SIGINT pass through) already resolved any
+    // request THIS window had pending, and runShutdown()'s destroyAll() is
+    // about to tear down every session anyway — a close event reaching here
+    // once shuttingDown is set must ask nothing and let the window close.
+    if (shuttingDown) return;
     const ownedSessions = windowRegistry.sessionsForWindow(wid);
     if (ownedSessions.length === 0) return; // no sessions — close freely
     ev.preventDefault();
-    const { response } = await dialog.showMessageBox(win, {
-      type: 'warning',
-      buttons: ['Cancel', 'Close & Kill Sessions'],
-      defaultId: 0,
-      cancelId: 0,
-      message: `This window has ${ownedSessions.length} active session${ownedSessions.length === 1 ? '' : 's'}.`,
-      detail: 'Closing the window will terminate these sessions. To preserve a session, drag its pill to another window first.',
+    const answer = await closeRequests.request(wid, ownedSessions.length, (push) => {
+      if (!win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST, push);
     });
-    if (response === 1) {
-      for (const sid of ownedSessions) {
-        sessionManager.destroySession(sid);
-        windowRegistry.releaseSession(sid);
-      }
-      confirmedClose = true;
-      win.close();
+    // A second close press while this was pending resolved the SAME promise
+    // for every concurrent invocation of this handler (design §4 step 4) — the
+    // first one through already ran the block below and set confirmedClose.
+    if (confirmedClose) return;
+    if (!answer.close) return; // Cancel — leave the window open, ask again next press
+    // `reopen` false (the switch was left off) means Destin said "don't bring
+    // these back" — untrack so Welcome back never offers them (design §4 step
+    // 3). A timeout or a whole-app-quit settle both resolve reopen:true
+    // (design §4 steps 2, 5): keep tracked, exactly like a crash.
+    if (!answer.reopen) {
+      for (const sid of ownedSessions) welcomeBackStore?.untrack(sid);
     }
+    for (const sid of ownedSessions) {
+      sessionManager.destroySession(sid);
+      windowRegistry.releaseSession(sid);
+    }
+    confirmedClose = true;
+    win.close();
   });
 
   return win;
@@ -1263,6 +1296,17 @@ function createWindow(firstRunManager?: FirstRunManager) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC.HOOK_EVENT, evt);
     }
+  });
+}
+
+// Welcome back (design §4, plan T3): the renderer's answer to a
+// window:close-request push. One handler for every window — closeRequests
+// routes the answer to the right pending entry by requestId, so this needs no
+// per-window registration the way createAppWindow's own close listener does.
+function registerCloseRequestIpc() {
+  ipcMain.handle(IPC.WINDOW_ANSWER_CLOSE, (_evt, answer: { requestId: string; close: boolean; reopen?: boolean }) => {
+    if (!answer || typeof answer.requestId !== 'string') return;
+    closeRequests.answer(answer.requestId, { close: !!answer.close, reopen: answer.reopen });
   });
 }
 
@@ -1913,6 +1957,7 @@ void app.whenReady().then(async () => {
   createWindow(isFirstRun ? firstRunManager : undefined);
   perfMark('main:create-window:done');
   registerDetachIpc();
+  registerCloseRequestIpc();
 
   // Buddy window position persistence — JSON file in userData so restarts
   // restore the mascot to where the user left it. Keyed by 'mascot' only:
@@ -2427,9 +2472,25 @@ void app.whenReady().then(async () => {
 // The idempotence guard is not defensive coding: before-quit fires again on the
 // second pass below, and window-all-closed can fire alongside it, so this WILL
 // be called more than once on a normal quit.
+// Welcome back (design §4 step 5): whole-app quit wins over any close prompt
+// still awaiting an answer. Called synchronously at the very top of
+// shutdownApp() — before any await — so it runs in the same tick `shuttingDown`
+// becomes non-null, for BOTH routes that reach shutdownApp (before-quit, and
+// SIGTERM/SIGINT which skip before-quit entirely). Settling resolves each
+// pending request as "keep tracked" (no untrack) and pushes
+// window:close-request-cancelled so the renderer drops its dialog instead of
+// describing a window that runShutdown() is about to tear down anyway.
+function settlePendingCloseRequests(): void {
+  closeRequests.settleAll((windowId, requestId) => {
+    const win = windowFromWcId(windowId);
+    if (win && !win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST_CANCELLED, { requestId });
+  });
+}
+
 let shuttingDown: Promise<void> | null = null;
 function shutdownApp(): Promise<void> {
   if (shuttingDown) return shuttingDown;
+  settlePendingCloseRequests();
   shuttingDown = runShutdown();
   return shuttingDown;
 }
