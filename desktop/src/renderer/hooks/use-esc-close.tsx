@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useSyncExternalStore,
 } from 'react';
@@ -162,7 +163,21 @@ export function useEscClose(
   useEffect(() => { layeredRef.current = opts?.layeredWhile; });
   const isPanel = !!opts?.layeredWhile;
 
-  useEffect(() => {
+  // WHY useLayoutEffect, not useEffect: registration must land in the SAME
+  // commit as the DOM it guards. A passive effect is scheduled onto a later
+  // macrotask, so a caller that opens this overlay from an awaited promise
+  // (ModelPickerPopup's confirmSwitch/applyChoice) and then presses Escape as
+  // soon as testing-library's MutationObserver-driven findByRole/waitFor sees
+  // the dialog in the DOM could fire Escape before this effect ran — under
+  // real load the passive-effect macrotask can lag long enough for that to
+  // happen for real, not just in tests (ModelSwitchPrompt.test.tsx's "Esc
+  // closes only the question" / "closing while summarizing" tests failed
+  // under full-suite CPU load, 2026-09-24 — reproduced, root-caused and fixed
+  // here). useLayoutEffect runs synchronously
+  // during the commit, before the browser (or a MutationObserver microtask)
+  // can observe the new DOM, so the push always precedes anything that could
+  // notice the overlay opened.
+  useLayoutEffect(() => {
     if (!store || !open) return;
     const id = nextId++;
     store.push({ id, ref, ...(isPanel ? { layeredWhile: layeredRef } : {}) });
