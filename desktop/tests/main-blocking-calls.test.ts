@@ -155,6 +155,17 @@ const PROTECTED: Protection[] = [
   { was: 'none (new 2026-09-24, main-blocking triage B3)', file: 'conversations/naming-store.ts', noBlocking: ['*'],
     mustExist: ['conflictCopiesIn'], kinds: { conflictCopiesIn: 'function' },
     why: 'get() runs on every completed reply and once listed the whole naming folder synchronously' },
+  { was: 'main-blocking-calls B6 (2026-09-24)', file: 'sync-spaces/space-manager.ts',
+    noBlocking: ['readDisk', 'writeDisk', 'runFlush', 'mutate', 'maybeRefresh',
+      'isEnabled', 'lastSyncFor', 'remoteFor', 'recordSyncSuccess', 'recordRemote', 'setEnabled'],
+    kinds: { readDisk: 'method', writeDisk: 'method', runFlush: 'method', mutate: 'method', maybeRefresh: 'method',
+      isEnabled: 'method', lastSyncFor: 'method', remoteFor: 'method', recordSyncSuccess: 'method',
+      recordRemote: 'method', setEnabled: 'method' },
+    why: 'every successful sync of every space rewrote sync-spaces.json, and every status query re-read it — ' +
+      'only loadInitial (the first read at sync startup) may block' },
+  { was: 'main-blocking-calls B6 (2026-09-24)', file: 'sync-spaces/import-project.ts', noBlocking: ['*'],
+    why: "Import existing folder: the file-count walk could hold every window for its 2 s budget, and a " +
+      'cross-drive move copied the whole folder synchronously' },
 ];
 
 // ---------------------------------------------------------------------------
