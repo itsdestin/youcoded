@@ -296,11 +296,6 @@ const WARM_AFTER_MS = 150;
 // that touchpad jitter at rest moves nothing.
 const TUCK_MIN_PX = 6;
 
-// Review round 2 draws three footers for Destin to choose between (L-1:
-// "i don't like the styling of the start fresh/resume all buttons"). The losing
-// two are deleted once he picks.
-const WB_FOOTER = 'stacked' as 'stacked' | 'pair' | 'link';
-
 type RowActions = {
   select: (s: PastSession) => void;
   toggleFlag: (sessionId: string, flag: FlagName, next: boolean) => unknown;
@@ -1858,24 +1853,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               ticked row. The count is in the button so it says exactly what
               one press will do. */}
           {wb && (
-            <div className={`shrink-0 relative px-4 py-3 ${WB_FOOTER === 'stacked' || WB_FOOTER === 'link' ? 'flex flex-col gap-2' : 'flex items-center gap-2'}`}>
+            <div className="shrink-0 relative px-4 py-3 flex flex-col gap-2">
               <div
                 aria-hidden
                 className="absolute inset-x-0 top-0 h-px"
                 style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
               />
-              {WB_FOOTER === 'stacked' && (<>
-                <Button variant="primary" className="w-full py-2.5" onClick={resumeTicked} disabled={tickedRows.length === 0 || resumingMany}>{resumeLabel}</Button>
-                <Button variant="secondary" className="w-full py-2.5" onClick={wb.onDone} disabled={resumingMany}>Start fresh</Button>
-              </>)}
-              {WB_FOOTER === 'pair' && (<>
-                <Button variant="secondary" className="flex-1 py-2.5" onClick={wb.onDone} disabled={resumingMany}>Start fresh</Button>
-                <Button variant="primary" className="flex-1 py-2.5" onClick={resumeTicked} disabled={tickedRows.length === 0 || resumingMany}>{resumeLabel}</Button>
-              </>)}
-              {WB_FOOTER === 'link' && (<>
-                <Button variant="primary" className="w-full py-2.5" onClick={resumeTicked} disabled={tickedRows.length === 0 || resumingMany}>{resumeLabel}</Button>
-                <Button variant="ghost" size="sm" className="self-center" onClick={wb.onDone} disabled={resumingMany}>Start fresh instead</Button>
-              </>)}
+              {/* Stacked, full width, primary over secondary — the app's dialog
+                  footer (review round 2, C-1: "stacked"). */}
+              <Button variant="primary" className="w-full py-2.5" onClick={resumeTicked} disabled={tickedRows.length === 0 || resumingMany}>{resumeLabel}</Button>
+              <Button variant="secondary" className="w-full py-2.5" onClick={wb.onDone} disabled={resumingMany}>Start fresh</Button>
             </div>
           )}
           </div>
