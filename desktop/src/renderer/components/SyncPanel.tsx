@@ -28,6 +28,7 @@ import { latestUnresolvedError, deriveSyncBoxState, oversizeNotice, type SyncSta
 import { deviceActivityLabel, relativeMs } from './device-activity-label';
 import { summarizeSpaceSyncError } from './sync-space-error-summary';
 import { plainMessage } from '../utils/ipc-error';
+import { HANDOFF_EXPLANATION } from './takeover-dialog-copy';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -69,6 +70,13 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
         { term: 'Upload now', text: 'Per-backup: push your local data up to that backup right now.' },
         { term: '+ Add a backup', text: 'Connect an extra Drive or iCloud copy.' },
       ],
+    },
+    {
+      // WHY (lease-handoff deck Q-5, 2026-09-21): the only place handoff rules
+      // appeared was the takeover dialog itself — mid-task. Destin chose a
+      // short paragraph here over a full section.
+      heading: 'Using the same conversation on two devices',
+      paragraphs: [HANDOFF_EXPLANATION],
     },
     {
       heading: 'If something looks off',

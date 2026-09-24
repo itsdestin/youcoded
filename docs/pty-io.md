@@ -61,7 +61,7 @@ option selection"; re-probe on a CC version bump.
 - Don't reintroduce bracketed-paste markers (`\x1b[200~...\x1b[201~`) on Windows (ConPTY mangles them).
 - **`useSubmitConfirmation` is the second-line defense** — sends a bare `\r` only when `pending` stays set 8s after submit AND `canRetrySubmit()` passes: `attentionState==='ok'`, no awaiting-approval/running current-turn tools, no in-flight assistant turn, no uncompleted interactive prompt. `attentionState==='ok'` ALONE is not idle (normal mid-turn + while a permission/AskUserQuestion menu is up); gating on it alone auto-answered prompts. Don't gate on `!isThinking` (never clears if CC never got the message).
 - **Never write to the PTY during a pending interaction** — CC's Ink select menu is LIVE while a hook permission card is up. Every automated writer consults `hasPendingInteraction`/`canRetrySubmit` or main-side `HookRelay.hasPendingPermission(sessionId)`. Deliberate menu-drivers (ToolCard plan-approval arrows, TrustGate, terminal-view xterm keystrokes) intentionally bypass. Fixed youcoded#110.
-- **One sanitized string** — the optimistic bubble + PTY send both derive from `components/outgoing-message.ts`; the transcript confirms by EXACT content match (PTY send replaces newlines with spaces). A newline-bearing bubble stayed `pending` forever + armed a stray retry `\r`.
+- **One sanitized string** — the optimistic bubble + PTY send both derive from `components/outgoing-message.ts`; the transcript confirms by content match (PTY send replaces newlines AND tabs with spaces — CC takes a typed tab as the Tab key and drops it, 2026-09-23). A newline-bearing bubble stayed `pending` forever + armed a stray retry `\r`.
 
 ## Diagnostics
 

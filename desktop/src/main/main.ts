@@ -35,6 +35,7 @@ import { CommandProvider } from './command-provider';
 import { shouldAutoApprove } from './permission-auto-approve';
 import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionState, type AttentionSummary, type AttentionReport, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
+import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/handoff-draft';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
@@ -185,6 +186,8 @@ let mainWindow: BrowserWindow | null = null;
 // the three-window manager is the only one, on every platform.
 let buddyManagerRef: BuddyWindowManager | null = null;
 let cleanupIpcHandlers: (() => Promise<void>) | null = null;
+// WHY: a window can close after registering IPC; cancel only that webContents' pending attempts.
+let cancelWindowHandoffs: (webContentsId: number) => void = () => {};
 // Sign in with ChatGPT: module scope only so runShutdown can dispose it (stops
 // the usage poll, closes a lingering sign-in listener). Assigned in createWindow.
 let chatgptAuth: ChatGptAuth | null = null;
@@ -198,7 +201,7 @@ let deviceIdentity: { id: string } | null = null;
 // The per-MACHINE id backing the device registry — distinct from deviceIdentity
 // (per-INSTALL, for leases). null = no durable machine identity: register nothing.
 let machineIdentity: { id: string } | null = null;
-const holderTakeoverRef: { fn: (sessionId: string, from?: { deviceId: string; device: string }) => void } = { fn: () => {} };
+const holderTakeoverRef: { fn: (sessionId: string, from?: { deviceId: string; device: string }, transferNonce?: string) => void } = { fn: () => {} };
 const sessionManager = new SessionManager();
 
 // Multi-window ownership: maps sessionId -> windowId and tracks leader for
@@ -905,6 +908,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // (the registry ignores buddies) — while someone is on the phone nothing is focused.
   win.on('focus', () => windowRegistry.noteFocused(wid));
   win.on('closed', () => {
+    cancelWindowHandoffs(wid);
     // Drop attention reports contributed by this window so stale session
     // states from a closed window don't persist in the aggregated summary.
     attentionReports.delete(wid);
@@ -1017,7 +1021,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
     // than an unusable backup repo.
     leaseDir: () => path.join(app.getPath('userData'), 'Leases'),
     hubRequest: hubLeaseRequest,
-    onTakeoverRequest: (sid, from) => holderTakeoverRef.fn(sid, from),
+    onTakeoverRequest: (sid, from, transferNonce) => holderTakeoverRef.fn(sid, from, transferNonce),
   });
   // Nothing else ever deleted expired lease files — deleteLeaseFile only runs on a
   // clean release, so every crash/force-quit leaked one permanently (59 of 60 were
@@ -1072,6 +1076,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
     chatgptAuth);
   cleanupIpcHandlers = ipcWiring.cleanup;
+  cancelWindowHandoffs = (id) => ipcWiring.handoffAttempts?.cancelOwner(`window:${id}`);
   const hasUsableProvider = ipcWiring.hasUsableProvider;
 
   if (firstRunManager) {
@@ -1294,7 +1299,8 @@ function registerDetachIpc() {
   // Transfer a session from its current owner window to a target window.
   // Rejects if the source claim is stale (race protection). Emits ownership
   // events to both windows so renderers can update their reducers.
-  function transferOwnership(sessionId: string, srcWindowId: number, targetWindowId: number, freshWindow: boolean) {
+  function transferOwnership(sessionId: string, srcWindowId: number, targetWindowId: number, freshWindow: boolean,
+    draft?: DetachedHandoffDraft) {
     const info = sessionManager.getSession(sessionId);
     if (!info) return;
     // Stale (another event already moved it) → transferSession refuses and changes
@@ -1307,7 +1313,10 @@ function registerDetachIpc() {
     const src = windowFromWcId(srcWindowId);
     const tgt = windowFromWcId(targetWindowId);
     src?.webContents.send(IPC.SESSION_OWNERSHIP_LOST, { sessionId });
-    const payload = { sessionId, sessionInfo: info, freshWindow };
+    // WHY: only this newly admitted detach carries unsent composer state;
+    // never mutate the authoritative SessionInfo kept by SessionManager.
+    const payload = { sessionId, sessionInfo: draft
+      ? { ...info, initialInput: draft.text, initialAttachments: draft.attachments } : info, freshWindow };
     // A window that has not yet pulled (DETACH_CLAIM_PENDING) has no listener —
     // a send would be dropped on the floor. Queue for its pull instead.
     if (pendingAcquire.isReady(targetWindowId)) {
@@ -1328,10 +1337,13 @@ function registerDetachIpc() {
   // "Launch in new window" entry point and the direct-spawn fallback for drops
   // outside any window. Spawns a peer window at/near the cursor and hands it
   // ownership of the session.
-  ipcMain.on(IPC.WINDOW_OPEN_DETACHED, (evt, { sessionId }: { sessionId: string }) => {
+  ipcMain.on(IPC.WINDOW_OPEN_DETACHED, (evt, { sessionId, draft }: { sessionId: string; draft?: unknown }) => {
+    // A malformed optional draft must never be silently discarded by a move.
+    const safeDraft = draft === undefined ? undefined : validateHandoffDraft(draft);
+    if (draft !== undefined && !safeDraft) return;
     const { x, y } = screen.getCursorScreenPoint();
     const newWin = createAppWindow({ x: x - 60, y: y - 40, width: 900, height: 700 });
-    transferOwnership(sessionId, evt.sender.id, newWin.webContents.id, /*freshWindow*/ true);
+    transferOwnership(sessionId, evt.sender.id, newWin.webContents.id, /*freshWindow*/ true, safeDraft ?? undefined);
     maybeAutoCloseEmpty(evt.sender.id);
   });
 
@@ -2087,13 +2099,22 @@ void app.whenReady().then(async () => {
   ipcMain.handle(IPC.BUDDY_GET_STATUS, () => buddyManager.getStatus());
   // Restore + focus the main window, then ask it to switch to the buddy's
   // viewed session so the user lands in the same conversation (spec §4.2).
-  ipcMain.handle(IPC.BUDDY_OPEN_MAIN, () => {
+  ipcMain.handle(IPC.BUDDY_OPEN_MAIN, (_event, request?: { resume?: string }) => {
     // Same source of truth the buddyManager deps use for mainWindow.
     const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
-    if (!win) return;
+    if (!win) {
+      if (request?.resume) throw new Error('Main window unavailable for handoff.');
+      return;
+    }
     if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
+    // WHY: a buddy explicit handoff must enter main's pending read/draft flow;
+    // focusing its old writer would bypass freshness. Main re-reads the row.
+    if (typeof request?.resume === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(request.resume)) {
+      win.webContents.send(IPC.UI_ACTION_RECEIVED, { type: '_BUDDY_RESUME', sessionId: request.resume });
+      return;
+    }
     const sid = buddyManager.getViewedSession();
     if (sid) win.webContents.send(IPC.SESSION_FOCUS_REQUEST, sid);
   });
@@ -2268,7 +2289,7 @@ void app.whenReady().then(async () => {
   // holder-ack protocol (investigation Fix 4). Do not assume 'taken' => turn saved.
   setSyncSpacesLeaseEventListener((ev) => {
     if (ev.kind === 'takeover-request' || ev.kind === 'taken') {
-      leaseClient?.handleTakeoverRequest(ev.sessionId, ev.from);
+      leaseClient?.handleTakeoverRequest(ev.sessionId, ev.from, ev.transferNonce, ev.senderDeviceId);
     }
   });
   startSyncSpaces(

@@ -91,7 +91,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'off', 'removeAllListeners',
   'session.list', 'session.create', 'session.browse', 'session.destroy',
   'session.setFlag', 'session.setTag', 'session.setNote', 'session.getMeta',
-  'session.sendInput', 'session.respondToPermission', 'on.transcriptEvent', 'on.hookEvent',
+  'session.sendInput', 'session.respondToPermission', 'session.handoff', 'on.transcriptEvent', 'on.hookEvent',
   'native.send', 'native.setBinding',
   'providers.list', 'providers.catalog', 'providers.test', 'providers.setKey', 'models.memoryCheck',
   // Local Models rows + Resume (2026-08-26). WHY these must be listed: the
@@ -880,11 +880,58 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // once from the resume path with the row's id — and only the FIRST ask per
   // session id runs. So the locator-less ask must already know the row.
   const resumedFrom = new Map<string, string>();
+  // Explicit handoff (?lease=held:<device>): the real pending tab, notices and
+  // draft rules run against this. The first wait ends "may have newer
+  // messages"; Try again, Continue or a forced takeover then opens the session.
+  // No ownership or freshness is proven here — the backend owns that.
+  const handoffs = new Map<string, { create?: any; state: any; tries: number }>();
+  const handoffRows = new Set<string>();
+  const handoffOpen = async (id: string, source: 'confirmed' | 'saved-copy') => {
+    const h = handoffs.get(id)!;
+    leaseReleased = true;
+    const created = await session.create!(h.create);
+    h.state = { id, status: 'admitted', source, session: created };
+    return h.state;
+  };
+  const handoff = {
+    begin: async (conversationId: string, _provider: string, create?: any) => {
+      handoffRows.add(conversationId);
+      const id = `wb-handoff-${handoffs.size + 1}`;
+      handoffs.set(id, { create, state: { id, status: 'waiting' }, tries: 0 });
+      return { id, status: 'waiting' };
+    },
+    status: async (id: string) => handoffs.get(id)?.state ?? { id, status: 'failed' },
+    wait: async (id: string) => {
+      const h = handoffs.get(id);
+      if (!h) return { id, status: 'failed' };
+      await new Promise((r) => setTimeout(r, 5000));
+      if (h.state.status !== 'waiting') return h.state;
+      if (h.tries === 0) {
+        h.state = { id, status: 'incomplete', cause: 'receipt not confirmed', holder: { deviceId: 'wb-holder', device: leaseHolder ?? 'Laptop' } };
+        return h.state;
+      }
+      return handoffOpen(id, 'confirmed');
+    },
+    retry: async (id: string) => {
+      const h = handoffs.get(id)!;
+      h.tries++;
+      h.state = { id, status: 'waiting' };
+      return h.state;
+    },
+    savedCopy: async (id: string) => handoffOpen(id, 'saved-copy'),
+    force: async (id: string) => handoffOpen(id, 'saved-copy'),
+    cancel: async (id: string) => { const h = handoffs.get(id); if (h) h.state = { id, status: 'cancelled' }; return h?.state ?? { id, status: 'cancelled' }; },
+    setCreateParams: async (id: string, create: any) => { const h = handoffs.get(id)!; h.create = create; return h.state; },
+  };
   const session: Ns<'session'> & UntypedSessionWrites = {
+    handoff: handoff as any,
     list: async () => store.getState().sessions,
     browse: async () => store.getState().past,
 
     create: async (opts) => {
+      // Admission belongs to creation, just like the desktop backend. A race
+      // fixture must deny BEFORE it emits a session-created event or adds a row.
+      if (opts.resumeSessionId && leaseHolder && !leaseReleased) return { status: 'lease-denied', device: leaseHolder };
       // Deterministic-ish id without Date.now(): the store's length is enough
       // to keep ids unique within a page, and stable across reloads.
       const id = `wb-new-${store.getState().sessions.length + 1}`;
@@ -895,15 +942,19 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // session..." for good. Take the title from the Resume row itself, and
       // send the first hook event App is waiting for (below) — the promo's
       // phone beat takes a session over and has to land in its conversation.
-      const resumedRow = (opts as any).resumeSessionId
-        ? store.getState().past.find((p) => p.sessionId === (opts as any).resumeSessionId) : undefined;
+      // Inline conversation cards use the separate UUID-backed fixture index,
+      // not wb-past-* ids. They must emit initialization too, or testing a real
+      // resume route here strands the screen behind a fake startup failure.
+      const ref = opts.resumeSessionId ? resolveFixture(opts.resumeSessionId) : undefined;
+      const resumedRow = store.getState().past.find((p) => p.sessionId === opts.resumeSessionId)
+        ?? (ref?.status === 'ok' ? { sessionId: ref.id, name: ref.title } : undefined);
       // Mirrors main's session:create: a conversation already open in a tab
-      // answers with that tab (`alreadyOpen`) instead of a second copy.
+      // answers with that tab (`reused`, resume admission) instead of a second copy.
       if (resumedRow) {
         const openId = [...resumedFrom].find(([sid, row]) => row === resumedRow.sessionId
           && store.getState().sessions.some((x) => x.id === sid))?.[0];
         const open = openId ? store.getState().sessions.find((x) => x.id === openId) : undefined;
-        if (open) return { ...open, alreadyOpen: true } as any;
+        if (open) return { ...open, reused: true } as any;
       }
       if (resumedRow) resumedFrom.set(id, resumedRow.sessionId);
       const created = {
@@ -919,6 +970,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         provider: opts.provider ?? 'claude',
         harnessId: (opts as any).harnessId,
         model: opts.model,
+        ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
       };
       store.setState((s) => ({ ...s, sessions: [...s.sessions, created as any] }));
       // WHY emit: the renderer does not poll. App re-fetches on
@@ -1881,10 +1933,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     syncNow: async () => ({ ok: true }),
     stopProject: async () => ({ ok: true }),
     renameProject: async () => ({ ok: true }),
-    // Promo: the conversation-lease gate App.tsx runs before a resume.
-    leaseQuery: async () => leaseHolder ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },
-    leaseTakeover: async () => ({ outcome: 'acquired' as const }),
-    leaseForce: async () => ({ ok: true }),
+    leaseQuery: async () => leaseHolder && leaseMode !== 'raced' && !leaseReleased
+      ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },
+    leaseTakeover: async () => {
+      if (leaseMode === 'timeout' || leaseMode === 'undeliverable') return { outcome: leaseMode };
+      leaseReleased = true;
+      return { outcome: 'ready' as const };
+    },
+    leaseForce: async () => { leaseReleased = true; return { ok: true }; },
     // The synced device registry behind the popup's Devices count-tab. Without
     // it the catch-all answers [] and the demo reads "0 Devices / No devices
     // yet" directly under "All synced", which contradicts itself — cross-device
@@ -2171,7 +2227,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // resume raise the "active on another device" takeover dialog.
   const remoteSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('remote') : null;
   const leaseSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('lease') : null;
-  const leaseHolder = leaseSwitch?.startsWith('held:') ? leaseSwitch.slice(5) : null;
+  const leaseMode = leaseSwitch?.split(':', 1)[0];
+  const leaseHolder = leaseSwitch?.includes(':') ? leaseSwitch.slice(leaseSwitch.indexOf(':') + 1) : null;
+  let leaseReleased = false;
   // `&student=1` (scenarios.ts reads the same flag for sessions/past/tags):
   // the student persona also owns Project View, the Session Files drawer and
   // the history of a resumed session below, so a promo scene never shows the
@@ -2768,6 +2826,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     requestTranscriptPage: async (req: { sessionId: string; claudeSessionId?: string }) => {
       const empty = { events: [] as TranscriptEvent[], cursor: null, hasMore: false };
       const row = req.claudeSessionId ?? resumedFrom.get(req.sessionId);
+      // A handoff opens on the same saved history its pending tab previewed.
+      if (row && handoffRows.has(row)) {
+        const page = await chatsearch.read({ provider: 'claude', id: row });
+        return { events: (page.events ?? []).map((e: any) => ({ ...e, sessionId: req.sessionId })) as TranscriptEvent[], cursor: null, hasMore: false };
+      }
       if (!studentSwitch || row !== 'wb-past-0') return empty;
       const raw = REPLY_SCRIPTS['./fixtures/replies/briefing.jsonl'];
       if (!raw) return empty;

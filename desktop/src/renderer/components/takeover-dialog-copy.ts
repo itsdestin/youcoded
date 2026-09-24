@@ -1,11 +1,19 @@
-// Copy for the conversation-lease takeover dialog (Destin sign-off 2026-07-23).
+// Copy for the conversation-lease takeover dialog (Destin sign-off 2026-07-23;
+// 'force' lead reworded 2026-09-21 — the hub relays the request but gets no
+// acknowledgement back (room.ts sets ok before safeSend, which swallows closed
+// sockets), so "didn't answer" claimed more than the system can know. Chosen
+// from lease-handoff deck Q-7).
 // Extracted from App.tsx as a pure function so the approved strings are
 // pinnable (tests/takeover-dialog-copy.test.ts) and future copy edits are
 // deliberate rather than a drive-by JSX tweak. Returns RAW strings with
 // `device` already interpolated — the `font-medium` bold-device span for
 // 'undeliverable'/'force' stays a JSX concern in App.tsx (this module has no
 // JSX dependency), which splits `lead` on the device substring to wrap it.
-export type TakeoverDialogPhase = 'confirm' | 'force' | 'undeliverable';
+export type TakeoverDialogPhase = 'confirm' | 'force' | 'undeliverable' | 'claim-denied';
+
+// One explanation for the dialog's information tip and Backup & Sync: neither
+// may promise exclusive offline ownership or confuse a claim with fresh messages.
+export const HANDOFF_EXPLANATION = 'When you resume a conversation another computer is using, YouCoded asks it to stop and hand it over. Recent messages may still be syncing. If the handoff cannot be confirmed, you can still try to open it; conflicting updates may be kept as separate copies rather than combined. Live handoff works between computers, not in the phone app.';
 
 export interface TakeoverDialogCopy {
   // First paragraph. Always present.
@@ -19,6 +27,10 @@ export function takeoverDialogCopy(phase: TakeoverDialogPhase, device: string): 
   switch (phase) {
     case 'confirm':
       return { lead: `This session is active on ${device} — take over here?` };
+    case 'claim-denied':
+      // Q-2 is retry or leave, not consent to force. Denial proves the holder,
+      // not whether the conversation moved or was already active there.
+      return { lead: `This conversation is now active on ${device}.` };
     case 'undeliverable':
       // The hub had no delivery path — the other device was never asked. Do NOT
       // blame it for "not responding" (that's the 'force' phase, a different,
@@ -29,7 +41,10 @@ export function takeoverDialogCopy(phase: TakeoverDialogPhase, device: string): 
       };
     case 'force':
       return {
-        lead: `${device} was asked to hand this conversation off, but didn't answer. It may be offline or busy.`,
+        // The hub cannot distinguish "asked, no reply" from "the handoff
+        // finished after our poll gave up" — both look like a timeout. State
+        // only what is known: no confirmed handoff.
+        lead: `We couldn't confirm that ${device} handed off this conversation. It may be offline or busy.`,
         consequence: `You can still take over. When ${device} catches up it will stop and save on its own — but anything it writes before then is kept as a separate copy, not added to this conversation.`,
       };
   }

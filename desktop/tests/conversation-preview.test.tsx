@@ -58,7 +58,7 @@ describe('ConversationPreview', () => {
     await screen.findByText('why is sync broken');
     fireEvent.click(screen.getByRole('button', { name: 'Resume Session' }));
     // App's own resume arguments: id, folder, then the picked launch choices.
-    expect(onResume).toHaveBeenCalledWith('sess-1', 'proj', '/home/user/proj', expect.any(String), false, false, 'claude', undefined);
+    expect(onResume).toHaveBeenCalledWith('sess-1', 'proj', '/home/user/proj', expect.any(String), false, false, 'claude', undefined, 'Fix the sync bug');
   });
 });
 

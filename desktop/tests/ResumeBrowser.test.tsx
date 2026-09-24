@@ -510,6 +510,7 @@ describe('native resume', () => {
         expect.anything(), expect.anything(), expect.anything(),
         'native',
         { providerId: 'ulid-openrouter', modelId: 'gpt-5' },
+        'Native Chat',
       );
     });
 
@@ -537,6 +538,7 @@ describe('native resume', () => {
         expect.anything(), expect.anything(), expect.anything(),
         'native',
         { providerId: 'ulid-anthropic', modelId: 'claude-x' },
+        'Native Chat',
       );
     });
 

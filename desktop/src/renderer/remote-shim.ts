@@ -450,6 +450,10 @@ function getWsUrl(): string {
  * this goes wrong again is a new channel quietly defaulting to the queue.
  */
 export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'transport'>> = {
+  // WHY: never replay a stale attempt action on a newly authenticated connection.
+  'handoff:begin': 'user-action', 'handoff:status': 'user-action', 'handoff:wait': 'user-action',
+  'handoff:retry': 'user-action', 'handoff:saved-copy': 'user-action', 'handoff:force': 'user-action',
+  'handoff:cancel': 'user-action', 'handoff:create-params': 'user-action',
   'session:input': 'user-action',
   'session:resize': 'read',
   'session:terminal-ready': 'transport',
@@ -621,7 +625,15 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
       reject(new Error(`Request ${type} timed out`));
     }, timeoutMs);
     pending.set(id, { resolve, reject, timeout, type });
-    send({ type, id, payload });
+    // (Combined branch: bugfix-remote removed the reconnect replay list, so only
+    // master's handoff send-failure path remains here.)
+    // WHY: user actions are never queued; reject immediately and forget their
+    // timeout instead of leaving a phantom pending action for reconnect.
+    if (!send({ type, id, payload }) && type.startsWith('handoff:')) {
+      clearTimeout(timeout);
+      pending.delete(id);
+      reject(new Error('The connection is unavailable. Try again when connected.'));
+    }
   });
 }
 
@@ -685,6 +697,11 @@ export function markConnectedForNotices(): void {
  *  `{ ok:false }` object and is NOT in this list, and LocalModelsSection casts
  *  its answer straight to an array and filters it. That predates this list. */
 export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
+  // Startup errors reject; a structured lease-denied result remains data.
+  'session:create',
+  // WHY: Android-local's unsupported response and host failures must reject, not masquerade as statuses.
+  'handoff:begin', 'handoff:status', 'handoff:wait', 'handoff:retry',
+  'handoff:saved-copy', 'handoff:force', 'handoff:cancel', 'handoff:create-params',
   // Reads a phone loads at start, answered by the host since 2026-09-11. A failure there comes
   // back as { ok:false, error } and must reach the caller's catch, not land as a "list".
   'theme:list',
@@ -1884,6 +1901,17 @@ export function installShim(): void {
         unwrapRemote(invoke('session-naming:rename', { sessionId, title })),
     },
     session: {
+      // WHY: the Android-local router explicitly refuses these; a paired desktop uses its real admission owner.
+      handoff: {
+        begin: (conversationId: string, provider: 'claude' | 'native', create?: import('../shared/types').HandoffCreateParams) => invoke('handoff:begin', { conversationId, provider, create }),
+        status: (id: string) => invoke('handoff:status', { id }),
+        wait: (id: string) => invoke('handoff:wait', { id }),
+        retry: (id: string) => invoke('handoff:retry', { id }),
+        savedCopy: (id: string, consent: boolean) => invoke('handoff:saved-copy', { id, consent }),
+        force: (id: string, consent: boolean, expectedHolderId: string) => invoke('handoff:force', { id, consent, expectedHolderId }),
+        cancel: (id: string) => invoke('handoff:cancel', { id }),
+        setCreateParams: (id: string, create: import('../shared/types').HandoffCreateParams) => invoke('handoff:create-params', { id, create }),
+      },
       create: (opts: any) => invoke('session:create', opts),
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
       list: () => invoke('session:list'),

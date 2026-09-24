@@ -127,7 +127,9 @@ const ModelLoadingBar = React.forwardRef<HTMLDivElement, Props>(function ModelLo
   // shadow-lg that .layer-surface already supplies (globals.css:861-862), so the
   // surface recipe stays in exactly one place.
   return (
-    <div ref={ref} className="model-status-strip absolute left-1/2 -translate-x-1/2 z-10 w-[min(88%,26rem)]">
+    // WHY use the chat-pane's edges, like its context banner: a max-width
+    // centered on the outer shell shrinks at desktop and crosses an open drawer.
+    <div ref={ref} className="model-status-strip absolute inset-x-3 z-10">
       <div className="layer-surface px-4 py-3">
         {loading ? (
           <div className="flex flex-col gap-2">

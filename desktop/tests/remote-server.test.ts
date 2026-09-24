@@ -222,6 +222,63 @@ describe('RemoteServer and the shell provider', () => {
     return server.handleMessage({ ws }, JSON.stringify(msg)).then(() => sent);
   }
 
+  it('routes remote handoff by socket identity and cancels only that socket on drop', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    const route: any = vi.fn(async () => ({ id: 'attempt', status: 'waiting' }));
+    route.cancelOwner = vi.fn();
+    server.setHandoffRoute(route);
+    const frames: any[] = [];
+    const client = { id: 'connection-a', ws: { readyState: 1, send: (raw: string) => frames.push(JSON.parse(raw)) } };
+    const other: any = { id: 'connection-b' };
+    server.clients.add(client);
+    server.clients.add(other);
+    await server.handleMessage(client, JSON.stringify({ type: 'handoff:begin', id: 'request', payload: {
+      owner: 'remote:connection-b', conversationId: 'abc', provider: 'native',
+    } }));
+    expect(route).toHaveBeenCalledWith('remote:connection-a', 'begin', expect.objectContaining({ owner: 'remote:connection-b' }));
+    expect(frames[0].payload).toEqual({ id: 'attempt', status: 'waiting' });
+    await server.handleMessage(client, JSON.stringify({ type: 'handoff:force', id: 'force-request', payload: {
+      owner: 'remote:connection-b', id: 'attempt', consent: true, expectedHolderId: 'original',
+    } }));
+    expect(route).toHaveBeenCalledWith('remote:connection-a', 'force', expect.objectContaining({ expectedHolderId: 'original' }));
+    server.removeClient(client);
+    expect(route.cancelOwner).toHaveBeenCalledWith('remote:connection-a');
+    expect(server.clients.has(other)).toBe(true);
+    other.ws = { close: vi.fn() };
+    server.stop();
+    expect(route.cancelOwner).toHaveBeenCalledWith('remote:connection-b');
+    expect(shellSessionManager.createSession).not.toHaveBeenCalled();
+  });
+
+  it('uses the injected admitted creation for a remote resume, including a denial', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    const create = vi.fn(async () => ({ status: 'lease-denied', device: 'Other computer' }));
+    server.setSessionCreate(create);
+    const payload = { provider: 'native', resumeSessionId: 'c1', cwd: '/tmp' };
+    const sent = await drive(server, { type: 'session:create', id: 'c1', payload });
+    expect(create).toHaveBeenCalledWith(payload);
+    expect(shellSessionManager.createSession).not.toHaveBeenCalled();
+    expect(sent[0].payload).toEqual({ status: 'lease-denied', device: 'Other computer' });
+  });
+
+  it('answers creation failures instead of abandoning the remote request', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    server.setSessionCreate(vi.fn().mockRejectedValue(new Error('Saved data could not be read.')));
+    const sent = await drive(server, { type: 'session:create', id: 'failure', payload: { resumeSessionId: 'c1' } });
+    expect(sent).toContainEqual({ type: 'session:create:response', id: 'failure', payload: { ok: false, error: 'Saved data could not be read.' } });
+  });
+
+  it('cannot bypass admission before the shared creation operation is wired', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    const sent = await drive(server, { type: 'session:create', id: 'early', payload: { resumeSessionId: 'c1' } });
+    expect(shellSessionManager.createSession).not.toHaveBeenCalled();
+    expect(sent[0].payload).toMatchObject({ ok: false });
+  });
+
   it('refuses session:create for a shell, which would be a bare shell on the host', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
@@ -237,20 +294,25 @@ describe('RemoteServer and the shell provider', () => {
   it('still creates an ordinary session', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    server.setSessionCreate(async (opts: any) => shellSessionManager.createSession(opts));
     await drive(server, { type: 'session:create', id: 'c2', payload: { name: 'x', cwd: '/tmp', skipPermissions: false } });
     expect(shellSessionManager.createSession).toHaveBeenCalledTimes(1);
   });
 
+  // Combined branch: the already-open check now lives in the shared create
+  // (master's resume admission, pinned in ipc-handlers-create-ownership); the
+  // phone's request must reach it and relay its answer untouched.
   it('answers a resume of a conversation already open with the open session, not a second one', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
-    shellSessionManager.listSessions = vi.fn(() => [{ id: 'desk-1', name: 'My chat', cwd: '/tmp', status: 'active' }]);
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
-    server.setSessionMetaWiring({ resolve: (sid: string) => (sid === 'desk-1' ? 'claude-A' : sid), canWrite: () => true });
+    const create = vi.fn(async () => ({ id: 'desk-1', name: 'My chat', cwd: '/tmp', status: 'active', reused: true }));
+    server.setSessionCreate(create);
     const sent = await drive(server, {
       type: 'session:create', id: 'c4', payload: { name: 'x', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'claude-A' },
     });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: 'claude-A' }));
     expect(shellSessionManager.createSession).not.toHaveBeenCalled();
-    expect(sent[0].payload).toMatchObject({ id: 'desk-1', alreadyOpen: true });
+    expect(sent[0].payload).toMatchObject({ id: 'desk-1', reused: true });
   });
 
   // 2026-09-16 (remote-access.md): the phone's create used to reach the session
@@ -261,6 +323,7 @@ describe('RemoteServer and the shell provider', () => {
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig, undefined, {
       prepareCreate: (p: any) => (p.cwd === '__no_folder__' ? { ...p, cwd: '/private/no-folder' } : p),
     });
+    server.setSessionCreate(async (opts: any) => shellSessionManager.createSession(opts));
     await drive(server, { type: 'session:create', id: 'c3', payload: { name: 'x', cwd: '__no_folder__', skipPermissions: false } });
     expect(shellSessionManager.createSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/private/no-folder' }));
   });
@@ -271,7 +334,7 @@ describe('RemoteServer and the shell provider', () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
     const order: string[] = [];
-    server.setSessionCreator(async (opts: any) => {
+    server.setSessionCreate(async (opts: any) => {
       order.push(`create+start:${opts.provider}`);
       return { id: 'n1', provider: opts.provider };
     });
@@ -285,7 +348,7 @@ describe('RemoteServer and the shell provider', () => {
   it('answers the phone with the real reason when creating the session throws', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
-    server.setSessionCreator(async () => { throw new Error('engine gone'); });
+    server.setSessionCreate(async () => { throw new Error('engine gone'); });
     const sent = await drive(server, { type: 'session:create', id: 'c5', payload: { name: 'x', cwd: '/tmp', skipPermissions: false, provider: 'native' } });
     expect(sent[0].payload).toEqual({ ok: false, error: 'engine gone' });
   });

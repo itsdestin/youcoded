@@ -95,17 +95,26 @@ export function setSyncSpacesAuthStore(store: { getToken(): string | null } | nu
 
 // Route a lease op to the hub socket. Returns null when the hub is down (the
 // lease client treats null as "no answer" and falls back to its file / never-block).
-export function hubLeaseRequest(op: string, sessionId: string, deviceId: string): Promise<LeaseResult | null> {
+export function hubLeaseRequest(op: string, sessionId: string, deviceId: string, transferNonce?: string, expectedHolderId?: string): Promise<LeaseResult | null> {
   // Debug: takeover/lease failures are silent by design (never-block), which made
   // "takeover didn't happen" undiagnosable from logs (2026-07-23). Log every op +
   // whether the hub could answer — `null` here means the op had NO delivery path.
+  // Elapsed-ms (2026-09-21, deck Q-1 rider): claim-before-open leans on this round
+  // trip happening before a resume can show anything, so its real latency needs to
+  // be measurable on Destin's devices before that order is committed to.
   if (!hubSocket) {
     console.warn(`[lease] ${op} ${sessionId.slice(0, 8)}: hub socket absent (status=${hubStatus}) — no delivery path, answering null`);
     return Promise.resolve(null);
   }
-  return hubSocket.request(op, sessionId, deviceId).then(
-    (r) => { console.log(`[lease] ${op} ${sessionId.slice(0, 8)}: ${r ? `ok=${r.ok} holder=${r.holder?.deviceId?.slice(0, 8) ?? 'none'}` : 'null (hub gave no answer)'}`); return r; },
-    (e) => { console.warn(`[lease] ${op} ${sessionId.slice(0, 8)}: hub request failed: ${e?.message ?? e}`); throw e; },
+  const startedAt = Date.now();
+  // WHY: the exact caller-provided transfer nonce must survive this facade; a
+  // socket reqId only correlates replies, not a final transcript snapshot.
+  return (expectedHolderId !== undefined
+    ? hubSocket.request(op, sessionId, deviceId, undefined, expectedHolderId)
+    : transferNonce === undefined ? hubSocket.request(op, sessionId, deviceId)
+    : hubSocket.request(op, sessionId, deviceId, transferNonce)).then(
+    (r) => { console.log(`[lease] ${op} ${sessionId.slice(0, 8)}: ${r ? `ok=${r.ok} holder=${r.holder?.deviceId?.slice(0, 8) ?? 'none'}` : 'null (hub gave no answer)'} (${Date.now() - startedAt}ms)`); return r; },
+    (e) => { console.warn(`[lease] ${op} ${sessionId.slice(0, 8)}: hub request failed after ${Date.now() - startedAt}ms: ${e?.message ?? e}`); throw e; },
   );
 }
 

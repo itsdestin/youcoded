@@ -373,7 +373,7 @@ describe('session:create — a Claude Code chat is described too', () => {
   it('does NOT send one for a native chat — the harness host owns that', async () => {
     // Two records for one chat would race, and the host's is the one that knows
     // the budget things were sized against.
-    const { sends } = await runSessionCreate({ provider: 'native', cwd: '/tmp' });
+    const { sends } = await runSessionCreate({ provider: 'native', cwd: '/tmp', binding: { providerId: 'p', modelId: 'm' } });
     expect(sends.find((s) => s.channel === 'native:session-context')).toBeUndefined();
   });
 });
@@ -381,6 +381,8 @@ describe('session:create — a Claude Code chat is described too', () => {
 // ---------------------------------------------------------------------------
 // Resuming a conversation that is already open does not open it twice.
 // ---------------------------------------------------------------------------
+// Combined branch: main now answers through master's resume admission
+// (`reused: true`) instead of chatfiles' `alreadyOpen`; same guarantee.
 describe('session:create — a conversation already open is not resumed a second time', () => {
   it('answers with the open session instead of creating a second one', async () => {
     const open = {
@@ -391,7 +393,7 @@ describe('session:create — a conversation already open is not resumed a second
       provider: 'native', resumeSessionId: 'native-open', cwd: '/tmp', name: 'Resuming…', skipPermissions: false,
     }, 2, [open]);
     expect(createSession).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ id: 'native-open', alreadyOpen: true });
+    expect(result).toMatchObject({ id: 'native-open', reused: true });
     expect(sends.find((s) => s.channel === IPC.SESSION_CREATED)).toBeUndefined();
   });
 
@@ -406,7 +408,7 @@ describe('session:create — a conversation already open is not resumed a second
       provider: 'claude', resumeSessionId: 'claude-X', cwd: '/tmp', name: 'Resuming…', skipPermissions: false,
     }, 2, [pending], { resumedConversationOf: (id: string) => (id === 'desk-9' ? 'claude-X' : undefined) });
     expect(createSession).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ id: 'desk-9', alreadyOpen: true });
+    expect(result).toMatchObject({ id: 'desk-9', reused: true });
   });
 
   it('still resumes when no open session holds the conversation', async () => {
@@ -418,6 +420,6 @@ describe('session:create — a conversation already open is not resumed a second
       provider: 'native', resumeSessionId: 'native-session-under-test', cwd: '/tmp', name: 'Resuming…', skipPermissions: false,
     }, 2, [other]);
     expect(createSession).toHaveBeenCalledTimes(1);
-    expect(result?.alreadyOpen).toBeUndefined();
+    expect(result?.reused).toBeUndefined();
   });
 });

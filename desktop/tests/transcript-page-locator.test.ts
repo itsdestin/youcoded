@@ -182,7 +182,7 @@ describe('transcript:page locator memory', () => {
     expect(older.reconcileInterrupted).toBe(true);
   });
 
-  // The phone's session:create runs the desktop's own create path (setSessionCreator), so a
+  // The phone's session:create runs the desktop's own create path (setSessionCreate), so a
   // Claude Code resume started from a phone takes the same pre-spawn snapshot.
   it('a Claude Code resume started from a phone is bounded the same way', async () => {
     writeTranscript(2);
@@ -200,7 +200,7 @@ describe('transcript:page locator memory', () => {
     const remote = {
       broadcast: vi.fn(), setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(),
       setLastTopic: vi.fn(), getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
-      setSessionCreator: vi.fn((fn: any) => { createFromPhone = fn; }),
+      setSessionCreate: vi.fn((fn: any) => { createFromPhone = fn; }),
     };
     const handler = pageHandler(new WindowRegistry(), manager, remote);
     await createFromPhone!({ provider: 'claude', cwd: '/home/destin/project', resumeSessionId: CC_ID, name: 'Resuming' });
@@ -234,7 +234,7 @@ describe('transcript:page locator memory', () => {
     const file = path.join(tmpHome, '.claude', 'projects', SLUG, `${CC_ID}.jsonl`);
     const spy = vi.spyOn(TranscriptWatcher.prototype, 'pageSourceFor').mockReturnValue({
       jsonlPath: file, subagentsDir: path.join(path.dirname(file), CC_ID, 'subagents'),
-      startOffset: fs.statSync(file).size,
+      startOffset: fs.statSync(file).size, cwd: tmpHome,
     });
     try {
       const handler = pageHandler();
