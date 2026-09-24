@@ -542,6 +542,29 @@ describe('sync-spaces service transition serialization', () => {
     );
   });
 
+  // A project's name is its sync identity (lowercased). A name that would join
+  // another project's online copy is refused BEFORE anything is created.
+  it('refuses a name the user stopped syncing (its old files would return)', async () => {
+    h.autoAddSpace = true;
+    const svc = await freshService();
+    await svc.syncSpacesEnable(true);
+    h.registry = [{ schemaVersion: 1, name: 'Foo', repoName: 'r', displayName: 'Foo', state: 'stopped', updatedAt: 1 }];
+    const r = await svc.syncSpacesCreateProject('foo');
+    expect(r).toEqual({ ok: false, error: 'A project named "Foo" was stopped from syncing earlier. Choose a different name.' });
+    expect(h.projects).not.toContain('foo');
+    expect(h.engines[0].added).not.toContain('project:foo');
+  });
+
+  it('refuses a name that differs from an existing project only by capital letters', async () => {
+    h.autoAddSpace = true;
+    const svc = await freshService();
+    await svc.syncSpacesEnable(true);
+    await svc.syncSpacesCreateProject('Notes');
+    const r = await svc.syncSpacesCreateProject('notes');
+    expect(r).toEqual({ ok: false, error: 'A project named "Notes" already exists. Names can\'t differ only by capital letters.' });
+    expect(h.projects).toEqual(['Notes']);
+  });
+
   // ---- Discovery / materialize / stop gate / triggers (2026-07-12) ----
 
   async function enabledSvc() {
