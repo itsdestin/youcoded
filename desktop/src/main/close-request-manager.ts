@@ -1,14 +1,18 @@
 // The in-app quit warning's request/answer state machine (design
 // docs/active/specs/2026-09-24-welcome-back-design.md §4, plan T3).
 //
-// WHY its own module, injected timer + id generator, exactly like
-// welcome-back-store.ts's injected fs: main.ts's window 'close' handler lives
-// inside createAppWindow(), closed over a real BrowserWindow/webContents that
-// vitest cannot construct. This module touches neither — it only tracks
-// pending requests per window and calls the two effects (`send`, a timer) the
-// caller hands it — so the state machine itself (reuse, timeout, settle,
-// late-answer-ignored) can be driven directly in tests with fake timers and a
-// deterministic id generator, with no Electron in the loop at all.
+// WHY its own module, injected id generator, exactly like welcome-back-store.ts's
+// injected fs: main.ts's window 'close' handler lives inside createAppWindow(),
+// closed over a real BrowserWindow/webContents that vitest cannot construct.
+// This module touches neither — it only tracks pending requests per window and
+// calls the `send` effect the caller hands it — so the state machine (reuse,
+// settle, late-answer-ignored) can be driven directly in tests.
+//
+// No timeout: the window waits for the person's answer for as long as they
+// take. A 5 s "frozen app" fallback used to close the window on someone still
+// reading the prompt; Destin had it removed (2026-09-24, "just remove the
+// timer"). A quit from the menu or the OS still settles a pending prompt
+// through settleAll().
 // Not exported: nothing outside this module needs the shape by name — main.ts
 // and the test file both pass/read plain object literals structurally
 // (knip flags an exported type with no outside importer as dead).
@@ -28,25 +32,19 @@ export interface CloseRequestPush {
 }
 
 export interface CloseRequestManagerDeps {
-  /** Schedules the "renderer might be frozen" fallback (design §4 step 2). */
-  setTimer: (fn: () => void, ms: number) => unknown;
-  clearTimer: (handle: unknown) => void;
   /** Mints a requestId. A real caller wants something unguessable
    *  (`randomUUID`); a test wants something deterministic. */
   genId: () => string;
-  /** Default 5s (design §4 step 2: "a frozen renderer cannot draw it"). */
-  timeoutMs?: number;
 }
 
 interface PendingRequest {
   requestId: string;
   resolvers: Array<(answer: CloseAnswer) => void>;
-  timer: unknown;
 }
 
-/** Timeout and a whole-app-quit settle resolve identically: keep every owned
- *  session tracked (no untrack) and let the caller's destroy+close loop run
- *  anyway — the same fate a crash already leaves a session in. */
+/** A whole-app-quit settle: keep every owned session tracked (no untrack) and
+ *  let the caller's destroy+close loop run — the same fate a crash leaves a
+ *  session in. */
 const KEEP_TRACKED: CloseAnswer = { close: true, reopen: true };
 
 export interface CloseRequestManager {
@@ -59,7 +57,7 @@ export interface CloseRequestManager {
    */
   request(windowId: number, sessions: number, send: (push: CloseRequestPush) => void): Promise<CloseAnswer>;
   /** The renderer answered `requestId`. A no-op if that request already
-   *  settled (by timeout or by settleAll()) — a late answer changes nothing
+   *  settled by settleAll() — a late answer changes nothing
    *  (design §4 step 5). */
   answer(requestId: string, answer: CloseAnswer): void;
   /**
@@ -103,8 +101,8 @@ export function applyCloseAnswer(
   if (!answer.close) return false;
   // `reopen` false (the switch was left off) means Destin said "don't bring
   // these back" — untrack so Welcome back never offers them (design §4 step
-  // 3). A timeout or a whole-app-quit settle both resolve reopen:true (design
-  // §4 steps 2, 5): keep tracked, exactly like a crash.
+  // 3). A whole-app-quit settle resolves reopen:true (design
+  // §4 step 5): keep tracked, exactly like a crash.
   if (!answer.reopen) {
     for (const sid of currentlyOwned) effects.untrack(sid);
   }
@@ -116,14 +114,12 @@ export function applyCloseAnswer(
 }
 
 export function createCloseRequestManager(deps: CloseRequestManagerDeps): CloseRequestManager {
-  const timeoutMs = deps.timeoutMs ?? 5_000;
   const pending = new Map<number, PendingRequest>();
 
   function settle(windowId: number, answer: CloseAnswer): void {
     const entry = pending.get(windowId);
-    if (!entry) return; // already settled — e.g. the timer fired after settleAll() beat it there
+    if (!entry) return; // already settled
     pending.delete(windowId);
-    deps.clearTimer(entry.timer);
     for (const resolve of entry.resolvers) resolve(answer);
   }
 
@@ -136,12 +132,7 @@ export function createCloseRequestManager(deps: CloseRequestManagerDeps): CloseR
         return new Promise((resolve) => existing.resolvers.push(resolve));
       }
       const requestId = deps.genId();
-      const entry: PendingRequest = { requestId, resolvers: [], timer: undefined };
-      // A frozen renderer can never draw the prompt, so the window must not
-      // wait on it forever (design §4 step 2, review 1 D4: no orphaned
-      // process behind a closed window) — settle exactly like "keep tracked",
-      // the same fate a crash leaves the session in.
-      entry.timer = deps.setTimer(() => settle(windowId, KEEP_TRACKED), timeoutMs);
+      const entry: PendingRequest = { requestId, resolvers: [] };
       pending.set(windowId, entry);
       const promise = new Promise<CloseAnswer>((resolve) => entry.resolvers.push(resolve));
       send({ requestId, sessions });
@@ -152,7 +143,7 @@ export function createCloseRequestManager(deps: CloseRequestManagerDeps): CloseR
       for (const [windowId, entry] of pending) {
         if (entry.requestId === requestId) { settle(windowId, answer); return; }
       }
-      // No matching pending entry — already settled by timeout or settleAll.
+      // No matching pending entry — already settled by settleAll.
       // Ignored on purpose (design §4 step 5).
     },
 

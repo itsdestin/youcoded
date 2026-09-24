@@ -209,8 +209,6 @@ let welcomeBackStore: WelcomeBackStore | undefined;
 // touches no disk) so createAppWindow's close handler can close over it
 // however early a window is created.
 const closeRequests = createCloseRequestManager({
-  setTimer: (fn, ms) => setTimeout(fn, ms),
-  clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
   genId: () => randomUUID(),
 });
 // Plan 2b Task 8: the conversation-lease client + this install's device identity.
