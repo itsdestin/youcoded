@@ -47,6 +47,11 @@ import { routePlanPause, type PlanPauseContext, type PlanRecoveryCause } from '.
 const PLAN_HEARTBEAT_MS = 20_000;
 /** How long stopped specialists get to finish on their own before teardown. */
 const PLAN_SETTLE_DEADLINE_MS = 10_000;
+/** T3 (design §3 "Concurrency"): how long a spend-limit DRAIN waits for every
+ *  live specialist to end its own turn at its next `beforeRequest` before
+ *  falling back to the ordinary abort-and-settle path. Long enough to cover a
+ *  child waiting on a permission ask, which never times out on its own. */
+const PLAN_DRAIN_DEADLINE_MS = 60_000;
 /** Final review F2: a failed final write is tried again after these waits
  *  (a held lock or a busy disk usually clears within a second). */
 const PLAN_SETTLE_WRITE_RETRY_DELAYS_MS: readonly number[] = [250, 1_000];
@@ -81,8 +86,11 @@ export function planRestartBrief(verdict: TranscriptVerdict): string {
  * Task 9a (pause handoff §1): the one message of the report-only turn that
  * follows an invalid report. It continues the same specialist session with its
  * tools switched off, so nothing it did before can run again.
+ * T3 (item 5, knip): no longer exported — nothing outside this file (or its
+ * test) ever imported it; a leftover from before the request-phase machinery
+ * that used to call it from plan-host-bridge.ts was removed.
  */
-export function planReportOnlyBrief(input: { finalLeaf: boolean; problem: string }): string {
+function planReportOnlyBrief(input: { finalLeaf: boolean; problem: string }): string {
   const noTools = 'Your tools are switched off for this reply.';
   if (input.finalLeaf) {
     return `Your last answer couldn't be used. ${input.problem} ${noTools} Reply now with ONLY a JSON object, exactly in this form: `
@@ -291,6 +299,8 @@ export interface PlanExecutorDeps {
   // deleted — the journal alone is what createAttempts/commitReport use.
   runner: PlanRunner;
   settleDeadlineMs?: number;
+  /** T3: overrides PLAN_DRAIN_DEADLINE_MS (tests pass a small value). */
+  drainDeadlineMs?: number;
   heartbeatMs?: number;
   timers?: PlanExecutorTimers;
   /** Final review F2: the waits before each retry of a run's final write
@@ -343,6 +353,13 @@ type HaltRequest =
     /** Task 9a: the facts pause-routing.ts reads back from the saved pause. */
     /** Task 13: `not-ready` = the specialist's provider couldn't run at all. */
     launch?: 'refused' | 'drift' | 'not-ready'; retried?: true; toolEffect?: ToolEffect;
+    /** T3 (design §3 "Concurrency" / §7): a `spend-limit` pause carries the
+     *  limit it hit, for the card's "Reached your $X limit." `drain: true`
+     *  marks this halt as one `requestHalt` must NOT abort live children for
+     *  — every running specialist gets to finish its own in-flight reply
+     *  first (settle's drain deadline), instead of being cut off mid-request
+     *  like every other pause reason. */
+    limit?: PlanSpendLimit; drain?: true;
   }
   /** finalize: PlanService's "stopped" edit, applied in the SAME write that
    *  drops the lease (review item 8). */
@@ -410,6 +427,58 @@ interface ActiveRun {
 
 const isCommitted = (a: PlanAttemptRecord) => a.phase === 'committed' || a.completedAt !== undefined;
 const fmtItem = (n: number, of: number) => `${n + 1} of ${of}`;
+
+/** T3: the plan's own optional spend limit (design §2/§7). Reused from
+ *  `PlanRecord` rather than declared fresh so the two can never drift. */
+type PlanSpendLimit = NonNullable<PlanRecord['spendLimit']>;
+
+/** T3 (design §3: "runWave first checks used ≥ limit on the plan it loaded,
+ *  so no new wave starts past the limit"). Mirrors plan-spend.ts's own
+ *  (private) `crossedLimit` — kept as a separate small copy rather than an
+ *  import so this file stays independent of plan-spend.ts's internals, the
+ *  same reasoning `pricingSnapshot` already used in plan-host-bridge.ts. */
+function spendLimitCrossed(plan: PlanRecord): boolean {
+  const limit = plan.spendLimit;
+  if (!limit) return false;
+  return 'usd' in limit ? (plan.usedUsd ?? 0) >= limit.usd : plan.usedTokens >= limit.tokens;
+}
+
+/** The pause's own `reason` sentence (design §7's "Reached your $5 limit.");
+ *  `paused.limit`/`paused.kind` are what the card actually draws from —
+ *  this is only the fallback text for anything that still reads `reason`. */
+function spendLimitReason(limit: PlanSpendLimit | undefined): string {
+  if (!limit) return "The plan stopped because it reached its spend limit.";
+  return 'usd' in limit
+    ? `Reached your $${limit.usd.toFixed(2)} limit.`
+    : `Reached your ${limit.tokens.toLocaleString('en-US')}-token limit.`;
+}
+
+/** T3 (design §3 "Concurrency", Revision 2 E2/E3): true when this LEAF
+ *  step's frozen binding is the local engine. `resolveManifest`
+ *  (plan-host-bridge.ts, already built by T1) freezes `manifest.steps[id].
+ *  pricing` to `{kind:'local'}` exactly when the step's binding resolved to
+ *  a local-engine provider — this file only reads that, it never re-derives
+ *  it. `pricing` is stored as `unknown` (types.ts: a snapshot shape this
+ *  file must not have to parse strictly — see its own WHY), so anything
+ *  that isn't recognizably `{kind:'local'}` — priced, free, or a missing/
+ *  damaged entry — reads as NOT local, the safe direction: it can only
+ *  under-serialize a genuinely local step, never wrongly serialize a cloud
+ *  one down to one specialist at a time. */
+function isLocalEngineStep(plan: PlanRecord, stepId: string): boolean {
+  const snapshot = plan.manifest.steps[stepId]?.pricing;
+  return !!snapshot && typeof snapshot === 'object' && (snapshot as { kind?: unknown }).kind === 'local';
+}
+
+/** T3: a plain re-read of `run.halt`, through a function call on purpose —
+ *  `memberStart` already narrowed `run.halt` to falsy earlier in the SAME
+ *  try block (`if (run.halt) return undefined;`, before any of this
+ *  function's own `await`s), and re-reading the bare property later lets
+ *  that stale narrowing leak across the awaits that follow, typing it as
+ *  `never` even though `markLimitReached`'s async half may genuinely have
+ *  set it by now. A function call is opaque to that narrowing. */
+function currentHalt(run: ActiveRun): HaltRequest | undefined {
+  return run.halt;
+}
 
 function allSteps(steps: PlanStepV1[]): PlanStepV1[] {
   return steps.flatMap((s) => (s.kind === 'repeat' ? [s, ...allSteps(s.steps!)] : [s]));
@@ -494,6 +563,7 @@ export class PlanExecutor implements PlanExecutorHooks {
   private readonly journal: PlanJournal;
   private readonly runner: PlanRunner;
   private readonly settleDeadlineMs: number;
+  private readonly drainDeadlineMs: number;
   private readonly heartbeatMs: number;
   private readonly timers: PlanExecutorTimers;
   private readonly runs = new Map<string, ActiveRun>();
@@ -512,6 +582,7 @@ export class PlanExecutor implements PlanExecutorHooks {
     this.journal = deps.journal;
     this.runner = deps.runner;
     this.settleDeadlineMs = deps.settleDeadlineMs ?? PLAN_SETTLE_DEADLINE_MS;
+    this.drainDeadlineMs = deps.drainDeadlineMs ?? PLAN_DRAIN_DEADLINE_MS;
     this.heartbeatMs = deps.heartbeatMs ?? PLAN_HEARTBEAT_MS;
     this.timers = deps.timers ?? {
       setInterval: (fn, ms) => {
@@ -612,11 +683,46 @@ export class PlanExecutor implements PlanExecutorHooks {
     if (run.halt && request.kind !== 'lost') return;
     if (run.halt?.kind === 'lost') return;
     run.halt = request;
+    // T3 (design §3 "Concurrency"): a DRAIN halt (a spend-limit pause) must
+    // NOT abort what is already running — the whole point is letting each
+    // live specialist's already-in-flight reply, and that reply's tools,
+    // finish normally; only settle's drain deadline aborts a straggler.
+    // `launchAbort` still fires so nothing NEW starts (a specialist still
+    // waiting for a free slot stops waiting) — that part matches every
+    // other halt.
     run.launchAbort.abort();
-    for (const child of run.live) {
-      if (!child.outcome) child.handle.abort();
+    const draining = request.kind === 'pause' && request.drain === true;
+    if (!draining) {
+      for (const child of run.live) {
+        if (!child.outcome) child.handle.abort();
+      }
     }
     run.fireHalt();
+  }
+
+  /**
+   * T3 (design §3 "Concurrency"): the FIRST attempt whose spend write crosses
+   * the plan's limit calls this (via the `markLimitReached` closure
+   * `memberStart` hands `runner.launch()`) to turn the crossing into a
+   * visible pause. The synchronous half already happened in the caller
+   * (`run.limitReached = true`, seen at once by every sibling's own
+   * `beforeRequest`); this half re-reads the plan for the limit's actual
+   * value (for the card) and requests the halt — `drain: true`, so
+   * `requestHalt` does NOT abort anyone: every live specialist keeps running
+   * until its own next `beforeRequest` ends its turn, or until settle's
+   * drain deadline forces it. `requestHalt`'s own "first reason wins" guard
+   * makes a second crossing (a different sibling, or a sibling's own
+   * specialist-error/interrupted pause once it lands) a no-op, so the plan
+   * pauses exactly once no matter how many attempts cross or land after it.
+   */
+  private requestSpendLimitDrain(run: ActiveRun, stepId: string): void {
+    void (async () => {
+      let limit: PlanSpendLimit | undefined;
+      try { limit = (await this.load(run)).spendLimit; } catch { /* the run may already be gone; pause with no limit named */ }
+      this.requestHalt(run, {
+        kind: 'pause', why: 'spend-limit', drain: true, stepId, limit, reason: spendLimitReason(limit),
+      });
+    })();
   }
 
   private async beat(run: ActiveRun): Promise<void> {
@@ -943,7 +1049,17 @@ export class PlanExecutor implements PlanExecutorHooks {
       if (!repeat) await this.setStatus(run, [step.id], 'running');
       const writer = this.runner.isWriter(run.ref, step.specialist);
       const cap = Math.max(1, Math.min(PLAN_MAX_CONCURRENT_SPECIALISTS, this.runner.maxConcurrent(run.ref)));
-      const width = writer ? 1 : cap;
+      // T3 (design §3 "Concurrency", Revision 2 E2/E3): the local engine's one
+      // shared context pool means at most ONE local-engine plan specialist
+      // may run at a time — a headcount cap, not a token-math one. A step's
+      // binding is frozen once per LEAF STEP (design §5), so every item of
+      // THIS map step shares it; serializing the step is enough (this
+      // executor never runs two steps concurrently — `walk`/`runRepeat` are
+      // already sequential — so there is no cross-step case to also guard).
+      // Cloud-bound steps are untouched: `local` is false and `width` is
+      // exactly what it was before this task.
+      const local = isLocalEngineStep(plan, step.id);
+      const width = (writer || local) ? 1 : cap;
       for (let at = 0; at < needed.length; at += width) {
         if (run.halt) return;
         await this.runWave(run, step, iteration, needed.slice(at, at + width), !!repeat?.finalLeaf);
@@ -956,11 +1072,27 @@ export class PlanExecutor implements PlanExecutorHooks {
   // WHY no launchRefusal check and no reservation/reservePause any more
   // (spending rework stage 1, design §1): nothing refuses a launch for
   // budget reasons, and `createAttempts` (below) cannot fail for one either.
-  // T3 owns the wave-start spend-limit check (design §3: "runWave first
-  // checks used ≥ limit on the plan it loaded, so no new wave starts past
-  // the limit") — not added here.
   private async runWave(run: ActiveRun, step: PlanStepV1, iteration: number, items: number[], finalLeaf: boolean): Promise<void> {
     let plan = await this.load(run);
+    // T3 (design §3: "runWave first checks used ≥ limit on the plan it
+    // loaded, so no new wave starts past the limit"). Checked BEFORE
+    // createAttempts, so a plan already at (or resumed above) its limit
+    // never grows a step record for work that will never launch — this
+    // covers a fresh wave AND the next slice of the same step (a map with
+    // more items than the cap runs several waves in sequence, each one
+    // re-checking here) with one site. Retries an already-live wave triggers
+    // (a specialist error's or an invalid report's one automatic relaunch)
+    // don't need a second check here: the only way `used` can cross the
+    // limit WHILE a wave is live is a reply's own spend write, and that
+    // already sets `run.halt` via `requestSpendLimitDrain` before any retry
+    // logic (`restartAfter`/`reportOnlyRetry`/`memberStart`'s own retry loop)
+    // runs — every one of them already refuses to act once `run.halt` is set.
+    if (spendLimitCrossed(plan)) {
+      this.requestHalt(run, {
+        kind: 'pause', why: 'spend-limit', stepId: step.id, limit: plan.spendLimit, reason: spendLimitReason(plan.spendLimit),
+      });
+      return;
+    }
     const rec = plan.steps.find((s) => s.id === step.id)!;
     const members: CreateAttemptMember[] = items.map((itemIndex) => {
       const latest = latestAttempt(rec, itemIndex, iteration);
@@ -1098,7 +1230,15 @@ export class PlanExecutor implements PlanExecutorHooks {
             // object, so one sibling's crossing is visible to every other's
             // own beforeRequest check.
             isLimitReached: () => run.limitReached === true,
-            markLimitReached: () => { run.limitReached = true; },
+            // T3: the synchronous flag first (every sibling's own
+            // `beforeRequest` must see it at once), then — once, idempotent —
+            // turn the crossing into an actual drain-and-pause. See
+            // `requestSpendLimitDrain`'s own WHY comment.
+            markLimitReached: () => {
+              if (run.limitReached) return;
+              run.limitReached = true;
+              this.requestSpendLimitDrain(run, step.id);
+            },
             isWriteFailed: () => run.spendWriteFailed === true,
             markWriteFailed: () => { run.spendWriteFailed = true; },
             recordChild: (childId, info) => this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
@@ -1162,7 +1302,19 @@ export class PlanExecutor implements PlanExecutorHooks {
         const child: LiveChild = { stepId: step.id, attemptId, handle, finalLeaf };
         run.live.push(child);
         wave.push(child);
-        if (run.halt) {
+        const halted = currentHalt(run);
+        if (halted) {
+          // T3: a DRAIN halt (a spend-limit pause) must not abort this one
+          // either — its launch simply landed a little later than the
+          // sibling whose crossing started the drain, and it is exactly as
+          // "already running" as any other live child at this point. Left
+          // alone, it runs its own turn and settle's drain wait covers it
+          // like every other one — UNLESS settle's own busy-wait already
+          // gave up on it (`run.closed`), which still tears it down below
+          // regardless of drain (the same "a start that never comes back
+          // must not keep the card from settling" rule non-drain halts use).
+          const stillDraining = halted.kind === 'pause' && halted.drain === true && !run.closed;
+          if (stillDraining) return child;
           handle.abort();
           // Settle already ran its disposals: nobody else would free this one.
           if (run.closed) {
@@ -1514,15 +1666,37 @@ export class PlanExecutor implements PlanExecutorHooks {
     run.closed = true;
     // 1. Everything still running was already asked to stop (requestHalt, or
     //    runWave for a launch that landed after the halt) and gets until the
-    //    deadline to finish on its own.
-    const pending = run.live.filter((c) => !c.outcome);
+    //    deadline to finish on its own. T3 (design §3 "Concurrency"): a DRAIN
+    //    halt (a spend-limit pause) is the one exception — `requestHalt`
+    //    deliberately did NOT abort anyone, so this wait is really "let every
+    //    live specialist reach its own next `beforeRequest` and end its turn
+    //    there", and it gets the longer drain deadline instead of the normal
+    //    settle one.
+    const draining = run.halt?.kind === 'pause' && run.halt.drain === true;
+    let pending = run.live.filter((c) => !c.outcome);
     if (pending.length > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         Promise.all(pending.map((c) => c.handle.outcome)),
-        new Promise<void>((r) => { timer = setTimeout(r, this.settleDeadlineMs); }),
+        new Promise<void>((r) => { timer = setTimeout(r, draining ? this.drainDeadlineMs : this.settleDeadlineMs); }),
       ]);
       if (timer) clearTimeout(timer);
+    }
+    // 1b. T3: the drain deadline passed with something still going (a stuck
+    //     specialist, or one waiting on a permission ask, which never times
+    //     out on its own) — abort it now and give it the same window a
+    //     non-drain halt already gets, "then aborts as before" (design §3).
+    if (draining) {
+      pending = run.live.filter((c) => !c.outcome);
+      if (pending.length > 0) {
+        for (const child of pending) child.handle.abort();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          Promise.all(pending.map((c) => c.handle.outcome)),
+          new Promise<void>((r) => { timer = setTimeout(r, this.settleDeadlineMs); }),
+        ]);
+        if (timer) clearTimeout(timer);
+      }
     }
     // 2. Whatever is left is torn down (this also frees every slot).
     await Promise.all(run.live.map((c) => c.handle.dispose()));
@@ -1576,6 +1750,11 @@ export class PlanExecutor implements PlanExecutorHooks {
             ...(final.launch ? { launch: final.launch } : {}),
             ...(final.retried ? { retried: true as const } : {}),
             ...(final.toolEffect ? { toolEffect: final.toolEffect } : {}),
+            // T3 (design §2/§7): the limit a `spend-limit` pause hit, for the
+            // card's "Reached your $X limit." `drain` itself is not stored —
+            // it only ever governed HOW this halt settled, not the pause the
+            // person ends up seeing.
+            ...(final.limit ? { limit: final.limit } : {}),
           };
           const s = p.steps.find((x) => x.id === final.stepId);
           if (s && s.status !== 'done') s.status = 'paused';

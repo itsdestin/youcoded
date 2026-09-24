@@ -1803,6 +1803,184 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
   });
 });
 
+// T3 (design §3 "Concurrency" / §7, decision 37 R-4): the plan's own optional
+// spend limit. `plan-spend.test.ts` covers the journal-write half (crossing,
+// concurrent writers, the shared flag); everything below is what the
+// EXECUTOR does once that flag is set — pause once, drain instead of
+// aborting, and never start a wave that is already past the limit.
+describe('spend limit: wave-start check', () => {
+  const SPEND2: PlanDocumentV1 = { goal: 'spend', steps: [
+    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', summary: 'Plain sentence.', items: ['a', 'b'] },
+  ] };
+
+  it("a wave never starts once used has already reached the plan's own spend limit (tokens)", async () => {
+    const runner = new FakeRunner(() => completes('ok'));
+    const fence = await seed(record(SPEND2, { usedTokens: 500, spendLimit: { tokens: 500 } }));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect(runner.launches).toHaveLength(0);
+    const p = await plan();
+    expect(p.status).toBe('paused');
+    expect(p.paused).toMatchObject({ kind: 'spend-limit', limit: { tokens: 500 } });
+    // Nothing was even created for work that would never launch.
+    expect(p.steps[0].attempts).toEqual([]);
+  });
+
+  it('the same check applies to a dollar limit, read from usedUsd', async () => {
+    const runner = new FakeRunner(() => completes('ok'));
+    const fence = await seed(record(SPEND2, { usedTokens: 100, usedUsd: 5, spendLimit: { usd: 5 } }));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect(runner.launches).toHaveLength(0);
+    expect((await plan()).paused).toMatchObject({ kind: 'spend-limit', limit: { usd: 5 } });
+  });
+
+  it('raising the limit above used lets Continue start the wave without an immediate re-pause', async () => {
+    const runner = new FakeRunner(() => completes('ok'));
+    const rec = record(SPEND2, {
+      status: 'paused', usedTokens: 500, spendLimit: { tokens: 5_000 },
+      paused: { stepId: 's1', reason: 'Reached your 500-token limit.', kind: 'spend-limit', limit: { tokens: 500 } },
+      steps: [{ id: 's1', status: 'paused', attempts: [] }],
+    });
+    // Simulates Continue after T6's setLimit raised it: the resume REFUSAL
+    // while used is still ≥ limit belongs to that service layer, not here —
+    // the executor's own contract is simply "don't re-pause once it isn't".
+    const fence = await seed(rec);
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect(runner.launches.map((l) => l.brief).sort()).toEqual(['Do a', 'Do b']);
+    expect((await plan()).status).toBe('completed');
+  });
+});
+
+describe('spend limit: drain halt', () => {
+  const TWO_ITEMS: PlanDocumentV1 = { goal: 'two', steps: [
+    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', summary: 'Plain sentence.', items: ['a', 'b'] },
+  ] };
+
+  it('a crossing write drains: siblings finish their own in-flight reply, the plan pauses once, and nothing is aborted before the deadline', async () => {
+    const runner = new FakeRunner((l) => async (ctx) => {
+      if (l.brief === 'Do a') {
+        // Stands in for T2's PlanSpend calling this from inside a reply's
+        // journal write — the crossing itself, mid-turn.
+        await new Promise((r) => setTimeout(r, 10));
+        ctx.launch.markLimitReached();
+        // The crossing reply's OWN tools still run (design §3): this
+        // specialist keeps going a little longer and still finishes for real.
+        await new Promise((r) => setTimeout(r, 10));
+        return { kind: 'completed' as const, report: 'A done' };
+      }
+      // The sibling is never asked to stop — it simply finishes its own reply.
+      await new Promise((r) => setTimeout(r, 20));
+      return { kind: 'completed' as const, report: 'B done' };
+    });
+    const fence = await seed(record(TWO_ITEMS, { spendLimit: { tokens: 999_999 } }));
+    const exec = executor(runner, { drainDeadlineMs: 5_000 });
+    const drainDeadline = markDeadline(5_000);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    // Neither sibling was ever aborted, and the (generous) drain deadline
+    // never had to fire — both ended on their own.
+    expect(runner.aborted).toEqual([]);
+    expect(drainDeadline.fired()).toBe(false);
+    const p = await plan();
+    expect(p.status).toBe('paused');
+    expect(p.paused).toMatchObject({ kind: 'spend-limit' });
+    expect(events.filter((e) => e.plan.status === 'paused')).toHaveLength(1);
+    // Both in-flight replies landed for real — the crossing one AND its
+    // sibling — neither was abandoned mid-turn.
+    expect(p.steps[0].attempts.filter((a) => a.terminal === 'completed').map((a) => a.reportText).sort())
+      .toEqual(['A done', 'B done']);
+  });
+
+  it('a child stuck past the drain deadline (e.g. a permission ask, which never times out) is aborted, then the plan still pauses once', async () => {
+    const stayUntilAborted = async (ctx: ChildCtx): Promise<PlanChildOutcome> => {
+      if (!ctx.signal.aborted) await new Promise<void>((res) => ctx.signal.addEventListener('abort', () => res(), { once: true }));
+      return { kind: 'interrupted' };
+    };
+    const runner = new FakeRunner((l) => async (ctx) => {
+      if (l.brief === 'Do a') {
+        await new Promise((r) => setTimeout(r, 5));
+        ctx.launch.markLimitReached();
+      }
+      return stayUntilAborted(ctx);
+    });
+    const fence = await seed(record(TWO_ITEMS, { spendLimit: { tokens: 999_999 } }));
+    // A settle deadline far bigger than the drain one: once aborted, these
+    // children resolve almost at once (they honor the signal), so this
+    // second timer is only a safety net and must not itself decide anything.
+    const exec = executor(runner, { drainDeadlineMs: 40, settleDeadlineMs: 5_000 });
+    const drainDeadline = markDeadline(40);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect(drainDeadline.fired()).toBe(true);
+    // Both were left running until the drain deadline forced the abort — never before it.
+    expect(runner.aborted.length).toBe(2);
+    for (const id of runner.aborted) expect(log.indexOf(`dispose:${id}`)).toBeGreaterThan(log.indexOf('settle-deadline'));
+    const p = await plan();
+    expect(p.status).toBe('paused');
+    expect(p.paused).toMatchObject({ kind: 'spend-limit' });
+    expect(events.filter((e) => e.plan.status === 'paused')).toHaveLength(1);
+  });
+});
+
+// T3 (design §3 "Concurrency", Revision 2 E2/E3): a headcount cap, not the
+// deleted token-math one — the local engine's one shared context pool means
+// at most ONE local-engine plan specialist may run at a time.
+describe('local engine: at most one plan specialist at a time', () => {
+  it('a 4-item local split step on a cloud-model parent never runs two local children at once', async () => {
+    const doc: PlanDocumentV1 = { goal: 'local', steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', summary: 'Plain sentence.', items: ['a', 'b', 'c', 'd'] },
+    ] };
+    const runner = new FakeRunner(() => async (ctx) => { await new Promise((r) => setTimeout(r, 5)); return completes('ok')(ctx); });
+    // A generous cap: proves the local rule serializes on its own, not
+    // because the cap happened to already be 1.
+    runner.cap = 4;
+    const manifest: ExecutionManifest = {
+      ...MANIFEST,
+      steps: { s1: { binding: { providerId: 'local-engine', modelId: 'llama' }, label: 'llama', pricing: { kind: 'local' }, source: 'default' } },
+    };
+    const fence = await seed(record(doc, { manifest }));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect(runner.maxLive).toBe(1);
+    expect(runner.launches).toHaveLength(4);
+    expect((await plan()).status).toBe('completed');
+  });
+});
+
+describe('recovery charges nothing (design §3 "Crash safety")', () => {
+  it("a restarted attempt keeps its already-recorded spend; nothing in the recovery/restart path adds to it", async () => {
+    const rec = record(TWO_STEP, {
+      status: 'interrupted', usedTokens: 700, usedUsd: 0.42,
+      steps: [
+        { id: 's1', status: 'paused', attempts: [
+          committed('c1', 0, 'A'),
+          attemptRec({ attemptId: 'p2', itemIndex: 1, childId: 'kid-2', phase: 'launched', spentTokens: 300, spentUsd: 0.12 }),
+        ] },
+        { id: 's2', status: 'pending', attempts: [] },
+      ],
+    });
+    const runner = new FakeRunner(() => completes('B'));
+    runner.verdicts.set('kid-2', { kind: 'resumable', briefDelivered: true });
+    const fence = await seed(rec);
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p2 = (await stepOf('s1')).attempts.find((a) => a.attemptId === 'p2')!;
+    expect(p2).toMatchObject({ spentTokens: 300, spentUsd: 0.12, phase: 'committed', reportText: 'B' });
+    // The plan's own running totals are untouched by recovery/restart/commit
+    // too — only a real reply's afterReply (T2, not exercised by this
+    // FakeRunner) ever changes them.
+    expect((await plan()).usedTokens).toBe(700);
+    expect((await plan()).usedUsd).toBe(0.42);
+  });
+});
+
 // WHY 'the report-only turn's reply is capped at its fixed allowance' is GONE:
 // it called `budget.requestGate(...)` directly (PlanBudget, deleted). Nothing
 // caps a report-only reply's size any more — decision 34 dropped every
