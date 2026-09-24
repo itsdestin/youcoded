@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PLAN_QUESTION_MAX_CHARS, type PlanView, type PlanStepView, type PlanChildView, type ToolCallState } from '../../../shared/types';
 import { useChatDispatch } from '../../state/chat-context';
-import { Button, Dialog, ErrorState, FieldError, SettingRow, StatusStrip, Textarea, TextInput, Toggle } from '../ui';
+import { Button, CloseButton, Dialog, ErrorState, FieldError, SettingRow, StatusStrip, Textarea, TextInput, Toggle } from '../ui';
 import { CheckIcon, FailIcon, StoppedIcon, ChevronIcon, GearIcon } from '../Icons';
 import { BugReportPopup } from '../development/BugReportPopup';
 import type { ReportContext } from '../development/ReportDesign';
@@ -246,15 +246,15 @@ function limitReachedLine(plan: PlanView): string {
   return `Reached your ${plan.spendLimit.tokens.toLocaleString()}-token limit.`;
 }
 
-/** Decision 35: Destin asked for two variants of Plan settings — a popup in
- *  the app's dialog style, and a section that expands inside the card — so he
- *  can pick one. `?planSettings=inline` on the workbench URL swaps the second
- *  in for review; the app defaults to the popup. Same review-time-toggle
- *  pattern as the terminal-backing sample (`?termBacking=`, design guide
- *  §4.2) — not a user-facing setting. */
-const PLAN_SETTINGS_VARIANT: 'popup' | 'inline' = typeof window !== 'undefined'
-  && new URLSearchParams(window.location.search).get('planSettings') === 'inline'
-  ? 'inline' : 'popup';
+/** Decision 37: Destin picked the popup over the in-card expand variant
+ *  (decision 35 offered both) — "i think a popup" — so that is the only
+ *  Plan settings surface now. The inline expand-in-place variant, its
+ *  `?planSettings=inline` review-time toggle and the "Plan settings" row it
+ *  used are gone; see decision-log.md decision 37. */
+
+/** A settings-dialog section label — same recipe as every other Settings
+ *  popup's (SpecialistsSection.tsx, ModelPickerPopup.tsx's `<h3>`). */
+const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
 
 /** Decision 35: every leaf row Plan settings can set a model for, in the
  *  card's own order — a repeat's body steps (decision 33's only nesting)
@@ -336,9 +336,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const [settingNewLimit, setSettingNewLimit] = useState(false);
   const [newLimit, setNewLimit] = useState('');
   useEffect(() => { if (!isPaused) { setSettingNewLimit(false); setNewLimit(''); } }, [isPaused]);
-  // Decision 35: Plan settings — one toggle for both variants (the gear
-  // button opens the popup; the inline SettingRow's own chevron opens the
-  // expand-in-place section — see PLAN_SETTINGS_VARIANT).
+  // Decision 35/37: Plan settings — the gear button opens the one popup.
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Task 9b: "Add budget pre-filled" — the assistant's amount, never below
   // the host's minimum (the host would refuse less).
@@ -578,9 +576,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                 {/* Decision 35: a way into Plan settings from the running
                     card too — a limit can be set/changed while it runs, and a
                     not-yet-started step's model can still change. */}
-                {PLAN_SETTINGS_VARIANT === 'popup' && (
-                  <Button size="icon-sm" variant="ghost" aria-label="Plan settings" title="Plan settings" onClick={() => setSettingsOpen(true)} disabled={blocked}><GearIcon className="w-3.5 h-3.5" /></Button>
-                )}
+                <Button size="icon-sm" variant="ghost" aria-label="Plan settings" title="Plan settings" onClick={() => setSettingsOpen(true)} disabled={blocked}><GearIcon className="w-3.5 h-3.5" /></Button>
                 <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop the plan'}</Button>
               </div>
             )}
@@ -591,9 +587,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
                 {/* Decision 35 item 1: a way into Plan settings sits to the
                     left of Comment · Approve (Approve stays rightmost, G-29). */}
-                {PLAN_SETTINGS_VARIANT === 'popup' && (
-                  <Button size="icon-sm" variant="ghost" aria-label="Plan settings" title="Plan settings" onClick={() => setSettingsOpen(true)} disabled={blocked}><GearIcon className="w-3.5 h-3.5" /></Button>
-                )}
+                <Button size="icon-sm" variant="ghost" aria-label="Plan settings" title="Plan settings" onClick={() => setSettingsOpen(true)} disabled={blocked}><GearIcon className="w-3.5 h-3.5" /></Button>
                 <Button size="sm" variant="secondary" onClick={() => setCommenting(true)} disabled={blocked}>Comment</Button>
                 <Button size="sm" variant="primary" onClick={approve} disabled={blocked}>{busy === 'approve' ? 'Approving…' : 'Approve'}</Button>
               </div>
@@ -601,22 +595,18 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
           </div>
           )}
 
-          {/* Decision 35: the inline variant's own entry point — an
-              expand-in-place SettingRow (G-29), right under the ceiling row,
-              only for `proposed`/`running` (the states Plan settings is
-              reachable from). The popup variant uses the gear buttons above
-              instead. */}
-          {PLAN_SETTINGS_VARIANT === 'inline' && !readOnly && (plan.status === 'proposed' || plan.status === 'running') && (
-            <SettingRow variant="item" title="Plan settings" onClick={() => setSettingsOpen((v) => !v)} expanded={settingsOpen} />
-          )}
-          {PLAN_SETTINGS_VARIANT === 'inline' && settingsOpen && !readOnly && (plan.status === 'proposed' || plan.status === 'running') && (
-            <div className="rounded-md border border-edge-dim bg-inset/25 p-2" data-testid="plan-settings-inline">
-              <PlanSettingsFields plan={plan} sessionId={sessionId} onChanged={(p) => dispatch({ type: 'PLAN_CHANGED', sessionId: id, plan: p })} />
-            </div>
-          )}
-          {PLAN_SETTINGS_VARIANT === 'popup' && settingsOpen && (
-            <Dialog open onClose={() => setSettingsOpen(false)} title="Plan settings" size="panel">
-              <div className="p-4" data-testid="plan-settings-popup">
+          {/* Decision 37: the popup is the only Plan settings surface now
+              (Destin, 2026-09-24: "i think a popup") — the in-card expand
+              variant decision 35 offered alongside it, and the "Plan
+              settings" SettingRow that opened it, are gone. Its title names
+              THIS plan (Destin: "if the popup is unique to that plan, it
+              should name the plan") the same way every other per-item
+              settings dialog does — LocalModelsSection's `title="Model
+              settings" subtitle={name}` — rather than the bare "Plan
+              settings" every plan's popup used to share. */}
+          {settingsOpen && (
+            <Dialog open onClose={() => setSettingsOpen(false)} title="Plan settings" subtitle={plan.title} size="panel">
+              <div data-testid="plan-settings-popup" className="contents">
                 <PlanSettingsFields plan={plan} sessionId={sessionId} onChanged={(p) => dispatch({ type: 'PLAN_CHANGED', sessionId: id, plan: p })} />
               </div>
             </Dialog>
@@ -667,21 +657,33 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                   <Button size="sm" variant="primary" onClick={() => setSettingNewLimit(true)} disabled={blocked}>Continue</Button>
                 </div>
               ) : (
-                <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-new-limit">
+                // Decision 37 (Destin, 2026-09-24: "lots of buttons/text in
+                // that warning card" — "make it lighter"): the "New limit $"
+                // label and the Cancel button are gone. The reason line above
+                // ("Reached your $5 limit.") already says what this box is
+                // for, so a second label repeating it added nothing; Cancel
+                // is now the same small unobtrusive close every dismissable
+                // box in the app uses (CloseButton), plus Escape on the field
+                // itself — never the app-wide Escape stack, since this is an
+                // inline row state, not an overlay. One filled Continue,
+                // rightmost (G-29) — was competing with a second filled-ish
+                // button's worth of chrome for the same action.
+                <div className="flex flex-wrap items-center justify-end gap-1.5 ml-auto" data-testid="plan-new-limit">
                   {/* UX review 1, U3: the number is the new TOTAL, not an amount added on top. */}
-                  <span className="text-xs text-fg-dim">New limit{unpriced(plan) ? '' : ' $'}</span>
+                  {!unpriced(plan) && <span className="text-xs text-fg-dim">$</span>}
                   <TextInput
                     size="sm"
                     inputMode={unpriced(plan) ? 'numeric' : 'decimal'}
                     value={newLimit}
                     onChange={(e) => setNewLimit(e.target.value.replace(unpriced(plan) ? /[^0-9]/g : /[^0-9.]/g, ''))}
+                    onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setSettingNewLimit(false); } }}
                     className="w-24"
                     aria-label="New spending limit"
                     autoFocus
                   />
                   {unpriced(plan) && <span className="text-xs text-fg-dim">tokens</span>}
-                  <Button size="sm" variant="ghost" onClick={() => setSettingNewLimit(false)} disabled={blocked}>Cancel</Button>
                   <Button size="sm" variant="primary" onClick={continueWithNewLimit} disabled={blocked || !(Number(newLimit) > 0)}>{busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
+                  <CloseButton size="icon-sm" onClick={() => setSettingNewLimit(false)} disabled={blocked} label="Stop setting a new limit" />
                 </div>
               )}
             >
@@ -903,16 +905,26 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
 }
 
 /**
- * Decision 35 — Plan settings: one place to set the plan's total spending cap
- * and each step's model. The body both variants share (the popup Dialog and
- * the inline expand-in-place section wrap this same component — PlanBlock
- * picks the wrapper by `PLAN_SETTINGS_VARIANT`).
+ * Decision 35/37 — Plan settings: one place to set the plan's total spending
+ * cap and each step's model, rendered inside the Dialog popup PlanBlock opens
+ * on the gear button. Styled like the app's other per-item settings popups
+ * (LocalModelsSection's "Model settings" dialog, ModelPickerPopup) rather than
+ * invented: `<section>` blocks with a `SECTION_LABEL` header when the section
+ * holds more than one row (Step models) and none when a single `SettingRow`'s
+ * own title already says what it is (Spending limit, matching Fast mode's
+ * section in ModelPickerPopup) — never both, which read as the same words
+ * twice (Dialog's own comment on why the title carries no sibling header).
  *
  * Per-step model reuses `ModelPicker` the way Settings → Specialists' TierRow
  * already does (SpecialistsSection.tsx) — a closed trigger ("Default ·
  * Sonnet") that opens the app's own model list on click, `includeClaude=
  * false` because a plan's specialists run through the native harness, never
- * a Claude Code alias. Reused rather than invented, per the task brief.
+ * a Claude Code alias. Reused rather than invented, per the task brief. Each
+ * row is a `SettingRow` (label left, the picker as its `control`, decision
+ * 37) rather than TierRow's stacked label-then-picker — TierRow stacks
+ * because ITS row also carries a whole sentence of hint text next to the
+ * title; a plan step's title is one short line, so it has the room a normal
+ * settings row assumes.
  */
 function PlanSettingsFields({ plan, sessionId, onChanged }: {
   plan: PlanView;
@@ -952,18 +964,21 @@ function PlanSettingsFields({ plan, sessionId, onChanged }: {
   const rows = useMemo(() => settingsRows(plan.steps), [plan.steps]);
 
   return (
-    <div className="space-y-4">
-      <div>
+    <div className="space-y-5">
+      {/* No section header here — the row's own title already says what this
+          is (ModelPickerPopup's Fast mode section does the same), so a
+          sibling "Spending limit" label would repeat it. */}
+      <section>
         <SettingRow
           variant="item"
-          title="Spending limit"
+          title="Set a limit"
           description={priced
             ? 'Off by default. The plan pauses once it reaches this amount.'
             : 'Off by default. The plan pauses once it reaches this many tokens.'}
           control={<Toggle checked={limitOn} onChange={(v) => { setLimitOn(v); void saveLimit(v, amount); }} disabled={saving} aria-label="Spending limit" />}
         />
         {limitOn && (
-          <div className="flex items-center gap-2 px-3 pt-1">
+          <div className="flex items-center gap-2 px-3 pt-2">
             {priced && <span className="text-xs text-fg-dim">$</span>}
             <TextInput
               size="sm"
@@ -984,31 +999,40 @@ function PlanSettingsFields({ plan, sessionId, onChanged }: {
         {/* UX review 1, U6: a limit below what the plan usually costs will
             likely pause it partway — say so before Approve, not after. */}
         {limitOn && estimateHigh(plan) != null && Number(amount) > 0 && Number(amount) < estimateHigh(plan)! && (
-          <div className="text-2xs text-fg-muted px-3 pt-1" data-testid="plan-limit-low">
+          <div className="text-2xs text-fg-muted px-3 pt-1.5" data-testid="plan-limit-low">
             Below what this plan usually costs, so it may pause before it finishes.
           </div>
         )}
-      </div>
-      <div className="space-y-2">
-        <div className="text-2xs uppercase tracking-wide text-fg-muted px-3">Step models</div>
-        <div className="space-y-3 px-3">
+      </section>
+      <section>
+        <h3 className={SECTION_LABEL}>Step models</h3>
+        <div className="space-y-1.5">
           {rows.map((step) => {
             const label = numbers.get(step.id)?.label ?? '';
             const manual = step.stepModel && !step.stepModel.isDefault;
             const value: ModelChoice | null = manual && step.stepModel!.providerId && step.stepModel!.modelId
               ? { runtime: 'native', providerId: step.stepModel!.providerId, modelId: step.stepModel!.modelId }
               : null;
+            const modelLabel = manual ? step.stepModel!.label : `Default · ${step.stepModel?.label ?? 'automatic'}`;
             return (
-              <div key={step.id} className="space-y-1">
-                <div className="text-xs text-fg-2 truncate">{label}. {step.summary ?? step.title}</div>
-                {step.status === 'pending' ? (
-                  <div className="flex items-center gap-1.5">
-                    <ModelPicker
-                      value={value}
-                      onSelect={(c) => void pickModel(step.id, c)}
-                      includeClaude={false}
-                      emptyLabel={`Default · ${step.stepModel?.label ?? 'automatic'}`}
-                    />
+              <SettingRow
+                key={step.id}
+                variant="item"
+                title={`${label}. ${step.summary ?? step.title}`}
+                truncateTitle
+                control={step.status === 'pending' ? (
+                  // Decision 37: label left, the picker as the row's control
+                  // — the same shape every other settings row uses — instead
+                  // of the stacked label-then-picker list this replaces.
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="w-40">
+                      <ModelPicker
+                        value={value}
+                        onSelect={(c) => void pickModel(step.id, c)}
+                        includeClaude={false}
+                        emptyLabel={`Default · ${step.stepModel?.label ?? 'automatic'}`}
+                      />
+                    </div>
                     {manual && (
                       <Button size="sm" variant="ghost" onClick={() => void resetModel(step.id)} title={`Use ${step.specialist}'s default model again`}>Reset</Button>
                     )}
@@ -1016,15 +1040,15 @@ function PlanSettingsFields({ plan, sessionId, onChanged }: {
                 ) : (
                   // Decision 35, running card: a step that has already started
                   // shows the model it ran on, and it can't be changed from here.
-                  <div className="text-2xs text-fg-muted">
-                    {manual ? step.stepModel!.label : `Default · ${step.stepModel?.label ?? 'automatic'}`} — already running
-                  </div>
+                  <span className="text-2xs text-fg-muted shrink-0 max-w-36 truncate" title={modelLabel}>
+                    {modelLabel} — running
+                  </span>
                 )}
-              </div>
+              />
             );
           })}
         </div>
-      </div>
+      </section>
     </div>
   );
 }
