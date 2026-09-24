@@ -183,7 +183,11 @@
    Destin, 2026-09-23 (deck minimalist-unified-surface): the header buttons,
    session switcher, quick chips and their edit button, status chips and their
    edit button, the window buttons AND the message box share ONE light surface.
-   The edge is an inset ring, not a border, so no control changes size. */
+   The edge is an inset ring, not a border, so no control changes size.
+   The 16% is FIXED, deliberately not the theme's --panels-opacity: the
+   faintness is the style (a theme's panel opacity, often 0.5+, would turn the
+   controls back into solid chips). The big sheets below DO follow it, because
+   they carry reading text. Integration review 2026-09-24, I7. */
 [data-chrome-style='float'] :is(
   .header-bar > .header-controls-left > button:not(.session-strip),
   .header-bar > .header-controls-left > div:not(.wide-view-toggle) > button,
@@ -204,26 +208,13 @@
   border-width: 1px;
   border-style: solid;
 }
-/* The frost, only where there is a wallpaper or gradient to frost. Literal px:
-   Chromium does not repaint a blur written through a custom property. */
-[data-wallpaper] [data-chrome-style='float'] :is(
-  .header-bar > .header-controls-left > button:not(.session-strip),
-  .header-bar > .header-controls-left > div:not(.wide-view-toggle) > button,
-  .header-bar > .header-controls-right > div > button,
-  .header-bar .wide-view-toggle,
-  .session-strip,
-  .quick-chip, .quick-chip-edit,
-  .status-bar > button, .status-bar .status-chip
-) {
-  backdrop-filter: blur(6px) saturate(1.1) !important;
-  -webkit-backdrop-filter: blur(6px) saturate(1.1) !important;
-}
-/* The message box is read through, so it frosts much harder (Destin,
-   2026-09-23: "frost/blur a bit more aggressively on the input area"). */
-[data-wallpaper] [data-chrome-style='float'] .input-bar-container form {
-  backdrop-filter: blur(16px) saturate(1.15) !important;
-  -webkit-backdrop-filter: blur(16px) saturate(1.15) !important;
-}
+/* THE FROST (every backdrop-filter this style uses) is NOT in this file: it is
+   injected by themes/theme-engine.ts (FLOAT_CHROME_GLASS), inside the same
+   stylesheet as every other glass surface. That stylesheet is written only
+   while the theme has a wallpaper/gradient, "Reduced effects" is off and the
+   blur slider is above zero — so all three turn this style's frost off too
+   (integration review 2026-09-24, I5/I6). Everything else here is the
+   surface WITHOUT frost, which is what those settings leave. */
 /* Header controls keep their badge/indicator positioning inside themselves. */
 [data-chrome-style='float'] :is(
   .header-bar > .header-controls-left > button,
@@ -284,10 +275,6 @@
 [data-chrome-style='float'] .header-bar > .header-controls-left button[aria-pressed='true']:not(.wide-view-toggle *) {
   background: color-mix(in srgb, var(--panel) 85%, transparent) !important;
   box-shadow: inset 0 0 0 1px var(--edge), 0 2px 8px -2px rgba(0, 0, 0, .42) !important;
-}
-[data-chrome-style='float'] .header-bar .wide-view-toggle-indicator {
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 [data-chrome-style='float'] .header-bar > .header-controls-right > div > button.bg-accent,
 [data-chrome-style='float'] .header-bar > .header-controls-right > div > button.bg-accent > svg,
@@ -404,24 +391,10 @@
   border-color: transparent !important;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--edge) 40%, transparent), 0 8px 24px -10px rgba(0, 0, 0, .3) !important;
 }
-/* See-through only over a wallpaper. With nothing to blur (Midnight, Light),
-   a 24% fill left the chat's bubbles and buttons sharp behind the menu's rows,
-   so a flat theme keeps the menu's solid panel.
-   24%, not the switcher's 16%: "just a smidge less transparent on the panel"
-   (Destin, deck minimalist-round7, R7-1) — a list of names needs more body.
-   !important: the theme engine injects the theme's own (heavier) overlay blur,
-   unlayered, after this file. */
-[data-wallpaper] [data-chrome-style='float'] .session-menu.glass-overlay {
-  background-color: color-mix(in srgb, var(--inset) 24%, transparent) !important;
-  backdrop-filter: blur(6px) saturate(1.1) !important;
-  -webkit-backdrop-filter: blur(6px) saturate(1.1) !important;
-}
-/* Overlays make their inner fills opaque so wallpaper cannot leak through;
-   here the wallpaper IS the look, so the selected row matches the switcher's
-   selected session instead. */
-[data-wallpaper] [data-chrome-style='float'] .session-menu :is(.bg-inset, .bg-panel) {
-  background-color: color-mix(in srgb, var(--panel) 26%, transparent) !important;
-}
+/* The menu's see-through fill (24%) and its selected row come WITH its frost,
+   from theme-engine.ts (FLOAT_CHROME_GLASS): without a blur — a flat theme,
+   "Reduced effects", a zero blur slider — a 24% fill left the chat behind it
+   sharp through the rows, so the menu keeps the app's normal overlay there. */
 /* The session list's edge fade. .scroll-fade paints a solid --panel gradient
    over the rows' ends, which on this see-through menu read as a dark band.
    Here the rows themselves fade to clear, like messages under the controls
@@ -490,13 +463,9 @@
   border-radius: var(--radius-lg);
   box-shadow: var(--float-sheet-ring), var(--float-sheet-drop);
 }
-/* Literal px: Chromium does not repaint a blur written through a variable. One
-   blur for the whole pane — its rows and cards below get none (a filter per
-   repeated card is the paint bug react-renderer.md warns about). */
-[data-wallpaper] [data-chrome-style='float'] .framed-shell > .drawer-pane {
-  backdrop-filter: blur(16px) saturate(1.15) !important;
-  -webkit-backdrop-filter: blur(16px) saturate(1.15) !important;
-}
+/* Its frost is ONE blur for the whole pane (theme-engine.ts), its rows and
+   cards below get none: a filter per repeated card is the paint bug
+   react-renderer.md warns about. */
 /* The pane's own interior layers were solid --inset; clear them. */
 [data-chrome-style='float'] .drawer-pane :is(.drawer-aside, .game-panel) {
   background-color: transparent !important;
@@ -527,10 +496,6 @@
   background-color: var(--float-sheet-fill) !important;
   border-radius: var(--radius-lg);
   box-shadow: var(--float-sheet-ring), var(--float-sheet-drop);
-}
-[data-wallpaper] [data-chrome-style='float'] .screen-pane {
-  backdrop-filter: blur(16px) saturate(1.15);
-  -webkit-backdrop-filter: blur(16px) saturate(1.15);
 }
 /* Cards on a screen (the project hero, file tiles, the search field): the
    light surface, no blur of their own. */

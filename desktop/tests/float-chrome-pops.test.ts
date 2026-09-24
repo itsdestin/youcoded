@@ -69,13 +69,26 @@ describe('float chrome never reaches another chrome style', () => {
     }
   });
 
-  it('the theme engine injects nothing float-specific and leaves the floating-input glass as it was', () => {
+  it('the theme engine leaves the floating-input glass as it was, and its float frost is gated on float', () => {
     const engine = readSource(join(RENDERER, 'themes/theme-engine.ts'));
     // WHY: an earlier draft rewrote these selectors with :not([data-chrome-style='float']),
     // which raised their specificity for EVERY floating-input theme.
     expect(engine).toContain("[data-wallpaper] [data-input-style='floating'] .input-bar-container,");
-    expect(engine).not.toMatch(/data-chrome-style='float'/);
     expect(engine).not.toMatch(/data-(veil|pop|header-lens)/);
+    expect(engine).not.toMatch(/:not\(\[data-chrome-style='float'\]\)/);
+    // Every selector in the float frost block names the float style.
+    const block = engine.match(/const FLOAT_CHROME_GLASS = `([\s\S]*?)`;/)?.[1] ?? '';
+    expect(block).not.toBe('');
+    for (const list of selectorLists(block.replace(/\/\*[\s\S]*?\*\//g, ''))) {
+      let depth = 0; let from = 0; const parts: string[] = [];
+      for (let i = 0; i < list.length; i++) {
+        if (list[i] === '(') depth++;
+        else if (list[i] === ')') depth--;
+        else if (list[i] === ',' && depth === 0) { parts.push(list.slice(from, i)); from = i + 1; }
+      }
+      parts.push(list.slice(from));
+      for (const selector of parts) expect(selector, selector).toContain("[data-chrome-style='float']");
+    }
   });
 
   it('sets no float attribute on a theme that does not select it', () => {
@@ -112,13 +125,27 @@ describe('the approved float look', () => {
   });
 
   it('frosts the message box harder than the small controls, and the small-control blur does not name it', () => {
-    const css = floatCSS();
-    expect(css).toMatch(/\.input-bar-container form \{\s*backdrop-filter: blur\(16px\)/);
+    applyThemeToDom(theme({ 'chrome-style': 'float' }) as any, false);
+    const glass = [...document.head.querySelectorAll('style')].map(el => el.textContent ?? '').join('\n');
+    expect(glass).toMatch(/\.input-bar-container form,[^{]*\{\s*backdrop-filter: blur\(16px\)/);
     // WHY: with `form` in the :is() list the list's higher specificity won and
     // the 16px rule never applied (caught 2026-09-23 in the cleanup's pixel diff).
-    const small = css.match(/:is\(([^{]*)\)\s*\{\s*backdrop-filter: blur\(6px\)/)?.[1] ?? '';
+    const small = glass.match(/:is\(([^{]*?)\)[^{]*\{\s*backdrop-filter: blur\(6px\)/)?.[1] ?? '';
     expect(small).not.toBe('');
     expect(small).not.toContain('form');
+  });
+
+  it('drops all float frost under Reduced effects or a zero blur, like every other glass surface', () => {
+    const frost = () => [...document.head.querySelectorAll('style')].map(el => el.textContent ?? '').join('\n')
+      .includes("[data-chrome-style='float'] .input-bar-container form");
+    applyThemeToDom(theme({ 'chrome-style': 'float' }) as any, false);
+    expect(frost()).toBe(true);
+    applyThemeToDom(theme({ 'chrome-style': 'float' }) as any, true);
+    expect(frost()).toBe(false);
+    applyThemeToDom({ ...theme({ 'chrome-style': 'float' }), background: { ...wallpaper, 'panels-blur': 0 } } as any, false);
+    expect(frost()).toBe(false);
+    // And the stylesheet itself carries no blur of its own to survive those settings.
+    expect(floatCSS()).not.toMatch(/backdrop-filter:\s*blur/);
   });
 
   it('shows no full-width header band', () => {
@@ -147,8 +174,8 @@ describe('the approved float look', () => {
 
   it('gives the session menu the switcher\'s surface and restyles every scroll bar', () => {
     const css = floatCSS();
-    // See-through only over a wallpaper; a flat theme keeps the solid panel.
-    expect(css).toMatch(/\[data-wallpaper\] \[data-chrome-style='float'\] \.session-menu\.glass-overlay \{\s*background-color: color-mix\(in srgb, var\(--inset\) 24%/);
+    // See-through only while frosted (theme engine); otherwise the normal overlay.
+    expect(readSource(join(RENDERER, 'themes/theme-engine.ts'))).toMatch(/\[data-wallpaper\] \[data-chrome-style='float'\] \.session-menu\.glass-overlay \{\s*background-color: color-mix\(in srgb, var\(--inset\) 24%/);
     // The list's ends fade to clear (a mask), not under a painted panel band.
     expect(css).toMatch(/\.session-menu \.scroll-fade::after \{\s*display: none/);
     expect(readSource(join(RENDERER, 'components/SessionStrip.tsx'))).toContain('className="session-menu glass-overlay');

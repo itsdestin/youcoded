@@ -547,6 +547,48 @@ export function buildReducedOverrides(styleEl: HTMLStyleElement): string {
 
 /** Applies a full ThemeDefinition to the live DOM. Only call from renderer process.
  *  When reducedEffects is true, glassmorphism, particles, and overlay effects are suppressed. */
+/** The 'float' chrome style's frost (styles/float-chrome.css draws the rest).
+ *  WHY here: this stylesheet is written only while a wallpaper/gradient is
+ *  present, "Reduced effects" is off and the blur slider is above zero, so
+ *  those settings turn this style's blur off exactly as they do every other
+ *  glass surface's (integration review 2026-09-24, I5/I6). Fixed amounts, not
+ *  panelsBlur: they are the approved look (review decks 2026-09-23), and the
+ *  small controls' 6px would read as solid at a theme's 20px+ panel blur.
+ *  Literal px: Chromium does not repaint a blur written through a variable.
+ *  Every selector is gated on the float style, so no other style sees it. */
+const FLOAT_CHROME_GLASS = `
+    [data-wallpaper] [data-chrome-style='float'] :is(
+      .header-bar > .header-controls-left > button:not(.session-strip),
+      .header-bar > .header-controls-left > div:not(.wide-view-toggle) > button,
+      .header-bar > .header-controls-right > div > button,
+      .header-bar .wide-view-toggle,
+      .session-strip,
+      .quick-chip, .quick-chip-edit,
+      .status-bar > button, .status-bar .status-chip
+    ),
+    [data-wallpaper] [data-chrome-style='float'] .session-menu.glass-overlay {
+      backdrop-filter: blur(6px) saturate(1.1) !important;
+      -webkit-backdrop-filter: blur(6px) saturate(1.1) !important;
+    }
+    [data-wallpaper] [data-chrome-style='float'] .header-bar .wide-view-toggle-indicator {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+    /* The message box and the big sheets are read through: heavier frost. */
+    [data-wallpaper] [data-chrome-style='float'] .input-bar-container form,
+    [data-wallpaper] [data-chrome-style='float'] .framed-shell > .drawer-pane,
+    [data-wallpaper] [data-chrome-style='float'] .screen-pane {
+      backdrop-filter: blur(16px) saturate(1.15) !important;
+      -webkit-backdrop-filter: blur(16px) saturate(1.15) !important;
+    }
+    /* The session menu turns see-through only while it is frosted. */
+    [data-wallpaper] [data-chrome-style='float'] .session-menu.glass-overlay {
+      background-color: color-mix(in srgb, var(--inset) 24%, transparent) !important;
+    }
+    [data-wallpaper] [data-chrome-style='float'] .session-menu :is(.bg-inset, .bg-panel) {
+      background-color: color-mix(in srgb, var(--panel) 26%, transparent) !important;
+    }`;
+
 export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false): void {
   const root = document.documentElement;
   const body = document.body;
@@ -823,7 +865,7 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     [data-wallpaper] .layer-scrim {
       backdrop-filter: blur(${scrimBlur}px);
       -webkit-backdrop-filter: blur(${scrimBlur}px);
-    }${bubbleRule}
+    }${bubbleRule}${FLOAT_CHROME_GLASS}
     `;
   } else {
     // Keep the tag in place but empty it — avoids layout thrash from
