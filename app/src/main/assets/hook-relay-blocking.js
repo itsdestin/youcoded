@@ -13,7 +13,11 @@
 var net = require('net');
 var socket = process.env.CLAUDE_MOBILE_SOCKET;
 if (!socket) process.exit(0);
-var TIMEOUT_MS = parseInt(process.env.CLAUDE_RELAY_TIMEOUT || '120000', 10);
+// Tier-2 backstop: 2h30m — above EventBridge's 2h hold, below Bootstrap's 3h
+// Claude Code hook timeout. Relay-wins = exit 2 (clean deny); Claude-Code-wins =
+// hook killed with no decision = AskUserQuestion waits forever. Do NOT equalize.
+// Pinned by desktop/tests/permission-timeout-margins.test.ts.
+var TIMEOUT_MS = parseInt(process.env.CLAUDE_RELAY_TIMEOUT || '9000000', 10);
 
 var input = '';
 process.stdin.setEncoding('utf8');
@@ -26,6 +30,11 @@ process.stdin.on('end', function() {
     try {
       var parsed = JSON.parse(input);
       parsed.mobileSessionId = process.env.CLAUDE_MOBILE_SESSION_ID;
+      // WHY (2026-09-23): CLAUDE_MOBILE_SESSION_ID is inherited by every process
+      // the session starts, so a nested `claude` reported its hooks as ours.
+      // Claude Code's own pid (CLAUDE_PID) lets EventBridge keep only the first
+      // process it hears from. Mirrors desktop hook-scripts/relay.js.
+      if (process.env.CLAUDE_PID) parsed.claudePid = process.env.CLAUDE_PID;
       input = JSON.stringify(parsed);
     } catch(e) { /* send raw if parse fails */ }
   }

@@ -29,6 +29,75 @@ describe('artifactReducer', () => {
     expect(next.sessionArtifacts['s1']).toEqual([sampleArtifact]);
   });
 
+  describe('a list refresh never orphans the open file', () => {
+    // A file opened straight from a chat path is shown as an on-disk
+    // (discovered) record whose id is its relative path. The session's list
+    // does not contain it until something records it; before this, the next
+    // refresh dropped it and the pane fell back to the file list.
+    const discovered: ArtifactRecord = { ...sampleArtifact, id: 'docs/plan.md', path: 'docs/plan.md', versions: [], discovered: true } as ArtifactRecord;
+    const tracked: ArtifactRecord = { ...sampleArtifact, id: 'art_9', path: 'docs/plan.md' };
+    const other: ArtifactRecord = { ...sampleArtifact, id: 'art_2', path: 'other.md' };
+    const opened = (rec: ArtifactRecord) => {
+      let s = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACT_UPSERTED', sessionId: 's1', artifact: rec });
+      s = artifactReducer(s, { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: rec.id });
+      return s;
+    };
+
+    it('keeps the open record when the refreshed list does not have it', () => {
+      const next = artifactReducer(opened(discovered), { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
+      expect(next.activeArtifactBySession['s1']).toBe('docs/plan.md');
+      expect(next.sessionArtifacts['s1'].map((a) => a.id)).toEqual(['art_2', 'docs/plan.md']);
+    });
+
+    it('follows the open file to its new id when the refresh lists it under one', () => {
+      // The first write by the assistant gives the file a permanent id.
+      const next = artifactReducer(opened(discovered), { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other, tracked] });
+      expect(next.activeArtifactBySession['s1']).toBe('art_9');
+      expect(next.sessionArtifacts['s1'].map((a) => a.id)).toEqual(['art_2', 'art_9']);
+    });
+
+    it('keeps a just-delivered file selected when an older refresh lands after it', () => {
+      // A reply delivers a file: auto-open records and selects it while the
+      // tool tracker's debounced refresh — started before the record existed —
+      // is still in flight. That refresh used to orphan the selection, and the
+      // panel opened on the list instead of the file.
+      const delivered: ArtifactRecord = { ...sampleArtifact, id: 'art_new', path: 'out/report.html' };
+      const next = artifactReducer(opened(delivered), { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
+      expect(next.activeArtifactBySession['s1']).toBe('art_new');
+      expect(next.sessionArtifacts['s1'].some((a) => a.id === 'art_new')).toBe(true);
+    });
+
+    it('lets go of an open file another window removed, once a refresh has listed it before', () => {
+      // Listed by a refresh, then gone from the next one: removed elsewhere.
+      let st = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [tracked, other] });
+      st = artifactReducer(st, { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: 'art_9' });
+      const next = artifactReducer(st, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
+      expect(next.sessionArtifacts['s1'].map((a) => a.id)).toEqual(['art_2']);
+    });
+
+    it('never swaps the open outside file for another with the same name', () => {
+      // An outside record's `path` is only its file name.
+      const mine: ArtifactRecord = { ...sampleArtifact, id: 'ext_A', kind: 'external', path: 'plan.md', absolutePath: '/a/plan.md' };
+      const theirs: ArtifactRecord = { ...sampleArtifact, id: 'ext_B', kind: 'external', path: 'plan.md', absolutePath: '/b/plan.md' };
+      let st = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [mine] });
+      st = artifactReducer(st, { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: 'ext_A' });
+      const next = artifactReducer(st, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [theirs] });
+      expect(next.activeArtifactBySession['s1']).toBe('ext_A');
+    });
+
+    it('is a plain replacement when nothing is open', () => {
+      const s = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACT_UPSERTED', sessionId: 's1', artifact: discovered });
+      const next = artifactReducer(s, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
+      expect(next.sessionArtifacts['s1']).toEqual([other]);
+    });
+
+    it('is a plain replacement when the open record is still listed', () => {
+      const next = artifactReducer(opened(tracked), { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [tracked, other] });
+      expect(next.activeArtifactBySession['s1']).toBe('art_9');
+      expect(next.sessionArtifacts['s1']).toEqual([tracked, other]);
+    });
+  });
+
   // The loading state for a tapped file (2026-09-11): while the lookup runs the
   // drawer said "Nothing here yet", contradicting the file just tapped. The
   // pending name lives here; every way a lookup can end clears it.

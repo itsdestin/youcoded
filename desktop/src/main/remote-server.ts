@@ -24,6 +24,7 @@ import type { PageFetchRequest } from '../shared/pages-types';
 // and ipc-handlers.ts use.
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
+import { readDefaults, writeDefaults, getFavorites, setFavorites, getIncognito, setIncognito } from './prefs-service';
 import { staticAssetPolicy } from './remote-static-policy';
 import fs from 'fs';
 import path from 'path';
@@ -1018,9 +1019,11 @@ export class RemoteServer {
    *  so a reconnecting phone was replayed the dead ask as open. Purge it from the buffer
    *  (the same purge a resolution does) and tell connected clients it expired — for the
    *  relay, "socket closed before a response was sent" is literally what happened. */
-  private onPermissionExpired = (sessionId: string, requestId: string) => {
+  private onPermissionExpired = (sessionId: string, requestId: string, reason?: string) => {
     this.bufferHookEvent({ type: 'PermissionResolved', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent);
-    const expired = { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent;
+    // _reason travels to phones too, so a 'hook-closed' ask stays answerable
+    // there exactly as it does on the computer (hook-relay.ts).
+    const expired = { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId, _reason: reason }, timestamp: Date.now() } as HookEvent;
     // Buffered too, so a phone that was away hears "expired" on reconnect instead of a
     // replay-complete that would clear the card as answered (T2 re-review, 7).
     this.bufferHookEvent(expired);
@@ -1935,10 +1938,15 @@ export class RemoteServer {
         }
         break;
       }
+      // WHY attachments are passed: the shim sends them (host paths the phone's picker
+      // already uploaded here), and dropping them meant a phone's attached files never
+      // reached the assistant — only the text did. Same argument the desktop handler
+      // passes; anything that is not a string is ignored rather than handed to the host.
+      // M1: mirrors the desktop invoke — never throw (transport-parity rule).
       case 'native:send': {
-        // M1: mirrors the desktop invoke — never throw (transport-parity rule).
         const notLive = { status: 'failed', reason: 'not-live' } satisfies NativeSendResult;
-        const result = this.nativeRuntime ? this.nativeRuntime.nativeHost.send(payload.sessionId, payload.text) : notLive;
+        const files = (Array.isArray(payload?.attachments) ? payload.attachments : []).filter((a: unknown) => typeof a === 'string');
+        const result = this.nativeRuntime ? this.nativeRuntime.nativeHost.send(payload.sessionId, payload.text, files) : notLive;
         this.respond(client.ws, type, id, result);
         break;
       }
@@ -3123,29 +3131,15 @@ export class RemoteServer {
         }
         break;
       }
+      // Session defaults: the SAME functions the desktop handlers call (prefs-service.ts —
+      // WHY there: the copies that lived here had drifted, and a permission setting saved
+      // from a phone was not enforced until the desktop re-read the file).
       case 'defaults:get': {
-        const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
-        const DEFAULTS_INITIAL = { skipPermissions: false, model: 'sonnet', projectFolder: '' };
-        try {
-          const raw = await fs.promises.readFile(defaultsPrefPath, 'utf8');
-          this.respond(client.ws, type, id, { ...DEFAULTS_INITIAL, ...JSON.parse(raw) });
-        } catch {
-          this.respond(client.ws, type, id, { ...DEFAULTS_INITIAL });
-        }
+        this.respond(client.ws, type, id, readDefaults());
         break;
       }
       case 'defaults:set': {
-        const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
-        const DEFAULTS_INITIAL = { skipPermissions: false, model: 'sonnet', projectFolder: '' };
-        try {
-          let current = { ...DEFAULTS_INITIAL };
-          try { current = { ...current, ...JSON.parse(await fs.promises.readFile(defaultsPrefPath, 'utf8')) }; } catch {}
-          const merged = { ...current, ...payload };
-          await fs.promises.writeFile(defaultsPrefPath, JSON.stringify(merged, null, 2));
-          this.respond(client.ws, type, id, merged);
-        } catch {
-          this.respond(client.ws, type, id, null);
-        }
+        this.respond(client.ws, type, id, writeDefaults(payload && typeof payload === 'object' ? payload : {}));
         break;
       }
       case 'get-home-path': {
@@ -3227,42 +3221,22 @@ export class RemoteServer {
         catch { this.respond(client.ws, type, id, false); }
         break;
       }
+      // Game favorites + incognito: the same functions main.ts's handlers call
+      // (prefs-service.ts). favorites:get used to answer the whole file here but a list there.
       case 'favorites:get': {
-        const favPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        try {
-          const data = await fs.promises.readFile(favPath, 'utf8');
-          this.respond(client.ws, type, id, JSON.parse(data));
-        } catch {
-          this.respond(client.ws, type, id, { favorites: [] });
-        }
+        this.respond(client.ws, type, id, getFavorites());
         break;
       }
       case 'favorites:set': {
-        const favPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        let existing: Record<string, any> = {};
-        try { existing = JSON.parse(await fs.promises.readFile(favPath, 'utf8')); } catch {}
-        existing.favorites = payload.favorites ?? payload;
-        await fs.promises.writeFile(favPath, JSON.stringify(existing, null, 2));
-        this.respond(client.ws, type, id, { ok: true });
+        this.respond(client.ws, type, id, setFavorites(payload?.favorites ?? payload));
         break;
       }
       case 'game:getIncognito': {
-        const gPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        try {
-          const data = JSON.parse(await fs.promises.readFile(gPath, 'utf8'));
-          this.respond(client.ws, type, id, data.incognito ?? false);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
+        this.respond(client.ws, type, id, getIncognito());
         break;
       }
       case 'game:setIncognito': {
-        const gPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        let existing: Record<string, any> = {};
-        try { existing = JSON.parse(await fs.promises.readFile(gPath, 'utf8')); } catch {}
-        existing.incognito = payload;
-        await fs.promises.writeFile(gPath, JSON.stringify(existing, null, 2));
-        this.respond(client.ws, type, id, { ok: true });
+        this.respond(client.ws, type, id, setIncognito(payload));
         break;
       }
       case 'transcript:read-meta': {
@@ -3984,7 +3958,10 @@ export class RemoteServer {
   private readonly fileReads: Record<string, (payload: any) => Promise<unknown>> = {
     'artifacts:list-session': async (p) => {
       if (typeof p.sessionId !== 'string') return { ok: false, error: 'bad-request' };
-      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot);
+      // Same conversation-id match as the desktop's LIST_SESSION (resolve = the id map).
+      const resolved = this.sessionMetaWiring?.resolve?.(p.sessionId);
+      const conversationId = resolved !== p.sessionId ? resolved : undefined;
+      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot, conversationId);
     },
     'artifacts:list-project': async (p) =>
       (await this.refuseUnknownProject(p.projectId, { records: true })) ?? listProjectFiles(p.projectId, p.opts),

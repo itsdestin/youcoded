@@ -27,8 +27,10 @@ function bridge(): PagesBridge | undefined {
 
 /** A new key is typed on the computer only (deck Q-phone): over remote access
  *  the approval says "Finish setting this up on your computer" instead of
- *  showing a key box. `?pagesPhone=1` shows that state in the workbench. */
-export function keysEnteredHere(): boolean {
+ *  showing a key box. `?pagesPhone=1` shows that state in the workbench.
+ *  WHY not exported: only this file calls it; the export was knip's one unused
+ *  export that pushed the combined tree past the remote branch's lowered ratchet. */
+function keysEnteredHere(): boolean {
   if (isWorkbenchMode() && new URLSearchParams(location.search).get('pagesPhone') === '1') return false;
   return !isRemoteMode();
 }

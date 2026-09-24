@@ -38,6 +38,11 @@ export interface ArtifactState {
   // session's drawer remembers which file was open across session switches.
   // ProjectView uses the literal 'project-view' key for its own selection.
   activeArtifactBySession: Record<string, string | null>;
+  /** Per-session: records put in the list HERE (a file opened from a chat path,
+   *  a delivered file) that no refresh has listed yet. Only these may survive
+   *  a refresh that lacks them — see SESSION_ARTIFACTS_LOADED. Optional so
+   *  hand-built test states need not carry it. */
+  localArtifactIdsBySession?: Record<string, string[]>;
   /** Per-session: the drawer is showing the git review sub-view for the active file. */
   gitReviewBySession: Record<string, boolean>;
   // Session references (spec 2026-08-10 §D). A previewed past conversation
@@ -71,15 +76,55 @@ export const initialArtifactState: ArtifactState = {
 
 export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactState {
   switch (a.type) {
-    case 'SESSION_ARTIFACTS_LOADED':
-      return { ...s, sessionArtifacts: { ...s.sessionArtifacts, [a.sessionId]: a.artifacts } };
+    case 'SESSION_ARTIFACTS_LOADED': {
+      // WHY this is not a plain replacement: the list is refreshed wholesale
+      // (after every burst of assistant file writes, on rename, on reopen), and
+      // the open file is held by ID. Two records the refresh can legitimately
+      // lack, which used to drop the open file and fall back to the list:
+      //   - a file opened straight from a chat path is an on-disk record keyed
+      //     by its PATH (`discovered`), and its first write gives it a
+      //     permanent id — follow it to the listed INTERNAL record at that path;
+      //   - a record put in the list here (a delivered file) that a refresh
+      //     started before it existed does not have yet — keep it.
+      // Anything else a refresh lacks was removed elsewhere, and goes (review
+      // 2026-09-23, F8). Matching is by id, and by path only for a discovered
+      // record: an outside file's `path` is just its name, so two outside
+      // files with the same name must never swap.
+      const sid = a.sessionId;
+      const local = s.localArtifactIdsBySession?.[sid] ?? [];
+      const listed = new Set(a.artifacts.map((x) => x.id));
+      const plain = {
+        ...s,
+        sessionArtifacts: { ...s.sessionArtifacts, [sid]: a.artifacts },
+        localArtifactIdsBySession: { ...s.localArtifactIdsBySession, [sid]: [] as string[] },
+      };
+      const activeId = s.activeArtifactBySession[sid];
+      const prev = activeId ? (s.sessionArtifacts[sid] ?? []).find((x) => x.id === activeId) : undefined;
+      if (!prev || listed.has(prev.id)) return plain;
+      const moved = (prev as { discovered?: boolean }).discovered
+        ? a.artifacts.find((x) => x.kind === 'internal' && x.path === prev.path)
+        : undefined;
+      if (moved) return { ...plain, activeArtifactBySession: { ...s.activeArtifactBySession, [sid]: moved.id } };
+      if (!local.includes(prev.id)) return plain;
+      return {
+        ...plain,
+        sessionArtifacts: { ...s.sessionArtifacts, [sid]: [...a.artifacts, prev] },
+        localArtifactIdsBySession: { ...s.localArtifactIdsBySession, [sid]: [prev.id] },
+      };
+    }
     case 'SESSION_ARTIFACT_UPSERTED': {
       const existing = s.sessionArtifacts[a.sessionId] ?? [];
       const i = existing.findIndex((x) => x.id === a.artifact.id);
       const next = i >= 0
         ? existing.map((x, j) => (j === i ? a.artifact : x))
         : [...existing, a.artifact];
-      return { ...s, sessionArtifacts: { ...s.sessionArtifacts, [a.sessionId]: next } };
+      const local = s.localArtifactIdsBySession?.[a.sessionId] ?? [];
+      return {
+        ...s,
+        sessionArtifacts: { ...s.sessionArtifacts, [a.sessionId]: next },
+        // A record new to this list came from here, not from a refresh.
+        ...(i < 0 ? { localArtifactIdsBySession: { ...s.localArtifactIdsBySession, [a.sessionId]: [...local, a.artifact.id] } } : {}),
+      };
     }
     case 'SET_SESSION_CWD':
       return { ...s, sessionCwd: { ...s.sessionCwd, [a.sessionId]: a.cwd } };
@@ -161,8 +206,11 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
     // page view too, and puts the library away.
     case 'PAGE_OPENED':
       return { ...s, openPageId: a.pageId, pageViewOpen: true, pagesViewOpen: false, projectViewOpen: false, pageFocus: !!a.focus };
+    // The open page is gone (deleted — PageHost notices the list no longer
+    // has it). The view stays, on "No page selected"; focus goes too, because
+    // a focused view hides the panel, which is now the only way on.
     case 'PAGE_CLOSED':
-      return { ...s, openPageId: null };
+      return { ...s, openPageId: null, pageFocus: false };
     case 'GIT_REVIEW_OPENED':
       return { ...s, gitReviewBySession: { ...s.gitReviewBySession, [a.sessionId]: true } };
     case 'GIT_REVIEW_CLOSED':

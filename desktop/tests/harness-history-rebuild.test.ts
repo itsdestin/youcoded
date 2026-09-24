@@ -399,6 +399,52 @@ describe('rebuildHistory — the resume deep-equal contract', () => {
     ]);
   });
 
+  it('a whitespace-only step that is silently re-run rebuilds byte-identical to live (raw + through-store)', async () => {
+    // The live push skips a whitespace-only step and re-runs it once; its deltas
+    // still streamed. Same partId on both attempts (the common provider shape),
+    // so without the discard the store folds '\n  \n' into the retry's text.
+    const model = scriptedModel([
+      stream(...textChunks('t0', '\n  \n'), finishChunk('stop')),
+      stream(...textChunks('t0', 'recovered'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ decide: async () => ALLOW }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const live = (session as any).history as any[];
+    expect(live).toEqual([{ role: 'user', content: 'go' }, { role: 'assistant', content: [{ type: 'text', text: 'recovered' }] }]);
+    expect(rebuildHistory(await throughStore(events))).toEqual(live);
+  });
+
+  it('a turn that ends on two whitespace-only steps rebuilds with no blank assistant message', async () => {
+    const model = scriptedModel([
+      stream(...textChunks('t0', '\n'), finishChunk('stop')),
+      stream(...textChunks('t1', '  '), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ decide: async () => ALLOW }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const live = (session as any).history as any[];
+    expect(live).toEqual([{ role: 'user', content: 'go' }]);
+    expect(rebuildHistory(events)).toEqual(live);
+    expect(rebuildHistory(await throughStore(events))).toEqual(live);
+  });
+
+  // WHY (combined branch): bugfix-native's blank-message skip meets master's
+  // compaction origins. A skipped blank message must push no origin, or every
+  // later message's origin is off by one and a portable cut cites wrong events.
+  it('a skipped whitespace-only assistant message leaves messages and origins aligned', () => {
+    const events: TranscriptEvent[] = [
+      { type: 'user-message', sessionId: 's-1', uuid: 'u1', timestamp: 0, data: { text: 'go' } },
+      { type: 'assistant-text', sessionId: 's-1', uuid: 'blank', timestamp: 0, data: { text: '\n  ', partId: 'p0' } },
+      { type: 'user-message', sessionId: 's-1', uuid: 'u2', timestamp: 0, data: { text: 'again' } },
+      { type: 'assistant-text', sessionId: 's-1', uuid: 'real', timestamp: 0, data: { text: 'hi', partId: 'p1' } },
+    ];
+    const { messages, origins } = rebuildHistoryWithOrigins(events);
+    expect(messages.map((m) => m.role)).toEqual(['user', 'user', 'assistant']);
+    expect(origins).toHaveLength(messages.length);
+    expect(origins[2]).toEqual(['real']);
+  });
+
   it('CRASH truncated tail: unpaired tool-use at end → synthetic tool-result back-filled (no dangling call)', async () => {
     // Process died after the tool-use line persisted but BEFORE its tool-result
     // (a wide window during Bash/Edit). The stream ends on an unpaired tool-use;

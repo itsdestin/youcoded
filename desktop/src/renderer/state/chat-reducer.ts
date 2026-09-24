@@ -439,7 +439,12 @@ function endTurn(
       continue;
     }
     if (tool.status === 'running' || tool.status === 'awaiting-approval') {
-      toolCalls.set(id, { ...tool, status: 'failed', error: errorMessage });
+      // Also drop `expired`: a kept card (PERMISSION_EXPIRED 'hook-closed') is
+      // settled now, and a stale flag would let a later quiet
+      // PERMISSION_CARD_RESOLVED (Dismiss, the menu-gone rule) overwrite this
+      // real failure with 'complete'.
+      const { expired: _expired, ...rest } = tool;
+      toolCalls.set(id, { ...rest, status: 'failed', error: errorMessage });
     }
   }
   return {
@@ -920,7 +925,58 @@ function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState)
   return { ...copy, timeline: carried.length ? [...copy.timeline, ...carried] : copy.timeline, queuedMessages };
 }
 
+/** A stall WARNING belongs to the amber 'stuck' state and nothing else.
+ *
+ *  WHY (roadmap: the amber "Still waiting" card and the "Retrying in 15s…"
+ *  countdown could flicker back and forth): only the heartbeat case writes
+ *  `stallWarning`, but a dozen cases write `attentionState: 'ok'` and leave it
+ *  set. ChatView shows ThinkingIndicator whenever the state is 'ok', and
+ *  ThinkingIndicator turns a leftover warning into the countdown — so an
+ *  unrelated update (a helper's permission card, a tool event) swapped the
+ *  amber card for a countdown the host never announced, and the next warning
+ *  swapped it back. Same shape as `stalledSince`: one rule at one place, not a
+ *  `stallWarning: null` line in every 'ok' writer (and the next one forgotten). */
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  let next = chatReducerCases(state, action);
+  const id = (action as { sessionId?: string }).sessionId;
+  if (next === state || !id) return next;
+  next = applyParkedSpecialistRuns(state, next, id);
+  const s = next.get(id);
+  if (!s || !s.stallWarning || s.attentionState === 'stuck') return next;
+  const fixed = new Map(next);
+  fixed.set(id, { ...s, stallWarning: null });
+  return fixed;
+}
+
+/** Hand every parked helper record whose card has now appeared to the normal
+ *  SPECIALIST_RUN_CHANGED case.
+ *
+ *  WHY (roadmap: after a reload a helper's card could come back with no notes):
+ *  a reload sends the history and the helper records separately, and the
+ *  history's tool events reach the reducer through a frame batcher while the
+ *  records are dispatched at once — so a record routinely arrived before the
+ *  Task card existed and was dropped. A finished helper never sends another,
+ *  so its notes and status never came back. The same happens when the card
+ *  sits on an older history page that loads later. Parking the record and
+ *  applying it when the card shows up closes both. Runs only when the
+ *  session's tool cards actually changed. */
+function applyParkedSpecialistRuns(prev: ChatState, next: ChatState, id: string): ChatState {
+  const s = next.get(id);
+  if (!s?.parkedSpecialistRuns?.size || prev.get(id)?.toolCalls === s.toolCalls) return next;
+  let out = next;
+  for (const [childId, run] of s.parkedSpecialistRuns) {
+    const current = out.get(id)!;
+    if (!findSpecialistCard(current.toolCalls, { parentToolCallId: run.parentToolCallId, childId })) continue;
+    const parked = new Map(current.parkedSpecialistRuns);
+    parked.delete(childId);
+    const unparked = new Map(out);
+    unparked.set(id, { ...current, parkedSpecialistRuns: parked.size ? parked : undefined });
+    out = chatReducerCases(unparked, { type: 'SPECIALIST_RUN_CHANGED', sessionId: id, run });
+  }
+  return out;
+}
+
+function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
   const next = new Map(state);
 
   switch (action.type) {
@@ -1869,9 +1925,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             // "Always allow" button on it, so losing it here would re-offer a
             // grant the engine can never honor.
             external: synTool.external,
+            floorStop: synTool.floorStop,
             // Carried so the full-auto safety-stop footer survives the
             // synthetic→real tool-id handover (spec 2026-08-12, M5 2b).
             permissionMode: synTool.permissionMode,
+            // A kept card (hook closed, Claude Code's menu possibly still up)
+            // must stay kept across the handover — without it the card has no
+            // requestId AND no flag: unanswerable and unresolvable.
+            expired: synTool.expired,
           });
           // Update the tool group to reference the real ID
           const toolGroups = new Map(session.toolGroups);
@@ -1932,13 +1993,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // ask over exactly as the synthetic-reclaim branch above does; every
       // other superseded card (no ask yet) still becomes a plain running tool.
       const superseded = toolCalls.get(action.toolUseId);
-      const carriedAsk = superseded?.status === 'awaiting-approval' && superseded.requestId
+      // A KEPT card (awaiting-approval + expired, requestId already cleared —
+      // PERMISSION_EXPIRED 'hook-closed') is carried too: the watcher re-emits
+      // tool-use for a line Claude Code rewrites, and resetting it to 'running'
+      // would reopen the send gates while Claude Code's menu may still be live.
+      const carriedAsk = superseded?.status === 'awaiting-approval' && (superseded.requestId || superseded.expired)
         ? {
             status: 'awaiting-approval' as const,
             requestId: superseded.requestId,
+            expired: superseded.expired,
             permissionSuggestions: superseded.permissionSuggestions,
             denyListed: superseded.denyListed,
             external: superseded.external,
+            floorStop: superseded.floorStop,
             permissionMode: superseded.permissionMode,
           }
         : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId };
@@ -1997,14 +2064,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // Carry structuredPatch onto the tool state so DiffView can render
         // with absolute file line numbers (Claude Code ships it pre-computed).
         const patch = action.structuredPatch;
+        // A result settles the card, so `expired` goes: this is the normal way a
+        // KEPT card ends (the user answered Claude Code's menu in the terminal,
+        // the tool ran, its result landed here). A card is either kept
+        // (awaiting-approval + expired) or settled — never both.
+        const { expired: _settled, ...base } = existing;
         if (action.isError) {
           toolCalls.set(action.toolUseId, {
-            ...existing, status: 'failed', error: action.result,
+            ...base, status: 'failed', error: action.result,
             ...(patch ? { structuredPatch: patch } : {}),
           });
         } else {
           toolCalls.set(action.toolUseId, {
-            ...existing, status: 'complete', response: action.result,
+            ...base, status: 'complete', response: action.result,
             ...(patch ? { structuredPatch: patch } : {}),
           });
         }
@@ -2363,6 +2435,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             requestId: action.requestId,
             denyListed: action.denyListed,
             external: action.external,
+            floorStop: action.floorStop,
             permissionMode: action.permissionMode,
           };
           const target = inputIdx >= 0 ? inputIdx : nameIdx;
@@ -2495,6 +2568,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           permissionSuggestions: action.permissionSuggestions,
           denyListed: action.denyListed,
           external: action.external,
+          floorStop: action.floorStop,
           permissionMode: action.permissionMode,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
@@ -2520,6 +2594,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           permissionSuggestions: action.permissionSuggestions,
           denyListed: action.denyListed,
           external: action.external,
+          floorStop: action.floorStop,
           permissionMode: action.permissionMode,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
@@ -2629,7 +2704,37 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // Matched by the kept id alone: a desktop window clears a resolution silently (no
         // note), and the expiry must reach that card too.
         const clearedByResolution = tool.status === 'running' && tool.resolvedRequestId === action.requestId;
+        if (heldHere && action.reason === 'hook-closed') {
+          // The hook's far end went away first (the relay's backstop, Claude Code
+          // killing the hook) — but Claude Code's OWN menu may still be on screen
+          // waiting. KEEP the card: it stays awaiting-approval so the session dot
+          // stays "needs you" and the send gates keep refusing to type into that
+          // menu. It loses its dead requestId and gains `expired`; the prompt
+          // detector's menu-gone rule, the transcript result or Dismiss settles
+          // it. (2026-07-30 permission-ask-timeout spec §2/§2a — the reported
+          // bug was this card flipping to 'failed', so the session looked idle
+          // while Claude Code was still blocked.) The reducer never reads the
+          // terminal itself.
+          toolCalls.set(id, { ...tool, requestId: undefined, expired: true });
+          break;
+        }
+        if (heldHere && action.reason === 'app-timeout') {
+          // The app's own 2h hold answered with a deny — say exactly that.
+          toolCalls.set(id, {
+            ...tool,
+            status: 'failed',
+            requestId: undefined,
+            answeredElsewhere: undefined,
+            resolvedRequestId: undefined,
+            error: 'No answer came in time, so YouCoded declined this request and Claude moved on.',
+          });
+          break;
+        }
         if (heldHere || clearedByResolution) {
+          // 'delivery-failed' or NO reason (the native broker's cancel, an older
+          // remote client): RESOLVE, never keep — native sessions have no
+          // terminal menu to fall back on, and a failed delivery means the
+          // socket is provably gone. Do not flip this default (spec §2c/§2d).
           toolCalls.set(id, {
             ...tool,
             status: 'failed',
@@ -2643,6 +2748,25 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         }
       }
 
+      next.set(action.sessionId, { ...session, toolCalls });
+      return next;
+    }
+
+    case 'PERMISSION_CARD_RESOLVED': {
+      // Quiet local settle of a KEPT card: its menu left the terminal (answered
+      // there, or through the plan card's keys) or the user clicked Dismiss.
+      // Only a still-awaiting kept card settles this way — a live ask goes
+      // through its buttons, and a card endTurn already failed must keep its
+      // real error.
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const tool = session.toolCalls.get(action.toolUseId);
+      if (!tool || !tool.expired || tool.status !== 'awaiting-approval') return state;
+      const toolCalls = new Map(session.toolCalls);
+      // 'complete' with no error: nothing failed. If the tool really runs, the
+      // transcript's result overwrites this with the true outcome.
+      const { expired: _resolved, ...rest } = tool;
+      toolCalls.set(action.toolUseId, { ...rest, status: 'complete' });
       next.set(action.sessionId, { ...session, toolCalls });
       return next;
     }
@@ -2718,16 +2842,24 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
     case 'SPECIALIST_RUN_CHANGED': {
       // Specialists 1c: the ledger record lands on the launching Task card.
-      // The card must already exist (the Task tool-use event precedes every
-      // ledger write, and replay splices child events after it) — a record for
-      // an unknown card is dropped, not parked, same as applySubagentEvent.
+      // A record for a card that is not on screen YET is PARKED (latest per
+      // helper) and applied when the card appears — see
+      // applyParkedSpecialistRuns for why dropping it lost a helper's notes.
       const session = next.get(action.sessionId);
       if (!session) return state;
       const cardId = findSpecialistCard(session.toolCalls, {
         parentToolCallId: action.run.parentToolCallId,
         childId: action.run.childId,
       });
-      if (!cardId) return state;
+      if (!cardId) {
+        const held = session.parkedSpecialistRuns?.get(action.run.childId);
+        // Same straggler rule as below: keep the newer of two stamped records.
+        if (held && held.seq !== undefined && action.run.seq !== undefined && action.run.seq <= held.seq) return state;
+        const parked = new Map(session.parkedSpecialistRuns);
+        parked.set(action.run.childId, action.run);
+        next.set(action.sessionId, { ...session, parkedSpecialistRuns: parked });
+        return next;
+      }
       const card = session.toolCalls.get(cardId)!;
       // Task 11 short-circuit: the delivery bookkeeping (claim / mark-
       // attempted / confirm / release) legitimately rewrites the ledger

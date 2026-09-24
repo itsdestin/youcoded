@@ -40,6 +40,7 @@ import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker'
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
+import { useSessionDefaults } from './hooks/useSessionDefaults';
 import { showFirstRunWelcome } from './first-run-screen';
 // Central slash-command router — also used by the drawer so drawer-initiated
 // slash commands behave the same as typed ones (otherwise drawer bypasses InputBar's intercept).
@@ -50,7 +51,7 @@ import { GameProvider, useGameState, useGameDispatch } from './state/game-contex
 import { hookEventToAction } from './state/hook-dispatcher';
 import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from './state/usage-snapshot';
 import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
-import { hasPendingInteraction, canPtySend } from './state/pty-input-gate';
+import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy, canPtySend } from './state/pty-input-gate';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
@@ -64,7 +65,7 @@ import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
 import { useSessionAttention, mergePeerSessionStatuses } from './hooks/useSessionAttention';
 import { useAttentionSummary } from './hooks/useAttentionSummary';
 import { useActiveSessionModel } from './hooks/useActiveSessionModel';
-import { useNativeSessionUsage, useNativeContextOverride, useTurnsWithUsage } from './hooks/useNativeSessionUsage';
+import { useNativeSessionUsage, useNativeContextOverride, useNativeContextWindow, useTurnsWithUsage } from './hooks/useNativeSessionUsage';
 import { useNativeSessionTotals } from './hooks/useNativeSessionTotals';
 import { useZoomControls } from './hooks/useZoomControls';
 import { useChromeMeasurements } from './hooks/useChromeMeasurements';
@@ -632,18 +633,6 @@ function AppInner() {
   // Zoom state + handlers extracted to useZoomControls (tranche 1).
   const { zoomPercent, zoomVisible, handleZoomIn, handleZoomOut, handleZoomReset } = useZoomControls();
 
-  // `startModel` is the saved default across EVERY provider (Assistant settings,
-  // Q-3a). The inferred shape had only the Claude alias, which is exactly why the
-  // setting was written, read back, and then ignored by every form that starts a
-  // conversation (contract R5).
-  const [sessionDefaults, setSessionDefaults] = useState<{
-    skipPermissions: boolean;
-    model: string;
-    projectFolder: string;
-    startModel?: ModelChoice;
-    startModelLabel?: { provider: string; model: string };
-  }>({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
-
   // Check first-run state with a 3-second safety timeout — never hang the app
   useEffect(() => {
     let resolved = false;
@@ -662,16 +651,10 @@ function AppInner() {
     return () => clearTimeout(timeout);
   }, []);
 
-  // Load session defaults on mount and whenever settings panel closes, and after a remote
-  // reconnect: one read lost during a drop left the new-session forms without the default
-  // project and model until Settings was opened and closed (2026-09-11 phone pass sweep).
-  const loadSessionDefaults = useCallback(() => {
-    (window as any).claude?.defaults?.get?.().then((defs: any) => {
-      if (defs) setSessionDefaults(defs);
-    }).catch(() => {});
-  }, []);
-  useEffect(() => { loadSessionDefaults(); }, [settingsOpen, loadSessionDefaults]);
-  useOnRemoteReconnect(loadSessionDefaults);
+  // The saved new-session defaults. Re-read around Settings, after a remote reconnect, and
+  // when this window regains focus — so a default saved in ANOTHER window shows here too
+  // (see useSessionDefaults for why).
+  const sessionDefaults = useSessionDefaults(settingsOpen);
 
   usePromptDetector();
   // Recovers chat→PTY submits that get lost on Windows ConPTY when Claude is
@@ -736,7 +719,8 @@ function AppInner() {
   const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
     const session = chatStateMapRef.current.get(sid);
     if (session && hasPendingInteraction(session)) {
-      setToast('Your assistant is waiting for your response — answer the prompt first.');
+      // Name the blocker — see pendingInteractionRefusalCopy.
+      setToast(pendingInteractionRefusalCopy(pendingInteractionKind(session)));
       return true;
     }
     return false;
@@ -3293,6 +3277,9 @@ function AppInner() {
   // so the usage above stays at its PRE-rewrite reading until the next message.
   // selectNativeStatusChips prefers this; the next turn-complete clears it.
   const nativeContextOverride = useNativeContextOverride(isNativeSession ? sessionId : null);
+  // The CURRENT model's window (re-pushed on a swap), not the last turn's — see
+  // nativeContextWindow in usage-snapshot.ts.
+  const nativeContextWindow = useNativeContextWindow(isNativeSession ? sessionId : null);
   // NOT gated on isNativeSession — CC turns carry usage too (the transcript
   // watcher stamps it), and the reuse chip serves both runtimes.
   const turnsWithUsage = useTurnsWithUsage(sessionId);
@@ -3943,7 +3930,13 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Your assistant is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
+                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
+                  // Name the blocker so reaching for "Send anyway" is an informed
+                  // choice (it presses Esc into Claude Code first — which on a
+                  // live permission or plan menu DECLINES it).
+                  const blocked = chatStateMapRef.current.get(sessionId ?? '');
+                  setToast({ message: pendingInteractionRefusalCopy(blocked ? pendingInteractionKind(blocked) : null), durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } });
+                }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={statusBarData}
                   onOpenSync={handleOpenSync}
@@ -3964,7 +3957,7 @@ function AppInner() {
                   openTasksCounts={openTasksCounts}
                   onOpenOpenTasks={openOpenTasksPopup}
                   nativeUsage={nativeStatusUsage}
-                  nativeContextLength={nativeStatusUsage?.contextLength ?? null}
+                  nativeContextLength={nativeContextWindow}
                   nativeContextOverride={nativeContextOverride}
                   turnsWithUsage={turnsWithUsage}
                   nativeTotals={sessionTotals}
@@ -4799,8 +4792,9 @@ export async function bootBuddyOnLaunch(): Promise<void> {
   // effect and RootErrorBoundary replaced the whole app with "YouCoded failed
   // to start". Gate on window.claude.window, the Electron-only window-controls
   // surface the shim deliberately omits; getPlatform() is NOT usable here
-  // because the shim sets __PLATFORM__ to the host's 'desktop' on auth:ok, so
-  // a remote browser does not report as 'browser'.
+  // because a remote browser's platform is not one value: a touch-first phone
+  // reports 'browser', but a mouse-first browser keeps the host's 'desktop'
+  // (remote-shim auth:ok), and the paired Android app reports 'android'.
   if (!(window as any).claude?.window) return;
   await runBuddyLinuxHideMigration();
   if (localStorage.getItem('youcoded-buddy-enabled') !== '1') return;

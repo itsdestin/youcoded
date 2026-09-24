@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { readClaudeJsonFrom, projectToClaudeJson } from '../src/main/mcp-reconciler';
+import { readClaudeJsonFrom, projectToClaudeJson, applyManifestEntries, platformMatches, expandTokens, type McpManifestEntry } from '../src/main/mcp-reconciler';
 
 // Regression tests for Finding 2: readClaudeJson() used to return `{}` on ANY
 // throw — corrupt JSON, EACCES, a partial read racing an external writer —
@@ -237,5 +237,81 @@ describe('projection into ~/.claude.json', () => {
     // exactly as it would be with _youcodedOwnedMcpServers entirely absent.
     expect(out.claudeJson.mcpServers!.gmail).toEqual({ type: 'stdio', command: 'my-thing' });
     expect(out.skippedCollisions).toEqual(['gmail']);
+  });
+});
+
+// Roadmap (marketplace, 2026-09-01): two published plugins' manifests —
+// copied verbatim below — used `${PACKAGE_DIR}` (never expanded, so the server
+// command was written literally wrong) and a `platforms` LIST of Node names
+// (never read, so the platform filter did nothing). Pure function, no real
+// ~/.claude.json anywhere.
+// The literal placeholder, spelled so no linter mistakes it for a template.
+const PKG = '$' + '{PACKAGE_DIR}';
+describe('plugin manifest scan (applyManifestEntries)', () => {
+  const spotify: McpManifestEntry = {
+    name: 'spotify-services', auto: true, platforms: ['darwin', 'win32'],
+    command: 'bash', args: [`${PKG}/mcp-servers/spotify-services/launcher.sh`], env: {},
+  };
+  const gmessages: McpManifestEntry = {
+    name: 'gmessages', auto: true, platforms: ['darwin', 'linux', 'win32'],
+    command: `${PKG}/mcp-servers/gmessages/gmessages`, args: [], env: {},
+  };
+  const root = '/home/u/.claude/plugins/marketplaces/youcoded/plugins/p';
+
+  it('expands the PACKAGE_DIR placeholder to the plugin directory, like {{plugin_root}}', () => {
+    const servers: Record<string, unknown> = {};
+    const r = applyManifestEntries(servers, [{ entries: [gmessages], pluginRoot: root }], { platform: 'linux', isWindows: false });
+    expect(r.added).toBe(1);
+    expect(servers.gmessages).toEqual({ type: 'stdio', command: `${root}/mcp-servers/gmessages/gmessages`, args: [], env: {} });
+    expect(expandTokens(`{{plugin_root}}/a ${PKG}/b`, '/r')).toBe('/r/a /r/b');
+  });
+
+  it('never reads a $ in the real path as a replacement pattern', () => {
+    expect(expandTokens(`${PKG}/x`, '/tmp/$&odd')).toBe('/tmp/$&odd/x');
+  });
+
+  it('honours a platforms list written in Node names', () => {
+    const servers: Record<string, unknown> = {};
+    const onLinux = applyManifestEntries(servers, [{ entries: [spotify], pluginRoot: root }], { platform: 'linux', isWindows: false });
+    expect(onLinux).toMatchObject({ added: 0, skippedPlatform: 1 });
+    expect(servers['spotify-services']).toBeUndefined();
+
+    const onMac = applyManifestEntries(servers, [{ entries: [spotify], pluginRoot: root }], { platform: 'macos', isWindows: false });
+    expect(onMac.added).toBe(1);
+    expect((servers['spotify-services'] as { args: string[] }).args).toEqual([`${root}/mcp-servers/spotify-services/launcher.sh`]);
+  });
+
+  it('keeps the single platform field working, in either vocabulary', () => {
+    expect(platformMatches({ platform: 'linux' }, 'linux')).toBe(true);
+    expect(platformMatches({ platform: 'macos' }, 'linux')).toBe(false);
+    expect(platformMatches({}, 'windows')).toBe(true);
+    expect(platformMatches({ platforms: ['all'] }, 'windows')).toBe(true);
+    // An empty list falls back to the single field rather than hiding the server.
+    expect(platformMatches({ platforms: [], platform: 'windows' }, 'windows')).toBe(true);
+  });
+
+  it('repairs an untouched entry an older build wrote with the literal placeholder', () => {
+    const servers: Record<string, unknown> = {
+      gmessages: { type: 'stdio', command: `${PKG}/mcp-servers/gmessages/gmessages`, args: [], env: {} },
+    };
+    const r = applyManifestEntries(servers, [{ entries: [gmessages], pluginRoot: root }], { platform: 'linux', isWindows: false });
+    expect(r).toMatchObject({ added: 0, repaired: 1, changed: true });
+    expect((servers.gmessages as { command: string }).command).toBe(`${root}/mcp-servers/gmessages/gmessages`);
+  });
+
+  it('repairs the old entry even when its keys were rewritten in another order', () => {
+    const servers: Record<string, unknown> = {
+      gmessages: { env: {}, args: [], command: `${PKG}/mcp-servers/gmessages/gmessages`, type: 'stdio' },
+    };
+    const r = applyManifestEntries(servers, [{ entries: [gmessages], pluginRoot: root }], { platform: 'linux', isWindows: false });
+    expect(r.repaired).toBe(1);
+  });
+
+  it('still never overwrites an entry the user changed, even one holding the placeholder', () => {
+    const custom = { type: 'stdio', command: `${PKG}/mcp-servers/gmessages/gmessages`, args: ['--verbose'], env: {} };
+    const servers: Record<string, unknown> = { gmessages: { ...custom } };
+    const r = applyManifestEntries(servers, [{ entries: [gmessages], pluginRoot: root }], { platform: 'linux', isWindows: false });
+    expect(r).toMatchObject({ added: 0, repaired: 0, changed: false });
+    expect(servers.gmessages).toEqual(custom);
   });
 });

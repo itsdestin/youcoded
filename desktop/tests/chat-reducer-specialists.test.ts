@@ -121,15 +121,35 @@ describe('SPECIALIST_RUN_CHANGED — note rows from run.notes', () => {
     expect(notes[0].id).not.toBe(notes[1].id);
   });
 
-  it('a run event for an unknown parentToolCallId is dropped, never a stray card', () => {
-    const before = state;
+  it('a run event for an unknown parentToolCallId is parked, never a stray card', () => {
     const run = baseRun({ parentToolCallId: 'no-such-card', childId: 'no-such-child', notes: [note('x', 1)] });
     const after = dispatch(state, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run });
 
-    // Dropped, not parked: the reducer returns state itself, unchanged.
-    expect(after).toBe(before);
     expect(after.get(SESSION)!.toolCalls.has('no-such-card')).toBe(false);
     expect(after.get(SESSION)!.toolCalls.size).toBe(1); // only the seeded Task card
+    expect(after.get(SESSION)!.parkedSpecialistRuns?.get('no-such-child')).toBe(run);
+  });
+
+  // A reload sends history and helper records separately, and the history's
+  // tool events are batched while the records are not — so the record can land
+  // first. Dropping it left a finished helper's card with no notes for good.
+  it('a record that arrives before its card is applied the moment the card appears', () => {
+    let s = initState();
+    const run = baseRun({ status: 'completed', notes: [note('look at the tests too', 5)] });
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run });
+    expect(s.get(SESSION)!.toolCalls.has(TASK_ID)).toBe(false);
+    s = seedTaskCard(s);
+    expect(s.get(SESSION)!.toolCalls.get(TASK_ID)!.specialistRun).toEqual(run);
+    expect(noteSegments(s).map((n) => (n as any).content)).toEqual(['look at the tests too']);
+    expect(s.get(SESSION)!.parkedSpecialistRuns).toBeUndefined();
+  });
+
+  it('only the newest parked record per helper is kept', () => {
+    let s = initState();
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ seq: 5, status: 'completed' }) });
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ seq: 3, status: 'running' }) });
+    s = seedTaskCard(s);
+    expect(s.get(SESSION)!.toolCalls.get(TASK_ID)!.specialistRun!.status).toBe('completed');
   });
 
   it('a run view identical to the card’s current one returns the SAME state object (no churn)', () => {

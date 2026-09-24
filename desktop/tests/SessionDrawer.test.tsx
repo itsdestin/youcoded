@@ -13,6 +13,7 @@ import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 import type { ArtifactRecord } from '../src/shared/artifacts/types';
 import { COPY, providerLabel, type ResolvedConversation } from '../src/shared/chatsearch-refs';
 import { __resetMissingArtifactsCache } from '../src/renderer/hooks/useMissingArtifacts';
+import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
 
 // theme-context reads localStorage / matchMedia / queryLocalFonts on mount and
 // doesn't export its raw Context, so mock the hook to the fields SessionDrawer
@@ -647,5 +648,74 @@ describe('showDeletedArtifacts survives the project-view merge', () => {
   it('is gone from project view', () => {
     expect(read('src/renderer/components/project-view/ProjectView.tsx')).not.toContain('showDeletedArtifacts');
     expect(read('src/renderer/components/project-view/tabs/FilesTab.tsx')).not.toContain('showDeletedArtifacts');
+  });
+});
+
+// Stopping the assistant is never harder with the files panel open (review
+// 2026-09-23, F2). The app opens the panel itself mid-reply; Escape from the
+// chat box must take the panel at most once, then reach the chat's stop
+// handler. Peeling through the panel's layers applies only with focus inside it.
+describe('SessionDrawer — Escape beside the chat', () => {
+  function mount() {
+    const artifact: ArtifactRecord = {
+      id: 'a1', path: 'notes.md', kind: 'internal', absolutePath: null,
+      lastModified: new Date().toISOString(), status: 'active',
+      versions: [{ id: 'v1', ts: new Date().toISOString(), sessionId: 'sess', type: 'create', author: 'agent' }],
+      comments: [], tags: [],
+    };
+    const state = {
+      ...initialArtifactState,
+      sessionArtifacts: { sess: [artifact] },
+      drawerOpenBySession: { sess: true },
+      activeArtifactBySession: { sess: 'a1' },
+    };
+    (window as any).claude = {
+      artifacts: {
+        get: vi.fn(() => new Promise(() => {})),
+        checkExistence: vi.fn().mockResolvedValue({ ok: true, missingIds: [] }),
+        onChanged: undefined,
+      },
+    };
+    const dispatch = vi.fn();
+    const stop = vi.fn();
+    // Stands in for App's chat passthrough: it acts only on an Escape no
+    // overlay consumed (shouldForwardEscToPty keys off defaultPrevented).
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) stop(); };
+    window.addEventListener('keydown', onKey);
+    const utils = render(
+      <EscCloseProvider>
+        <input data-testid="chat-box" />
+        <ArtifactContext.Provider value={{ state, dispatch }}>
+          <SessionDrawer sessionId="sess" projectRoot="/home/u/proj" cwd="/home/u/proj" projectId="proj-1" projectName="proj" />
+        </ArtifactContext.Provider>
+      </EscCloseProvider>,
+    );
+    const press = (el: Element) => fireEvent.keyDown(el, { key: 'Escape' });
+    return { utils, dispatch, stop, press, off: () => window.removeEventListener('keydown', onKey) };
+  }
+
+  it('with focus in the chat box, the second Escape reaches the chat’s stop handler', () => {
+    const { utils, dispatch, stop, press, off } = mount();
+    const chat = utils.getByTestId('chat-box');
+    chat.focus();
+    press(chat);
+    expect(dispatch).toHaveBeenCalledTimes(1); // the panel took one step back
+    expect(stop).not.toHaveBeenCalled();
+    press(chat);
+    expect(stop).toHaveBeenCalledTimes(1);     // …and the next one stops the assistant
+    press(chat);
+    expect(stop).toHaveBeenCalledTimes(2);
+    off();
+  });
+
+  it('with focus inside the panel, each Escape peels one of its layers', () => {
+    const { utils, dispatch, stop, press, off } = mount();
+    const inside = utils.container.querySelector('aside button') as HTMLElement;
+    inside.focus();
+    expect(document.activeElement).toBe(inside);
+    press(inside); press(inside); press(inside);
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    expect(stop).not.toHaveBeenCalled();
+    off();
   });
 });

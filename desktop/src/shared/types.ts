@@ -69,6 +69,19 @@ export interface PortableModelRef {
 // Task 11 (cancel/edit queued messages): the 'queued' arm carries the host-
 // minted queueId (NativeSessionHost.send()'s randomUUID()) so the renderer can
 // target this exact entry later with native:queue-remove.
+/** Why a native Bash ask was forced below every stored rule, so no saved grant
+ *  could ever skip it (and the card offers no "Always allow"):
+ *  - 'removal': the command would remove the workspace, home folder, disk root
+ *    or a system folder (harness/tools/rm-target.ts); 'removal-if-empty': only
+ *    if a variable in the path is empty; 'removal-unknown': the folder is a
+ *    command's output or reached by a cd the text cannot follow;
+ *  - 'secret-path': the command reads a secret or credential file — the same
+ *    list the file tools refuse (harness/tools/bash-secret-paths.ts);
+ *    'secret-maybe': it could (a glob, a find with no usable filter).
+ *  The card's wording comes from this, so it never claims more than the check
+ *  knows (review N11). */
+export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe';
+
 export type NativeSendResult =
   | { status: 'sent' }
   | { status: 'queued'; queueId: string }
@@ -627,6 +640,7 @@ export type SubagentSegment =
       requestId?: string;
       denyListed?: boolean;
       external?: boolean;
+      floorStop?: FloorStop;
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
@@ -794,11 +808,23 @@ export interface ToolCallState {
   /** Native broker only: winning rule came from the destructive deny-list →
    *  the "Always allow" button shows a consequence-gated confirm. Task 13. */
   denyListed?: boolean;
+  /** A Claude Code ask whose hook socket died while Claude Code's own menu may
+   *  still be on screen ('hook-closed' expiry). The card STAYS awaiting-approval
+   *  so the session dot and the send gates keep holding — the bug this fixes was
+   *  the card flipping to 'failed' so the session looked idle while Claude Code
+   *  was still blocked. requestId is cleared (the socket is gone). Settled by
+   *  the tool's transcript result, the prompt detector's menu-gone rule, or
+   *  Dismiss (PERMISSION_CARD_RESOLVED). */
+  expired?: true;
   /** Native broker only: the ask was forced by a path outside the session
    *  folder → the "Always allow" button is HIDDEN. The engine forces an ask on
    *  every external path and never consults the stored rules there, so a
    *  remembered rule could not fire. Spec 2026-08-11, finding 3. */
   external?: boolean;
+  /** Native broker only: the ask was forced by a floor below every stored rule
+   *  → the "Always allow" button is HIDDEN (for the same reason as `external`)
+   *  and Full auto's stop band names which floor. See FloorStop. */
+  floorStop?: FloorStop;
   /** Native broker only: the session's permission mode when the ask fired.
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */

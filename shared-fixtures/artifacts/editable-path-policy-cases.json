@@ -32,5 +32,32 @@
     { "path": "/home/u/proj/.env.local", "tier": "needs-confirm", "protectedRead": false },
     { "path": "/home/u/proj/.env.production", "tier": "needs-confirm", "protectedRead": false },
     { "path": "/home/u/proj/.envrc", "tier": "needs-confirm", "protectedRead": false }
+  ],
+  "recordPrivateComment": "privateForRecordTrust: whether a RECORDED ../ path (nobody chose to open it) must be refused. Every non-free tier above is also recordPrivate:true.",
+  "recordPrivate": [
+    { "path": "/home/u/proj/docs/notes.md", "private": false },
+    { "path": "/home/u/proj/.gitignore", "private": false },
+    { "path": "/home/u/proj/history.md", "private": false },
+    { "path": "/home/u/.ssh/id_rsa", "private": true },
+    { "path": "/home/u/proj/.env", "private": true },
+    { "path": "/home/u/.git-credentials", "private": true },
+    { "path": "/home/u/.claude.json", "private": true },
+    { "path": "/home/u/.npmrc", "private": true },
+    { "path": "/home/u/proj/.npmrc", "private": true },
+    { "path": "/home/u/.pypirc", "private": true },
+    { "path": "/home/u/.pgpass", "private": true },
+    { "path": "/home/u/.bash_history", "private": true },
+    { "path": "/home/u/.zsh_history", "private": true },
+    { "path": "/home/u/.local/share/fish/fish_history", "private": true },
+    { "path": "/home/u/.docker/config.json", "private": true },
+    { "path": "/home/u/.config/gcloud/application_default_credentials.json", "private": true },
+    { "path": "/home/u/.config/gcloud", "private": true },
+    { "path": "/home/u/.local/share/keyrings/login.keyring", "private": true },
+    { "path": "/home/u/.password-store/bank.gpg", "private": true },
+    { "path": "/home/u/.cargo/credentials.toml", "private": true },
+    { "path": "c:/users/u/.SSH/id_rsa", "private": true },
+    { "path": "/Users/u/proj/.ENV", "private": true },
+    { "path": "c:/users/u/_NETRC", "private": true },
+    { "path": "/Users/u/proj/.Git/config", "private": true }
   ]
 }

@@ -152,11 +152,18 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
   let toolResults: ToolResultPart[] = [];
   let toolOriginUuids: string[] = [];
   const flushAssistant = () => {
-    if (assistantParts.length) {
+    // Mirror the live push's emptiness rule (harness-session.ts `stepHasText`):
+    // a message of whitespace-only text and no tool calls never entered history
+    // live — a whitespace step is skipped, as is a whitespace interrupted
+    // partial — so its persisted deltas must not rebuild into one either.
+    // (Combined branch: a skipped blank message pushes no origin either, so
+    // messages and origins stay index-aligned for compaction's portable cut.)
+    const blank = assistantParts.every((p) => p.type === 'text' && p.text.trim().length === 0);
+    if (assistantParts.length && !blank) {
       out.push({ role: 'assistant', content: assistantParts });
       origins.push(assistantOriginUuids.length ? assistantOriginUuids : null);
-      assistantParts = []; assistantOriginUuids = [];
     }
+    assistantParts = []; assistantOriginUuids = [];
   };
   const flushResults = () => {
     if (toolResults.length) {

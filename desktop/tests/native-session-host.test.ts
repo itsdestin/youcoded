@@ -2184,6 +2184,49 @@ describe('NativeSessionHost', () => {
       expect(types).not.toContain('turn-complete');
       await qHost.destroyAll();
     });
+
+    // A send arriving WHILE quiesce is winding down (idle session, so it would
+    // dispatch a fresh turn) used to run a whole turn on the old device before
+    // the handoff. It is refused instead, and the renderer keeps the draft.
+    it('a send that arrives while quiesce is in progress, or after it, is refused until the takeover ends', async () => {
+      const store = new SessionStore(new NativeHome(root));
+      const qHost = new NativeSessionHost(store, delayedFactory, NO_CONTEXT, async () => null, async () => null);
+      await qHost.create({ sessionId: 'qz3', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const quiesced = qHost.quiesce('qz3');
+      expect(qHost.send('qz3', 'mid-quiesce')).toEqual({ status: 'failed', reason: 'not-live' });
+      await quiesced;
+      await new Promise((r) => setTimeout(r, 80));
+      expect(store.readEvents('qz3', root).some((e) => e.type === 'user-message')).toBe(false);
+      // Still refused after quiesce returns: the takeover's flush and lease
+      // release come next, and only destroy ends the session.
+      expect(qHost.send('qz3', 'after')).toEqual({ status: 'failed', reason: 'not-live' });
+      // A takeover that did not go ahead lifts it.
+      qHost.endQuiesce('qz3');
+      expect(qHost.send('qz3', 'after')).toEqual({ status: 'sent' });
+      await qHost.destroyAll();
+    });
+
+    // The same refusal guards every other way a quiesced session could start
+    // work past the takeover's flush: /compact, /clear, a skill, and an idle
+    // delivery pass (a finished specialist's report waking the model).
+    it('while quiesced, compact / clear / invokeSkill refuse and an idle delivery pass does not start', async () => {
+      const store = new SessionStore(new NativeHome(root));
+      const appendSpy = vi.spyOn(store, 'append');
+      const qHost = new NativeSessionHost(store, delayedFactory, NO_CONTEXT, async () => null, async () => null);
+      await qHost.create({ sessionId: 'qz4', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      await qHost.quiesce('qz4');
+      const appendsAtQuiesce = appendSpy.mock.calls.length;
+
+      expect(await qHost.compact('qz4')).toEqual({ ok: false, reason: 'not-live' });
+      expect(qHost.clear('qz4')).toEqual({ ok: false, reason: 'not-live' });
+      expect(await qHost.invokeSkill('qz4', 'any-skill')).toEqual({ ok: false, reason: 'not-live' });
+      (qHost as any).kickIdleDeliveryPass('qz4');
+      expect((qHost as any).live.get('qz4').inFlight).toBeFalsy();
+
+      await new Promise((r) => setTimeout(r, 80));
+      expect(appendSpy.mock.calls.length).toBe(appendsAtQuiesce);
+      await qHost.destroyAll();
+    });
   });
 
   // ---- Specialists (plan 1a, Task 5): createChild mints a CHILD session —

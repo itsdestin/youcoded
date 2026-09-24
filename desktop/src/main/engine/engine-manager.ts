@@ -29,7 +29,7 @@ import { contextLengthFor } from '../models/fit-estimator';
 import { readManifest, removeManifest, markManifestComplete, isManifestComplete } from '../models/download-manifest';
 import { ManifestBackfill, defaultBackfillLookups, isStaleBackfillMiss } from '../models/manifest-backfill';
 import type { BackfillCandidate, BackfillLookups } from '../models/manifest-backfill';
-import { scanGgufCache, scanLocalDownloads, isComplete } from './cache-scan';
+import { scanGgufCache, scanLocalDownloads, isComplete, visionModelIdsOnDisk } from './cache-scan';
 import { parseGgufName, quantDescription } from '../models/quant-parser';
 import { stripSplitSuffix } from '../../shared/gguf-split';
 import { detectGpu, backendOptions, gpuDeviceName } from '../models/gpu-detector';
@@ -1423,6 +1423,8 @@ export class EngineManager extends EventEmitter {
     const cfg = readEngineConfig(this.home);
     await this.rebuildSupervisor(inst);
     const models = await this.supervisor!.listModels();
+    // WHY the files too: the router may not have re-scanned yet — see visionModelIdsOnDisk.
+    const onDiskVision = visionModelIdsOnDisk(cfg.cacheDir);
     return models.map((m) => {
       const row: CatalogModel = {
         id: m.id,
@@ -1444,6 +1446,7 @@ export class EngineManager extends EventEmitter {
       // must stay undefined rather than become a `false` a caller would read as
       // "this model cannot see" and quietly drop the user's attachment.
       if (m.inputModalities) row.supportsVision = m.inputModalities.includes('image');
+      else if (onDiskVision.has(m.id)) row.supportsVision = true; // router silent → trust the files
       return row;
     });
   }
