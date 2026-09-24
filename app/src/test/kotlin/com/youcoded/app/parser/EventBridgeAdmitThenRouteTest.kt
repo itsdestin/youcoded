@@ -17,7 +17,7 @@ class EventBridgeAdmitThenRouteTest {
         """{"hook_event_name":"$event","session_id":"cc","mobileSessionId":"$mobile","claudePid":"$pid"}"""
 
     /** handleClient's first two steps; null = the socket is closed with no reply. */
-    private fun decide(bridge: EventBridge, raw: String): EventBridge.Route? {
+    private fun decide(bridge: EventBridge, raw: String): EventBridge.Companion.Route? {
         val json: JSONObject = bridge.admit(raw) ?: return null
         return EventBridge.route(json.optString("hook_event_name", ""), json.optString("mobileSessionId", ""), "mine")
     }
@@ -27,8 +27,8 @@ class EventBridgeAdmitThenRouteTest {
         val bridge = EventBridge("test-socket-name", "mine")
         assertNull(decide(bridge, line("SessionStart", "mine", "1000")))            // claims the owner, then stops
         assertNull(decide(bridge, line("PermissionRequest", "mine", "2000")))       // nested claude: ignored
-        assertEquals(EventBridge.Route.PASS_THROUGH, decide(bridge, line("PermissionRequest", "other", "3000")))
-        assertEquals(EventBridge.Route.HOLD_FOR_CARD, decide(bridge, line("PermissionRequest", "mine", "1000")))
-        assertEquals(EventBridge.Route.FIRE_AND_FORGET, decide(bridge, line("PostToolUse", "mine", "1000")))
+        assertEquals(EventBridge.Companion.Route.PASS_THROUGH, decide(bridge, line("PermissionRequest", "other", "3000")))
+        assertEquals(EventBridge.Companion.Route.HOLD_FOR_CARD, decide(bridge, line("PermissionRequest", "mine", "1000")))
+        assertEquals(EventBridge.Companion.Route.FIRE_AND_FORGET, decide(bridge, line("PostToolUse", "mine", "1000")))
     }
 }
