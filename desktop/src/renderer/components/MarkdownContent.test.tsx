@@ -1,8 +1,30 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { describe, it, expect, afterEach } from 'vitest';
+import React from 'react';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import MarkdownContent from './MarkdownContent';
+import { SessionRefsEnabled } from './session-refs-context';
+import { MARKDOWN_STREAM_CORPUS, tokenDeltas, prefixesOf } from '../../../tests/helpers/markdown-stream-corpus';
+
+// Every source string handed to react-markdown, so the streaming cost pins below
+// count real parse+highlight passes. Delegates to the real renderer unchanged.
+const markdownRenders = vi.hoisted(() => [] as string[]);
+vi.mock('react-markdown', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-markdown')>();
+  return {
+    ...actual,
+    default: (props: { children?: string }) => {
+      markdownRenders.push(String(props.children ?? ''));
+      return (actual.default as any)(props);
+    },
+  };
+});
+// The reference block resolves ids asynchronously; a fixed stand-in keeps the
+// streaming comparisons below about markdown, not about a network answer.
+vi.mock('./tool-views/ChatsearchRefBlock', () => ({
+  default: ({ shortIds }: { shortIds: string[] }) => <div data-refs={shortIds.join(',')} />,
+}));
 
 afterEach(cleanup);
 
@@ -355,5 +377,101 @@ describe('remote images wait for a tap; local images render inline', () => {
     // point is only that a data: image is NOT treated as a website fetch.
     render(<MarkdownContent content={'![dot](data:image/png;base64,iVBORw0KGgo=)'} />);
     expect(screen.queryByRole('button', { name: /image from/i })).toBeNull();
+  });
+});
+
+// Streaming (smoothness sweep A5): a growing reply is drawn piece by piece, and
+// the page must be byte-for-byte what drawing the whole text at once gives.
+describe('MarkdownContent while a reply streams in', () => {
+  const Bubble = ({ md, incremental }: { md: string; incremental?: boolean }) => (
+    <SessionRefsEnabled.Provider value={true}>
+      <MarkdownContent content={md} sessionId="s1" incremental={incremental} />
+    </SessionRefsEnabled.Provider>
+  );
+  // The page as markup with each element's attributes in name order. WHY sorted:
+  // React appends an attribute it adds to an EXISTING element (a code block's
+  // `class` arriving once its language is typed) after the ones already there,
+  // so an element updated in place lists them in a different order than a fresh
+  // one. Order carries no meaning to the browser, and today's whole-message
+  // render updates in place too; everything else — text nodes included — is
+  // compared exactly.
+  const canonical = (root: Element): string => Array.from(root.childNodes).map((n) => {
+    if (n.nodeType !== 1) return n.nodeType === 3 ? JSON.stringify(n.textContent) : '';
+    const el = n as Element;
+    const attrs = Array.from(el.attributes).map((a) => `${a.name}=${JSON.stringify(a.value)}`).sort().join(' ');
+    return `<${el.tagName.toLowerCase()} ${attrs}>${canonical(el)}</${el.tagName.toLowerCase()}>`;
+  }).join('');
+  const wholeHtml = (md: string) => {
+    const r = render(<Bubble md={md} />);
+    const html = canonical(r.container);
+    r.unmount();
+    return html;
+  };
+  const streamAndCompare = (md: string, prefixes: string[]) => {
+    const live = render(<Bubble md={prefixes[0]} incremental />);
+    for (const prefix of prefixes) {
+      live.rerender(<Bubble md={prefix} incremental />);
+      expect(canonical(live.container), `after ${JSON.stringify(prefix)}`).toBe(wholeHtml(prefix));
+    }
+    live.unmount();
+  };
+
+  for (const sample of MARKDOWN_STREAM_CORPUS) {
+    it(`draws "${sample.name}" exactly like the whole message after every delta`, () => {
+      streamAndCompare(sample.md, prefixesOf(tokenDeltas(sample.md)));
+    });
+  }
+
+  // Where a partial last line can change the block above it, go one character
+  // at a time: "#" then "#f", "-" then "- x", a header row then its delimiter.
+  for (const name of ['setext headings', 'hash that is not a heading, then a real one', 'dashes: setext, rules and list items', 'table appearing under paragraph lines', 'CRLF line endings']) {
+    it(`draws "${name}" exactly like the whole message after every character`, () => {
+      const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === name)!.md;
+      streamAndCompare(md, Array.from({ length: md.length }, (_, i) => md.slice(0, i + 1)));
+    });
+  }
+
+  it('keeps the elements already on screen instead of replacing them as the reply grows', () => {
+    const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
+    const prefixes = prefixesOf(tokenDeltas(md));
+    const live = render(<Bubble md={prefixes[0]} incremental />);
+    live.rerender(<Bubble md={prefixes[1]} incremental />);
+    const heading = live.container.querySelector('h2')!;
+    expect(heading.textContent).toBe('Plan');
+    let firstCode: Element | null = null;
+    for (const prefix of prefixes.slice(2)) {
+      live.rerender(<Bubble md={prefix} incremental />);
+      expect(live.container.querySelector('h2')).toBe(heading);
+      firstCode ??= prefix.includes('```json') ? live.container.querySelector('pre') : null;
+      if (firstCode) expect(live.container.querySelector('pre')).toBe(firstCode);
+    }
+    expect(firstCode).not.toBeNull();
+    live.unmount();
+  });
+
+  it('re-draws only the unfinished paragraph per delta, not the finished code blocks above it', () => {
+    const body = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md.repeat(3);
+    const tailWords = tokenDeltas(' and then some closing words that keep arriving one at a time until the end');
+    const live = render(<Bubble md={body.slice(0, 10)} incremental />);
+    let md = body;
+    live.rerender(<Bubble md={md} incremental />);
+    md += '\n\nClosing';
+    live.rerender(<Bubble md={md} incremental />);
+    markdownRenders.length = 0;
+    for (const word of tailWords) {
+      md += word;
+      live.rerender(<Bubble md={md} incremental />);
+    }
+    // One react-markdown pass per delta, each over the live paragraph alone.
+    expect(markdownRenders).toHaveLength(tailWords.length);
+    for (const source of markdownRenders) expect(source.startsWith('Closing')).toBe(true);
+    live.unmount();
+  });
+
+  it('draws a message that never grows (history) as one document, with no split', () => {
+    const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
+    markdownRenders.length = 0;
+    render(<Bubble md={md} incremental />);
+    expect(markdownRenders).toEqual([md]);
   });
 });

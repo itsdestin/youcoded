@@ -11,6 +11,7 @@ import { FilepathToken } from './FilepathToken';
 import { CONVERSATIONS_FENCE, parseConversationRefs } from '../../shared/chatsearch-refs';
 import ChatsearchRefBlock from './tool-views/ChatsearchRefBlock';
 import { SessionRefsEnabled } from './session-refs-context';
+import { splitMarkdownBlocks, blockChunks, type MarkdownBlocks } from './markdown-blocks';
 
 /**
  * Rehype plugin: tag every <code> that lives inside a <pre> with data-block.
@@ -538,9 +539,37 @@ interface Props {
   sessionId?: string;
   /** Decorative rendering for tiles: no Copy buttons, no links — nothing focusable or clickable. */
   preview?: boolean;
+  /**
+   * The content may GROW while this stays mounted (a reply streaming in). Once it
+   * does, finished blocks are drawn once and only the tail is re-drawn per update.
+   * Same page either way — see markdown-blocks.ts.
+   */
+  incremental?: boolean;
 }
 
-export default React.memo(function MarkdownContent({ content, sessionId, preview }: Props) {
+/**
+ * One piece of a streaming message, drawn as its own markdown document.
+ * WHY memo: a finished block's `source` never changes again, so it is parsed,
+ * highlighted and reconciled exactly once instead of once per streamed word.
+ * All three props are module-level or memoised, so the comparison holds.
+ */
+const MarkdownChunk = React.memo(function MarkdownChunk({ source, rehypePlugins, components }: {
+  source: string;
+  rehypePlugins: PluggableList;
+  components: React.ComponentProps<typeof ReactMarkdown>['components'];
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={remarkPluginsStable}
+      rehypePlugins={rehypePlugins}
+      components={components}
+    >
+      {source}
+    </ReactMarkdown>
+  );
+});
+
+export default React.memo(function MarkdownContent({ content, sessionId, preview, incremental }: Props) {
   // Memoize the rehype plugin array and the component map by sessionId so that:
   // (a) When sessionId is absent, we use the stable module-scope arrays (no allocation).
   // (b) When sessionId is present, the filepath-token component is added once and
@@ -580,6 +609,46 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, preview]);
+
+  // Streaming (smoothness sweep A5): see markdown-blocks.ts for the rule that
+  // decides which blocks are finished. These refs are a render-time cache, not
+  // state: splitMarkdownBlocks(content, prev) returns `prev` itself when content
+  // is unchanged, so a repeated render (StrictMode) computes the same thing.
+  const prevContentRef = useRef<string | null>(null);
+  const blocksRef = useRef<MarkdownBlocks | null>(null);
+  if (incremental) {
+    const prev = prevContentRef.current;
+    // Only an APPEND switches the split on — a message opened from history
+    // never grows, so it keeps today's single render and pays for no extra parse.
+    // Once on it stays on for this mount, so the end of the reply never swaps
+    // the page's elements out from under a selection.
+    if (!blocksRef.current && prev !== null && content.length > prev.length && content.startsWith(prev)) {
+      blocksRef.current = splitMarkdownBlocks(prev);
+    }
+    if (blocksRef.current) blocksRef.current = splitMarkdownBlocks(content, blocksRef.current);
+    prevContentRef.current = content;
+  }
+
+  if (incremental) {
+    const chunks = blocksRef.current ? blockChunks(blocksRef.current) : [content];
+    // WHY a keyed Fragment per chunk, not a wrapper element: the chunks' elements
+    // land as direct siblings exactly as one whole-message render would put them,
+    // so `.assistant-bubble > *`, `last:mb-0` and every other selector see the
+    // same tree. The '\n' between chunks is the text node react-markdown itself
+    // puts between top-level blocks. Keys are block indexes, and chunk 0 is the
+    // same element before and after the split switches on, so nothing already
+    // on screen remounts.
+    return (
+      <>
+        {chunks.map((source, i) => (
+          <React.Fragment key={i}>
+            {i > 0 ? '\n' : null}
+            <MarkdownChunk source={source} rehypePlugins={rehypePlugins} components={components} />
+          </React.Fragment>
+        ))}
+      </>
+    );
+  }
 
   return (
     <ReactMarkdown
