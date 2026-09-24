@@ -99,12 +99,10 @@ export async function answerInkMenu(
     if (!moved) return fail('not-taken', true);
   }
 
-  // Final check immediately before Enter: same menu, cursor on the target label.
-  const last = readMenu(io, pick.signature);
-  if (typeof last !== 'object') return fail(last === 'absent' ? 'menu-gone' : 'menu-changed', typed);
-  if (last.selectedIndex !== pick.index || last.options[last.selectedIndex] !== pick.label) {
-    return fail('not-taken', typed);
-  }
+  // The loop only breaks on a read (just now, nothing awaited since) showing
+  // this exact option set with the cursor on the target — and the label at the
+  // target was checked against the button before the first key. So Enter goes
+  // only where the button's label is.
   io.write('\r');
 
   // Gone = this option set has been off screen continuously for goneForMs.

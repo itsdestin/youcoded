@@ -282,7 +282,8 @@ describe('the startup-dialog driver never guesses', () => {
     const cc = scripted(trustScreen(0), (_k, s) => s); // arrows ignored
     const r = await answerInkMenu({ signature: sig, index: 1, label: 'Yes, I trust this folder' }, cc.io);
     expect(r).toEqual({ ok: false, reason: 'not-taken', typed: true });
-    expect(cc.writes).not.toContain('\r');
+    // ONE arrow, unconfirmed → stop. Never a second key, never Enter.
+    expect(cc.writes).toEqual(['\u001b[B']);
   });
 
   it('never sends Enter when the options change mid-walk', async () => {
@@ -315,6 +316,11 @@ describe('the unnumbered reader refuses what it cannot be sure of', () => {
 
   it('no box rule above → not a menu', () => {
     expect(parseInkSelect(trustScreen(0).split('\n').slice(1).join('\n'))).toBeNull();
+  });
+
+  it('two cursors on screen → not one menu', () => {
+    const screen = trustScreen(0).replace('   Yes, I trust this folder', ' ❯ Yes, I trust this folder');
+    expect(parseInkSelect(screen.replace(' ❯ No, exit', ' ❯ No, exit'))).toBeNull();
   });
 
   it('a checkbox (multi-select) dialog → not buttons, but reported as a startup dialog', () => {

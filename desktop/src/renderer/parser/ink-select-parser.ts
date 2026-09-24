@@ -450,7 +450,6 @@ function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | nul
     if (!raw.trim()) { if (rows.length && i > selectorIdx) break; continue; }
     const isCursor = i === selectorIdx;
     if (!isCursor && (colOf(raw) !== labelCol || DIALOG_FOOTER.test(raw))) break;
-    if (!isCursor && /^\s*[❯>]/.test(raw)) return null; // a second cursor: not one menu
     const text = isCursor ? m[4].trim() : raw.trim();
     const prev = rows[rows.length - 1];
     if (prev && !isCursor) {

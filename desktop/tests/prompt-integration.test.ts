@@ -2,7 +2,7 @@
 // (sendPromptInput talks to window.claude — .ts tests default to the node env)
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parseInkSelect, menuToButtons } from '../src/renderer/parser/ink-select-parser';
-import { sendPromptInput, PROMPT_SUBMIT_DELAY_MS } from '../src/renderer/state/prompt-input';
+import { sendPromptInput, answerPrompt, PROMPT_SUBMIT_DELAY_MS } from '../src/renderer/state/prompt-input';
 
 /**
  * The whole chain: PTY screen text → parsed menu → buttons → bytes on the PTY.
@@ -103,6 +103,17 @@ Enter to confirm`);
     // Then the Enter, as its own write.
     expect(sendInput).toHaveBeenCalledTimes(2);
     expect(sendInput.mock.calls[1][1]).toBe('\r');
+  });
+
+  it('a card answered by verified navigation is marked answered only when Claude Code took it', async () => {
+    const [, second] = menuToButtons({ id: 'x', title: 'x', options: ['a', 'b'], selectedIndex: 0 });
+    const complete = vi.fn();
+    const r = await answerPrompt('s1', second, complete); // menu not on screen → refused
+    expect(r).toMatchObject({ ok: false });
+    expect(complete).not.toHaveBeenCalled();
+    // A numbered menu's digit is fire-and-forget: completed at once.
+    answerPrompt('s1', { label: 'a', input: '1' }, complete);
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 
   it('an unnumbered menu\'s button types nothing when the menu is not on screen', async () => {

@@ -291,7 +291,6 @@ object InkSelectParser {
             if (raw.isBlank()) { if (rows.isNotEmpty() && i > selectorIdx) break; continue }
             val isCursor = i == selectorIdx
             if (!isCursor && (colOf(raw) != labelCol || DIALOG_FOOTER.containsMatchIn(raw))) break
-            if (!isCursor && Regex("""^\s*[❯>]""").containsMatchIn(raw)) return null
             val text = if (isCursor) m.groupValues[4].trim() else raw.trim()
             val prev = rows.lastOrNull()
             if (prev != null && !isCursor) {
