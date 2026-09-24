@@ -1,0 +1,216 @@
+// Per-install "Welcome back" bookkeeping — which desktop sessions are open
+// THIS run (the "strip"), and which prior conversations should be offered for
+// reopen the next time the app launches. Persisted at
+// <userData>/welcome-back.json. Design: docs/active/specs/2026-09-24-welcome-back-design.md §1.
+//
+// WHY its own file, not the Conversation Store: this fact is per-INSTALL, not
+// a fact any other device should ever learn. Syncing it would leave a
+// `open:<installId>` key on the store forever for every device that ever ran
+// this install (design §1) — this file only exists here, and is not synced.
+//
+// WHY injected fs: the caller (main.ts, T2) passes `fs.promises`; tests pass
+// an in-memory fake, so this module's tests never touch a real disk and can
+// assert on the exact write sequence (temp file, then rename).
+import type { SessionProvider } from '../shared/types';
+
+/** `shell` sessions are a terminal, not an AI conversation — they have no
+ *  conversation id to remember, so they never appear in `open` or `offer`. */
+export type WelcomeBackProvider = Exclude<SessionProvider, 'shell'>;
+
+export interface WelcomeBackEntry {
+  conversationId: string;
+  provider: WelcomeBackProvider;
+}
+
+interface WelcomeBackState {
+  version: 1;
+  /** This run's strip: desktopSessionId -> what it's tracking. */
+  open: Record<string, WelcomeBackEntry>;
+  /** What the Welcome back screen shows next launch. */
+  offer: WelcomeBackEntry[];
+}
+
+function emptyState(): WelcomeBackState {
+  return { version: 1, open: {}, offer: [] };
+}
+
+const VALID_PROVIDERS: readonly WelcomeBackProvider[] = ['claude', 'native'];
+
+function asEntry(value: unknown): WelcomeBackEntry | null {
+  const e = value as Partial<WelcomeBackEntry> | null;
+  if (!e || typeof e !== 'object') return null;
+  if (typeof e.conversationId !== 'string' || !e.conversationId) return null;
+  if (!VALID_PROVIDERS.includes(e.provider as WelcomeBackProvider)) return null;
+  return { conversationId: e.conversationId, provider: e.provider as WelcomeBackProvider };
+}
+
+// Corrupt or partial JSON must never throw — a bad file reads the same as a
+// missing one (design §1: "a missing/corrupt file = empty (never throws)").
+// Malformed individual entries are dropped rather than failing the whole
+// parse, so one bad row never loses every other tracked session.
+function parseState(raw: string): WelcomeBackState {
+  try {
+    const parsed = JSON.parse(raw) as Partial<WelcomeBackState> | null;
+    if (!parsed || typeof parsed !== 'object') return emptyState();
+    const open: Record<string, WelcomeBackEntry> = {};
+    if (parsed.open && typeof parsed.open === 'object') {
+      for (const [id, value] of Object.entries(parsed.open)) {
+        const entry = asEntry(value);
+        if (entry) open[id] = entry;
+      }
+    }
+    const offer: WelcomeBackEntry[] = [];
+    if (Array.isArray(parsed.offer)) {
+      for (const value of parsed.offer) {
+        const entry = asEntry(value);
+        if (entry) offer.push(entry);
+      }
+    }
+    return { version: 1, open, offer };
+  } catch {
+    return emptyState();
+  }
+}
+
+// First entry per conversationId wins — `offer` is offered by conversation
+// identity, not by which desktop session last tracked it.
+function dedupeByConversationId(entries: WelcomeBackEntry[]): WelcomeBackEntry[] {
+  const seen = new Map<string, WelcomeBackEntry>();
+  for (const entry of entries) if (!seen.has(entry.conversationId)) seen.set(entry.conversationId, entry);
+  return [...seen.values()];
+}
+
+/** The subset of `fs.promises` this store needs. Callers pass `fs.promises`
+ *  itself (structurally compatible); tests pass an in-memory fake. */
+export interface WelcomeBackFs {
+  readFile(path: string, encoding: 'utf8'): Promise<string>;
+  writeFile(path: string, data: string, encoding: 'utf8'): Promise<void>;
+  rename(oldPath: string, newPath: string): Promise<void>;
+}
+
+export interface WelcomeBackStore {
+  /** Resolves once the on-disk file (or its absence) has been loaded.
+   *  Every handler awaits this (design §1, review 1 D5) instead of relying on
+   *  it being called after some fixed boot delay. */
+  ready: Promise<void>;
+  /** Run once at app.whenReady(), before createWindow(): folds this run's
+   *  strip into `offer` and clears it. Union, not replace — if the app dies
+   *  again before Destin answers the Welcome back screen, the still-unanswered
+   *  offer survives (design §1). Resolves once that change is durable. */
+  startup(): Promise<void>;
+  /** A desktop session started resuming, or sent its first user message. */
+  track(desktopId: string, conversationId: string, provider: WelcomeBackProvider): void;
+  /** The conversation id backing an already-tracked desktop session changed
+   *  (`/clear` rotation, in-session `/resume`, a SessionStart remap). A no-op
+   *  if `desktopId` isn't tracked — remap fires for every mapping change,
+   *  tracked or not (design §2). */
+  remap(desktopId: string, conversationId: string): void;
+  /** The session left `open` because IT specifically ended (explicit X,
+   *  "don't resume" on window close, a holder takeover) — never because the
+   *  process merely exited (design §2: that case calls nothing, on purpose). */
+  untrack(desktopId: string): void;
+  /** Conversation ids the Welcome back screen should offer. */
+  offerIds(): string[];
+  /** Removes these conversation ids from `offer` (the screen was answered or left). */
+  forget(ids: string[]): void;
+  /** Resolves once every write queued so far has landed on disk. */
+  flush(): Promise<void>;
+}
+
+export function createWelcomeBackStore(filePath: string, fs: WelcomeBackFs): WelcomeBackStore {
+  let state: WelcomeBackState = emptyState();
+  const tmpPath = `${filePath}.tmp`;
+
+  // `tail` orders writes and never rejects, so one failed write can't wedge
+  // every later one and can't surface as an unhandled rejection when nobody
+  // is awaiting that particular call (track/untrack/remap/forget are
+  // fire-and-forget from the caller's side). `pendingWrite` is the most
+  // recent attempt's own promise, which flush() returns AS-IS (it may
+  // reject) so a caller that does await — shutdownApp — learns of a real
+  // disk failure instead of it being silently swallowed.
+  let tail: Promise<void> = Promise.resolve();
+  let pendingWrite: Promise<void> = Promise.resolve();
+
+  async function persist(): Promise<void> {
+    // Read `state` here, at execution time, not at the call site: if several
+    // mutations queue writes before the first one runs, every queued write
+    // still persists whatever is CURRENT when its turn comes — so the file on
+    // disk always converges on the latest state even though writes are not
+    // coalesced (design §1: "serialized on one promise chain, latest state wins").
+    const json = JSON.stringify(state);
+    // Temp file + rename: a crash mid-write leaves the OLD file intact rather
+    // than a half-written JSON that would read back as corrupt (i.e. empty).
+    await fs.writeFile(tmpPath, json, 'utf8');
+    await fs.rename(tmpPath, filePath);
+  }
+
+  function enqueueWrite(): Promise<void> {
+    const attempt = tail.then(persist);
+    pendingWrite = attempt;
+    tail = attempt.catch(() => { /* logged nowhere on purpose — see comment above */ });
+    return attempt;
+  }
+
+  const ready: Promise<void> = (async () => {
+    try {
+      const raw = await fs.readFile(filePath, 'utf8');
+      state = parseState(raw);
+    } catch {
+      // Missing file (first run) or unreadable file — both are "nothing saved".
+      state = emptyState();
+    }
+  })();
+
+  return {
+    ready,
+
+    async startup(): Promise<void> {
+      await ready;
+      state = {
+        version: 1,
+        offer: dedupeByConversationId([...state.offer, ...Object.values(state.open)]),
+        open: {},
+      };
+      await enqueueWrite();
+    },
+
+    track(desktopId, conversationId, provider): void {
+      state.open[desktopId] = { conversationId, provider };
+      // Fire-and-forget: the returned promise is `tail`-chained and self-caught
+      // (see enqueueWrite), so an unawaited call here can never surface as an
+      // unhandled rejection — `void` only satisfies the no-floating-promises lint.
+      void enqueueWrite();
+    },
+
+    remap(desktopId, conversationId): void {
+      const existing = state.open[desktopId];
+      if (!existing) return; // not tracked — nothing to remap (design §2)
+      if (existing.conversationId === conversationId) return; // no change, no write
+      state.open[desktopId] = { ...existing, conversationId };
+      void enqueueWrite();
+    },
+
+    untrack(desktopId): void {
+      if (!(desktopId in state.open)) return;
+      delete state.open[desktopId];
+      void enqueueWrite();
+    },
+
+    offerIds(): string[] {
+      return state.offer.map((entry) => entry.conversationId);
+    },
+
+    forget(ids): void {
+      if (!ids.length || !state.offer.length) return;
+      const remove = new Set(ids);
+      const next = state.offer.filter((entry) => !remove.has(entry.conversationId));
+      if (next.length === state.offer.length) return; // nothing matched — no write
+      state.offer = next;
+      void enqueueWrite();
+    },
+
+    flush(): Promise<void> {
+      return pendingWrite;
+    },
+  };
+}
