@@ -12,6 +12,9 @@ import { reconcileMcp } from './mcp-reconciler';
 import { log } from './logger';
 import { BUNDLED_PLUGIN_IDS } from '../shared/bundled-plugins';
 import { isNewerVersion } from '../shared/version-compare';
+import { getManagedRoots } from './sync-spaces/service';
+import { NativeHome } from './native-home';
+import { markPluginRemoved } from './project-extensions/store';
 // Marketplace overhaul Task 16: the Worker host the catalog is served from.
 // Main already imports this module (install-reconcile.ts, marketplace-api-handlers.ts).
 import { MARKETPLACE_API_HOST } from '../renderer/state/marketplace-api-client';
@@ -518,6 +521,25 @@ export class LocalSkillProvider {
     }
   }
 
+  /**
+   * Project skills & tools uninstall cascade (technical design 2026-09-24
+   * §2): write `{on:false, removed:true}` into every project record that
+   * has an entry for this plugin, so "needs setup" never offers to reinstall
+   * something the user deliberately removed. Best-effort and NEVER allowed
+   * to fail the uninstall itself — sync-spaces may not have started yet
+   * (getManagedRoots() null before startEngine runs), and a write hiccup
+   * here is far less bad than an uninstall that silently didn't happen.
+   */
+  private async cascadePluginRemoval(pluginId: string): Promise<void> {
+    const roots = getManagedRoots();
+    if (!roots) return;
+    try {
+      await markPluginRemoved({ personalRoot: roots.personalRoot, home: new NativeHome() }, pluginId);
+    } catch (e) {
+      log('WARN', 'project-extensions', `markPluginRemoved(${pluginId}) failed`, { error: String((e as Error)?.message ?? e) });
+    }
+  }
+
   async uninstall(id: string): Promise<{ type: 'plugin' | 'prompt' }> {
     const installed = this.configStore.getInstalledPlugins();
 
@@ -526,6 +548,7 @@ export class LocalSkillProvider {
     if (installed[id]) {
       await uninstallPlugin(id);
       this.configStore.removePluginInstall(id);
+      await this.cascadePluginRemoval(id);
       this.installedCache = null;
       this.onCacheInvalidated?.();
       return { type: 'plugin' };
@@ -542,6 +565,7 @@ export class LocalSkillProvider {
     if (parentPluginId && installed[parentPluginId]) {
       await uninstallPlugin(parentPluginId);
       this.configStore.removePluginInstall(parentPluginId);
+      await this.cascadePluginRemoval(parentPluginId);
       this.installedCache = null;
       this.onCacheInvalidated?.();
       return { type: 'plugin' };
