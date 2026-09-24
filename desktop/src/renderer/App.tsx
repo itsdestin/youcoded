@@ -75,6 +75,7 @@ import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
 import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
 import { InitializingCover } from './components/InitializingCover';
+import { promptShowMeansStarted } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
@@ -1835,13 +1836,9 @@ function AppInner() {
 
     // Prompt events — Android bridge broadcasts Ink menu prompts detected from PTY screen
     const promptShowHandler = (window.claude.on as any).promptShow?.((payload: any) => {
-      // A prompt arriving proves the session is alive — dismiss "Initializing" overlay
-      setInitializedSessions((prev) => {
-        if (prev.has(payload.sessionId)) return prev;
-        const next = new Set(prev);
-        next.add(payload.sessionId);
-        return next;
-      });
+      // Only Android's explicit ready signal (first hook) starts the session — a
+      // startup-dialog card must not (review F1; startup-dialog-store.ts).
+      if (promptShowMeansStarted(payload.promptId)) setInitializedSessions((prev) => (prev.has(payload.sessionId) ? prev : new Set(prev).add(payload.sessionId)));
       dispatch({
         type: 'SHOW_PROMPT',
         sessionId: payload.sessionId,

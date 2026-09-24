@@ -212,6 +212,16 @@ class ManagedSession(
                 delay(200)
                 eventBridge = bridge.getEventBridge()
             }
+            // Tell React the session has STARTED only when Claude Code runs its first
+            // hook — it runs none until every startup dialog is answered. Until then
+            // React keeps the input gated and its startup safety net on (desktop
+            // parity: App.tsx's first-hook rule). The old trigger, "the screen showed
+            // anything", fired before the dialogs (review F1, 2026-09-24).
+            val readyBridge = eventBridge
+            scope.launch {
+                readyBridge.sessionStarted.first { it }
+                withContext(Dispatchers.Main) { broadcastSessionReady() }
+            }
             eventBridge.events.collect { event ->
                 // Check for session ID mapping and start topic/transcript observers
                 val claudeSessionId = eventBridge.getClaudeSessionId(id)
@@ -343,7 +353,6 @@ class ManagedSession(
             try {
                 val activePrompts = mutableSetOf<String>()
                 var lastScreenHash = 0
-                var sessionReadyBroadcast = false
                 while (true) {
                     delay(1000)
                     if (!bridge.isRunning) break
@@ -358,29 +367,8 @@ class ManagedSession(
                         detectPrompts(screen, combined, activePrompts)
                         detectPermissionMode(screen)
 
-                        // Detect Claude Code ready state — dismiss React "Initializing" overlay
-                        if (!sessionReadyBroadcast && screen.isNotBlank()) {
-                            // Claude Code shows a ">" prompt or has visible content
-                            // Any non-blank screen after session start means it's alive
-                            sessionReadyBroadcast = true
-                            bridgeServer?.broadcast(JSONObject().apply {
-                                put("type", "prompt:show")
-                                put("payload", JSONObject().apply {
-                                    put("sessionId", id)
-                                    put("promptId", "_session_ready")
-                                    put("title", "")
-                                    put("buttons", org.json.JSONArray())
-                                })
-                            })
-                            // Immediately dismiss it
-                            bridgeServer?.broadcast(JSONObject().apply {
-                                put("type", "prompt:dismiss")
-                                put("payload", JSONObject().apply {
-                                    put("sessionId", id)
-                                    put("promptId", "_session_ready")
-                                })
-                            })
-                        }
+                        // (No "any screen output = ready" here any more — see the
+                        // sessionStarted collector below; review F1, 2026-09-24.)
                     }
                 }
             } catch (_: Exception) {}
@@ -619,6 +607,21 @@ class ManagedSession(
                 })
             })
         })
+    }
+
+    /** The "session started" signal React listens for (prompt:show of
+     *  SESSION_READY_PROMPT_ID, dismissed at once — see App.tsx promptShow). */
+    private fun broadcastSessionReady() {
+        bridgeServer?.broadcast(JSONObject().apply {
+            put("type", "prompt:show")
+            put("payload", JSONObject().apply {
+                put("sessionId", id)
+                put("promptId", "_session_ready")
+                put("title", "")
+                put("buttons", org.json.JSONArray())
+            })
+        })
+        broadcastPromptDismiss("_session_ready")
     }
 
     private fun broadcastPromptDismiss(promptId: String) {

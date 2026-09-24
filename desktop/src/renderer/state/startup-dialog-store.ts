@@ -49,3 +49,18 @@ export function useUnreadableStartupDialog(sessionId: string | null): Unreadable
   const get = useCallback(() => (sessionId ? current.get(sessionId) ?? null : null), [sessionId]);
   return useSyncExternalStore(subscribe, get);
 }
+
+/** The promptId Android's ManagedSession broadcasts (shown then dismissed at
+ *  once) when Claude Code runs its first hook — Android's "session started". */
+const ANDROID_SESSION_READY_PROMPT_ID = '_session_ready';
+
+/**
+ * Does this prompt:show mean the session has STARTED? Only Android's explicit
+ * ready signal does. WHY (review F1, 2026-09-24): App used to count ANY
+ * prompt:show as "started" — so the trust card itself switched the startup
+ * safety net off and enabled the chat box while a multi-select MCP dialog was
+ * live, and typed text went into the dialog.
+ */
+export function promptShowMeansStarted(promptId: string): boolean {
+  return promptId === ANDROID_SESSION_READY_PROMPT_ID;
+}

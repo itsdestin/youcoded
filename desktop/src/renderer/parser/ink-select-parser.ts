@@ -501,6 +501,9 @@ function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | nul
  */
 export function readStartupDialog(screenText: string): { heading: string } | null {
   const lines = stripAnsi(screenText).split('\n');
+  // A full-screen read (Android's, or a buffer with blank rows below the
+  // dialog) ends in empty rows; the footer is near the last NON-empty one.
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
   let footer = -1;
   for (let i = lines.length - 1; i >= Math.max(0, lines.length - 12); i--) {
     const t = lines[i].trim();

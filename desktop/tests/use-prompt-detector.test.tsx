@@ -382,3 +382,94 @@ describe('usePromptDetector startup safety net', () => {
     expect(getUnreadableStartupDialog('s1')).toBeNull();
   });
 });
+
+describe('usePromptDetector — every readable dialog ends up with a card', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.dispatch.mockClear();
+    mocks.callbacks.length = 0;
+    mocks.screen.text = '';
+    mocks.sessions.clear();
+  });
+  afterEach(() => { vi.useRealTimers(); });
+  const shows = () => mocks.dispatch.mock.calls.filter((c) => c[0].type === 'SHOW_PROMPT').map((c) => c[0]);
+
+  it('an unreadable frame inside the debounce does not lose the card (trust → garbled → trust)', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(100); });
+    // One frame mid-redraw: the footer not painted yet → not a readable menu.
+    mocks.screen.text = TRUST_2_1_281.replace(' Enter to confirm · Esc to cancel', '');
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(100); });
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(shows().map((s) => s.title)).toEqual(['Trust This Folder?']);
+  });
+
+  it('gives an identical dialog that follows an ANSWERED card a fresh card', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    const [first] = shows();
+    // The user answered it; Claude Code asks the identical question again.
+    mocks.sessions.set('s1', {
+      toolCalls: new Map(), activeTurnToolIds: [],
+      timeline: [{ kind: 'prompt', prompt: { ...first, completed: 'Yes, I trust this folder' } }],
+    });
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(1000 + 400); });
+    const all = shows();
+    expect(all).toHaveLength(2);
+    expect(all[1].promptId).toBe(`${first.promptId}~1`);
+    expect(all[1].title).toBe('Trust This Folder?');
+  });
+
+  it('does not re-issue a card whose dialog left promptly after the answer', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    const [first] = shows();
+    mocks.sessions.set('s1', {
+      toolCalls: new Map(), activeTurnToolIds: [],
+      timeline: [{ kind: 'prompt', prompt: { ...first, completed: 'Yes, I trust this folder' } }],
+    });
+    fireBuffer('s1');
+    mocks.screen.text = '❯ \n? for shortcuts';
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(shows()).toHaveLength(1);
+  });
+});
+
+// Android (review F1): the REAL multi-server MCP dialog, as Android's terminal
+// hands it over (exported by startup-dialogs.test.ts). Until the session has
+// started — which on Android now means "Claude Code ran a hook", never "the
+// screen showed something" — it must reach the safety net, and a menu card must
+// not count as "started".
+import fs from 'fs';
+import path from 'path';
+import { promptShowMeansStarted } from '../src/renderer/state/startup-dialog-store';
+
+describe('Android startup: the multi-server MCP dialog', () => {
+  const fx = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'test', 'resources',
+    'startup-dialogs', 'mcp-two-100x35-dialog-2-visible.json'), 'utf8'));
+  beforeEach(() => { mocks.dispatch.mockClear(); mocks.callbacks.length = 0; mocks.sessions.clear(); });
+
+  it('reaches the safety net while the session is starting', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = fx.screen;
+    fireBuffer('android-1');
+    expect(getUnreadableStartupDialog('android-1')).toEqual({ heading: '2 new MCP servers found in this project' });
+  });
+
+  it('only Android\'s explicit ready signal starts a session — a dialog card never does', () => {
+    expect(promptShowMeansStarted('_session_ready')).toBe(true);
+    expect(promptShowMeansStarted('menu_no_exit_yes_i_trus')).toBe(false);
+    expect(promptShowMeansStarted('bypass_warning')).toBe(false);
+  });
+});
