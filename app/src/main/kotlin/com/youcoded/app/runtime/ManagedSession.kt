@@ -32,35 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.input.TextFieldValue
 
-// --- Permission override classification ---
-// In bypass mode, Claude Code still fires PermissionRequest for protected paths,
-// compound cd commands, and AskUserQuestion. These regexes classify each request
-// so the user's per-category overrides can selectively auto-approve them.
-private val TITLE_HOOK_RE = Regex("""[>|].*[/\\]\.claude[/\\]topics[/\\]topic-""")
-private val CONFIG_FILE_RE = Regex("""\.(bashrc|bash_profile|zshrc|zprofile|profile|gitconfig|gitmodules|ripgreprc)\b|\.mcp\.json|\.claude\.json""")
-private val PROTECTED_DIR_RE = Regex("""[/\\]\.git[/\\]|[/\\]\.claude[/\\]""")
-private val CD_REDIRECT_RE = Regex("""\bcd\b.*[>]""")
-private val CD_GIT_RE = Regex("""\bcd\b.*\bgit\b""")
-
-private fun classifyPermission(toolName: String, toolInput: JSONObject): String {
-    val cmd = toolInput.optString("command", "")
-    val filePath = toolInput.optString("file_path", "")
-    val target = cmd.ifEmpty { filePath }
-
-    if (toolName == "Bash" && TITLE_HOOK_RE.containsMatchIn(cmd)) return "titleHook"
-    if (toolName == "Bash") {
-        if (CD_GIT_RE.containsMatchIn(cmd)) return "compoundCdGit"
-        if (CD_REDIRECT_RE.containsMatchIn(cmd)) return "compoundCdRedirect"
-    }
-    if (CONFIG_FILE_RE.containsMatchIn(target)) return "protectedConfigFiles"
-    if (PROTECTED_DIR_RE.containsMatchIn(target)) return "protectedDirectories"
-    return "unknown"
-}
-
-private fun shouldAutoApprove(category: String, overrides: JSONObject): Boolean {
-    if (overrides.optBoolean("approveAll", false)) return true
-    return overrides.optBoolean(category, false)
-}
+// Permission override classification lives in PermissionAutoApprove.kt (pure, unit-tested).
 
 /** Matches desktop's SessionStatusColor: green, red, blue, gray */
 enum class SessionStatus { Active, AwaitingApproval, Unseen, Idle, Dead }
@@ -243,19 +215,16 @@ class ManagedSession(
                 bridgeServer?.let { server ->
                     when (event) {
                         is HookEvent.PermissionRequest -> {
-                            // Classify and auto-approve based on user's override settings.
-                            // Title hooks always auto-approved; other categories per user config.
-                            // AskUserQuestion is never auto-approved (needs real user input).
-                            if (event.toolName != "AskUserQuestion") {
-                                val category = classifyPermission(event.toolName, event.toolInput)
-                                val overrides = permissionOverridesCache
-                                val shouldApprove = category == "titleHook" || shouldAutoApprove(category, overrides)
-                                if (shouldApprove) {
-                                    val decision = JSONObject().put("decision",
-                                        JSONObject().put("behavior", "allow"))
-                                    ptyBridge?.getEventBridge()?.respond(event.requestId, decision)
-                                    return@let
-                                }
+                            // Auto-approve per the user's override settings. WHY one call
+                            // (2026-09-24): the decision is shouldAutoApprove in
+                            // PermissionAutoApprove.kt, which never allows ExitPlanMode or
+                            // AskUserQuestion — Claude Code ignores a hook allow for them,
+                            // so an allow only hid the card while the menu stayed live.
+                            if (shouldAutoApprove(event.toolName, event.toolInput, permissionOverridesCache)) {
+                                val decision = JSONObject().put("decision",
+                                    JSONObject().put("behavior", "allow"))
+                                ptyBridge?.getEventBridge()?.respond(event.requestId, decision)
+                                return@let
                             }
                             val suggestions = event.permissionSuggestions?.let { arr ->
                                 (0 until arr.length()).map { arr.optString(it) }
