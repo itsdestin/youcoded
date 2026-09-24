@@ -9,7 +9,7 @@ import { ThemeBg } from '../../../components/ThemeBg';
  *  the decided tinted status pill and no capitals. Tokens only; dev-only. */
 
 export type CardAnatomy = 'today' | 'quiet-footer' | 'meta-under-title' | 'chips';
-export type ConvAnatomy = 'date-top' | 'date-end' | 'icons-bottom' | 'icons-hover' | 'icons-top-date-end';
+export type ConvAnatomy = 'date-top' | 'date-end' | 'icons-bottom' | 'icons-hover' | 'icons-top-date-end' | 'icons-top-date-bottom';
 
 const CARD = 'rounded-xl bg-panel border border-edge-dim p-3 flex flex-col gap-2';
 const SHADOW = { boxShadow: '0 4px 20px rgb(0 0 0 / .16), 0 1px 3px rgb(0 0 0 / .08)' };
@@ -62,15 +62,14 @@ function Card({ item, anatomy }: { item: Item; anatomy: CardAnatomy }) {
           {item.status && <Pill>{item.status}</Pill>}
           <Star on={item.star} />
         </div>
-        <div className="flex gap-1">
+        {/* U-1 (Destin): every chip in ONE row right under the name. */}
+        <div className="flex flex-wrap gap-1">
           <span className={chip}>Likely safe</span>
           <span className={chip}>{item.by}</span>
-        </div>
-        <p className="text-xs text-fg-2 line-clamp-2">{item.desc}</p>
-        <div className="mt-auto flex flex-wrap gap-1">
           <span className={chip}>{item.kind}</span>
           {item.stats.split(' · ').map((x) => <span key={x} className={chip}>{x}</span>)}
         </div>
+        <p className="text-xs text-fg-2 line-clamp-2">{item.desc}</p>
       </div>
     );
   }
@@ -141,7 +140,7 @@ export function ConversationCardDemo({ anatomy }: { anatomy: ConvAnatomy }) {
           <div key={c.title} className={`${CARD} group`} style={SHADOW}>
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-fg flex-1 truncate">{c.title}</span>
-              {anatomy === 'icons-top-date-end' && <Icons />}
+              {(anatomy === 'icons-top-date-end' || anatomy === 'icons-top-date-bottom') && <Icons />}
               {(anatomy === 'date-top' || anatomy === 'icons-bottom' || anatomy === 'icons-hover') && <span className="text-2xs text-fg-muted shrink-0">{c.date}</span>}
               {anatomy === 'icons-hover' && <span className="opacity-0 group-hover:opacity-100 transition-opacity"><Icons /></span>}
             </div>
@@ -153,6 +152,8 @@ export function ConversationCardDemo({ anatomy }: { anatomy: ConvAnatomy }) {
                 {c.project} · {c.model} · {c.size}{anatomy === 'date-end' || anatomy === 'icons-top-date-end' ? ` · ${c.date}` : ''}
               </p>
               {anatomy === 'icons-bottom' && <Icons />}
+              {/* U-2 (Destin): date bottom right, tag/note buttons top right. */}
+              {anatomy === 'icons-top-date-bottom' && <span className="text-2xs text-fg-muted shrink-0">{c.date}</span>}
             </div>
           </div>
         ))}
