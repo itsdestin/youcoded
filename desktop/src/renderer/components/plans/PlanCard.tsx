@@ -544,7 +544,10 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               takes the free space (flex-1) but keeps a readable 16rem before
               the buttons give way; below that the buttons wrap onto their own
               line and stay on the right (ml-auto), Approve rightmost (G-29). */}
-          {plan.steps.length > 0 && (
+          {/* Decision 34 item 3: while the "Reached your $X limit" row shows,
+              it IS the spending line — a second "Spent $5.00 of the $5.00
+              limit" above it said the same thing twice. */}
+          {plan.steps.length > 0 && !(plan.status === 'paused' && plan.paused?.kind === 'plan-limit' && !handoff) && (
           <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap" data-testid="plan-ceiling">
           <span className="text-xs text-fg-dim flex-1 min-w-0 basis-64">
             {plan.status === 'proposed' || revised
@@ -633,7 +636,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
           })()}
 
           {plan.autoApproved && (
-            <div className="text-2xs text-fg-muted">Ran without asking — under the limit you set in Settings.</div>
+            <div className="text-2xs text-fg-muted">Started without asking — its estimate was under your amount in Settings.</div>
           )}
 
           {/* Decision 34 item 3: "Paused at your limit" — one row, Stop ·
@@ -1477,7 +1480,9 @@ function StepRow({ step, index, siblings, number, numbers, plan, sessionId }: {
             <StepSection label="Model">
               <div className="text-2xs text-fg-muted" data-testid="plan-step-model">
                 {step.stepModel && !step.stepModel.isDefault ? step.stepModel.label : `Default · ${step.stepModel?.label ?? 'automatic'}`}
-                {step.status !== 'pending' ? ' — already running, so its model can’t be changed now' : ' — change it in Plan settings'}
+                {/* The card only names the model; why a started step's model is
+                    fixed is explained in Plan settings, where it matters. */}
+                {step.status === 'pending' ? ' — change it in Plan settings' : ''}
               </div>
             </StepSection>
           )}
