@@ -8,7 +8,6 @@
 import { CommentCard } from './CommentCard';
 import { EmptyState } from '../ui/states';
 import { useDocComments } from '../../state/doc-comments-store';
-import { CommentsPaneFooter } from './CommentsPaneFooter';
 
 interface Props {
   path: string;
@@ -22,10 +21,9 @@ export function CodeCommentsRail({ path, onJumpToLine }: Props) {
     .sort((a, b) => (a.startLine ?? 0) - (b.startLine ?? 0) || a.createdAt - b.createdAt);
 
   return (
-    // The rail scrolls on its own (no scroll-sync here), so the footer is a
-    // plain non-scrolling row under the list.
-    <div className="w-64 shrink-0 border-l border-edge flex flex-col">
-    <div className="flex-1 min-h-0 overflow-y-auto p-2 flex flex-col gap-2">
+    // pb-32: room to scroll the last card up past the floating Ask/Show
+    // resolved buttons (SessionDrawer's bottom-right cluster).
+    <div className="w-64 shrink-0 border-l border-edge overflow-y-auto p-2 pb-32 flex flex-col gap-2">
       {visible.length === 0 && (
         <EmptyState message="No comments on this file yet." variant="inline" />
       )}
@@ -42,8 +40,6 @@ export function CodeCommentsRail({ path, onJumpToLine }: Props) {
           onJump={c.startLine ? () => onJumpToLine(c.startLine!) : undefined}
         />
       ))}
-    </div>
-    <CommentsPaneFooter path={path} />
     </div>
   );
 }

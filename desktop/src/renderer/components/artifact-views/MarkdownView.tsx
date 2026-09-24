@@ -1,7 +1,7 @@
 // Task 6.4: MarkdownView is now a fully controlled component.
 // Edit state (editing, draft) is managed by ActiveArtifactView in SessionDrawer.tsx
 // so the conflict banner has access to the in-progress draft.
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useRef } from 'react';
 import MarkdownContent from '../MarkdownContent';
 import type { ArtifactViewProps } from './types';
 // Doc comments (round 2, Destin): Reading mode (default) shows highlights +
@@ -13,7 +13,6 @@ import type { ArtifactViewProps } from './types';
 // nothing to anchor to.
 import { CommentsMargin } from '../comments/CommentsMargin';
 import { ReadingHighlights } from '../comments/ReadingHighlights';
-import { CommentsPaneFooter } from '../comments/CommentsPaneFooter';
 import { useContainerNarrow } from '../../hooks/use-container-narrow';
 
 // 640px, same NUMBER the app's viewport breakpoint uses, but measuring the
@@ -33,24 +32,7 @@ export function MarkdownView({
 }: ArtifactViewProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [rootRef, narrow] = useContainerNarrow<HTMLDivElement>(MARGIN_COLLAPSE_PX);
-  // The comment footer is overlaid on the margin's bottom edge from OUTSIDE
-  // the scroller (see the render below), so it must stop short of the
-  // scroller's own scrollbar or it would cover the bottom of it.
-  const scrollerRef = useRef<HTMLDivElement>(null);
-  const [scrollbarW, setScrollbarW] = useState(0);
   const inComments = commentsMode === 'comments' && !editing;
-  useLayoutEffect(() => {
-    const el = scrollerRef.current;
-    if (!el || !inComments) return;
-    const measure = () => {
-      const w = el.offsetWidth - el.clientWidth;
-      setScrollbarW((cur) => (cur === w ? cur : w));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [inComments]);
 
   if (content === null) {
     // Loading / missing / read-error are rendered by ActiveArtifactView (which
@@ -81,11 +63,11 @@ export function MarkdownView({
 
   const isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
   return (
-    <div ref={rootRef} className="relative flex flex-col h-full">
+    <div ref={rootRef} className="flex flex-col h-full">
       {/* The scrolling ancestor is this flex row, not the text column alone —
           the margin (or, narrow, its marker rail) is a SIBLING inside it, so
           both move together on scroll with no listener of our own. */}
-      <div ref={scrollerRef} className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto">
         {/* WHY an inner min-h-full flex row: a scroller's own flex children
             stretch only to the scroller's VISIBLE height, so the margin
             column (and its divider line) ended one screen down while the
@@ -95,7 +77,7 @@ export function MarkdownView({
         <div
           ref={contentRef}
           // pb-32 in Comments mode: room to scroll the last cards up past
-          // the footer overlaid on the margin's bottom edge.
+          // the floating Ask/Show resolved buttons (SessionDrawer's cluster).
           className={`flex-1 min-w-0 p-4 ${inComments ? 'pb-32' : ''}`}
           data-artifact-viewer
           data-doc-path={path}
@@ -113,17 +95,6 @@ export function MarkdownView({
           : <ReadingHighlights containerRef={contentRef} path={path} onOpenComments={onOpenComments ?? (() => {})} />}
         </div>
       </div>
-      {/* WHY outside the scroller: the margin column scrolls with the text
-          (that's what keeps each card beside its highlight), so anything
-          inside it scrolls away too. Overlaying the footer on the margin's
-          bottom edge from here keeps "Ask Your Assistant" fixed while the
-          cards scroll underneath it. Width matches the margin (w-64, or the
-          w-9 marker rail when narrow). */}
-      {inComments && (
-        <div className={`absolute bottom-0 z-10 border-l border-edge ${narrow ? 'w-9' : 'w-64'}`} style={{ right: scrollbarW }}>
-          <CommentsPaneFooter path={path} compact={narrow} />
-        </div>
-      )}
     </div>
   );
 }

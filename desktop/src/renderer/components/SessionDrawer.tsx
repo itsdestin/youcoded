@@ -17,6 +17,7 @@ import { useMissingArtifacts, refreshMissingArtifacts } from '../hooks/useMissin
 import { gitFooterState } from '../utils/git-footer';
 import { ActiveArtifactView, type ActiveArtifactHandle, type CommentsHeaderState } from './artifact-views/ActiveArtifactView';
 import { MenuIcon } from './context-menu/menu-icons';
+import { CommentsFloatingActions } from './comments/CommentsFloatingActions';
 import SessionPreviewPane from './SessionPreviewPane';
 // 6b: COPY was originally added ONLY for the "Referenced
 // conversations" list block below (a cut candidate — see Task 6 brief 6b).
@@ -123,32 +124,32 @@ function Ic({ name, size = 15 }: { name: keyof typeof PATHS | string; size?: num
   );
 }
 
-// Comments mode button (doc comments mockup, round 4 — Destin: "the comment
-// pane button should be in the header alongside the other actions"). Same
-// shape/states as IconBtn, but wider so the count can sit beside the glyph —
-// the same inline count badge the header's Files button uses (HeaderBar.tsx),
-// flipped to on-accent while pressed so it stays legible.
+// Floating Comments button (doc comments mockup). Round 4 put it in the
+// header icon row; round 5 (Destin: "try putting the comment button just to
+// the left of the edit button") moved it into the floating Edit cluster, in
+// the same pill shape as the Cancel button there. Pressed (accent ring) while
+// Comments mode is on; the count badge is the header Files button's recipe
+// (HeaderBar.tsx).
 function CommentsBtn({ state, onClick }: { state: CommentsHeaderState; onClick: () => void }) {
   const title = state.active ? 'Back to reading' : 'Comments';
   return (
-    <Tooltip text={title}>
     <button
       type="button"
       aria-pressed={state.active}
-      aria-label={state.count ? `${title} (${state.count})` : title}
+      title={title}
       onClick={onClick}
-      className={`h-7 px-1.5 gap-1 rounded-md inline-flex items-center justify-center shrink-0 border transition-colors ${
-        state.active ? 'text-fg bg-well border-edge' : 'text-fg-dim border-transparent hover:text-fg hover:bg-well hover:border-edge'
+      className={`pointer-events-auto flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-panel border shadow-lg hover:text-fg hover:bg-well transition-colors ${
+        state.active ? 'text-fg border-accent ring-1 ring-accent' : 'text-fg-2 border-edge'
       }`}
     >
       <MenuIcon name="comment" className="w-4 h-4" />
+      Comments
       {state.count > 0 && (
         <span className="text-3xs rounded-full px-1 min-w-[14px] inline-flex items-center justify-center leading-none py-0.5 bg-accent text-on-accent">
           {state.count}
         </span>
       )}
     </button>
-    </Tooltip>
   );
 }
 
@@ -1143,7 +1144,6 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         )}
         {/* Edit/Save moved to the floating button at the bottom-right of the
             doc pane (Destin, 2026-07-22) — see the cluster below the content div. */}
-        {active && commentsState.available && <CommentsBtn state={commentsState} onClick={() => editRef.current?.toggleComments()} />}
         {active && isElectron && <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />}
         {active && isRemoteMode() && <IconBtn name="download" title="Download" onClick={handleDownload} />}
         {active && <IconBtn name={copiedPath ? 'check' : 'copypath'} title={copiedPath ? 'Copied' : 'Copy path'} onClick={handleCopyPath} />}
@@ -1275,14 +1275,27 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   and back OUT when the list reopens — kept mounted so both
                   directions animate. While EDITING it stays visible regardless,
                   so Save can never be hidden by opening the list. */}
-              {/* Hidden in Comments mode: it sat on top of the comment pane's
-                  "Ask Your Assistant" footer, and Comments mode is for review —
-                  going back to reading brings Edit back. */}
-              {active && (editState.editing || (editState.isEditable && !commentsState.active)) && (
+              {/* Doc comments (round 5): the cluster is now a right-aligned
+                  column. Bottom row: [Comments] [Edit]. In Comments mode,
+                  "Show resolved" and "Ask Your Assistant" float above that row,
+                  over the comment column — no bar or panel of their own
+                  (Destin: "they should float over the same … panel"). The
+                  column itself ignores the pointer so the gaps between pills
+                  never block the document; each pill opts back in. */}
+              {active && (
+                <div className="absolute bottom-9 right-4 z-20 flex flex-col items-end gap-2 pointer-events-none">
+                  {commentsState.active && <CommentsFloatingActions path={active.path} />}
+                  <div className="flex items-center gap-2">
+                  {commentsState.available && !editState.editing && (
+                    <CommentsBtn state={commentsState} onClick={() => editRef.current?.toggleComments()} />
+                  )}
+              {/* Edit is hidden in Comments mode (a review mode — going back to
+                  reading brings it back); otherwise unchanged below. */}
+              {(editState.editing || (editState.isEditable && !commentsState.active)) && (
                 <div
-                  className={`absolute bottom-9 right-4 z-20 flex items-center gap-2 transition-all duration-200 ${
+                  className={`flex items-center gap-2 transition-all duration-200 ${
                     editState.editing || !showList
-                      ? 'opacity-100 scale-100'
+                      ? 'opacity-100 scale-100 pointer-events-auto'
                       : 'opacity-0 scale-90 pointer-events-none'
                   }`}
                 >
@@ -1315,6 +1328,9 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       Edit
                     </button>
                   )}
+                </div>
+              )}
+                  </div>
                 </div>
               )}
               {/* metadata strip — bottom of the DOC column (not a full-width row up
