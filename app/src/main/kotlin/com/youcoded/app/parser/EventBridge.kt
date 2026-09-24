@@ -37,6 +37,16 @@ class EventBridge(private val socketName: String, private val ownSessionId: Stri
          *  own socket, so it is this session's. */
         fun isForeignAsk(askSessionId: String?, ownSessionId: String?): Boolean =
             !askSessionId.isNullOrBlank() && !ownSessionId.isNullOrBlank() && askSessionId != ownSessionId
+
+        /** What handleClient does with one incoming hook line. Pure, so the
+         *  routing — including the foreign-ask hand-back — is unit-tested. */
+        enum class Route { HOLD_FOR_CARD, PASS_THROUGH, FIRE_AND_FORGET }
+
+        fun route(eventName: String, askSessionId: String?, ownSessionId: String?): Route = when {
+            eventName != "PermissionRequest" -> Route.FIRE_AND_FORGET
+            isForeignAsk(askSessionId, ownSessionId) -> Route.PASS_THROUGH
+            else -> Route.HOLD_FOR_CARD
+        }
     }
 
     private val _events = MutableSharedFlow<HookEvent>(extraBufferCapacity = 1000)
@@ -128,14 +138,15 @@ class EventBridge(private val socketName: String, private val ownSessionId: Stri
                 transcriptPathMap[mobileSessionId] = transcriptPath
             }
 
-            if (eventName == "PermissionRequest" && isForeignAsk(mobileSessionId, ownSessionId)) {
+            val route = route(eventName, mobileSessionId, ownSessionId)
+            if (route == Route.PASS_THROUGH) {
                 // Not this session's ask: hand it straight back, undecided.
                 android.util.Log.i("EventBridge", "Passing through an ask for another session")
                 client.close()
                 return
             }
 
-            if (eventName == "PermissionRequest") {
+            if (route == Route.HOLD_FOR_CARD) {
                 // Hold socket open for blocking response
                 val requestId = UUID.randomUUID().toString()
                 pendingSockets[requestId] = client

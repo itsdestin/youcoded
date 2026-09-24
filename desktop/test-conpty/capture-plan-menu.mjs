@@ -84,6 +84,12 @@ const hookPassthrough = !!arg('hook-passthrough', false);
 const customPrompt = arg('prompt', null);
 const waitRegex = arg('wait-for', null);
 const noPlan = !!arg('no-plan', false);
+// --seed "rel/path=content" (repeatable) — files to put in the project first.
+const seeds = args.flatMap((a, i) => (a === '--seed' ? [args[i + 1]] : []));
+// --mcp-script <path> — run that stdio MCP server as server "youcoded".
+const mcpScript = arg('mcp-script', null);
+// --skill <name> — install a tiny personal skill with that name.
+const skillName = arg('skill', null);
 
 function stripAnsi(s) {
   return String(s)
@@ -198,12 +204,29 @@ fs.writeFileSync(path.join(configDir, '.claude.json'), JSON.stringify({
   projects: { [fwd]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } },
 }, null, 2));
 
+for (const seed of seeds) {
+  const [rel, ...rest] = seed.split('=');
+  fs.mkdirSync(path.dirname(path.join(project, rel)), { recursive: true });
+  fs.writeFileSync(path.join(project, rel), rest.join('='));
+}
+if (typeof skillName === 'string') {
+  fs.mkdirSync(path.join(configDir, 'skills', skillName), { recursive: true });
+  fs.writeFileSync(path.join(configDir, 'skills', skillName, 'SKILL.md'),
+    `---\nname: ${skillName}\ndescription: Say hello. Use when asked to greet.\n---\nReply with the single word hello.\n`);
+}
+let mcpConfigPath = null;
+if (typeof mcpScript === 'string') {
+  mcpConfigPath = path.join(root, 'mcp.json');
+  fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: { notes: { command: process.execPath, args: [path.resolve(mcpScript)] } } }));
+}
+
 // ---- run ---------------------------------------------------------------
 const prompt = 'Plan mode test. Do not read, search or explore anything. '
   + 'Write a one-sentence plan to create hello.txt containing the word hi, then call ExitPlanMode immediately.';
 
-const claudeArgs = ['--model', model, ...(noPlan ? [] : ['--permission-mode', 'plan'])];
+const claudeArgs = [...(typeof mcpScript === 'string' ? ['--mcp-config', path.join(root, 'mcp.json')] : []), '--model', model, ...(noPlan ? [] : ['--permission-mode', 'plan'])];
 if (bypass) claudeArgs.push('--allow-dangerously-skip-permissions');
+// (--mcp-config goes FIRST: it takes several values and would swallow the prompt.)
 claudeArgs.push(typeof customPrompt === 'string' ? customPrompt : prompt);
 
 const env = { ...cleanEnv(process.env), HOME: home, CLAUDE_CONFIG_DIR: configDir, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
@@ -349,7 +372,7 @@ fs.mkdirSync(outDir, { recursive: true });
 const file = path.join(outDir, `cc-${ccVersion}-${variant}-${cols}x${rows}.json`);
 fs.writeFileSync(file, JSON.stringify({
   ccVersion, variant, cols, rows, capturedAt: new Date().toISOString(),
-  flags: { clearContext, bypass, answer, resizeTo, model, hookDenyAfter, hookReleaseAfter, hookAllowAfter, hookPassthrough, customPrompt, waitRegex, noPlan }, settings: { showClearContextOnPlanAccept: clearContext },
+  flags: { clearContext, bypass, answer, resizeTo, model, hookDenyAfter, hookReleaseAfter, hookAllowAfter, hookPassthrough, customPrompt, waitRegex, noPlan, seeds, mcpScript, skillName }, settings: { showClearContextOnPlanAccept: clearContext },
   chunks, marks, outcome,
 }, null, 1));
 console.log(`wrote ${file}`);

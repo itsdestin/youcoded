@@ -12,6 +12,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import ToolCard from '../src/renderer/components/ToolCard';
 import { CompactToolStrip } from '../src/renderer/components/buddy/CompactToolStrip';
+import { ExpiredApprovalActions } from '../src/renderer/components/ExpiredApprovalActions';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import type { ToolCallState } from '../src/shared/types';
 import { FixtureTerminal, loadPlanFixture, markIndex, PLAN_FIXTURE_DIR } from './helpers/plan-menu-fixtures';
@@ -188,6 +189,14 @@ describe('a kept card that is not a plan', () => {
   // The real Write prompt the dev instance showed (CC 2.1.281, 80 columns).
   const WRITE_HELLO = fs.readFileSync(path.join(PLAN_FIXTURE_DIR, 'app-screen-cc-2.1.281-write-permission-80col.txt'), 'utf8');
   const writeTool = (file: string) => planTool({ toolName: 'Write', input: { file_path: file, content: 'hi' }, requestId: undefined, expired: true } as Partial<ToolCallState>);
+  // The screen came from a session in /tmp/plan-e2e/a1, where Claude Code
+  // prints the path relative to that folder. ToolCard passes the session's
+  // folder; here it is given directly.
+  const mountKept = (sid: string, file: string) => render(
+    <ChatProvider>
+      <ExpiredApprovalActions sessionId={sid} toolName="Write" input={{ file_path: file, content: 'hi' }} cwd="/tmp/plan-e2e/a1" onDismiss={() => {}} />
+    </ChatProvider>,
+  );
 
   async function termWith(id: string, text: string) {
     const t = new Terminal({ cols: 100, rows: 40, allowProposedApi: true });
@@ -199,18 +208,32 @@ describe('a kept card that is not a plan', () => {
 
   it("offers its OWN menu's numbered rows and Dismiss; a row types only its number", async () => {
     await termWith('kept', WRITE_HELLO);
-    mount('kept', writeTool('/tmp/plan-e2e/a1/hello.txt'));
+    mountKept('kept', '/tmp/plan-e2e/a1/hello.txt');
     fireEvent.click(await screen.findByRole('button', { name: 'No' }));
     expect(sendInput.mock.calls).toEqual([['kept', '3']]);
     expect(screen.getByRole('button', { name: 'Dismiss — I answered in the terminal' })).toBeTruthy();
     expect(respondToPermission).not.toHaveBeenCalled();
   });
 
+  it('a same-named file in another folder is a different call — no buttons', async () => {
+    await termWith('samename', WRITE_HELLO);
+    mountKept('samename', '/tmp/plan-e2e/a1/sub/hello.txt');
+    await screen.findByText(/Answer it there, or dismiss this/);
+    expect(screen.queryByRole('button', { name: 'Yes' })).toBeNull();
+  });
+
+  it('through ToolCard with no known session folder, an absolute path cannot match a relative one — no buttons', async () => {
+    await termWith('nocwd', WRITE_HELLO);
+    mount('nocwd', writeTool('/tmp/plan-e2e/a1/hello.txt'));
+    await screen.findByText(/Answer it there, or dismiss this/);
+    expect(screen.queryByRole('button', { name: 'Yes' })).toBeNull();
+  });
+
   it("two asks in a row: a card whose ask was answered shows NO buttons for the NEXT ask's menu", async () => {
     // Card A (Write a.txt) was answered in the terminal; the screen now shows
     // B's prompt (Write hello.txt). A's "Yes" must not be able to approve B.
     await termWith('next', WRITE_HELLO);
-    mount('next', writeTool('/tmp/plan-e2e/a1/a.txt'));
+    mountKept('next', '/tmp/plan-e2e/a1/a.txt');
     await screen.findByText(/Answer it there, or dismiss this/);
     expect(screen.queryByRole('button', { name: 'Yes' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'No' })).toBeNull();
@@ -218,7 +241,7 @@ describe('a kept card that is not a plan', () => {
 
   it("re-reads the screen at click time: if the next ask's menu replaced its own, nothing is typed", async () => {
     const t = await termWith('swap', WRITE_HELLO);
-    mount('swap', writeTool('/tmp/plan-e2e/a1/hello.txt'));
+    mountKept('swap', '/tmp/plan-e2e/a1/hello.txt');
     const yes = await screen.findByRole('button', { name: 'Yes' });
     // Before the next 2s re-read, the terminal moves on to a different ask.
     await new Promise<void>((r) => t.write('\x1b[2J\x1b[H' + WRITE_HELLO.replace(/hello\.txt/g, 'other.txt').replace(/\n/g, '\r\n'), r));

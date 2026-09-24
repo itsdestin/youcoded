@@ -29,3 +29,22 @@ class EventBridgeOwnershipTest {
         assertFalse(EventBridge.isForeignAsk("other", null))
     }
 }
+
+/** The routing handleClient follows for each hook line. */
+class EventBridgeRouteTest {
+    @Test
+    fun `another session's permission ask is passed through undecided`() {
+        org.junit.Assert.assertEquals(EventBridge.Companion.Route.PASS_THROUGH, EventBridge.route("PermissionRequest", "other", "mine"))
+    }
+
+    @Test
+    fun `this session's permission ask is held for the card`() {
+        org.junit.Assert.assertEquals(EventBridge.Companion.Route.HOLD_FOR_CARD, EventBridge.route("PermissionRequest", "mine", "mine"))
+        org.junit.Assert.assertEquals(EventBridge.Companion.Route.HOLD_FOR_CARD, EventBridge.route("PermissionRequest", "", "mine"))
+    }
+
+    @Test
+    fun `other hook events are fire-and-forget`() {
+        org.junit.Assert.assertEquals(EventBridge.Companion.Route.FIRE_AND_FORGET, EventBridge.route("Notification", "other", "mine"))
+    }
+}
