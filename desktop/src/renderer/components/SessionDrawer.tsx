@@ -1291,18 +1291,22 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
               {active && (
                 <div
                   inert={!(editState.editing || !showList)}
-                  className={`absolute bottom-9 right-4 z-20 flex flex-col items-end gap-2 pointer-events-none origin-bottom-right transition-all duration-200 ${
+                  className={`absolute inset-x-0 bottom-9 z-20 pointer-events-none origin-bottom-right transition-all duration-200 ${
                     editState.editing || !showList ? 'opacity-100 scale-100' : 'opacity-0 scale-90'
                   }`}
                 >
-                  {/* w-60 = the margin's card width (cards sit 8px inside the
-                      256px column); -mr-2 because this cluster sits 16px from
-                      the edge but the cards end 8px from it — measured, so the
-                      buttons line up with the card edges exactly. */}
+                  {/* Round 8 (Destin: "comments/edit should remain over the
+                      file pane, not the comments pane"): two anchors in one
+                      pop-in group. The comment actions sit at the bottom of the
+                      comment column — w-60 = the margin's card width, right-2 =
+                      the cards' 8px inset from the edge (measured). */}
                   {commentsState.active && (
-                    <div className="w-60 -mr-2"><CommentsFloatingActions path={active.path} /></div>
+                    <div className="absolute bottom-0 right-2 w-60"><CommentsFloatingActions path={active.path} /></div>
                   )}
-                  <div className="flex items-center gap-2">
+                  {/* Comments + Edit sit over the DOCUMENT: in Comments mode they
+                      move left past the 256px comment column (right-68 = 16px
+                      clearance + 256px), otherwise their usual 16px from the edge. */}
+                  <div className={`absolute bottom-0 flex items-center gap-2 ${commentsState.active ? 'right-68' : 'right-4'}`}>
                   {commentsState.available && !editState.editing && (
                     <CommentsBtn
                       state={commentsState}

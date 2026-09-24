@@ -59,8 +59,11 @@ export function CommentsFloatingActions({ path }: { path: string }) {
   return (
     <div className="flex flex-col gap-2 w-full">
       {resolvedCount > 0 && (
+        // `raised` (solid panel fill + edge border) — the primitive's variant
+        // for a control that sits ON other content. Round 8: `secondary` is
+        // transparent/outlined, so floating over a card it read as a hole.
         <Button
-          variant="secondary"
+          variant="raised"
           size="md"
           aria-pressed={showResolved}
           onClick={() => setShowResolved(!showResolved)}
