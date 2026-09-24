@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, ChevronDown, PluginIcon, SettingRow, Toggle, Tooltip } from '../../../components/ui';
+import { Button, ChevronDown, Dialog, PluginIcon, SettingRow, Toggle, Tooltip } from '../../../components/ui';
 import { SkillIcon, ToolIcon } from '../../../components/marketplace/type-icons';
 
 // WHY this fixture lives in the renderer: the visual review uses the same theme tokens
@@ -43,7 +43,6 @@ function PluginRow({ plugin, project, locked = false, initiallyOpen = false, fla
   const risky = pending?.kind === 'part' && pending.index !== undefined
     ? [plugin.parts![pending.index].name]
     : (plugin.parts ?? []).filter(part => part.active).map(part => part.name);
-  const riskCopy = `${risky.join(', ')} can connect to outside services or run on ${risky.length > 1 ? 'their' : 'its'} own when a new conversation in ${project} begins. Only turn this on if you trust ${plugin.name}.`;
   const toggleMaster = (next: boolean) => {
     if (next && hasActivePart && !enabled) { setPending({ kind: 'master' }); return; }
     setEnabled(next);
@@ -70,6 +69,17 @@ function PluginRow({ plugin, project, locked = false, initiallyOpen = false, fla
     }
     setPending(null);
   };
+  // WHY a popup (Destin, combined review K-1 "confused", S-2 "maybe a popup
+  // confirmation"): the inline box sat under the rows and read as part of the
+  // list. A dialog says plainly what switching on will do, before it happens.
+  const riskDialog = pending && <Dialog open onClose={() => setPending(null)} layer={3} size="prompt" title={`Turn on ${pending.kind === 'part' ? risky[0] : plugin.name}?`} scrollBody={false}>
+    <div className="p-5 space-y-3">
+      <p className="text-xs text-fg-2">{pending.kind === 'part' ? 'This is a tool connection.' : `${plugin.name} includes ${risky.length > 1 ? 'tool connections' : 'a tool connection'}:`}</p>
+      {pending.kind === 'master' && <ul className="list-disc pl-5 text-xs text-fg">{risky.map(name => <li key={name}>{name}</li>)}</ul>}
+      <p className="text-xs text-fg-2">When it's on, every new conversation in {project} starts it automatically, and it can reach services outside YouCoded without asking each time. Only turn it on if you trust where {plugin.name} came from.</p>
+      <div className="flex gap-2 justify-end"><Button variant="secondary" onClick={() => setPending(null)}>Cancel</Button><Button variant="primary" onClick={confirm}>Turn on</Button></div>
+    </div>
+  </Dialog>;
   const masterControl = locked ? (
     // A disabled switch cannot receive pointer hover, so the app's Tooltip anchors to a focusable wrapper.
     <Tooltip text="Included with Your Assistant; can't turn off here. Other projects have their own choices.">
@@ -95,11 +105,7 @@ function PluginRow({ plugin, project, locked = false, initiallyOpen = false, fla
         return <SettingRow key={part.name} variant="nav" className="!bg-inset/50 border border-edge-dim" icon={part.active ? <ToolIcon size={17} /> : <SkillIcon size={17} />}
           title={part.name} description={`${part.kind} · ${status}${part.active ? ' · Needs local setup' : ''}`} descriptionClassName={WRAP} control={control} />;
       })}</div>}
-      {pending && <div role="alertdialog" aria-label="Confirm automatic connection" className="mx-3 mb-3 rounded-lg border border-edge bg-inset p-3">
-        <div className="text-sm font-medium text-fg">Allow automatic connections?</div>
-        <p className="mt-1 text-xs text-fg-2">{riskCopy}</p>
-        <div className="mt-3 flex gap-2"><Button size="sm" variant="primary" onClick={confirm}>Enable</Button><Button size="sm" variant="secondary" onClick={() => setPending(null)}>Cancel</Button></div>
-      </div>}
+      {riskDialog}
     </section>;
   }
   // WHY: mirror YouCoded's existing collapsible group anatomy (outer card,
@@ -127,11 +133,7 @@ function PluginRow({ plugin, project, locked = false, initiallyOpen = false, fla
         </div>;
       })}</div>}
     </>}
-    {pending && <div role="alertdialog" aria-label="Confirm automatic connection" className="mt-4 rounded-lg border border-edge bg-inset p-3">
-      <div className="text-sm font-medium text-fg">Allow automatic connections?</div>
-      <p className="mt-1 text-xs text-fg-2">{riskCopy}</p>
-      <div className="mt-3 flex gap-2"><Button size="sm" variant="primary" onClick={confirm}>Enable</Button><Button size="sm" variant="secondary" onClick={() => setPending(null)}>Cancel</Button></div>
-    </div>}
+    {riskDialog}
   </section>;
 }
 
@@ -140,18 +142,21 @@ function PluginRow({ plugin, project, locked = false, initiallyOpen = false, fla
 // only explanation of what to do, so they wrap instead.
 const WRAP = 'text-fg-muted !whitespace-normal';
 
-// WHY: "Set up locally" had no destination. No YouCoded screen manages tool
-// connections today, so the honest preview is a short explanation plus the two
-// things a user could actually do; which one ships is a question for Destin.
+// WHY: "Set up here" explains why the item is missing and offers the first
+// build's two real paths (combined review Q-3: ask the assistant, or pick the
+// skill file). A popup, not an inline box: Destin, S-2 "dont want this inside
+// the card. maybe a popup". The action buttons are sample-only in the preview.
 function NeedsSetupRow({ icon, title, kind, need, actions }: { icon: React.ReactNode; title: string; kind: string; need: string; actions: string[] }) {
   const [open, setOpen] = useState(false);
   return <div className="rounded-lg border border-edge-dim bg-panel">
     <SettingRow variant="nav" className="!bg-transparent" icon={icon} title={title} description={`${kind} · Not on this device`} descriptionClassName={WRAP}
-      accessory={<Button size="sm" variant="secondary" aria-expanded={open} onClick={() => setOpen(value => !value)}>Set up here</Button>} />
-    {open && <div className="mx-3 mb-3 rounded-lg border border-edge-dim bg-inset p-3">
-      <p className="text-xs text-fg-2">{need}</p>
-      <div className="mt-3 flex flex-wrap gap-2">{actions.map((label, index) => <Button key={label} size="sm" variant={index === 0 ? 'primary' : 'secondary'}>{label}</Button>)}</div>
-    </div>}
+      accessory={<Button size="sm" variant="secondary" onClick={() => setOpen(true)}>Set up here</Button>} />
+    <Dialog open={open} onClose={() => setOpen(false)} layer={3} size="prompt" title={`Set up ${title}`} scrollBody={false}>
+      <div className="p-5 space-y-4">
+        <p className="text-xs text-fg-2">{need}</p>
+        <div className="flex flex-col gap-2">{actions.map((label, index) => <Button key={label} variant={index === 0 ? 'primary' : 'secondary'} className="w-full">{label}</Button>)}</div>
+      </div>
+    </Dialog>
   </div>;
 }
 
