@@ -58,7 +58,7 @@ export function CommentsPaneFooter({ path, compact = false }: { path: string; co
   // the marker rail already shows resolved threads as check marks.
   if (compact) {
     return (
-      <div className="sticky bottom-0 flex justify-center py-2 bg-canvas border-t border-edge">
+      <div className="flex justify-center py-2 bg-canvas border-t border-edge">
         <Button variant="primary" size="sm" className="px-1.5" disabled={openCount === 0} title={askTitle} aria-label="Ask Your Assistant" onClick={send}>
           <MenuIcon name="ask" />
         </Button>
@@ -67,10 +67,13 @@ export function CommentsPaneFooter({ path, compact = false }: { path: string; co
   }
 
   return (
-    // WHY sticky: the margin scrolls with the document (both are children of
-    // one scroller, so cards stay beside their text) — sticky keeps the
-    // action reachable at any scroll position without a second scroll box.
-    <div className="sticky bottom-0 flex flex-col gap-2 px-2 py-2 bg-canvas border-t border-edge">
+    // The HOST pins this below the comment column (MarkdownView overlays it
+    // on the margin's bottom edge; CodeCommentsRail stacks it under its list).
+    // Round 4 shipped it `sticky` inside the scrolling margin instead — but
+    // that column is only as tall as the viewport, so once the document
+    // scrolled the footer drifted up mid-column and sat on top of a card
+    // (Destin's screenshot: "janky").
+    <div className="flex flex-col gap-2 px-2 py-2 bg-canvas border-t border-edge">
       {resolvedCount > 0 && (
         <Button
           variant="ghost"

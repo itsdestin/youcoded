@@ -1275,7 +1275,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   and back OUT when the list reopens — kept mounted so both
                   directions animate. While EDITING it stays visible regardless,
                   so Save can never be hidden by opening the list. */}
-              {active && (editState.editing || editState.isEditable) && (
+              {/* Hidden in Comments mode: it sat on top of the comment pane's
+                  "Ask Your Assistant" footer, and Comments mode is for review —
+                  going back to reading brings Edit back. */}
+              {active && (editState.editing || (editState.isEditable && !commentsState.active)) && (
                 <div
                   className={`absolute bottom-9 right-4 z-20 flex items-center gap-2 transition-all duration-200 ${
                     editState.editing || !showList
