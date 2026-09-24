@@ -6,7 +6,9 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { InitializingCover, INIT_SLOW_WARNING_MS } from '../src/renderer/components/InitializingCover';
+import { InitializingCover, INIT_SLOW_WARNING_MS, INIT_SLOW_WARNING_ANDROID_MS } from '../src/renderer/components/InitializingCover';
+import { notifyBufferReady } from '../src/renderer/hooks/terminal-registry';
+import * as platform from '../src/renderer/platform';
 import { setUnreadableStartupDialog } from '../src/renderer/state/startup-dialog-store';
 
 afterEach(() => { vi.useRealTimers(); setUnreadableStartupDialog('s1', null); });
@@ -41,5 +43,40 @@ describe('InitializingCover', () => {
     act(() => { setUnreadableStartupDialog('s1', { heading: 'x' }); });
     act(() => { setUnreadableStartupDialog('s1', null); });
     expect(screen.getByText('Initializing session...')).toBeTruthy();
+  });
+});
+
+describe('InitializingCover — "may be wrong" only after SILENCE', () => {
+  it('a start that keeps drawing never gets the hint', () => {
+    vi.useFakeTimers();
+    cover();
+    for (let i = 0; i < 4; i++) {
+      act(() => { vi.advanceTimersByTime(INIT_SLOW_WARNING_MS - 1000); });
+      act(() => { notifyBufferReady('s1'); });
+      act(() => { vi.advanceTimersByTime(50); }); // the notification is frame-batched
+    }
+    expect(screen.queryByText(/Something may be wrong/)).toBeNull();
+    act(() => { vi.advanceTimersByTime(INIT_SLOW_WARNING_MS + 100); });
+    expect(screen.getByText(/Something may be wrong/)).toBeTruthy();
+  });
+
+  it('output from ANOTHER session does not count', () => {
+    vi.useFakeTimers();
+    cover();
+    act(() => { vi.advanceTimersByTime(INIT_SLOW_WARNING_MS - 1000); });
+    act(() => { notifyBufferReady('some-other-session'); });
+    act(() => { vi.advanceTimersByTime(1100); });
+    expect(screen.getByText(/Something may be wrong/)).toBeTruthy();
+  });
+
+  it('waits longer on the phone, where a silent cold start is normal', () => {
+    vi.useFakeTimers();
+    const spy = vi.spyOn(platform, 'isAndroid').mockReturnValue(true);
+    cover();
+    act(() => { vi.advanceTimersByTime(INIT_SLOW_WARNING_MS + 1000); });
+    expect(screen.queryByText(/Something may be wrong/)).toBeNull();
+    act(() => { vi.advanceTimersByTime(INIT_SLOW_WARNING_ANDROID_MS); });
+    expect(screen.getByText(/Something may be wrong/)).toBeTruthy();
+    spy.mockRestore();
   });
 });

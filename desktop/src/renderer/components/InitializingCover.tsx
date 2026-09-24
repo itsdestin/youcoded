@@ -2,11 +2,20 @@ import React, { useEffect, useState } from 'react';
 import { Button } from './ui/Button';
 import { AppIcon, ThemeMascot } from './Icons';
 import { useUnreadableStartupDialog } from '../state/startup-dialog-store';
+import { onBufferReady } from '../hooks/terminal-registry';
+import { isAndroid } from '../platform';
 
-/** How long "Initializing session…" waits before offering the terminal view.
- *  WHY 6s (was 15s, shortened 2026-09-14): 15s was a long wait before the way
- *  out was offered when a start really is stuck. */
+/** How long the session's terminal must have been SILENT before the cover
+ *  says "Something may be wrong".
+ *
+ *  WHY silence, not time since launch (second review F3, 2026-09-24): a start
+ *  that is working keeps drawing — the banner, the input box, a dialog. The
+ *  honest signal of "stuck" is no hook AND nothing happening on screen. And
+ *  WHY longer on the phone: Android now waits for Claude Code's first hook
+ *  (review F1), and a cold Node start on a slow phone can sit silent for
+ *  several seconds before its first output, which is normal there. */
 export const INIT_SLOW_WARNING_MS = 6000;
+export const INIT_SLOW_WARNING_ANDROID_MS = 15000;
 
 /**
  * The cover over a Claude Code session's chat until it has started (moved out
@@ -29,9 +38,15 @@ export function InitializingCover({ sessionId, onOpenTerminal, children }: {
   const unreadable = useUnreadableStartupDialog(sessionId);
   const [slow, setSlow] = useState(false);
   useEffect(() => {
+    const quietMs = isAndroid() ? INIT_SLOW_WARNING_ANDROID_MS : INIT_SLOW_WARNING_MS;
+    let t: ReturnType<typeof setTimeout>;
+    const restart = () => { clearTimeout(t); t = setTimeout(() => setSlow(true), quietMs); };
     setSlow(false);
-    const t = setTimeout(() => setSlow(true), INIT_SLOW_WARNING_MS);
-    return () => clearTimeout(t);
+    restart();
+    // Any drawing in this session's terminal restarts the clock (and takes
+    // back a hint shown during a pause that has now ended).
+    const unsub = onBufferReady((sid) => { if (sid === sessionId) { setSlow(false); restart(); } });
+    return () => { clearTimeout(t); unsub(); };
   }, [sessionId]);
 
   return (
