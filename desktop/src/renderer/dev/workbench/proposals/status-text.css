@@ -1,0 +1,8 @@
+/* Design-guide review (2026-09-24): STATUS LABELS "QUIET TEXT".
+   Display-only status labels (INSTALLED on cards, Working / Inactive in the
+   session menu) become plain small grey words, no pill and no color. Clickable status-bar chips are buttons and keep
+   the button rules. Workbench-only: ?proposal=...,status-text. */
+@layer proposal {
+:is(.uppercase.rounded-full[class*="text-3xs"][class*="tracking-wide"], span.rounded-full.border[class*="text-4xs"]) { text-transform: none !important; letter-spacing: 0 !important; font-size: 11px !important; line-height: 16px !important;
+  background: none !important; border: none !important; padding: 0 !important; color: var(--fg-muted) !important; }
+}
