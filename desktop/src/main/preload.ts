@@ -32,6 +32,14 @@ interface ChangelogIpcResult {
 // cannot resolve relative imports to other modules
 const IPC = {
   SESSION_CREATE: 'session:create',
+  HANDOFF_BEGIN: 'handoff:begin',
+  HANDOFF_STATUS: 'handoff:status',
+  HANDOFF_WAIT: 'handoff:wait',
+  HANDOFF_RETRY: 'handoff:retry',
+  HANDOFF_SAVED_COPY: 'handoff:saved-copy',
+  HANDOFF_FORCE: 'handoff:force',
+  HANDOFF_CANCEL: 'handoff:cancel',
+  HANDOFF_CREATE_PARAMS: 'handoff:create-params',
   SESSION_DESTROY: 'session:destroy',
   SESSION_INPUT: 'session:input',
   SESSION_RESIZE: 'session:resize',
@@ -380,6 +388,7 @@ const IPC = {
   NATIVE_CLEAR: 'native:clear',
   NATIVE_INVOKE_SKILL: 'native:invoke-skill',
   NATIVE_SET_BINDING: 'native:set-binding',
+  NATIVE_SWITCH_MODEL: 'native:switch-model',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   NATIVE_GET_PERMISSION_MODE: 'native:get-permission-mode',
   NATIVE_PERMISSION_MODE: 'native:permission-mode',
@@ -406,12 +415,23 @@ const IPC = {
   CHATGPT_SIGN_IN: 'chatgpt:sign-in',
   CHATGPT_CANCEL_SIGN_IN: 'chatgpt:cancel-sign-in',
   CHATGPT_SIGN_OUT: 'chatgpt:sign-out',
+  // Sign in with OpenRouter — mirrors shared/types.ts.
+  OPENROUTER_SIGN_IN_STATUS: 'openrouter:sign-in-status',
+  OPENROUTER_SIGN_IN: 'openrouter:sign-in',
+  OPENROUTER_CANCEL_SIGN_IN: 'openrouter:cancel-sign-in',
   // YouCoded Pages (Phase 1) — mirrors shared/types.ts; pinned equal by ipc-channels.test.ts.
   PAGES_LIST: 'pages:list',
   PAGES_GET: 'pages:get',
   PAGES_SET_PINNED: 'pages:set-pinned',
   PAGES_SET_DATA: 'pages:set-data',
   PAGES_CHANGED: 'pages:changed',
+  // Pages Phase 2 — connections, keys and the one door out of a page.
+  PAGES_APPROVE: 'pages:approve',
+  PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
+  PAGES_REFRESH: 'pages:refresh',
+  PAGES_SAVED_KEYS: 'pages:saved-keys',
+  PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
+  PAGES_FETCH: 'pages:fetch',
   // Claude Code's own sign-in, read live (2026-09-09) — mirrors shared/types.ts.
   CLAUDE_CODE_STATUS: 'claude-code:status',
   CLAUDE_CODE_INSTALL: 'claude-code:install',
@@ -522,6 +542,18 @@ contextBridge.exposeInMainWorld('claude', {
       unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_RENAME, sessionId, title)),
   },
   session: {
+    // WHY: begin returns the pending token immediately; wait is a separate bounded observation.
+    handoff: {
+      begin: (conversationId: string, provider: 'claude' | 'native', create?: import('../shared/types').HandoffCreateParams) => ipcRenderer.invoke(IPC.HANDOFF_BEGIN, { conversationId, provider, create }) as Promise<import('../shared/types').HandoffAttemptResult>,
+      status: (id: string) => ipcRenderer.invoke(IPC.HANDOFF_STATUS, { id }) as Promise<import('../shared/types').HandoffAttemptResult>,
+      wait: (id: string) => ipcRenderer.invoke(IPC.HANDOFF_WAIT, { id }) as Promise<import('../shared/types').HandoffAttemptResult>,
+      retry: (id: string) => ipcRenderer.invoke(IPC.HANDOFF_RETRY, { id }) as Promise<import('../shared/types').HandoffAttemptResult>,
+      savedCopy: (id: string, consent: boolean) => ipcRenderer.invoke(IPC.HANDOFF_SAVED_COPY, { id, consent }) as Promise<import('../shared/types').HandoffAttemptResult>,
+      // WHY: force is separate from saved-copy consent and names the exact holder shown to the user.
+      force: (id: string, consent: boolean, expectedHolderId: string) => ipcRenderer.invoke(IPC.HANDOFF_FORCE, { id, consent, expectedHolderId }) as Promise<import('../shared/types').HandoffAttemptResult>,
+      cancel: (id: string) => ipcRenderer.invoke(IPC.HANDOFF_CANCEL, { id }) as Promise<import('../shared/types').HandoffAttemptResult>,
+      setCreateParams: (id: string, create: import('../shared/types').HandoffCreateParams) => ipcRenderer.invoke(IPC.HANDOFF_CREATE_PARAMS, { id, create }) as Promise<import('../shared/types').HandoffAttemptResult>,
+    },
     create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string; provider?: 'claude' | 'native'; model?: string }) =>
       ipcRenderer.invoke(IPC.SESSION_CREATE, opts),
     destroy: (sessionId: string) =>
@@ -1211,7 +1243,7 @@ contextBridge.exposeInMainWorld('claude', {
       return () => ipcRenderer.removeListener(IPC.CROSS_WINDOW_CURSOR, h);
     },
     // Commands — renderer → main
-    openDetached: (payload: { sessionId: string }) =>
+    openDetached: (payload: { sessionId: string; draft?: { text: string; attachments: string[] } }) =>
       ipcRenderer.send(IPC.WINDOW_OPEN_DETACHED, payload),
     detachStart: (payload: { sessionId: string; screenX: number; screenY: number }) =>
       ipcRenderer.send(IPC.SESSION_DETACH_START, payload),
@@ -1362,7 +1394,7 @@ contextBridge.exposeInMainWorld('claude', {
     },
     // ── Buddy upgrades ──
     dragEnded: () => ipcRenderer.send(IPC.BUDDY_DRAG_ENDED),
-    openMain: (): Promise<void> => ipcRenderer.invoke(IPC.BUDDY_OPEN_MAIN),
+    openMain: (request?: { resume: string }): Promise<void> => ipcRenderer.invoke(IPC.BUDDY_OPEN_MAIN, request),
     dismiss: (): Promise<void> => ipcRenderer.invoke(IPC.BUDDY_DISMISS),
     getStatus: (): Promise<{ dismissed: boolean; visible: boolean }> =>
       ipcRenderer.invoke(IPC.BUDDY_GET_STATUS),
@@ -1476,12 +1508,14 @@ contextBridge.exposeInMainWorld('claude', {
     // User-initiated /compact. Request-response, NOT fire-and-forget: the caller
     // needs the {ok, reason} result to tell the user why nothing happened when a
     // compaction is refused (turn in flight, nothing to compact, summary failed).
-    compact: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_COMPACT, { sessionId }),
+    compact: (sessionId: string, focus?: string) => ipcRenderer.invoke(IPC.NATIVE_COMPACT, { sessionId, focus }),
     // /clear as a context barrier — appends a marker, never erases the log.
     clear: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_CLEAR, { sessionId }),
     invokeSkill: (sessionId: string, skill: string, args?: string) => ipcRenderer.invoke(IPC.NATIVE_INVOKE_SKILL, { sessionId, skill, args }),
     // Request-response: match the positional ipcMain.handle signatures.
     setBinding: (sessionId: string, binding: unknown) => ipcRenderer.invoke(IPC.NATIVE_SET_BINDING, sessionId, binding),
+    // U11: the picker's fit-checked switch; `summarize` answers the popup.
+    switchModel: (sessionId: string, binding: unknown, summarize?: boolean) => ipcRenderer.invoke(IPC.NATIVE_SWITCH_MODEL, { sessionId, binding, summarize }),
     setPermissionMode: (sessionId: string, mode: string) => ipcRenderer.invoke(IPC.NATIVE_SET_PERMISSION_MODE, sessionId, mode),
     // Read the session's current permission mode — seeds the chip on create/resume.
     getPermissionMode: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_GET_PERMISSION_MODE, sessionId),
@@ -1527,7 +1561,9 @@ contextBridge.exposeInMainWorld('claude', {
     list: () => ipcRenderer.invoke(IPC.PROVIDER_LIST),
     upsert: (config: unknown) => ipcRenderer.invoke(IPC.PROVIDER_UPSERT, config),
     remove: (id: string) => ipcRenderer.invoke(IPC.PROVIDER_REMOVE, id),
-    test: (id: string) => ipcRenderer.invoke(IPC.PROVIDER_TEST, id),
+    // `key`: an optional CANDIDATE key checked instead of the saved one, so the
+    // Connect dialog can refuse a bad key before it replaces a working one.
+    test: (id: string, key?: string) => ipcRenderer.invoke(IPC.PROVIDER_TEST, id, key),
     setKey: (id: string, key: string) => ipcRenderer.invoke(IPC.PROVIDER_SET_KEY, id, key),
     catalog: () => ipcRenderer.invoke(IPC.PROVIDER_CATALOG),
   },
@@ -1551,6 +1587,16 @@ contextBridge.exposeInMainWorld('claude', {
     signIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_SIGN_IN)),
     cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_CANCEL_SIGN_IN)),
     signOut: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_SIGN_OUT)),
+  },
+  // Sign in with OpenRouter (connection-trust §3.5). Same shape and the same
+  // unwrapInvokeError reason as `chatgpt` above: signIn() can THROW a sentence
+  // the card shows as-is. `supported` follows the native runtime, which owns
+  // the OpenRouter provider; the key never crosses to the renderer.
+  openrouter: {
+    supported: process.env.YOUCODED_NATIVE !== '0',
+    status: () => unwrapInvokeError(ipcRenderer.invoke(IPC.OPENROUTER_SIGN_IN_STATUS)),
+    signIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.OPENROUTER_SIGN_IN)),
+    cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.OPENROUTER_CANCEL_SIGN_IN)),
   },
   // Claude Code's own sign-in, read live from `claude auth status` (2026-09-09).
   // Read-only on purpose — the other three verbs have no equivalent here,
@@ -1752,6 +1798,11 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('artifacts:list-project', projectId, opts),
     listAllFiles: (projectId: string, opts?: { force?: boolean }) =>
       ipcRenderer.invoke('artifacts:list-all-files', projectId, opts),
+    // One folder of Project Files, a page at a time, from disk (folder-listing.ts).
+    // relDir is project-relative ('' = the project folder). Answers
+    // { ok:true, files, folders, total, offset, hasMore } or { ok:false, error }.
+    listFolder: (projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean }) =>
+      ipcRenderer.invoke('artifacts:list-folder', projectId, relDir, opts),
     // Resolve ONE file path tapped in chat to the record the drawer opens — a
     // tracked record, or the on-disk file inside the folder. Replaces
     // downloading the whole project list to find one file (read-service.ts
@@ -1839,6 +1890,16 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.PAGES_CHANGED, handler);
       return () => ipcRenderer.removeListener(IPC.PAGES_CHANGED, handler);
     },
+    // Phase 2. `keys` carries a pasted key per key-connection id, or 'saved' to
+    // reuse the one already kept; main is the side that decides, so a pasted
+    // key from a phone is refused there rather than here.
+    approve: (id: string, keys: Record<string, string>) => ipcRenderer.invoke(IPC.PAGES_APPROVE, id, keys),
+    removeConnection: (id: string, connectionId: string) => ipcRenderer.invoke(IPC.PAGES_REMOVE_CONNECTION, id, connectionId),
+    refresh: (id: string) => ipcRenderer.invoke(IPC.PAGES_REFRESH, id),
+    savedKeys: () => ipcRenderer.invoke(IPC.PAGES_SAVED_KEYS),
+    // Both parts: a key is identified by service AND address.
+    deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, service, address),
+    fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, id, req),
   },
   git: {
     fileStatus: (projectRoot: string, relPath: string) =>

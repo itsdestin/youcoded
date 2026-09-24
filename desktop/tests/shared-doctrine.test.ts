@@ -55,7 +55,7 @@ describe('sharedDoctrine — composition', () => {
   });
 });
 
-describe('sharedDoctrine — question vs action (Destin, 2026-09-05)', () => {
+describe('sharedDoctrine — question vs action', () => {
   it('the root session is told not to change anything unless the user clearly expects it, in both sizes', () => {
     expect(sharedDoctrine(FULL)).toContain('unless the user unambiguously expects you to');
     expect(sharedDoctrine({ ...FULL, compact: true, batching: false })).toContain('A question ends in an answer, not an edit');
@@ -65,7 +65,7 @@ describe('sharedDoctrine — question vs action (Destin, 2026-09-05)', () => {
   });
 });
 
-describe('sharedDoctrine — consolidation review (Destin, 2026-09-05)', () => {
+describe('sharedDoctrine — consolidation review', () => {
   it('the visual-review rule reaches every audience and both sizes', () => {
     expect(sharedDoctrine(FULL)).toContain('check the finished result the way the user will see it');
     expect(sharedDoctrine({ ...FULL, audience: 'parent' })).toContain('check the finished result the way the user will see it');
@@ -80,7 +80,7 @@ describe('sharedDoctrine — consolidation review (Destin, 2026-09-05)', () => {
   });
 });
 
-describe('sharedDoctrine — capability assumption (Destin, 2026-09-05)', () => {
+describe('sharedDoctrine — capability assumption', () => {
   it('every audience is told to find a way before declining, in both sizes', () => {
     expect(sharedDoctrine(FULL)).toContain('Assume you can do whatever the user asks');
     expect(sharedDoctrine({ ...FULL, audience: 'parent' })).toContain('Assume you can do whatever the user asks');

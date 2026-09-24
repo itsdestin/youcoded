@@ -1,7 +1,11 @@
 // FilesTab — the folder-tree file browser for one project. Renders the
-// Project Files section: every real file in the project folder (LIST_ALL_FILES,
-// full-browser discovery). The disk is the truth here, so a file Claude edited
-// in-folder gets NO special treatment.
+// Project Files section: every real file in the project folder. The disk is the
+// truth here, so a file Claude edited in-folder gets NO special treatment.
+// Two sources since 2026-09-18 (Project Files at any size, Stage 1): plain
+// folder browsing reads ONE folder at a time straight from disk, a page at a
+// time (artifacts:list-folder — any depth, any size, no "Browse anyway" gate);
+// search and the type filter still use the capped whole-project list
+// (LIST_ALL_FILES) until the background index lands (roadmap, Stage 2).
 // Merged from the old Artifacts/All-files tab split on 2026-07-23; the search +
 // type filter + sort apply to the one grid. Badge counts stay folder TOTALS.
 // An External Artifacts section (sidecar records outside the project folder)
@@ -11,11 +15,15 @@
 // Drawer (artifacts.listSession) — that stays their home.
 // Cards use .layer-surface; the deleted badge is a plain word "deleted" (the ●◐○ / ✕
 // glyph language is disliked — plain words instead).
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useArtifact } from '../../../state/ArtifactContext';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// WHY no useArtifact import: this file must not read ArtifactContext — see the
+// memo comment on FilesTab below. The one value it needs arrives as props.
+import type { ArtifactAction } from '../../../state/artifact-actions';
+import { useChunkedReveal } from '../../../hooks/use-chunked-reveal';
 import { useProjectWatch } from '../../../hooks/useProjectWatch';
 import { dedupeContentHits, groupContentHits, capGroups, MAX_CONTENT_ROWS, type RankableHit } from '../../../utils/content-search-ranking';
 import type { CentralIndexProject, ArtifactRecord } from '../../../../shared/artifacts/types';
+import { FOLDER_PAGE_SIZE, type FolderPage, type FolderSummary } from '../../../../shared/artifacts/folder-page';
 import { ActiveArtifactView } from '../../artifact-views/ActiveArtifactView';
 import type { ActiveArtifactHandle } from '../../artifact-views/ActiveArtifactView';
 import { useArtifactContent } from '../../artifact-views/useArtifactContent';
@@ -34,13 +42,6 @@ import { getPlatform, isRemoteMode } from '../../../platform';
 import { downloadFile } from '../../artifact-views/download-file';
 import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 
-// Is the project path a bare drive/filesystem root (vs. the home folder)?
-// Only used to pick the right word in the gated-folder message.
-function rootLooksLikeDrive(p: string): boolean {
-  const fwd = p.replace(/\\/g, '/').replace(/\/+$/, '');
-  return /^[a-zA-Z]:$/.test(fwd) || fwd === '';
-}
-
 // Absolute on-disk path for an artifact (internal = project.path + rel path).
 function artifactAbsPath(projectPath: string, a: ArtifactRecord): string {
   if (a.kind !== 'internal') return a.absolutePath ?? a.path;
@@ -50,7 +51,9 @@ function artifactAbsPath(projectPath: string, a: ArtifactRecord): string {
 
 // ProjectView keeps its own artifact selection separate from any chat session's
 // drawer, keyed under this reserved sessionId in activeArtifactBySession.
-const PV_SESSION = 'project-view';
+// Exported so ProjectView — the one reader of ArtifactContext on this screen —
+// can pick this session's open file out of the state and hand it down.
+export const PV_SESSION = 'project-view';
 
 // Human "kind" label for a card (Document / Image / Spreadsheet / Code), from the
 // shared fine-grained type groups — the same groups the type filter uses, so the
@@ -76,49 +79,44 @@ function fileComparator(sortBy: FileSortKey) {
   };
 }
 
-// One level of a virtual folder tree built from the flat artifact paths.
-// `samples` holds the first few files found beneath the folder, used to render
-// the filename-list contents preview on the folder card.
-interface DirFolder { name: string; path: string; count: number; samples: ArtifactRecord[] }
+// One row of the folder view: a file or a subfolder, in the order the listing
+// sent them (files first). Built once per page arrival (useMemo), so a row's
+// wrapper keeps its identity across unrelated renders.
+type FolderEntry = { kind: 'file'; file: ArtifactRecord } | { kind: 'dir'; dir: FolderSummary };
 
-// Filenames shown on a folder card before the "…and N more" overflow line.
-const FOLDER_PREVIEW_FILES = 3;
+// A folder's count line: its direct entries. Blank when the folder could not
+// be read — its own listing shows the real reason when opened.
+function itemsLabel(f: FolderSummary): string {
+  if (f.itemCount === undefined) return '';
+  return `${f.itemCount.toLocaleString()} item${f.itemCount === 1 ? '' : 's'}`;
+}
 
-// Split the (already-filtered) artifacts into the immediate subfolders + the
-// files that live directly in `dir` ('' = project root). Counts on a folder are
-// the total files anywhere beneath it (recursive), so the card reads "N files".
-// Files sort per the user's sort key; folders always sort by name (a folder has
-// no single mtime/type, and a stable folder order keeps navigation predictable).
-function listDir(artifacts: ArtifactRecord[], dir: string, sortBy: FileSortKey): { folders: DirFolder[]; files: ArtifactRecord[] } {
-  const prefix = dir ? dir + '/' : '';
-  const folderCounts = new Map<string, number>();
-  const folderSamples = new Map<string, ArtifactRecord[]>();
-  const files: ArtifactRecord[] = [];
-  for (const a of artifacts) {
-    const p = a.path.replace(/\\/g, '/');
-    if (prefix && !p.startsWith(prefix)) continue;
-    const rest = p.slice(prefix.length);
-    if (!rest) continue;
-    const slash = rest.indexOf('/');
-    if (slash === -1) {
-      files.push(a); // directly in this dir
-    } else {
-      const name = rest.slice(0, slash);
-      folderCounts.set(name, (folderCounts.get(name) ?? 0) + 1);
-      // Collect a few sample files for the folder-card contents preview.
-      const s = folderSamples.get(name);
-      if (s) { if (s.length < FOLDER_PREVIEW_FILES) s.push(a); }
-      else folderSamples.set(name, [a]);
-    }
+// What a folder that could not be listed says. Every one names the real
+// reason the listing gave (docs/error-message-standards.md) — never "empty".
+function folderErrorMessage(error: string, detail: string | undefined, atRoot: boolean, projectPath: string): string {
+  switch (error) {
+    case 'permission-denied':
+      return 'Your computer won’t let YouCoded open this folder (permission denied).';
+    case 'not-found':
+      return atRoot
+        ? `This project’s folder isn’t at ${projectPath}. If it’s on a drive that isn’t connected, connect it and try again.`
+        : 'This folder isn’t there any more.';
+    case 'not-a-folder':
+      return 'This is a file now, not a folder.';
+    case 'protected-path':
+      return 'YouCoded doesn’t open this folder, because it can hold passwords or keys.';
+    case 'outside-project':
+      return 'This folder leads outside the project, so YouCoded doesn’t show it here.';
+    case 'not-allowed':
+      // The remote host's root gate (remote-server.ts refuseUnknownProject).
+      return 'This computer doesn’t share this folder over remote access.';
+    case 'request-failed':
+      return detail ? `Couldn’t load your files: ${detail}` : 'Couldn’t load your files.';
+    default:
+      // 'unavailable' and anything newer: the system's own code, labelled as
+      // such (ELOOP, EIO…), rather than a guess at what it means (F6).
+      return detail ? `Couldn’t open this folder. The system reported: ${detail}.` : 'Couldn’t open this folder.';
   }
-  const folders = [...folderCounts.entries()]
-    .map(([name, count]) => ({
-      name, path: dir ? `${dir}/${name}` : name, count,
-      samples: folderSamples.get(name) ?? [],
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  files.sort(fileComparator(sortBy));
-  return { folders, files };
 }
 
 // Folder glyph for the folder cards — shared module (../icons); strokeWidth 1.5
@@ -127,7 +125,7 @@ function listDir(artifacts: ArtifactRecord[], dir: string, sortBy: FileSortKey):
 // Reveal button above.
 import { FolderIcon as FolderCardIcon, DocIcon, ImageIcon, SheetIcon, CodeGlyphIcon, GridViewIcon, ListViewIcon } from '../icons';
 import { ChevronIcon } from '../../Icons';
-import { Button, EmptyState, ErrorState } from '../../ui';
+import { EmptyState, ErrorState } from '../../ui';
 
 // The rounded box the list-view rows sit in — the same container language the
 // content-search groups already use. Module scope, NOT inside the component: a
@@ -149,7 +147,13 @@ import { Button, EmptyState, ErrorState } from '../../ui';
 //    scrollbar anywhere — measured at 1440x560: 9 rows in the DOM, 3 visible.
 // max-sm keeps both out of the way: below 640px the whole page scrolls, and a
 // second scrolling region inside it would trap the gesture.
-function ListBox({ children, scrolls }: { children: React.ReactNode; scrolls?: boolean }) {
+function ListBox({ children, scrolls, scrollRef }: {
+  children: React.ReactNode;
+  scrolls?: boolean;
+  // The element that scrolls when `scrolls` is set — the folder view's reveal
+  // watches it, because in list view it is this box, not the column, that moves.
+  scrollRef?: React.Ref<HTMLDivElement>;
+}) {
   if (!scrolls) return <div className="shrink-0 rounded-lg border border-edge-dim overflow-hidden">{children}</div>;
   // TWO elements, deliberately. Chromium paints a scrollbar in its own gutter,
   // which is NOT clipped by the scrolling element's own border-radius — so with
@@ -160,7 +164,7 @@ function ListBox({ children, scrolls }: { children: React.ReactNode; scrolls?: b
   // radius live on the outer div and the scrolling happens inside it.
   return (
     <div className="min-h-0 flex flex-col rounded-lg border border-edge-dim overflow-hidden">
-      <div className="min-h-0 overflow-y-auto max-sm:overflow-visible">{children}</div>
+      <div ref={scrollRef} className="min-h-0 overflow-y-auto max-sm:overflow-visible">{children}</div>
     </div>
   );
 }
@@ -178,7 +182,7 @@ function MiniTypeIcon({ path, size = 12 }: { path: string; size?: number }) {
 // The folder-tree file browser for one project — search, type filter, sort,
 // folder navigation, and the detail overlay all live here (mode collapsed
 // 2026-07-23; see the header comment).
-export function FilesTab({
+function FilesTabImpl({
   project,
   search,
   types,
@@ -190,6 +194,8 @@ export function FilesTab({
   onCurrentDirChange,
   onClearSearch,
   hidden,
+  pvActiveId,
+  artifactDispatch: dispatch,
 }: {
   project: CentralIndexProject;
   search: string;     // lifted to ProjectView — lives on the shared seg-row now
@@ -226,35 +232,46 @@ export function FilesTab({
   // rebuild alone froze the app for ~300 ms per switch (perf-lab 2026-09-09).
   // Staying mounted also returns you to the folder and file you were looking at.
   hidden?: boolean;
+  // The file open in Project View (ArtifactContext's entry for PV_SESSION), and
+  // that context's dispatch. Handed down by ProjectView instead of read here:
+  // the context changes on every file any session writes, and a read here would
+  // redraw the whole grid — hidden or not — each time (see the memo below).
+  pvActiveId: string | null;
+  artifactDispatch: React.Dispatch<ArtifactAction>;
 }) {
   // Root breadcrumb label + empty-state wording — constant now that this tab
   // renders only the one on-disk section.
   const rootLabel = 'Project Files';
   const noun = 'files';
-  const { state, dispatch } = useArtifact();
-  const pvActiveId = state.activeArtifactBySession[PV_SESSION] ?? null;
+  // Searching OR an active type filter flattens the tree to matching FILES only
+  // — no folder cards. When you're looking for something, folders are noise;
+  // each flat card shows its parent folder for context instead. Plain browsing
+  // (no search, no type filter) keeps the navigable folder tree.
+  const searching = !!search.trim();
+  const flat = searching || types.size > 0;
+
+  // ── Whole-project list (search and type filter only) ─────────────────────
+  // The capped whole-project walk (LIST_ALL_FILES). Fetched only once a search
+  // or filter needs it: plain browsing never waits for a recursive scan any
+  // more. `force` because the home-folder/drive gate is gone (Stage 1) — a
+  // search there gets the walk's first batch, and the truncation note below
+  // says so, until the background index (roadmap, Stage 2) replaces it.
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
-  // True until the first load for the current project resolves — gates the
-  // empty-state message so it can't flash before data arrives.
-  const [loading, setLoading] = useState(true);
-  // The real message when the list could not be fetched at all. WHY this exists:
-  // over remote access the host refused every file channel until batch 3, the
-  // refusal REJECTED, and this component had no catch — so `loading` never
-  // cleared and a phone saw "Loading files…" forever (found 2026-09-10). A
-  // failure is a state with a Retry, never a spinner that outlives its request.
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // True until the list for the current project resolves — gates the flat
+  // empty states so they can't flash before data arrives.
+  const [allLoading, setAllLoading] = useState(false);
+  // The real message when the search list's request could not be answered at
+  // all (the folder view has its own, below). WHY this exists: over remote access the host refused every file channel until
+  // batch 3, the refusal REJECTED, and this component had no catch — so the
+  // loading line never cleared and a phone saw "Loading files…" forever (found
+  // 2026-09-10). A failure is a state with a Retry, never a spinner that
+  // outlives its request.
+  const [allError, setAllError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
-  // True when on-disk discovery hit a cap (folder too large) — surfaced as a note
-  // so a partial list never silently reads as complete.
+  // True when the whole-project walk hit a cap — surfaced as a note under
+  // search results so a partial list never silently reads as complete.
   const [truncated, setTruncated] = useState(false);
-  // Gated root (home dir / drive root): main returns { gated } WITHOUT scanning
-  // — the tree is so large the list/count would be an arbitrary sample. The tab
-  // renders a "Browse anyway?" gate; forceScan re-requests with { force: true }.
-  const [gated, setGated] = useState(false);
-  const [forceScan, setForceScan] = useState(false);
-  useEffect(() => { setForceScan(false); }, [project.id]); // per-project consent
-  // Current folder being browsed ('' = project root). Files are organized into a
-  // virtual tree from their relative paths so a 1000-file project is navigable.
+  // Current folder being browsed ('' = project root).
   const [currentDir, setCurrentDir] = useState('');
   // Report the browsed folder up to ProjectView, which needs it as the "+ Add
   // file" import destination — see the prop comment above. Deliberately keyed
@@ -268,57 +285,179 @@ export function FilesTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDir]);
 
-  // Load artifacts whenever the active project changes, or after an add-external
-  // (refreshKey bump from ProjectView).
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setLoadError(null);
-    // Always the on-disk discovery scan now — the old ARTIFACTS branch
-    // (listProject, tracked sidecar files) was dropped with the mode prop.
-    const load = (window.claude as any).artifacts.listAllFiles(project.id, forceScan ? { force: true } : undefined);
-    load.then((res: any) => {
-      if (cancelled) return;
-      setLoading(false);
-      setGated(!!res?.gated);
-      if (res && res.ok) { setArtifacts(res.files ?? res.artifacts ?? []); setTruncated(!!res.truncated); }
-      else { setArtifacts([]); setTruncated(false); }
-    }).catch((err: any) => {
-      if (cancelled) return;
-      setLoading(false);
-      setArtifacts([]);
-      setTruncated(false);
-      // The real message when there is one; never a guess about the cause.
-      setLoadError(err?.message ? String(err.message) : '');
-    });
-    return () => { cancelled = true; };
-  }, [project.id, refreshKey, forceScan, retryToken]);
-
   // Back to the project root — on a PROJECT SWITCH only. Deliberately its own
-  // effect: the loader above also runs on refreshKey (every "+ Add file") and on
-  // forceScan, and resetting here threw the user back to the root after every
-  // import. Worse, the reset propagated up through onCurrentDirChange, so
-  // ProjectView's currentRelDir went stale too and a SECOND consecutive import
-  // landed at the root instead of the folder being browsed — defeating the
-  // whole point of that plumbing. Clearing the active artifact belongs here for
-  // the same reason: it exists so the detail pane can't carry the PREVIOUS
-  // project's content, which an import never causes.
+  // effect: the loaders below also run on refreshKey (every "+ Add file"), and
+  // resetting here threw the user back to the root after every import. Worse,
+  // the reset propagated up through onCurrentDirChange, so ProjectView's
+  // currentRelDir went stale too and a SECOND consecutive import landed at the
+  // root instead of the folder being browsed — defeating the whole point of
+  // that plumbing. Clearing the active artifact belongs here for the same
+  // reason: it exists so the detail pane can't carry the PREVIOUS project's
+  // content, which an import never causes.
   useEffect(() => {
     setCurrentDir('');
     dispatch({ type: 'ACTIVE_ARTIFACT_CLEARED', sessionId: PV_SESSION });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
-  // Filter the file grid (search + multi-select type). 2026-07-23: the
-  // deleted-state / "Show deleted" branch was dropped along with the Artifacts
-  // tab — listAllFiles is a live disk scan, so a "deleted" record (a tombstone
-  // with no content, per VersionEvent) can never appear in its results anyway.
-  // "Hide code & configs" also went away the same day: code is just one of the
-  // types, so an empty `types` set means all types and selecting the other three
-  // expresses the old hide-code view without a second overlapping control.
-  // Search matches the FILE NAME only — a query matching a folder name should
-  // not surface every file inside that folder.
-  // Shared predicate — search + type filter apply to the one Project Files grid.
+  const allGen = useRef(0);
+  const loadAll = () => {
+    const gen = ++allGen.current;
+    setAllLoading(true);
+    setAllError(null);
+    Promise.resolve((window.claude as any).artifacts.listAllFiles(project.id, { force: true }))
+      .then((res: any) => {
+        if (gen !== allGen.current) return;
+        setAllLoading(false);
+        if (res && res.ok) { setArtifacts(res.files ?? res.artifacts ?? []); setTruncated(!!res.truncated); }
+        else { setArtifacts([]); setTruncated(false); }
+      })
+      .catch((err: any) => {
+        if (gen !== allGen.current) return;
+        setAllLoading(false);
+        setArtifacts([]);
+        setTruncated(false);
+        // The real message when there is one; never a guess about the cause.
+        setAllError(err?.message ? String(err.message) : '');
+      });
+  };
+  // Remembers which project/refresh the list above belongs to, so turning a
+  // search off and on again doesn't refetch, but a new project or an import does.
+  const allFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!flat) return;
+    const key = `${project.id}\0${refreshKey}\0${retryToken}`;
+    if (allFor.current === key) return;
+    allFor.current = key;
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flat, project.id, refreshKey, retryToken]);
+  // A project switch drops the old list at once, so a search typed straight
+  // after the switch never matches against the previous project's files.
+  useEffect(() => { setArtifacts([]); setTruncated(false); setAllError(null); allFor.current = null; }, [project.id]);
+
+  // ── Folder view: ONE folder, from disk, a page at a time ─────────────────
+  // artifacts:list-folder (main/artifacts/folder-listing.ts). No depth limit,
+  // no size gate: dot-folders, node_modules and nested repos open like any
+  // folder. More pages arrive as the reader scrolls (the sentinel below).
+  const [folderFiles, setFolderFiles] = useState<ArtifactRecord[]>([]);
+  const [folderDirs, setFolderDirs] = useState<FolderSummary[]>([]);
+  const [folderHasMore, setFolderHasMore] = useState(false);
+  const [folderLoading, setFolderLoading] = useState(true);
+  // Why the folder could not be listed: the listing's own { ok:false } answer,
+  // or 'request-failed' when the request itself was refused (remote access
+  // down…). Rendered as an ErrorState with the real reason, never as an empty
+  // folder. Kept apart from allError (search) so neither clears or shows the
+  // other's failure (code review 2026-09-18, F1).
+  const [folderError, setFolderError] = useState<{ error: string; detail?: string } | null>(null);
+  // A LATER page failed. The pages already shown stay; the end of the list
+  // says why it stopped and offers Retry, so a half-read folder never reads as
+  // complete (code review 2026-09-18, F2).
+  const [moreError, setMoreError] = useState<{ error: string; detail?: string } | null>(null);
+  const folderGen = useRef(0);
+  const folderPaging = useRef(false);
+  // The listing's snapshot id from page 0 — later pages pass it so they read
+  // the SAME listing even when something else re-reads this folder (F3).
+  const folderSnapshot = useRef<string | undefined>(undefined);
+  const loadedCount = folderFiles.length + folderDirs.length;
+  const loadedCountRef = useRef(0);
+  loadedCountRef.current = loadedCount;
+
+  const listFolderPage = (dir: string, offset: number, limit: number, snapshot?: string): Promise<FolderPage | { ok: false; error: 'unsupported' }> =>
+    Promise.resolve((window.claude as any).artifacts.listFolder?.(project.id, dir, { sort: sortBy, offset, limit, snapshot })
+      ?? { ok: false, error: 'unsupported' });
+  const reasonOf = (res: any) => ({ error: String(res?.error ?? ''), detail: res?.detail });
+  const rejectionOf = (err: any) => ({ error: 'request-failed', detail: err?.message ? String(err.message) : undefined });
+
+  // Load the folder from the top. `keep` re-reads at least that many entries,
+  // so a refresh (a file added while you read page 3) doesn't cut the list
+  // back to one page under the reader. Refreshes ask for up to 1,000 at a time
+  // (the listing's cap), so a reader deep in a folder costs one or two round
+  // trips per refresh, not one per 200 (F7).
+  const loadFolder = (keep = 0) => {
+    const gen = ++folderGen.current;
+    folderPaging.current = false;
+    setMoreError(null);
+    if (keep === 0) {
+      // A different folder: clear the old one at once, so its files never sit
+      // under the new folder's breadcrumb while the new listing arrives.
+      setFolderLoading(true);
+      setFolderFiles([]); setFolderDirs([]); setFolderHasMore(false); setFolderError(null);
+    }
+    const dir = currentDir;
+    (async () => {
+      const files: ArtifactRecord[] = [];
+      const dirs: FolderSummary[] = [];
+      let more = true;
+      let snapshot: string | undefined;
+      while (more && (files.length + dirs.length === 0 || files.length + dirs.length < keep)) {
+        const got = files.length + dirs.length;
+        const limit = Math.min(1000, Math.max(FOLDER_PAGE_SIZE, keep - got));
+        const res: any = await listFolderPage(dir, got, limit, snapshot);
+        if (gen !== folderGen.current) return;
+        if (!res?.ok) {
+          setFolderLoading(false);
+          setFolderFiles([]); setFolderDirs([]); setFolderHasMore(false);
+          // The phone app has no file data yet (SessionService.kt stub): keep
+          // showing the same empty folder it showed before this channel existed.
+          setFolderError(res?.error === 'not-implemented-on-mobile' || res?.error === 'unsupported'
+            ? null : reasonOf(res));
+          return;
+        }
+        snapshot = res.snapshot;
+        files.push(...res.files);
+        dirs.push(...res.folders);
+        more = !!res.hasMore;
+      }
+      folderSnapshot.current = snapshot;
+      setFolderLoading(false);
+      setFolderError(null);
+      setFolderFiles(files); setFolderDirs(dirs); setFolderHasMore(more);
+    })().catch((err: any) => {
+      if (gen !== folderGen.current) return;
+      setFolderLoading(false);
+      setFolderFiles([]); setFolderDirs([]); setFolderHasMore(false);
+      setFolderError(rejectionOf(err));
+    });
+  };
+  // The next page, appended. One at a time; a reload in between wins.
+  const loadMoreFolder = () => {
+    if (folderPaging.current || !folderHasMore) return;
+    folderPaging.current = true;
+    setMoreError(null);
+    const gen = folderGen.current;
+    listFolderPage(currentDir, loadedCountRef.current, FOLDER_PAGE_SIZE, folderSnapshot.current).then((res: any) => {
+      if (gen !== folderGen.current) return;
+      folderPaging.current = false;
+      if (!res?.ok) { setMoreError(reasonOf(res)); return; }
+      // The listing this page belonged to had expired: re-read from the top,
+      // keeping as many entries, rather than splice two listings together.
+      if (res.restarted) { loadFolder(loadedCountRef.current + FOLDER_PAGE_SIZE); return; }
+      folderSnapshot.current = res.snapshot ?? folderSnapshot.current;
+      setFolderFiles((prev) => [...prev, ...res.files]);
+      setFolderDirs((prev) => [...prev, ...res.folders]);
+      setFolderHasMore(!!res.hasMore);
+    }).catch((err: any) => {
+      if (gen !== folderGen.current) return;
+      folderPaging.current = false;
+      setMoreError(rejectionOf(err));
+    });
+  };
+  // Opening a folder starts from the top with a loading line; re-reading the
+  // SAME folder (a sort change, an import, Retry) replaces it in place with as
+  // many entries as were loaded — no flash, and the reader keeps their place.
+  const shownFolder = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${project.id}\0${currentDir}`;
+    const same = shownFolder.current === key;
+    shownFolder.current = key;
+    loadFolder(same ? Math.max(loadedCountRef.current, 1) : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id, currentDir, sortBy, refreshKey, retryToken]);
+
+  // Filter the flat list (search + multi-select type). Search matches the FILE
+  // NAME only — a query matching a folder name should not surface every file
+  // inside that folder. An empty `types` set means all types.
   const matchesFilters = (a: ArtifactRecord) => {
     const filename = a.path.split('/').pop() ?? a.path;
     if (search && !filename.toLowerCase().includes(search.toLowerCase())) return false;
@@ -327,13 +466,14 @@ export function FilesTab({
   };
   const filtered = useMemo(
     () => artifacts.filter(matchesFilters),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [artifacts, search, types],
   );
+  // Re-read what is on screen: the folder (keeping as many entries as are
+  // loaded) and, once a search has fetched it, the whole-project list.
   const refreshArtifacts = () => {
-    const load = (window.claude as any).artifacts.listAllFiles(project.id, forceScan ? { force: true } : undefined);
-    load.then((r: any) => {
-      if (r && r.ok) { setArtifacts(r.files ?? r.artifacts ?? []); setTruncated(!!r.truncated); setGated(!!r.gated); }
-    });
+    loadFolder(Math.max(loadedCountRef.current, 1));
+    if (allFor.current !== null) loadAll();
   };
   const refreshRef = useRef(refreshArtifacts);
   refreshRef.current = refreshArtifacts;
@@ -341,16 +481,18 @@ export function FilesTab({
   // Live external changes (spec §8.3): watch the project root while this tab is
   // mounted, and refresh the list when files appear/disappear on disk. Debounced
   // — a git checkout emits hundreds of add/remove events in a burst, and each
-  // uncoalesced refresh would re-run the (cache-invalidated) discovery scan.
+  // uncoalesced refresh would re-read the folder (and, while searching, re-run
+  // the cache-invalidated discovery scan).
   // Over remote access, the changes made while the phone was disconnected never
   // arrived as events — reload the list once the watch is back (batch 3, R12).
+  // Known limit until Stage 2: the watcher stops 6 levels down (2 for a home
+  // folder), so a folder deeper than that refreshes when you open it again,
+  // not live.
   useProjectWatch(project.path, () => refreshRef.current());
-  // This tab now stays mounted while another tab shows, so the refresh has to
-  // know that. Refreshing while hidden would be a full uncached disk walk in the
-  // main process (main drops the discovery cache on every add/remove) for a list
-  // nobody is looking at — the very cost this whole change removes, moved to a
-  // worse moment: a git checkout or an npm install running while you read
-  // Conversations. Remember instead, and refresh once on the way back.
+  // This tab stays mounted while another tab shows, so the refresh has to know
+  // that. Refreshing while hidden would re-read for a list nobody is looking
+  // at, at a worse moment: a git checkout or an npm install running while you
+  // read Conversations. Remember instead, and refresh once on the way back.
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
   const missedChangeRef = useRef(false);
@@ -435,23 +577,88 @@ export function FilesTab({
     dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId: PV_SESSION, artifactId: id });
   };
 
+  // The file a card or row was last opened from. WHY: the folder view holds
+  // one folder's loaded pages, not the whole project — a refresh that re-reads
+  // fewer pages, or a search that flattens the view, must not drop the record
+  // the open-file overlay is showing (the overlay closes when it has none).
+  const [openedRecord, setOpenedRecord] = useState<ArtifactRecord | null>(null);
+  const openFile = (a: ArtifactRecord) => {
+    setOpenedRecord(a);
+    dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId: PV_SESSION, artifactId: a.id });
+  };
   const activeArtifact = pvActiveId
-    ? (artifacts.find((a) => a.id === pvActiveId)
+    ? (folderFiles.find((a) => a.id === pvActiveId)
+      ?? artifacts.find((a) => a.id === pvActiveId)
+      ?? (openedRecord && openedRecord.id === pvActiveId ? openedRecord : undefined)
       ?? (syntheticHit && syntheticHit.id === pvActiveId ? syntheticHit : undefined))
     : undefined;
 
-  // Searching OR an active type filter flattens the tree to matching FILES only
-  // — no folder cards. When you're looking for something, folders are noise;
-  // each flat card shows its parent folder for context instead. Plain browsing
-  // (no search, no type filter) keeps the navigable folder tree.
-  const searching = !!search.trim();
-  const flat = searching || types.size > 0;
-  const dirView = useMemo(() => listDir(filtered, currentDir, sortBy), [filtered, currentDir, sortBy]);
   // Flat results honor the same sort as the folder view.
   const flatResults = useMemo(
     () => (flat ? [...filtered].sort(fileComparator(sortBy)) : filtered),
     [filtered, flat, sortBy],
   );
+  // Flat results draw 50 at a time as you scroll (render-cost consolidation
+  // 2026-09-18): a search or type filter over a big project is the 2,000-card
+  // case, and drawing them all at once is what made typing in the box stall.
+  // resetKey is the query's VALUES, so a new search starts a fresh window at
+  // the top; resetScrollOnActivate is off because coming back to the Files tab
+  // with the same search must leave the list where it was.
+  // Below 640px the page scrolls instead of this box (max-sm:overflow-visible
+  // on it), so the reveal watches the viewport there — same trade-off as
+  // ConversationsTab.
+  const flatScrollRef = useRef<HTMLDivElement>(null);
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const noRoot = useRef<HTMLElement | null>(null);
+  const narrowViewport = useNarrowViewport();
+  const isList = view === 'list';
+  const { visible: flatVisible, hasMore: flatHasMore, sentinelRef: flatSentinelRef } = useChunkedReveal(flatResults, {
+    resetKey: JSON.stringify([search.trim(), [...types].sort(), sortBy, view, project.id]),
+    rootRef: narrowViewport ? noRoot : flatScrollRef,
+    // Only while flat: the folder view has its own reveal below, and an idle
+    // one here would reset the shared scroll box on the folder view's behalf.
+    active: !hidden && flat,
+    resetScrollOnActivate: false,
+  });
+
+  // The folder view draws the same way (Stage 1, 2026-09-18): it used to be
+  // left whole because a folder was "tens of items", and a folder read from
+  // disk can now be 100,000. The listing pages 200 at a time; this reveals 50
+  // at a time from what has arrived, and the second sentinel asks for the next
+  // page once everything that arrived is drawn. The key is the FOLDER, never
+  // the sort: re-sorting re-reads in place and must not throw the reader back
+  // to the top (a regression the flat reveal once shipped).
+  const folderEntries = useMemo<FolderEntry[]>(() => [
+    ...folderFiles.map((file) => ({ kind: 'file' as const, file })),
+    ...folderDirs.map((dir) => ({ kind: 'dir' as const, dir })),
+  ], [folderFiles, folderDirs]);
+  const { visible: folderVisible, hasMore: folderRevealMore, sentinelRef: folderSentinelRef } = useChunkedReveal(folderEntries, {
+    resetKey: JSON.stringify(['folder', project.id, currentDir]),
+    // List view scrolls INSIDE its rounded box (ListBox), not the column.
+    rootRef: narrowViewport ? noRoot : (isList ? listScrollRef : flatScrollRef),
+    active: !hidden && !flat,
+    resetScrollOnActivate: false,
+  });
+  // The "fetch the next page" sentinel: shown once every arrived entry is
+  // drawn and the folder has more on disk.
+  const [pageSentinel, setPageSentinel] = useState<HTMLElement | null>(null);
+  const pageSentinelRef = useCallback((el: HTMLElement | null) => setPageSentinel(el), []);
+  const needNextPage = !flat && !hidden && !folderRevealMore && folderHasMore && moreError === null;
+  const loadMoreRef = useRef(loadMoreFolder);
+  loadMoreRef.current = loadMoreFolder;
+  useEffect(() => {
+    if (!needNextPage) return;
+    // No observer (jsdom, exotic WebView): fetch rather than strand the folder.
+    if (typeof IntersectionObserver === 'undefined') { loadMoreRef.current(); return; }
+    if (!pageSentinel) return;
+    const root = narrowViewport ? null : (isList ? listScrollRef.current : flatScrollRef.current);
+    const io = new IntersectionObserver(
+      (entries) => { if (entries.some((e) => e.isIntersecting)) loadMoreRef.current(); },
+      { root, rootMargin: '400px 0px' },
+    );
+    io.observe(pageSentinel);
+    return () => io.disconnect();
+  }, [needNextPage, pageSentinel, narrowViewport, isList, loadedCount]);
   // Content hits minus anything already shown as a name match. Hoisted out of the
   // render below so the "no results" check and the content section agree on one
   // number instead of deduping twice.
@@ -465,7 +672,7 @@ export function FilesTab({
   // (2026-07-23): a real empty state with a way out, since two "(0)" headers and
   // no content read as a dead end.
   const noSearchResults = searching && flatResults.length === 0 && contentRows.length === 0
-    && !contentSearching;
+    && !contentSearching && !allLoading;
   const segments = currentDir ? currentDir.split('/') : [];
 
   // One file card — reused by both the flat search results and the folder view.
@@ -490,7 +697,7 @@ export function FilesTab({
         // as inconsistent (user feedback 2026-07-08). Same override the seg
         // control uses on its .layer-surface.
         style={{ boxShadow: 'none' }}
-        onClick={() => dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId: PV_SESSION, artifactId: a.id })}
+        onClick={() => openFile(a)}
         title={isDeleted ? `${a.path}\nDeleted (file is no longer on disk)` : a.path}
       >
         <ArtifactThumbnail
@@ -526,7 +733,6 @@ export function FilesTab({
   // A row is icon + filename + kind + when-it-changed (design deck 2026-09-03,
   // Q-3a). The last two columns are max-sm:hidden: on a phone the row keeps the
   // filename, which is the part you're actually reading.
-  const isList = view === 'list';
   // Full-bleed blocks (empty states, section headers, the content-hit list) span
   // every grid column in grid view; in the list's flex column they're just w-full.
   const fullW = isList ? 'w-full shrink-0' : 'col-span-full';
@@ -550,7 +756,7 @@ export function FilesTab({
         key={a.id}
         type="button"
         className={`${ROW_CLS} ${isActive ? 'bg-inset text-fg' : 'hover:bg-well'} ${isDeleted ? 'opacity-60' : ''}`}
-        onClick={() => dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId: PV_SESSION, artifactId: a.id })}
+        onClick={() => openFile(a)}
         title={isDeleted ? `${a.path}\nDeleted (file is no longer on disk)` : a.path}
       >
         <span className={`shrink-0 ${isActive ? 'text-accent' : 'text-fg-muted'}`}>
@@ -572,7 +778,7 @@ export function FilesTab({
     );
   };
 
-  const renderFolderRow = (f: DirFolder) => (
+  const renderFolderRow = (f: FolderSummary) => (
     <button
       key={'dir:' + f.path}
       type="button"
@@ -583,7 +789,7 @@ export function FilesTab({
       <span className="shrink-0 text-accent"><FolderCardIcon size={15} strokeWidth={1.5} /></span>
       <span className="flex-1 min-w-0 truncate text-xs font-mono text-fg-2">{f.name}</span>
       <span className="max-sm:hidden shrink-0 w-32 truncate text-3xs text-fg-muted">
-        {f.count} file{f.count === 1 ? '' : 's'}
+        {itemsLabel(f)}
       </span>
       {/* A folder has no single modified time — the column stays empty rather
           than borrowing one file's date and reading as the folder's. */}
@@ -591,7 +797,97 @@ export function FilesTab({
     </button>
   );
 
-  const emptyHere = !flat && dirView.folders.length === 0 && dirView.files.length === 0;
+  // A folder card. Its preview is the folder's first few files by name and its
+  // count is what sits DIRECTLY inside it ("N items") — the listing reads one
+  // level, never the whole subtree, which is what keeps a huge folder instant.
+  // (It said "N files", counted recursively, while the view was carved out of
+  // the capped whole-project walk.)
+  const renderFolderCard = (f: FolderSummary) => {
+    // The listing sends a card's first few files already (FOLDER_SAMPLE_FILES).
+    const previewFiles = f.samples;
+    return (
+          // Folder cards have a distinct FOLDER SHAPE — a tab on the top-left
+          // plus a body that previews the contents as a FILENAME LIST (the
+          // first few files inside, tiny type icon + name — user-picked over
+          // the old 2x2 thumbnail grid, which read as clutter). The name +
+          // count live INSIDE the folder body (a footer below the preview),
+          // so they read as part of the folder, not a caption floating
+          // beneath it.
+          <button
+            key={'dir:' + f.path}
+            type="button"
+            // hover-lift: see the doc-card comment above — the scale is
+            // guarded by @media (hover: hover) for the Android WebView.
+            className="group relative flex flex-col h-44 text-left hover-lift"
+            onClick={() => setCurrentDir(f.path)}
+            title={f.path}
+          >
+            {/* Folder tab (nub). ml-4 clears the body's rounded top-left
+                corner. The nub carries its OWN bottom border and overlaps
+                the body by exactly 1px (-mb-px), so its border sits ON the
+                body's top border: the separating line stays visible across
+                the joint AND there's no seam gap at fractional zoom levels.
+                (border-b-0 + overlap covered the line; border-b-0 without
+                overlap left a subpixel gap — both were reported.) */}
+            <div className="relative -mb-px ml-4 h-3 w-14 rounded-t-md bg-panel border border-edge group-hover:border-accent/60 transition-colors" />
+            {/* Folder body — preview AND the name/count footer, all inside one
+                bordered, rounded container so they read as the same folder.
+                All four corners rounded — the old rounded-tl-none square
+                corner under the tab read as a glitch, not a folder. bg-panel
+                (not bg-inset) so the folder body matches the file card's
+                .layer-surface background — the two card kinds previously
+                used different tokens and read as mismatched (user feedback
+                2026-07-19). */}
+            <div className="flex-1 min-h-0 flex flex-col rounded-lg border border-edge bg-panel overflow-hidden group-hover:border-accent/60 transition-colors">
+              <div className="flex-1 min-h-0 overflow-hidden">
+                {previewFiles.length > 0 ? (
+                  <div className="flex flex-col gap-1.5 p-2.5">
+                    {/* First few filenames only — no overflow line (the
+                        footer's "N items" count already tells the rest). */}
+                    {previewFiles.map((s) => (
+                      <div key={s.id} className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-fg-muted shrink-0"><MiniTypeIcon path={s.path} /></span>
+                        <span className="text-2xs text-fg-2 truncate">{fileNameOf(s)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  // No previewable files (a folder of subfolders) — folder glyph.
+                  <div className="h-full w-full flex items-center justify-center bg-well text-accent">
+                    <FolderCardIcon size={40} strokeWidth={1.5} />
+                  </div>
+                )}
+              </div>
+              {/* Footer inside the folder: name (with accent folder glyph) + count.
+                  bg-panel + the doc-caption typography (12px mono fg-2 name,
+                  10.5px fg-muted second line) — same token as the folder
+                  body above, so the whole card and the doc cards share one
+                  background color. */}
+              <div className="shrink-0 border-t border-edge-dim px-2.5 py-1.5 bg-panel">
+                <div className="text-xs font-mono text-fg-2 flex items-center gap-1.5">
+                  <span className="text-accent shrink-0"><FolderCardIcon size={13} strokeWidth={1.5} /></span>
+                  <span className="truncate">{f.name}</span>
+                </div>
+                <div className="text-3xs text-fg-muted pl-[20px]">
+                  {itemsLabel(f)}
+                </div>
+              </div>
+            </div>
+          </button>
+    );
+  };
+
+  // The end of a folder whose next page failed: what stopped it, and Retry.
+  const renderMoreError = () => moreError && (
+    <ErrorState
+      mode="recoverable"
+      message={`${folderErrorMessage(moreError.error, moreError.detail, false, project.path)} Some of this folder isn’t shown.`}
+      onRetry={() => loadMoreRef.current()}
+    />
+  );
+  const emptyHere = !flat && !folderLoading && folderError === null && loadedCount === 0 && !folderHasMore;
+  // Which request the loading line and the load error belong to right now.
+  const loading = flat ? allLoading : folderLoading;
 
   return (
     // `hidden` REPLACES the layout classes rather than riding alongside them —
@@ -663,48 +959,36 @@ export function FilesTab({
       {loading && (
         <p className="text-sm text-fg-muted">Loading {noun}…</p>
       )}
-      {!loading && loadError !== null && (
+      {flat && !allLoading && allError !== null && (
         <div className="max-w-md mt-4 mx-auto">
           <ErrorState
             mode="recoverable"
-            message={loadError ? `Couldn’t load your files: ${loadError}` : 'Couldn’t load your files.'}
+            message={allError ? `Couldn’t load your files: ${allError}` : 'Couldn’t load your files.'}
             onRetry={() => setRetryToken((t) => t + 1)}
           />
         </div>
       )}
-      {/* Gated root (home dir / drive root): no scan ran. Explain WHY and offer
-          an explicit opt-in — showing an arbitrary truncated sample by default
-          would read as "here are your files" when it isn't. */}
-      {!loading && gated && (
-        <div className="max-w-md mt-4 mx-auto text-center">
-          <p className="text-sm text-fg mb-1.5">This folder is very large.</p>
-          <p className="text-sm-tight text-fg-muted mb-3">
-            It covers your whole {rootLooksLikeDrive(project.path) ? 'drive' : 'home folder'}, so
-            browsing shows only a partial list and can be slow. Conversations are unaffected.
-          </p>
-          {/* Was a pill (rounded-full). Spec decision 65 reserves pills for
-              floating overlay affordances — this is an inline action inside the
-              gate message, so it uses the standard button radius. */}
-          <Button variant="secondary" onClick={() => setForceScan(true)}>
-            Browse anyway
-          </Button>
+      {/* A folder the listing could not read: the real reason and a Retry,
+          never an empty folder (spec 2026-09-18 §8). The breadcrumb above
+          stays, so the way back out is always one click. */}
+      {!flat && !folderLoading && folderError !== null && (
+        <div className="max-w-md mt-4 mx-auto">
+          <ErrorState
+            mode="recoverable"
+            message={folderErrorMessage(folderError.error, folderError.detail, currentDir === '', project.path)}
+            onRetry={() => setRetryToken((t) => t + 1)}
+          />
         </div>
       )}
       {/* Search mode's empty state is the EmptyState in the grid below (it
           replaces the "(0)" headers). This line is for the type-filter flatten,
           which has no headers and no search to clear. */}
-      {!loading && !gated && flat && !searching && flatResults.length === 0 && (
+      {!loading && flat && !searching && flatResults.length === 0 && (
         <p className="text-sm text-fg-muted">Nothing matches the current filters.</p>
       )}
-      {!loading && !gated && loadError === null && emptyHere && (
+      {emptyHere && (
         <p className="text-sm text-fg-muted">
-          {/* When files EXIST but the type filter hid them all, say so — the
-              bare "no files" empty state would lie about the project. */}
-          {artifacts.length > 0
-            ? currentDir
-              ? 'This folder is empty under the current filters.'
-              : 'Nothing matches the current filters.'
-            : 'No files found in this project folder.'}
+          {currentDir ? 'This folder is empty.' : 'No files found in this project folder.'}
         </p>
       )}
 
@@ -718,7 +1002,7 @@ export function FilesTab({
           columns read correctly on a phone. */}
       {/* List view is a plain column — no card hover-lift, so it needs none of
           the p-2/-m-2 overflow room the grid does. */}
-      <div className={isList
+      <div ref={flatScrollRef} className={isList
         ? `flex-1 min-h-0 flex flex-col gap-2 content-start max-sm:overflow-visible ${
             flat ? 'overflow-auto' : 'overflow-hidden'}`
         : 'flex-1 overflow-auto max-sm:overflow-visible grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 content-start p-2 -m-2'}>
@@ -742,8 +1026,15 @@ export function FilesTab({
                 </div>
               )}
               {isList
-                ? <div className={fullW}><ListBox>{flatResults.map(renderFileRow)}</ListBox></div>
-                : flatResults.map(renderFileCard)}
+                ? <div className={fullW}><ListBox>{flatVisible.map(renderFileRow)}</ListBox></div>
+                : flatVisible.map(renderFileCard)}
+              {/* The reveal's sentinel. Different keys per view so a grid ↔ list
+                  switch REPLACES the element (the hook re-arms on the new one)
+                  rather than React reusing a node that moved. col-span-full
+                  keeps it from taking a grid cell. */}
+              {flatHasMore && (isList
+                ? <div key="list" ref={flatSentinelRef} className="h-px shrink-0" aria-hidden />
+                : <div key="grid" ref={flatSentinelRef} className="col-span-full h-px" aria-hidden />)}
               {searching && !noSearchResults && (() => {
                 const rows = contentRows;
                 // Group + sort BEFORE capping, so the biggest groups survive the cut.
@@ -800,96 +1091,32 @@ export function FilesTab({
           : isList
           ? (
             // Same order as the cards: loose files first, then subfolders.
-            <ListBox scrolls>
-              {dirView.files.map(renderFileRow)}
-              {dirView.folders.map(renderFolderRow)}
+            <ListBox scrolls scrollRef={listScrollRef}>
+              {folderVisible.map((e) => (e.kind === 'file' ? renderFileRow(e.file) : renderFolderRow(e.dir)))}
+              {/* The reveal's sentinel, then the next-page sentinel — inside the
+                  box, because in list view the box is what scrolls. */}
+              {folderRevealMore && <div ref={folderSentinelRef} className="h-px shrink-0" aria-hidden />}
+              {needNextPage && <div ref={pageSentinelRef} className="h-px shrink-0" aria-hidden />}
+              {moreError && <div className="p-2">{renderMoreError()}</div>}
             </ListBox>
           )
           : (
             <>
               {/* Files directly in this folder FIRST, then subfolders (per request:
-                  single files sort before folders). */}
-              {dirView.files.map(renderFileCard)}
-              {dirView.folders.map((f) => {
-                const previewFiles = f.samples.slice(0, FOLDER_PREVIEW_FILES);
-                return (
-                  // Folder cards have a distinct FOLDER SHAPE — a tab on the top-left
-                  // plus a body that previews the contents as a FILENAME LIST (the
-                  // first few files inside, tiny type icon + name — user-picked over
-                  // the old 2x2 thumbnail grid, which read as clutter). The name +
-                  // count live INSIDE the folder body (a footer below the preview),
-                  // so they read as part of the folder, not a caption floating
-                  // beneath it.
-                  <button
-                    key={'dir:' + f.path}
-                    type="button"
-                    // hover-lift: see the doc-card comment above — the scale is
-                    // guarded by @media (hover: hover) for the Android WebView.
-                    className="group relative flex flex-col h-44 text-left hover-lift"
-                    onClick={() => setCurrentDir(f.path)}
-                    title={f.path}
-                  >
-                    {/* Folder tab (nub). ml-4 clears the body's rounded top-left
-                        corner. The nub carries its OWN bottom border and overlaps
-                        the body by exactly 1px (-mb-px), so its border sits ON the
-                        body's top border: the separating line stays visible across
-                        the joint AND there's no seam gap at fractional zoom levels.
-                        (border-b-0 + overlap covered the line; border-b-0 without
-                        overlap left a subpixel gap — both were reported.) */}
-                    <div className="relative -mb-px ml-4 h-3 w-14 rounded-t-md bg-panel border border-edge group-hover:border-accent/60 transition-colors" />
-                    {/* Folder body — preview AND the name/count footer, all inside one
-                        bordered, rounded container so they read as the same folder.
-                        All four corners rounded — the old rounded-tl-none square
-                        corner under the tab read as a glitch, not a folder. bg-panel
-                        (not bg-inset) so the folder body matches the file card's
-                        .layer-surface background — the two card kinds previously
-                        used different tokens and read as mismatched (user feedback
-                        2026-07-19). */}
-                    <div className="flex-1 min-h-0 flex flex-col rounded-lg border border-edge bg-panel overflow-hidden group-hover:border-accent/60 transition-colors">
-                      <div className="flex-1 min-h-0 overflow-hidden">
-                        {previewFiles.length > 0 ? (
-                          <div className="flex flex-col gap-1.5 p-2.5">
-                            {/* First few filenames only — no overflow line (the
-                                footer's "N files" count already tells the rest). */}
-                            {previewFiles.map((s) => (
-                              <div key={s.id} className="flex items-center gap-1.5 min-w-0">
-                                <span className="text-fg-muted shrink-0"><MiniTypeIcon path={s.path} /></span>
-                                <span className="text-2xs text-fg-2 truncate">{fileNameOf(s)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          // No previewable files (a folder of subfolders) — folder glyph.
-                          <div className="h-full w-full flex items-center justify-center bg-well text-accent">
-                            <FolderCardIcon size={40} strokeWidth={1.5} />
-                          </div>
-                        )}
-                      </div>
-                      {/* Footer inside the folder: name (with accent folder glyph) + count.
-                          bg-panel + the doc-caption typography (12px mono fg-2 name,
-                          10.5px fg-muted second line) — same token as the folder
-                          body above, so the whole card and the doc cards share one
-                          background color. */}
-                      <div className="shrink-0 border-t border-edge-dim px-2.5 py-1.5 bg-panel">
-                        <div className="text-xs font-mono text-fg-2 flex items-center gap-1.5">
-                          <span className="text-accent shrink-0"><FolderCardIcon size={13} strokeWidth={1.5} /></span>
-                          <span className="truncate">{f.name}</span>
-                        </div>
-                        <div className="text-3xs text-fg-muted pl-[20px]">
-                          {f.count} file{f.count === 1 ? '' : 's'}
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
+                  single files sort before folders) — the listing sends that order. */}
+              {folderVisible.map((e) => (e.kind === 'file' ? renderFileCard(e.file) : renderFolderCard(e.dir)))}
+              {folderRevealMore && <div key="grid-folder" ref={folderSentinelRef} className="col-span-full h-px" aria-hidden />}
+              {needNextPage && <div key="grid-page" ref={pageSentinelRef} className="col-span-full h-px" aria-hidden />}
+              {moreError && <div className="col-span-full">{renderMoreError()}</div>}
             </>
           )}
       </div>
 
-      {/* Truncation note — discovery hit a cap (very large folder). Never let a
-          partial list read as complete. */}
-      {truncated && (
+      {/* Truncation note — the whole-project walk behind search and the type
+          filter hit a cap. Never let a partial list read as complete. Folder
+          browsing has no cap, so this only shows while flat (until Stage 2's
+          background index replaces the walk). */}
+      {flat && truncated && (
         <p className="text-2xs text-fg-muted shrink-0">
           This folder is large — showing the first batch of files. Some documents deeper in the
           folder aren't listed.
@@ -910,6 +1137,7 @@ export function FilesTab({
         <ArtifactDetail
           artifact={activeArtifact}
           project={project}
+          artifactDispatch={dispatch}
           initialLine={pendingReveal?.id === activeArtifact.id ? pendingReveal.line : undefined}
           onInitialLineConsumed={() => setPendingReveal(null)}
         />
@@ -917,6 +1145,14 @@ export function FilesTab({
     </div>
   );
 }
+
+// WHY memo: this tab is kept mounted while hidden for its watcher (09-09);
+// without memo every Project View render — each tab click — redrew the whole
+// hidden grid. And it must not read ArtifactContext itself, because memo cannot
+// stop a context reader and that context changes on every file any session
+// writes (render-cost consolidation 2026-09-18). Guarded by the ast-grep rules
+// filestab-memoized and filestab-no-artifact-context.
+export const FilesTab = React.memo(FilesTabImpl);
 
 // ─── ArtifactDetail ───────────────────────────────────────────────────────────
 // Selected-artifact detail, now hosted in the shared centered ProjectDetailOverlay
@@ -927,6 +1163,10 @@ export function FilesTab({
 interface DetailProps {
   artifact: ArtifactRecord;
   project: CentralIndexProject;
+  // ArtifactContext's dispatch, passed down from FilesTab rather than read with
+  // useArtifact(): nothing in this file reads that context (see FilesTab's memo
+  // comment, and the ast-grep rule filestab-no-artifact-context).
+  artifactDispatch: React.Dispatch<ArtifactAction>;
   // WHY: `onRefreshArtifacts` removed — ArtifactDetail accepted it but never
   // called it. The parent (FilesTab) passes `onMutated` directly to the
   // ActiveArtifactView inside; refresh signaling doesn't flow through this
@@ -938,8 +1178,7 @@ interface DetailProps {
   onInitialLineConsumed?: () => void;
 }
 
-function ArtifactDetail({ artifact, project, initialLine, onInitialLineConsumed }: DetailProps) {
-  const { dispatch } = useArtifact();
+function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initialLine, onInitialLineConsumed }: DetailProps) {
   // Read lifecycle (fetch + loading/missing/error phases) — shared hook, same
   // as SessionDrawer, so a slow read shows a placeholder instead of flashing
   // "This file is no longer on disk."

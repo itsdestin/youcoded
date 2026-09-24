@@ -71,14 +71,70 @@ describe('isWatchIgnoredPath', () => {
 describe('project watcher lifecycle', () => {
   let root: string;
   let events: ExternalChangeEvent[];
+  let probes: ExternalChangeEvent[];
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  // awaitWriteFinish stability is 500ms — give events a wide margin.
+  // Used ONLY before a negative assertion ("nothing arrived"), and only after a
+  // positive signal has proved the watcher is delivering: awaitWriteFinish
+  // stability is 500ms, so this is the window in which an unwanted event would
+  // have shown up. Never used to wait FOR an event — see untilLive / seen.
   const settle = () => wait(1200);
+
+  // WHY signals instead of fixed sleeps (2026-09-18): this block failed on macOS
+  // CI only, a different case each run — `expected [] to include 'src/app.ts'`,
+  // `expected 0 to be greater than 0`, `expected ['add'] to include 'edit'` —
+  // while Linux and Windows passed. Two separate causes, both timing:
+  //  1. On macOS a DIRECTORY watch is not live when chokidar says 'ready'. Node's
+  //     fs.watch goes through libuv's FSEvents backend, whose uv__fsevents_init
+  //     only SIGNALS a CoreFoundation thread and returns; that thread later
+  //     destroys the process's one FSEventStream and recreates it with the new
+  //     path list, starting at kFSEventStreamEventIdSinceNow (libuv
+  //     src/unix/fsevents.c). A write that lands before the new stream exists is
+  //     never reported — no wait, however long, sees it. inotify (Linux) and
+  //     ReadDirectoryChangesW (Windows) are armed synchronously, hence mac-only.
+  //  2. Every event passes chokidar's awaitWriteFinish (500ms stable + 100ms
+  //     polls on stat), so the delay to emit is load-dependent, and 1200ms was a
+  //     guess. When the 'add' of a.ts had not finished stabilising before the
+  //     second write, chokidar folded that write into the pending add
+  //     (`_pendingWrites` → lastChange) and no 'edit' ever came: `['add']`.
+  // So each case first proves the watch is delivering (untilLive), then waits
+  // for the event it is about (seen). Neither changes what is asserted.
+  const PROBE = /(^|\/)watch-probe-\d+\.txt$/;
+  const record = (evt: ExternalChangeEvent) =>
+    (PROBE.test(evt.artifactId ?? '') ? probes : events).push(evt);
+  let probeSeq = 0;
+  // Rewrite spacing must exceed the 500ms stability window, or each rewrite
+  // restarts the pending write and it never stabilises. Deadline stays under
+  // the setup-waitfor 15s so a dead watch reports HERE, by name.
+  const PROBE_REWRITE_MS = 2500;
+  const PROBE_DEADLINE_MS = 12_500;
+
+  /** Resolve once a write in `dir` is actually reported — the watch is live. A
+   *  probe written into the macOS startup gap is lost, so it is rewritten until
+   *  one lands. Probe events go to `probes`, never to `events`. */
+  async function untilLive(dir: string): Promise<void> {
+    const name = `watch-probe-${probeSeq++}.txt`;
+    const file = path.join(dir, name);
+    const landed = () => probes.some((e) => (e.artifactId ?? '').split('/').pop() === name);
+    const deadline = Date.now() + PROBE_DEADLINE_MS;
+    for (let attempt = 0; Date.now() < deadline; attempt++) {
+      await fs.promises.writeFile(file, `probe attempt ${attempt}`);
+      const rewriteAt = Date.now() + PROBE_REWRITE_MS;
+      while (Date.now() < rewriteAt) {
+        if (landed()) return;
+        await wait(25);
+      }
+    }
+    throw new Error(`no event from a watch on ${dir} within ${PROBE_DEADLINE_MS}ms`);
+  }
+
+  /** Wait for the recorded (non-probe) events to satisfy `check`. */
+  const seen = (check: () => void) => vi.waitFor(check);
 
   beforeEach(async () => {
     root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-watch-'));
     events = [];
-    initProjectWatchers((evt) => events.push(evt));
+    probes = [];
+    initProjectWatchers(record);
     // The shipped grace is 60s — far too long to wait for a close. Every case
     // below either re-subscribes immediately (well inside any grace) or waits
     // this out, so shortening it changes nothing the tests are asserting.
@@ -92,27 +148,29 @@ describe('project watcher lifecycle', () => {
   it('emits by:external with kind add/edit, and never agent', async () => {
     const res = await watchProject(root, 1);
     expect(res.ok).toBe(true);
+    await untilLive(root);
     await fs.promises.writeFile(path.join(root, 'a.ts'), 'one');
-    await settle();
+    // The add must be OUT before the second write, or chokidar merges the two
+    // into one pending 'add' (cause 2 above) and the edit is never emitted.
+    await seen(() => expect(events.map((e) => e.kind)).toContain('add'));
     await fs.promises.writeFile(path.join(root, 'a.ts'), 'two');
-    await settle();
-    const kinds = events.map((e) => e.kind);
-    expect(kinds).toContain('add');
-    expect(kinds).toContain('edit');
+    await seen(() => expect(events.map((e) => e.kind)).toContain('edit'));
     for (const e of events) {
       expect(e.by).toBe('external');
       expect(e.artifactId).toBe('a.ts'); // discovered id IS the relative path
     }
-  }, 15000);
+  });
 
   it('suppresses the app own-write echo', async () => {
     await watchProject(root, 1);
+    // Live first, so "no event" below means suppressed, not "not watching yet".
+    await untilLive(root);
     const p = path.join(root, 'b.md');
     noteOwnWrite(p);
     await fs.promises.writeFile(p, 'saved by the app');
     await settle();
     expect(events).toEqual([]);
-  }, 15000);
+  });
 
   it('resolves tracked files to their sidecar id', async () => {
     await fs.promises.mkdir(path.join(root, '.youcoded'), { recursive: true });
@@ -121,26 +179,26 @@ describe('project watcher lifecycle', () => {
       JSON.stringify({ artifacts: [{ id: 'art_123', kind: 'internal', path: 'tracked.md' }], manualIncludes: [] })
     );
     await watchProject(root, 1);
+    await untilLive(root);
     await fs.promises.writeFile(path.join(root, 'tracked.md'), 'external change');
-    await settle();
-    expect(events.length).toBeGreaterThan(0);
+    await seen(() => expect(events.length).toBeGreaterThan(0));
     for (const e of events) expect(e.artifactId).toBe('art_123');
-  }, 15000);
+  });
 
   it('refcounts: watcher survives one unsubscribe, dies after the last + grace', async () => {
     await watchProject(root, 1);
     await watchProject(root, 2);
     unwatchProject(root, 1);
+    await untilLive(root);
     await fs.promises.writeFile(path.join(root, 'c.txt'), 'still watched');
-    await settle();
-    expect(events.length).toBeGreaterThan(0);
+    await seen(() => expect(events.length).toBeGreaterThan(0));
     events = [];
     unwatchProject(root, 2);
     await wait(400); // grace (100ms here) then the async close
     await fs.promises.writeFile(path.join(root, 'd.txt'), 'nobody watching');
     await settle();
     expect(events).toEqual([]);
-  }, 20000);
+  });
 
   it('re-subscribing inside the grace reuses the watcher instead of rebuilding it', async () => {
     // THE tab-thrash fix: Files → Conversations → Files unsubscribes and
@@ -156,10 +214,10 @@ describe('project watcher lifecycle', () => {
     }
     expect(__watchersStartedForTest() - before).toBe(1);
     // Still a LIVE watcher, not a parked husk.
+    await untilLive(root);
     await fs.promises.writeFile(path.join(root, 'f.txt'), 'after the round trip');
-    await settle();
-    expect(events.length).toBeGreaterThan(0);
-  }, 20000);
+    await seen(() => expect(events.length).toBeGreaterThan(0));
+  });
 
   it('dropSubscriber releases every ref a dead renderer held', async () => {
     await watchProject(root, 7);
@@ -169,20 +227,22 @@ describe('project watcher lifecycle', () => {
     await fs.promises.writeFile(path.join(root, 'e.txt'), 'renderer is gone');
     await settle();
     expect(events).toEqual([]);
-  }, 15000);
+  });
 
   it('still watches a project root that is ITSELF a git repo', async () => {
     // The failure this guards is silent and total: the nested-repo rule applied
     // to the root would ignore the root, chokidar would watch nothing, and the
     // only symptom is that the file list quietly stops noticing outside edits.
     // Most real projects ARE repos, so this is the common case, not an edge one.
+    // (A root the watcher ignores never delivers the probe either, so untilLive
+    // fails by name in that case — the guard is intact.)
     await fs.promises.mkdir(path.join(root, '.git'), { recursive: true });
     await fs.promises.mkdir(path.join(root, 'src'), { recursive: true });
     await watchProject(root, 1);
+    await untilLive(path.join(root, 'src'));
     await fs.promises.writeFile(path.join(root, 'src/app.ts'), 'in my own repo');
-    await settle();
-    expect(events.map((e) => e.artifactId)).toContain('src/app.ts');
-  }, 20000);
+    await seen(() => expect(events.map((e) => e.artifactId)).toContain('src/app.ts'));
+  });
 
   it('parks at most MAX_GRACE_ENTRIES watchers, closing the oldest', async () => {
     // The bound on parked OS watch handles (inotify is capped per user), so a
@@ -196,18 +256,19 @@ describe('project watcher lifecycle', () => {
       unwatchProject(r, 1);   // straight into the grace
     }
     await wait(200);          // closes are async
-    // The two oldest are gone: a write there emits nothing.
+    // The four most recent are still parked and still live — proven first, so
+    // the silence asserted for the two oldest below is not "nothing is watching".
+    await untilLive(roots[5]);
     events = [];
+    // The two oldest are gone: a write there emits nothing.
     await fs.promises.writeFile(path.join(roots[0], 'a.txt'), 'evicted');
     await fs.promises.writeFile(path.join(roots[1], 'a.txt'), 'evicted');
     await settle();
     expect(events).toEqual([]);
-    // The four most recent are still parked and still live.
     await fs.promises.writeFile(path.join(roots[5], 'b.txt'), 'still parked');
-    await settle();
-    expect(events.length).toBeGreaterThan(0);
+    await seen(() => expect(events.length).toBeGreaterThan(0));
     for (const r of roots) await fs.promises.rm(r, { recursive: true, force: true });
-  }, 25000);
+  });
 
   it('leaving mid-walk and coming back does not abandon the walk in flight', async () => {
     // The worst version of the reported symptom: click away DURING the initial
@@ -222,10 +283,10 @@ describe('project watcher lifecycle', () => {
     const second = watchProject(root, 1);
     await Promise.all([first, second]);
     expect(__watchersStartedForTest() - before).toBe(1);
+    await untilLive(root);
     await fs.promises.writeFile(path.join(root, 'midwalk.txt'), 'still watched');
-    await settle();
-    expect(events.map((e) => e.artifactId)).toContain('midwalk.txt');
-  }, 20000);
+    await seen(() => expect(events.map((e) => e.artifactId)).toContain('midwalk.txt'));
+  });
 
   it('does not watch inside a NESTED git repo, but does watch its siblings', async () => {
     // youcoded-dev holds 43 worktrees and several clones: 9,583 directories
@@ -238,32 +299,33 @@ describe('project watcher lifecycle', () => {
     const sibling = path.join(root, 'mine');
     await fs.promises.mkdir(sibling, { recursive: true });
     await watchProject(root, 1);
+    await untilLive(sibling);
     await fs.promises.writeFile(path.join(nested, 'src/inside.ts'), 'nested repo');
     await fs.promises.writeFile(path.join(sibling, 'outside.ts'), 'my own tree');
-    await settle();
-    const ids = events.map((e) => e.artifactId);
-    expect(ids).toContain('mine/outside.ts');
-    expect(ids).not.toContain('vendored/src/inside.ts');
-  }, 20000);
+    await seen(() => expect(events.map((e) => e.artifactId)).toContain('mine/outside.ts'));
+    await settle(); // the nested write went first; give it its window to (wrongly) appear
+    expect(events.map((e) => e.artifactId)).not.toContain('vendored/src/inside.ts');
+  });
 
   // 2026-09-16 C8: an event names the windows subscribed to its root, so the
   // sink sends it to those and not to every window in the app.
   it('hands the sink the subscriber ids of the changed root only', async () => {
     const delivered: number[][] = [];
-    initProjectWatchers((evt, subscriberIds) => { events.push(evt); delivered.push(subscriberIds); });
+    initProjectWatchers((evt, subscriberIds) => { record(evt); delivered.push(subscriberIds); });
     await watchProject(root, 7);
     await watchProject(root, 9);
     const other = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-watch-other-'));
     try {
       await watchProject(other, 11);
+      await untilLive(root);
       await fs.promises.writeFile(path.join(root, 'a.txt'), 'hello');
-      await settle();
+      await seen(() => expect(events.map((e) => e.artifactId)).toContain('a.txt'));
       expect(delivered.length).toBeGreaterThan(0);
       for (const ids of delivered) expect([...ids].sort()).toEqual([7, 9]);
     } finally {
       await fs.promises.rm(other, { recursive: true, force: true });
     }
-  }, 20000);
+  });
 });
 
 // 2026-09-16 C8: own-write markers under no watcher used to stay forever.

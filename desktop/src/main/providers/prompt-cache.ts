@@ -28,6 +28,7 @@
 import type { LanguageModelMiddleware } from 'ai';
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider';
 import { currentChatGptRequest } from './chatgpt-request-diagnostics';
+import { ENV_OPEN } from '../harness/prompt-assembly';
 
 const MARKER = { type: 'ephemeral', ttl: '1h' } as const;
 
@@ -48,9 +49,19 @@ export function applyPromptCache(
     // and system prompt would be re-written as well.
     let lastSystem = -1;
     params.prompt.forEach((m, i) => { if (m.role === 'system') lastSystem = i; });
-    const prompt = params.prompt.map((m, i) => i === lastSystem
-      ? { ...m, providerOptions: { ...m.providerOptions, anthropic: { ...m.providerOptions?.anthropic, cacheControl: MARKER } } }
-      : m);
+    const mark = <M extends LanguageModelV4CallOptions['prompt'][number]>(m: M): M =>
+      ({ ...m, providerOptions: { ...m.providerOptions, anthropic: { ...m.providerOptions?.anthropic, cacheControl: MARKER } } });
+    const prompt = params.prompt.flatMap((m, i) => {
+      if (i !== lastSystem || m.role !== 'system') return [m];
+      // WHY split (2026-09-23): Anthropic reuses a cache entry only at a marked
+      // block boundary. The <env> snapshot (date, git state) sits LAST in the
+      // system prompt and changes between sessions; marking the text above it
+      // as its own block lets the next conversation in the same folder reuse the
+      // identity, preset, project instructions and doctrine. 3 markers of 4.
+      const at = m.content.lastIndexOf(`\n\n${ENV_OPEN}`);
+      if (at <= 0) return [mark(m)];
+      return [mark({ ...m, content: m.content.slice(0, at) }), mark({ ...m, content: m.content.slice(at + 2) })];
+    });
     const providerOptions = tail
       ? { ...params.providerOptions, anthropic: { ...params.providerOptions?.anthropic, cacheControl: MARKER } }
       : params.providerOptions;

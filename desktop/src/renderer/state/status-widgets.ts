@@ -1,4 +1,6 @@
 //
+import { addTurnUsage, emptyTotals, type SessionTotals, type TurnUsageLike } from './session-totals';
+
 // The one place that answers "can this session show this widget at all?".
 // Both the status bar and its Customize popup read it, so the bar can never
 // hide a chip the menu still offers, or vice versa (spec §9).
@@ -8,6 +10,18 @@
 // the /usage card. A shared module keeps one definition; a local helper would
 // have grown a second copy the first time something else needed it.
 
+/** Display-only accounting for the bar and /usage. Progress is a cumulative
+ * snapshot of this turn, not an incremental request delta. Terminal completion
+ * moves it into durable totals and clears progress; never add the completed
+ * turn again. Durable specialist totals are retained without changing them. */
+export function nativeDisplayTotals(
+  totals: SessionTotals | null | undefined,
+  inProgressUsage: TurnUsageLike | null | undefined,
+): SessionTotals | null {
+  if (!inProgressUsage) return totals ?? null;
+  return addTurnUsage(totals ?? emptyTotals(), inProgressUsage);
+}
+
 /** Every toggleable widget in WIDGET_CATEGORIES (StatusBar.tsx). Moved here so
  *  the relevance rules and the registry can reference one union. */
 export type WidgetId =
@@ -16,7 +30,9 @@ export type WidgetId =
   | 'cache-hit-rate' | 'active-ratio' | 'output-speed'
   | 'announcement'
   | 'open-tasks'
-  | 'session-tags';
+  | 'session-tags'
+  // Fixed controls the bar always draws — listed so the menu's Always On section can name them.
+  | 'model' | 'permission-mode';
 
 /** The session's runtime — NOT its provider type. Known the instant a session
  *  exists and never absent, which is why the gate below can never flicker. */

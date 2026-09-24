@@ -9,7 +9,8 @@
 // import-file-dialog.test.tsx). Swapped to RTL's own `fireEvent`, this repo's
 // existing convention; every assertion below is verbatim from the brief.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { emptyTotals } from '../src/renderer/state/session-totals';
 import type { ReactElement } from 'react';
 import { makeStoreWrapper } from './helpers/chat-store-harness';
 import StatusBar from '../src/renderer/components/StatusBar';
@@ -31,7 +32,7 @@ afterEach(cleanup);
 
 beforeEach(() => {
   // This repo's jsdom ships no localStorage — stub it the same way
-  // statusbar-session-relevance.test.tsx / remote-shim-unsupported.test.ts do.
+  // statusbar-session-relevance.test.tsx / remote-shim-refusals.test.ts do.
   (window as any).localStorage = {
     _s: {} as Record<string, string>,
     getItem(k: string) { return this._s[k] ?? null; },
@@ -102,7 +103,54 @@ function rowAround(label: HTMLElement, reason: string): HTMLElement {
   return (el?.parentElement?.parentElement ?? el)!;
 }
 
+describe('Always On section and announcement popup', () => {
+  // WHY: these four are the controls the bar always draws; the menu names them
+  // once, at the top, instead of tagging a single row "always on".
+  it('lists Model, Permissions, Tags & Note and Announcements first, with no per-row tag', async () => {
+    await openMenu('claude');
+    const headings = screen.getAllByRole('heading', { level: 3 }).map(h => h.textContent);
+    expect(headings[0]).toBe('Always On');
+    for (const label of ['Model', 'Permissions', 'Tags & Note', 'Announcements']) {
+      expect(screen.getByText(label).closest('button')!.hasAttribute('disabled')).toBe(true);
+    }
+    expect(screen.queryByText('always on')).toBeNull();
+  });
+
+  it('turns Git Branch off for a fresh install', async () => {
+    await openMenu('claude');
+    const box = screen.getByText('Git Branch').closest('button')!.querySelector('span')!;
+    expect(box.className).not.toContain('bg-accent');
+  });
+
+  it('shows the announcement even when it was hidden before, and opens the full text on click', async () => {
+    window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['usage-5h']));
+    const message = 'A long announcement that would be cut off by the chip\nwith a second line.';
+    render(<StatusBar statusData={{ ...statusData, announcement: { message } }} provider="claude" sessionId="s1" nativeTotals={null} />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /long announcement/ }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getAllByText(/second line/).length).toBeGreaterThan(0);
+  });
+});
+
 describe('Customize Status Bar menu', () => {
+  it('keeps Cost switchable when live work is unpriced, and explains free live work', () => {
+    window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['session-cost']));
+    const { wrapper, store } = makeStoreWrapper(['s1']);
+    rtlRender(<StatusBar statusData={statusData} provider="native" sessionId="s1" nativeTotals={emptyTotals()} />, { wrapper });
+    const progress = (free: boolean) => ({ inputTokens: 10, outputTokens: 1,
+      cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: null, free });
+    act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
+      usageProgress: progress(false), timestamp: 10, uuid: 'unpriced' }));
+    expect(screen.getByText('not listed')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /status bar widgets|customize/i }));
+    expect(screen.getByText('Session Cost').closest('button')?.disabled).toBe(false);
+    act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
+      usageProgress: progress(true), timestamp: 11, uuid: 'free' }));
+    expect(screen.queryByText('not listed')).toBeNull();
+    expect(screen.getByText("Models on your own machine don't cost anything to run")).toBeTruthy();
+  });
+
   it('explains the subscription rows in a native session', async () => {
     await openMenu('native');
     expect(screen.getAllByText('Claude Code sessions only').length).toBe(2);

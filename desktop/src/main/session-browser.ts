@@ -384,6 +384,51 @@ export async function readSessionTranscriptMeta(jsonlPath: string, wantTitle: bo
   }
 }
 
+// WHY (render-cost consolidation 2026-09-18): opening Projects ran the whole
+// transcript scan twice (conversation list + hero counts) and Resume/buddy ran
+// it again — each time a 64 KB tail read + parse per transcript. A transcript
+// whose size and mtime are unchanged yields the same answer, so remember it.
+// Only THIS read is cached: titles, flags, tags and the store overlay are
+// still read fresh on every scan, so nothing here needs invalidating.
+// Bounded by the number of transcripts on disk; entries for files a scan no
+// longer sees are dropped by pruneTranscriptMetaCache.
+//
+// The entry holds the PROMISE, not the answer: Projects open starts two scans
+// at the same moment (conversation list + hero counts), and with an
+// answer-cache both would find it empty and both read every transcript — the
+// exact double read this exists to remove. Sharing the in-flight promise makes
+// the second scan wait for the first one's read.
+// A failed read (all nulls — readSessionTranscriptMeta never throws) is NOT
+// kept: a transient EBUSY/sync-restore race would otherwise pin "Untitled" and
+// a wrong date on that conversation until the file next changed.
+type MetaEntry = { size: number; mtimeMs: number; wantTitle: boolean; meta: Promise<SessionTranscriptMeta> };
+const metaCache = new Map<string, MetaEntry>();
+
+export function readSessionTranscriptMetaCached(
+  jsonlPath: string, stat: { size: number; mtimeMs: number }, wantTitle: boolean,
+): Promise<SessionTranscriptMeta> {
+  const hit = metaCache.get(jsonlPath);
+  // A title-less entry cannot answer a title request; the reverse is fine.
+  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs && (hit.wantTitle || !wantTitle)) return hit.meta;
+  const entry: MetaEntry = {
+    size: stat.size, mtimeMs: stat.mtimeMs, wantTitle,
+    meta: readSessionTranscriptMeta(jsonlPath, wantTitle),
+  };
+  metaCache.set(jsonlPath, entry);
+  void entry.meta.then((m) => {
+    const failed = m.fallbackTitle === null && m.lastTimestampMs === null && m.lastModelId === null;
+    // Only drop OUR entry — a newer read may have replaced it meanwhile.
+    if (failed && metaCache.get(jsonlPath) === entry) metaCache.delete(jsonlPath);
+  });
+  return entry.meta;
+}
+
+function pruneTranscriptMetaCache(seen: Set<string>) {
+  for (const k of metaCache.keys()) if (!seen.has(k)) metaCache.delete(k);
+}
+
+export function __clearTranscriptMetaCacheForTests() { metaCache.clear(); }
+
 /**
  * Scans all project directories for JSONL transcript files.
  * Returns sessions sorted by last modified (most recent first).
@@ -430,6 +475,11 @@ export async function listPastSessions(
   const indexMeta = await readIndexMeta();
 
   const allSessions: PastSession[] = [];
+  // WHY: readSessionTranscriptMetaCached's cache is keyed on absolute path and
+  // never invalidated on its own (Task 3) — a scan must tell it which paths it
+  // saw this pass so pruneTranscriptMetaCache can drop entries for transcripts
+  // that no longer exist, instead of growing forever.
+  const seenPaths = new Set<string>();
 
   for (const slug of slugs) {
     const slugDir = path.join(projectsDir, slug);
@@ -462,7 +512,12 @@ export async function listPastSessions(
         // (sync restores clobber mtimes), and the first user message names
         // sessions the title pipeline missed. readSessionTranscriptMeta returns
         // nulls on any failure, so this can only improve on the defaults.
-        const meta = await readSessionTranscriptMeta(path.join(slugDir, file), topicName === 'Untitled');
+        // Cached (Task 3): Project View opens two scans at once and
+        // Resume/buddy scan again — an unchanged transcript's answer is shared
+        // instead of re-read every time.
+        const full = path.join(slugDir, file);
+        seenPaths.add(full);
+        const meta = await readSessionTranscriptMetaCached(full, stat, topicName === 'Untitled');
         const name = topicName !== 'Untitled'
           ? topicName
           : (meta.fallbackTitle ?? 'Untitled');
@@ -505,6 +560,11 @@ export async function listPastSessions(
     const results = await Promise.all(sessionPromises);
     allSessions.push(...results.filter((s): s is PastSession => s !== null));
   }
+
+  // Only prune against a real production scan of PROJECTS_DIR — a test scan of
+  // a temp tree (subagent-exclusion.test.ts, this file's own cache tests) must
+  // never wipe cache entries a concurrent production scan is relying on.
+  if (projectsDir === PROJECTS_DIR) pruneTranscriptMetaCache(seenPaths);
 
   // Deduplicate: aggregation symlinks/copies place project-specific .jsonl
   // files into the home slug for unified browsing. When the same sessionId

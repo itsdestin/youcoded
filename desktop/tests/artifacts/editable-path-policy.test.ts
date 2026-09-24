@@ -9,6 +9,7 @@ import {
   protectedReadPath,
   looksBinary,
   isDotenvBasename,
+  privateForRecordTrust,
 } from '../../src/shared/artifacts/editable-path-policy';
 import fixtures from '../../../shared-fixtures/artifacts/editable-path-policy-cases.json';
 
@@ -23,6 +24,17 @@ describe('editTier / protectedReadPath (shared fixture)', () => {
   it('fixture covers every tier', () => {
     const tiers = new Set(fixtures.cases.map((c) => c.tier));
     expect(tiers).toEqual(new Set(['free', 'needs-confirm', 'denied']));
+  });
+});
+
+describe('privateForRecordTrust (shared fixture)', () => {
+  for (const c of fixtures.recordPrivate) {
+    it(`${c.path} → ${c.private ? 'refused' : 'allowed'} as a recorded path`, () => {
+      expect(privateForRecordTrust(c.path)).toBe(c.private);
+    });
+  }
+  it('refuses everything editTier does not rate free', () => {
+    for (const c of fixtures.cases) if (c.tier !== 'free') expect(privateForRecordTrust(c.path)).toBe(true);
   });
 });
 

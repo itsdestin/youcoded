@@ -101,7 +101,7 @@ function AuthScreen({
   // run on from day one, so a ChatGPT-only user is not sent to "Skip setup".
   onChatGpt: () => void;
   // OpenRouter's own sign-in (PKCE against openrouter.ai/auth — spec
-  // 2026-08-31-openrouter-connection-trust-design.md, not yet built). Review
+  // 2026-08-31-openrouter-connection-trust-design.md §3.5). Review
   // 2026-09-05 P-5: it belongs on this screen beside the other two plans.
   onOpenRouter: () => void;
   // F-1/F-2: any key the app supports, run on YouCoded's own assistant.
@@ -442,9 +442,9 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
 
           {/* Error display. The message is always shown; the Try Again button
               only when a PREREQUISITE actually failed. WHY: "Try Again" here
-              re-runs the whole Node/Git/Claude install pass, and one click on
-              "Log in with OpenRouter" sets an error message ("coming in a later
-              update") without anything having failed — offering to reinstall
+              re-runs the whole Node/Git/Claude install pass, and a refused
+              OpenRouter key or sign-in sets an error message without any
+              prerequisite having failed — offering to reinstall
               the app's plumbing in answer to that is both confusing and slow.
               The sign-in failures (ChatGPT timed out, Claude login timed out)
               DO mark the 'auth' prerequisite failed, so they keep their

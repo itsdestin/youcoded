@@ -83,6 +83,25 @@ describe('loadFixture', () => {
     }
   });
 
+  it('keeps an awaiting-approval card with expired:true on a permission_expired line', () => {
+    const raw = [
+      '{"type":"tool_use","id":"toolu_01BashExpired","name":"Bash","input":{"command":"rm -rf node_modules && npm ci"}}',
+      '{"type":"permission_request","tool_use_id":"toolu_01BashExpired","requestId":"wb-expired-1","denyListed":false}',
+      '{"type":"permission_expired","tool_use_id":"toolu_01BashExpired","requestId":"wb-expired-1","reason":"hook-closed"}',
+    ].join('\n');
+    const result = loadFixture('bash-awaiting-approval-expired', raw);
+    // The expiry swaps the permission_request's block in place — never a second block.
+    expect(result.blocks).toHaveLength(1);
+    expect(result.blocks[0].kind).toBe('tool');
+    if (result.blocks[0].kind === 'tool') {
+      expect(result.blocks[0].tool).toMatchObject({
+        toolUseId: 'toolu_01BashExpired', toolName: 'Bash',
+        status: 'awaiting-approval', expired: true, requestId: undefined,
+      });
+    }
+    expect(result.error).toBeUndefined();
+  });
+
   it('returns an error field when the fixture is malformed', () => {
     const result = loadFixture('broken', 'not valid json\n');
 

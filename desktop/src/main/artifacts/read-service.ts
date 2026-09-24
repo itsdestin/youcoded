@@ -26,13 +26,39 @@ import { discoveredFileRecord } from './project-file-discovery';
 import { listProjects } from './central-index';
 import { countArtifacts, projectAllFiles, isGatedRoot } from './projects-index';
 import { evaluateBinaryRead } from './read-binary-access';
-import { authorizeArtifactRead, isAbsoluteRecorded } from './write-authorization';
+import { authorizeArtifactRead, isAbsoluteRecorded, judgeRelativeRecord } from './write-authorization';
 import { trackedArtifacts } from './visible-artifacts';
 import { invalidateSidecarIdCache } from './project-watcher';
 import { searchProjectContent } from './content-search';
+import { listFolderPage } from './folder-listing';
+import type { FolderPage, FolderSort } from '../../shared/artifacts/folder-page';
 import { readFolders } from '../saved-folders';
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+
+/** The user's saved project folders — where a `../` record may be trusted. */
+function savedProjectRoots(): string[] {
+  return readFolders().map((f) => f.path);
+}
+
+/**
+ * Where a record with a RELATIVE location (a file written through `../`) really
+ * is, judged by judgeRelativeRecord against the saved project folders — or
+ * null for every other record. One helper so artifacts:get and artifacts:save
+ * cannot judge the same record differently (review 2026-09-23, F3). A refusal
+ * never carries the location (F5).
+ */
+export async function judgeRecordLocation(projectRoot: string, artifact: ArtifactRecord): Promise<
+  | { ok: true; realPath: string }
+  | { ok: false; error: 'missing' | 'protected-path' | 'outside-projects' | 'not-in-home-project' }
+  | { ok: false; error: 'record-unreadable'; code: string }
+  | null
+> {
+  if (artifact.kind === 'internal' || !artifact.absolutePath || isAbsoluteRecorded(artifact.absolutePath)) return null;
+  const v = await judgeRelativeRecord(projectRoot, artifact.absolutePath, savedProjectRoots());
+  if (v.ok) return v;
+  return v.reason === 'unreadable' ? { ok: false, error: 'record-unreadable', code: v.code } : { ok: false, error: v.reason };
+}
 
 /** The phone's ceiling for one read; absent on the desktop's own transport. */
 export interface ReadCeiling {
@@ -68,13 +94,17 @@ async function repairSidecar(projectRoot: string): Promise<void> {
   if (migration.migrated) invalidateSidecarIdCache(projectRoot);
 }
 
-/** Tracked files a session touched — the Session Drawer's list. */
-export async function listSessionFiles(sessionId: string, projectRoot: string) {
+/** Tracked files a session touched — the Session Drawer's list.
+ *  `conversationId` (a Claude Code session's own id, resolved by the caller)
+ *  also matches versions an EARLIER desktop session of the same conversation
+ *  wrote — a resume runs under a new desktop id. */
+export async function listSessionFiles(sessionId: string, projectRoot: string, conversationId?: string) {
   await repairSidecar(projectRoot);
   const sidecar = await readSidecarShared(projectRoot);
   if (!sidecar || 'corrupted' in sidecar) return { ok: true, artifacts: [] };
   const result = sidecar.artifacts.filter((a) =>
-    a.versions.some((v) => v.sessionId === sessionId)
+    a.versions.some((v) => v.sessionId === sessionId
+      || (!!conversationId && v.conversationId === conversationId))
   );
   return { ok: true, artifacts: result };
 }
@@ -111,7 +141,10 @@ export async function listProjectFiles(projectId: string, opts?: { withCount?: b
  * (stops at nested git repos), cached. NOT pure discovery — projectAllFiles()
  * UNIONS in any tracked INTERNAL artifact that exists on disk but discovery
  * did not reach. Gated roots (home dir / drive root) return { gated: true }
- * with no scan unless opts.force — the tab renders a "Browse anyway?" gate.
+ * with no scan unless opts.force. Since 2026-09-18 the Files tab browses with
+ * artifacts:list-folder and calls this only for search and the type filter,
+ * always with force (the "Browse anyway" screen is gone); the project hero's
+ * count still calls it without force, so a home folder shows no count there.
  */
 export async function listAllFiles(projectId: string, opts?: { force?: boolean }) {
   const projects = await listProjects(CLAUDE_DIR);
@@ -120,11 +153,32 @@ export async function listAllFiles(projectId: string, opts?: { force?: boolean }
   if (isGatedRoot(projectRoot) && !opts?.force) {
     return { ok: true, files: [], truncated: false, gated: true };
   }
-  // The repair runs AFTER the gated-root check so a gated root's sidecar is
-  // never read and rewritten on a listing the user never confirmed.
+  // The repair runs AFTER the gated-root check, so the hero count's unforced
+  // call never reads or rewrites a home folder's sidecar. A search there
+  // (forced) does repair it — as opening that folder's Session Drawer
+  // already did, unconditionally (code review 2026-09-18, F8).
   await repairSidecar(projectRoot);
   const r = await projectAllFiles(projectRoot);
   return { ok: true, files: r.files, truncated: r.truncated };
+}
+
+/**
+ * One folder of a project, from disk, one page at a time
+ * (artifacts:list-folder). The project is named the way listAllFiles names it
+ * (an index id, or the saved folder's path), so both transports resolve it
+ * identically. No gated-root check: listing one folder costs one readdir
+ * however large the tree around it, so a home folder or a whole drive browses
+ * like any other project (spec 2026-09-18, Stage 1).
+ */
+export async function listFolder(
+  projectId: unknown,
+  relDir: unknown,
+  opts?: { sort?: FolderSort; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean },
+): Promise<FolderPage> {
+  if (typeof projectId !== 'string' || projectId.length === 0) return { ok: false, error: 'bad-request' };
+  const projects = await listProjects(CLAUDE_DIR);
+  const p = projects.find((x) => x.id === projectId);
+  return listFolderPage(p ? p.path : projectId, relDir, opts);
 }
 
 type ResolvePathError =
@@ -254,7 +308,24 @@ export async function readArtifactText(
     : undefined;
 
   let fullPath: string;
-  if (artifact) {
+  let trusted: { resolvedPath?: string } = {};
+  if (artifact && artifact.kind !== 'internal' && artifact.absolutePath && !isAbsoluteRecorded(artifact.absolutePath)) {
+    // A file the agent wrote through `../` whose record was not repaired (yet).
+    // WHY judged here and not refused outright: it used to come back as
+    // "no longer on disk" while the file sat right there. It opens only where
+    // the repair would trust it (write-authorization.ts judgeRelativeRecord —
+    // live, so a folder saved as a project a minute ago counts); otherwise
+    // the answer names the real reason, never "missing" unless it is.
+    // F5 (review 2026-09-23): a refusal never carries where the file is —
+    // this answer also reaches remote browsers.
+    const verdict = (await judgeRecordLocation(projectRoot, artifact))!;
+    if (!verdict.ok) return verdict.error === 'missing' ? { ok: true, artifact, content: null, orphan: true } : verdict;
+    fullPath = verdict.realPath;
+    // F3: the byte viewers (images, PDFs, Office files) read by absolute path;
+    // a trusted `../` record hands them the judged location, since the record
+    // itself still holds a relative one until the repair rewrites it.
+    trusted = { resolvedPath: canonicalize(verdict.realPath, null) };
+  } else if (artifact) {
     fullPath = artifact.kind === 'internal'
       ? path.join(projectRoot, artifact.path)
       : artifact.absolutePath!;
@@ -274,7 +345,7 @@ export async function readArtifactText(
   // path (write-authorization.ts owns the logic + its tests).
   const readAuth = await authorizeArtifactRead(projectRoot, fullPath, !artifact || artifact.kind === 'internal');
   if (!readAuth.ok) {
-    if ('orphan' in readAuth) return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
+    if ('orphan' in readAuth) return { ok: true, ...trusted, artifact: artifact ?? null, content: null, orphan: true };
     return { ok: false, error: readAuth.error };
   }
   const realPath = readAuth.realPath;
@@ -286,9 +357,11 @@ export async function readArtifactText(
     st = await fs.promises.stat(realPath);
   } catch (e: any) {
     if (e.code !== 'ENOENT') throw e;
-    return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
+    return { ok: true, ...trusted, artifact: artifact ?? null, content: null, orphan: true };
   }
-  if (opts?.maxBytes !== undefined && st.size > opts.maxBytes) return tooLarge(st.size, opts.maxBytes);
+  // C5: a phone offered Download for a too-large trusted `../` file needs its
+  // judged location — the record still holds a relative one.
+  if (opts?.maxBytes !== undefined && st.size > opts.maxBytes) return { ...tooLarge(st.size, opts.maxBytes), ...trusted };
 
   // Over the cap we do not refuse blind. Sniff the head first: an over-cap
   // IMAGE used to get the TEXT editor's error message. Text comes back as a
@@ -314,7 +387,7 @@ export async function readArtifactText(
       const win = await readFully(EDIT_MAX_BYTES);
       const d = decideOverCapRead(head, win);
       return {
-        ok: true, artifact: artifact ?? null, orphan: false,
+        ok: true, ...trusted, artifact: artifact ?? null, orphan: false,
         content: d.content, binary: d.binary, truncated: d.truncated,
         sizeBytes: st.size, mtimeMs: st.mtimeMs,
       };
@@ -334,14 +407,14 @@ export async function readArtifactText(
     if (!binary) content = buf.toString('utf8');
   } catch (e: any) {
     if (e.code !== 'ENOENT') throw e;
-    return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
+    return { ok: true, ...trusted, artifact: artifact ?? null, content: null, orphan: true };
   }
   // mtimeMs is the optimistic-concurrency token: round-trip it into
   // artifacts:save as baseMtimeMs and the save is rejected when the file
   // changed underneath. sizeBytes and truncated ride EVERY response: the
   // renderer derives editability from the size, and a `full` read must clear
   // the partial bar.
-  return { ok: true, artifact: artifact ?? null, content, orphan: false, binary,
+  return { ok: true, ...trusted, artifact: artifact ?? null, content, orphan: false, binary,
            truncated: false, sizeBytes: st.size, mtimeMs: st.mtimeMs };
 }
 
@@ -508,7 +581,13 @@ export async function checkArtifactExistence(projectRoot: string, artifactIds: s
         ? path.join(projectRoot, a.path)
         : a.absolutePath;
       if (!fullPath) return id;
-      if (a.kind !== 'internal' && !isAbsoluteRecorded(fullPath)) return id;
+      if (a.kind !== 'internal' && !isAbsoluteRecorded(fullPath)) {
+        // A `../` record: resolved against the project (never the process
+        // cwd). WHY: marking it missing drew an existing file as deleted; now
+        // only a file genuinely absent is, and opening a refused one says why.
+        const verdict = await judgeRelativeRecord(projectRoot, fullPath, savedProjectRoots());
+        return !verdict.ok && verdict.reason === 'missing' ? id : null;
+      }
       try {
         await fs.promises.access(fullPath);
         return null;

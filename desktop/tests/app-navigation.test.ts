@@ -6,7 +6,7 @@ const INDEX = '/opt/YouCoded/resources/app.asar/dist/renderer/index.html';
 const DEV = 'http://localhost:5223';
 const own = pathToFileURL(INDEX).href;
 
-describe('isAppPageUrl — where a window may navigate (2026-09-10)', () => {
+describe('isAppPageUrl — where a window may navigate', () => {
   it("allows the app's own page, with a query or a hash", () => {
     expect(isAppPageUrl(own, INDEX, DEV)).toBe(true);
     expect(isAppPageUrl(`${own}?mode=buddy`, INDEX, DEV)).toBe(true);

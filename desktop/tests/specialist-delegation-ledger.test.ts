@@ -291,7 +291,7 @@ describe('DelegationLedger', () => {
   // retrying means showing the same report twice. injectionAttempted, set by
   // markInjectionAttempted() strictly BEFORE runNotice() is ever called, is
   // what tells them apart on disk.
-  describe('injectionAttempted (fix pass 5)', () => {
+  describe('injectionAttempted', () => {
     it('markInjectionAttempted durably stamps the marker', async () => {
       await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'completed', startedAt: 100 }));
       await ledger.markInjectionAttempted(CWD, 'p1', 'c1');
@@ -338,7 +338,7 @@ describe('DelegationLedger', () => {
   // ledger-single-mutatejson-call (Plan B, 2026-09-16 — it replaced a
   // source-text guard here) enforces the mechanism (one mutateJson call site)
   // that makes it true by construction rather than by convention.
-  describe('change listener (plan 1c)', () => {
+  describe('change listener', () => {
     it('recordStart fires with the new record', async () => {
       const onChange = vi.fn();
       const l = new DelegationLedger(home, onChange);

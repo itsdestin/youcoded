@@ -17,9 +17,11 @@ const STATE_FILE = path.join(os.homedir(), ".claude", "youcoded-analytics.json")
 
 describe("analytics-service.runAnalyticsOnLaunch", () => {
   const origFetch = globalThis.fetch;
+  const origSmokeTest = process.env.YOUCODED_SMOKE_TEST;
 
   beforeEach(() => {
     machineIdImpl = () => "test-machine-id-stable";
+    delete process.env.YOUCODED_SMOKE_TEST;
     try { fs.unlinkSync(STATE_FILE); } catch {}
     globalThis.fetch = vi.fn(async () =>
       new Response(JSON.stringify({ ok: true }), { status: 200 })
@@ -28,6 +30,8 @@ describe("analytics-service.runAnalyticsOnLaunch", () => {
 
   afterEach(() => {
     globalThis.fetch = origFetch;
+    if (origSmokeTest === undefined) delete process.env.YOUCODED_SMOKE_TEST;
+    else process.env.YOUCODED_SMOKE_TEST = origSmokeTest;
     try { fs.unlinkSync(STATE_FILE); } catch {}
   });
 
@@ -35,6 +39,17 @@ describe("analytics-service.runAnalyticsOnLaunch", () => {
     vi.resetModules();
     return (await import("./analytics-service")) as typeof import("./analytics-service");
   }
+
+  it("smoke-test launch sends nothing and creates no analytics state", async () => {
+    process.env.YOUCODED_SMOKE_TEST = "1";
+    machineIdImpl = () => { throw new Error("smoke tests must not calculate an identity"); };
+
+    const svc = await importFresh();
+    await svc.runAnalyticsOnLaunch();
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(fs.existsSync(STATE_FILE)).toBe(false);
+  });
 
   it("first launch: posts ONE heartbeat with deviceIdHash, saves lastPingedDate", async () => {
     const svc = await importFresh();

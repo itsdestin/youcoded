@@ -29,6 +29,7 @@ import { GrepTool, resolveRgPath } from '../src/main/harness/tools/grep';
 import { TodoWriteTool } from '../src/main/harness/tools/todo-write';
 import { shellCwdMissHint, workspaceRootMissHint } from '../src/main/harness/tools/guards';
 import type { ToolContext } from '../src/main/harness/tools/types';
+import { defineTool, SEARCH_TIMEOUT_MS } from '../src/main/harness/tools/registry';
 
 // Each test gets a fresh tmp sandbox + fresh ToolContext (readRegistry/todos maps),
 // so read-before-edit state never leaks between cases.
@@ -220,7 +221,7 @@ describe('Read', () => {
   });
 });
 
-describe('Read: image delivery (2026-08-11 spec)', () => {
+describe('Read: image delivery', () => {
   it('returns the image path in payload.images for a vision model', async () => {
     const p = path.join(dir, 'shot.png');
     fs.writeFileSync(p, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -516,7 +517,7 @@ describe('Write', () => {
 // invisible: nothing tells a model which paths are registered or with what
 // stamp. These pin the in-band signals that make it predictable. They assert on
 // message CONTENT deliberately — the content IS the fix here, not incidental.
-describe('the read gate explains itself (2026-08-11 review round 8)', () => {
+describe('the read gate explains itself', () => {
   it('the refusal names both tools that satisfy the gate, and says a shell view does not', async () => {
     fs.writeFileSync(path.join(dir, 'ungated.txt'), 'hello\n');
     const r = await EditTool.execute({ file_path: 'ungated.txt', old_string: 'hello', new_string: 'bye' }, ctx);
@@ -1036,7 +1037,7 @@ describe('Bash', () => {
   // else combined"). New contract: ~4,000-char head+tail sandwich, line-aware
   // cut, full output always spilled to disk on overflow, path named in the
   // notice. See docs/active/investigations/2026-08-10-harness-output-truncation-prior-art.md.
-  describe('output cap tightening (2026-08-10 review)', () => {
+  describe('output cap tightening', () => {
     const seqCmd = `node -e "for(let i=1;i<=20000;i++)console.log(i)"`;
     const visibleBody = (text: string) => text.split('\n[cwd:')[0];
 
@@ -1177,7 +1178,7 @@ describe('Bash', () => {
     }, 30_000);
   });
 
-  describe('timeout representation (2026-08-10 review)', () => {
+  describe('timeout representation', () => {
     it('reports a sentinel exit code (124), a typed timedOut flag, and SIGKILL-aware prose', async () => {
       const r: any = await BashTool.execute({ command: 'sleep 5', timeout: 500 }, ctx);
       expect(r.isError).toBe(true);
@@ -1900,6 +1901,44 @@ describe('shellCwdMissHint / workspaceRootMissHint (path-resolution asymmetry hi
   });
 });
 
+describe('Luna experiment file path restriction', () => {
+  it('fails closed on outside targets across model-visible file tools', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-outside-'));
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'secret');
+    const link = path.join(dir, 'outside-link');
+    fs.symlinkSync(outside, link, 'dir');
+    vi.stubEnv('YOUCODED_LUNA_EXPERIMENT', '1');
+    vi.stubEnv('LUNA_FIXTURE_ROOT', dir);
+    try {
+      const results = await Promise.all([
+        ReadTool.execute({ file_path: path.join(link, 'secret.txt') }, ctx),
+        WriteTool.execute({ file_path: path.join(outside, 'new.txt'), content: 'bad' }, ctx),
+        EditTool.execute({ file_path: path.join(link, 'secret.txt'), old_string: 'secret', new_string: 'bad' }, ctx),
+        GlobTool.execute({ pattern: '*', path: link }, ctx),
+        GrepTool.execute({ pattern: 'secret', path: path.join(link, 'secret.txt') }, ctx),
+      ]);
+      expect(results.every((result) => result.isError)).toBe(true);
+      expect(fs.existsSync(path.join(outside, 'new.txt'))).toBe(false);
+      expect(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8')).toBe('secret');
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('allows a new file under the fixture when the experiment is enabled', async () => {
+    vi.stubEnv('YOUCODED_LUNA_EXPERIMENT', '1');
+    vi.stubEnv('LUNA_FIXTURE_ROOT', dir);
+    try {
+      const r = await WriteTool.execute({ file_path: 'new/sub/file.txt', content: 'ok' }, ctx);
+      expect(r.isError).toBeFalsy();
+      expect(fs.readFileSync(path.join(dir, 'new/sub/file.txt'), 'utf8')).toBe('ok');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe('TodoWrite', () => {
   it('replaces the list in ctx', async () => {
     ctx.todos.push({ content: 'stale', status: 'pending', activeForm: 'Staling' });
@@ -1915,5 +1954,77 @@ describe('TodoWrite', () => {
     expect(ctx.todos.length).toBe(2);
     expect(ctx.todos[0].content).toBe('One');
     expect(r.text).toContain('2 items, 1 completed');
+  });
+});
+
+// The 2026-08-26 incident: one Grep from a home-folder conversation sat 4 hours
+// in a network-mounted Google Drive until Stop killed it. A search now has a
+// deadline that ends the SEARCH with an error the model can act on — never the
+// turn (the turn's own signal must stay un-aborted).
+describe('search deadline (Grep and Glob)', () => {
+  it('Grep and Glob both declare the shared search deadline', () => {
+    expect((GrepTool as any).caps?.timeoutMs).toBe(SEARCH_TIMEOUT_MS);
+    expect((GlobTool as any).caps?.timeoutMs).toBe(SEARCH_TIMEOUT_MS);
+  });
+
+  it('a tool that never finishes ends with a timed-out error, and the turn signal is not aborted', async () => {
+    let toolSignal: AbortSignal | undefined;
+    const stuck = defineTool<Record<string, never>>({
+      name: 'Stuck',
+      description: 'never resolves',
+      inputSchema: undefined as any,
+      caps: { maxChars: 1000, timeoutMs: 20 },
+      permissionSubject: () => undefined,
+      execute(_a, c) {
+        toolSignal = c.signal;
+        return new Promise(() => {});
+      },
+    });
+    const turn = new AbortController();
+    const r = await stuck.execute({}, makeCtx(dir, turn.signal));
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/Stuck timed out after/);
+    expect(toolSignal?.aborted).toBe(true); // the tool's own kill wiring fires
+    expect(turn.signal.aborted).toBe(false); // the conversation keeps going
+  });
+
+  it('a tool with no declared deadline is never given one, even by the test override', async () => {
+    const plain = defineTool<Record<string, never>>({
+      name: 'Plain',
+      description: 'resolves late',
+      inputSchema: undefined as any,
+      permissionSubject: () => undefined,
+      execute: () => new Promise((res) => setTimeout(() => res({ text: 'late' }), 30)),
+    });
+    const r = await plain.execute({}, { ...makeCtx(dir), toolTimeoutMs: 1 });
+    expect(r.text).toBe('late');
+  });
+
+  it('a user interrupt still reaches a tool that has a deadline', async () => {
+    const waits = defineTool<Record<string, never>>({
+      name: 'Waits',
+      description: 'ends on abort',
+      inputSchema: undefined as any,
+      caps: { maxChars: 1000, timeoutMs: 60_000 },
+      permissionSubject: () => undefined,
+      execute: (_a, c) => new Promise((res) => {
+        c.signal.addEventListener('abort', () => res({ text: 'stopped', isError: true }), { once: true });
+      }),
+    });
+    const turn = new AbortController();
+    const pending = waits.execute({}, makeCtx(dir, turn.signal));
+    turn.abort();
+    expect((await pending).text).toBe('stopped');
+  });
+
+  // POSIX-only: a FIFO nobody writes to makes ripgrep block on its read
+  // forever — a deterministic stand-in for a hung network mount.
+  it.skipIf(process.platform === 'win32')('a real Grep stuck on an unreadable file is stopped at the deadline', async () => {
+    childProcess.execFileSync('mkfifo', [path.join(dir, 'stuck-pipe')]);
+    const turn = new AbortController();
+    const r = await GrepTool.execute({ pattern: 'x', path: 'stuck-pipe' }, { ...makeCtx(dir, turn.signal), toolTimeoutMs: 200 });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/Grep timed out after/);
+    expect(turn.signal.aborted).toBe(false);
   });
 });

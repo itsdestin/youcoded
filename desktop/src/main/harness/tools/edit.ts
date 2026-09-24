@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import { z } from 'zod';
 import { structuredPatch } from 'diff';
 import { defineTool } from './registry';
-import { canonicalize, resolveP } from './guards';
+import { canonicalize, resolveP, lunaPathRefused } from './guards';
 import { fingerprintOf } from './file-fingerprint';
 import { withPathLock } from './path-lock';
 import type { ToolContext, ToolResultPayload } from './types';
@@ -83,6 +83,7 @@ export const EditTool = defineTool({
   inputSchema: EDIT_INPUT,
   permissionSubject: (a) => a.file_path,
   async execute(args, ctx) {
+    if (lunaPathRefused(resolveP(args.file_path, ctx.cwd))) return { text: 'Edit rejected: path is outside the Luna experiment fixture.', isError: true };
     // Serialised per file (2026-09-16 C4): the read-check-write below is async
     // now, so two parallel Edits of ONE file must queue — see path-lock.ts.
     return withPathLock(canonicalize(args.file_path, ctx.cwd), () => editLocked(args, ctx));

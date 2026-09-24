@@ -83,7 +83,7 @@ describe('makeOpenRouterFactory', () => {
 // inheriting that undefined-maximum behavior. Real HarnessSession.opts.harness
 // (ai/test's MockLanguageModelV4 records every doStream call's options in
 // doStreamCalls, which is how this proves the SENT value, not an inferred one).
-describe('runCase output ceiling (2026-08-10 incident)', () => {
+describe('runCase output ceiling', () => {
   it('caps maxOutputTokens instead of leaving it unset (which lets OpenRouter reserve the model max)', async () => {
     const model = scriptModel([{ text: 'Final review.' }]);
     const run = await runCase({
@@ -778,7 +778,7 @@ describe('wrap-up turn', () => {
     expect(bashResults.every((e) => e.data.isError)).toBe(true);
   }, HEAVY_RUN_TIMEOUT_MS);
 
-  it('denies a genuine AskUserQuestion during wrap-up, so WRAP_UP_PROMPT\'s "every tool call will be denied" claim is true (Fix pass 2, Finding 2)', async () => {
+  it('denies a genuine AskUserQuestion during wrap-up, so WRAP_UP_PROMPT\'s "every tool call will be denied" claim is true', async () => {
     // AskUserQuestion is declared `interactive: true` (ask-user-question.ts)
     // and harness-session.ts routes interactive tools AROUND decide()
     // entirely, straight to askUser. Before this fix, run-case's askUser
@@ -878,7 +878,7 @@ describe('wrap-up turn', () => {
     expect(run.review).toBe('My review is done.');
   }, HEAVY_RUN_TIMEOUT_MS);
 
-  it('strips wrap-up narration that precedes a denied tool attempt, instead of concatenating it onto the review (Fix pass 2, Finding 1)', async () => {
+  it('strips wrap-up narration that precedes a denied tool attempt, instead of concatenating it onto the review', async () => {
     // The pass-1 fix (dropping the anchor entirely inside the wrap-up window)
     // fixed "answer, then try one more tool" but broke the more common
     // multi-step shape: narrate -> attempt a tool -> get denied (a tool-result
@@ -981,7 +981,7 @@ describe('wrap-up turn', () => {
   }, HEAVY_RUN_TIMEOUT_MS);
 });
 
-describe('what the model actually receives (2026-08-11 amnesia bug)', () => {
+describe('what the model actually receives', () => {
   // BATTERY_MAX_OUTPUT_TOKENS was 32_000 against fitToContext's 32_768 default
   // window, leaving 32768 - 32000 - 1024 = -256 tokens for history. Every
   // request collapsed to a single message; mid-turn the model saw only the

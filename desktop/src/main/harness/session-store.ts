@@ -15,6 +15,7 @@ import type { ModelBinding } from '../../shared/provider-types';
 // native paths.
 import { nativeStoreSlug } from '../slug-encoding';
 import { NativeHome } from '../native-home';
+import { shortenPathTokens } from '../conversations/naming-core';
 
 export interface NativeSessionHeader {
   v: 1;
@@ -55,6 +56,26 @@ export interface PersistedEventReference {
   partId?: string;
   start: number;
   end: number;
+}
+
+/** Verify that every UUID/offset survived coalescing in the persisted anchor.
+ * Missing metadata is an older transcript, NOT evidence for a later delta. */
+export function validatedDeltaReferences(event: TranscriptEvent): Array<{ eventUuid: string; start: number; end: number }> | null {
+  const candidates: unknown = event.data?.deltaReferences;
+  if (!Array.isArray(candidates) || !candidates.length || !event.uuid ||
+      !COALESCED_TYPES.has(event.type) || event.data?.partId == null) return null;
+  const length = String(event.data?.text ?? '').length;
+  const seen = new Set<string>();
+  let end = 0;
+  for (const item of candidates) {
+    if (!item || typeof item.eventUuid !== 'string' || !item.eventUuid || seen.has(item.eventUuid) ||
+        !Number.isSafeInteger(item.start) || !Number.isSafeInteger(item.end) ||
+        item.start !== end || item.end < item.start || item.end > length) return null;
+    if (seen.size === 0 && item.eventUuid !== event.uuid) return null;
+    seen.add(item.eventUuid);
+    end = item.end;
+  }
+  return end === length ? candidates : null;
 }
 
 /** map() with at most `limit` promises in flight; results in input order. */
@@ -113,7 +134,8 @@ export class SessionStore {
    * rebuild fallback — resolve to nothing, and every later publication would
    * fail with `unknown-reference`. Rebuilding them from the persisted lines is
    * exact: a line on disk IS the anchor, and a coalesced part's persisted text
-   * is by definition the whole part (one reference tiling [0, length)).
+   * now carries validated delta witnesses; legacy lines lacking them retain
+   * only the anchor's whole-part reference.
    * Never overwrites a live reference — this process's own appends win.
    * Takes the already-read events so a resume reads the JSONL exactly once.
    */
@@ -123,6 +145,17 @@ export class SessionStore {
       if (!event.uuid || refs.has(event.uuid)) continue;
       const partId = event.data?.partId;
       const coalesced = COALESCED_TYPES.has(event.type) && partId != null;
+      if (coalesced) {
+        const deltas = validatedDeltaReferences(event);
+        if (deltas) {
+          for (const delta of deltas) if (!refs.has(delta.eventUuid)) refs.set(delta.eventUuid, {
+            ...delta, anchorUuid: event.uuid, type: event.type, partId: String(partId),
+          });
+          continue;
+        }
+        // Corrupt witness metadata is not the same as a pre-witness transcript.
+        if (event.data?.deltaReferences !== undefined) continue;
+      }
       refs.set(event.uuid, {
         eventUuid: event.uuid, anchorUuid: event.uuid, type: event.type,
         ...(coalesced ? { partId: String(partId) } : {}),
@@ -153,32 +186,26 @@ export class SessionStore {
     }
 
     // Manual stall Retry: the attempt that wrote these parts is being abandoned
-    // and its text is being erased on screen. Discard the buffer WITHOUT
-    // writing it — this is the only path that drops a buffered part instead of
-    // flushing it, and it must run BEFORE the display-only filter below, which
-    // would otherwise return early and leave the abandoned text to be flushed
-    // by the next event.
+    // and its text is being erased on screen. Discard a matching open buffer
+    // WITHOUT writing its text, but persist the tombstone so an already-flushed
+    // part is excluded on restart. This runs before the heartbeat filter below.
     //
-    // KNOWN LIMITATION (deliberate, not an oversight): this can only discard a
-    // part still BUFFERED here — and only ONE part is ever buffered, because
-    // the coalescing branch below flushes the moment ANY different part opens.
-    // Two shapes therefore commit earlier text to the JSONL before the stall:
-    //   1. the attempt emitted a tool call (a non-delta event → flush), or
-    //   2. the attempt switched parts mid-prose — most commonly a reasoning
-    //      block giving way to visible text, which is the ordinary shape on
-    //      the model in the 2026-08-16 incident, so this is the COMMON case,
-    //      not the exotic one. (The buffer keys off type AND partId, so
-    //      reasoning→text flushes on both counts.)
-    // In either shape dropPart can't reach back and unwrite the committed
-    // line. A re-run can then duplicate that earlier text ON DISK even though
-    // the live screen (which erased via the renderer's own dropPart handling)
-    // stays correct. The transcript is append-only; rewriting already-committed
-    // lines is out of scope here.
+    // A previous part may already have flushed when the stream changed parts
+    // or called a tool. The tombstone is append-only too: replay removes those
+    // retired parts without rewriting the transcript's earlier lines.
     if (event.type === 'assistant-thinking' && event.data?.dropPart) {
       const open = this.open.get(event.sessionId);
       if (open && event.data.dropPart.partIds.includes(String(open.event.data?.partId))) {
         this.open.delete(event.sessionId);
       }
+      // WHY: an earlier part can already be on disk if a second part opened.
+      // The retry tombstone must survive restart, or the discarded answer
+      // re-enters both the visible transcript and the portable model tail.
+      await this.home.appendSessionLine(nativeStoreSlug(cwd), event.sessionId, event);
+      if (event.uuid) this.referenceMap(event.sessionId).set(event.uuid, {
+        eventUuid: event.uuid, anchorUuid: event.uuid, type: event.type,
+        start: 0, end: JSON.stringify(event.data ?? {}).length,
+      });
       return;
     }
 
@@ -204,10 +231,15 @@ export class SessionStore {
         const start = String(open.event.data.text ?? '').length;
         const delta = String(event.data?.text ?? '');
         open.event.data.text = String(open.event.data.text ?? '') + delta;
-        if (event.uuid && open.event.uuid) this.referenceMap(event.sessionId).set(event.uuid, {
-          eventUuid: event.uuid, anchorUuid: open.event.uuid, type: event.type,
-          partId: String(partId), start, end: start + delta.length,
-        });
+        if (event.uuid && open.event.uuid) {
+          this.referenceMap(event.sessionId).set(event.uuid, {
+            eventUuid: event.uuid, anchorUuid: open.event.uuid, type: event.type,
+            partId: String(partId), start, end: start + delta.length,
+          });
+          // WHY: the original delta UUID would otherwise vanish when this
+          // buffer flushes. Keep only positional witnesses, never repeated text.
+          open.event.data.deltaReferences?.push({ eventUuid: event.uuid, start, end: start + delta.length });
+        }
         return;
       }
       // A different part started: the previous one is complete — flush it,
@@ -221,7 +253,12 @@ export class SessionStore {
       await this.flush(event.sessionId);
       this.open.set(event.sessionId, {
         slug,
-        event: { ...event, data: { ...event.data } },
+        event: { ...event, data: { ...event.data,
+          // WHY: persist the first UUID and every later range so a reopened
+          // checkpoint can prove a tail endpoint in this coalesced part.
+          ...(event.uuid ? { deltaReferences: [{ eventUuid: event.uuid, start: 0,
+            end: String(event.data?.text ?? '').length }] } : {}),
+        } },
       });
       if (event.uuid) {
         const textLength = String(event.data?.text ?? '').length;
@@ -399,6 +436,16 @@ export class SessionStore {
     return sortNewestFirst(out);
   }
 
+  /** The name the Resume Browser shows for one session: its header title, else
+   *  its opening words. The resume-time title re-apply (native-resume-title.ts)
+   *  falls back to this so the header pill says what the row the user clicked
+   *  said, instead of 'Resuming…'. undefined when the file has neither. */
+  async openingTitle(sessionId: string, cwd: string): Promise<string | undefined> {
+    const slug = nativeStoreSlug(cwd);
+    const lines = await this.home.readSessionHeadAsync(slug, sessionId);
+    return this.listEntry({ slug, sessionId, mtimeMs: 0, sizeBytes: 0 }, lines, true)?.title;
+  }
+
   /** One Resume row from a session file's bounded head, or null when the file
    *  is not a listable native session. Shared by list() and listAsync(). */
   private listEntry(file: { slug: string; sessionId: string; mtimeMs: number; sizeBytes: number }, lines: unknown[], includeChildren: boolean): NativeSessionListEntry | null {
@@ -416,7 +463,9 @@ export class SessionStore {
       for (const line of lines.slice(1)) {
         const e = line as TranscriptEvent;
         if (e && typeof e === 'object' && e.type === 'user-message' && e.data?.text != null) {
-          title = String(e.data.text).slice(0, DERIVED_TITLE_MAX);
+          // Keep the Resume Browser's raw opening excerpt and cap; only make
+          // path tokens readable, without rewriting the persisted user text.
+          title = shortenPathTokens(String(e.data.text)).slice(0, DERIVED_TITLE_MAX);
           break;
         }
       }

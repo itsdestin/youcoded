@@ -24,9 +24,14 @@ vi.mock('../src/renderer/state/chat-context', () => ({
   useChatState: () => mocks.state,
   useChatDispatch: () => mocks.dispatch,
 }));
-vi.mock('../src/renderer/state/ArtifactContext', () => ({
-  useArtifact: () => ({ state: { drawerOpenBySession: {}, drawerExpanded: false }, dispatch: vi.fn() }),
-}));
+vi.mock('../src/renderer/state/ArtifactContext', () => {
+  // ChatView reads the artifact store through narrow selectors (perf, 2026-09-23).
+  const state = { drawerOpenBySession: {}, drawerExpanded: false };
+  return {
+    useArtifactSelector: (select: (s: any) => unknown) => select(state),
+    useArtifactDispatch: () => vi.fn(),
+  };
+});
 vi.mock('../src/renderer/hooks/use-stick-to-bottom', () => ({
   useStickToBottom: () => ({
     atBottom: false,
@@ -48,7 +53,9 @@ vi.mock('../src/renderer/hooks/use-stick-to-bottom', () => ({
   observe() {} unobserve() {} disconnect() {}
 };
 
-import ChatView from '../src/renderer/components/ChatView';
+// The unmemoised view: this harness delivers new state by re-rendering with the
+// SAME props, which the memoised default export skips by design (see ChatView.tsx).
+import { UnmemoizedChatView as ChatView } from '../src/renderer/components/ChatView';
 
 const userEntry = (id: string) => ({ kind: 'user', message: { id, role: 'user', content: id, timestamp: 1 } });
 

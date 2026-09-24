@@ -7,7 +7,7 @@
 import * as fs from 'fs';
 import { z } from 'zod';
 import { defineTool } from './registry';
-import { resolveP, toPosix } from './guards';
+import { resolveP, toPosix, lunaPathRefused } from './guards';
 
 export const SEND_USER_FILE_DESCRIPTION = [
   'Send finished files to the user — a report, a mockup, a screenshot, a built page — as a "Deliverables" card with previews they can open.',
@@ -52,6 +52,10 @@ export const SendUserFileTool = defineTool({
         continue;
       }
       const abs = resolveP(raw, ctx.cwd);
+      if (lunaPathRefused(abs)) {
+        problems.push(`${toPosix(abs)}: outside the Luna experiment fixture`);
+        continue;
+      }
       let st: fs.Stats;
       try {
         st = fs.statSync(abs);            // follows symlinks: a link to a file is a file

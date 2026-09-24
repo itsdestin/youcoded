@@ -1,4 +1,4 @@
-import { ChatMessage, PLAN_ASK_DETAIL_HEADER, PLAN_ASK_NOTICE_LEAD, PLAN_ASK_QUESTION_CLOSE, PLAN_ASK_QUESTION_LABEL, PLAN_ASK_QUESTION_OPEN, PLAN_NOTICE_PREFIX, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
+import { ChatMessage, PLAN_ASK_DETAIL_HEADER, PLAN_ASK_NOTICE_LEAD, PLAN_ASK_QUESTION_CLOSE, PLAN_ASK_QUESTION_LABEL, PLAN_ASK_QUESTION_OPEN, PLAN_NOTICE_PREFIX, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -61,6 +61,9 @@ export interface TurnUsage {
    *  step's prompt + its output). Drives the context pill; inputTokens cannot,
    *  because it sums across steps and re-counts history each time. */
   contextUsedTokens?: number;
+  /** Transient harness measurement, not a completed transcript. Missing context
+   *  cannot use the legacy in+out fallback on this cumulative progress. */
+  liveProgress?: true;
   /** Native runtime only: USD for THIS turn, priced in main at the model that
    *  ran it (spec §5). null = the model has no published price; ABSENT = no
    *  pricing information at all (a CC turn). Without this field a priced turn
@@ -262,6 +265,9 @@ export interface SystemMarker {
   // Optional long-form text the marker can reveal on click. Currently only
   // set on compact markers — the actual conversation summary CC produced.
   summary?: string;
+  // Native compaction only: the user message that opens the kept recent tail
+  // (null = unknown). Present → archive-boundary.ts dims only entries above it.
+  retainedFromUuid?: string | null;
 }
 
 // /copy [N] picker — shown inline when the Nth assistant turn has multiple
@@ -323,6 +329,12 @@ export interface SessionChatState {
   toolGroups: Map<string, ToolGroupState>;
   assistantTurns: Map<string, AssistantTurn>;
   isThinking: boolean;
+  /** Live native request accounting only; never serialized or added to totals. */
+  inProgressUsage: TurnUsage | null;
+  /** Host event timestamp watermark for progress/terminal/heartbeat ordering. Infinity closes an unstamped terminal lane until a recorded new user turn. */
+  usageProgressAt: number;
+  /** Progress heartbeat identity is separate from durable transcript seenUuids. */
+  usageProgressUuid: string | null;
   streamingText: string;
   /** ID of the current tool group (tools are appended here until next message) */
   currentGroupId: string | null;
@@ -347,6 +359,14 @@ export interface SessionChatState {
    */
   errorMessage: string | null;
   /**
+   * Which known failure `errorMessage` is, when main could tell (e.g.
+   * 'openrouter-key-rejected', 'openrouter-credit-short'). WHY: the banner picks
+   * its action button from this instead of pattern-matching the sentence —
+   * optional and additive like sync's `errorCode`, so a message without one
+   * still renders as it always did. Set and cleared alongside errorMessage.
+   */
+  errorCode: string | null;
+  /**
    * Native sessions only. Set when the streaming watchdog detects the provider
    * has gone silent (no chunk for ~60s). Drives ThinkingIndicator's "This is
    * taking a while… Retrying in Ns" countdown. `willRetry` is true when the
@@ -361,6 +381,11 @@ export interface SessionChatState {
    *  first `stalled` heartbeat and left alone by later ones, so the elapsed
    *  time never resets while the card is up. */
   stalledSince: number | null;
+  /** Helper run records that arrived before their card existed, keyed by the
+   *  helper's childId (latest record only). Applied the moment a matching card
+   *  appears — see chat-reducer.ts `applyParkedSpecialistRuns`. Transient:
+   *  never serialized; absent means nothing is waiting. */
+  parkedSpecialistRuns?: Map<string, SpecialistRunView>;
   /**
    * Native runtime: the model is READING the prompt (prefill), not hanging. Set
    * by a `promptProcessing`-bearing heartbeat and cleared the moment prefill ends
@@ -398,7 +423,7 @@ export interface SessionChatState {
    * Holds the pre-compaction contextTokens count so COMPACTION_COMPLETE can compute
    * how much was freed.
    */
-  compactionPending: { startedAt: number; beforeContextTokens: number | null } | null;
+  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean } | null;
   /**
    * Native sessions only. Tokens occupying the model's window after the last
    * HISTORY REWRITE that happened outside a turn — a /compact or a /clear.
@@ -505,6 +530,9 @@ export function createSessionChatState(): SessionChatState {
     toolGroups: new Map(),
     assistantTurns: new Map(),
     isThinking: false,
+    inProgressUsage: null,
+    usageProgressAt: 0,
+    usageProgressUuid: null,
     streamingText: '',
     currentGroupId: null,
     currentTurnId: null,
@@ -512,6 +540,7 @@ export function createSessionChatState(): SessionChatState {
     activeTurnToolIds: new Set(),
     attentionState: 'ok',
     errorMessage: null,
+    errorCode: null,
     stallWarning: null,
     stalledSince: null,
     promptProcessing: null,
@@ -622,6 +651,10 @@ export type ChatAction =
       type: 'NATIVE_SESSION_ERROR';
       sessionId: string;
       message: string;
+      /** Host event clock, when dispatched from a transcript event. */
+      timestamp?: number;
+      /** The session-error event's optional `errorCode` (see SessionChatState). */
+      errorCode?: string;
       /** The failing event's uuid, for the totals dedup in the reducer. Optional
        *  because the two non-App dispatchers — the workbench fixture loader and
        *  a renderer test — raise this condition without an event to name. */
@@ -667,6 +700,9 @@ export type ChatAction =
       // clears attentionState back to 'ok'.
       type: 'TRANSCRIPT_THINKING_HEARTBEAT';
       sessionId: string;
+      usageProgress?: TurnUsage;
+      uuid?: string;
+      timestamp?: number;
       // Native watchdog: present → the stream has stalled; drives the
       // ThinkingIndicator countdown. Absent → a normal heartbeat that CLEARS any
       // active stall warning (activity resumed).
@@ -745,6 +781,9 @@ export type ChatAction =
       // folder → ToolCard HIDES "Always allow", because the engine skips the
       // rules on every later external call and could never honor the grant.
       external?: boolean;
+      // Native broker only: forced by the removal-target floor (rm-target.ts),
+      // which no stored rule can skip → ToolCard HIDES "Always allow" too.
+      floorStop?: FloorStop;
       // Native broker only: the session's mode at ask time. 'full-auto' +
       // denyListed → ToolCard renders the safety-stop footer (spec 2026-08-12).
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
@@ -753,6 +792,19 @@ export type ChatAction =
       type: 'PERMISSION_EXPIRED';
       sessionId: string;
       requestId: string;
+      /** Why the ask ended. ONLY 'hook-closed' (the far end went away; Claude
+       *  Code's own menu may still be live) keeps the card. Absent = resolve:
+       *  keeping is the riskier behaviour, and the native broker and older
+       *  remote clients never send a reason. Optional so older serialized
+       *  actions still apply. */
+      reason?: 'app-timeout' | 'delivery-failed' | 'hook-closed';
+    }
+  | {
+      /** Quiet settle of a KEPT (expired) card: its menu left the terminal, or
+       *  the user clicked Dismiss. No error text — nothing failed. */
+      type: 'PERMISSION_CARD_RESOLVED';
+      sessionId: string;
+      toolUseId: string;
     }
   | {
       // Specialists 1c: the host's delegation ledger changed for one hire
@@ -767,8 +819,8 @@ export type ChatAction =
     }
   | {
       // Background Bash (G-1): the live shell-run record lands on its Bash card
-      // (chat-reducer.ts's SHELL_RUN_CHANGED case). Same contract as
-      // SPECIALIST_RUN_CHANGED — a record for an unknown card is dropped.
+      // (chat-reducer.ts's SHELL_RUN_CHANGED case). A record for an unknown
+      // card is dropped (SPECIALIST_RUN_CHANGED parks one instead).
       type: 'SHELL_RUN_CHANGED';
       sessionId: string;
       run: ShellRunView;
@@ -949,6 +1001,10 @@ export type ChatAction =
       sessionId: string;
       /** Parsed events for this page, oldest -> newest. */
       events: TranscriptEvent[];
+      /** Main confirmed that unfinished work on this history page is no longer live. */
+      reconcileInterrupted?: boolean;
+      /** Tool ids known to predate a resumed CC process (page may also have new work). */
+      reconcileInterruptedToolIds?: string[];
       /** Handle for the page OLDER than this one; null when hasMore is false. */
       cursor: PageCursor | null;
       hasMore: boolean;
@@ -987,7 +1043,14 @@ export type ChatAction =
       sessionId: string;
       cardId: string;
       beforeContextTokens: number | null;
+      // Native: the IPC call's own answer ends this spinner (marker or refusal),
+      // so App's 3-minute "may have failed" watchdog must not guess instead —
+      // a slow local summary legitimately runs longer and its marker was lost.
+      awaitsResult?: boolean;
     }
+  // A native summary the user stopped (or a switch popup that gave up): drop the
+  // spinner with NO marker — nothing was compacted, and nothing "may have failed".
+  | { type: 'COMPACTION_CANCELLED'; sessionId: string }
   // Compaction finished — remove spinner, clear timeline, add marker with diff.
   // Triggered by transcript-shrink OR first turn-complete (resume-from-summary).
   | {
@@ -1007,6 +1070,8 @@ export type ChatAction =
       // compactionPending flag to satisfy the stale-event guard, so this bypasses
       // it to insert the marker. CC's paths never set it.
       auto?: boolean;
+      // Native compaction: the kept tail's first user message (see SystemMarker).
+      retainedFromUuid?: string | null;
     }
   // A native HISTORY REWRITE that ran outside a turn — /compact or /clear.
   //
@@ -1066,6 +1131,8 @@ export interface SerializedSessionChatState {
   attentionState: AttentionState;
   errorMessage: string | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
+  errorCode?: string | null;
+  // Optional so a pre-field snapshot from an older host still deserializes.
   stallWarning?: { retryInMs: number; willRetry: boolean } | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
   // Serialized (unlike promptProcessing) because a parked turn is a condition
@@ -1074,7 +1141,7 @@ export interface SerializedSessionChatState {
   // makes the elapsed number approximate on remote; that is accepted.
   stalledSince?: number | null;
   lastBufferActivityAt: number;
-  compactionPending: { startedAt: number; beforeContextTokens: number | null } | null;
+  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean } | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
   // Serialized because it is a fact about the SESSION's window, not about one
   // client's view: a phone that reconnects after the desktop compacted must see
@@ -1139,6 +1206,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         activeTurnToolIds: Array.from(s.activeTurnToolIds),
         attentionState: s.attentionState,
         errorMessage: s.errorMessage,
+        errorCode: s.errorCode,
         stallWarning: s.stallWarning,
         stalledSince: s.stalledSince,
         lastBufferActivityAt: s.lastBufferActivityAt,
@@ -1172,6 +1240,10 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       toolGroups: new Map(ser.toolGroups),
       assistantTurns: new Map(ser.assistantTurns),
       isThinking: ser.isThinking,
+      // WHY: remote hydration must not revive a request that may already have ended.
+      inProgressUsage: null,
+      usageProgressAt: 0,
+      usageProgressUuid: null,
       streamingText: ser.streamingText,
       currentGroupId: ser.currentGroupId,
       currentTurnId: ser.currentTurnId,
@@ -1181,6 +1253,8 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       // Older remote hosts predate errorMessage — default null so a
       // pre-field snapshot hydrates without an undefined leaking into state.
       errorMessage: ser.errorMessage ?? null,
+      // WHY carried: a phone that reconnects must get the same action button.
+      errorCode: ser.errorCode ?? null,
       // Older hosts predate stallWarning — default null so a pre-field snapshot hydrates.
       stallWarning: ser.stallWarning ?? null,
       // Older hosts predate stalledSince — default null so a pre-field snapshot hydrates.

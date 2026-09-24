@@ -1,13 +1,14 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { ToolCallState, type ShellRunView } from '../../../shared/types';
-import { UnifiedDiff } from '../diff/UnifiedDiff';
+import { UnifiedDiff, FILE_BOX_CHUNK } from '../diff/UnifiedDiff';
+import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
 import MarkdownContent from '../MarkdownContent';
 import { useSessionToolCalls } from '../../state/chat-context';
 import { buildTasksById, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../state/task-state';
 import { SubagentTimeline } from './SubagentTimeline';
 import { ChevronIcon } from '../Icons';
 import { useExpandAllToggle, getInitialExpanded, isExpandModeActive } from '../../hooks/useExpandAllToggle';
-import { useArtifactOptional } from '../../state/ArtifactContext';
+import { useArtifactSelectorOptional, useArtifactDispatchOptional } from '../../state/ArtifactContext';
 import { ArtifactThumbnail } from '../ArtifactThumbnail';
 import { matchSessionArtifact } from '../filepath-match';
 import { useSecondsTick } from '../../hooks/useSecondsTick';
@@ -70,9 +71,14 @@ function CollapsibleBlock({ children, maxLines = 20, className = '' }: { childre
   const lines = children.split('\n');
   const overflow = lines.length > maxLines;
   const shown = open || !overflow ? children : lines.slice(0, maxLines).join('\n');
+  // WHY the 45vh cap when expanded: expanded is ONE <pre> (cheap to draw, so no
+  // chunked reveal), but uncapped a 5,000-line command output pushed the chat
+  // down by 5,000 lines — what D1 (Destin, 2026-09-18) says he doesn't want.
+  // Same cap as the expanded file-change / file-read boxes and the git timeline.
+  const cap = open && overflow ? 'scroll-box-cap' : '';
   return (
     <div className="relative">
-      <pre className={`text-xs text-fg-dim bg-panel rounded-sm p-2 overflow-auto whitespace-pre-wrap font-mono ${className}`}>
+      <pre className={`text-xs text-fg-dim bg-panel rounded-sm p-2 overflow-auto whitespace-pre-wrap font-mono ${cap} ${className}`}>
         {shown}
         {overflow && !open && <span className="text-fg-muted">{'\n'}…</span>}
       </pre>
@@ -129,11 +135,13 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
   // Optional: the buddy window / sandbox / tests render ToolCard without
   // ArtifactProvider. When absent, sessionArts is undefined → no match → we
   // fall back to the plain PathHeader below (no crash).
-  const artifactCtx = useArtifactOptional();
-  const sessionArts = artifactCtx?.state.sessionArtifacts;
+  // WHY a per-session selector (perf, 2026-09-23): this card now redraws only
+  // when ITS session's file list changes, not when any session writes a file.
+  const sessionArts = useArtifactSelectorOptional((s) => s.sessionArtifacts?.[sessionId ?? '']);
+  const artifactDispatch = useArtifactDispatchOptional();
   const artifact = useMemo(
-    () => matchSessionArtifact(sessionArts?.[sessionId ?? ''] ?? [], fp),
-    [sessionArts, sessionId, fp],
+    () => matchSessionArtifact(sessionArts ?? [], fp),
+    [sessionArts, fp],
   );
 
   if (!artifact) {
@@ -155,8 +163,8 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
 
   const open = () => {
     if (!sessionId) return; // per-session drawer needs a session to scope to
-    artifactCtx?.dispatch({ type: 'DRAWER_OPENED', sessionId });
-    artifactCtx?.dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: artifact.id });
+    artifactDispatch?.({ type: 'DRAWER_OPENED', sessionId });
+    artifactDispatch?.({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: artifact.id });
   };
 
   return (
@@ -594,10 +602,11 @@ function parseCatN(resp: string): { lineNo: number; text: string }[] {
   return rows;
 }
 
-// Approximate line height for the xs mono rows — keeps the initial viewport
-// capped at ~15 lines (text-xs ≈ 12px + py-0.5 padding ≈ 20px per row).
-const READ_ROW_PX = 20;
 const READ_PREVIEW_LINES = 15;
+
+// Shared base for the read box's collapsed/expanded class strings (review
+// round 1, 2026-09-18) — see UnifiedDiff's DIFF_BOX_BASE for the same fix.
+const READ_BOX_BASE = 'text-xs font-mono rounded-sm border border-edge bg-panel';
 
 function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string }) {
   // Fix: an object file_path crashed basename(); non-number offset/limit
@@ -606,10 +615,29 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
   const fp = asString(tool.input.file_path);
   const offset = typeof tool.input.offset === 'number' ? tool.input.offset : undefined;
   const limit = typeof tool.input.limit === 'number' ? tool.input.limit : undefined;
-  const rows = tool.response ? parseCatN(tool.response) : [];
+  // Memoised: each revealed chunk re-renders this view, and re-parsing a
+  // 5,000-line response on every chunk would cost more than the rows saved.
+  const rows = useMemo(() => (tool.response ? parseCatN(tool.response) : []), [tool.response]);
   const [open, setOpen] = useState(() => getInitialExpanded());
   useExpandAllToggle(() => setOpen(true), () => setOpen(false));
   const overflow = rows.length > READ_PREVIEW_LINES;
+  const expanded = overflow && open;
+  const boxRef = useRef<HTMLDivElement>(null);
+  // WHY (D1, Destin 2026-09-18) — the same three states as UnifiedDiff; see the
+  // longer note there. Collapsed = a real 15-line slice (it used to draw EVERY
+  // line and hide most behind a max-height). Expanded = a 45vh scroller filled
+  // FILE_BOX_CHUNK (200) lines at a time, so Ctrl+O expand-all costs 200 lines a
+  // box, not whole files. Unloaded = "Show less" (the resetKey flips, releasing
+  // the revealed lines), or the chat's entry folding dropping the whole card
+  // when it is far off screen — it remounts collapsed via getInitialExpanded().
+  // That fold is the off-screen unload path: do not add a second one here.
+  const reveal = useChunkedReveal(rows, {
+    resetKey: expanded ? 'expanded' : 'collapsed',
+    rootRef: boxRef,
+    active: expanded,
+    chunk: FILE_BOX_CHUNK,
+  });
+  const drawn = expanded ? reveal.visible : overflow ? rows.slice(0, READ_PREVIEW_LINES) : rows;
 
   let rangeLabel = '';
   if (rows.length > 0) {
@@ -617,14 +645,6 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
   } else if (offset != null && limit != null) {
     rangeLabel = `lines ${offset}–${offset + limit}`;
   }
-
-  // Collapsed: cap container height to 15 rows and let it scroll internally.
-  // Expanded: remove the cap so everything flows inline. All rows always
-  // render (no virtualization needed — Read responses are bounded by the
-  // tool's limit param).
-  const containerStyle = open
-    ? undefined
-    : { maxHeight: `${READ_PREVIEW_LINES * READ_ROW_PX}px` };
 
   return (
     <div className="space-y-2">
@@ -636,22 +656,29 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
       {rows.length > 0 ? (
         <>
           <div
-            className="text-xs font-mono rounded-sm border border-edge bg-panel overflow-auto"
-            style={containerStyle}
+            ref={boxRef}
+            data-testid="read-box"
+            // WHY one base string: collapsed draws a real 15-row slice, so
+            // there is nothing to scroll inside THIS box until expanded —
+            // only the expanded scroller needs overflow-auto + the cap
+            // (review round 1, 2026-09-18).
+            className={expanded ? `${READ_BOX_BASE} overflow-auto scroll-box-cap` : READ_BOX_BASE}
           >
-            {rows.map(r => (
+            {drawn.map(r => (
               <div key={r.lineNo} className="flex items-start">
                 <span className="w-10 text-right px-1.5 py-0.5 text-fg-muted select-none shrink-0 border-r border-edge">{r.lineNo}</span>
                 <span className="py-0.5 px-2 text-fg-dim whitespace-pre-wrap break-all flex-1">{r.text || ' '}</span>
               </div>
             ))}
+            {expanded && reveal.hasMore && <div ref={reveal.sentinelRef} data-reveal-sentinel className="h-px" aria-hidden />}
           </div>
           {overflow && (
             <button
               onClick={() => setOpen(o => !o)}
               className="text-3xs text-fg-muted tracking-wider uppercase hover:text-fg-2"
             >
-              {open ? 'Collapse' : `Expand (${rows.length} lines)`}
+              {/* Wording matches CollapsibleBlock so every long box in a card reads the same. */}
+              {open ? 'Show less' : `Show ${rows.length - READ_PREVIEW_LINES} more lines`}
             </button>
           )}
         </>
@@ -695,8 +722,9 @@ function AgentView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
   const target = useSpecialistRunByChild(sessionId, taskId || undefined);
   // Task 10: same per-cwd lookup ToolCard/TaskConsentBlock use — a project's
   // OWN specialists only resolve here if this card's session cwd is passed.
-  const artifacts = useArtifactOptional();
-  const cwd = sessionId ? artifacts?.state.sessionCwd?.[sessionId] : undefined;
+  // Narrow selector: only this session's cwd, so other sessions' file writes
+  // don't redraw this card.
+  const cwd = useArtifactSelectorOptional((s) => (sessionId ? s.sessionCwd?.[sessionId] : undefined));
   const definition = useSpecialistDefinition(cwd, isNative ? subagent : undefined);
   const title = run?.title;
   const tone = SUBAGENT_TONE[subagent] || 'neutral';

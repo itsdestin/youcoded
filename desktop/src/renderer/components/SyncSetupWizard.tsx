@@ -784,7 +784,7 @@ function PrereqCheckStep({
           <Callout tone="danger">
             {installError}
             <div className="mt-1">
-              <button className="text-accent underline" onClick={() => claude.openExternal('https://rclone.org/install/')}>
+              <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://rclone.org/install/')}>
                 Install manually
               </button>
             </div>
@@ -818,11 +818,11 @@ function IcloudMissingHelp({ onRecheck }: { onRecheck: () => void }) {
         <div className="text-3xs text-fg-muted space-y-1">
           <div>On Windows, iCloud isn't built in — you need to install <span className="text-fg-dim">iCloud for Windows</span> from the Microsoft Store or Apple's website.</div>
           <div className="flex flex-wrap gap-2 pt-1">
-            <button className="text-accent underline" onClick={() => claude.openExternal('https://apps.microsoft.com/detail/9PKTQ5699M62')}>
+            <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://apps.microsoft.com/detail/9PKTQ5699M62')}>
               Microsoft Store
             </button>
             <span className="text-fg-muted">or</span>
-            <button className="text-accent underline" onClick={() => claude.openExternal('https://www.apple.com/icloud/setup/pc.html')}>
+            <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://www.apple.com/icloud/setup/pc.html')}>
               apple.com/icloud
             </button>
           </div>
@@ -923,12 +923,12 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
         <div className="text-3xs text-fg-muted space-y-1">
           <div>On macOS, the easiest way is Homebrew. In Terminal, run:</div>
           <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">brew install gh</div>
-          <div>No Homebrew? Download the installer from <button className="text-accent underline" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>.</div>
+          <div>No Homebrew? Download the installer from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>.</div>
         </div>
       )}
       {(installError || !canAutoInstall) && os === 'windows' && (
         <div className="text-3xs text-fg-muted space-y-1">
-          <div>On Windows, download the installer from <button className="text-accent underline" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>.</div>
+          <div>On Windows, download the installer from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>.</div>
           <div>Or, if you use winget, open PowerShell and run:</div>
           <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">winget install GitHub.cli</div>
         </div>
@@ -938,12 +938,12 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
           <div>On Linux, install with your package manager:</div>
           <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">sudo apt install gh  # Debian/Ubuntu</div>
           <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">sudo dnf install gh  # Fedora</div>
-          <div>Full instructions: <button className="text-accent underline" onClick={() => claude.openExternal('https://github.com/cli/cli/blob/trunk/docs/install_linux.md')}>install guide</button>.</div>
+          <div>Full instructions: <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://github.com/cli/cli/blob/trunk/docs/install_linux.md')}>install guide</button>.</div>
         </div>
       )}
       {(installError || !canAutoInstall) && os === 'other' && (
         <div className="text-3xs text-fg-muted">
-          Install from <button className="text-accent underline" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>, then come back and tap "Check Again".
+          Install from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>, then come back and tap "Check Again".
         </div>
       )}
       {(installError || !canAutoInstall) && (

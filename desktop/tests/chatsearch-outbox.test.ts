@@ -5,7 +5,7 @@ import path from 'node:path';
 
 // WHY these mocks and not fs: the drainer's contract is "apply through the real
 // store functions and broadcast" — we assert on the calls, and use real files
-// in a tmp home for the mailbox itself (same rule as chatsearch-index-reschedule).
+// in a tmp home for the mailbox itself (same rule as chatsearch-index-service-reschedule).
 const flagCalls: any[] = []; const noteCalls: any[] = []; const broadcasts: any[] = [];
 // Finding 5: captures the 4th (isNative) arg noteFlagChanged actually receives,
 // kept SEPARATE from flagCalls (a 3-tuple) so existing flagCalls assertions

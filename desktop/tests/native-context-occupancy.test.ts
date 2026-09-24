@@ -45,6 +45,20 @@ describe('turn-complete usage — occupancy vs turn total', () => {
     expect(usage.contextUsedTokens).not.toBe(usage.inputTokens + usage.outputTokens);  // …but never drives the gauge
   });
 
+  it('uses the last request input anchor with one appended assistant and a new user input', async () => {
+    const model = scriptedModel([
+      stream(...textChunks('a', 'first reply'), finishChunk('stop', 900, 40)),
+      stream(...textChunks('b', 'second reply'), finishChunk('stop', 1100, 20)),
+    ]);
+    const session = new HarnessSession(makeOpts({}), async () => model as any);
+    await session.send('first');
+    const measured = session.contextUsedTokens!;
+    expect(measured).toBeGreaterThan(900);
+    expect(measured).toBeLessThan(940); // not the whole reply's provider output again
+    await session.send('second');
+    expect(session.contextUsedTokens).toBeGreaterThan(1100);
+  });
+
   it('a single-step turn reports that step, so the two agree', async () => {
     const model = scriptedModel([stream(...textChunks('a', 'hi'), finishChunk('stop', 900, 40))]);
     const session = new HarnessSession(makeOpts({}), async () => model as any);

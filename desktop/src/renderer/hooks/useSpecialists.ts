@@ -4,6 +4,7 @@ import { planChildCard, planLeafSteps, planWithActivity } from '../components/pl
 import { isPlanCard } from '../utils/specialist-cards';
 import { planStatusPhrase } from '../components/plans/plan-status';
 import type { SpecialistRunView, ToolCallState, SpecialistDefinitionView, DelegatedModelsView, SubagentSegment, SpecialistsListResult } from '../../shared/types';
+import { useOnRemoteReconnect } from './useOnRemoteReconnect';
 
 // Specialists 1c — narrow selectors over the chat store. A Task card carries
 // ITS OWN run record on the tool prop (ToolCallState.specialistRun), so these
@@ -419,9 +420,20 @@ export function useSpecialistRoster(cwd?: string, opts?: { ensurePersonalFolder?
     // caller keeps the original cache-absence-only behavior. Still exactly
     // one load call per mount (this effect, this branch) — the duplicate
     // concurrent-read race the previous fix removed does not come back.
-    if (ensureRef.current || !rosterCache.has(key)) void refreshSpecialistRoster(cwd, { ensurePersonalFolder: ensureRef.current });
+    // A 'failed' entry is not an answer either (2026-09-11 phone pass sweep): it used to
+    // stay for the page's life, so a list whose read was lost stayed failed until Settings
+    // (the one ensuring caller) forced a refresh. A new mount asks again.
+    if (ensureRef.current || !rosterCache.has(key) || rosterCache.get(key)?.status === 'failed') {
+      void refreshSpecialistRoster(cwd, { ensurePersonalFolder: ensureRef.current });
+    }
     return () => { subs!.delete(cb); };
   }, [key, cwd]);
+  // And a mounted one asks again after a remote reconnect. Only while failed: the first
+  // subscriber's refresh marks the entry 'loading' at once, so the others sharing this cwd
+  // see that and do not ask a second time.
+  useOnRemoteReconnect(() => {
+    if (rosterCache.get(key)?.status === 'failed') void refreshSpecialistRoster(cwd);
+  });
   return rosterCache.get(key) ?? { status: 'loading' };
 }
 

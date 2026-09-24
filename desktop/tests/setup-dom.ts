@@ -1,5 +1,6 @@
 // Per-test-file DOM setup (vitest `setupFiles`).
 import { afterEach } from 'vitest';
+import { __resetTagRegistryForTests } from '../src/renderer/hooks/useTagRegistry';
 
 //
 // jsdom ships no ResizeObserver. Several components observe their own size --
@@ -47,4 +48,10 @@ afterEach(async () => {
   if (typeof globalThis.window === 'undefined') return;
   const { cleanup } = await import('@testing-library/react');
   cleanup();
+  // WHY here, not per file: useTagRegistry is one module-level store now (render-cost
+  // consolidation 2026-09-18) — a registry loaded by test A in a file is still there for
+  // test B in the same file otherwise, and a forgotten per-file reset leaks one test's
+  // tags into the next with a failure that names neither. One line here cannot be
+  // forgotten.
+  __resetTagRegistryForTests();
 });

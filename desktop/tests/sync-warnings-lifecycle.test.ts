@@ -192,7 +192,7 @@ describe('cleanupStaleBackendErrorFiles', () => {
 // overwrites it ~10s later (2026-07-30 spec §4 gap). svcMock stands in for
 // the real sync-spaces service (see the vi.mock above) so these tests don't
 // need to boot the real engine/chokidar/electron just to control two values.
-describe('getSyncStatus — self recency and sync-in-progress (2026-07-30 spec §4 gap)', () => {
+describe('getSyncStatus — self recency and sync-in-progress', () => {
   const toolkitStateDir = path.join(tmpHome, '.claude', 'toolkit-state');
   const markerPath = path.join(toolkitStateDir, '.sync-marker');
   const lockDir = path.join(toolkitStateDir, '.sync-lock');

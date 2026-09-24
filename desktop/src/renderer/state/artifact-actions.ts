@@ -67,4 +67,7 @@ export type ArtifactAction =
   | { type: 'SESSION_PREVIEW_CLEARED'; sessionId: string }
   // Records that a conversation was previewed this session, for the drawer's
   // "Referenced conversations" list (cut candidate — see Task 6 brief 6b).
-  | { type: 'SESSION_REFERENCED'; sessionId: string; ref: { provider: 'claude' | 'native'; id: string; title: string; lastActive: string } };
+  | { type: 'SESSION_REFERENCED'; sessionId: string; ref: { provider: 'claude' | 'native'; id: string; title: string; lastActive: string } }
+  // A session tab is gone from this window (closed, or its process already
+  // dead). Drops every per-session entry keyed by its id — see the reducer case.
+  | { type: 'SESSION_REMOVED'; sessionId: string };

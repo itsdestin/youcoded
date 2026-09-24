@@ -15,9 +15,13 @@ import { DEFAULT_TAG_COLOR, type TagRecord } from '../../../shared/tags';
 
 export type ChipTag = Pick<TagRecord, 'label' | 'color'>;
 
-/** One registry load per card (not per row) — call this once at the card's
- *  root and pass the map down, so N rows sharing M tags don't each mount
- *  their own useTagRegistry() and independently hit window.claude.tags.list(). */
+// WHY this is still its own hook and not inlined at each call site
+// (render-cost consolidation 2026-09-18): useTagRegistry() is now backed by
+// one shared module-level store, so mounting it in N rows no longer costs N
+// window.claude.tags.list() reads — but each row still needs the label→record
+// map, and computing that fresh per row would be its own per-row cost. Kept as
+// a thin wrapper: one useTagRegistry() call, one memoized index, shared by
+// every caller that needs it.
 export function useTagLabelIndex(): Map<string, TagRecord> {
   const registry = useTagRegistry();
   return useMemo(() => {

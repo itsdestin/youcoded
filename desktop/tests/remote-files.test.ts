@@ -211,6 +211,19 @@ describe('the file lists answer the same on both transports', () => {
     expect(names(remote)).toContain('notes.md');
   });
 
+  it('artifacts:list-folder — one folder, the same page on both transports', async () => {
+    const ipc = await overIpc('artifacts:list-folder', root, '', { offset: 0 });
+    const remote = await overRemote('artifacts:list-folder', { projectId: root, relDir: '', opts: { offset: 0 } });
+    expect(remote?.ok).toBe(true);
+    // Each page-0 read hands back its own snapshot id; everything else matches.
+    const { snapshot: a, ...ipcRest } = ipc;
+    const { snapshot: b, ...remoteRest } = remote;
+    expect(typeof a).toBe('string');
+    expect(typeof b).toBe('string');
+    expect(remoteRest).toEqual(ipcRest);
+    expect((remote.files as any[]).map((f) => f.path)).toContain('notes.md');
+  });
+
   it('artifacts:list-session and list-project answer with the same (empty) tracked lists', async () => {
     const ipcS = await overIpc('artifacts:list-session', 'sess-1', root);
     const remS = await overRemote('artifacts:list-session', { sessionId: 'sess-1', projectRoot: root });
@@ -304,6 +317,7 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
       ['artifacts:list-session', { sessionId: 's', projectRoot: outside }],
       ['artifacts:list-project', { projectId: outside }],
       ['artifacts:list-all-files', { projectId: outside }],
+      ['artifacts:list-folder', { projectId: outside, relDir: '' }],
       ['artifacts:search-content', { projectRoot: outside, query: 'secret' }],
       ['artifacts:check-existence', { projectRoot: outside, artifactIds: ['x'] }],
       ['project:list-context', { projectPath: outside }],
@@ -331,6 +345,7 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
     for (const [type, payload] of [
       ['artifacts:get', { projectRoot: sessionRoot, artifactId: 'untracked.txt' }],
       ['artifacts:list-all-files', { projectId: sessionRoot }],
+      ['artifacts:list-folder', { projectId: sessionRoot, relDir: '' }],
       ['artifacts:search-content', { projectRoot: sessionRoot, query: 'ship' }],
       ['artifacts:read-binary', { absolutePath: path.join(sessionRoot, 'untracked.txt') }],
       ['artifacts:watch-project', { projectRoot: sessionRoot }],
@@ -351,6 +366,7 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
   it('a malformed payload answers bad-request, never a Node error\'s text', async () => {
     expect(await overRemote('artifacts:get', { projectRoot: root })).toMatchObject({ ok: false, error: 'bad-request' });
     expect(await overRemote('artifacts:list-all-files', {})).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(await overRemote('artifacts:list-folder', { projectId: root })).toMatchObject({ ok: false, error: 'bad-request' });
     expect(await overRemote('artifacts:watch-project', { projectRoot: 42 })).toMatchObject({ ok: false, error: 'bad-request' });
   });
 
@@ -460,5 +476,67 @@ describe('live refresh over remote (R12)', () => {
 
     (server as any).clients.delete(b.client);
     await overRemote('artifacts:unwatch-project', { projectRoot: root }, b);
+  });
+});
+
+// A file the assistant wrote through `../` (review 2026-09-23, F3/F5): a record
+// that opens can also be SAVED — judged exactly as it is read — a planted one
+// is refused, and no refusal on either transport carries where the file is.
+describe('a ../ record through both transports', () => {
+  let world: string;
+  let proj: string;
+  let notes: string;
+  let savedBefore = '[]';
+  beforeAll(() => {
+    const home = process.env.HOME!;
+    world = fs.realpathSync(fs.mkdtempSync(path.join(home, 'yc-dotdot-')));
+    proj = path.join(world, 'proj');
+    notes = path.join(world, 'notes');
+    fs.mkdirSync(path.join(proj, '.youcoded'), { recursive: true });
+    fs.mkdirSync(notes, { recursive: true });
+    fs.writeFileSync(path.join(notes, 'plan.md'), 'old\n');
+    fs.writeFileSync(path.join(world, 'loose.md'), 'outside every project\n');
+    fs.writeFileSync(path.join(home, '.git-credentials'), 'https://u:t@github.com\n');
+    const rec = (id: string, rel: string) => ({
+      id, path: path.basename(rel), kind: 'external', absolutePath: rel,
+      lastModified: new Date().toISOString(), status: 'active', versions: [], comments: [], tags: [],
+    });
+    fs.writeFileSync(path.join(proj, '.youcoded', 'artifacts.json'), JSON.stringify({
+      $schema: SIDECAR_SCHEMA_VERSION, projectId: 'dotdot', name: 'proj',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      artifacts: [rec('plan', '../notes/plan.md'), rec('loose', '../loose.md'), rec('planted', path.relative(proj, path.join(home, '.git-credentials')))],
+      manualExcludes: [], manualIncludes: [],
+    }));
+    // The saved folders gain `notes` and `proj`. NOT the home folder: this
+    // sandbox file is read by other suites' handlers too, and a saved home
+    // changes their answers (the home-as-saved-folder case is pinned with an
+    // explicit home in write-authorization.test.ts).
+    const file = path.join(home, '.claude', 'youcoded-folders.json');
+    savedBefore = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, JSON.stringify([...JSON.parse(savedBefore),
+      { path: notes, nickname: 'notes', addedAt: Date.now() },
+      { path: proj, nickname: 'proj', addedAt: Date.now() }]));
+  });
+  afterAll(() => {
+    fs.writeFileSync(path.join(process.env.HOME!, '.claude', 'youcoded-folders.json'), savedBefore);
+    fs.rmSync(world, { recursive: true, force: true, maxRetries: 3 });
+  });
+
+  it('saves a trusted one at its real location', async () => {
+    const res = await overIpc('artifacts:save', proj, 'dotdot', 'proj', 'plan', 'new\n', 'sess-1', {});
+    expect(res).toMatchObject({ ok: true });
+    expect(fs.readFileSync(path.join(notes, 'plan.md'), 'utf8')).toBe('new\n');
+  });
+
+  it('refuses a planted credential on read and save', async () => {
+    expect(await overIpc('artifacts:get', proj, 'planted')).toEqual({ ok: false, error: 'protected-path' });
+    expect(await overIpc('artifacts:save', proj, 'dotdot', 'proj', 'planted', 'x', 'sess-1', {})).toEqual({ ok: false, error: 'protected-path' });
+    expect(fs.readFileSync(path.join(process.env.HOME!, '.git-credentials'), 'utf8')).toContain('github.com');
+  });
+
+  it('refuses one outside every project without naming where it is, on both transports', async () => {
+    expect(await overIpc('artifacts:get', proj, 'loose')).toEqual({ ok: false, error: 'outside-projects' });
+    const remote = await overRemote('artifacts:get', { projectRoot: proj, artifactId: 'loose' });
+    expect(remote).toEqual({ ok: false, error: 'outside-projects' });
   });
 });

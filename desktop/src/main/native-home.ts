@@ -172,10 +172,27 @@ export class NativeHome {
    * rethrows every other I/O error (same reason as readJson). WHY bytes, not
    * text: a damaged plan journal is preserved byte-for-byte in a quarantine
    * copy, and decoding invalid UTF-8 first would silently alter it.
+   *
+   * SYNC on purpose: the one caller of this exact form is peekRecords()
+   * (plan-journal.ts), a synchronous read-only replay decoration that has to
+   * match NativeSessionHost.getHistory's own synchronous contract. Every
+   * OTHER caller is already async — use readRawBytesAsync there (main-
+   * blocking-calls.test.ts: a click/IPC-reachable path may not block the
+   * one Electron main thread).
    */
   readRawBytes(rel: string): Buffer | null {
     try {
       return fs.readFileSync(path.join(this.dir, rel));
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return null;
+      throw e;
+    }
+  }
+
+  /** readRawBytes with the read off the main thread — see its WHY. */
+  async readRawBytesAsync(rel: string): Promise<Buffer | null> {
+    try {
+      return await fs.promises.readFile(path.join(this.dir, rel));
     } catch (e: any) {
       if (e?.code === 'ENOENT') return null;
       throw e;

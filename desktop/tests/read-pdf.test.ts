@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -64,6 +64,20 @@ function writePdf(name: string, pageTexts: string[]): string {
   fs.writeFileSync(p, makePdf(pageTexts), 'latin1');
   return p;
 }
+
+// WHY warm pdf.js here: the app loads it lazily on the first PDF read, so the
+// first extraction test used to pay the whole cold import inside its own 30s
+// budget — ~3s normally, but past 30s on a loaded Windows runner (beta.85
+// build, 2026-09-19). The module cache is shared, so the tool's own
+// import() resolves instantly after this. The hook gets its own budget,
+// measured from that ~3s norm with room for a 10x-slow runner.
+const PDFJS_COLD_LOAD_BUDGET_MS = 90_000;
+beforeAll(async () => {
+  await import('pdfjs-dist/legacy/build/pdf.mjs');
+  // The worker module ships no types; a variable specifier keeps tsc out of it.
+  const workerModule = 'pdfjs-dist/legacy/build/pdf.worker.mjs';
+  await import(/* @vite-ignore */ workerModule);
+}, PDFJS_COLD_LOAD_BUDGET_MS);
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-pdf-'));

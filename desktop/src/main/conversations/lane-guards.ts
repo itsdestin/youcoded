@@ -34,8 +34,8 @@ export interface StatLike {
  * small ones by adopting this helper. Callers that want the junk gate pass
  * MIN_TRANSCRIPT_BYTES explicitly.
  *
- * Pass an `fs.lstatSync()` result — never `statSync`, which follows the symlink
- * and defeats the first check.
+ * Pass an lstat result (`fs.lstatSync()` or `fs.promises.lstat()`) — never a
+ * `stat`, which follows the symlink and defeats the first check.
  */
 export function transcriptSkipReason(
   st: StatLike,

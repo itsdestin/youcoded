@@ -20,5 +20,14 @@
     "moduleResolution": "bundler"
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  // WHY the two *.test.ts(x) globs: this is the BUILD config (rootDir "src",
+  // outDir "dist" — `npm run build:main` emits from it), and it type-checks
+  // whatever "src/**/*" matches, test files included. tsconfig.tests.json
+  // already covers every test file properly (rootDir ".", so it can see both
+  // src/ and tests/ in one program). A src-local test file that imports a
+  // shared helper from tests/helpers/ (useChunkedReveal's test does, and every
+  // list this hook moves onto will have one) trips THIS config's rootDir
+  // check with TS6059, because "src" can't contain a file living under
+  // tests/. Test files were never meant to compile into dist anyway.
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/*.test.tsx"]
 }

@@ -15,10 +15,10 @@
 //
 // Layer 2 (Dialog's default) so it stacks above the Resume Browser's layer-1
 // overlay, which is where it is opened from today.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { TagRecord } from '../../../shared/tags';
 import { TAG_COLORS, DEFAULT_TAG_COLOR, TagColor } from '../../../shared/tags';
-import { TagRegistryApi } from '../../hooks/useTagRegistry';
+import { TagRegistryApi, refreshTagRegistry } from '../../hooks/useTagRegistry';
 import { Button, Dialog, EmptyState, ErrorState, InputGroup, TextInput, Toggle } from '../ui';
 
 export function TagManagerPopup({ open, onClose, registry, layer = 2 }: {
@@ -31,6 +31,10 @@ export function TagManagerPopup({ open, onClose, registry, layer = 2 }: {
    *  same z-index as the surface that opened it. */
   layer?: 2 | 3;
 }) {
+  // WHY: the list of tags you are about to rename or delete should be current —
+  // opening the manager re-reads the shared store in the background (a sync pull
+  // from another device sends no push). An unchanged answer redraws nothing.
+  useEffect(() => { if (open) refreshTagRegistry(); }, [open]);
   const [draft, setDraft] = useState('');
   const [showArchived, setShowArchived] = useState(false);
 
@@ -139,7 +143,8 @@ function ManagedTagRow({ tag, registry }: { tag: TagRecord; registry: TagRegistr
         <button
           type="button"
           onClick={() => setPaletteOpen((o) => !o)}
-          className="w-4 h-4 shrink-0 rounded-full border"
+          // A swatch has no fill to change — it IS the colour — so a ring answers instead.
+          className="w-4 h-4 shrink-0 rounded-full border transition-shadow hover:ring-2 hover:ring-edge active:ring-fg-muted"
           style={{ backgroundColor: `var(--${tag.color})`, borderColor: `var(--${tag.color})` }}
           aria-label={`Change color (currently ${tag.color.replace('tag-', '')})`}
           aria-expanded={paletteOpen}

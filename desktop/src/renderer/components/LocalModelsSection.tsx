@@ -91,6 +91,11 @@ export function SizeLine({ q }: { q: { totalSizeBytes: number; quant: string; fi
 // The few quants a non-technical user should see first (spec §4 — a raw 15–24
 // row list is hostile). Everything else hides behind "Show all N".
 const RECOMMENDED_QUANTS = new Set(['UD-Q4_K_XL', 'Q4_K_M', 'Q8_0']);
+// WHY case-folded: some publishers (Mungert, Google's QAT repos) write quants in
+// lowercase (`q4_k_m`), which the parser now keeps verbatim. Without folding,
+// those repos would never show a recommended quant and the one-click download
+// would pick the smallest file instead.
+const isRecommendedQuant = (quant: string) => RECOMMENDED_QUANTS.has(quant.toUpperCase());
 
 const key = (repo: string, quant: string) => `${repo}::${quant}`;
 
@@ -439,7 +444,7 @@ export function RepoCard({
   // one, else the first.
   const chosen = quants
     ? ((preferredQuant && quants.find((o) => o.quant === preferredQuant))
-        || quants.find((o) => RECOMMENDED_QUANTS.has(o.quant))
+        || quants.find((o) => isRecommendedQuant(o.quant))
         || quants[0])
     : undefined;
   const dl = chosen ? activeDownload(downloads, repo, chosen.quant) : undefined;
@@ -452,8 +457,8 @@ export function RepoCard({
   };
 
   // Recommended quants first; the rest hide behind "Show all N".
-  const recommended = (quants ?? []).filter((x) => RECOMMENDED_QUANTS.has(x.quant));
-  const rest = (quants ?? []).filter((x) => !RECOMMENDED_QUANTS.has(x.quant));
+  const recommended = (quants ?? []).filter((x) => isRecommendedQuant(x.quant));
+  const rest = (quants ?? []).filter((x) => !isRecommendedQuant(x.quant));
   const visible = showAll ? [...recommended, ...rest] : (recommended.length > 0 ? recommended : (quants ?? []).slice(0, 3));
   const hiddenCount = (quants ?? []).length - visible.length;
 

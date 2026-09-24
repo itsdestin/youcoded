@@ -11,6 +11,36 @@ export type ProviderType =
   // shared/chatgpt-types.ts carries the account state.
   | 'chatgpt';
 
+/** OpenRouter's add-credit page. One constant because the Settings card's My
+ *  Account button and the chat's "Add credit" button must land in the same
+ *  place — there is no purchase API, so adding credit is always this link. */
+export const OPENROUTER_CREDITS_URL = 'https://openrouter.ai/settings/credits';
+
+/** What the app last learned about a stored key by asking the provider
+ *  (connection-trust design 2026-08-31, re-based 2026-09-18, §3.1). WHY it
+ *  exists: "a key is saved" is not "the key works" — a dead key used to read
+ *  Connected. Only OpenRouter reports one today. */
+export interface ProviderHealth {
+  /** verified: the provider accepted the key. rejected: it refused it (see
+   *  reason). unchecked: the provider could not be reached, so nothing is known. */
+  verdict: 'verified' | 'rejected' | 'unchecked';
+  reason?: 'openrouter-key-rejected' | 'openrouter-key-expired' | 'openrouter-forbidden' | 'openrouter-wrong-key-type';
+  /** ISO date the key stops working, when the provider reported one. */
+  expiresAt?: string;
+  /** Epoch ms of the check this verdict came from. */
+  checkedAt: number;
+}
+
+/** Sign in with OpenRouter (connection-trust design §3.5): a browser
+ *  round-trip that ends with OpenRouter handing the app a key. What the card
+ *  polls while the browser is open. The key itself never crosses to the screen.
+ *  WHY `failed` carries a message: the card says what went wrong in plain
+ *  words, then offers the button again. */
+export interface OpenRouterSignInStatus {
+  state: 'idle' | 'waiting' | 'failed';
+  message?: string;
+}
+
 export interface ProviderConfig {
   id: string;             // 'local' | 'openrouter' | ulid for user-created entries
   type: ProviderType;
@@ -93,4 +123,7 @@ export interface ProviderStatus extends ProviderConfig {
   builtIn: boolean;       // 'local' and 'openrouter' cannot be removed
   hasKey: boolean;        // a secret exists for secretRef
   ready: boolean;         // enabled AND (keyless type OR hasKey); 'local' stays false until Plan B
+  /** Read-only: the last check of this profile's key (§3.1). Absent until a
+   *  check has run. Never sent back to provider:upsert. */
+  health?: ProviderHealth;
 }

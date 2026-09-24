@@ -1,10 +1,9 @@
-// YouCoded Pages — shared shapes (Phase 1, the shell).
+// YouCoded Pages — shared shapes.
 // Plan: youcoded-dev/docs/active/plans/2026-09-16-youcoded-pages-phasing.md
 //
 // A page is a small app inside YouCoded, built in chat, shown in the live theme.
-// Phase 1 pages reach nothing outside their own frame, so this shape carries no
-// permissions yet — that model is an open question answered in Phase 2, and
-// adding a field here before it is decided would pre-empt the deck.
+// Phase 1 (the shell) pages reach nothing outside their own frame. Phase 2 adds
+// connections, below — decided on two questions decks on 2026-09-19.
 
 /** Where a page lives. Personal pages belong to the person; project pages
  *  belong to one project folder and say so on their card. Explicit, never
@@ -18,6 +17,112 @@ export type PageHome =
  *  and follows `currentColor` like the Projects folder beside it. */
 export type PageIcon =
   | 'page' | 'timer' | 'notes' | 'paint' | 'chart' | 'calendar' | 'list' | 'game';
+
+// ── Phase 2: connections (decided on two questions decks, 2026-09-19) ──────
+// Everything a page reaches outside its frame is listed here and approved
+// once; anything unlisted is blocked. The shapes are the UI's contract — the
+// backend (manifest parsing, the approval store, fetch-on-behalf) is built
+// AFTER the screens are approved, so these fields are optional on PageSummary
+// until then and only the workbench fake fills them.
+
+/** `lookup`: the app sends look-up requests only and blocks the rest, so the
+ *  approval can truthfully say "Cannot send changes". Never worded as
+ *  "read-only" or "safe" for an outside service (deck Q-readonly). */
+/** The word a service expects before a key in a header. */
+export type KeyScheme = 'bearer' | 'token' | 'none';
+
+export type PageAccess = 'lookup' | 'full';
+
+export type PageConnection =
+  /** YouCoded's own service, as the signed-in person. */
+  | {
+      id: string; kind: 'youcoded';
+      /** Changes are allowed ONLY at these exact places on YouCoded's service
+       *  (for example `/admin/analytics/website-campaigns`); look-ups anywhere.
+       *  Absent or empty: look-ups only. There is deliberately no "change
+       *  anything" form — the sign-in controls the person's whole account. */
+      writePaths?: string[];
+    }
+  /** A service that takes a pasted key. The key lives in the app, never the page. */
+  | {
+      id: string; kind: 'key'; service: string; address: string; access: PageAccess;
+      /** How to find the key, written by the page's author and carried with the
+       *  page (review round 1, C-1). Shown as the author's words. */
+      keyHelp?: { steps: string[] };
+      /** Where the service wants the key. Every service takes it somewhere
+       *  different and the person is never asked — OpenWeather wants `appid`
+       *  in the URL, most others want a header — so the manifest says which,
+       *  and main attaches it there. Default: the `Authorization` header. */
+      keyIn?: 'header' | 'query';
+      keyParam?: string;
+      /** What goes before the key in a header. Absent means the usual word for
+       *  an Authorization header ("Bearer") and nothing for any other header. */
+      keyScheme?: KeyScheme;
+    }
+  /** Public information: an approved address, nothing secret. */
+  | { id: string; kind: 'public'; address: string }
+  /** The GitHub sign-in the app already holds. */
+  | { id: string; kind: 'github'; access: PageAccess }
+  /** The whole internet — its own blunt approval, never combined with a key
+   *  or sign-in on the same page (follow-up deck Q-open, Q-open-mix). */
+  | { id: string; kind: 'open' };
+
+/** A connection as the person sees it on one page. */
+export type PageConnectionStatus = PageConnection & {
+  /** False for a line added since the last approval — the page pauses and the
+   *  approval screen marks just this line New (deck S-change). */
+  approved: boolean;
+  /** `key` only: a key for this service is already saved, so the approval
+   *  offers it instead of asking again (deck Q-key-reuse). */
+  savedKey?: boolean;
+};
+
+/** Freshness of a connected page, owned by the app and shown in the band
+ *  (deck Q-last-updated). `at` is null before the first successful update. */
+export interface PageRefreshState {
+  at: string | null;
+  failed: boolean;
+}
+
+/** A key saved once under Settings › Connected services, with the pages using
+ *  it. Identified by service AND address: a saved key is offered to another
+ *  page only when the address matches byte for byte, so a second page cannot
+ *  point your key at its own collector (design review 1, finding 3). */
+export interface SavedPageKey {
+  service: string;
+  address: string;
+  usedBy: { id: string; name: string }[];
+}
+
+/** What a page asked the app to fetch on its behalf. The page never holds the
+ *  credential; main attaches it and redacts it from everything it returns. */
+export interface PageFetchRequest {
+  /** Absolute http(s) URL. A relative or protocol-relative URL is refused. */
+  url: string;
+  method?: string;
+  /** Only Accept, Accept-Language and Content-Type survive. */
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+type PageFetchRefusal =
+  | 'not-approved'        // no connection covers that address, or it is not approved
+  | 'method-not-allowed'  // a look-up connection was asked to send a change
+  | 'too-many-requests'   // the page's own rate cap
+  | 'bad-url'             // not an absolute http(s) URL
+  | 'unsupported'         // this window cannot fetch for a page at all (Android, an older host)
+  | 'network';            // the guard or the service refused; `message` says what
+
+export type PageFetchResult =
+  | { ok: true; status: number; headers: Record<string, string>; body: string }
+  | { ok: false; reason: PageFetchRefusal; message: string };
+
+/** Approving can fail for a reason the person must see — most often a computer
+ *  with no keychain, where the secrets store refuses by design and NO approval
+ *  is recorded (design review 1, finding 11). */
+export type PageApproveResult =
+  | { ok: true; pages: PageSummary[] }
+  | { ok: false; message: string };
 
 export interface PageSummary {
   /** `personal:<slug>` or `project:<project name>:<slug>` — the same on every
@@ -36,6 +141,14 @@ export interface PageSummary {
    *  the host reloads the frame on an edit and not on the page's own saving
    *  (design review F7). Milliseconds. */
   htmlStamp: number;
+  /** What the page reaches. Absent or empty: a page that reaches nothing. */
+  connections?: PageConnectionStatus[];
+  /** Present only for a connected page that has been approved. */
+  refresh?: PageRefreshState;
+  /** The page's code is not the code that was approved, while its connections
+   *  are. It still opens and still reaches only what was allowed; the band
+   *  says so quietly until the person dismisses it (deck 3, Q-code-change). */
+  codeChanged?: boolean;
 }
 
 /** A page's working version, ready to show. `html` is a complete document;
@@ -67,6 +180,19 @@ export interface PagesBridge {
    *  pinned or removed — on this device or arriving by sync. Returns the
    *  unsubscribe. */
   onChanged: (cb: (pages: PageSummary[]) => void) => () => void;
+  // Phase 2 — workbench-only until the screens are approved (mock-only.ts).
+  /** Approves every unapproved line. `keys` carries a pasted key per `key`
+   *  connection id, or 'saved' to use the one already kept. */
+  approve?: (id: string, keys: Record<string, string>) => Promise<PageApproveResult>;
+  /** Stops future use of one connection; the page asks again next time. */
+  removeConnection?: (id: string, connectionId: string) => Promise<PageSummary[]>;
+  /** Fetch fresh information now (the band's refresh button). */
+  refresh?: (id: string) => Promise<PageSummary[]>;
+  savedKeys?: () => Promise<SavedPageKey[]>;
+  /** Both parts, because a key is identified by service AND address. */
+  deleteSavedKey?: (service: string, address: string) => Promise<SavedPageKey[]>;
+  /** The one door out of a page. Main checks it against the approvals on disk. */
+  fetch?: (id: string, req: PageFetchRequest) => Promise<PageFetchResult>;
 }
 
 /** How many pinned pages the header shows before the rest stay in the

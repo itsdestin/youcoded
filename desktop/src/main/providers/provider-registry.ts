@@ -26,6 +26,7 @@ import type { ChatGptAuth } from './chatgpt-auth';
 import { CHATGPT_CODEX_BASE_URL, CHATGPT_SIGN_IN_REQUIRED_MESSAGE } from './chatgpt-oauth';
 import { chatGptMiddleware } from './chatgpt-model';
 import { promptCacheMiddleware, type PromptCacheProvider } from './prompt-cache';
+import { openRouterTurnFetch, type OpenRouterHealth } from './openrouter-health';
 
 const FILE = 'providers.json';
 const BUILT_INS: ProviderConfig[] = [
@@ -75,7 +76,11 @@ export class ProviderRegistry {
               /** Sign in with ChatGPT. null = the kill switch (YOUCODED_CHATGPT=0)
                *  or a unit test without it: the virtual row is not listed and a
                *  ChatGPT binding is refused with a plain sentence. */
-              private chatgpt: ChatGptAuth | null = null) {}
+              private chatgpt: ChatGptAuth | null = null,
+              /** What OpenRouter last said about this profile's key
+               *  (connection-trust §3.1). null = a unit test without it: the
+               *  OpenRouter Test falls back to reporting nothing it can't prove. */
+              private health: OpenRouterHealth | null = null) {}
 
   /** Seed the built-in entries. Runs under the file lock so two processes
    *  (dev instance + built app share ~/.youcoded) can't double-seed. */
@@ -136,7 +141,12 @@ export class ProviderRegistry {
             // plan's models leave the picker).
             ? (this.chatgpt?.isSignedIn() ?? false)
             : keyless || hasKey);
-      return { ...p, builtIn, hasKey, ready };
+      // The stored verdict rides along read-only (never decrypts — see
+      // OpenRouterHealth.get). `ready` deliberately ignores it: `ready` feeds
+      // the launch gate and the model menu, and a refused key must change the
+      // WORDS, not lock the user out (§3.1).
+      const health = p.type === 'openrouter' && hasKey ? this.health?.get(p.secretRef) : undefined;
+      return { ...p, builtIn, hasKey, ready, ...(health ? { health } : {}) };
     });
   }
 
@@ -198,6 +208,7 @@ export class ProviderRegistry {
     // Plan A — the cost is one dead ciphertext entry, never a wrong key.
     const entry = this.readAll().find((p) => p.id === id);
     if (entry?.secretRef) await this.secrets.delete(entry.secretRef);
+    if (entry?.secretRef) this.health?.clear(entry.secretRef);
     await this.home.mutateJson(FILE, (cur) => {
       const file = (cur as ProvidersFile | null) ?? { v: 1 as const, providers: [] };
       file.providers = file.providers.filter((p) => p.id !== id);
@@ -214,6 +225,9 @@ export class ProviderRegistry {
       throw new Error(`Provider '${id}' is not configured.`);
     }
     const ref = await this.secrets.set(plaintext, entry.secretRef);
+    // A new key makes the old verdict meaningless: drop it (or adopt the check
+    // the Connect dialog just ran on this exact key) before anything reads it.
+    if (entry.type === 'openrouter') this.health?.adoptOrClear(ref, plaintext);
     // Persist the pointer by mutating the LIVE entry inside the file lock —
     // NOT by writing back the snapshot read above. A snapshot write would
     // silently undo any concurrent edit (label change, disable) that landed
@@ -269,7 +283,7 @@ export class ProviderRegistry {
     // say what actually happened instead.
     if (!p && VIRTUAL_IDS.has(binding.providerId)) throw new Error(CHATGPT_TURNED_OFF_MESSAGE);
     if (!p) throw new Error(`Provider '${binding.providerId}' is not configured.`);
-    if (!p.enabled) throw new Error(`${p.label} is disabled in Settings → Providers.`);
+    if (!p.enabled) throw new Error(`${p.label} is disabled in Assistant settings → Cloud providers.`);
 
     switch (p.type) {
       case 'local-engine': {
@@ -290,7 +304,7 @@ export class ProviderRegistry {
         if (!(await this.localEngine.ensureServable(binding.modelId))) {
           throw new Error(
             `The local engine could not find the model file for '${binding.modelId}'. `
-            + 'It may have been deleted, moved, or renamed — re-download it in Settings → Providers → Local models.',
+            + 'It may have been deleted, moved, or renamed — re-download it in Assistant settings → Local models.',
           );
         }
         // The local stream tap does two jobs off ONE tee'd copy: live prefill
@@ -353,12 +367,21 @@ export class ProviderRegistry {
       }
       case 'openrouter': {
         const apiKey = await this.keyFor(p);
-        if (!apiKey) throw new Error('OpenRouter needs an API key — add one in Settings → Providers.');
+        if (!apiKey) throw new Error('OpenRouter needs an API key — add one in Assistant settings → Cloud providers.');
+        const health = this.health;
+        const ref = p.secretRef;
         return cached('openrouter', createOpenAICompatible({
           name: 'openrouter',
           baseURL: p.baseUrl ?? OPENROUTER_BASE_URL,
           apiKey,
           headers: OPENROUTER_HEADERS,
+          // Connection-trust §3.1 write point 4: a refused request marks the
+          // saved key rejected, so Settings stops saying Connected, and ends
+          // the turn with a plain sentence the chat card can act on. Here —
+          // not where the turn's error is emitted — because only here are the
+          // key's pointer and the real status both known, and specialist
+          // sessions' requests pass through here too.
+          ...(health && ref ? { fetch: openRouterTurnFetch(fetch, () => health.recordTurnRejection(ref, apiKey)) } : {}),
           // NO `includeUsage: true` here, unlike the local-engine and generic
           // openai-compatible branches (where it stays necessary). The SDK
           // compiles that flag to `stream_options: { include_usage: true }` —
@@ -399,17 +422,17 @@ export class ProviderRegistry {
       }
       case 'anthropic': {
         const apiKey = await this.keyFor(p);
-        if (!apiKey) throw new Error(`${p.label} needs an API key — add one in Settings → Providers.`);
+        if (!apiKey) throw new Error(`${p.label} needs an API key — add one in Assistant settings → Cloud providers.`);
         return cached('anthropic', createAnthropic({ apiKey })(binding.modelId));
       }
       case 'openai': {
         const apiKey = await this.keyFor(p);
-        if (!apiKey) throw new Error(`${p.label} needs an API key — add one in Settings → Providers.`);
+        if (!apiKey) throw new Error(`${p.label} needs an API key — add one in Assistant settings → Cloud providers.`);
         return createOpenAI({ apiKey })(binding.modelId);
       }
       case 'google': {
         const apiKey = await this.keyFor(p);
-        if (!apiKey) throw new Error(`${p.label} needs an API key — add one in Settings → Providers.`);
+        if (!apiKey) throw new Error(`${p.label} needs an API key — add one in Assistant settings → Cloud providers.`);
         return createGoogleGenerativeAI({ apiKey })(binding.modelId);
       }
       case 'chatgpt': {
@@ -490,6 +513,18 @@ export class ProviderRegistry {
     const live = this.chatgpt.signedInAccount();
     const accountFingerprint = createHash('sha256').update(live.accountId).digest('hex');
     return `${binding.providerId}\0${binding.modelId}\0${accountFingerprint}\0${live.credentialEpoch}`;
+  }
+
+  /** Re-check the saved OpenRouter key and store the answer (§3.4: launch,
+   *  then every few minutes). Does nothing unless OpenRouter is turned on and
+   *  has a key, so it never asks OpenRouter on behalf of someone not using it.
+   *  Never throws. */
+  async refreshOpenRouter(): Promise<void> {
+    try {
+      const p = this.readAll().find((x) => x.type === 'openrouter');
+      if (!p?.enabled || !this.secrets.has(p.secretRef)) return;
+      await this.testConnection(p.id);
+    } catch { /* a background check has no one to tell; the next one retries */ }
   }
 
   /**
@@ -594,7 +629,7 @@ export class ProviderRegistry {
    * NEVER throws — always resolves { ok, message } so the Providers panel can
    * render the outcome without a try/catch on every call site.
    */
-  async testConnection(id: string): Promise<{ ok: boolean; message: string }> {
+  async testConnection(id: string, candidateKey?: string): Promise<{ ok: boolean; message: string; verdict?: 'verified' | 'rejected' | 'unchecked' }> {
     // Everything — including the providers.json read and the localBaseUrl()
     // callback — lives inside the try, so no code path can throw past the
     // never-throws contract. (readAll rethrows non-ENOENT I/O errors, and
@@ -613,7 +648,7 @@ export class ProviderRegistry {
       // createOpenAICompatible normalizes internally, but these hand-built
       // probe URLs don't get that treatment.
       const stripSlash = (u: string) => u.replace(/\/+$/, '');
-      const needsKey = { ok: false, message: `${p.label} needs an API key — add one in Settings → Providers.` };
+      const needsKey = { ok: false, message: `${p.label} needs an API key — add one in Assistant settings → Cloud providers.` };
       const signal = AbortSignal.timeout(TEST_TIMEOUT_MS);
       let res: Response;
       switch (p.type) {
@@ -629,17 +664,26 @@ export class ProviderRegistry {
           break;
         }
         case 'openrouter': {
-          const key = await this.keyFor(p);
+          // Asks OpenRouter about the key itself (GET /key), which refuses a
+          // bad key — the old probe hit the public /models list, which answers
+          // any key and none, so Test could never fail (§1 D2).
+          // `candidateKey`: the Connect dialog / first-run check a key BEFORE
+          // saving it, so a typo never replaces a working key.
+          let key = candidateKey?.trim();
+          if (!key) {
+            try {
+              key = await this.keyFor(p);
+            } catch (e: any) {
+              // A saved key that can't be DECRYPTED is not a network problem —
+              // say what actually happened, and leave the verdict alone.
+              return { ok: false, message: e?.message ?? String(e) };
+            }
+          }
           if (!key) return needsKey;
-          // CAVEAT: OpenRouter's /models endpoint is PUBLIC, so a 200 here
-          // proves reachability, NOT that the key is valid. (`GET /api/v1/key`
-          // would validate the key; deferred.) Don't present the green check
-          // as key validation in the UI.
-          res = await fetch(`${stripSlash(p.baseUrl ?? OPENROUTER_BASE_URL)}/models`, {
-            headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_HEADERS },
-            signal,
-          });
-          break;
+          if (!this.health) return { ok: false, message: 'Checking OpenRouter keys is not available in this build.' };
+          const saved = candidateKey === undefined && p.secretRef ? p.secretRef : undefined;
+          const r = await this.health.check(p.baseUrl ?? OPENROUTER_BASE_URL, key, saved);
+          return { ok: r.ok, message: r.message, verdict: r.verdict };
         }
         case 'openai-compatible': {
           if (!p.baseUrl) return { ok: false, message: `${p.label} has no endpoint URL configured.` };

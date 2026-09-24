@@ -21,9 +21,11 @@ import {
   CONTENT as ARTIFACT_CONTENT, SAMPLE_PNG_BASE64, SAMPLE_SVG, makeDetailPngBase64, makeSamplePdfBase64, contextGroups,
   studentProjects, studentProjectsWithCounts, studentAllFiles, studentSessionFiles, studentContextGroups,
 } from './fixtures/artifacts';
+import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { resolveFixture, CS_ERR_READ } from './fixtures/chatsearch';
 import { SHEET_BEFORE, SHEET_AFTER } from './fixtures/sheets';
 import type { MockState, MockSessionMeta } from './scenarios';
+import { stressRowCount } from './scenarios';
 import { specialistRoster, delegatedModels as seedDelegatedModels } from './fixtures/specialists';
 import { PLANS } from './specialist-runs';
 import { MARKETPLACE_PLUGINS, MARKETPLACE_THEMES, INSTALLED_SKILLS, INSTALLED_PACKAGES, FEATURED } from './fixtures/marketplace/registry';
@@ -39,11 +41,12 @@ import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
 // worker uses, so what Destin reviews in the workbench is the shipped grey/solid
 // rule rather than a lookalike (it used to grey the last two words, full stop).
 import { splitAtLastSentenceEnd } from '../../../shared/voice-types';
-import { buildCatalog } from './fixtures/marketplace/catalog';
+import { buildCatalog, buildStressCatalog } from './fixtures/marketplace/catalog';
 // `?guide=tip:<id>` (below): fire one first-run tip on demand for a photograph.
 import { triggerTip } from '../../components/guide/tips';
 import { isNoFolderCwd } from '../../../shared/no-folder';
 import { createRemoteAccessPreview } from './fixtures/remote-access';
+import { folderPageFromRecords } from '../../../shared/artifacts/folder-page';
 
 // artifactId -> pretend on-disk size, for exercising the over-cap artifact
 // states (partial-view banner, handoff) against the fake backend.
@@ -80,7 +83,7 @@ const WORKBENCH_TEXT_HEADS: Record<string, string> = {
 
 /** Dotted paths this shim implements by hand (`'session.list'`), plus dotless
  *  top-level bridge members (`'getPlatform'`). The contract test
- *  (tests/workbench-mock-contract.test.ts) checks each against preload.ts. */
+ *  (tests/mock-shim-window.test.ts) checks each against preload.ts. */
 export const HAND_WRITTEN: ReadonlyArray<string> = [
   'sessionNaming.get', 'sessionNaming.set', 'sessionNaming.title', 'sessionNaming.rename',
   'devLabel', 'getPlatform', 'getHomePath', 'getFavorites', 'setFavorites',
@@ -89,9 +92,9 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'off', 'removeAllListeners',
   'session.list', 'session.create', 'session.browse', 'session.destroy',
   'session.setFlag', 'session.setTag', 'session.setNote', 'session.getMeta',
-  'session.sendInput', 'session.respondToPermission', 'on.transcriptEvent', 'on.hookEvent',
-  'native.send', 'native.setBinding',
-  'providers.list', 'providers.catalog', 'models.memoryCheck',
+  'session.sendInput', 'session.respondToPermission', 'session.handoff', 'on.transcriptEvent', 'on.hookEvent',
+  'native.send', 'native.setBinding', 'native.switchModel',
+  'providers.list', 'providers.catalog', 'providers.test', 'providers.setKey', 'models.memoryCheck',
   // Local Models rows + Resume (2026-08-26). WHY these must be listed: the
   // contract test only checks members named here, so a hand-written mock left
   // off this list escapes the real-or-registered check entirely.
@@ -171,7 +174,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'firstRun.localSetup', 'firstRun.localDownload',
   'firstRun.resumeLocalDownload', 'firstRun.connectLocalApp', 'claudeCode.install',
   'artifacts.listProjectsIndex', 'artifacts.listSession', 'artifacts.listProject',
-  'artifacts.listAllFiles', 'artifacts.get', 'artifacts.checkExistence',
+  'artifacts.listAllFiles', 'artifacts.listFolder', 'artifacts.get', 'artifacts.checkExistence',
   'artifacts.searchContent', 'artifacts.watchProject', 'artifacts.unwatchProject',
   'artifacts.readBinary', 'artifacts.save',
   'syncSpaces.status', 'syncSpaces.syncNow', 'syncSpaces.stopProject',
@@ -210,6 +213,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // carries the four rows. The fake keeps pin state for the tab's lifetime so the
   // header's pinned buttons follow the library's pin toggles.
   'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
+  // Pages Phase 2 (connections) — designed ahead of the backend; rows in mock-only.ts.
+  'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -382,7 +387,7 @@ function withCatchAll(namespace: string, impl: Record<string, unknown>): Record<
         // A nested hand-written namespace (`theme.marketplace = { list }`) gets
         // the same catch-all as a top-level one, so the members it does NOT
         // implement still resolve `[]` rather than being undefined — the
-        // synchronous-throw-inside-Promise.all bug workbench-shim-semantics pins.
+        // synchronous-throw-inside-Promise.all bug mock-shim.test.ts pins.
         if (value && typeof value === 'object' && !Array.isArray(value)) {
           if (!cache.has(key)) cache.set(key, withCatchAll(`${namespace}.${key}`, value as Record<string, unknown>));
           return cache.get(key);
@@ -466,7 +471,7 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
-import type { PagesBridge, PageDocument, PageSummary } from '../../../shared/pages-types';
+import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
  *
@@ -716,6 +721,29 @@ function chatgptUsageFixture() {
   };
 }
 
+/** `?openrouter=<state>` — what the OpenRouter key looks like to the card:
+ *  verified | rejected | expired | wrong-type | unchecked | none. Absent = the
+ *  fixture as it always was (no key reported), so no other deck's baseline
+ *  moves. WHY a pin: the connection-trust review (2026-09-18) needs the same
+ *  card shot with a live key, a dead key and an unreachable service. */
+function openrouterPin(): string | null {
+  return (typeof location !== 'undefined' && new URLSearchParams(location.search).get('openrouter')) || null;
+}
+
+/** The verdict a `?openrouter=` pin stands for, shaped as the real registry
+ *  reports it. `none` has no key, so no verdict. */
+function openrouterHealth(pin: string): import('../../../shared/provider-types').ProviderHealth | undefined {
+  const checkedAt = Date.now() - 60_000;
+  switch (pin) {
+    case 'verified': return { verdict: 'verified', checkedAt };
+    case 'unchecked': return { verdict: 'unchecked', checkedAt };
+    case 'rejected': return { verdict: 'rejected', reason: 'openrouter-key-rejected', checkedAt };
+    case 'expired': return { verdict: 'rejected', reason: 'openrouter-key-expired', expiresAt: new Date(Date.now() - 86_400_000).toISOString(), checkedAt };
+    case 'wrong-type': return { verdict: 'rejected', reason: 'openrouter-wrong-key-type', checkedAt };
+    default: return undefined;
+  }
+}
+
 /** The `?chatgpt=` pin, read fresh so both the account state and the status:data
  *  usage fixture answer from the same URL. */
 function chatgptPlanPin(): string | null {
@@ -761,6 +789,11 @@ function statusBarFixtureFor(scenario: string): { usage: unknown; sessionStatsMa
 }
 
 /** Hand-written channel implementations, backed by the store. */
+// Main's session:focus-request, as the workbench's one window receives it.
+// session.create fires it for a reused writer (as ipc-handlers.ts createSession
+// does); buddy.onFocusSession is how App listens for it.
+const focusSessionSubs = new Set<(sessionId: string) => void>();
+
 function handWritten(store: MockStore): Record<string, Record<string, unknown>> {
   // `location` is guarded the same way latencyFromQuery() above guards it —
   // this module has no node-test importer today, but the pattern is load-
@@ -860,11 +893,58 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // once from the resume path with the row's id — and only the FIRST ask per
   // session id runs. So the locator-less ask must already know the row.
   const resumedFrom = new Map<string, string>();
+  // Explicit handoff (?lease=held:<device>): the real pending tab, notices and
+  // draft rules run against this. The first wait ends "may have newer
+  // messages"; Try again, Continue or a forced takeover then opens the session.
+  // No ownership or freshness is proven here — the backend owns that.
+  const handoffs = new Map<string, { create?: any; state: any; tries: number }>();
+  const handoffRows = new Set<string>();
+  const handoffOpen = async (id: string, source: 'confirmed' | 'saved-copy') => {
+    const h = handoffs.get(id)!;
+    leaseReleased = true;
+    const created = await session.create!(h.create);
+    h.state = { id, status: 'admitted', source, session: created };
+    return h.state;
+  };
+  const handoff = {
+    begin: async (conversationId: string, _provider: string, create?: any) => {
+      handoffRows.add(conversationId);
+      const id = `wb-handoff-${handoffs.size + 1}`;
+      handoffs.set(id, { create, state: { id, status: 'waiting' }, tries: 0 });
+      return { id, status: 'waiting' };
+    },
+    status: async (id: string) => handoffs.get(id)?.state ?? { id, status: 'failed' },
+    wait: async (id: string) => {
+      const h = handoffs.get(id);
+      if (!h) return { id, status: 'failed' };
+      await new Promise((r) => setTimeout(r, 5000));
+      if (h.state.status !== 'waiting') return h.state;
+      if (h.tries === 0) {
+        h.state = { id, status: 'incomplete', cause: 'receipt not confirmed', holder: { deviceId: 'wb-holder', device: leaseHolder ?? 'Laptop' } };
+        return h.state;
+      }
+      return handoffOpen(id, 'confirmed');
+    },
+    retry: async (id: string) => {
+      const h = handoffs.get(id)!;
+      h.tries++;
+      h.state = { id, status: 'waiting' };
+      return h.state;
+    },
+    savedCopy: async (id: string) => handoffOpen(id, 'saved-copy'),
+    force: async (id: string) => handoffOpen(id, 'saved-copy'),
+    cancel: async (id: string) => { const h = handoffs.get(id); if (h) h.state = { id, status: 'cancelled' }; return h?.state ?? { id, status: 'cancelled' }; },
+    setCreateParams: async (id: string, create: any) => { const h = handoffs.get(id)!; h.create = create; return h.state; },
+  };
   const session: Ns<'session'> & UntypedSessionWrites = {
+    handoff: handoff as any,
     list: async () => store.getState().sessions,
     browse: async () => store.getState().past,
 
     create: async (opts) => {
+      // Admission belongs to creation, just like the desktop backend. A race
+      // fixture must deny BEFORE it emits a session-created event or adds a row.
+      if (opts.resumeSessionId && leaseHolder && !leaseReleased) return { status: 'lease-denied', device: leaseHolder };
       // Deterministic-ish id without Date.now(): the store's length is enough
       // to keep ids unique within a page, and stable across reloads.
       const id = `wb-new-${store.getState().sessions.length + 1}`;
@@ -875,8 +955,25 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // session..." for good. Take the title from the Resume row itself, and
       // send the first hook event App is waiting for (below) — the promo's
       // phone beat takes a session over and has to land in its conversation.
-      const resumedRow = (opts as any).resumeSessionId
-        ? store.getState().past.find((p) => p.sessionId === (opts as any).resumeSessionId) : undefined;
+      // Inline conversation cards use the separate UUID-backed fixture index,
+      // not wb-past-* ids. They must emit initialization too, or testing a real
+      // resume route here strands the screen behind a fake startup failure.
+      const ref = opts.resumeSessionId ? resolveFixture(opts.resumeSessionId) : undefined;
+      const resumedRow = store.getState().past.find((p) => p.sessionId === opts.resumeSessionId)
+        ?? (ref?.status === 'ok' ? { sessionId: ref.id, name: ref.title } : undefined);
+      // Mirrors main's session:create: a conversation already open in a tab
+      // answers with that tab (`reused`, resume admission) instead of a second copy,
+      // and asks the window to select it, as main's focus request does.
+      if (resumedRow) {
+        const openId = [...resumedFrom].find(([sid, row]) => row === resumedRow.sessionId
+          && store.getState().sessions.some((x) => x.id === sid))?.[0];
+        const open = openId ? store.getState().sessions.find((x) => x.id === openId) : undefined;
+        if (open) {
+          // Main also asks the owning window to select it (session:focus-request).
+          queueMicrotask(() => focusSessionSubs.forEach((cb) => cb(open.id)));
+          return { ...open, reused: true } as any;
+        }
+      }
       if (resumedRow) resumedFrom.set(id, resumedRow.sessionId);
       const created = {
         id,
@@ -891,6 +988,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         provider: opts.provider ?? 'claude',
         harnessId: (opts as any).harnessId,
         model: opts.model,
+        ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
       };
       store.setState((s) => ({ ...s, sessions: [...s.sessions, created as any] }));
       // WHY emit: the renderer does not poll. App re-fetches on
@@ -1038,6 +1136,36 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   };
 
+  // ── Sign in with OpenRouter ───────────────────────────────────────────────
+  // `?openrouterSignIn=waiting|failed` pins the card mid-round-trip. Unpinned,
+  // a sign-in "finishes" after 2.5 s and saves a key that verifies, like the
+  // real one (design §3.5).
+  const openrouterSignInPin = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('openrouterSignIn') : null;
+  let openrouterSignIn: { state: 'idle' | 'waiting' | 'failed'; message?: string } =
+    openrouterSignInPin === 'waiting' ? { state: 'waiting' }
+    : openrouterSignInPin === 'failed' ? { state: 'failed', message: 'Sign-in timed out. Try again when you are ready.' }
+    : { state: 'idle' };
+  let openrouterSignInTimer: ReturnType<typeof setTimeout> | null = null;
+  const openrouter = {
+    supported: true,
+    status: async () => openrouterSignIn,
+    signIn: async () => {
+      if (store.refuseWrites) return false;
+      openrouterSignIn = { state: 'waiting' };
+      if (openrouterSignInTimer) clearTimeout(openrouterSignInTimer);
+      if (!openrouterSignInPin) {
+        openrouterSignInTimer = setTimeout(() => { openrouterKeySaved = true; openrouterSignIn = { state: 'idle' }; }, 2500);
+      }
+      return true;
+    },
+    cancelSignIn: async () => {
+      if (openrouterSignInTimer) clearTimeout(openrouterSignInTimer);
+      openrouterSignInTimer = null;
+      openrouterSignIn = { state: 'idle' };
+      return true;
+    },
+  };
+
   // ── Claude Code's own sign-in ──────────────────────────────────────────────
   // Pinned by `?claudeCode=` (signed-in | signed-out | apikey | not-installed |
   // unknown). Default signed-in on a Max plan, because that is the ordinary
@@ -1077,13 +1205,37 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     removeKey: async (id: string) => { if (store.refuseWrites) throw new Error('refused'); searchKeys.delete(id); return true; },
   };
 
+  // A key saved through the fake Connect dialog, so the card re-reads as
+  // having one — the real registry does the same after setKey.
+  let openrouterKeySaved = false;
   const providers: Ns<'providers'> = {
     // The ChatGPT row is keyless: `ready` IS "signed in", derived here so the
     // picker, the Settings row and the runtime selector never disagree.
-    list: async () => store.getState().providers.map((p) =>
+    list: async () => store.getState().providers.map((p) => {
       // `&&` so a scenario that turns every provider off (no-providers) still wins.
-      p.type === 'chatgpt' ? { ...p, ready: p.ready && chatgptStatus.state === 'signed-in' } : p),
+      if (p.type === 'chatgpt') return { ...p, ready: p.ready && chatgptStatus.state === 'signed-in' };
+      const pin = openrouterPin();
+      if (p.type === 'openrouter' && (pin || openrouterKeySaved)) {
+        const hasKey = openrouterKeySaved || pin !== 'none';
+        // The stored verdict (connection-trust §3.1) the real registry merges
+        // into this row. A key saved through the fake Connect dialog passed
+        // the fake check, so it reads verified.
+        const health = openrouterKeySaved ? openrouterHealth('verified') : pin ? openrouterHealth(pin) : undefined;
+        return { ...p, hasKey, ready: p.ready && hasKey, ...(health ? { health } : {}) };
+      }
+      return p;
+    }),
     catalog: async () => store.getState().catalog,
+    // The real Test asks OpenRouter about the key (§3.2). The fake: a candidate
+    // key containing "fake" is refused; the saved key answers per `?openrouter=`.
+    test: async (_id: string, key?: string) => {
+      const verdict = key !== undefined ? (key.includes('fake') ? 'rejected' : 'verified')
+        : openrouterKeySaved ? 'verified' : openrouterHealth(openrouterPin() ?? 'verified')?.verdict ?? 'verified';
+      if (verdict === 'rejected') return { ok: false, verdict, message: "OpenRouter didn't accept this key. Check that you copied all of it." };
+      if (verdict === 'unchecked') return { ok: false, verdict, message: "OpenRouter couldn't be reached to check the key." };
+      return { ok: true, verdict, message: 'Connected.' };
+    },
+    setKey: async () => { if (store.refuseWrites) throw new Error('refused'); openrouterKeySaved = true; return true; },
   };
 
   // M5 2a. Real backend since (permissions:* on preload + remote-shim); the fake
@@ -1605,6 +1757,21 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       }));
       return true;
     },
+    // U11 model-switch popup. `?switchFit=summary` makes every pick ask first
+    // (so the popup can be reviewed); `?switchFit=working` also leaves the
+    // summary running forever, `?switchFit=error` makes it fail. Default: fits.
+    switchModel: async (sessionId: string, b: { providerId: string; modelId: string }, summarize?: boolean) => {
+      const fit = new URLSearchParams(location.search).get('switchFit');
+      if (fit && !summarize) return { status: 'needs-summary' };
+      if (fit === 'working') return new Promise(() => {});
+      if (fit === 'error') return { status: 'failed', reason: 'cannot-fit' };
+      if (store.refuseWrites) return { status: 'failed', reason: 'not-live' };
+      store.setState((s) => ({
+        ...s,
+        sessions: s.sessions.map((x: any) => x.id === sessionId ? { ...x, model: b.modelId, providerId: b.providerId } : x),
+      }));
+      return { status: 'switched' };
+    },
     // G-1: the card's Stop just resolves — the gallery fixture stays in its
     // captured state rather than spawning anything real.
     killShell: async (_sessionId: string, _shellId: string) => ({ ok: true }),
@@ -1883,10 +2050,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     syncNow: async () => ({ ok: true }),
     stopProject: async () => ({ ok: true }),
     renameProject: async () => ({ ok: true }),
-    // Promo: the conversation-lease gate App.tsx runs before a resume.
-    leaseQuery: async () => leaseHolder ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },
-    leaseTakeover: async () => ({ outcome: 'acquired' as const }),
-    leaseForce: async () => ({ ok: true }),
+    leaseQuery: async () => leaseHolder && leaseMode !== 'raced' && !leaseReleased
+      ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },
+    leaseTakeover: async () => {
+      if (leaseMode === 'timeout' || leaseMode === 'undeliverable') return { outcome: leaseMode };
+      leaseReleased = true;
+      return { outcome: 'ready' as const };
+    },
+    leaseForce: async () => { leaseReleased = true; return { ok: true }; },
     // The synced device registry behind the popup's Devices count-tab. Without
     // it the catch-all answers [] and the demo reads "0 Devices / No devices
     // yet" directly under "All synced", which contradicts itself — cross-device
@@ -1986,6 +2157,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // second past row in that folder would match by projectPath and break the
   // conversations beat's one-result search.
   const conversationsIn = (projectPath: string) => {
+    // WHY (render-cost plan, Task 0 step 2b): in `stress` the FIRST project
+    // (artifactProjects()[0], the youcoded repo) holds every past row, so its
+    // Conversations tab reaches `?stressRows=` — the size of the freeze the plan
+    // fixes. Filtering left it a third of the rows. The rows keep their own
+    // sessionIds, so opening one still previews the same conversation the
+    // Resume browser shows.
+    // WHY this branch skips the `studentSwitch` live-session merge below (fix
+    // round 1, review): `&scenario=stress&student=1` is not a combination any
+    // scene or sweep uses — stress drives the render-cost sweep, student drives
+    // the promo persona — so the two are not meant to combine and this early
+    // return never needs to.
+    if (activeScenario === 'stress' && projectPath === artifactProjects()[0].path) {
+      return store.getState().past.map((p) => ({ ...p, projectPath, projectSlug: projectPath.split('/').pop()! }));
+    }
     const past = store.getState().past
       .filter((p) => p.projectPath === projectPath);
     if (!studentSwitch) return past;
@@ -1996,6 +2181,29 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         lastModified: Date.now() - 30 * 60_000, size: 2048, provider: x.provider,
       }));
     return [...live, ...past];
+  };
+  // Files tab (fix round 1, render-cost plan Task 0, implementer concern 3):
+  // in `stress` the FIRST project's file listing also reaches `stressRowCount()`
+  // rows, same as its Conversations tab above — otherwise Files, search "e"
+  // sweeps ~12 fixture files and proves nothing about the flat-results render
+  // path at scale (Task 5 of the plan). Every generated name contains "e"
+  // ("stress-file-e-N.md") so the one-letter search the sweep types matches
+  // every row, not a filtered subset. `discovered: true` (no sidecar versions)
+  // matches how `allFiles()`'s DISCOVERED half is shaped — same fixture shape,
+  // just generated instead of hand-written.
+  const stressFiles = (): ArtifactRecord[] => Array.from({ length: stressRowCount() }, (_, i) => {
+    const path = `stress-files/stress-file-e-${i}.md`;
+    return {
+      id: path, path, kind: 'internal' as const, absolutePath: null,
+      lastModified: new Date(SYNC_NOW - i * 60_000).toISOString(),
+      status: 'active' as const, versions: [], comments: [], tags: [], discovered: true,
+    };
+  });
+  const filesIn = (projectId: string): ArtifactRecord[] => {
+    if (activeScenario === 'stress' && projectId === artifactProjects()[0].path) {
+      return [...allFiles(projectId), ...stressFiles()];
+    }
+    return studentSwitch ? studentAllFiles(projectId) : allFiles(projectId);
   };
   const project = {
     listConversations: async (projectPath: string) => ({
@@ -2105,14 +2313,21 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // returns since 2026-09-16, so the preview replays them through the chat
       // reducer exactly as it does a real page. A turn with a third line gets a
       // short sentence, a few tool calls, then the answer, so the preview shows
-      // a real tool group (tests/workbench-transcript-fixture.test.ts).
+      // a real tool group (tests/mock-shim.test.ts, transcript fixture).
       //
       // The turns cycle through CHAT_TURNS rather than printing filler. WHY
       // (2026-09-10): a human reads this text to judge whether the preview
       // tells them which conversation it is. The words are invented; nothing
       // here is read off disk.
       const sessionId = `preview:${req.id}`;
-      const TOTAL = 24;
+      // WHY stress scales TOTAL (fix round 1, render-cost plan Task 0 concern 3):
+      // a long conversation needs to exist for the preview's paging to have
+      // something real to page through. PAGE stays fixed — SessionPreviewPane.tsx
+      // reads one page per `chatsearch:read` call and pages backwards only as
+      // the reader scrolls (never "load everything"), so a bigger TOTAL alone
+      // does NOT grow the DOM-size sweep's first-load count; it grows `hasMore`
+      // depth instead. Recorded honestly in the sweep table, not raised here.
+      const TOTAL = activeScenario === 'stress' ? stressRowCount() : 24;
       const PAGE = 10;
       const turnsFor = studentSwitch ? STUDENT_TURNS : CHAT_TURNS;
       const eventsFor = (i: number) => {
@@ -2165,7 +2380,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // resume raise the "active on another device" takeover dialog.
   const remoteSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('remote') : null;
   const leaseSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('lease') : null;
-  const leaseHolder = leaseSwitch?.startsWith('held:') ? leaseSwitch.slice(5) : null;
+  const leaseMode = leaseSwitch?.split(':', 1)[0];
+  const leaseHolder = leaseSwitch?.includes(':') ? leaseSwitch.slice(leaseSwitch.indexOf(':') + 1) : null;
+  let leaseReleased = false;
   // `&student=1` (scenarios.ts reads the same flag for sessions/past/tags):
   // the student persona also owns Project View, the Session Files drawer and
   // the history of a resumed session below, so a promo scene never shows the
@@ -2455,6 +2672,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     return Promise.reject(new Error(`remote-unsupported: ${channel}`));
   };
   const filesRefused = () => remoteFilesSwitch === 'refused';
+  // `&filesLocked=1`: Project Files gets a folder that refuses to open (see
+  // listFolder) — the only way to reach that error without a real disk.
+  const lockedSwitch = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('filesLocked') === '1';
   // A file only a phone would balk at: 24 MB is over the 10 MB image/PDF ceiling
   // but well under the desktop's 50 MB, so the same row previews fine at the
   // desk and shows the too-large card on the phone. Appended to the lists only in
@@ -2485,11 +2706,28 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return { ok: true, artifacts: withRemoteRows(studentSwitch ? studentSessionFiles() : sessionArtifacts(sessionId)) };
     },
     listProject: async (projectId: string) => ({
-      ok: true, artifacts: studentSwitch ? studentAllFiles(projectId) : allFiles(projectId),
+      ok: true, artifacts: filesIn(projectId),
     }),
     listAllFiles: async (projectId: string) => {
       if (filesRefused()) return refuseAsToday('artifacts:list-all-files');
-      return { ok: true, files: withRemoteRows(studentSwitch ? studentAllFiles(projectId) : allFiles(projectId)), truncated: false };
+      return { ok: true, files: withRemoteRows(filesIn(projectId)), truncated: false };
+    },
+    // artifacts:list-folder — one folder, a page at a time, carved from the
+    // fixture rows by the same helper the renderer tests use
+    // (shared/artifacts/folder-page.ts), because the workbench has no disk.
+    // `&filesLocked=1` adds a folder the "system" refuses to open, so the
+    // permission error can be reached and captured.
+    listFolder: async (projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean }) => {
+      if (filesRefused()) return refuseAsToday('artifacts:list-folder');
+      const dir = relDir.replace(/^\/+|\/+$/g, '');
+      if (lockedSwitch && dir === 'Locked') return { ok: false, error: 'permission-denied' };
+      const page = folderPageFromRecords(withRemoteRows(filesIn(projectId)), dir, opts);
+      if (lockedSwitch && !dir && page.ok && !page.hasMore) {
+        page.folders = [...page.folders, { name: 'Locked', path: 'Locked', samples: [] }]
+          .sort((x, y) => x.name.localeCompare(y.name));
+        page.total += 1;
+      }
+      return page;
     },
     // artifacts:resolve-path — one tapped chat path. Same answer shapes as the
     // real lookup (read-service.ts resolveArtifactPath): the fixture row whose
@@ -2499,7 +2737,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       if (filesRefused()) return refuseAsToday('artifacts:resolve-path');
       const root = projectRoot.replace(/\/+$/, '');
       const abs = filePath.startsWith('/') ? filePath : `${root}/${filePath.replace(/^\.\//, '')}`;
-      const rows = studentSwitch ? studentAllFiles(projectRoot) : allFiles(projectRoot);
+      const rows = filesIn(projectRoot);
       const hit = rows.find((r) => (r.kind === 'internal' ? `${root}/${r.path}` : r.absolutePath) === abs);
       if (hit) return { ok: true, artifact: hit };
       return { ok: false, error: abs.startsWith(`${root}/`) ? 'not-found' : 'outside-project' };
@@ -2751,6 +2989,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     requestTranscriptPage: async (req: { sessionId: string; claudeSessionId?: string }) => {
       const empty = { events: [] as TranscriptEvent[], cursor: null, hasMore: false };
       const row = req.claudeSessionId ?? resumedFrom.get(req.sessionId);
+      // A handoff opens on the same saved history its pending tab previewed.
+      if (row && handoffRows.has(row)) {
+        const page = await chatsearch.read({ provider: 'claude', id: row });
+        return { events: (page.events ?? []).map((e: any) => ({ ...e, sessionId: req.sessionId })) as TranscriptEvent[], cursor: null, hasMore: false };
+      }
       if (!studentSwitch || row !== 'wb-past-0') return empty;
       const raw = REPLY_SCRIPTS['./fixtures/replies/briefing.jsonl'];
       if (!raw) return empty;
@@ -2858,6 +3101,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // (playReply in sendInput above). Same attachment pattern as specialistEvent
   // below — Ns<'on'> doesn't carry these members.
   (on as any).transcriptEvent = (cb: (e: any) => void) => { subs.transcript.add(cb); return () => { subs.transcript.delete(cb); }; };
+  // Probe hook, same shape as __workbenchAppearanceSync: play one transcript
+  // event (e.g. a native compact-summary) into the renderer for a screenshot.
+  if (typeof window !== 'undefined') (window as any).__workbenchTranscript = (e: unknown) => { subs.transcript.forEach((f) => f(e)); return subs.transcript.size; };
   (on as any).hookEvent = (cb: (e: any) => void) => { subs.hook.add(cb); return () => { subs.hook.delete(cb); }; };
   // Specialists 1c: the delegation feed (run records + delivered notes). Not
   // on Ns<'on'> yet (no real channel) — attached separately so the typed
@@ -2946,7 +3192,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // (type / origin / scan / capabilities), and the list also carries the
     // member rows (skills, specialists, tools INSIDE bundles) plus a few
     // standalone items — the shape the real catalog will return once built.
-    listMarketplace: async () => (marketplaceEmpty ? [] : buildCatalog(MARKETPLACE_PLUGINS)),
+    // WHY the stress branch (render-cost plan, Task 0 step 2b): `?stressRows=`
+    // must reach the Marketplace too, or the DOM-size sweep measures ~60 cards
+    // and a whole-list render looks cheap.
+    listMarketplace: async () => (marketplaceEmpty ? []
+      : activeScenario === 'stress' ? buildStressCatalog(MARKETPLACE_PLUGINS, stressRowCount())
+      : buildCatalog(MARKETPLACE_PLUGINS)),
     list: async () => (marketplaceEmpty ? [] : installedSkills.map((s) => ({ ...s }))),
     // Promo (marketplace beat): Install STICKS for the page's lifetime. Before
     // this both channels fell to the catch-all, so the detail button flashed
@@ -3084,6 +3335,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       buddyStatusSubs.add(cb);
       return () => buddyStatusSubs.delete(cb);
     },
+    onFocusSession: (cb: (sessionId: string) => void) => {
+      focusSessionSubs.add(cb);
+      return () => { focusSessionSubs.delete(cb); };
+    },
     // needed = the app cannot move its own windows here, so a helper is required
     // at all; supported = a helper could work on this desktop (KDE 6 Wayland);
     // installed = the helper package is loaded in the compositor. `installed` is
@@ -3167,18 +3422,21 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, plans, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, claudeCode, search,
+    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;
 }
 
 /** `window.claude.pages` for the workbench (Phase 1 shell). `empty` seeds no
- *  pages so the library's first-run card is reviewable; every other scenario
+ *  pages so the landing screen's first-run card is reviewable; every other scenario
  *  gets the three fixture pages. Pin toggles publish through onChanged the way
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {
   let pages: PageDocument[] = empty ? [] : seedPages();
+  // One key is saved from the start (Trip board uses it), so the Weather page
+  // can show "Uses your saved OpenWeather key".
+  const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);
   const subs = new Set<(p: PageSummary[]) => void>();
   const summaries = () => pages.map(({ html: _html, data: _data, ...rest }) => rest);
   const publish = () => subs.forEach((cb) => cb(summaries()));
@@ -3202,8 +3460,58 @@ function createPagesMock(empty: boolean): PagesBridge {
       pages = pages.map((p) => (p.id === id ? { ...p, data } : p));
       return { ok: true };
     },
+    // The workbench never reaches the network: every fixture page's numbers are
+    // baked in. The door still answers, so a page that calls it gets an honest
+    // refusal rather than a promise that never settles.
+    fetch: async () => ({ ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' }),
     onChanged: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
+    // ── Phase 2 (connections) — no backend yet; mock-only.ts carries the rows ──
+    // Allow: every waiting line becomes approved, a pasted key becomes a saved
+    // key, and the page gets its first "Updated just now".
+    approve: async (id, keys) => {
+      await delay();
+      pages = pages.map((p) => {
+        if (p.id !== id) return p;
+        for (const c of p.connections ?? []) {
+          if (c.kind === 'key' && keys[c.id] && keys[c.id] !== 'saved') savedServices.set(c.service, c.address);
+        }
+        // Allowing (or dismissing "code changed") records the current code too.
+        return { ...p, codeChanged: false, connections: (p.connections ?? []).map((c) => ({ ...c, approved: true, ...(c.kind === 'key' ? { savedKey: true } : {}) })), refresh: p.refresh ?? { at: new Date().toISOString(), failed: false } };
+      });
+      publish();
+      return { ok: true, pages: summaries() };
+    },
+    // Remove: the line stays listed but goes back to waiting, so the page asks
+    // again next time it opens (deck S-remove).
+    removeConnection: async (id, connectionId) => {
+      pages = pages.map((p) => (p.id !== id ? p : { ...p, refresh: undefined, connections: (p.connections ?? []).map((c) => (c.id === connectionId ? { ...c, approved: false } : c)) }));
+      publish();
+      return summaries();
+    },
+    // Refresh always succeeds here, so a failed page can be seen recovering.
+    refresh: async (id) => {
+      await delay(900);
+      pages = pages.map((p) => (p.id === id ? { ...p, refresh: { at: new Date().toISOString(), failed: false } } : p));
+      publish();
+      return summaries();
+    },
+    savedKeys: async () => listSavedKeys(),
+    // A key is service AND address, so the workbench deletes by both — the real
+    // store cannot offer one page's key to another page's host.
+    deleteSavedKey: async (service, address) => {
+      if (savedServices.get(service) === address) savedServices.delete(service);
+      pages = pages.map((p) => ({ ...p, refresh: p.connections?.some((c) => c.kind === 'key' && c.service === service) ? undefined : p.refresh, connections: p.connections?.map((c) => (c.kind === 'key' && c.service === service ? { ...c, approved: false, savedKey: false } : c)) }));
+      publish();
+      return listSavedKeys();
+    },
   };
+  function delay(ms = 350) { return new Promise((r) => setTimeout(r, ms)); }
+  function listSavedKeys(): SavedPageKey[] {
+    return [...savedServices.entries()].map(([service, address]) => ({
+      service, address,
+      usedBy: pages.filter((p) => p.connections?.some((c) => c.kind === 'key' && c.service === service && c.approved)).map((p) => ({ id: p.id, name: p.name })),
+    }));
+  }
 }
 
 const VOICE_SCRIPT = "Can you look at the budget spreadsheet I sent yesterday? Row 14 is wrong: it says $2,300 but Sarah's invoice was $2,030. Fix it and draft a short reply to her.".split(' ');

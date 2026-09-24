@@ -56,10 +56,10 @@ export function chatGptModelsUrl(clientVersion: string): string {
 
 /** What the registry throws when a ChatGPT model is picked while signed out. */
 export const CHATGPT_SIGN_IN_REQUIRED_MESSAGE =
-  'Sign in with ChatGPT in Settings → Model Providers to use this model.';
+  'Sign in with ChatGPT in Assistant settings → Cloud providers to use this model.';
 /** What a turn ends with when a refresh can no longer fix a 401. */
 export const CHATGPT_SIGN_IN_EXPIRED_MESSAGE =
-  'Your ChatGPT sign-in has expired — sign in again in Settings → Model Providers.';
+  'Your ChatGPT sign-in has expired — sign in again in Assistant settings → Cloud providers.';
 
 // ---------------------------------------------------------------------------
 // PKCE and the authorize URL

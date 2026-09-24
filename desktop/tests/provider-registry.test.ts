@@ -315,7 +315,7 @@ describe('ProviderRegistry', () => {
   describe('Sign in with ChatGPT (virtual row + request path)', () => {
     const NOT_A_KEY = 'ChatGPT is signed in through OpenAI, not with a key — use Sign out on its card.';
     const TURNED_OFF = 'ChatGPT sign-in is turned off in this build.';
-    const SIGN_IN_REQUIRED = 'Sign in with ChatGPT in Settings → Model Providers to use this model.';
+    const SIGN_IN_REQUIRED = 'Sign in with ChatGPT in Assistant settings → Cloud providers to use this model.';
 
     interface Captured { url: string; headers: Record<string, string>; body: any }
     interface FakeOpts {

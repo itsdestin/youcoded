@@ -11,6 +11,11 @@ if (process.env.CLAUDE_MOBILE_SESSION_ID) {
   try {
     var parsed = JSON.parse(rawInput);
     parsed.mobileSessionId = process.env.CLAUDE_MOBILE_SESSION_ID;
+    // WHY (2026-09-23): CLAUDE_MOBILE_SESSION_ID is inherited by every process
+    // the session starts, so a nested `claude` reported its hooks as ours.
+    // Claude Code's own pid (CLAUDE_PID) lets EventBridge keep only the first
+    // process it hears from. Mirrors desktop hook-scripts/relay.js.
+    if (process.env.CLAUDE_PID) parsed.claudePid = process.env.CLAUDE_PID;
     input = JSON.stringify(parsed);
   } catch(e) { /* send raw if parse fails */ }
 }

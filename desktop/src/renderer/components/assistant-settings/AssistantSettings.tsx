@@ -65,8 +65,10 @@ function usePanelFold(): boolean {
 /** Which providers need attention right now (Q-4a: a warning dot on the row and
  *  on the page). ONLY states that are actually broken — a dot for anything less
  *  is the one way this row loses trust. Today: a ChatGPT plan OpenAI has blocked,
- *  and a local engine that failed to start. A key OpenRouter rejects is not
- *  known until a send fails; that error lands in the chat, not here.
+ *  an OpenRouter key OpenRouter refused, and a local engine that failed to
+ *  start. The OpenRouter case reads the key's stored verdict, which a refused
+ *  chat message also writes (connection-trust §3.1) — before 2026-09-18 a dead
+ *  key was only ever visible as an error in the chat.
  *
  *  Q-B (Destin, 2026-09-07): the dot clears as soon as the panel sees the
  *  provider working. You sign back in on the Cloud providers page and the
@@ -96,12 +98,18 @@ function useAttention(open: boolean): Set<PageId> {
     if ((window as any).claude?.native?.supported !== true) { setPages(next); return; }
     const chatgpt = (window as any).claude?.chatgpt;
     const engine = (window as any).claude?.engine;
+    const providers = (window as any).claude?.providers;
     Promise.all([
       chatgpt?.status?.().then((s: { state?: string }) => { if (s?.state === 'blocked') next.add('cloud'); }).catch(() => {}),
       // `state === 'error'` ONLY. A transport-level `{ ok: false }` means the
       // question could not be asked, which is not the same as an engine that
       // failed to start, and a dot for it is a dot nobody can clear.
       engine?.status?.().then((s: { state?: string }) => { if (s?.state === 'error') next.add('local'); }).catch(() => {}),
+      // `rejected` ONLY — an unreachable OpenRouter (`unchecked`) is not a
+      // broken key, and a dot for it would be a dot nobody can clear offline.
+      providers?.list?.().then((rows: Array<{ type?: string; hasKey?: boolean; health?: { verdict?: string } }>) => {
+        if (rows?.some((p) => p.type === 'openrouter' && p.hasKey && p.health?.verdict === 'rejected')) next.add('cloud');
+      }).catch(() => {}),
     ]).then(() => { if (alive) setPages(next); });
     return () => { alive = false; };
   }, [tick]);

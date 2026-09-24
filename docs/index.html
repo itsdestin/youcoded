@@ -1766,7 +1766,7 @@ html{-webkit-tap-highlight-color:transparent}
 
 <header class="hero hero-centred hero-flank" id="top">
   <div class="wrap">
-    <p class="kicker">Free &middot; Open source &middot; BYO model</p>
+    <p class="kicker">Free &middot; Easy &middot; Open source</p>
     <div class="flankrow">
       <div class="mrow mrow-l">
 <button class="mascot" data-theme="cotton-candy-sky" data-idle="float" data-acts="wave cheer" data-face="welcome"
@@ -3387,11 +3387,12 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 // fallback if the API ever fails or rate-limits. Until (or unless) it resolves,
 // every href still points at the /releases list page, so nothing 404s.
 //
-// 2026-09-03: switched from /releases/latest to the /releases LIST while 1.3 is
-// in beta. /releases/latest returns the newest STABLE release and skips
-// pre-releases entirely -- so the site was serving v1.2.4 (18 May) months after
-// the 1.3 betas started. The list is newest-first and includes pre-releases.
-// This is temporary: when 1.3.0 ships, put /releases/latest back.
+// 2026-09-03: switched from /releases/latest to the /releases LIST, which is
+// newest-first and includes pre-releases (/releases/latest skips them, so the
+// site served v1.2.4 months after the 1.3 betas started).
+// 2026-09-23 (Destin): KEEP offering betas for the foreseeable future, even
+// though 1.3.0 has shipped. Switching back is his call: the release skill
+// (youcoded-admin skills/release/SKILL.md, Step 9) asks him at each release.
 (function() {
   var CACHE_KEY = 'youcoded-latest-release';
   var CACHE_VERSION = 3;
@@ -3466,12 +3467,10 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   fetch(API_URL, { headers: { 'Accept': 'application/vnd.github+json' } })
     .then(function(r) { return r.ok ? r.json() : null; })
     .then(function(releases) {
-      // TEMPORARY (2026-09-03): the list endpoint is newest-first and includes
-      // pre-releases, so entry 0 is the current 1.3 beta. Drafts are invisible
-      // to anonymous visitors but filtered anyway; an entry with no attached
-      // files is skipped so a notes-only release can't blank every button.
-      // Revert to /releases/latest + `release` when 1.3.0 ships -- see
-      // docs/roadmap/desktop.md.
+      // The list endpoint is newest-first and includes pre-releases, so entry 0
+      // may be a beta -- on purpose, see the 2026-09-23 note above. Drafts are
+      // invisible to anonymous visitors but filtered anyway; an entry with no
+      // attached files is skipped so a notes-only release can't blank every button.
       var release = Array.isArray(releases) ? releases.find(function(r) {
         return r && !r.draft && r.assets && r.assets.length;
       }) : null;

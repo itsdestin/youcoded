@@ -11,7 +11,7 @@ import { sendPromptInput } from '../state/prompt-input';
 import UsageCard from './UsageCard';
 import SystemMarker from './SystemMarker';
 import SkillInvocationCard from './SkillInvocationCard';
-import { findArchiveBoundary } from '../state/archive-boundary';
+import { findArchiveBoundary, archivedTooltip } from '../state/archive-boundary';
 import CompactingCard from './CompactingCard';
 import CopyPicker from './CopyPicker';
 import ThinkingIndicator from './ThinkingIndicator';
@@ -24,16 +24,19 @@ import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
 import { useTheme } from '../state/theme-context';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
-import { useArtifact } from '../state/ArtifactContext';
+import { useSwitchFirstFrame } from '../hooks/use-switch-first-frame';
+import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
 import { assistantName } from '../utils/assistant-name';
 import { ContentFindBar } from './ContentFindBar';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
+import { OnScreenContext } from '../state/on-screen-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
-import { Tooltip, StatusStrip, Button } from './ui';
+import { StatusStrip, Button } from './ui';
+import { TimelineEntryHint } from './TimelineEntryHint';
 import { helperAsksOf, proposedPlansOf } from '../utils/specialist-cards';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
@@ -81,6 +84,8 @@ interface Props {
   onSwitchProviders?: () => void;
   /** Plan-limit card's Upgrade plan button: opens OpenAI's upgrade page. */
   onUpgradePlan?: () => void;
+  /** OpenRouter "not enough credit" card: opens OpenRouter's add-credit page. */
+  onAddCredit?: () => void;
   // Task 12 (docked strip, replaces Task 11's UserMessage-bubble affordances):
   // App owns the native:queue-remove invoke, the QUEUED_MESSAGE_REMOVED
   // dispatch, the toast state, and the input-bar ref the Edit flow refills —
@@ -98,10 +103,13 @@ interface Props {
   conversationStatus?: 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
   /** Asks the host for a fresh copy — the strip's Refresh. */
   onRefreshConversation?: () => void;
+  /** Fake local-model state solely for the workbench width review; no engine. */
+  modelLoadingDemo?: boolean;
 }
 
-export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
-  const state = useChatState(sessionId);
+// Memoised at the bottom of the file — see the WHY there.
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation, modelLoadingDemo }: Props) {
+  const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
   // What the conversation strip shows: the live status, plus a 2.5 s "Up to
@@ -134,9 +142,11 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   //  • `reducedEffects` is folded in here rather than at the class, so the
   //    timer never even starts when the user has effects off.
   const arriving = useOneShotWindow(sessionActive) && sessionActive && !reducedEffects;
-  // Artifact drawer state — read from ArtifactContext so ChatView reacts to
-  // the drawer toggle without needing a prop threaded down from App.tsx.
-  const { state: artifactState, dispatch: artifactDispatch } = useArtifact();
+  // Artifact drawer state, read from the artifact store. WHY narrow selectors (perf,
+  // 2026-09-23): the whole state redrew every open chat on ANY session's file write.
+  const drawerOpen = useArtifactSelector((s) => s.drawerOpenBySession[sessionId] ?? false);
+  const drawerExpandedFlag = useArtifactSelector((s) => s.drawerExpanded);
+  const artifactDispatch = useArtifactDispatch();
   // Preview cards (SessionRefActions, deep in the chat tree) ask for a past
   // conversation by event. Mounted here — not in SessionDrawer, which is
   // unmounted until it opens — so it hears the very first Preview click.
@@ -144,9 +154,8 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // responds — see the WHY comment inside the hook (deliberately not
   // `visible`, which also depends on the chat/terminal toggle).
   useSessionPreviewListener(sessionId, sessionActive, artifactDispatch);
-  // Drawer open/closed is per-session — read this session's flag (absent → closed).
-  const drawerOpen = artifactState.drawerOpenBySession[sessionId] ?? false;
-  const drawerExpanded = artifactState.drawerExpanded;
+  // WHY drawerOpen &&: expand is app-wide, so ungated it hid every OTHER session's chat.
+  const drawerExpanded = drawerOpen && drawerExpandedFlag;
   // The game pane and artifact drawer share the framed-shell's right slot.
   // The game pane wins when both are somehow open (App also enforces mutual
   // exclusivity, so this is just a render-time safety net).
@@ -261,7 +270,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // streaming session renders once per delta. The timeline array's identity
   // only changes when an entry is appended (a delta updates assistantTurns,
   // not timeline), so memoising on it turns a once-per-token scan into a
-  // once-per-entry scan. Pinned by tests/chatview-archive-boundary-memo.test.tsx.
+  // once-per-entry scan. Pinned by tests/ChatView-render-cost.test.tsx.
   const archiveBoundary = useMemo(() => findArchiveBoundary(state.timeline), [state.timeline]);
 
   // PTY-buffer classifier drives the attention banner. Replaces the old
@@ -320,7 +329,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // cause is ALREADY re-pinned by the ResizeObserver on contentRef below, which
   // runs after layout, where the same read is free. Dropping the timestamp
   // loses nothing and removes the per-token reflow. Pinned by
-  // tests/chatview-scroll-pin-deps.test.tsx.
+  // tests/ChatView-render-cost.test.tsx.
   useEffect(() => {
     if (stickRef.current) scrollToBottom();
   }, [state.timeline.length, state.isThinking, scrollToBottom, stickRef]);
@@ -433,10 +442,10 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
       }
       if (page) {
         unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
-        // Captured HERE, one statement before the prepend — not before the await,
-        // where a round-trip's worth of streaming could have moved everything.
+        // Capture just before prepend: streaming during the await may move the anchor.
         prependAnchorRef.current = captureScrollAnchor();
-        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+        // WHY: older pages can hold an orphaned tool; preserve main's recovery verdict.
+        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
       } else {
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
       }
@@ -571,7 +580,16 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // Suspended while the find bar is open: ContentFindBar finds text by walking
   // the DOM, so a folded entry would be unfindable and the user would be told
   // "0 results" for text that is in their conversation.
-  const folding = useEntryFolding(!findOpen, scrollContainerRef);
+  //
+  // `sessionActive` (2026-09-18): a background pane is content-visibility:hidden,
+  // which reads to the folding observer as "everything scrolled away". Telling
+  // it the pane is merely in the background is what stops a tab you left a
+  // moment ago from being blank when you come back — see INACTIVE_FOLD_MS.
+  const folding = useEntryFolding(!findOpen, scrollContainerRef, sessionActive);
+
+  // Scroll, unfold and re-frost BEFORE the first painted frame of a switch —
+  // the three reasons messages popped in. WHY per step: the hook's header.
+  useSwitchFirstFrame(visible, scrollContainerRef, stickToBottom, folding.unfoldNearViewport);
 
   // One ref for both observers — the blur-gating one and the folding one — so a
   // timeline entry still carries a single callback ref.
@@ -585,15 +603,32 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // turn restarted the fold idle timer so folding could never fire. It made the
   // measured numbers WORSE than doing nothing (2026-08-28).
   const registerFold = folding.registerEntry;
+  // Live entry element per key, for the archived-entry hint, which sits beside
+  // its entry rather than wrapping it (TimelineEntryHint.tsx says why).
+  const entryElsRef = useRef(new Map<string, HTMLElement>());
+  const getEntryEl = useCallback((key: string) => entryElsRef.current.get(key), []);
   const attachEntry = useCallback((el: HTMLDivElement | null) => {
     const releaseBlur = observeEntry(el);
     const releaseFold = registerFold(el);
-    return () => { releaseBlur(); releaseFold(); };
+    const key = el?.dataset.entryKey;
+    if (el && key) entryElsRef.current.set(key, el);
+    return () => {
+      releaseBlur();
+      releaseFold();
+      if (key && entryElsRef.current.get(key) === el) entryElsRef.current.delete(key);
+    };
   }, [observeEntry, registerFold]);
 
   // Arrow key scrolling with acceleration when not typing
   const scrollSpeed = useRef(0);
   useEffect(() => {
+    // WHY gated on `visible` (2026-09-23): every open session keeps its ChatView
+    // mounted, and this listener sits on `window`, so ungated ONE ArrowUp ran it
+    // in every chat at once — scrolling each hidden chat and calling
+    // releaseStick() there, which un-pinned background chats from their newest
+    // message and re-rendered each of them for a button nobody could see. Only
+    // the chat on screen answers, the same rule as Ctrl+F below.
+    if (!visible) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(document.activeElement)) return;
       // A focused game board owns its own arrow keys. Without this the chat
@@ -633,8 +668,11 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp, true);
+      // A key held while the pane goes away would otherwise start the next
+      // visit at the accelerated speed.
+      scrollSpeed.current = 0;
     };
-  }, [releaseStick]);
+  }, [visible, releaseStick]);
 
   // Ctrl/Cmd+F opens the chat-history find bar. Only the visible ChatView
   // responds (one per session is mounted). Defers to the artifact drawer's own
@@ -681,6 +719,13 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // event) never reaches flick velocity, so discrete mouse scrolling stays
   // snappy — only a fast multi-event trackpad flick coasts.
   useEffect(() => {
+    // WHY gated on `visible` (2026-09-23): the glide-cancel below listens on
+    // `window` for every click and key, and every open session's ChatView is
+    // mounted — so each keystroke anywhere ran it once per open chat. A hidden
+    // pane takes no wheel input (pointer-events:none, inert), so it has nothing
+    // to glide or cancel; the listeners come back with the pane. Leaving the pane
+    // mid-glide stops that glide (cleanup below), which nobody can see.
+    if (!visible) return;
     const container = scrollContainerRef.current;
     if (!container) return;
 
@@ -827,7 +872,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
       window.removeEventListener('keydown', cancelOnInput, true);
       stopMomentum();
     };
-  }, []);
+  }, [visible]);
 
   const handlePromptSelect = useCallback(
     (promptId: string, button: PromptCardButton, label: string, promptTitle?: string) => {
@@ -860,12 +905,10 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   );
 
   // Task 12 review fix (Important — float collision): .model-status-strip and
-  // .jump-to-bottom float in THIS component's OUTER absolute root (see their
-  // render sites below) sharing the same --bottom-chrome-height offset band
-  // as .queued-messages-strip — with the strip visible, they'd sit at the
-  // exact same height and overlap it. .chat-pane (the strip's own DOM parent)
-  // is NOT an ancestor of those two floats, so a var set there wouldn't reach
-  // them; this measures the strip's OWN rendered height and publishes
+  // .jump-to-bottom share .queued-messages-strip's offset band — they'd
+  // overlap it when visible. The model strip is chat-pane-local, but the jump
+  // button is in the outer root; publish the measured height to their common
+  // ancestor chatRootRef rather than only on .chat-pane. This publishes
   // --queued-strip-height on chatRootRef (the true common ancestor of all
   // three), and globals.css adds it into their bottom calc so they lift above
   // the strip instead of overlapping it — offset coordination, not z-index.
@@ -973,6 +1016,9 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
     // WHY: every open session's ChatView stays mounted, and waiting cards listen
     // for keys on `window` — only the chat on screen may answer them.
     <CardKeysLiveContext.Provider value={visible}>
+    {/* WHY: clocks inside this chat (thinking line, running-command seconds)
+        stand still while it is hidden — see on-screen-context.ts. */}
+    <OnScreenContext.Provider value={visible}>
     <div
       // Fix: previously toggled display:none/flex, which forced a full reflow of
       // both views on every chat↔terminal toggle (the #1 cause of visual jank
@@ -1269,12 +1315,13 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               // `.timeline-entry` query all see an unchanged list.
               const folded = folding.isFolded(key!);
               const foldHeight = folded ? folding.heightOf(key!) : undefined;
+              // WHY the hint is a SIBLING, and only for archived entries: a
+              // wrapping <Tooltip> per entry ran its state and effects for every
+              // message on every streamed word, with empty text almost always.
+              // The entry element stays first in the keyed fragment either way,
+              // so archiving it never rebuilds it — see TimelineEntryHint.tsx.
               return (
-                <Tooltip key={key!} text={isPreCompaction
-                    ? (archiveKind === 'clear'
-                      ? 'Cleared — still here to read, but not in Claude\'s context'
-                      : 'Archived by compaction — not in Claude\'s active context')
-                    : ''}>
+                <React.Fragment key={key!}>
                 <div
                   ref={attachEntry}
                   data-entry-key={key!}
@@ -1283,7 +1330,14 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                 >
                   {folded && foldHeight ? null : content}
                 </div>
-                </Tooltip>
+                {isPreCompaction && (
+                  <TimelineEntryHint
+                    entryKey={key!}
+                    getEntry={getEntryEl}
+                    text={archivedTooltip(archiveKind)}
+                  />
+                )}
+                </React.Fragment>
               );
               });
             })()}
@@ -1358,6 +1412,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                     state={state.attentionState}
                     anthropicRequestId={lastTurnRequestId}
                     errorMessage={state.errorMessage}
+                    errorCode={state.errorCode}
                     stalledSince={state.stalledSince}
                     // Native sessions get the stuck line without the
                     // "check Terminal view" pointer — they have no Terminal.
@@ -1367,6 +1422,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                     onOpenProviderSettings={onOpenProviderSettings}
                     onSwitchProviders={onSwitchProviders}
                     onUpgradePlan={onUpgradePlan}
+                    onAddCredit={onAddCredit}
                     // Stalled card only. Retry re-runs the PARKED STEP — it is
                     // deliberately NOT the native-send helper the old TODO here
                     // pointed at, which sends a new user message and would fork
@@ -1391,8 +1447,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
           {/* Task 12: docked strip for queued messages — a sibling of
               .chat-scroll (NOT inside it), so it neither scrolls with the
               timeline nor lives in the outer absolute ChatView container
-              (unlike ModelLoadingBar/jump-to-bottom, which float above the
-              WHOLE framed-shell). .chat-pane is `position: relative`, so this
+              (where jump-to-bottom floats). .chat-pane is `position: relative`, so this
               anchors to ITS bottom edge via the same --bottom-chrome-height
               offset those two floating elements use to clear the real
               InputBar (which lives outside ChatView — see App.tsx's
@@ -1406,6 +1461,18 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
             queuedMessages={state.queuedMessages}
             onCancel={onCancelQueued ? (queueId) => onCancelQueued(sessionId, queueId) : undefined}
             onEdit={onEditQueued ? (queueId, text) => onEditQueued(sessionId, queueId, text) : undefined}
+          />
+          {/* WHY mount the actual model floater in the chat column: when Files or
+              Games opens, outer-root centering would span the drawer as well. */}
+          <ModelLoadingBar
+            ref={modelStatusRef}
+            // Workbench-only sample; the normal model state still comes from chat.
+            modelState={modelLoadingDemo ? 'loading' : state.modelState}
+            modelInfo={modelLoadingDemo ? { modelId: 'Qwen3-8B-Q4_K_M.gguf', sizeBytes: 8 * 1024 ** 3 } : state.modelInfo}
+            loadedBytes={state.modelLoadedBytes}
+            everResident={state.modelEverResident}
+            isThinking={state.isThinking}
+            onReload={(modelId) => { void window.claude.models.load(modelId); }}
           />
         </div>
         {/* Right frame edge / divider + Session Drawer — only shown when open.
@@ -1443,20 +1510,6 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
         <div className="frame-edge" />
       </div>
 
-      {/* Native local-model status: centered strip above the input — a loading
-          bar while the model (re)loads, or an "unloaded · Reload" prompt when it
-          slept. In the outer absolute div (like jump-to-bottom) so it floats
-          above the input chrome, unclipped. No-op for claude sessions. */}
-      <ModelLoadingBar
-        ref={modelStatusRef}
-        modelState={state.modelState}
-        modelInfo={state.modelInfo}
-        loadedBytes={state.modelLoadedBytes}
-        everResident={state.modelEverResident}
-        isThinking={state.isThinking}
-        onReload={(modelId) => { void window.claude.models.load(modelId); }}
-      />
-
       {/* Jump to bottom button — .jump-to-bottom class handles glassmorphism
          offset so the button appears above the frosted input bar.
          Positioned in the outer absolute div so it floats above the full
@@ -1480,6 +1533,21 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
         sessionId={sessionId}
       />
     </div>
+    </OnScreenContext.Provider>
     </CardKeysLiveContext.Provider>
   );
 }
+
+// WHY memo (2026-09-18): App renders a ChatView for EVERY open session and
+// re-renders on every session switch; unmemoised, each re-walked its whole
+// timeline inside the click, ahead of the switch's first frame. Chat state still
+// arrives through useChatState, which memo does not block. App must hand this
+// STABLE props — hooks/use-chatview-handlers.ts says what one inline arrow costs.
+// Guard: tests/chatview-skips-uninvolved-sessions.test.tsx.
+export default React.memo(ChatView);
+
+// For tests of the view's OWN render logic (scan counts, scroll pinning). Their
+// harness mocks useChatState as a plain getter and delivers "new state" by
+// re-rendering with identical props — exactly what memo exists to skip. In the
+// app, state arrives through the store's subscription, which memo never blocks.
+export { ChatView as UnmemoizedChatView };

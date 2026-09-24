@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 import { defineTool } from './registry';
-import { canonicalize, resolveP, shellCwdMissHint } from './guards';
+import { canonicalize, resolveP, shellCwdMissHint, lunaPathRefused } from './guards';
 import { deliverableImageMediaType, UNDELIVERABLE_IMAGE_EXTENSIONS, MAX_ATTACHMENT_BYTES } from '../image-support';
 import { readPdfAsToolResult } from '../pdf-text';
 import { fingerprintFile, fingerprintOf } from './file-fingerprint';
@@ -109,6 +109,7 @@ export const ReadTool = defineTool({
   permissionSubject: (a) => a.file_path,
   async execute(args, ctx) {
     const abs = resolveP(args.file_path, ctx.cwd);
+    if (lunaPathRefused(abs)) return { text: 'Read rejected: path is outside the Luna experiment fixture.', isError: true };
     let st: fs.Stats;
     try {
       st = await fs.promises.stat(abs); // off the main thread (2026-09-16 C4 review)

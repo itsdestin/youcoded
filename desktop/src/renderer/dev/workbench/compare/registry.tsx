@@ -6715,7 +6715,11 @@ function SfxCutBlockR5({ fullText, supplied, what, cutStyle = 'diff' }: { fullTe
         {view === 'cut'
           ? (cutStyle === 'plain'
             ? <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-2xs leading-relaxed text-fg-2 bg-well p-3">{sfxCutLines(fullText, supplied)}</pre>
-            : <div className="max-h-64 overflow-y-auto bg-well"><UnifiedDiff oldStr={fullText} newStr={supplied} /></div>)
+            // fill: mirrors SessionContextPopup's CutBlock — this wrapper is
+            // already the scroll surface (max-h-64 overflow-y-auto), so
+            // UnifiedDiff must not stack its own cap + button inside it
+            // (review round 1, 2026-09-18).
+            : <div className="max-h-64 overflow-y-auto bg-well"><UnifiedDiff oldStr={fullText} newStr={supplied} fill /></div>)
           : <SfxMd text={supplied} flush />}
       </div>
     </>

@@ -6,8 +6,8 @@
 // that aren't available in jsdom.
 
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 // Mock ToolBody so it doesn't pull in ChatStateContext / xterm / electron.
 vi.mock('../src/renderer/components/tool-views/ToolBody', () => ({
@@ -21,8 +21,21 @@ vi.mock('../src/renderer/components/MarkdownContent', () => ({
   default: ({ content }: { content: string }) => <span>{content}</span>,
 }));
 
+// Wraps the real friendlyToolDisplay in a spy so tests can count how many
+// times a ROW actually re-rendered (SubagentToolRow calls it once per render)
+// — proves the Task 10 memo skips an untouched sibling on an expand click.
+vi.mock('../src/renderer/components/ToolCard', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/renderer/components/ToolCard')>();
+  return { ...actual, friendlyToolDisplay: vi.fn(actual.friendlyToolDisplay) };
+});
+
 import { SubagentTimeline } from '../src/renderer/components/tool-views/SubagentTimeline';
+import { friendlyToolDisplay } from '../src/renderer/components/ToolCard';
 import type { SubagentSegment } from '../src/shared/types';
+
+beforeEach(() => {
+  vi.mocked(friendlyToolDisplay).mockClear();
+});
 
 describe('SubagentTimeline', () => {
   it('renders nothing for empty segments', () => {
@@ -80,5 +93,26 @@ describe('SubagentTimeline', () => {
     ];
     rerender(<SubagentTimeline segments={doneSegments} />);
     expect(statusSvgs(container).length).toBe(1);
+  });
+});
+
+describe('SubagentTimeline — row memo', () => {
+  it('expanding one row does not re-render its untouched sibling', () => {
+    const segments: SubagentSegment[] = [
+      { type: 'tool', id: 't1', toolUseId: 'toolu_1', toolName: 'Read', input: { file_path: '/a' }, status: 'complete', response: 'ok' },
+      { type: 'tool', id: 't2', toolUseId: 'toolu_2', toolName: 'Bash', input: { command: 'ls' }, status: 'complete', response: 'ok' },
+    ];
+    render(<SubagentTimeline segments={segments} />);
+    // Initial render: each row calls friendlyToolDisplay exactly once.
+    expect(vi.mocked(friendlyToolDisplay).mock.calls.map(([tool]) => (tool as any).toolName))
+      .toEqual(['Read', 'Bash']);
+
+    fireEvent.click(screen.getByRole('button', { name: /Read/ }));
+
+    // Read's row re-rendered (its own `expanded` changed); Bash's row did
+    // NOT — the memo skipped it because segment/id/toggle/separatorAbove/
+    // sessionId/specialistName/suppressAsk were all unchanged for it.
+    expect(vi.mocked(friendlyToolDisplay).mock.calls.map(([tool]) => (tool as any).toolName))
+      .toEqual(['Read', 'Bash', 'Read']);
   });
 });

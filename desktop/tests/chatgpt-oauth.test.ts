@@ -50,7 +50,7 @@ describe('chatgpt-oauth: constants and the sign-in round trip', () => {
     expect(CHATGPT_ACCOUNTS_CHECK_URL).toBe('https://chatgpt.com/backend-api/wham/accounts/check');
     expect(chatGptModelsUrl('1.2.4')).toBe('https://chatgpt.com/backend-api/codex/models?client_version=1.2.4');
     expect(chatGptModelsUrl('1.0.0 beta/2')).toBe('https://chatgpt.com/backend-api/codex/models?client_version=1.0.0%20beta%2F2');
-    expect(CHATGPT_SIGN_IN_REQUIRED_MESSAGE).toBe('Sign in with ChatGPT in Settings → Model Providers to use this model.');
+    expect(CHATGPT_SIGN_IN_REQUIRED_MESSAGE).toBe('Sign in with ChatGPT in Assistant settings → Cloud providers to use this model.');
   });
 
   it('PKCE: the challenge is base64url(S256(verifier)), no padding, verifier in the RFC length range', () => {
@@ -438,6 +438,6 @@ describe('chatgpt-oauth: the three thrown errors reach the user byte for byte', 
   });
 
   it('the expired sentence is the approved one', () => {
-    expect(CHATGPT_SIGN_IN_EXPIRED_MESSAGE).toBe('Your ChatGPT sign-in has expired — sign in again in Settings → Model Providers.');
+    expect(CHATGPT_SIGN_IN_EXPIRED_MESSAGE).toBe('Your ChatGPT sign-in has expired — sign in again in Assistant settings → Cloud providers.');
   });
 });

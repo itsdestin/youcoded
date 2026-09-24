@@ -60,7 +60,10 @@ async function loadFirstPage(sessionId: string, deps: FirstPageLoadDeps): Promis
       // scroll-up sentinel (Destin, 2026-09-07). See first-page-retry.ts.
       const decision = decideFirstPage(page, attempt);
       if (decision === 'accept') {
-        deps.dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+        deps.dispatch({
+          type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore,
+          reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds,
+        });
         return 'loaded';
       }
       if (decision === 'give-up') { deps.dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return 'failed'; }

@@ -24,6 +24,11 @@ export const WebSearchTool = defineTool<z.infer<typeof inputSchema>>({
   moreHint: 'narrow the query, or WebFetch a result to read it in full',
   permissionSubject: (args) => args.query,
   async execute(args, ctx) {
+    // WHY: the Luna reservation guard counts model sends, not tool-network
+    // traffic. Keep the advertised tool stable but fail before service egress.
+    if (process.env.YOUCODED_LUNA_EXPERIMENT === '1') {
+      return { text: 'Experiment network tools are disabled.', isError: true };
+    }
     if (!ctx.services?.search) {
       return { text: 'Web search is not wired for this session; this is a configuration error.', isError: true };
     }

@@ -11,6 +11,7 @@ import type { ChatsearchReadRequest } from '../shared/chatsearch-refs';
 import https from 'https';
 import { execFile } from 'child_process';
 import { SessionManager, prepareRunInTerminal, shellDisplayName } from './session-manager';
+import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-page-source';
 import { HookRelay } from './hook-relay';
 import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent, type PlansEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
@@ -31,6 +32,8 @@ import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 import { NativeHome } from './native-home';
 import { SecretsStore } from './providers/secrets-store';
 import { ProviderRegistry } from './providers/provider-registry';
+import { OpenRouterHealth } from './providers/openrouter-health';
+import { OpenRouterSignIn } from './providers/openrouter-oauth';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
 // (it needs the post-dev-profile userData) and passed IN; this file only wires it.
 import type { ChatGptAuth } from './providers/chatgpt-auth';
@@ -42,7 +45,7 @@ import { generateText } from 'ai';
 import type { ModelBinding } from '../shared/provider-types';
 import { createSessionNamer } from './session-namer';
 import { NamingSettings } from './naming-settings';
-import { reapplyStoredTitle, type ResumeTitleDeps } from './native-resume-title';
+import { reapplyStoredTitle, createProvisionalTitles, type ResumeTitleDeps } from './native-resume-title';
 import { ModelCatalog } from './providers/model-catalog';
 import { EngineManager } from './engine/engine-manager';
 // Faster-engine prerequisites (2026-09-05 §A5) — a pure-ish read of this
@@ -82,7 +85,7 @@ import { exaBackend } from './harness/search/backends/exa';
 import { ddgBackend } from './harness/search/backends/ddg';
 import { tavilyBackend } from './harness/search/backends/tavily';
 import type { NativePermissionMode } from '../shared/permission-types';
-import { resolveMappingAction } from './session-id-mapping';
+import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
 import { listPastSessions, loadHistory } from './session-browser';
 import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
 import { readTranscriptMeta } from './transcript-utils';
@@ -108,7 +111,7 @@ import { readDevices, renameDevice, removeDevice } from './sync-spaces/device-re
 // createGithubConnect is the stateful orchestrator that owns the in-flight flow.
 import { installGh } from './github-auth';
 import { createGithubConnect, setGithubConnect, disconnectGithub } from './github-connect';
-import { combinedGithubStatus } from './github-client';
+import { combinedGithubStatus, getGithubClient } from './github-client';
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
@@ -118,6 +121,7 @@ import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateI
 import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
 import { verifyDownloadedUpdate } from './update-manifest-verify';
 import { readReleaseStatus, selectRelease, type UpdateStatus } from './update-release-status';
+import { linuxInstallKind } from './linux-install-kind';
 import { UpdateSettings } from './update-settings';
 import { UPDATE_SIGNING_PUBLIC_KEY_PEM } from './update-signing-key';
 import { getChangelog } from './changelog-service';
@@ -131,6 +135,7 @@ import { SavedFolder, readFolders, writeFolders } from './saved-folders';
 // registry's limit (project-registry.ts uses the same constant).
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
+import { readDefaults, writeDefaults, setPermissionOverridesSink } from './prefs-service';
 import { loadConfigSync, writeConfig, getAppliedAtLaunch, getCachedGpu } from './performance-config';
 import type { PerformanceConfigSnapshot, SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
@@ -141,6 +146,9 @@ import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArtifact, removeArtifactRecord } from './artifacts/artifact-store';
 import { listProjects, removeProject } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
+import { PageConnectionsStore } from './pages/connections-store';
+import { createAuthStore } from './marketplace-auth-store';
+import type { PageFetchRequest } from '../shared/pages-types';
 import { getMachineIdentity } from './device-identity';
 // Shared with remote-server.ts — see that module's header for why these left
 // this file (they were closures, so the remote transport could not reach them).
@@ -161,12 +169,13 @@ import {
 } from './git/git-service';
 import { initGitWatchers, watchGit, unwatchGit, dropGitSubscriber } from './git/git-watcher';
 import { resolveRepoRoot, invalidateRepoRootCache } from './git/git-exec';
+import { gitBranchLabel } from './git/git-branch-label';
 import { PROJECT_IPC } from './project/ipc-channels';
 // The artifact and Project View READ bodies, shared with remote-server.ts
 // (remote access batch 3) so a phone gets the desktop's own answers.
 import {
-  listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
-  searchArtifactContent, checkArtifactExistence, resolveArtifactPath,
+  listSessionFiles, listProjectFiles, listAllFiles, listFolder, readArtifactText, readArtifactBytes,
+  searchArtifactContent, checkArtifactExistence, resolveArtifactPath, judgeRecordLocation,
 } from './artifacts/read-service';
 import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 // Conversation Store (Phase 2a): live intake of transcript activity, session
@@ -175,13 +184,14 @@ import { listConversations, repoInfo, listContextFiles, readContext } from './pr
 import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded, noteTitleChanged,
   noteFlagChanged, noteSessionNote, noteModelUsed, getConversationStore, flushSessionToSpace,
   buildLocalProjectResolver, emitConversationMetaChanged,
-  noteAutomaticTitle,
+  pinHandoffDestination, publishStoppedHandoff, syncPublishedHandoff,
+  importConfirmedHandoff, resolveHandoffProject, resolveSavedHandoffProject, HANDOFF_SYNC_TIMEOUT_MS,
   getNamingRecord,
   mutateNamingRecord,
-  isSessionNameOwned,
   resolveSessionName,
   setManualSessionName,
 } from './conversations/service';
+import { createTitleQueue, mayPublishAutomaticName } from './conversations/naming-store';
 import { requestChatsearchRefresh } from './chatsearch-index/index-service';
 // Task 4: resolves a native session's live model binding into the store's
 // portable {modelId, providerType, providerLabel} shape — see
@@ -191,6 +201,12 @@ import type { PortableModelRef } from './conversations/store-core';
 // Plan 2b Task 8: holder-side takeover — when another device requests a session
 // this device holds, cleanly interrupt/flush/release/move/destroy it.
 import { createHolderTakeover } from './conversations/takeover';
+import { createResumeAdmission } from './conversations/resume-admission';
+import { createHandoffAttempts } from './conversations/handoff-attempt';
+import { createHandoffTransport, registerHandoffIpc } from './conversations/handoff-transport';
+import { createTransferredExitGate } from './conversations/handoff-exit';
+import { hubLeaseRequest, syncSpacesSyncNowAwaited } from './sync-spaces/service';
+import type { RequesterTakeoverType } from './conversations/takeover';
 import { getTagRegistry, listTagsForHost } from './conversations/tag-registry-service';
 import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
 import { writeContextFile } from './project-context';
@@ -366,11 +382,11 @@ export function registerIpcHandlers(
   // entirely (nothing breaks — acquire/release/takeover simply don't run).
   leaseWiring?: {
     client: import('./conversations/lease-client').LeaseClient;
-    setHolderTakeover: (fn: (sessionId: string, from?: { deviceId: string; device: string }) => void) => void;
+    setHolderTakeover: (fn: (sessionId: string, from?: { deviceId: string; device: string }, transferNonce?: string) => void) => void;
     // Plan 2b Task 9: the requester-side takeover flow, built in main.ts (where
     // deviceId + hubLeaseRequest + materializeOne + syncSpacesSyncNow are all
     // reachable). The three lease IPC handlers below are thin passthroughs to it.
-    requester: import('./conversations/takeover').RequesterTakeoverType;
+    requester: RequesterTakeoverType;
     // deviceId  — per-INSTALL. Leases ONLY. Distinguishes the dev instance from
     //             the built app on one machine; never use it for the registry.
     // machineId — per-MACHINE. Device registry ONLY (self-marking). '' when this
@@ -378,6 +394,8 @@ export function registerIpcHandlers(
     //             since nothing was registered either.
     deviceId: string;
     machineId: string;
+    /** Test override; production uses the sync-space service flag. */
+    syncEnabled?: () => boolean;
   },
   // Sign in with ChatGPT (backend design 2026-09-05 §1, §6): the account object
   // main.ts built inside createWindow. Optional so the tests that call this with
@@ -760,7 +778,7 @@ export function registerIpcHandlers(
   // This only holds because assignSession runs SYNCHRONOUSLY in that handler,
   // before its first await — nextTick outranks the microtask queue, so an
   // assignSession sitting after any await would drain too late. See the WHY on
-  // the assignSession block itself; pinned by tests/session-create-ownership-order.test.ts.
+  // the assignSession block itself; pinned by tests/ipc-handlers-create-ownership.test.ts.
   sessionManager.on('session-created', (info) => {
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
@@ -790,6 +808,14 @@ export function registerIpcHandlers(
   // updates when BOTH fire (sendForSession reaches the owning window's
   // App.tsx sessionRenamed handler; broadcastRename updates SessionInfo, the
   // remote clients, and the window directory).
+  // Opening-words names planted on a resumed, never-titled native session's pill
+  // (native-resume-title.ts), keyed by session id. They are there so the pill
+  // matches the Resume Browser row — NOT a title: both `hasTitle` checks below
+  // look through them via liveNameForTitleCheck, or the namer would read the
+  // raw first message as a real name and never generate one.
+  const provisionalResumeTitles = createProvisionalTitles();
+  const liveNameForTitleCheck = (desktopId: string): string | undefined =>
+    provisionalResumeTitles.forTitleCheck(desktopId, sessionManager.getSession(desktopId)?.name);
   const resumeTitleDeps: ResumeTitleDeps = {
     // NOTE: getConversationStore() is null for the whole launch when the managed
     // roots are unavailable (conversations/service.ts sets storePhase
@@ -797,40 +823,43 @@ export function registerIpcHandlers(
     // the re-apply is a permanent no-op. That is survivable, not silent breakage
     // — the title feeder still generates a name at the next turn-complete.
     getStoredTitle: async (sessionId) => (await getConversationStore()?.get('native', sessionId))?.title,
-    onTitle: (sessionId, title) => {
+    onTitle: (sessionId, title, opts) => {
+      if (opts?.provisional) provisionalResumeTitles.mark(sessionId, title);
       sendForSession(sessionId, IPC.SESSION_RENAMED, sessionId, title);
       broadcastRename(sessionId, title);
     },
+    getOpeningTitle: (sessionId) => nativeHost.openingTitle(sessionId),
   };
 
-  // Session CRUD
-  ipcMain.handle(IPC.SESSION_CREATE, async (event, rawOpts) => {
+  const leasesEnabled = () => leaseWiring?.syncEnabled?.() ?? isSyncSpacesEnabled();
+  // Session CRUD. The same operation serves Electron and the remote socket;
+  // admission happens before createSession can spawn a writer on either path.
+  const startSession = async (event: { sender: { id: number; isDestroyed?: () => boolean } } | null, rawOpts: Parameters<SessionManager['createSession']>[0], attemptCheck?: () => void) => {
     // "No folder" (shared/no-folder.ts): the renderer's sentinel becomes the
     // app-owned empty folder here, before the session manager or the native
     // host sees a cwd.
+    // The window can close while admission or native startup is awaiting I/O.
+    const checkWindow = () => { attemptCheck?.(); if (event?.sender.isDestroyed?.()) throw new Error('The window closed before this conversation opened.'); };
+    checkWindow();
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
+    // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
+    const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
+      ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
     const info = sessionManager.createSession(opts);
-    // Assign the new session to the calling window so per-session events (transcript,
-    // pty output, permission prompts) route here once Task 1.4 migrates the emits.
-    //
-    // MUST stay here — synchronously after createSession, BEFORE the native block's
-    // awaits. createSession emits 'session-created' synchronously, and the listener
-    // above defers the SESSION_CREATED forward by one process.nextTick precisely so
-    // ownership is set first. But nextTick outranks the promise microtask queue, so
-    // it drains the moment this handler suspends at its FIRST await — and the native
-    // branch below awaits nativeHost.resume/create long before the end of the
-    // handler. With this block at the bottom (where it lived until 2026-08-06), a
-    // native session created or resumed from a SECOND main window was forwarded with
-    // no owner registered, took sendForSession's ownerless mainWindow fallback, and
-    // appeared in window 1 instead. Claude Code never hit it: that path runs straight
-    // through with no intervening await. Pinned by tests/session-create-ownership-order.test.ts.
-    //
-    // Exception: if the sender is a buddy window (the floater's compact chat),
-    // assign to the leader main window instead. Buddies don't appear in the
-    // switcher directory and shouldn't own sessions — otherwise the session
-    // would be invisible to every main window's session list. The buddy still
-    // sees the session via its subscribe() call in SessionPill.selectSession.
-    if (windowRegistry) {
+    if (resumeBoundary) resumePageBoundaries.set(info.id, resumeBoundary);
+    // WHY: a holder takeover can arrive during the FIRST native await or before
+    // CC emits SessionStart. Register the resumed identity synchronously now.
+    if (opts.resumeSessionId) {
+      writerGenerations.set(info.id, (writerGenerations.get(info.id) ?? 0) + 1);
+      sessionIdMap.set(info.id, opts.resumeSessionId);
+      if (leaseWiring && leasesEnabled()) admittedResumes.add(info.id);
+      if (info.provider === 'claude') awaitingFirstResumeHook.add(info.id);
+    }
+    // WHY: assign ownership BEFORE the first native await. session-created is
+    // forwarded on nextTick; otherwise it reaches the wrong window (pinned by
+    // ipc-handlers-create-ownership.test.ts). Buddy-created sessions belong to
+    // the leader main window; the buddy subscribes instead of owning them.
+    if (windowRegistry && event) {
       let targetId = event.sender.id;
       if (windowRegistry.getKind(event.sender.id) === 'buddy') {
         const leader = windowRegistry.getLeaderId();
@@ -844,19 +873,7 @@ export function registerIpcHandlers(
     // branch of createSession uses resumeSessionId AS the id, so info.id already
     // equals the resumed id and the host rebuilds the matching session.
     if (info.provider === 'native') {
-      // Surface a native-runtime failure as a session-error transcript event on the
-      // SAME pipe the host uses (drives NATIVE_SESSION_ERROR → the error banner).
-      // Deferred via nextTick so it lands AFTER SESSION_CREATED + assignSession,
-      // matching the ordering guarantee the session-created forward relies on.
-      const emitNativeSessionError = (text: string) => {
-        const errEvent: TranscriptEvent = {
-          type: 'session-error', sessionId: info.id, uuid: randomUUID(), timestamp: Date.now(), data: { text },
-        };
-        process.nextTick(() => {
-          sendForSession(info.id, IPC.TRANSCRIPT_EVENT, errEvent);
-          remoteServer?.broadcast({ type: 'transcript:event', payload: errEvent });
-        });
-      };
+      nativeStarting.add(info.id);
       // Did a real resume of stored data actually happen? Distinct from
       // `opts.resumeSessionId` being set: a resume can REFUSE (transcript not
       // synced / project folder missing) or fall back to creating a fresh
@@ -865,21 +882,11 @@ export function registerIpcHandlers(
       let didResume = false;
       try {
         if (opts.resumeSessionId) {
-          // Task 6: the resume-time model selector's pick (opts.binding, when the
-          // renderer already made one — the ResumeBrowser/pre-resume modal ALWAYS
-          // offers the selector for native rows) overrides the persisted header
-          // binding. Passed straight into resume() so it's applied before the
-          // eager loadModel() below and noteModelUsed's resolvePortableModel() both
-          // read it — see native-session-host.ts's resume() doc comment for why a
-          // post-hoc setBinding here would race those reads.
+          // Apply the resume-time binding inside resume(), before context/model
+          // profiling, rather than changing it after initialization.
           //
-          // Task 9 — resolve the transcript's REAL cwd BEFORE resume(). session-
-          // manager silently rewrites a nonexistent cwd to $HOME (session-manager.ts
-          // cwd→homedir); handing that to resume() reads a header from the wrong
-          // (empty) slug and the session spawns blank — the native twin of the CC
-          // greedy-slug/$HOME bugs (bea0de3e/57be5e14). So NEVER pass an unvalidated
-          // cwd: probe the transcript's existence, and on a genuine miss REFUSE with
-          // an accurate, split message rather than resolve to $HOME.
+          // Resolve the transcript's actual cwd BEFORE resume(): SessionManager
+          // falls back to $HOME when cwd is absent, which can spawn a blank chat.
           let resolvedCwd: string | undefined;
           let refusal: string | undefined;
           if (opts.cwd && fs.existsSync(opts.cwd) && nativeTranscriptExists(opts.cwd, opts.resumeSessionId)) {
@@ -910,28 +917,33 @@ export function registerIpcHandlers(
           }
 
           if (refusal) {
-            emitNativeSessionError(refusal);
+            throw new Error(refusal);
           } else if (resolvedCwd) {
             info.cwd = resolvedCwd; // fix the SessionInfo so downstream (noteSessionStarted, eager model, renderer) reads the validated cwd
             didResume = await nativeHost.resume(opts.resumeSessionId, resolvedCwd, opts.binding);
+            // Existence is not readability; false means no harness was started.
+            if (!didResume) throw new Error('This conversation could not be resumed — its saved data could not be read.');
           } else {
             const resumed = await nativeHost.resume(opts.resumeSessionId, info.cwd, opts.binding);
             didResume = resumed;
             // No stored file (e.g. resuming an id that was never persisted) → start
             // a fresh session under the same id so the renderer isn't left with a
             // SessionInfo backed by no live HarnessSession.
-            if (!resumed && opts.binding) {
-              await nativeHost.create({ sessionId: info.id, cwd: info.cwd, binding: opts.binding, presetId: opts.preset });
+            const fallbackBinding = opts.binding;
+            if (!resumed && fallbackBinding) {
+              await nativeHost.create({ sessionId: info.id, cwd: info.cwd, binding: fallbackBinding, presetId: opts.preset });
             } else if (!resumed && !opts.binding) {
               // Resume asked for a session whose saved data is gone, and we have no
               // binding to start a fresh one under this id — the renderer already
               // holds a live SessionInfo with an empty chat and no way to know why.
-              emitNativeSessionError('This conversation could not be resumed — its saved data is missing.');
+              throw new Error('This conversation could not be resumed — its saved data is missing.');
             }
           }
         } else {
+          if (!opts.binding) throw new Error('A model is required to start this conversation.');
           await nativeHost.create({ sessionId: info.id, cwd: info.cwd, binding: opts.binding, presetId: opts.preset });
         }
+        checkWindow();
         // Stamp the RESOLVED preset id (post legacy-mapping — a stored 'chat'
         // header resolves to 'assistant') onto the SessionInfo so the renderer's
         // preset badge + resume rows can read it. getHarnessId is authoritative
@@ -941,18 +953,8 @@ export function registerIpcHandlers(
         // session already knows whose plan it is spending (review T6 F1).
         info.providerType = bindingToPortableModel(nativeHost.getBinding(info.id), await providerRegistry.list())?.providerType;
 
-        // Native sessions emit NO CC SessionStart hook, so the CC lease path
-        // (sessionIdMap + acquire at the SessionStart listener) never fires for
-        // them — without this they run with NO takeover protection at all: a
-        // leaseQuery always answers held:false and the resume gate never offers a
-        // handoff, so two devices could both resume the same native conversation
-        // (2026-07-18 investigation §3.5). For native, info.id IS the claude
-        // session id (createSession uses resumeSessionId as the id; fresh native
-        // sessions mint one), so the mapping is identity. The existing session-exit
-        // release + holder teardown both key off sessionIdMap, so they pick native
-        // sessions up unchanged once the entry exists. Registered here (after the
-        // host create/resume succeeded) so a FAILED start doesn't take a lease on a
-        // dead session.
+        // Native has no CC hook; this identity mapping also powers holder teardown.
+        writerGenerations.set(info.id, (writerGenerations.get(info.id) ?? 0) + 1);
         sessionIdMap.set(info.id, info.id);
         noteSessionStarted(info.id, info.cwd, 'native');
         // Fix (2026-08-06): fill the header pill in on resume. The renderer
@@ -965,11 +967,8 @@ export function registerIpcHandlers(
         // cwd resolution above only exists on the foreign-cwd branch, not on
         // the common local-resume path.
         //
-        // Gated on didResume, NOT on opts.resumeSessionId: a REFUSED resume
-        // (transcript not synced / folder missing) and the "saved data missing,
-        // start fresh under the same id" fallback both leave a session that is
-        // empty or dead. Naming either after the stored conversation would put
-        // a real name on a session that isn't it — worse than the placeholder.
+        // Only a true resume receives the stored title: a fallback creates
+        // fresh data under the old id, which is not the old conversation.
         if (didResume) {
           void reapplyStoredTitle(resumeTitleDeps, info.id);
         }
@@ -982,38 +981,38 @@ export function registerIpcHandlers(
         void resolvePortableModel(info.id)
           .then((ref) => { if (ref) noteModelUsed(info.id, ref); })
           .catch(() => { /* best-effort — the first turn-complete catches up */ });
-        // LEASE FOR NATIVE SESSIONS — re-enabled in M2 (Task 9). It was reverted on
-        // 2026-07-18 (PR #176 fallout) with an explicit condition: "Re-enable this
-        // together with the parity work, NOT before — the lease only becomes
-        // meaningful at the same moment the transcript becomes shared." That moment
-        // is now. The native transcript is SHARED: it mirrors into the native/ space
-        // lane and materializes on peers (M2 Tasks 4/8), so the lease finally
-        // coordinates a REAL cross-device resource. Concretely, leaseQuery now
-        // answers held:true for a native conversation another device owns, and the
-        // resume gate offers the handoff (holder quiesce → flush → release; requester
-        // materialize → acquire) instead of two devices silently resuming two copies.
-        //
-        // Never-block (spec §3): a failed or DENIED acquire only WARNS — it never
-        // prevents the session from running (the resume must not wait on the lease).
-        // The warn leaves a breadcrumb so a "takeover didn't respond" is diagnosable
-        // (the same gap that hid the 2026-07-18 handoff timeout). For native, info.id
-        // IS the claude session id, so the acquire keys off the identity mapping set
-        // above. Gated on sync being enabled, mirroring the CC acquire at the
-        // SessionStart listener: a lease coordinates cross-device writers, which only
-        // exist for a synced conversation — an unsynced native session has no shared
-        // resource and needs no lease.
-        if (isSyncSpacesEnabled()) {
-          void leaseWiring?.client.acquire(info.id)
-            .then((res) => {
-              if (res && res.ok === false) {
-                log('WARN', 'Lease', 'native session running without its lease (held by another device)', { claudeId: info.id, holder: res.holder });
-              }
-            })
-            .catch(() => { /* never-block */ });
+        // Resumes already acquired before creation; fresh native identities
+        // acquire here. Confirmed denial tears the failed session down instead
+        // of leaving a writable session without authority. Offline stays usable.
+        if (!opts.resumeSessionId && leaseWiring && leasesEnabled()) {
+          const acquired = await leaseWiring.client.acquire(info.id).catch(() => null);
+          if (acquired?.ok === false) {
+            throw new Error('Another device holds this conversation.');
+          }
         }
+        checkWindow();
+        if (nativeExited.has(info.id)) throw new Error('This conversation ended before startup completed.');
       } catch (e) {
+        // WHY: destroy may fail while a harness can still append. Keep its
+        // identity and renewable hold until a successful teardown; never
+        // represent a possible writer as a safely released session.
+        try {
+          await nativeHost.destroy(info.id);
+          await resumeAdmission.waitForStop(opts.resumeSessionId ?? info.id);
+          resumeAdmission.clearProtection(opts.resumeSessionId ?? info.id);
+          sessionManager.destroySession(info.id);
+        } catch (cleanupError) {
+          resumeAdmission.protect(opts.resumeSessionId ?? info.id);
+          log('ERROR', 'IPC', 'native teardown after startup failure failed', { sessionId: info.id, error: String(cleanupError) });
+          throw new Error(`Native startup failed (${String(e)}); teardown failed (${String(cleanupError)}).`);
+        } finally { nativeStarting.delete(info.id); nativeExited.delete(info.id); }
+        sessionIdMap.delete(info.id);
+        windowRegistry?.releaseSession(info.id);
         log('ERROR', 'IPC', 'native session start failed', { sessionId: info.id, error: String(e) });
+        throw e;
       }
+      nativeStarting.delete(info.id);
+      nativeExited.delete(info.id);
       // Eager-load the bound model the moment the session opens (like LM Studio),
       // so the loading bar + GB progress appear immediately rather than only after
       // the first message. Fire-and-forget; the model poll drives the UI.
@@ -1040,8 +1039,40 @@ export function registerIpcHandlers(
         }
       });
     }
+    checkWindow();
     return info;
-  });
+  };
+  const createSession = async (event: { sender: { id: number; isDestroyed?: () => boolean } } | null, opts: Parameters<SessionManager['createSession']>[0]) => {
+    if (!opts.resumeSessionId) return startSession(event, opts);
+    let started = false;
+    const result = await resumeAdmission.open(opts.resumeSessionId, () => {
+      started = true;
+      return startSession(event, opts);
+    }, !!leaseWiring && leasesEnabled());
+    if (result.status === 'lease-denied') return result;
+    // WHY: a duplicate open belongs to its original window, even if the
+    // second request came from a different window. Ask that owner to select it.
+    // WHY the ownerless fallback (combined branch: master's reuse vs bugfix-chatfiles'
+    // "switch to the open tab"): a session with NO owning window — started from
+    // a phone or a remote handoff — was answered `reused` with no focus request
+    // at all, so the desktop never switched to it. Its events take
+    // sendForSession's ownerless route (the primary mainWindow, above), so that
+    // is the one window whose renderer lists it. Once that window is closed no
+    // window shows it, and none is raised (not the leader: it would not list it).
+    const owner = windowRegistry?.getOwner(result.id);
+    if (!started && event) {
+      const target = owner != null ? webContents.fromId(owner)
+        : (!mainWindow.isDestroyed() ? mainWindow.webContents : undefined);
+      if (target) {
+        target.send(IPC.SESSION_FOCUS_REQUEST, result.id);
+        BrowserWindow.fromWebContents(target)?.focus();
+      }
+    }
+    return started ? result : { ...result, reused: true as const };
+  };
+  ipcMain.handle(IPC.SESSION_CREATE, (event, opts) => createSession(event, opts));
+  // Optional for test doubles that only model the older remote interface.
+  remoteServer?.setSessionCreate?.((opts) => createSession(null, opts));
 
   // Pull-style directory snapshot — renderers call this on mount to avoid
   // racing the WINDOW_DIRECTORY_UPDATED push that fires before React subscribes.
@@ -1052,9 +1083,16 @@ export function registerIpcHandlers(
   }
 
   ipcMain.handle(IPC.SESSION_DESTROY, async (_event, sessionId: string) => {
+    // WHY: admission is keyed by CONVERSATION id; a Claude session's desktop id
+    // differs. Capture it before teardown can drop the mapping.
+    const conversationId = sessionIdMap.get(sessionId) ?? sessionId;
     // Idempotent + no-op for non-native ids: flushes/tears down the native
     // HarnessSession if this id is live, otherwise returns immediately.
     await nativeHost.destroy(sessionId);
+    await resumeAdmission.waitForStop(conversationId);
+    // WHY: an earlier direct destroy may have left this Claude writer unproven.
+    // A later IPC destroy cannot clear its protection without PTY-exit proof.
+    const recoveredWriter = handoffAttempts?.hasSession(sessionId) ? false : resumeAdmission.clearProtection(conversationId);
     // Task 7: drop the title feeder's per-session state too — a no-op for
     // non-native ids (the feeder was never fed events for them) and cheap
     // idempotent Map.delete for native ones.
@@ -1064,7 +1102,19 @@ export function registerIpcHandlers(
     // stops the transcript watcher. Closing the conversation is the point where
     // nothing can ask for its history again.
     pageSources.forget(sessionId);
-    const result = sessionManager.destroySession(sessionId);
+    resumePageBoundaries.delete(sessionId);
+    // WHY: ordinary destroy emits session-exit before requesting a PTY kill.
+    // A transferred writer needs the worker's PTY-exit proof before its pin
+    // can go; an unknown stop stays fenced, even if the UI closes the tab.
+    const pinnedClaude = handoffAttempts?.hasSession(sessionId) && sessionManager.getSession(sessionId)?.provider === 'claude';
+    const stopProof = pinnedClaude ? await sessionManager.stopSessionForHandoff(sessionId) : null;
+    if (pinnedClaude && stopProof?.status !== 'stopped') resumeAdmission.protect(conversationId);
+    // WHY: a proven stop already removed the manager entry, so destroySession
+    // finds nothing; that is still a successful close, not a failure.
+    const result = sessionManager.destroySession(sessionId) || (!!pinnedClaude && stopProof?.status === 'stopped');
+    // No SessionManager entry remains to emit exit after a failed startup.
+    if (recoveredWriter && !result) resumeAdmission.end(conversationId);
+    if (result && !pinnedClaude) handoffAttempts?.ended(sessionId);
     if (result) {
       // Explicit user-initiated destroy → treat as clean exit (0). The
       // reducer no-ops clean exits unless a turn was in flight.
@@ -1363,58 +1413,14 @@ export function registerIpcHandlers(
   });
 
   // --- Session defaults persistence ---
-  const DEFAULTS_INITIAL = {
-    skipPermissions: false,
-    model: 'sonnet',
-    projectFolder: '',
-    permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT },
-  };
-
-  // Load permission overrides into main.ts cache on startup
-  function syncPermissionOverrides(defaults: Record<string, any>) {
-    const overrides = defaults.permissionOverrides;
-    if (overrides && typeof overrides === 'object') {
-      setPermissionOverrides(overrides);
-    }
-  }
-
-  ipcMain.handle('defaults:get', async () => {
-    try {
-      const raw = fs.readFileSync(defaultsPrefPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      const result = { ...DEFAULTS_INITIAL, ...parsed,
-        permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT, ...parsed.permissionOverrides },
-      };
-      syncPermissionOverrides(result);
-      return result;
-    } catch {
-      return { ...DEFAULTS_INITIAL };
-    }
-  });
-
-  ipcMain.handle('defaults:set', async (_event, updates: Record<string, any>) => {
-    try {
-      let current: Record<string, any> = { ...DEFAULTS_INITIAL };
-      try {
-        const parsed = JSON.parse(fs.readFileSync(defaultsPrefPath, 'utf-8'));
-        current = { ...current, ...parsed,
-          permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT, ...parsed.permissionOverrides },
-        };
-      } catch {}
-      // Deep-merge permissionOverrides instead of replacing
-      const merged = { ...current, ...updates };
-      if (updates.permissionOverrides) {
-        merged.permissionOverrides = { ...current.permissionOverrides, ...updates.permissionOverrides };
-      }
-      fs.mkdirSync(path.dirname(defaultsPrefPath), { recursive: true });
-      fs.writeFileSync(defaultsPrefPath, JSON.stringify(merged, null, 2));
-      // Update in-memory cache so hook handler picks up changes immediately
-      syncPermissionOverrides(merged);
-      return merged;
-    } catch {
-      return null;
-    }
-  });
+  // Read/merge/write lives in prefs-service.ts, shared with remote-server.ts so a phone's
+  // read and save behave exactly like this window's. Every read and save also refreshes
+  // main.ts's in-memory override cache (the one the permission hook consults) through the
+  // sink registered here — for a save made from a phone too.
+  setPermissionOverridesSink(setPermissionOverrides);
+  ipcMain.handle('defaults:get', async () => readDefaults(defaultsPrefPath));
+  ipcMain.handle('defaults:set', async (_event, updates: Record<string, any>) =>
+    writeDefaults(updates && typeof updates === 'object' ? updates : {}, defaultsPrefPath));
 
   // --- Anonymous analytics opt-out (Phase 6) ---------------------------------
   // Getters and setters for the boolean gate analytics-service reads on launch.
@@ -1999,9 +2005,11 @@ export function registerIpcHandlers(
       // first; selectRelease picks the highest VERSION carrying this computer's
       // installer, so the full 1.3.0 ends a beta run without a special case.
       const release = listing
-        ? selectRelease(parsed, { includePrereleases: true, platform: process.platform, arch: process.arch })
+        ? selectRelease(parsed, { includePrereleases: true, platform: process.platform, arch: process.arch, linuxKind: linuxInstallKind(), translated: app.runningUnderARM64Translation })
         : (parsed as Parameters<typeof readReleaseStatus>[0]);
-      const next = readReleaseStatus(release, app.getVersion(), process.platform, process.arch);
+      // The install kind rides along because a pacman/deb/rpm install can only apply
+      // its OWN package — offering it the AppImage was 180 MB wasted (2026-09-20).
+      const next = readReleaseStatus(release, app.getVersion(), process.platform, process.arch, linuxInstallKind(), app.runningUnderARM64Translation);
       if (next) cachedUpdateStatus = next;
       else if (!cachedUpdateStatus) cachedUpdateStatus = currentOnlyStatus();
       // Stamped even for a reply that is not a release (GitHub's rate-limit body),
@@ -2312,9 +2320,12 @@ export function registerIpcHandlers(
       readJsonFile(path.join(home, '.claude', 'backup-meta.json')),
       fs.promises.stat(path.join(home, '.claude', 'toolkit-state', '.sync-lock')).then((s) => s.isDirectory(), () => false),
       Promise.all([...sessionIdMap].map(async ([desktopId, claudeId]) => {
+        // WHY: .gitbranch comes from Claude Code's status line, which native sessions lack.
+        const live = sessionManager.getSession(desktopId);
+        const nativeCwd = live?.provider === 'native' ? live.cwd : null;
         const [context, branch, stats] = await Promise.all([
           readTextFile(path.join(home, '.claude', `.context-${claudeId}`)),
-          readTextFile(path.join(home, '.claude', `.gitbranch-${claudeId}`)),
+          nativeCwd ? gitBranchLabel(nativeCwd) : readTextFile(path.join(home, '.claude', `.gitbranch-${claudeId}`)),
           readJsonFile(path.join(home, '.claude', `.session-stats-${claudeId}.json`)),
         ]);
         return { desktopId, context, branch, stats };
@@ -2444,10 +2455,85 @@ export function registerIpcHandlers(
   const topicDir = path.join(os.homedir(), '.claude', 'topics');
   // Maps desktop session ID → Claude Code session ID
   const sessionIdMap = new Map<string, string>();
+  const nativeStarting = new Set<string>();
+  const nativeExited = new Set<string>();
+  const admittedResumes = new Set<string>();
+  const awaitingFirstResumeHook = new Set<string>();
+  const resumeAdmission = createResumeAdmission<SessionInfo>({
+    acquire: (id) => leaseWiring!.client.acquire(id),
+    release: (id) => leaseWiring!.client.release(id),
+    // WHY (combined branch: master's resume admission x bugfix-chatfiles'
+    // already-open guard): one lookup for "is this conversation open here".
+    // Master's identity-map walk first; chatfiles' lookup then also matches a native session by its own id (a native desktop id IS its
+    // conversation id, before the identity map is written) and a Claude Code
+    // resume still waiting for its first hook (resumedConversationOf).
+    getLive: (id) => {
+      for (const [desktopId, claudeId] of sessionIdMap) {
+        if (claudeId === id) {
+          const info = sessionManager.getSession(desktopId);
+          if (info) return info;
+        }
+      }
+      return findLiveSessionForConversation(id, sessionManager.listSessions?.() ?? [],
+        (desktopId) => sessionIdMap.get(desktopId) ?? sessionManager.resumedConversationOf?.(desktopId));
+    },
+  });
+  // WHY: Task 5 must attach transport routes to this SAME admission/session
+  // owner; no separate requester may turn lease release into freshness.
+  const handoffAttempts = leaseWiring ? createHandoffAttempts({
+    deviceId: leaseWiring.deviceId, admission: resumeAdmission,
+    validate: (context, opts: Parameters<SessionManager['createSession']>[0]) =>
+      opts.resumeSessionId === context.sessionId && opts.provider === context.provider &&
+      typeof opts.name === 'string' && opts.name.length <= 512 && typeof opts.skipPermissions === 'boolean' &&
+      (opts.model === undefined || typeof opts.model === 'string') &&
+      (opts.binding === undefined || (typeof opts.binding === 'object' && opts.binding !== null)),
+    query: (id) => leaseWiring.client.query(id),
+    takeover: (id, nonce) => leaseWiring.client.takeover(id, nonce),
+    // WHY: only the hub's atomic compare-and-swap may grant separate force consent.
+    forceIfHolder: (id, expected) => hubLeaseRequest('force-acquire-if-holder', id, leaseWiring.deviceId, undefined, expected),
+    releaseForced: (id) => leaseWiring.client.release(id),
+    sync: () => syncSpacesSyncNowAwaited('personal', HANDOFF_SYNC_TIMEOUT_MS),
+    confirm: importConfirmedHandoff, pin: pinHandoffDestination, project: resolveHandoffProject,
+    savedProject: resolveSavedHandoffProject,
+    delay: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    start: (owner, context, cwd, check, opts: Parameters<SessionManager['createSession']>[0]) => {
+      check();
+      if (opts.resumeSessionId !== context.sessionId || opts.provider !== context.provider)
+        throw new Error('Handoff create options do not match the verified transcript.');
+      const sender = owner.startsWith('window:') ? webContents.fromId(Number(owner.slice(7))) : null;
+      if (owner.startsWith('window:') && !sender) throw new Error('The requesting window closed.');
+      return startSession(sender ? { sender } : null, { ...opts, cwd }, check);
+    },
+    dispose: async (info: SessionInfo) => {
+      // WHY: destroySession only requests a PTY kill; cancellation must wait
+      // for the worker's proven exit before relinquishing lease authority.
+      if (info.provider === 'claude') {
+        if ((await sessionManager.stopSessionForHandoff(info.id)).status !== 'stopped')
+          throw new Error('Canceled writer stop is unproven.');
+      } else {
+        await nativeHost.destroy(info.id);
+        if (!sessionManager.destroySession(info.id)) throw new Error('Attempt writer could not be stopped.');
+      }
+      sessionIdMap.delete(info.id);
+      windowRegistry?.releaseSession(info.id);
+    },
+  }) : null;
+  const handoffRoute = createHandoffTransport(handoffAttempts);
+  registerHandoffIpc(ipcMain, handoffRoute);
+  remoteServer?.setHandoffRoute?.(handoffRoute);
+  const transferredExit = createTransferredExitGate(resumeAdmission,
+    (sessionId) => handoffAttempts?.hasSession(sessionId) ?? false,
+    (sessionId) => handoffAttempts?.ended(sessionId));
   // Where each session's transcript lives, for the paged-history handler to
   // fall back on whenever the transcript watcher cannot say — see
   // transcript-page-source.ts for the three ordinary moments when it cannot.
   const pageSources = new TranscriptPageSources();
+  const transcriptWatcher = new TranscriptWatcher();
+  // WHY: expected exit removes the map, but a /clear remap (including a
+  // round-trip) must permanently invalidate a captured writer generation.
+  const writerGenerations = new Map<string, number>();
+  const handoffExpectedExits = new Set<string>();
+  const resumePageBoundaries = new Map<string, { jsonlPath: string; offset: number }>();
 
   // Holder-side takeover (Plan 2b Task 8): when another device requests this
   // session, cleanly interrupt, flush the final turn to the space, release the
@@ -2482,7 +2568,42 @@ export function registerIpcHandlers(
     };
     const holderTakeover = createHolderTakeover({
       sessionManager, sessionIdMap, leaseClient: leaseWiring.client,
+      markExpectedExit: (id) => handoffExpectedExits.add(id),
+      clearExpectedExit: (id) => { handoffExpectedExits.delete(id); },
       flushSessionToSpace, pushMoved,
+      withAdmissionHandoff: (id, teardown) => resumeAdmission.handoff(id, teardown),
+      senderDeviceId: leaseWiring.deviceId,
+      pinSnapshot: pinHandoffDestination,
+      protectUnsafe: (id) => resumeAdmission.protect(id),
+      publishSnapshot: publishStoppedHandoff,
+      syncPublished: syncPublishedHandoff,
+      captureWriter: (desktopId, conversationId) => {
+        const info = sessionManager.getSession(desktopId);
+        if (!info || sessionIdMap.get(desktopId) !== conversationId ||
+            (info.provider !== 'claude' && info.provider !== 'native')) return null;
+        const provider = info.provider;
+        const native = provider === 'native' ? nativeHost.captureHandoffWriter(desktopId) : null;
+        const watched = provider === 'claude' ? transcriptWatcher.pageSourceFor(desktopId) : null;
+        const source = provider === 'native' ? native?.transcriptPath : watched?.jsonlPath;
+        const projectCwd = provider === 'native' ? native?.projectCwd : watched?.cwd;
+        if (!source || !projectCwd) return null;
+        const generation = writerGenerations.get(desktopId) ?? 0;
+        return {
+          provider, sessionId: conversationId, transcriptPath: source, projectCwd,
+          persisted: () => provider === 'claude' || !!native?.persisted(),
+          current: () => {
+            if ((writerGenerations.get(desktopId) ?? 0) !== generation) return false;
+            const live = sessionManager.getSession(desktopId);
+            if (live) return live.provider === provider && sessionIdMap.get(desktopId) === conversationId &&
+              (provider === 'native' ? nativeHost.captureHandoffWriter(desktopId)?.transcriptPath === source &&
+                nativeHost.captureHandoffWriter(desktopId)?.projectCwd === projectCwd :
+                transcriptWatcher.pageSourceFor(desktopId)?.jsonlPath === source &&
+                transcriptWatcher.pageSourceFor(desktopId)?.cwd === projectCwd);
+            // Only the captured session's ordinary exit may remove its mapping.
+            return handoffExpectedExits.has(desktopId) && !sessionIdMap.has(desktopId);
+          },
+        };
+      },
       // Provider of a live desktop id — drives the holder's step-3 branch (native
       // sessions quiesce their HarnessSession; CC sessions get the ESC byte).
       getProvider: (id) => sessionManager.getSession(id)?.provider,
@@ -2493,10 +2614,11 @@ export function registerIpcHandlers(
       // Idempotent + no-op for non-native ids, so the holder flow calls it
       // unconditionally without needing to know the provider.
       destroyNative: (id) => nativeHost.destroy(id),
+      endQuiesceNative: (id) => nativeHost.endQuiesce(id),
     });
     // Fire-and-forget from a hub event — the handler never throws (each step is
     // try/caught inside createHolderTakeover), so void is safe.
-    leaseWiring.setHolderTakeover((sid, from) => { void holderTakeover(sid, from); });
+    leaseWiring.setHolderTakeover((sid, from, transferNonce) => { void holderTakeover(sid, from, transferNonce); });
   }
 
   // `lastAttentionBySession` is declared alongside the other status-value
@@ -2511,8 +2633,6 @@ export function registerIpcHandlers(
       void buildStatusDataShared().then((data) => remoteServer?.broadcastStatusData(data));
     }
   });
-
-  const transcriptWatcher = new TranscriptWatcher();
 
   // Last model id written to the store per CLAUDE session id, so a repeat is
   // never re-written. Unbounded in principle but bounded in practice by
@@ -2607,8 +2727,27 @@ export function registerIpcHandlers(
   // reader) is untouched. Stored tokens are left alone — the flag is a fast
   // revert, not a sign-out.
   const chatgptForUi: ChatGptAuth | null = process.env.YOUCODED_CHATGPT !== '0' ? (chatgptAuth ?? null) : null;
-  const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook(), chatgptForUi);
+  // Connection trust (§3.1): what OpenRouter last said about THIS profile's
+  // key, stored beside its secrets (userData), never in shared ~/.youcoded.
+  const openRouterHealth = new OpenRouterHealth({ dir: app.getPath('userData') });
+  const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook(), chatgptForUi, openRouterHealth);
   void providerRegistry.init();
+  // Re-check the OpenRouter key shortly after launch and every 5 minutes, so a
+  // key that died while the app sat idle reads as dead before anyone sends a
+  // message. refreshOpenRouter asks nothing unless OpenRouter is on with a key.
+  // (The ChatGPT usage poll's cadence — providers/chatgpt-auth.ts USAGE_POLL_MS.)
+  setTimeout(() => { void providerRegistry.refreshOpenRouter(); }, 5_000).unref?.();
+  setInterval(() => { void providerRegistry.refreshOpenRouter(); }, 5 * 60_000).unref?.();
+  // Sign in with OpenRouter (§3.5). The key it brings back takes the paste
+  // path: checked first, and saved only if OpenRouter didn't refuse it.
+  const openRouterSignIn = new OpenRouterSignIn({
+    openExternal: (url) => shell.openExternal(url),
+    acceptKey: async (key) => {
+      const check = await providerRegistry.testConnection('openrouter', key);
+      if (check.verdict !== 'rejected') await providerRegistry.setKey('openrouter', key);
+      return check;
+    },
+  });
   const modelCatalog = new ModelCatalog(app.getPath('userData'), undefined, {
     // WHY read defaults at resolution time, never mutate budgets of active sessions.
     contextPreferences: () => contextSettings.read(),
@@ -2907,6 +3046,10 @@ export function registerIpcHandlers(
     return null;
   };
 
+  // Serialize local title projections with manual renames. This is NOT the
+  // cross-process sidecar lock: no filesystem lock is held across store awaits.
+  const queueTitle = createTitleQueue();
+
   /**
    * Publish an AUTOMATIC name: persist, then paint. Every generated title in
    * the app goes through here — the topic watcher below included — so the
@@ -2916,15 +3059,54 @@ export function registerIpcHandlers(
    */
   const applyAutomaticTitle = async (
     desktopId: string, storeId: string, provider: SessionProvider, title: string,
-  ): Promise<boolean> => {
-    // Checked BEFORE the broadcast, not only at the write: noteAutomaticTitle
-    // can refuse a disk write, but nothing can un-paint a session pill.
-    if (await isSessionNameOwned(provider, storeId)) return false;
-    await noteAutomaticTitle(storeId, title, provider);
+    expectedAutoAt?: string, opening = false,
+  ): Promise<boolean> => queueTitle(`${provider}/${storeId}`, async () => {
+    const eligible = () => namingSettings.read().mode !== 'off';
+    const read = () => getNamingRecord(provider, storeId);
+    const hasTitle = async () => {
+      const rec = await getConversationStore()?.get(provider, storeId);
+      return hasRealTitle(rec?.title, liveNameForTitleCheck(desktopId));
+    };
+    if (!await mayPublishAutomaticName({ read, hasTitle, name: title, expectedAutoAt, opening, enabled: eligible })) return false;
+    let publicationStamp = expectedAutoAt;
+    if (publicationStamp === undefined) {
+      // The CC hook has not yet written its sidecar. Refuse a newer review
+      // that wins the lock after our read rather than rolling it back.
+      const before = await read();
+      let wrote = false;
+      const at = new Date().toISOString();
+      const written = await mutateNamingRecord(provider, storeId, (cur) => {
+        if (cur.manual || cur.auto !== (before?.auto ?? '') ||
+            cur.autoAt !== (before?.autoAt ?? cur.autoAt)) return cur;
+        wrote = true;
+        return { ...cur, auto: title, autoAt: at };
+      });
+      if (!written || !wrote) return false;
+      publicationStamp = at;
+    }
+    // Namer writes already went through the sidecar lock; do NOT call
+    // noteAutomaticTitle again: it would re-write an older opening title over
+    // a newer AI review between the first write and this projection.
+    if (!await mayPublishAutomaticName({ read, hasTitle, name: title,
+      expectedAutoAt: publicationStamp, opening, enabled: eligible })) return false;
+    const previousTitle = (await getConversationStore()?.get(provider, storeId))?.title ?? '';
+    const result = await noteTitleChanged(storeId, title, provider);
+    if (!result.ok) return false;
+    if (!await mayPublishAutomaticName({ read, hasTitle: async () => false,
+      name: title, expectedAutoAt: publicationStamp, enabled: eligible })) {
+      // A rename/Off may have landed during the projection await. Restore the
+      // authority's name (or the prior title when Off) instead of leaving a
+      // stale compatibility projection for older readers. A queued local manual
+      // rename will subsequently make its own projection and broadcast.
+      const current = await read();
+      const restored = current?.manual || (eligible() ? current?.auto : previousTitle);
+      if (restored !== undefined && restored !== title) await noteTitleChanged(storeId, restored, provider);
+      return false;
+    }
     sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, title);
     broadcastRename(desktopId, title);
     return true;
-  };
+  });
 
   const sessionNamer = createSessionNamer({
     settings: () => namingSettings.read(),
@@ -2960,7 +3142,9 @@ export function registerIpcHandlers(
         fs.writeFileSync(path.join(topicDir, `ask-${storeId}`), '');
       } catch { /* best-effort: a missed ask retries at the next review */ }
     },
-    currentName: (sessionId: string) => sessionManager.getSession(sessionId)?.name ?? '',
+    // A resumed chat's provisional opening words are not a name to "keep", or
+    // the review would echo them back as the title (createProvisionalTitles).
+    currentName: (sessionId: string) => provisionalResumeTitles.forNamer(sessionId, sessionManager.getSession(sessionId)?.name),
     // Store title wins; the live session name covers the boot window before
     // the store's first upsert. BOTH halves go through the shared placeholder
     // predicate — the 2026-08-06 lesson: a check that only excluded 'New
@@ -2969,12 +3153,12 @@ export function registerIpcHandlers(
       const ident = namingIdentity(sessionId);
       if (!ident) return true; // unknown identity: assume named rather than overwrite
       const rec = await getConversationStore()?.get(ident.provider, ident.storeId);
-      return hasRealTitle(rec?.title, sessionManager.getSession(sessionId)?.name);
+      return hasRealTitle(rec?.title, liveNameForTitleCheck(sessionId));
     },
-    publish: async (sessionId: string, name: string) => {
+    publish: async (sessionId: string, name: string, expectedAutoAt: string, opening: boolean) => {
       const ident = namingIdentity(sessionId);
       if (!ident) return;
-      await applyAutomaticTitle(sessionId, ident.storeId, ident.provider as SessionProvider, name);
+      await applyAutomaticTitle(sessionId, ident.storeId, ident.provider as SessionProvider, name, expectedAutoAt, opening);
     },
   });
 
@@ -3099,7 +3283,7 @@ export function registerIpcHandlers(
   // stale data relative to whichever surface wrote last.
   // chatgptAuth (Sign in with ChatGPT §5): the remote chatgpt:* WS cases read
   // the SAME account object, already kill-switched (null → signed-out/false).
-  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount });
+  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount, openRouterSignIn });
 
   // Plan 2b Task 11: give the remote server the SAME lease client/requester +
   // deviceId so its WS clients reach the identical lease/device state the
@@ -3128,6 +3312,7 @@ export function registerIpcHandlers(
     // Native sessions page over the merged event array; getHistoryPage returns
     // null for non-native ids, so CC's watcher stays the source for claude
     // sessions — the same discrimination the replay handler uses.
+    const idleBeforeRead = nativeHost.isLive(sessionId) && nativeHost.isIdle(sessionId);
     const nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null);
     if (nativePage !== null) {
       return {
@@ -3135,19 +3320,15 @@ export function registerIpcHandlers(
         // `offset` carries an ARRAY INDEX for native sources; opaque to the renderer.
         cursor: nativePage.hasMore ? { path: `native:${sessionId}`, offset: nativePage.nextIndex!, sizeAtRead: 0 } : null,
         hasMore: nativePage.hasMore,
+        reconcileInterrupted: shouldReconcileNativePage({ nativeIdle: idleBeforeRead && nativeHost.isIdle(sessionId), inherited, olderPage: !!beforeCursor }),
       };
     }
 
     let source: ResolvedPageSource | null = transcriptWatcher.pageSourceFor(sessionId);
     if (!source) {
-      // Not watched (a just-resumed CC session before CC's hook reports the
-      // transcript path; a session whose process has exited, which tears the
-      // watcher down; the buddy floater, which never watched one). Resolve from
-      // the ids the caller supplied, or from the ones an EARLIER request for
-      // this session supplied — only the FIRST page request carries them, and
-      // the scroll-up sentinel that follows it must not be told the
-      // conversation has no more history just because it has no ids to send.
-      // rememberLocator validates both before either shapes a path.
+      // No watcher yet (pre-hook resume), anymore (exit), or ever (buddy).
+      // Resolve from validated locator ids supplied now or on the first page;
+      // later scroll-up requests carry only the cursor, not those ids.
       pageSources.rememberLocator(sessionId, req.claudeSessionId, req.projectSlug);
       source = pageSources.get(sessionId);
       // NOT `empty`: "I cannot find the file" and "this is the beginning of the
@@ -3165,27 +3346,23 @@ export function registerIpcHandlers(
         return { ...empty, unresolved: true };
       }
     }
-    // The FIRST page ends where the live tailer started, so the page and the
-    // live stream cannot overlap (transcript-watcher startOffset, Task 4). A
-    // startOffset of 0 means the file didn't exist at watch time — read to EOF.
-    //
-    // EXCEPT for a window that INHERITED this session: "the live stream already
-    // delivered the rest" is only true of a window that was listening. A
-    // torn-off window received none of it, so stopping at startOffset showed a
-    // conversation frozen at the moment the session was resumed, with every
-    // message since missing (Destin, 2026-09-03). It reads to EOF instead; the
-    // reducer's HISTORY_PAGE_LOADED seeds its scratch replay from the live
-    // session's seenUuids, so any overlap with live events is deduped, not
-    // duplicated.
-    const endOffset = beforeCursor
-      ? beforeCursor.offset
-      : (inherited ? null : (source.startOffset || null));
-    return readTranscriptPage({
-      jsonlPath: source.jsonlPath,
-      sessionId,
-      endOffset,
-      subagentsDir: source.subagentsDir,
+    // The first page stops at the watcher cutoff; zero or an inherited window reads to EOF.
+    // HISTORY_PAGE_LOADED dedups any overlap against the live seenUuids.
+    const saved = resumePageBoundaries.get(sessionId);
+    const resumeOffset = saved?.jsonlPath === source.jsonlPath ? saved.offset : null;
+    const endOffset = beforeCursor ? beforeCursor.offset : (inherited ? null : (source.startOffset || null));
+    const page = await readTranscriptPage({
+      jsonlPath: source.jsonlPath, sessionId, endOffset, subagentsDir: source.subagentsDir,
     });
+    // Preserve the entire page (including new output before SessionStart), but
+    // reap ONLY tools that began before spawn. A watcher cutoff can be too late.
+    const entirelyOld = resumeOffset != null && !!beforeCursor && beforeCursor.offset <= resumeOffset;
+    const reconcile = resumeOffset != null && !entirelyOld;
+    const old = reconcile ? await readTranscriptPage({ jsonlPath: source.jsonlPath,
+      sessionId, endOffset: resumeOffset }) : null;
+    return { ...page, reconcileInterrupted: entirelyOld, reconcileInterruptedToolIds: old
+      ? [...new Set(old.events.filter(ev => ev.type === 'tool-use').map(ev => ev.data.toolUseId).filter((id): id is string => !!id))]
+      : undefined };
   });
 
   // Transcript replay: a window that just acquired a session asks for every
@@ -3277,6 +3454,13 @@ export function registerIpcHandlers(
       }
       if (sender.isDestroyed()) return;
     }
+    // WHY: progress never entered JSONL, so only the native host can restore it.
+    // Send after history and before the idle marker; the renderer compares stamps
+    // if a newer live heartbeat arrived while the asynchronous replay was read.
+    if (isNative) {
+      const progress = nativeHost.currentUsageProgressFor(sessionId);
+      if (progress) sender.send(IPC.TRANSCRIPT_EVENT, progress);
+    }
     // sessionIdle gates the reap because this SAME state re-send fires when a
     // window re-docks a session that is genuinely mid-turn. Only the native
     // host can answer that (`entry.inFlight`); CC sessions have no equivalent
@@ -3342,9 +3526,9 @@ export function registerIpcHandlers(
   // User-initiated /compact for a native session. Never throws across IPC: a
   // failure returns a coded reason so the renderer can surface a specific,
   // accurate message instead of a guessed one (docs/error-message-standards.md).
-  ipcMain.handle(IPC.NATIVE_COMPACT, async (_e, { sessionId }: { sessionId: string }) => {
+  ipcMain.handle(IPC.NATIVE_COMPACT, async (_e, { sessionId, focus }: { sessionId: string; focus?: string }) => {
     try {
-      return await nativeHost.compact(sessionId);
+      return await nativeHost.compact(sessionId, focus);
     } catch (err: any) {
       return { ok: false, reason: 'error', detail: err?.message ?? String(err) };
     }
@@ -3364,6 +3548,20 @@ export function registerIpcHandlers(
       return await nativeHost.invokeSkill(sessionId, skill, args);
     } catch (err: any) {
       return { ok: false, reason: 'error', detail: err?.message ?? String(err) };
+    }
+  });
+  // U11: the picker's switch. Same model-used write-through as set-binding
+  // below, but only once the switch actually happened.
+  ipcMain.handle(IPC.NATIVE_SWITCH_MODEL, async (_e, { sessionId, binding, summarize }: { sessionId: string; binding: any; summarize?: boolean }) => {
+    try {
+      const result = await nativeHost.switchModel(sessionId, binding, summarize === true);
+      if (result.status === 'switched') {
+        const ref = await resolvePortableModel(sessionId);
+        if (ref) noteModelUsed(sessionId, ref);
+      }
+      return result;
+    } catch (err: any) {
+      return { status: 'failed', reason: 'error', detail: err?.message ?? String(err) };
     }
   });
   ipcMain.handle(IPC.NATIVE_SET_BINDING, async (_e, sessionId: string, binding: any) => {
@@ -3430,7 +3628,10 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.PROVIDER_LIST, async () => providerRegistry.list());
   ipcMain.handle(IPC.PROVIDER_UPSERT, async (_e, config: any) => providerRegistry.upsert(config));
   ipcMain.handle(IPC.PROVIDER_REMOVE, async (_e, id: string) => { await providerRegistry.remove(id); return true; });
-  ipcMain.handle(IPC.PROVIDER_TEST, async (_e, id: string) => providerRegistry.testConnection(id));
+  // `key`: an optional candidate checked instead of the saved key (the Connect
+  // dialog refuses a bad key before it can replace a working one).
+  ipcMain.handle(IPC.PROVIDER_TEST, async (_e, id: string, key?: unknown) =>
+    providerRegistry.testConnection(id, typeof key === 'string' ? key : undefined));
   ipcMain.handle(IPC.PROVIDER_SET_KEY, async (_e, id: string, key: string) => { await providerRegistry.setKey(id, key); return true; });
   ipcMain.handle(IPC.PROVIDER_CATALOG, async () => modelCatalog.get(await providerRegistry.list()));
   // Sign in with ChatGPT (backend design 2026-09-05 §3, §5, §6). status is a
@@ -3440,6 +3641,9 @@ export function registerIpcHandlers(
   // catches them, so Electron rejects the renderer's promise and preload's
   // unwrapInvokeError strips the transport prefix before the card shows
   // e.message. Under the kill switch chatgptForUi is null: signed-out / false.
+  ipcMain.handle(IPC.OPENROUTER_SIGN_IN_STATUS, async () => openRouterSignIn.status());
+  ipcMain.handle(IPC.OPENROUTER_SIGN_IN, async () => openRouterSignIn.signIn());
+  ipcMain.handle(IPC.OPENROUTER_CANCEL_SIGN_IN, async () => openRouterSignIn.cancelSignIn());
   ipcMain.handle(IPC.CHATGPT_STATUS, async () => chatgptForUi ? chatgptForUi.status() : { state: 'signed-out' as const });
   ipcMain.handle(IPC.CHATGPT_SIGN_IN, async () => chatgptForUi ? chatgptForUi.signIn() : false);
   ipcMain.handle(IPC.CHATGPT_CANCEL_SIGN_IN, async () => chatgptForUi ? chatgptForUi.cancelSignIn() : false);
@@ -3895,7 +4099,11 @@ export function registerIpcHandlers(
       const current = sessionIdMap.get(desktopId);
       const hookEventName = event.payload?.hook_event_name as string | undefined;
       const source = event.payload?.source as string | undefined;
-      if (resolveMappingAction(current, claudeId, hookEventName, source) !== 'adopt') {
+      // A resumed CC identity is registered before spawn. Its matching first
+      // SessionStart still must install transcript watchers, but not reacquire.
+      const firstAdmittedStart = awaitingFirstResumeHook.has(desktopId) && current === claudeId
+        && hookEventName === 'SessionStart';
+      if (!firstAdmittedStart && resolveMappingAction(current, claudeId, hookEventName, source) !== 'adopt') {
         // Log only a REFUSED remap (not the steady-state 'ignore' of matching
         // ids / tool hooks, which would spam every hook event). This is the
         // breadcrumb the 2026-07-26 wrong-transcript investigation had to do
@@ -3929,15 +4137,18 @@ export function registerIpcHandlers(
       // some OTHER source, the offset-0 replay would append into an
       // already-populated chat timeline, and the renderer would need a
       // CLEAR_TIMELINE-equivalent coupled to the remap.
-      if (current) {
+      awaitingFirstResumeHook.delete(desktopId);
+      if (current && current !== claudeId) {
+        admittedResumes.delete(desktopId);
         teardownSessionWatchers(desktopId);
         // 2b: /clear rotates the CC session id WITHOUT firing session-exit, so the
         // pre-rotation claudeId's lease + its 30s renew timer would otherwise leak
         // (renewing a dead id every 30s until app quit). Release it here.
         // Idempotent + best-effort; release() never rejects, .catch guards a future change.
-        void leaseWiring?.client.release(current).catch(() => { /* best-effort */ });
+        if (leaseWiring) resumeAdmission.end(current);
       }
 
+      writerGenerations.set(desktopId, (writerGenerations.get(desktopId) ?? 0) + 1);
       sessionIdMap.set(desktopId, claudeId);
       startWatching(desktopId, claudeId);
 
@@ -3970,29 +4181,18 @@ export function registerIpcHandlers(
         // Conversation Store (Phase 2a): tell the store this claude session's cwd
         // so its activity upserts carry projectName/originalPath (local truth).
         noteSessionStarted(claudeId, ccCwd, 'claude');
-        // 2b Task 8: this device now owns the session — take the lease.
-        // Fire-and-forget: a denied (ok:false) result would only mean another
-        // device holds it, but the sanctioned resume path already ran takeover
-        // BEFORE spawn, so we never block session start on the lease. acquire()
-        // never rejects, but the .catch keeps a future change from leaking one.
-        //
-        // Gate on sync being ENABLED: leases coordinate CROSS-DEVICE writers, which
-        // only exist for a synced conversation. Without this, every CC SessionStart
-        // (even for users who never enabled sync) took an optimistic local hold with
-        // a 30s renew timer writing Personal/Leases/*.json — wasteful and creates a
-        // Leases/ dir for no reason. Release on session-exit stays UNCONDITIONAL
-        // (idempotent — harmless if never acquired) so a session that acquired while
-        // sync was on still releases if sync later flips off.
-        // Log a denied acquire: today a session can run its whole life NOT owning
-        // its lease with zero trace, which is exactly how the 2026-07-18 handoff
-        // timeout went undiagnosed (the holder never held, so it never responded).
-        // Still never-block — the resume must not wait on the lease — but leave a
-        // breadcrumb so the next "takeover didn't respond" is diagnosable.
-        if (isSyncSpacesEnabled()) {
-          void leaseWiring?.client.acquire(claudeId)
+        // Resumed ids already acquired before spawn. New identities (including
+        // in-session /resume) acquire here; a confirmed denial must stop their
+        // writer rather than leave it running without authority. An unavailable
+        // hub still permits offline access. No lease when sync is disabled.
+        if (leaseWiring && !admittedResumes.has(desktopId) && leasesEnabled()) {
+          void leaseWiring.client.acquire(claudeId)
             .then((res) => {
               if (res && res.ok === false) {
-                log('WARN', 'Lease', 'session running without its lease (held by another device)', { claudeId, holder: res.holder });
+                log('WARN', 'Lease', 'stopping session denied its lease', { claudeId, holder: res.holder });
+                if (sessionIdMap.get(desktopId) === claudeId && sessionManager.getSession(desktopId)) {
+                  sessionManager.destroySession(desktopId);
+                }
               }
             })
             .catch(() => { /* never-block */ });
@@ -4001,20 +4201,20 @@ export function registerIpcHandlers(
     });
   }
 
+  // WHY: a PTY exit frame, not the early session-exit from destroySession,
+  // is the proof needed to release a transferred Claude writer's pin.
+  sessionManager.on('session-stopped', transferredExit.onStopped);
   // Stop watching when a session is destroyed
   sessionManager.on('session-exit', (sessionId: string) => {
+    if (nativeStarting.has(sessionId)) nativeExited.add(sessionId);
     teardownSessionWatchers(sessionId);
-    // Native teardown backstop (2026-07-18). SESSION_DESTROY already awaits
-    // nativeHost.destroy before destroySession, but session-exit ALSO fires for
-    // paths that go straight to SessionManager (a crashed worker, a takeover, an
-    // internal destroy) — and for a native session those left the HarnessSession
-    // running with its transcript-event listener still appending. Idempotent and
-    // a no-op for non-native ids, so calling it here is free on the CC path.
-    // Fire-and-forget: this listener is sync, and destroy() never rejects for an
-    // unknown id — the .catch guards a future change.
-    void nativeHost.destroy(sessionId).catch((e) => {
-      log('ERROR', 'IPC', 'native teardown on session-exit failed', { sessionId, error: String(e) });
-    });
+    // WHY: exit also occurs without SESSION_DESTROY. Coordinate the native
+    // append-chain drain with lease release; a failed stop must retain the hold.
+    const isNative = sessionManager.getSession(sessionId)?.provider === 'native';
+    const stop = nativeHost.destroy(sessionId);
+    // WHY: capture provider before the await; SessionManager deletes its entry after emit.
+    void stop.then(() => { if (isNative) handoffAttempts?.ended(sessionId); },
+      (e) => log('ERROR', 'IPC', 'native teardown on session-exit failed', { sessionId, error: String(e) }));
     // Task 7: same backstop reasoning as the destroy() call above — this
     // path also covers crashes/takeovers that never went through
     // SESSION_DESTROY, so the feeder's per-session state needs the same
@@ -4034,7 +4234,16 @@ export function registerIpcHandlers(
       requestChatsearchRefresh();
       // 2b Task 8: drop our lease so another device can acquire. Idempotent +
       // best-effort; release() never rejects, .catch guards a future change.
-      void leaseWiring?.client.release(claudeId).catch(() => { /* best-effort */ });
+      // A teardown from a previous writer must not free a successor's lease.
+      // The holder handoff releases explicitly only after the writer stops.
+      const anotherWriter = [...sessionIdMap.entries()].some(([did, cid]) =>
+        did !== sessionId && cid === claudeId && !!sessionManager.getSession(did));
+      if (!anotherWriter && !resumeAdmission.isHandingOff(claudeId)) {
+        // WHY: all destroy callers share this event. Its early emission by
+        // SessionManager must not release a transferred writer's hub lease.
+        if (!transferredExit.onExit(sessionId, claudeId, stop) && leaseWiring)
+          resumeAdmission.markExit(claudeId, stop);
+      }
       // WHY (2026-09-16, per-session-maps investigation): the last-model
       // dedupe is keyed by CLAUDE id and was never cleared, so every
       // conversation opened this run left a string behind for the life of the
@@ -4042,6 +4251,8 @@ export function registerIpcHandlers(
       lastModelSeen.delete(claudeId);
     }
     sessionIdMap.delete(sessionId);
+    admittedResumes.delete(sessionId);
+    awaitingFirstResumeHook.delete(sessionId);
     lastAttentionBySession.delete(sessionId);
     // Same investigation: the per-session model-state signature (native
     // sessions) had no removal path either.
@@ -4324,20 +4535,22 @@ export function registerIpcHandlers(
     const resolved = sessionIdMap.get(sessionId) || sessionId;
     const desktopId = sessionIdMap.has(sessionId) ? sessionId : resolved;
     const provider = await sessionProviderFor(resolved);
-    try {
-      const res = await setManualSessionName(provider, resolved, String(title ?? ''));
-      if (!res.ok) return res;
-      // Stop work already in flight for this session BEFORE painting: a
-      // generation that returns after this must be discarded, not raced.
-      sessionNamer.invalidate(sessionId);
-      sessionNamer.invalidate(resolved);
-      sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, res.name);
-      broadcastRename(desktopId, res.name);
-      emitConversationMetaChanged();
-      return { ok: true, name: res.name };
-    } catch (e: any) {
-      return { ok: false, error: e?.message || 'The name was not saved.' };
-    }
+    // Invalidate before waiting for any earlier projection, not after its
+    // store await. The queue then makes the manual projection/broadcast last.
+    sessionNamer.invalidate(sessionId);
+    sessionNamer.invalidate(resolved);
+    return queueTitle(`${provider}/${resolved}`, async () => {
+      try {
+        const res = await setManualSessionName(provider, resolved, String(title ?? ''));
+        if (!res.ok) return res;
+        sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, res.name);
+        broadcastRename(desktopId, res.name);
+        emitConversationMetaChanged();
+        return { ok: true, name: res.name };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || 'The name was not saved.' };
+      }
+    });
   };
 
   ipcMain.handle(IPC.SESSION_NAMING_GET, () => namingGet());
@@ -4448,8 +4661,8 @@ export function registerIpcHandlers(
   // (spec §3 never-block).
   ipcMain.handle(IPC.SYNC_SPACES_LEASE_QUERY, (_e, p: { claudeSessionId: string }) =>
     leaseWiring?.client.query(String(p?.claudeSessionId ?? '')) ?? { held: false, source: 'none' });
-  ipcMain.handle(IPC.SYNC_SPACES_LEASE_TAKEOVER, (_e, p: { claudeSessionId: string }) =>
-    leaseWiring?.requester.takeover(String(p?.claudeSessionId ?? '')) ?? { outcome: 'error' });
+  ipcMain.handle(IPC.SYNC_SPACES_LEASE_TAKEOVER, (_e, p: { claudeSessionId: string; transferNonce?: string }) =>
+    leaseWiring?.requester.takeover(String(p?.claudeSessionId ?? ''), p?.transferNonce) ?? { outcome: 'error' });
   ipcMain.handle(IPC.SYNC_SPACES_LEASE_FORCE, (_e, p: { claudeSessionId: string }) =>
     leaseWiring?.requester.force(String(p?.claudeSessionId ?? '')) ?? { ok: false });
 
@@ -4681,6 +4894,8 @@ export function registerIpcHandlers(
   // write and one .gitignore read; appendVersion queues per project and applies
   // the whole burst in a few read/write cycles instead of a thousand, each of
   // which used to pin a parsed 4.4 MB sidecar in memory until the app OOM'd.
+  // A Claude Code session's conversation id when it differs from its desktop id (VersionEvent.conversationId).
+  const conversationIdFor = (id: string): string | undefined => [sessionIdMap.get(id)].find((c) => c && c !== id);
   ipcMain.handle(ARTIFACT_IPC.APPEND_VERSION, async (
     _e,
     projectRoot: string,
@@ -4704,6 +4919,9 @@ export function registerIpcHandlers(
       type: args.type,
       author: args.author,
       toolUseId: typeof args.toolUseId === 'string' && args.toolUseId ? args.toolUseId : undefined,
+      // WHY: a Claude Code resume gets a fresh desktop id, so a files list keyed on it alone lost
+      // everything before the resume; the conversation's own id lets LIST_SESSION find these again.
+      conversationId: conversationIdFor(sessionId),
     });
     // AFTER the append resolves, not before it (2026-08-15 review): appendVersion
     // is queued now, so an invalidate issued before the call could be followed
@@ -4773,7 +4991,7 @@ export function registerIpcHandlers(
   // transports cannot drift on roots, denylist or shape. The legacy-record
   // repair each listing runs is inside the service.
   ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, sessionId: string, projectRoot: string) =>
-    listSessionFiles(sessionId, projectRoot));
+    listSessionFiles(sessionId, projectRoot, conversationIdFor(sessionId)));
 
   // Project View IPC — list project-scoped conversations, git repo info, and
   // the discovered context files (CLAUDE.md, rules, etc.). The reads go
@@ -4841,6 +5059,11 @@ export function registerIpcHandlers(
   ipcMain.handle(ARTIFACT_IPC.RESOLVE_PATH, (_e, projectRoot: string, filePath: string) =>
     resolveArtifactPath(projectRoot, filePath));
 
+  // LIST_FOLDER → one folder of Project Files, a page at a time, straight from
+  // disk (folder-listing.ts). No depth cap and no home-folder gate.
+  ipcMain.handle(ARTIFACT_IPC.LIST_FOLDER, (_e, projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean }) =>
+    listFolder(projectId, relDir, opts));
+
   // full: the user clicked "Load the whole file" on the partial-view bar. Still
   // refused above FULL_READ_MAX_BYTES — the flag opts into a BIGGER read, not an
   // unbounded one. No `maxBytes` here: the desktop's own limits are untouched.
@@ -4882,7 +5105,12 @@ export function registerIpcHandlers(
       : undefined;
 
     let fullPath: string;
-    if (artifact) {
+    // A `../` record is judged as artifacts:get judges it (F3), so the tier below sees its REAL location.
+    const judged = artifact ? await judgeRecordLocation(projectRoot, artifact) : null;
+    if (judged && !judged.ok) return judged.error === 'missing' ? { ok: false, error: 'artifact-not-found' } : judged;
+    if (judged?.ok) {
+      fullPath = judged.realPath;
+    } else if (artifact) {
       // NOTE the tracked branch historically wrote artifact.absolutePath! with
       // NO check at all — the sidecar-escalation hole (spec §12.1). Everything
       // below now runs on the RESOLVED path for both branches.
@@ -4999,6 +5227,14 @@ export function registerIpcHandlers(
     deviceId: () => getMachineIdentity(app.getPath('userData'))?.id ?? null,
     localFallbackDir: () => app.getPath('userData'),
     noteOwnWrite,
+    // Phase 2: approvals and key POINTERS beside the model-provider keys in
+    // userData, never in a sync space — a key is machine-bound ciphertext.
+    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore),
+    // A FRESH reader per call, not a held instance: the fs-backed store caches
+    // after its first load, so a long-lived one here would keep answering with
+    // the token from before the person signed in or out.
+    youcodedToken: () => createAuthStore(app.getPath('userData')).getToken(),
+    githubToken: async () => (await getGithubClient()?.getToken())?.token ?? null,
     broadcast: (pages) => {
       webContents.getAllWebContents().forEach((wc) => wc.send(IPC.PAGES_CHANGED, pages));
       remoteServer?.broadcast({ type: IPC.PAGES_CHANGED, payload: pages });
@@ -5008,6 +5244,19 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.PAGES_GET, async (_e, id: string) => pagesService.store.get(String(id ?? '')));
   ipcMain.handle(IPC.PAGES_SET_PINNED, async (_e, id: string, pinned: boolean) => pagesService.store.setPinned(String(id ?? ''), !!pinned));
   ipcMain.handle(IPC.PAGES_SET_DATA, async (_e, id: string, data: unknown) => pagesService.store.setData(String(id ?? ''), data));
+  // Phase 2. `remote: false` here and `true` in remote-server.ts is the whole
+  // of "no keys on the phone" (design review 1, finding 13): a desktop window
+  // may paste a key, a remote caller may only reuse one already saved.
+  ipcMain.handle(IPC.PAGES_APPROVE, async (_e, id: string, keys: Record<string, string>) =>
+    pagesService.approve(String(id ?? ''), keys ?? {}, { remote: false }));
+  ipcMain.handle(IPC.PAGES_REMOVE_CONNECTION, async (_e, id: string, connectionId: string) =>
+    pagesService.removeConnection(String(id ?? ''), String(connectionId ?? '')));
+  ipcMain.handle(IPC.PAGES_REFRESH, async (_e, id: string) => pagesService.refresh(String(id ?? '')));
+  ipcMain.handle(IPC.PAGES_SAVED_KEYS, async () => pagesService.savedKeys());
+  ipcMain.handle(IPC.PAGES_DELETE_SAVED_KEY, async (_e, service: string, address: string) =>
+    pagesService.deleteSavedKey(String(service ?? ''), String(address ?? '')));
+  ipcMain.handle(IPC.PAGES_FETCH, async (_e, id: string, req: PageFetchRequest) =>
+    pagesService.fetch(String(id ?? ''), req ?? { url: '' }));
   // A crashed/closed renderer never sends unwatch — drop its refs on destroy so
   // it cannot pin a watcher forever. One listener per webContents, attached on
   // its first subscribe.
@@ -5307,6 +5556,7 @@ export function registerIpcHandlers(
   };
   const cleanup = function cleanup(): Promise<void> {
     stopThemeWatcher();
+    openRouterSignIn.dispose();
     statusPush.stop();
     transcriptWatcher.stopAll();
     // Flush + tear down every live native session on quit (best-effort, bounded
@@ -5339,5 +5589,5 @@ export function registerIpcHandlers(
     engine: { installed: () => engineManager.registryHook().installed(), install: () => engineManager.install() },
     models: modelManager,
   };
-  return { cleanup, hasUsableProvider, firstRunDeps };
+  return { cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn, handoffAttempts };
 }

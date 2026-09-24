@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button, ErrorState, fieldClasses, Tooltip } from '../ui';
+import { FIELD_TRIGGER_STATES } from '../ui/field';
 import { plainMessage } from '../../utils/ipc-error';
 import { triggerTip } from '../guide/tips';
 import { SearchFilterPill } from '../ui/SearchFilterPill';
 import { POPOVER_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import type { PortableModelRef } from '../../../shared/types';
 
 // ONE model list, used everywhere a model gets chosen. Replaces four shapes for
@@ -32,7 +34,20 @@ import type { PortableModelRef } from '../../../shared/types';
 // state; build real features, no interim 'not available yet' shims".
 
 import { CLAUDE_ALIASES, type ClaudeAlias } from '../../../shared/model-ids';
+import {
+  RECOMMENDED_MODELS_HIDDEN_KEY,
+  chatgptPlanFamily,
+  gptFamilyRecommendationFor,
+  isClaudeFamilyRecommendation,
+  isGptFamilyRecommendation,
+  isRecommendedOpenRouterModel,
+} from '../../../shared/recommended-models';
 import { matchesQuery } from '../../../shared/text-match';
+// WHY: search draws every matching row at once — ~24,000 page elements at
+// stress scale (300+ catalog models) for a query as short as "a". Same
+// shared window every other long list in the app uses (render-cost
+// consolidation 2026-09-18).
+import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
 import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
@@ -79,6 +94,11 @@ interface Entry {
   /** `unavailable` is specifically "Add an API key" — clicking it should open
    *  Settings' Cloud providers page instead of sitting there as inert text. */
   needsApiKey?: boolean;
+  /** Bottom-band membership (2026-09-20 recommended models): the closed-set
+   *  bands — Claude Code defaults, the ChatGPT plan's named families, the
+   *  curated OpenRouter picks — this row belongs to, in display order.
+   *  Favourites always lead; unset means the row is ordinary catalogue data. */
+  band?: number;
 }
 
 /** Which company mark + colour a row carries.
@@ -101,6 +121,72 @@ function brandForEntry(e: Entry): { icon?: ProviderIconKey; color: string } | nu
 
 function choiceKey(c: ModelChoice): string {
   return c.runtime === 'claude' ? `claude:${c.alias}` : `${c.providerId}:${c.modelId}`;
+}
+
+// ── Bottom bands (recommended models, 2026-09-20) ───────────────────────────
+// The default view used to be favourites-only, which opened EMPTY on a fresh
+// install. Now: favourites first, then three closed-set bands. "Closed" is the
+// whole point — this is never a scrollable catalogue (decision 2 above); the
+// bands are a bounded, curated answer to "what can I try".
+//
+//   1. CLAUDE CODE DEFAULTS — the four aliases. Always present for a picker
+//      that includes Claude (availability greys a row its install cannot run;
+//      a picker with includeClaude=false in a native session never sees them).
+//
+//   2. CHATGPT PLAN FAMILIES — luna/terra/sol/astra, only when the plan is
+//      signed in. Family-matched against the plan's own catalog rows, never a
+//      pinned id (the manifest re-versions server-side).
+//
+//   3. RECOMMENDED — the curated OpenRouter set, only when OpenRouter is set
+//      up (a provider row exists at all). Rows are intersected with the live
+//      catalog, so a dead or renamed endpoint simply stops appearing; the
+//      weekly endpoint-health runner (workspace roadmap) is what proposes
+//      replacement ids when upstream renames one.
+//
+// The replacement rule (Destin, same day): a connected first-party plan
+// REPLACES the plan-shaped recommendations it duplicates — the ChatGPT plan
+// stands down the gpt luna/terra/sol/astra OpenRouter endpoints per family it
+// actually lists, and Claude Code stands down any claude recommendation —
+// while DeepSeek/GLM/Kimi/Grok/Gemini stay recommended for everyone.
+
+const BAND_CLAUDE = 1;
+const BAND_PLAN = 2;
+const BAND_RECOMMENDED = 3;
+
+/** The band a catalog row belongs to (plus the wildcard row's plan membership),
+ *  or undefined for ordinary catalogue rows — including one a connected
+ *  first-party plan has replaced, which renders exactly like never-banded.
+ *  Pure over the data the picker already holds — no fourth fetch. */
+function bandFor(
+  modelId: string,
+  providerType: string,
+  claudeSignedIn: boolean,
+  data: { catalog: CatalogRow[]; providers: ProviderRow[] },
+): { band: number; wildcard?: boolean } | undefined {
+  if (providerType === 'chatgpt') {
+    const family = chatgptPlanFamily(modelId);
+    if (family) return { band: BAND_PLAN };
+    return undefined;
+  }
+  if (providerType !== 'openrouter') return undefined;
+  if (isClaudeFamilyRecommendation(modelId)) {
+    // Claude Code replaces claude-family recommendations when connected. A
+    // claude row that is not curated is ordinary catalogue data either way.
+    if (claudeSignedIn || !isRecommendedOpenRouterModel(modelId)) return undefined;
+    return { band: BAND_RECOMMENDED };
+  }
+  if (isGptFamilyRecommendation(modelId)) {
+    // Stand down exactly the endpoint whose family the plan actually lists.
+    const family = gptFamilyRecommendationFor(modelId);
+    const planListed = family !== null && data.catalog.some(
+      (c) => data.providers.find((p) => p.id === c.providerId)?.type === 'chatgpt'
+        && chatgptPlanFamily(c.id) === family,
+    );
+    if (planListed) return undefined;
+    return { band: BAND_RECOMMENDED };
+  }
+  if (isRecommendedOpenRouterModel(modelId)) return { band: BAND_RECOMMENDED };
+  return undefined;
 }
 
 // ── Favourites ───────────────────────────────────────────────────────────────
@@ -258,6 +344,13 @@ export default function ModelPicker({
   const [sources, setSources] = useState<Set<string>>(new Set());
   const [localOnly, setLocalOnly] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(loadFavorites);
+  // WHY re-read on open: Assistant settings keeps its ModelPicker mounted while
+  // the neighbouring toggle writes localStorage. Mount-only state would keep
+  // showing the old recommendation setting until the whole page unmounted.
+  const readRecommendedHidden = () => {
+    try { return localStorage.getItem(RECOMMENDED_MODELS_HIDDEN_KEY) === '1'; } catch { return false; }
+  };
+  const [recommendedHidden, setRecommendedHidden] = useState(readRecommendedHidden);
   const [freeformFor, setFreeformFor] = useState<string | null>(null);
   const [freeformText, setFreeformText] = useState('');
 
@@ -268,6 +361,9 @@ export default function ModelPicker({
   const panelRef = useRef<HTMLDivElement>(null);
   const pillRef = useRef<HTMLDivElement>(null);
   const filterPopRef = useRef<HTMLDivElement>(null);
+  // The scroll root the reveal window measures against and resets to the top
+  // — the `overflow-y-auto` list div, not the outer panel.
+  const listRef = useRef<HTMLDivElement>(null);
   const [panelPos, setPanelPos] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const [filterPos, setFilterPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -352,12 +448,19 @@ export default function ModelPicker({
     return () => { off?.(); };
   }, []);
 
+  // A remote reconnect asks again even with the panel closed. WHY: the first load runs
+  // closed (the pill's model name, a prefill), and a request lost during a phone's drop
+  // left the list empty until the panel was opened (2026-09-11 phone pass sweep).
+  const reconnectReloadRef = useRef(false);
+  useOnRemoteReconnect(() => { reconnectReloadRef.current = true; setReload((n) => n + 1); });
+
   useEffect(() => {
     // The very first fetch happens while the panel is still closed (the pill has
     // to show the model's name, and a prefill has to resolve). After that, only
-    // an open or a finished download is worth re-asking for — closing the panel
-    // is not.
-    if (everLoadedRef.current && !open) return;
+    // an open, a finished download or a remote reconnect is worth re-asking for —
+    // closing the panel is not.
+    if (everLoadedRef.current && !open && !reconnectReloadRef.current) return;
+    reconnectReloadRef.current = false;
     everLoadedRef.current = true;
     let cancelled = false;
     // WHY no per-call `.catch(() => [])` (error inventory 2026-09-10, false message 9):
@@ -405,7 +508,10 @@ export default function ModelPicker({
   // Reset the transient view state on each open so the panel always starts on
   // the favourites view rather than resuming a stale search.
   useEffect(() => {
-    if (open) { setSearch(''); setFilterOpen(false); setFreeformFor(null); }
+    if (open) {
+      setSearch(''); setFilterOpen(false); setFreeformFor(null);
+      setRecommendedHidden(readRecommendedHidden());
+    }
   }, [open]);
 
   // Layered ESC: close the filter popover first, then the panel.
@@ -449,6 +555,8 @@ export default function ModelPicker({
   const entries: Entry[] = useMemo(() => {
     const out: Entry[] = [];
     const data = { providers, catalog, claudeStatus };
+    // Claude Code's replacement verdict for the claude-family recommendations.
+    const claudeConnected = claudeStatus?.state === 'signed-in';
     if (includeClaude) {
       for (const m of CLAUDE_MODELS) {
         const choice: ModelChoice = { runtime: 'claude', alias: m.alias };
@@ -456,6 +564,10 @@ export default function ModelPicker({
           key: choiceKey(choice), label: m.label, choice,
           sourceId: CLAUDE_SOURCE, sourceLabel: 'Claude Code', local: false,
           unavailable: unavailableReason(choice, data) ?? undefined,
+          // The Claude Code defaults band: every picker that includes Claude
+          // leads its default view with these four (availability decides
+          // greyed vs pickable per row).
+          band: BAND_CLAUDE,
         });
       }
     }
@@ -467,12 +579,14 @@ export default function ModelPicker({
     for (const p of includeNative ? providers : []) {
       for (const m of catalog.filter((c) => c.providerId === p.id)) {
         const choice: ModelChoice = { runtime: 'native', providerId: p.id, modelId: m.id };
+        const banded = bandFor(m.id, p.type, claudeConnected, { catalog, providers });
         out.push({
           key: choiceKey(choice), label: m.label, choice,
           sourceId: p.id, sourceLabel: p.label, local: p.type === 'local-engine',
           providerType: p.type,
           unavailable: unavailableReason(choice, data) ?? undefined,
           needsApiKey: nativeChoiceNeedsApiKey(choice, data),
+          ...(banded ? { band: banded.band } : {}),
         });
       }
     }
@@ -515,7 +629,12 @@ export default function ModelPicker({
   useEffect(() => { if (open && loaded && !hasLocal) triggerTip('local-models'); }, [open, loaded, hasLocal]);
 
   const rows = useMemo(() => {
-    const pool = searching ? entries : entries.filter((e) => favorites.has(e.key));
+    // The default view is favourites + the bottom bands (2026-09-20). While
+    // searching, the whole catalogue is the result — bands are default-view
+    // furniture, not a filter, so the pool reverts to `entries` unchanged.
+    const pool = searching
+      ? entries
+      : entries.filter((e) => favorites.has(e.key) || (e.band !== undefined && !recommendedHidden));
     const filtered = pool.filter((e) => {
       if (localOnly && !e.local) return false;
       if (sources.size && !sources.has(e.sourceId)) return false;
@@ -523,17 +642,30 @@ export default function ModelPicker({
       if (!matchesQuery(q, e.label, e.sourceLabel)) return false;
       return true;
     });
+    // Favourites, then the bands in number order — Destin's "sorted to the
+    // bottom" (2026-09-20). Favourites partition FIRST (a star on an ordinary,
+    // unbanded row must not sink below the bands), and within each group the
+    // band number orders. A favourite inside a band keeps its star; the sort
+    // is what makes favourites-first a rule rather than accident.
+    const sorted = filtered.slice().sort((a, b) => {
+      const fa = favorites.has(a.key) ? 0 : 1;
+      const fb = favorites.has(b.key) ? 0 : 1;
+      if (fa !== fb) return fa - fb;
+      return (a.band ?? Number.MAX_SAFE_INTEGER) - (b.band ?? Number.MAX_SAFE_INTEGER);
+    });
     // Pin the active model to the top of the favourites view, even when it
     // isn't favourited — a menu that opens straight to this list (no click to
     // get here first) should lead with what's actually selected, not require
-    // typing to find it. Skipped while searching: the whole catalogue is
-    // already the result there, and reordering a search result is surprising.
-    let ordered = filtered;
+    // typing to find it. Runs AFTER the band sort so a pinned unbanded row
+    // still leads the whole list rather than sinking behind the bands.
+    // Skipped while searching: the whole catalogue is already the result
+    // there, and reordering a search result is surprising.
+    let ordered = sorted;
     if (pinSelectedToTop && !searching && value) {
       const currentKey = choiceKey(value);
-      const idx = filtered.findIndex((e) => e.key === currentKey);
+      const idx = sorted.findIndex((e) => e.key === currentKey);
       if (idx > 0) {
-        const reordered = filtered.slice();
+        const reordered = sorted.slice();
         const [current] = reordered.splice(idx, 1);
         ordered = [current, ...reordered];
       } else if (idx === -1) {
@@ -541,17 +673,39 @@ export default function ModelPicker({
         const passesFilters = hit
           && (!localOnly || hit.local)
           && (!sources.size || sources.has(hit.sourceId));
-        if (passesFilters) ordered = [hit, ...filtered];
+        if (passesFilters) ordered = [hit, ...sorted];
       }
     }
     // WHY partition rather than sort: `unavailable` already drives the disabled
     // state, so this promotes rows the user can choose without re-checking
-    // provider readiness or disturbing catalogue/pinned order within either group.
+    // provider readiness or disturbing band/pinned order within either group.
     return [
       ...ordered.filter((e) => e.unavailable === undefined),
       ...ordered.filter((e) => e.unavailable !== undefined),
     ];
-  }, [entries, favorites, searching, localOnly, sources, q, pinSelectedToTop, value]);
+  }, [entries, favorites, searching, localOnly, sources, q, pinSelectedToTop, value, recommendedHidden]);
+
+  // WHY: rows is drawn 50 at a time, same as every other long list
+  // (`hooks/use-chunked-reveal.ts`) — a 300+ model catalog plus provider
+  // sources otherwise puts ~24,000 elements on the page for a one-letter
+  // query. Keyed on the query VALUES (not `rows`' identity) so toggling a
+  // favourite star mid-scroll doesn't collapse the window back to one chunk.
+  //
+  // `pinSelectedToTop` only reorders the FAVOURITES view (searching === false,
+  // see the comment above `ordered` — search results stay in unordered
+  // catalogue order on purpose). That means a selected model CAN sit past row
+  // 50 while searching, same as it already sat past whatever the user had
+  // scrolled to before this change — chunking makes that scroll progressive
+  // instead of instant, it does not newly hide anything a plain scroll could
+  // already reach. The favourites view is windowed too — only noticeable past
+  // 50 favourites, and where `pinSelectedToTop` is on (the chat's model popup)
+  // the selected model is first there, so it is always in the first chunk.
+  const resetKey = useMemo(
+    () => JSON.stringify([q, [...sources].sort(), localOnly]),
+    [q, sources, localOnly],
+  );
+  const { visible: visibleRows, hasMore, sentinelRef } =
+    useChunkedReveal(rows, { resetKey, rootRef: listRef, active: open });
 
   const toggleFavorite = (key: string) => {
     setFavorites((prev) => {
@@ -742,7 +896,7 @@ export default function ModelPicker({
         // behind it and read as a label rather than a control (reported
         // 2026-07-31 with a screenshot). One step deeper on the surface ladder
         // fixes it without disturbing the other ~25 fields.
-        className={fieldClasses('sm', 'w-full text-left truncate flex items-center gap-1.5 justify-between bg-well border-edge')}
+        className={fieldClasses('sm', `w-full text-left truncate flex items-center gap-1.5 justify-between bg-well border-edge ${FIELD_TRIGGER_STATES}`)}
       >
         {/* The current model's company mark, in its brand colour — the same
             pairing the status-bar chip shows, so the control you set it from and
@@ -780,7 +934,7 @@ export default function ModelPicker({
               />
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto py-1.5">
+            <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto py-1.5">
               {!loaded ? (
                 <p className="text-xs text-fg-muted text-center py-4">Loading…</p>
               ) : (
@@ -815,7 +969,12 @@ export default function ModelPicker({
                       </Button>
                     </div>
                   )}
-                  {rows.map(row)}
+                  {visibleRows.map(row)}
+                  {/* Top-up trigger — extends the window as the user scrolls
+                      near the end of what's drawn. Rendered only while rows
+                      remain so the observer effect tears down once the list
+                      is whole. */}
+                  {hasMore && <div ref={sentinelRef} aria-hidden className="h-px" />}
 
                   {/* Freeform providers only surface while searching — they are
                       not favouritable (there is no model id to star yet). */}

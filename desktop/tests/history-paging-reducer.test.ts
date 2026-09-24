@@ -40,6 +40,61 @@ describe('history paging reducer', () => {
     expect(sess.history).toEqual({ cursor: { path: 'p', offset: 100, sizeAtRead: 500 }, hasMore: true, loading: false });
   });
 
+  it('marks an interrupted historical tool as failed without ending a newer live turn', () => {
+    const oldTool: TranscriptEvent = {
+      type: 'tool-use', sessionId: 's', uuid: 'old-use', timestamp: 2,
+      data: { toolUseId: 'old', toolName: 'Bash', toolInput: { command: 'sleep 30' } },
+    };
+    let st = withSession('s');
+    st = chatReducer(st, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: 's', uuid: 'live-use',
+      toolUseId: 'live', toolName: 'Bash', toolInput: { command: 'sleep 10' },
+    });
+    st = chatReducer(st, {
+      type: 'HISTORY_PAGE_LOADED', sessionId: 's',
+      events: [userEvent('s', 'old-user', 'before crash'), oldTool],
+      cursor: null, hasMore: false, reconcileInterrupted: true,
+    });
+    expect(st.get('s')!.toolCalls.get('old')?.status).toBe('failed');
+    expect(st.get('s')!.toolCalls.get('old')?.error).toMatch(/interrupted/i);
+    expect(st.get('s')!.toolCalls.get('live')?.status).toBe('running');
+    expect(st.get('s')!.activeTurnToolIds.has('live')).toBe(true);
+  });
+
+  it('does not leave an idle resumed session looking like it is working', () => {
+    const st = chatReducer(withSession('s'), { type: 'HISTORY_PAGE_LOADED', sessionId: 's',
+      events: [userEvent('s', 'prompt', 'before crash'), {
+        type: 'tool-use', sessionId: 's', uuid: 'tool', timestamp: 2,
+        data: { toolUseId: 'old', toolName: 'Bash', toolInput: {} },
+      }], cursor: null, hasMore: false, reconcileInterrupted: true,
+    });
+    expect(st.get('s')!.toolCalls.get('old')?.status).toBe('failed');
+    expect(st.get('s')!.activeTurnToolIds.size).toBe(0);
+    expect(st.get('s')!.isThinking).toBe(false);
+  });
+
+  it('fails only pre-resume tools when new tool calls share the same page', () => {
+    const tool = (id: string): TranscriptEvent => ({ type: 'tool-use', sessionId: 's', uuid: `use-${id}`,
+      timestamp: 2, data: { toolUseId: id, toolName: 'Bash', toolInput: {} } });
+    const st = chatReducer(withSession('s'), { type: 'HISTORY_PAGE_LOADED', sessionId: 's',
+      events: [tool('old'), tool('new')], cursor: null, hasMore: false,
+      reconcileInterruptedToolIds: ['old'],
+    });
+    expect(st.get('s')!.toolCalls.get('old')?.status).toBe('failed');
+    expect(st.get('s')!.toolCalls.get('new')?.status).toBe('running');
+  });
+
+  it('does not mark an inherited live tool as interrupted', () => {
+    const tool: TranscriptEvent = {
+      type: 'tool-use', sessionId: 's', uuid: 'live-use', timestamp: 2,
+      data: { toolUseId: 'live', toolName: 'Bash', toolInput: {} },
+    };
+    const st = chatReducer(withSession('s'), {
+      type: 'HISTORY_PAGE_LOADED', sessionId: 's', events: [tool], cursor: null, hasMore: false,
+    });
+    expect(st.get('s')!.toolCalls.get('live')?.status).toBe('running');
+  });
+
   it('a second (older) page PREPENDS before the first', () => {
     let st = withSession('s');
     st = chatReducer(st, {

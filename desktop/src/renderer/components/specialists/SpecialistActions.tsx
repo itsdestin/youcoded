@@ -87,7 +87,8 @@ export function SpecialistActions({ sessionId, run, compact = false }: {
               // request came back with an error. Gating here means the cap
               // is visible before the user tries, not after.
               disabled={busy !== null || !note.trim() || note.length > MAX}
-              className="text-xs px-2 py-1 rounded-md bg-accent text-on-accent disabled:opacity-50"
+              // A filled accent button with a dead hover; same steps as Button's primary.
+              className="text-xs px-2 py-1 rounded-md bg-accent text-on-accent hover:bg-accent/90 active:bg-accent/80 transition-colors disabled:opacity-50"
             >
               {busy === 'note' ? 'Sending…' : 'Send'}
             </button>

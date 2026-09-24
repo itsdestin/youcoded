@@ -176,7 +176,11 @@ function CutBlock({ fullText, supplied, what }: { fullText?: string | null; supp
       </div>
       <div className="border-t border-edge-dim">
         {view === 'cut'
-          ? <div className="max-h-64 overflow-y-auto bg-well"><UnifiedDiff oldStr={fullText} newStr={supplied} /></div>
+          // fill: this wrapper is already the scroll surface (max-h-64
+          // overflow-y-auto) — without fill, UnifiedDiff stacked its own
+          // 15-line cap + button inside it, a second scrollbar hiding the
+          // rest of the cut text (review round 1, 2026-09-18).
+          ? <div className="max-h-64 overflow-y-auto bg-well"><UnifiedDiff oldStr={fullText} newStr={supplied} fill /></div>
           : <Md text={supplied} flush />}
       </div>
     </>
@@ -315,7 +319,8 @@ function WarnCard({ label }: { label: string }) {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="w-full flex items-center gap-2 text-left cursor-pointer"
+        // state-layer: it said cursor-pointer and never changed under the pointer.
+        className="w-full flex items-center gap-2 text-left cursor-pointer rounded-md px-1 -mx-1 state-layer"
       >
         <span className={`flex-1 min-w-0 font-medium ${open ? '' : 'truncate'}`}>
           {open

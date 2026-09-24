@@ -789,6 +789,11 @@ export const WebFetchTool = defineTool<z.infer<typeof inputSchema>>({
   moreHint: 'fetch a more specific URL, or a narrower section of the page',
   permissionSubject: (args) => args.url,
   async execute(args, ctx) {
+    // WHY: the Luna reservation guard counts model sends, not tool-network
+    // traffic. Keep the advertised tool stable but fail before DNS or HTTP.
+    if (process.env.YOUCODED_LUNA_EXPERIMENT === '1') {
+      return { text: 'Experiment network tools are disabled.', isError: true };
+    }
     let res: Response, finalUrl: string;
     try {
       ({ res, finalUrl } = await guardedFetch(args.url, { signal: ctx.signal, ...testHooks }));

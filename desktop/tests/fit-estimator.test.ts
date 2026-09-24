@@ -35,7 +35,7 @@ const F16 = { k: 'f16', v: 'f16' } as const;
 const Q8K = { k: 'q8_0', v: 'f16' } as const;   // what the engine is spawned with today
 const BLOCK = 34 / 32;                          // q8_0's 34-byte, 32-value block
 
-describe('kvCacheBytes — the per-layer formula (§D2)', () => {
+describe('kvCacheBytes — the per-layer formula', () => {
   it('plain full-attention model: layers × kvHeads × (dK×kBytes + dV×vBytes) × tokens, +block overhead', () => {
     const h = header({ blockCount: 32, headCountKv: 8, keyLength: 128, valueLength: 128 });
     const kv = kvCacheBytes(h, 4096, F16);
@@ -212,7 +212,7 @@ function inputs(over: Partial<MemoryCheckInputs> = {}): MemoryCheckInputs {
   };
 }
 
-describe('estimateFit — the four tiers (§D2)', () => {
+describe('estimateFit — the four tiers', () => {
   it('need = model + vision + KV + 512 MB working headroom', () => {
     expect(WORKING_HEADROOM_BYTES).toBe(512 * MIB);
     // 6 GB model + 1 GB vision + 0.5 GB KV + 0.5 GB headroom = 8 GB = exactly the
@@ -262,7 +262,7 @@ describe('estimateFit — the four tiers (§D2)', () => {
       .toBe('too-large');
   });
 
-  it('the KV term may raise a verdict to tight, NEVER to too-large (R1-10)', () => {
+  it('the KV term may raise a verdict to tight, NEVER to too-large', () => {
     // A model that fits on its own but whose 128k cache would blow past
     // everything: it is a warning, not a hard block, because lowering the
     // context length is exactly what the advice line tells the user to do.
@@ -304,7 +304,7 @@ describe('estimateFit — the four tiers (§D2)', () => {
   });
 });
 
-describe('estimateFit — the breakdown the size bubble reads (R8, R1-25, R32)', () => {
+describe('estimateFit — the breakdown the size bubble reads', () => {
   it('carries the model, the vision file, the context share and its length', () => {
     const r = estimateFit(inputs({ modelBytes: 6 * GB, visionBytes: GB, kvBytes: 0.25 * GB, contextLength: 32768 }));
     expect(r.breakdown).toMatchObject({
@@ -329,7 +329,7 @@ describe('estimateFit — the breakdown the size bubble reads (R8, R1-25, R32)',
   });
 });
 
-describe('the pool a model is scored against (§D2)', () => {
+describe('the pool a model is scored against', () => {
   it('is the first GPU device the engine reported', () => {
     // The real line on this machine:
     //   Vulkan0: AMD Radeon 8060S Graphics (RADV STRIX_HALO) (86016 MiB, 83660 MiB free)
@@ -385,7 +385,7 @@ describe('the pool a model is scored against (§D2)', () => {
   });
 });
 
-describe('memory available right now — one reader per platform (§D2)', () => {
+describe('memory available right now — one reader per platform', () => {
   it('Linux reads MemAvailable out of /proc/meminfo', () => {
     const meminfo = 'MemTotal:       131299568 kB\nMemFree:         6690268 kB\nMemAvailable:    81691368 kB\n';
     expect(availableMemoryBytes({
@@ -419,7 +419,7 @@ describe('memory available right now — one reader per platform (§D2)', () => 
   });
 });
 
-describe('what counts as resident (R1-14)', () => {
+describe('what counts as resident', () => {
   it('loaded and loading are resident; sleeping and unloaded are not', () => {
     expect(isResident('loaded')).toBe(true);
     // Mid-load memory is being taken this second — leaving it out is the
@@ -431,7 +431,7 @@ describe('what counts as resident (R1-14)', () => {
   });
 });
 
-describe('contextLengthFor (§D3)', () => {
+describe('contextLengthFor', () => {
   const models = { 'gemma-4-E2B-it-Q8_0': { contextLength: 131072 }, 'Qwen3.5-9B-Q8_0': { contextLength: null } };
   it("uses the model's own setting when it has one, else the engine-wide default", () => {
     expect(contextLengthFor('gemma-4-E2B-it-Q8_0', models, 32768)).toBe(131072);
@@ -495,7 +495,7 @@ describe('checkMemoryForLoad (create-time guard)', () => {
     expect(v.detail).toContain('8.0 GB this computer has free');
   });
 
-  it('a dismissal silences the warning only at the SAME context length (§D4)', () => {
+  it('a dismissal silences the warning only at the SAME context length', () => {
     const tight = inputs({
       modelBytes: 9 * GB, kvBytes: 0.5 * GB, contextLength: 32768, availableBytes: 8 * GB, poolBytes: 80 * GB,
     });
@@ -589,5 +589,65 @@ describe('the real models on this machine keep their verdicts', () => {
     const r = estimateFit({ modelBytes: 103.69 * GB, kvBytes: kv.bytes, contextLength: 32768, ...z13 });
     expect(r.fit).toBe('tight');
     expect(r.label).toMatch(/splits/i);
+  });
+});
+
+// Roadmap (local-models, 2026-09-07; investigation 2026-09-07-unified-memory-fit-
+// estimate): "a 2b model is saying 'will be tight' on my 128gb ram laptop". The
+// numbers below are the investigation's own, for unsloth/Qwen3.5-2B at 128k.
+describe('estimateFit — unified memory (Strix Halo, Apple Silicon)', () => {
+  const T = 121.5 * GB;         // what the OS reports on the 128 GB laptop
+  const qwen2b = { modelBytes: 1.9 * GB, kvBytes: 1.75 * GB, contextLength: 131072 };
+
+  it('scored against the 4 GB BIOS carve-out it read "Will be tight" (the reported bug)', () => {
+    const r = estimateFit(inputs({ ...qwen2b, poolBytes: 4.29 * GB, poolIsDedicatedVram: true, availableBytes: 106 * GB }));
+    expect(r.label).toBe('Will be tight — close other apps first');
+  });
+
+  it('scored against the real shared pool it fits on the GPU', () => {
+    const r = estimateFit(inputs({
+      ...qwen2b, poolBytes: 86016 * MIB, poolIsShared: true, poolIsDedicatedVram: false,
+      totalMemBytes: T, availableBytes: 106 * GB,
+    }));
+    expect(r.fit).toBe('fits');
+    expect(r.label).toBe('Runs fast — fits on your GPU');
+  });
+
+  it('the room on the chip is the SMALLER of the allowance and free RAM, never the sum', () => {
+    // 84 GiB allowance, but other apps leave only 20 GiB free: a 30 GiB model
+    // cannot have 84 — it is tight, and it is not a GPU/memory split.
+    const r = estimateFit(inputs({
+      modelBytes: 30 * GB, poolBytes: 84 * GB, poolIsShared: true, totalMemBytes: T, availableBytes: 20 * GB,
+    }));
+    expect(r.fit).toBe('tight');
+    expect(r.label).toBe('Will be tight — close other apps first');
+  });
+
+  it('a resident model is subtracted once, not from both the pool and free RAM', () => {
+    // 40 GiB already loaded: free RAM (80) already excludes it, the pool left
+    // is 84 − 40 = 44. A 42 GiB model: room = min(44, 80) = 44 → tight, not
+    // "too large" and not "splits" (which a double subtraction would produce).
+    const r = estimateFit(inputs({
+      modelBytes: 41.5 * GB, poolBytes: 84 * GB, poolIsShared: true, totalMemBytes: T,
+      availableBytes: 80 * GB, loadedBytes: 40 * GB,
+    }));
+    expect(r.fit).toBe('tight');
+    expect(r.label).not.toMatch(/splits/);
+  });
+
+  it('beyond the allowance it splits, up to the machine\'s RAM and no further', () => {
+    const at = (gb: number) => estimateFit(inputs({
+      modelBytes: gb * GB, poolBytes: 84 * GB, poolIsShared: true, totalMemBytes: T, availableBytes: 106 * GB,
+    }));
+    expect(at(100).label).toBe('Runs, but splits across your GPU and memory');
+    expect(at(125).fit).toBe('too-large');
+  });
+
+  it('a dedicated flag always wins over a stray shared flag', () => {
+    const r = estimateFit(inputs({
+      modelBytes: 30 * GB, poolBytes: 84 * GB, poolIsShared: true, poolIsDedicatedVram: true,
+      totalMemBytes: T, availableBytes: 20 * GB,
+    }));
+    expect(r.fit).toBe('fits');
   });
 });

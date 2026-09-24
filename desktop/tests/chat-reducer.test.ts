@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { ChatState, ChatAction, serializeChatState, deserializeChatState } from '../src/renderer/state/chat-types';
 import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
+import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
 import type { HookEvent } from '../src/shared/types';
 
 const SESSION = 'test-session';
@@ -14,6 +15,131 @@ function initState(): ChatState {
 function dispatch(state: ChatState, action: ChatAction): ChatState {
   return chatReducer(state, action);
 }
+
+describe('transient native usage progress', () => {
+  const usage = (inputTokens: number) => ({ inputTokens, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 });
+  const heartbeat = (sessionId: string, inputTokens: number, timestamp: number, uuid: string): ChatAction => ({
+    type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId, usageProgress: usage(inputTokens), timestamp, uuid,
+  });
+
+  it.each(['/compact', '/clear'] as const)('lets measured progress replace the %s context override, but preserves it for usage-silent progress', (command) => {
+    let s = dispatch(initState(), { type: 'NATIVE_HISTORY_REWRITTEN', sessionId: SESSION,
+      uuid: `rewrite-${command}`, contextUsedTokens: 0 });
+    const chips = () => selectNativeStatusChips(s.get(SESSION)!.inProgressUsage, 1000, s.get(SESSION)!.contextUsedOverride);
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION, timestamp: 100, uuid: 'silent',
+      usageProgress: { ...usage(20), liveProgress: true } });
+    expect(s.get(SESSION)!.contextUsedOverride).toBe(0);
+    expect(chips()?.contextUsedTokens).toBe(0);
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION, timestamp: 101, uuid: 'measured',
+      usageProgress: { ...usage(30), liveProgress: true, contextUsedTokens: 400 } });
+    expect(s.get(SESSION)!.contextUsedOverride).toBeNull();
+    expect(chips()?.contextUsedTokens).toBe(400);
+    expect(chips()?.contextPct).toBe(60);
+  });
+
+  it('keeps two sessions independent and replaces cumulative progress without durable totals', () => {
+    let s = dispatch(initState(), { type: 'SESSION_INIT', sessionId: 'other' });
+    s = dispatch(s, heartbeat(SESSION, 10, 100, 'p1'));
+    s = dispatch(s, heartbeat('other', 20, 101, 'p2'));
+    s = dispatch(s, heartbeat(SESSION, 30, 102, 'p3'));
+    expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(30));
+    expect(s.get('other')!.inProgressUsage).toEqual(usage(20));
+    expect(s.get(SESSION)!.totals).toEqual(initState().get(SESSION)!.totals);
+    expect(JSON.stringify(serializeChatState(s))).not.toContain('inProgressUsage');
+    expect(deserializeChatState(serializeChatState(s)).get(SESSION)!.inProgressUsage).toBeNull();
+  });
+
+  it('clears measured progress on completion interruption and error', () => {
+    for (const terminal of [
+      { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'end', timestamp: 201, stopReason: null, model: null, anthropicRequestId: null, usage: null },
+      { type: 'TRANSCRIPT_INTERRUPT', sessionId: SESSION, uuid: 'end', timestamp: 201 },
+      { type: 'NATIVE_SESSION_ERROR', sessionId: SESSION, message: 'failed' },
+    ] as ChatAction[]) {
+      let s = dispatch(initState(), heartbeat(SESSION, 10, 100, 'p1'));
+      s = dispatch(s, terminal);
+      expect(s.get(SESSION)!.inProgressUsage).toBeNull();
+    }
+  });
+
+  it('clears confirmed idle replay but preserves progress for active replay', () => {
+    const live = dispatch(initState(), heartbeat(SESSION, 10, 100, 'p1'));
+    expect(dispatch(live, { type: 'TRANSCRIPT_REPLAY_COMPLETE', sessionId: SESSION, sessionIdle: false }).get(SESSION)!.inProgressUsage).toEqual(usage(10));
+    expect(dispatch(live, { type: 'TRANSCRIPT_REPLAY_COMPLETE', sessionId: SESSION, sessionIdle: true }).get(SESSION)!.inProgressUsage).toBeNull();
+  });
+
+  it('fences late attach by host terminal time even when the renderer clock is behind or ahead', () => {
+    for (const rendererTime of [1, 999_999]) {
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(rendererTime);
+      try {
+        let s = dispatch(initState(), heartbeat(SESSION, 10, 100, 'old'));
+        s = dispatch(s, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION,
+          uuid: 'end', timestamp: 110, stopReason: null, model: null, anthropicRequestId: null, usage: null });
+        expect(s.get(SESSION)!.usageProgressAt).toBe(110);
+        expect(dispatch(s, heartbeat(SESSION, 11, 105, 'late'))).toBe(s);
+        // A later host measurement in a new turn must not be blocked by the
+        // renderer's unrelated wall clock (even if it reads 999999).
+        s = dispatch(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION,
+          uuid: `user-${rendererTime}`, timestamp: 120, text: 'next' });
+        s = dispatch(s, heartbeat(SESSION, 20, 130, 'next-progress'));
+        expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(20));
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  });
+
+  it('fences attach after interrupted and failed turns using their host event stamps', () => {
+    for (const terminal of [
+      { type: 'TRANSCRIPT_INTERRUPT', sessionId: SESSION, uuid: 'interrupt', timestamp: 200, kind: 'plain' },
+      { type: 'NATIVE_SESSION_ERROR', sessionId: SESSION, message: 'failed', timestamp: 200 },
+    ] as ChatAction[]) {
+      let s = dispatch(initState(), heartbeat(SESSION, 10, 100, 'old'));
+      s = dispatch(s, terminal);
+      expect(s.get(SESSION)!.inProgressUsage).toBeNull();
+      expect(dispatch(s, heartbeat(SESSION, 10, 150, 'late'))).toBe(s);
+    }
+  });
+
+  it('does not let progress-only late attach dismiss a newer stall, but an ordinary heartbeat clears it', () => {
+    let s = dispatch(initState(), heartbeat(SESSION, 10, 100, 'old'));
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION,
+      timestamp: 200, uuid: 'stall', stalled: true, stallWarning: { retryInMs: 5000, willRetry: false } });
+    const stalled = s.get(SESSION)!;
+    expect(stalled.attentionState).toBe('stalled');
+    expect(dispatch(s, heartbeat(SESSION, 15, 150, 'attach'))).toBe(s);
+    expect(s.get(SESSION)).toBe(stalled);
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION, timestamp: 210, uuid: 'resumed' });
+    expect(s.get(SESSION)!.attentionState).toBe('ok');
+    expect(s.get(SESSION)!.stallWarning).toBeNull();
+    expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(10));
+  });
+
+  it('an unrelated update that returns the chat to ok also drops the stall warning', () => {
+    let s = dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'hi', timestamp: 1 } as ChatAction);
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION, stallWarning: { retryInMs: 15_000, willRetry: true } });
+    expect(s.get(SESSION)!.attentionState).toBe('stuck');
+    expect(s.get(SESSION)!.stallWarning).not.toBeNull();
+    // A tool event (e.g. a helper's) writes 'ok'. Keeping the warning there made
+    // ChatView swap the amber card for a "Retrying in 15s…" countdown.
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-t1', toolUseId: 't1',
+      toolName: 'Read', toolInput: { file_path: 'a.ts' }, timestamp: 2 } as ChatAction);
+    expect(s.get(SESSION)!.attentionState).toBe('ok');
+    expect(s.get(SESSION)!.stallWarning).toBeNull();
+  });
+
+  it('rejects stale attach progress and duplicate UUID without changing references', () => {
+    let s = dispatch(initState(), heartbeat(SESSION, 30, 102, 'new'));
+    expect(dispatch(s, heartbeat(SESSION, 10, 100, 'old'))).toBe(s);
+    expect(dispatch(s, heartbeat(SESSION, 99, 103, 'new'))).toBe(s);
+    s = dispatch(s, heartbeat(SESSION, 40, 104, 'newer'));
+    expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(40));
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION });
+    expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(40));
+    s = dispatch(s, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION,
+      uuid: 'end', timestamp: 105, stopReason: null, model: null, anthropicRequestId: null, usage: null });
+    expect(dispatch(s, heartbeat(SESSION, 30, 102, 'attach')).get(SESSION)!.inProgressUsage).toBeNull();
+  });
+});
 
 describe('TRANSCRIPT_TURN_COMPLETE metadata', () => {
   let state: ChatState;
@@ -806,6 +932,18 @@ describe('native runtime reducer paths', () => {
     expect(session.errorMessage).toBeNull();
   });
 
+  // Connection trust (2026-09-18): the error's code picks the card's button, so
+  // it is stored with the message, cleared with it, and survives a phone
+  // reconnect (the snapshot) — otherwise a reconnecting phone loses the button.
+  it('an error code is stored, cleared by the next prompt, and survives the snapshot', () => {
+    state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'first', timestamp: 1 });
+    state = dispatch(state, { type: 'NATIVE_SESSION_ERROR', sessionId: SESSION, message: 'm', errorCode: 'openrouter-credit-short' });
+    expect(state.get(SESSION)!.errorCode).toBe('openrouter-credit-short');
+    expect(deserializeChatState(serializeChatState(state)).get(SESSION)!.errorCode).toBe('openrouter-credit-short');
+    state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'again', timestamp: 2 });
+    expect(state.get(SESSION)!.errorCode).toBeNull();
+  });
+
   it('NATIVE_MODEL_STATE_CHANGED sets modelState + modelInfo without touching turn state', () => {
     state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'hi', timestamp: 1 });
     expect(state.get(SESSION)!.isThinking).toBe(true);
@@ -975,7 +1113,7 @@ describe('native runtime reducer paths', () => {
 // ~8M copies and the last paragraph lurched. The set is append-only and
 // nothing renders it, so the reducer now appends in place — its one documented
 // purity exception (see markSeen's WHY). Pinned by identity, not timing.
-describe('seen-uuid dedup appends in place (2026-09-16 A3)', () => {
+describe('seen-uuid dedup appends in place', () => {
   const text = (uuid: string, t = 'w'): ChatAction => ({ type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid, text: t, timestamp: 1 });
   const turnText = (s: ChatState) => {
     const sess = s.get(SESSION)!;
@@ -1016,5 +1154,475 @@ describe('seen-uuid dedup appends in place (2026-09-16 A3)', () => {
     state = new Map(state).set(SESSION, bare);
     state = dispatch(state, { type: 'TRANSCRIPT_SKILL_INVOKED', sessionId: SESSION, uuid: 'sk1', skillId: 'x', displayName: 'x', timestamp: 1 } as ChatAction);
     expect(state.get(SESSION)!.seenUuids.has('sk1')).toBe(true);
+  });
+});
+
+// SESSION_MOVED — another device took over this session's lease. It ONLY ends
+// the in-flight turn cleanly (endTurn); it appends no timeline marker. The
+// holder destroys the session immediately after, so any appended marker would be
+// wiped by SESSION_REMOVE back-to-back and never render. The user-facing
+// "this session was taken over on <device>" surface is App.tsx's MovedGate, not
+// the timeline. These tests pin that endTurn still runs and NO marker is added.
+describe('SESSION_MOVED reducer action', () => {
+  let state: ChatState;
+
+  beforeEach(() => {
+    state = initState();
+  });
+
+  it('mid-turn: clears isThinking, fails running tools with "Turn ended", appends NO marker', () => {
+    // Start a turn + emit a tool so there is in-flight state to tear down.
+    state = dispatch(state, {
+      type: 'TRANSCRIPT_USER_MESSAGE',
+      sessionId: SESSION,
+      uuid: 'u1',
+      text: 'hi',
+      timestamp: 1000,
+    });
+    state = dispatch(state, {
+      type: 'TRANSCRIPT_TOOL_USE',
+      sessionId: SESSION,
+      uuid: 'u2',
+      toolUseId: 'tool-1',
+      toolName: 'Bash',
+      toolInput: { command: 'ls' },
+    });
+    expect(state.get(SESSION)!.isThinking).toBe(true);
+    expect(state.get(SESSION)!.toolCalls.get('tool-1')!.status).toBe('running');
+
+    const timelineLenBefore = state.get(SESSION)!.timeline.length;
+
+    state = dispatch(state, {
+      type: 'SESSION_MOVED',
+      sessionId: SESSION,
+      device: 'MacBook Pro',
+    });
+
+    const session = state.get(SESSION)!;
+    // endTurn() effects
+    expect(session.isThinking).toBe(false);
+    expect(session.activeTurnToolIds.size).toBe(0);
+    expect(session.toolCalls.get('tool-1')!.status).toBe('failed');
+    expect(session.toolCalls.get('tool-1')!.error).toBe('Turn ended');
+    // Attention resets to 'ok' — this is a clean turn end, NOT a terminal error state.
+    expect(session.attentionState).toBe('ok');
+
+    // NO system marker is appended (the Moved Gate is the surface now) and the
+    // timeline length is otherwise unchanged.
+    const markers = session.timeline.filter((e) => e.kind === 'system-marker');
+    expect(markers.length).toBe(0);
+    expect(session.timeline.length).toBe(timelineLenBefore);
+  });
+
+  it('idle: no marker, no spurious tool changes', () => {
+    const before = state.get(SESSION)!;
+    expect(before.isThinking).toBe(false);
+    expect(before.timeline.length).toBe(0);
+
+    state = dispatch(state, {
+      type: 'SESSION_MOVED',
+      sessionId: SESSION,
+      device: 'Linux Desktop',
+    });
+
+    const session = state.get(SESSION)!;
+    expect(session.toolCalls.size).toBe(0);
+    expect(session.isThinking).toBe(false);
+    const markers = session.timeline.filter((e) => e.kind === 'system-marker');
+    expect(markers.length).toBe(0);
+  });
+
+  it('unknown sessionId: returns state unchanged (no throw)', () => {
+    const before = state;
+    const after = dispatch(state, {
+      type: 'SESSION_MOVED',
+      sessionId: 'no-such-session',
+      device: 'Phantom',
+    });
+    expect(after).toBe(before);
+  });
+});
+
+describe('reducer session totals', () => {
+  const SID = 's1';
+  const start = (): ChatState => chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: SID });
+
+  const turnComplete = (usage: any, uuid: string) => ({
+    type: 'TRANSCRIPT_TURN_COMPLETE' as const,
+    sessionId: SID, uuid, timestamp: 1,
+    stopReason: 'end_turn', model: 'm', anthropicRequestId: null, usage,
+  });
+
+  it('sums usage across turns', () => {
+    let s = start();
+    s = chatReducer(s, turnComplete({ inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheCreationTokens: 0 }, 'u1'));
+    s = chatReducer(s, turnComplete({ inputTokens: 200, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0 }, 'u2'));
+    expect(s.get(SID)!.totals.inputTokens).toBe(300);
+    expect(s.get(SID)!.totals.outputTokens).toBe(30);
+  });
+
+  it('counts a turn exactly once, even when the watcher re-delivers it', () => {
+    // The watcher's re-emit contract and re-dock replay both RE-DELIVER
+    // turn-complete ("the reducer absorbs them"), and addTurnUsage is not
+    // idempotent. This was latent until 2026-09-03, when the In:/Out:/Cached:
+    // chips started reading a Claude Code session's totals — before that
+    // nothing displayed them, so a double count was invisible. Re-docking a
+    // session would otherwise have inflated every number on the bar.
+    let s = start();
+    const usage = { inputTokens: 1_000, outputTokens: 90, cacheReadTokens: 800, cacheCreationTokens: 20 };
+    s = chatReducer(s, turnComplete(usage, 'dup-1'));
+    s = chatReducer(s, turnComplete(usage, 'dup-1'));   // same turn, re-delivered
+    s = chatReducer(s, turnComplete(usage, 'dup-1'));   // and again
+    expect(s.get(SID)!.totals.inputTokens).toBe(1_000);
+    expect(s.get(SID)!.totals.outputTokens).toBe(90);
+    expect(s.get(SID)!.totals.cacheReadTokens).toBe(800);
+    // A genuinely different turn still adds.
+    s = chatReducer(s, turnComplete(usage, 'dup-2'));
+    expect(s.get(SID)!.totals.inputTokens).toBe(2_000);
+  });
+
+  it('does not count a SUBAGENT turn-complete twice — the subagent-usage event owns that', () => {
+    let s = start();
+    s = chatReducer(s, {
+      ...turnComplete({ inputTokens: 500, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 }, 'u3'),
+      parentAgentToolUseId: 'parent-tool-1',
+      agentId: 'child-1',
+    } as any);
+    expect(s.get(SID)!.totals.inputTokens).toBe(0);
+  });
+
+  it('counts edited lines from a tool result exactly once, even on a duplicate emit', () => {
+    let s = start();
+    const patch = [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: [' ctx', '-a', '+b', '+c'] }];
+    const use = { type: 'TRANSCRIPT_TOOL_USE' as const, sessionId: SID, uuid: 'tu', timestamp: 1, toolUseId: 't1', toolName: 'Edit', toolInput: {} };
+    const result = { type: 'TRANSCRIPT_TOOL_RESULT' as const, sessionId: SID, uuid: 'tr', timestamp: 2, toolUseId: 't1', toolName: 'Edit', result: 'ok', isError: false, structuredPatch: patch };
+    s = chatReducer(s, use as any);
+    s = chatReducer(s, result as any);
+    s = chatReducer(s, result as any);   // duplicate delivery (replay overlapping live)
+    expect(s.get(SID)!.totals.linesAdded).toBe(2);
+    expect(s.get(SID)!.totals.linesRemoved).toBe(1);
+  });
+
+  it('counts a SPECIALIST edit — the segment path, not the main tool-call path', () => {
+    let s = start();
+    const patch = [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 3, lines: ['+x', '+y', '+z'] }];
+    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SID, uuid: 'p1', timestamp: 1, toolUseId: 'task-1', toolName: 'Task', toolInput: {} } as any);
+    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SID, uuid: 'c1', timestamp: 2, toolUseId: 'ct-1', toolName: 'Write', toolInput: {}, parentAgentToolUseId: 'task-1', agentId: 'child-1' } as any);
+    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SID, uuid: 'c2', timestamp: 3, toolUseId: 'ct-1', toolName: 'Write', result: 'ok', isError: false, structuredPatch: patch, parentAgentToolUseId: 'task-1', agentId: 'child-1' } as any);
+    expect(s.get(SID)!.totals.linesAdded).toBe(3);
+  });
+
+  it('counts a SPECIALIST edit exactly once, even on a duplicate emit, as the main timeline does', () => {
+    let s = start();
+    const patch = [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 3, lines: ['+x', '+y', '+z'] }];
+    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SID, uuid: 'p3', timestamp: 1, toolUseId: 'task-3', toolName: 'Task', toolInput: {} } as any);
+    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SID, uuid: 'c3', timestamp: 2, toolUseId: 'ct-3', toolName: 'Write', toolInput: {}, parentAgentToolUseId: 'task-3', agentId: 'child-1' } as any);
+    const result = { type: 'TRANSCRIPT_TOOL_RESULT' as const, sessionId: SID, uuid: 'c4', timestamp: 3, toolUseId: 'ct-3', toolName: 'Write', result: 'ok', isError: false, structuredPatch: patch, parentAgentToolUseId: 'task-3', agentId: 'child-1' };
+    s = chatReducer(s, result as any);
+    s = chatReducer(s, result as any);   // duplicate delivery (replay overlapping live)
+    expect(s.get(SID)!.totals.linesAdded).toBe(3);
+  });
+
+  it('main timeline: an orphan tool result — no preceding tool-use for that toolUseId — contributes nothing, even on duplicate delivery', () => {
+    let s = start();
+    const patch = [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: [' ctx', '-a', '+b', '+c'] }];
+    // No TRANSCRIPT_TOOL_USE for 'missing-tool' ever dispatched — this simulates
+    // a dropped/malformed tool-use line, which this codebase treats as a real
+    // possibility (see the once-only guard comments above the reducer cases).
+    const result = { type: 'TRANSCRIPT_TOOL_RESULT' as const, sessionId: SID, uuid: 'tr-orphan', timestamp: 2, toolUseId: 'missing-tool', toolName: 'Edit', result: 'ok', isError: false, structuredPatch: patch };
+    s = chatReducer(s, result as any);
+    s = chatReducer(s, result as any);   // duplicate delivery
+    expect(s.get(SID)!.totals.linesAdded).toBe(0);
+    expect(s.get(SID)!.totals.linesRemoved).toBe(0);
+  });
+
+  it('specialist: an orphan specialist tool result — no preceding tool-use under the parent — contributes nothing, even on duplicate delivery', () => {
+    let s = start();
+    const patch = [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 3, lines: ['+x', '+y', '+z'] }];
+    // The parent Agent tool-call DOES exist (otherwise applySubagentEvent bails
+    // entirely before reaching the patch guard), but no TRANSCRIPT_TOOL_USE ever
+    // created a 'ct-orphan' segment under it.
+    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SID, uuid: 'p4', timestamp: 1, toolUseId: 'task-4', toolName: 'Task', toolInput: {} } as any);
+    const result = { type: 'TRANSCRIPT_TOOL_RESULT' as const, sessionId: SID, uuid: 'c-orphan', timestamp: 3, toolUseId: 'ct-orphan', toolName: 'Write', result: 'ok', isError: false, structuredPatch: patch, parentAgentToolUseId: 'task-4', agentId: 'child-1' };
+    s = chatReducer(s, result as any);
+    s = chatReducer(s, result as any);   // duplicate delivery
+    expect(s.get(SID)!.totals.linesAdded).toBe(0);
+    expect(s.get(SID)!.totals.linesRemoved).toBe(0);
+  });
+
+  // Task 17: the two new totals fields, seen through the real reducer.
+  // NOTE: there is no reducer path that calls addSubagentUsage yet — a
+  // specialist's spend is meant to arrive as its own subagent-usage event
+  // (see the WHY block above the addTurnUsage call in chat-reducer.ts), which
+  // main does not emit yet. So what the reducer can be held to today is the
+  // other half: a parent turn's cost is NEVER specialist spend, and a
+  // specialist's own turn-complete still contributes nothing at all.
+  it('a parent turn with a cost is not counted as specialist spend', () => {
+    let s = start();
+    s = chatReducer(s, turnComplete({ inputTokens: 100, outputTokens: 10, costUsd: 0.5 }, 'u10'));
+    const totals = s.get(SID)!.totals;
+    expect(totals.costUsd).toBeCloseTo(0.5, 10);
+    expect(totals.specialistCostUsd).toBe(0);
+    expect(totals.specialistRuns).toBe(0);
+  });
+
+  it('a SPECIALIST turn-complete adds no cost and no specialist spend — its own event owns that', () => {
+    let s = start();
+    s = chatReducer(s, {
+      ...turnComplete({ inputTokens: 500, outputTokens: 50, costUsd: 0.9 }, 'u11'),
+      parentAgentToolUseId: 'parent-tool-2',
+      agentId: 'child-2',
+    } as any);
+    const totals = s.get(SID)!.totals;
+    expect(totals.costUsd).toBe(0);
+    expect(totals.specialistCostUsd).toBe(0);
+  });
+
+  it('carries a free-to-run turn through to the session totals', () => {
+    let s = start();
+    s = chatReducer(s, turnComplete({ inputTokens: 100, outputTokens: 10, free: true }, 'u12'));
+    const totals = s.get(SID)!.totals;
+    expect(totals.anyFree).toBe(true);
+    expect(totals.anyUnpriced).toBe(false);
+    expect(totals.anyPriced).toBe(false);
+  });
+
+  it('survives serialization', async () => {
+    const { serializeChatState, deserializeChatState } = await import('../src/renderer/state/chat-types');
+    let s = start();
+    s = chatReducer(s, turnComplete({ inputTokens: 7, outputTokens: 3, cacheReadTokens: 1, cacheCreationTokens: 0 }, 'u9'));
+    const back = deserializeChatState(serializeChatState(s));
+    expect(back.get(SID)!.totals.inputTokens).toBe(7);
+  });
+
+  it('gives a pre-field snapshot empty totals rather than undefined', async () => {
+    const { deserializeChatState, createSessionChatState } = await import('../src/renderer/state/chat-types');
+    const legacy: any = { sessions: [[SID, { ...createSessionChatState(), toolCalls: [], toolGroups: [], assistantTurns: [], activeTurnToolIds: [], seenUuids: [], totals: undefined }]] };
+    const back = deserializeChatState(legacy);
+    expect(back.get(SID)!.totals.inputTokens).toBe(0);
+  });
+});
+
+// A Claude Code ask that ends without a user decision carries WHY
+// (hook-relay.ts / EventBridge.kt). Only 'hook-closed' — the hook's far end went
+// away while Claude Code's own menu may still be on screen — KEEPS the card.
+describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
+  function withAsk(toolName = 'Bash'): ChatState {
+    return dispatch(initState(), { type: 'PERMISSION_REQUEST', sessionId: SESSION, toolName, input: {}, requestId: 'r1' } as ChatAction);
+  }
+  const expire = (s: ChatState, reason?: 'app-timeout' | 'delivery-failed' | 'hook-closed') =>
+    dispatch(s, { type: 'PERMISSION_EXPIRED', sessionId: SESSION, requestId: 'r1', ...(reason ? { reason } : {}) } as ChatAction);
+  const card = (s: ChatState, id = 'perm-r1') => s.get(SESSION)!.toolCalls.get(id)!;
+
+  it("'hook-closed' keeps the card waiting: awaiting-approval, expired, no requestId, no error", async () => {
+    const { hasPendingInteraction, canRetrySubmit } = await import('../src/renderer/state/pty-input-gate');
+    const s = expire(withAsk(), 'hook-closed');
+    expect(card(s)).toMatchObject({ status: 'awaiting-approval', expired: true });
+    expect(card(s).requestId).toBeUndefined();
+    expect(card(s).error).toBeUndefined();
+    // Still counts as pending: nothing may be typed into Claude Code's live menu.
+    expect(hasPendingInteraction(s.get(SESSION)!)).toBe(true);
+    expect(canRetrySubmit(s.get(SESSION)!)).toBe(false);
+  });
+
+  it("'app-timeout' fails the card and says YouCoded declined it", () => {
+    const t = card(expire(withAsk(), 'app-timeout'));
+    expect(t.status).toBe('failed');
+    expect(t.expired).toBeUndefined();
+    expect(t.error).toMatch(/No answer came in time, so YouCoded declined this request/);
+  });
+
+  it("a reason this build does not know ('unroutable' from an older host) settles the card like no reason", () => {
+    const s = dispatch(withAsk(), { type: 'PERMISSION_EXPIRED', sessionId: SESSION, requestId: 'r1', reason: 'unroutable' } as unknown as ChatAction);
+    expect(card(s)).toMatchObject({ status: 'failed' });
+    expect(card(s).expired).toBeUndefined();
+  });
+
+  it("no reason (native broker, older client) and 'delivery-failed' settle the card, never keep it", () => {
+    for (const reason of [undefined, 'delivery-failed'] as const) {
+      const t = card(expire(withAsk(), reason));
+      expect(t.status).toBe('failed');
+      expect(t.expired).toBeUndefined();
+      expect(t.error).toMatch(/closed before an answer reached it/);
+    }
+  });
+
+  it('the hook dispatcher passes a known reason through and drops an unknown one', () => {
+    const evt = (r: unknown) => ({ type: 'PermissionExpired', sessionId: SESSION, payload: { _requestId: 'r1', _reason: r }, timestamp: 0 } as unknown as HookEvent);
+    expect(hookEventToAction(evt('hook-closed'))).toMatchObject({ type: 'PERMISSION_EXPIRED', reason: 'hook-closed' });
+    expect(hookEventToAction(evt('something-new'))).not.toHaveProperty('reason');
+    expect(hookEventToAction(evt(undefined))).not.toHaveProperty('reason');
+  });
+
+  it('PERMISSION_CARD_RESOLVED quietly completes a kept card, and leaves a live ask alone', () => {
+    const settled = dispatch(expire(withAsk(), 'hook-closed'), { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(settled)).toMatchObject({ status: 'complete' });
+    expect(card(settled).expired).toBeUndefined();
+    expect(card(settled).error).toBeUndefined();
+    const live = dispatch(withAsk(), { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(live).status).toBe('awaiting-approval');
+  });
+
+  it('a kept card the turn then fails keeps its failure — a late settle cannot erase it', () => {
+    let s = expire(withAsk(), 'hook-closed');
+    s = dispatch(s, { type: 'SESSION_PROCESS_EXITED', sessionId: SESSION, exitCode: 1 } as ChatAction);
+    expect(card(s)).toMatchObject({ status: 'failed' });
+    expect(card(s).expired).toBeUndefined();
+    const before = card(s).error;
+    s = dispatch(s, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(s)).toMatchObject({ status: 'failed', error: before });
+  });
+
+  it('PERMISSION_CARD_RESOLVED requires awaiting-approval, not just the flag', () => {
+    const s = withAsk();
+    const toolCalls = new Map(s.get(SESSION)!.toolCalls);
+    toolCalls.set('perm-r1', { ...toolCalls.get('perm-r1')!, status: 'failed', error: 'real failure', expired: true });
+    const stale = new Map(s); stale.set(SESSION, { ...s.get(SESSION)!, toolCalls });
+    const after = dispatch(stale, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(after)).toMatchObject({ status: 'failed', error: 'real failure' });
+  });
+
+  it('a kept placeholder stays kept when the real tool-use replaces it, and can still be settled', () => {
+    let s = expire(withAsk(), 'hook-closed');
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
+    expect([...s.get(SESSION)!.toolCalls.keys()].filter((k) => k.startsWith('perm-'))).toEqual([]);
+    expect(card(s, 'toolu_1')).toMatchObject({ status: 'awaiting-approval', expired: true });
+    s = dispatch(s, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'toolu_1' });
+    expect(card(s, 'toolu_1').status).toBe('complete');
+  });
+
+  it('a re-emitted tool-use does not reset a kept card to running (the send gates must keep holding)', async () => {
+    const { hasPendingInteraction } = await import('../src/renderer/state/pty-input-gate');
+    let s = expire(withAsk(), 'hook-closed');
+    const use = { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction;
+    s = dispatch(dispatch(s, use), use);
+    expect(card(s, 'toolu_1')).toMatchObject({ status: 'awaiting-approval', expired: true });
+    expect(hasPendingInteraction(s.get(SESSION)!)).toBe(true);
+  });
+
+  it("the tool's own result settles a kept card and clears the flag (answered in the terminal)", () => {
+    let s = expire(withAsk(), 'hook-closed');
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
+    const ok = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u2', toolUseId: 'toolu_1', result: 'ok', isError: false } as ChatAction);
+    expect(card(ok, 'toolu_1')).toMatchObject({ status: 'complete' });
+    expect(card(ok, 'toolu_1').expired).toBeUndefined();
+    const bad = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u3', toolUseId: 'toolu_1', result: 'no', isError: true } as ChatAction);
+    expect(card(bad, 'toolu_1').expired).toBeUndefined();
+  });
+
+  it('a kept card survives the remote-client snapshot round trip', () => {
+    const s = expire(withAsk(), 'hook-closed');
+    const back = deserializeChatState(serializeChatState(s));
+    expect(back.get(SESSION)!.toolCalls.get('perm-r1')).toMatchObject({ status: 'awaiting-approval', expired: true });
+  });
+});
+
+// The chat reducer must not copy a session's
+// whole Maps (toolCalls, toolGroups, assistantTurns — none of which ever shrink)
+// before knowing whether anything will change. These pin the copy-on-write
+// contract that replaced it:
+//   • a no-op returns the SAME state object (nothing re-renders), and
+//   • a change that leaves a Map untouched keeps that Map's identity, while
+//   • the change itself still lands, and the PREVIOUS state is never mutated.
+
+const COW = 'cow-session';
+
+function cowInit(): ChatState {
+  return chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: COW });
+}
+
+const cowToolUse = (toolUseId: string, toolName = 'Bash', toolInput: Record<string, unknown> = { command: toolUseId }): ChatAction => ({
+  type: 'TRANSCRIPT_TOOL_USE', sessionId: COW, uuid: `u-${toolUseId}`, toolUseId, toolName, toolInput, timestamp: 1,
+} as ChatAction);
+
+const cowPreparing = (toolCallId: string, chars: number, cleared?: boolean): ChatAction => ({
+  type: 'NATIVE_TOOL_PREPARING', sessionId: COW, toolCallId, toolName: 'Bash', chars, ...(cleared ? { cleared } : {}),
+} as ChatAction);
+
+// Deep snapshot of the parts a copy-on-write bug would corrupt in place.
+function cowSnapshot(state: ChatState) {
+  const s = state.get(COW)!;
+  return JSON.stringify({
+    toolCalls: [...s.toolCalls.entries()],
+    toolGroups: [...s.toolGroups.entries()],
+    assistantTurns: [...s.assistantTurns.entries()],
+    timeline: s.timeline,
+    active: [...s.activeTurnToolIds],
+  });
+}
+
+describe('chat reducer copy-on-write', () => {
+  it('a second tool joining the open group keeps the assistantTurns Map (the turn did not change)', () => {
+    const one = chatReducer(cowInit(), cowToolUse('t1'));
+    const before = cowSnapshot(one);
+    const two = chatReducer(one, cowToolUse('t2'));
+    const a = one.get(COW)!;
+    const b = two.get(COW)!;
+
+    expect(b.assistantTurns).toBe(a.assistantTurns);
+    expect(b.timeline).toBe(a.timeline);
+    // The group DID change: new Map, both ids, same group.
+    expect(b.toolGroups).not.toBe(a.toolGroups);
+    expect(b.currentGroupId).toBe(a.currentGroupId);
+    expect(b.toolGroups.get(b.currentGroupId!)!.toolIds).toEqual(['t1', 't2']);
+    expect(b.toolCalls.get('t2')!.status).toBe('running');
+    // And the earlier state was not written through.
+    expect(cowSnapshot(one)).toBe(before);
+  });
+
+  it('a re-emitted tool-use keeps both the toolGroups and assistantTurns Maps', () => {
+    const one = chatReducer(chatReducer(cowInit(), cowToolUse('t1')), cowToolUse('t2'));
+    const again = chatReducer(one, cowToolUse('t1'));
+    expect(again.get(COW)!.toolGroups).toBe(one.get(COW)!.toolGroups);
+    expect(again.get(COW)!.assistantTurns).toBe(one.get(COW)!.assistantTurns);
+    expect(again.get(COW)!.toolGroups.get(again.get(COW)!.currentGroupId!)!.toolIds).toEqual(['t1', 't2']);
+  });
+
+  it('a tool opening a new group in an EXISTING turn copies assistantTurns without mutating the old one', () => {
+    let s = chatReducer(cowInit(), {
+      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: COW, uuid: 'txt-1', text: 'hi', timestamp: 1,
+    } as ChatAction);
+    const before = cowSnapshot(s);
+    const prev = s;
+    s = chatReducer(s, cowToolUse('t1'));
+    const turnId = s.get(COW)!.currentTurnId!;
+    expect(turnId).toBe(prev.get(COW)!.currentTurnId);
+    expect(s.get(COW)!.assistantTurns).not.toBe(prev.get(COW)!.assistantTurns);
+    expect(s.get(COW)!.assistantTurns.get(turnId)!.segments.map((x) => x.type)).toEqual(['text', 'tool-group']);
+    expect(cowSnapshot(prev)).toBe(before);
+  });
+
+  it('NATIVE_TOOL_PREPARING no-ops return the same state object', () => {
+    const real = chatReducer(cowInit(), cowToolUse('t1'));
+    // Progress tick for a card the real tool-use already superseded.
+    expect(chatReducer(real, cowPreparing('t1', 40))).toBe(real);
+    // Clear of a card that is not preparing, and of an unknown card.
+    expect(chatReducer(real, cowPreparing('t1', 0, true))).toBe(real);
+    expect(chatReducer(real, cowPreparing('nope', 0, true))).toBe(real);
+  });
+
+  it('NATIVE_TOOL_PREPARING still updates and clears a preparing card without touching the old state', () => {
+    const prep = chatReducer(cowInit(), cowPreparing('p1', 5));
+    const before = cowSnapshot(prep);
+    const ticked = chatReducer(prep, cowPreparing('p1', 50));
+    expect(ticked.get(COW)!.toolCalls.get('p1')!.preparingChars).toBe(50);
+    const cleared = chatReducer(ticked, cowPreparing('p1', 0, true));
+    expect(cleared.get(COW)!.toolCalls.has('p1')).toBe(false);
+    expect(cowSnapshot(prep)).toBe(before);
+  });
+
+  it('an orphan tool result keeps the toolCalls Map', () => {
+    const s = chatReducer(cowInit(), cowToolUse('t1'));
+    const out = chatReducer(s, {
+      type: 'TRANSCRIPT_TOOL_RESULT', sessionId: COW, uuid: 'r-x', timestamp: 2, toolUseId: 'never-seen', toolName: 'Bash', result: 'ok', isError: false,
+    } as ChatAction);
+    expect(out.get(COW)!.toolCalls).toBe(s.get(COW)!.toolCalls);
+  });
+
+  it('a PERMISSION_REQUEST heartbeat for an ask already awaiting is a same-object no-op', () => {
+    let s = chatReducer(cowInit(), cowToolUse('t1', 'Read', { file_path: '/a' }));
+    s = chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: COW, toolName: 'Read', input: { file_path: '/a' }, requestId: 'req-1' } as ChatAction);
+    expect(s.get(COW)!.toolCalls.get('t1')!.status).toBe('awaiting-approval');
+    expect(chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: COW, toolName: 'Read', input: { file_path: '/a' }, requestId: 'req-1' } as ChatAction)).toBe(s);
   });
 });

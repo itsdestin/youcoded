@@ -24,6 +24,7 @@ const GATED = /document\.hidden|visibilityState|visibilitychange|useVisibleInter
 // Path relative to src/renderer → one-line reason it is allowed to tick unseen.
 const ALLOWLIST: Record<string, string> = {
   'components/assistant-settings/AssistantSettings.tsx': 're-renders every 4s only while the Assistant dialog is open',
+  'components/ExpiredApprovalActions.tsx': '2s terminal re-read only while a kept (hook-closed) permission card is on screen — the menu it offers must track the live terminal',
   'components/BrailleSpinner.tsx': 'shared 40ms spinner tick; runs only while a spinner is mounted (interval-driven by design, see animation-frame-budget.test.ts)',
   'components/guide/GuideRing.tsx': '250ms anchor re-measure while a first-run tour ring is shown',
   'components/guide/GuideTour.tsx': '300ms anchor-presence check while a first-run tour is running',
@@ -32,6 +33,7 @@ const ALLOWLIST: Record<string, string> = {
   'components/plans/PlanCard.tsx': '1s elapsed clock that mounts ONLY while a plan is being written (PlanWritingDetail), the same shape as ThinkingIndicator\'s countdown; it unmounts the moment the plan is proposed',
   'components/ThinkingIndicator.tsx': 'word rotation (2.5s), retry countdown (1s) and prefill tick (250ms), each only while a reply is in flight',
   'hooks/useAttentionClassifier.ts': '1s PTY buffer read only while Claude is thinking; stall detection must keep working when the window is hidden',
+  'hooks/usePlanMenu.ts': "500ms plan-menu re-read only while a plan-approval card is on screen; its \"can't read the options\" fallback is time-based and a static terminal sends no updates",
   'hooks/useVoiceInput.ts': '500ms seconds counter only while the microphone is listening',
   'state/account-context.tsx': 'account refresh every 15 minutes — negligible',
   'dev/workbench/compare/registry.tsx': 'workbench-only, never in the shipped app',

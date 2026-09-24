@@ -108,6 +108,13 @@ export class AcceptedHistoryCapture {
     this.commit(attempt, (e) => e.kind === 'text' && uuids.has(e.uuid));
   }
 
+  /** Read-only origin view for the message pushed by this attempt. The caller
+   *  takes it before acceptAttempt consumes the pending deltas. */
+  attemptOrigins(attempt: AttemptId, textOnly = false): string[] {
+    return (this.pending.get(attempt) ?? [])
+      .filter(e => !textOnly || e.kind === 'text').map(e => e.uuid);
+  }
+
   private commit(attempt: AttemptId, keep: (event: AttemptEvent) => boolean): void {
     const events = this.pending.get(attempt);
     if (!events) return;                     // already consumed, or never begun
@@ -124,7 +131,14 @@ export class AcceptedHistoryCapture {
     this._revision++;
   }
 
-  markSummary(summaryUuid: string): void {
+  markSummary(summaryUuid: string, resumeFromEventUuid?: string): void {
+    // WHY: matching a repeated user/assistant message against an older retired
+    // UUID would make a restored sidecar point to the wrong replay cut. Keep
+    // only the chronological retained tail and its newly appended summary.
+    const marker = this.accepted.indexOf(summaryUuid);
+    const first = resumeFromEventUuid ? this.accepted.indexOf(resumeFromEventUuid) : -1;
+    this.accepted = marker >= 0 && first >= 0 && first < marker
+      ? this.accepted.slice(first) : [summaryUuid];
     this.transformation = { kind: 'summary', summaryEventUuid: summaryUuid };
     this._revision++;
   }

@@ -201,6 +201,8 @@ export interface ChatGptAuthDeps {
    *  revert, never a sign-out (review T4 F1). Defaults to on. */
   pollUsage?: boolean;
   fetch?: typeof fetch;
+  /** Experiment-only pre-dispatch reservation; no request data crosses this boundary. */
+  beforeModelRequest?: () => Promise<void>;
   listen?: ListenFn;
   isEncryptionAvailable?: () => boolean | Promise<boolean>;
   now?: () => number;
@@ -378,6 +380,7 @@ export class ChatGptAuth {
   private readonly appVersion: string;
   private readonly openExternal: (url: string) => Promise<void>;
   private readonly realFetch: typeof fetch;
+  private readonly beforeModelRequest?: () => Promise<void>;
   private readonly listen: ListenFn;
   private readonly isEncryptionAvailable?: () => boolean | Promise<boolean>;
   private readonly now: () => number;
@@ -441,6 +444,7 @@ export class ChatGptAuth {
     this.appVersion = deps.appVersion;
     this.openExternal = deps.openExternal;
     this.realFetch = deps.fetch ?? ((input, init) => fetch(input, init));
+    this.beforeModelRequest = deps.beforeModelRequest;
     this.listen = deps.listen ?? ((port, host, handler) => defaultListen(port, host, handler, this.log));
     this.isEncryptionAvailable = deps.isEncryptionAvailable;
     this.now = deps.now ?? (() => Date.now());
@@ -1001,6 +1005,9 @@ export class ChatGptAuth {
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
       headers.set('authorization', `Bearer ${credentials.token}`);
       headers.set('chatgpt-account-id', credentials.accountId);
+      // WHY: reserve on each actual send, including the invisible 401 resend;
+      // refusal must happen before diagnostics or the network sees this attempt.
+      await this.beforeModelRequest?.();
       // WHY: only actual sends count, including the wrapper's invisible 401 resend.
       // Credentials never cross the observer boundary; the outgoing body is untouched.
       const attempt = context?.diagnostics?.dispatch(context, init?.body, parent ?? null);

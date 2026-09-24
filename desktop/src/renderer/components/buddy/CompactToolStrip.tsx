@@ -86,7 +86,7 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
     return (
       <button
         onClick={() => setExpanded(true)}
-        className="layer-surface"
+        className="layer-surface ring-state"
         style={{
           alignSelf: 'center',
           padding: '4px 14px',
@@ -105,7 +105,7 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
   }
 
   return (
-    <div className="layer-surface" style={{ padding: 6, borderRadius: 10, alignSelf: 'stretch' }}>
+    <div className="layer-surface ring-state" style={{ padding: 6, borderRadius: 10, alignSelf: 'stretch' }}>
       {/* Collapse toggle */}
       <button
         onClick={() => { if (awaiting.length === 0) setExpanded((e) => !e); }}
@@ -171,13 +171,16 @@ function ToolRow({
           decision,
         );
         if (delivered === false) {
-          // Fix: Socket already closed — mark expired so the UI unsticks.
-          // Reset responding so user can retry if needed.
+          // Fix: Socket already closed — resolve the card so the UI unsticks.
+          // reason 'delivery-failed': the socket is provably gone, so the
+          // reducer must RESOLVE, never keep (a kept card here would pin
+          // buttons that cannot work).
           setResponding(false);
           const action = {
             type: 'PERMISSION_EXPIRED' as const,
             sessionId,
             requestId: tool.requestId,
+            reason: 'delivery-failed' as const,
           };
           dispatch(action);
           (window as any).claude?.remote?.broadcastAction(action);
@@ -252,8 +255,34 @@ function ToolRow({
       >
         {target}
       </span>
-      {/* Inline Allow / Deny / Always buttons only for awaiting-approval tools */}
-      {tool.status === 'awaiting-approval' && tool.requestId ? (
+      {/* A plan approval is Claude Code's own multi-row menu (clear context,
+          which mode to continue in, typed feedback) — not an allow/deny. Its
+          answer needs the session's terminal screen, which lives in the main
+          window, not this floater (PlanApprovalCard reads it). A hook "allow"
+          here would not approve anything: Claude Code ignores an allow for a
+          tool that needs the user's own input, so the card would clear while
+          the plan kept waiting. Point at the main window instead of offering
+          buttons that cannot do what they say. */}
+      {tool.status === 'awaiting-approval' && tool.toolName === 'ExitPlanMode' ? (
+        <span style={{ flexShrink: 0, color: 'var(--fg-dim)' }}>Review the plan in the main window</span>
+      ) : tool.status === 'awaiting-approval' && tool.expired ? (
+        // A KEPT card: its hook socket died, Claude Code's menu may still be up
+        // in the main window's terminal. Nothing here can answer that menu, so
+        // offer only the same Dismiss the chat card has — worded as the claim it
+        // is ("I answered"), because dismissing reopens sending into that menu.
+        <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <button
+            onClick={() => {
+              const action = { type: 'PERMISSION_CARD_RESOLVED' as const, sessionId, toolUseId: tool.toolUseId };
+              dispatch(action);
+              (window as any).claude?.remote?.broadcastAction?.(action);
+            }}
+            style={{ ...denyStyle, whiteSpace: 'normal', textAlign: 'center', lineHeight: 1.3 }}
+          >
+            Dismiss — I answered in the terminal
+          </button>
+        </span>
+      ) : tool.status === 'awaiting-approval' && tool.requestId ? (
         <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
           <button
             disabled={responding}

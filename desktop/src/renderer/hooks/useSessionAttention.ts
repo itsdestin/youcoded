@@ -1,7 +1,7 @@
 import { useCallback, useRef } from 'react';
 import { useSyncExternalStore } from 'react';
 import { useChatStore } from '../state/chat-context';
-import type { AttentionState } from '../state/chat-types';
+import type { AttentionState, SessionChatState } from '../state/chat-types';
 import type { SessionStatusColor } from '../components/StatusDot';
 import { hasOpenSpecialistAsk } from '../utils/specialist-cards';
 
@@ -66,6 +66,48 @@ export interface SessionAttentionInfo {
   awaitingApproval: boolean;
 }
 
+/** One session's last answer, and every input that answer was derived from. */
+interface SessionMemo {
+  toolCalls: SessionChatState['toolCalls'];
+  activeTurnToolIds: SessionChatState['activeTurnToolIds'];
+  attentionState: AttentionState;
+  isThinking: boolean;
+  hasTimeline: boolean;
+  /** Not viewed and not active — the only way the arguments reach the colour. */
+  unseen: boolean;
+  /** Derived by the peer-session branch, whose rules differ (no green/blue). */
+  peer: boolean;
+  info: SessionAttentionInfo;
+}
+
+/**
+ * The memo still holds for this session's current state.
+ *
+ * WHY (2026-09-23): the snapshot runs on EVERY store notification — each word
+ * streamed in any tab — and used to redo every session from scratch, including
+ * a walk of each one's whole tool history (helper asks), only to find nothing
+ * had changed. The reducer keeps `toolCalls` / `activeTurnToolIds` the same
+ * objects when a notification does not touch them (react-renderer.md), so
+ * identity on the fields the colour is built from is proof enough.
+ */
+function memoHolds(m: SessionMemo | undefined, c: SessionChatState, unseen: boolean, peer: boolean): m is SessionMemo {
+  return !!m
+    && m.peer === peer
+    && m.toolCalls === c.toolCalls
+    && m.activeTurnToolIds === c.activeTurnToolIds
+    && m.attentionState === c.attentionState
+    && m.isThinking === c.isThinking
+    && m.hasTimeline === (c.timeline.length > 0)
+    && m.unseen === unseen;
+}
+
+function memoOf(c: SessionChatState, unseen: boolean, peer: boolean, info: SessionAttentionInfo): SessionMemo {
+  return {
+    toolCalls: c.toolCalls, activeTurnToolIds: c.activeTurnToolIds, attentionState: c.attentionState,
+    isThinking: c.isThinking, hasTimeline: c.timeline.length > 0, unseen, peer, info,
+  };
+}
+
 // Cached selector over the chat store. Re-renders the host ONLY when some
 // session's (status, attentionState, awaitingApproval) triple changes —
 // replaces AppInner's whole-map subscription (tranche 1). Derivation logic is
@@ -85,6 +127,9 @@ export function useSessionAttention(
 ): Map<string, SessionAttentionInfo> {
   const store = useChatStore();
   const cacheRef = useRef<Map<string, SessionAttentionInfo>>(new Map());
+  // Per-session answers, so a notification that changed nothing a colour is
+  // built from costs a few identity checks instead of a recompute (memoHolds).
+  const memoRef = useRef(new Map<string, SessionMemo>());
   // Render-phase arg mirror (R8 pattern) so getSnapshot — called by React on
   // subscription ticks AND on ordinary re-renders — always sees current args.
   const argsRef = useRef({ sessions, viewedSessions, activeSessionId });
@@ -94,11 +139,20 @@ export function useSessionAttention(
     const { sessions, viewedSessions, activeSessionId } = argsRef.current;
     const state = store.getState();
     const next = new Map<string, SessionAttentionInfo>();
+    const prevMemo = memoRef.current;
+    const nextMemo = new Map<string, SessionMemo>();
 
     for (const s of sessions) {
       const chatState = state.get(s.id);
       if (!chatState) {
         next.set(s.id, { status: 'gray', attentionState: 'ok', awaitingApproval: false });
+        continue;
+      }
+      const unseen = !viewedSessions.has(s.id) && s.id !== activeSessionId;
+      const memo = prevMemo.get(s.id);
+      if (memoHolds(memo, chatState, unseen, false)) {
+        next.set(s.id, memo.info);
+        nextMemo.set(s.id, memo);
         continue;
       }
       // Only check tools in the active turn — stale tools from old turns are invisible
@@ -132,7 +186,9 @@ export function useSessionAttention(
           : (chatState.timeline.length > 0 && !viewedSessions.has(s.id) && s.id !== activeSessionId) ? 'blue'
           : 'gray'
         );
-      next.set(s.id, { status, attentionState: chatState.attentionState, awaitingApproval: hasAwaiting });
+      const info = { status, attentionState: chatState.attentionState, awaitingApproval: hasAwaiting };
+      next.set(s.id, info);
+      nextMemo.set(s.id, memoOf(chatState, unseen, false, info));
     }
     // Sessions present in chat state but not in the sessions list — this is
     // now also how a PEER WINDOW's session gets a color: App's statusData
@@ -150,6 +206,14 @@ export function useSessionAttention(
     // idle — only the red/amber "needs attention" states are accurate.
     for (const [sid, chatState] of state) {
       if (next.has(sid)) continue;
+      // `unseen` is not an input here (peer sessions never go blue), so the
+      // memo is stored with a fixed false.
+      const memo = prevMemo.get(sid);
+      if (memoHolds(memo, chatState, false, true)) {
+        next.set(sid, memo.info);
+        nextMemo.set(sid, memo);
+        continue;
+      }
       let awaitingApproval = false;
       for (const id of chatState.activeTurnToolIds) {
         const t = chatState.toolCalls.get(id);
@@ -158,8 +222,11 @@ export function useSessionAttention(
       // Same specialist-ask rule as the owned-session branch above.
       if (!awaitingApproval && hasOpenSpecialistAsk(chatState.toolCalls)) awaitingApproval = true;
       const status: SessionStatusColor = awaitingApproval ? 'red' : attentionDotColor(chatState.attentionState) ?? 'gray';
-      next.set(sid, { status, attentionState: chatState.attentionState, awaitingApproval });
+      const info = { status, attentionState: chatState.attentionState, awaitingApproval };
+      next.set(sid, info);
+      nextMemo.set(sid, memoOf(chatState, false, true, info));
     }
+    memoRef.current = nextMemo;
 
     // Identity stabilization: return the previous Map when nothing changed.
     const prev = cacheRef.current;

@@ -61,7 +61,7 @@ describe('defaultRuntime()', () => {
     expect(defaultRuntime()).toBe('native');
   });
 
-  it('(c) stored native + native unsupported → STILL native (Destin, 2026-09-07: nothing falls back to Claude Code)', () => {
+  it('(c) stored native + native unsupported → STILL native; nothing falls back to Claude Code', () => {
     // This pinned the opposite until 2026-09-07. The old rule (R3-6) sent an
     // install whose non-Claude side is switched off back to Claude Code so its
     // forms stayed usable; Destin overruled it on deck step P-3 — "i never want

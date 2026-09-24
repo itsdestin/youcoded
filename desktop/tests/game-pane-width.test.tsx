@@ -50,7 +50,7 @@ function allIdentical(seen: Array<(px: number) => void>): boolean {
   return seen.length > 0 && seen.every((fn) => fn === seen[0]);
 }
 
-describe('applyGameDefaultWidth survives a width change (§4.3)', () => {
+describe('applyGameDefaultWidth survives a width change', () => {
   it('holds its identity when a drag is committed', () => {
     const { getByTestId, seen } = mount();
     act(() => { getByTestId('drag').click(); });

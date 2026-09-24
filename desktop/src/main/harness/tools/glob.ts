@@ -3,8 +3,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
-import { defineTool } from './registry';
-import { resolveP, toPosix, shellCwdMissHint } from './guards';
+import { defineTool, SEARCH_TIMEOUT_MS } from './registry';
+import { resolveP, toPosix, shellCwdMissHint, lunaPathRefused } from './guards';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next']);
 /** How many matches we RETURN. */
@@ -171,7 +171,9 @@ export const GlobTool = defineTool({
   // Glob's own cap (RESULT_LIMIT, above) is what actually decides how much text
   // comes back — the pipeline's char cap should not silently apply a different
   // number to the same field.
-  caps: { maxChars: 30_000 },
+  // timeoutMs: see SEARCH_TIMEOUT_MS (registry.ts) — a walk into a huge tree or
+  // a network mount must end with an answer, not hang the turn.
+  caps: { maxChars: 30_000, timeoutMs: SEARCH_TIMEOUT_MS },
   // Static fallback for composeNotice's no-bounds branch (Task 19): a result
   // list can sit under WALK_CEILING/RESULT_LIMIT (so `bounds` stays undefined —
   // nothing was withheld at the FILE-COUNT level) while still exceeding
@@ -191,6 +193,7 @@ export const GlobTool = defineTool({
       };
     }
     const root = resolveP(args.path ?? '.', ctx.cwd);
+    if (lunaPathRefused(root)) return { text: 'Glob rejected: path is outside the Luna experiment fixture.', isError: true };
     // Fix (two independent 2026-08 harness reviews, Grok 4.5 + Qwen 3.8 Max —
     // see guards.ts's WHY block above shellCwdMissHint): a missing search root
     // used to fall silently through walk()'s per-directory try/catch below and

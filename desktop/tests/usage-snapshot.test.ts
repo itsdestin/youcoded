@@ -11,8 +11,9 @@
 // src/renderer/state/usage-snapshot.ts and is pinned here.
 import { describe, it, expect } from 'vitest';
 import { pruneExpiredUsage } from '../src/renderer/state/usage-snapshot';
-import { buildUsageSnapshot, type UsageSnapshotInput } from '../src/renderer/state/usage-snapshot';
+import { buildUsageSnapshot, nativeContextWindow, type UsageSnapshotInput } from '../src/renderer/state/usage-snapshot';
 import { emptyTotals } from '../src/renderer/state/session-totals';
+import { nativeDisplayTotals, widgetUnavailableReason } from '../src/renderer/state/status-widgets';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
 import type { TurnUsage } from '../src/renderer/state/chat-types';
 
@@ -111,6 +112,83 @@ describe('buildUsageSnapshot — the native totals fallback', () => {
     expect(snap!.outputTokens).toBe(340);
     expect(snap!.costUsd).toBe(1.5);
     expect(snap!.specialistRuns).toBe(2);
+  });
+});
+
+describe('buildUsageSnapshot — live native display totals', () => {
+  it('adds cumulative progress to durable specialists once, then replaces it at completion', () => {
+    const totals = { ...emptyTotals(), inputTokens: 100, outputTokens: 20, cacheReadTokens: 40,
+      costUsd: 0.02, anyPriced: true, specialistRuns: 1, specialistCostUsd: 0.02 };
+    const session = { ...nativeSession(turn(), totals), inProgressUsage: turn({
+      inputTokens: 200, outputTokens: 30, cacheReadTokens: 70, cacheCreationTokens: 5, costUsd: 0.04,
+    }) };
+    const snapshot = () => buildUsageSnapshot({ ...base, isNative: true, session })!;
+    expect([snapshot().inputTokens, snapshot().outputTokens, snapshot().cacheReadTokens, snapshot().costUsd, snapshot().specialistRuns])
+      .toEqual([300, 50, 110, 0.06, 1]);
+    session.inProgressUsage = turn({ inputTokens: 350, outputTokens: 55, cacheReadTokens: 120, cacheCreationTokens: 10, costUsd: 0.07 });
+    expect([snapshot().inputTokens, snapshot().outputTokens, snapshot().cacheReadTokens])
+      .toEqual([450, 75, 160]);
+    expect(snapshot().costUsd).toBeCloseTo(0.09);
+    const completed = { ...session, inProgressUsage: null, totals: {
+      ...totals, inputTokens: 450, outputTokens: 75, cacheReadTokens: 160, cacheCreationTokens: 10, costUsd: 0.09,
+    } };
+    expect(buildUsageSnapshot({ ...base, isNative: true, session: completed })!.inputTokens).toBe(450);
+    expect(buildUsageSnapshot({ ...base, isNative: true, session: completed })!.costUsd).toBe(0.09);
+  });
+
+  it('does not label incomplete usage on a known-priced model as unpriced', () => {
+    const session = { timeline: [], assistantTurns: new Map(), totals: emptyTotals(),
+      inProgressUsage: turn({ inputTokens: 10, outputTokens: 0, liveProgress: true, contextLength: 100 }) };
+    const snap = buildUsageSnapshot({ ...base, isNative: true, session })!;
+    expect(snap.costUsd).toBeNull();
+    expect(snap.costIsPartial).toBe(false);
+    expect(snap.contextPercent).toBeNull();
+    expect(snap.inputTokens).toBe(10);
+    const totals = nativeDisplayTotals(session.totals, session.inProgressUsage)!;
+    expect(totals.anyUnpriced).toBe(false);
+    expect(widgetUnavailableReason('session-cost', { runtime: 'native', hasPricedWork: totals.anyPriced,
+      anyUnpriced: totals.anyUnpriced, runsLocally: totals.anyFree, chatgptWindows: false })).toBeNull();
+  });
+
+  it('keeps free, unpriced and absent progress costs distinct', () => {
+    const snap = (progress: TurnUsage) => buildUsageSnapshot({ ...base, isNative: true,
+      session: { timeline: [], assistantTurns: new Map(), totals: emptyTotals(), inProgressUsage: progress } })!;
+    const first = snap(turn({ inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, costUsd: null, free: true }));
+    expect([first.inputTokens, first.outputTokens, first.cacheReadTokens, first.cacheCreationTokens])
+      .toEqual([10, 2, 0, 0]);
+    expect(first.costUsd).toBeNull();
+    expect(snap(turn({ inputTokens: 10, costUsd: null, free: true })).costIsPartial).toBe(false);
+    expect(snap(turn({ inputTokens: 10, costUsd: null })).costIsPartial).toBe(true);
+    expect(snap(turn({ inputTokens: 10 })).costIsPartial).toBe(false);
+    expect(snap(turn({ inputTokens: 10 })).costUsd).toBeNull();
+    expect(snap(turn({ inputTokens: 10, costUsd: 0.004 })).costUsd).toBe(0.004);
+  });
+});
+
+describe('buildUsageSnapshot — live native usage', () => {
+  it('shows measured progress before completed usage and falls back after terminal clear without changing totals', () => {
+    const completed = turn({ contextLength: 200_000, contextUsedTokens: 40_000 });
+    const progress = turn({ contextLength: 200_000, contextUsedTokens: 150_000, cacheReadTokens: 0, free: true, costUsd: null });
+    const totals = { ...emptyTotals(), inputTokens: 300, costUsd: 0.5, anyPriced: true, anyUnpriced: true, anyFree: true };
+    const session = { ...nativeSession(completed, totals), inProgressUsage: progress };
+    const live = buildUsageSnapshot({ ...base, isNative: true, session })!;
+    expect(live.contextPercent).toBe(25);
+    expect(live.inputTokens).toBe(300);
+    expect(live.cacheReadTokens).toBe(0);
+    expect(live.costUsd).toBe(0.5);
+    expect(live.costIsPartial).toBe(true);
+    expect(buildUsageSnapshot({ ...base, isNative: true, session: { ...session, inProgressUsage: null } })!.contextPercent).toBe(80);
+    expect(buildUsageSnapshot({ ...base, isNative: false, session, usage: { five_hour: { utilization: 1, resets_at: 'later' } } })!.contextPercent).toBeNull();
+  });
+
+  it('shows progress with no completed turn, but leaves unknown context absent and honors rewrite override', () => {
+    const progress = turn({ inputTokens: 100, cacheReadTokens: 0, costUsd: null, free: true });
+    const session = { timeline: [], assistantTurns: new Map(), totals: emptyTotals(), inProgressUsage: progress };
+    expect(buildUsageSnapshot({ ...base, isNative: true, session })!.contextPercent).toBeNull();
+    expect(buildUsageSnapshot({ ...base, isNative: true, session: { ...session, contextUsedOverride: 0 },
+      contextPercent: null })!.contextPercent).toBeNull();
+    const withWindow = { ...progress, contextLength: 1000, contextUsedTokens: 400 };
+    expect(buildUsageSnapshot({ ...base, isNative: true, session: { ...session, inProgressUsage: withWindow, contextUsedOverride: 0 } })!.contextPercent).toBe(100);
   });
 });
 
@@ -267,5 +345,23 @@ describe('pruneExpiredUsage', () => {
   it('keeps a window with an unparseable reset time rather than guessing it expired', () => {
     const u = { five_hour: { utilization: 10, resets_at: 'garbage' } };
     expect(pruneExpiredUsage(u, NOW)).toEqual(u);
+  });
+});
+
+// After a model swap the last turn's contextLength is the OLD model's window;
+// the host re-pushes the session-context record with the new one at once.
+describe('the context window follows the current model, not the last turn', () => {
+  const usage = turn({ contextLength: 1_000_000, contextUsedTokens: 30_000 });
+
+  it('prefers the session-context window once the host has re-pushed it', () => {
+    const session = { ...nativeSession(usage), sessionContext: { contextWindowTokens: 8192 } };
+    expect(nativeContextWindow(session)).toBe(8192);
+    // 30k used of an 8k window: nothing left, not "97% remaining".
+    expect(buildUsageSnapshot({ ...base, isNative: true, session })!.contextPercent).toBe(0);
+  });
+
+  it('falls back to the last turn’s window when the record has none', () => {
+    expect(nativeContextWindow({ ...nativeSession(usage), sessionContext: { contextWindowTokens: null } })).toBe(1_000_000);
+    expect(nativeContextWindow(nativeSession(usage))).toBe(1_000_000);
   });
 });

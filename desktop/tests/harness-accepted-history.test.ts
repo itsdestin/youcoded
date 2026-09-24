@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { HarnessSession } from '../src/main/harness/harness-session';
+import { summaryProvenanceNote } from '../src/main/harness/compaction';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { TriggerIndex } from '../src/main/harness/injection/path-triggers';
 import { bindOpenAIContinuationModel } from '../src/main/harness/openai-continuation';
@@ -93,6 +94,23 @@ describe('HarnessSession accepted history', () => {
     expect(accepted.messages).not.toBe(history);   // a copy — the host holds it across an await
     expect(accepted.binding).toBe('openrouter\u0000m');
     expect(accepted.transformation).toBeUndefined();
+    // WHY: the flat accepted list is not a message index. A portable summary
+    // may start at the tool group in the middle of this same user turn.
+    expect(history.map((m: any) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+    expect(session.firstEventForCut(0)).toBe(contentEvents[0].uuid);
+    expect(session.firstEventForCut(1)).toBe(contentEvents[1].uuid);
+    // A tool-result cannot start the tail if its paired call is retired.
+    expect(session.firstEventForCut(2)).toBeNull();
+    expect(session.firstEventForCut(3)).toBe(contentEvents[4].uuid);
+    expect(session.firstEventForCut(4)).toBeNull();
+  });
+
+  it('does not guess a portable resume point from a flat restored seed', () => {
+    const session = makeSession({ model: scriptModel([{ text: 'unused' }]) });
+    session.seedHistory([{ role: 'user', content: 'old' }, { role: 'assistant', content: 'same text' }] as any,
+      { eventUuids: ['a', 'b'], revision: 2 });
+    expect(session.firstEventForCut(1)).toBeNull();
+    expect(session.firstEventForCut(0)).toBeNull();
   });
 
   it('a manual Retry drops the abandoned attempt\'s uuids and accepts the re-run\'s', async () => {
@@ -133,6 +151,21 @@ describe('HarnessSession accepted history', () => {
     expect(accepted.eventUuids).toContain(uuidOfText(events, 'visible partial'));
     expect(accepted.eventUuids).not.toContain(reasoning.uuid);
     expect(accepted.messages.at(-1)).toEqual({ role: 'assistant', content: 'visible partial' });
+    expect(session.firstEventForCut(1)).toBe(uuidOfText(events, 'visible partial'));
+  });
+
+  it('does not start a retained plain-text assistant message at discarded reasoning', async () => {
+    const model = modelFromStreams([
+      () => completingStream(...reasoningChunks('r', 'secret reasoning'),
+        ...textChunks('t', 'visible answer'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({}), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const message = session.acceptedHistory().messages[1];
+    expect(JSON.stringify(message.content)).toContain('visible answer');
+    expect(JSON.stringify(message.content)).not.toContain('secret reasoning');
+    expect(session.firstEventForCut(1)).toBe(uuidOfText(events, 'visible answer'));
   });
 
   it('a steer and a rule injection each bump the revision without adding a uuid', async () => {
@@ -155,6 +188,7 @@ describe('HarnessSession accepted history', () => {
     await steered.send('go');
     expect(steered.acceptedHistory().eventUuids).toHaveLength(plain.eventUuids.length);
     expect(steered.acceptedHistory().revision).toBe(plain.revision + 1);
+    expect(steered.firstEventForCut(1)).toBeNull(); // later synthetic steer cannot be reconstructed from UUIDs
 
     const triggers: TriggerIndex = { match: () => [{ id: 'r1', source: '.claude/rules/api.md', body: 'Always validate input.' }] };
     const injected = build({ triggers });
@@ -162,6 +196,15 @@ describe('HarnessSession accepted history', () => {
     expect(injected.acceptedHistory().eventUuids).toHaveLength(plain.eventUuids.length);
     expect(injected.acceptedHistory().revision).toBe(plain.revision + 1);
     expect(JSON.stringify(injected.acceptedHistory().messages)).toContain('Always validate input');
+    expect(injected.firstEventForCut(1)).toBeNull(); // later injected rule also lacks an event
+  });
+
+  it('labels a live skill invocation body as app-authored but not the user arguments event', async () => {
+    const session = makeSession({ model: scriptModel([{ text: 'done' }]) });
+    await session.runSkill({ skillId: 'demo', displayName: 'Demo', body: 'skill instructions', args: 'user arguments' });
+    const history = session.acceptedHistory().messages;
+    expect(history[0].content).toBe('skill instructions\n\nuser arguments');
+    expect(summaryProvenanceNote(history)).toContain('"skill instructions user arguments"');
   });
 
   it('spliceNotice records the user-message uuid it emitted and advances the revision', async () => {
@@ -212,30 +255,39 @@ describe('HarnessSession accepted history', () => {
     expect(accepted.revision).toBe(plain.revision + 1);
   });
 
-  it('a prune records a pruned transformation; a summary records the compact-summary uuid', async () => {
+  it('an old tool result is retired into a summary with the compact-summary uuid', async () => {
     // A tool result big enough to be worth pruning (20k chars = 5k tokens),
     // followed by enough newer text to push it OUT of the protected recent
     // window — without both, pruneToolOutputs hands the history straight back
     // and there is no transformation to record (see the no-op test below).
-    const pruned = makeSession({ contextLength: 8192, model: scriptModel([{ text: 'done' }]) });
+    const events: TranscriptEvent[] = [];
+    const pruned = makeSession({ contextLength: 8192, onEvent: (e) => events.push(e),
+      model: scriptModel([{ text: 'SUMMARY: read big.txt; user asked for a recap.' }, { text: 'done' }]) });
     pruned.seedHistory([
       { role: 'user', content: 'read the big file' },
       { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c0', toolName: 'Read', input: { file_path: 'big.txt' } }] },
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c0', toolName: 'Read', output: { type: 'text', value: 'y'.repeat(20_000) } }] },
-      { role: 'user', content: `recap ${'x'.repeat(16_000)}` },
+      { role: 'user', content: `recap ${'x'.repeat(2_000)}` },
     ] as any);
+    expect(JSON.stringify(pruned.acceptedHistory().messages)).toContain('y'.repeat(20_000));
     await drainTurn(pruned, 'continue');
-    expect(pruned.acceptedHistory().transformation).toEqual({ kind: 'pruned' });
-    expect(JSON.stringify(pruned.acceptedHistory().messages)).toContain('pruned —');
+    // The retired tool output is shortened ONLY in the summarizer's request;
+    // the successful summary replaces its span in accepted history, and the
+    // compact-summary uuid is the durable provenance of that replacement.
+    const summary = events.find(e => e.type === 'compact-summary')!;
+    expect(summary).toBeDefined();
+    expect(pruned.acceptedHistory().transformation).toEqual({ kind: 'summary', summaryEventUuid: summary.uuid });
+    expect(JSON.stringify(pruned.acceptedHistory().messages)).toContain('SUMMARY: read big.txt');
+    expect(JSON.stringify(pruned.acceptedHistory().messages)).not.toContain('y'.repeat(20_000));
 
-    const events: TranscriptEvent[] = [];
+    const noOpEvents: TranscriptEvent[] = [];
     const summarized = makeSession({
-      contextLength: 4096, seedBulkHistoryTokens: 6000, onEvent: (e) => events.push(e),
+      contextLength: 8192, seedBulkHistoryTokens: 4000, onEvent: (e) => noOpEvents.push(e),
       model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
     });
     await drainTurn(summarized, 'continue');
-    const summaryEvent = events.find((e) => e.type === 'compact-summary')!;
-    expect(summarized.acceptedHistory().transformation).toEqual({ kind: 'summary', summaryEventUuid: summaryEvent.uuid });
+    expect(noOpEvents.some((e) => e.type === 'compact-summary')).toBe(false);
+    expect(summarized.acceptedHistory().transformation).toBeUndefined();
   });
 
   it('clearHistory empties the accepted list and is itself a durable change', async () => {
@@ -520,11 +572,20 @@ describe('HarnessSession accepted history', () => {
     // the compact-summary event that already holds it.
     const autoEvents: TranscriptEvent[] = [];
     const summarized = makeSession({
-      contextLength: 4096, seedBulkHistoryTokens: 6000, onEvent: (e) => autoEvents.push(e),
+      contextLength: 8192, onEvent: (e) => autoEvents.push(e),
       model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
     });
+    summarized.seedHistory([
+      { role: 'user', content: 'read the file' },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'read', toolName: 'Read', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'read', toolName: 'Read', output: { type: 'text', value: 'y'.repeat(20_000) } }] },
+      { role: 'user', content: 'recap' },
+    ] as any);
     await drainTurn(summarized, 'continue');
+    // WHY: an old tool result is shortened only in the summary request; the
+    // successful automatic rewrite must reference the actual event UUID.
     const autoUuid = autoEvents.find((e) => e.type === 'compact-summary')!.uuid;
+    expect(summarized.acceptedHistory().transformation).toEqual({ kind: 'summary', summaryEventUuid: autoUuid });
     expect(summarized.acceptedHistory().eventUuids).toContain(autoUuid);
 
     // The manual /compact path is a second, independent summary site.

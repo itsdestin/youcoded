@@ -4,7 +4,7 @@
 // What actually happened: his specialist tiers resolved to ChatGPT models
 // while he was signed OUT of ChatGPT. The app proposed the plan anyway, he
 // approved it, and only then did a specialist die with "Sign in with ChatGPT
-// in Settings → Model Providers to use this model." The plan then spent its
+// in Assistant settings → Cloud providers to use this model." The plan then spent its
 // ONE automatic retry re-running the identical launch — which could never
 // succeed — and paused.
 //
@@ -30,7 +30,7 @@ import type { ExecutionManifest, PlanRecord, PlanRef } from '../src/main/harness
 /** The provider registry's own sentence — copied here so a silent reword in
  *  the registry fails this test instead of quietly changing what the user is
  *  told about a plan that cannot run. */
-const SIGN_IN = 'Sign in with ChatGPT in Settings → Model Providers to use this model.';
+const SIGN_IN = 'Sign in with ChatGPT in Assistant settings → Cloud providers to use this model.';
 const SID = 'root';
 const REF: PlanRef = { cwd: '/proj', sessionId: SID };
 const DOC: PlanDocumentV1 = { goal: 'summarise the repo', steps: [

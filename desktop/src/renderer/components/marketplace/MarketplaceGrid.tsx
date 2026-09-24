@@ -13,9 +13,15 @@ import { useNarrowViewport } from "../../hooks/use-narrow-viewport";
 interface Props {
   children: React.ReactNode;
   dense?: boolean;
+  // Task 8 (render-cost consolidation 2026-09-18): a chunked list's reveal
+  // sentinel. Rendered as its OWN extra item, never through `children` — the
+  // compact branch below clones every CHILD with `compact: true`, and a plain
+  // sentinel <div> isn't a MarketplaceCard, so it would pick up a stray
+  // `compact` DOM attribute if it rode along as a child instead.
+  sentinel?: React.ReactNode;
 }
 
-export default function MarketplaceGrid({ children, dense }: Props) {
+export default function MarketplaceGrid({ children, dense, sentinel }: Props) {
   const compact = useNarrowViewport();
 
   // Inject compact={true} into each MarketplaceCard child when compact is on.
@@ -43,6 +49,7 @@ export default function MarketplaceGrid({ children, dense }: Props) {
     return (
       <div className="flex flex-col gap-2">
         {childrenWithCompact}
+        {sentinel}
       </div>
     );
   }
@@ -50,6 +57,7 @@ export default function MarketplaceGrid({ children, dense }: Props) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
       {childrenWithCompact}
+      {sentinel}
     </div>
   );
 }

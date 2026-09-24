@@ -78,7 +78,7 @@ const inline = (markup: string | null): HTMLElement => {
   return host;
 };
 
-describe('sanitizeRigSvg — markup that means one thing to XML and another to HTML (2026-09-10)', () => {
+describe('sanitizeRigSvg — markup that means one thing to XML and another to HTML', () => {
   const liveScriptSurface = (host: HTMLElement): string[] =>
     Array.from(host.querySelectorAll('*')).flatMap((el) => {
       const found: string[] = [];
@@ -134,7 +134,7 @@ describe('sanitizeRigSvg — every shipped drawing keeps the parts the app anima
   });
 });
 
-describe('sanitizeRigSvg — data: href is real rasters only (2026-09-10 review)', () => {
+describe('sanitizeRigSvg — data: href is real rasters only', () => {
   it('keeps an embedded PNG but drops a data:image/svg+xml href', () => {
     const out = inline(sanitizeRigSvg(wrap(
       '<image href="data:image/png;base64,iVBORw0KGgo="/><image href="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="/>'
@@ -145,7 +145,7 @@ describe('sanitizeRigSvg — data: href is real rasters only (2026-09-10 review)
   });
 });
 
-describe('the cleaner fails CLOSED if DOMPurify is ever unsupported (2026-09-10 review)', () => {
+describe('the cleaner fails CLOSED if DOMPurify is ever unsupported', () => {
   it('purifySvgMarkup returns empty (→ default buddy) instead of the input', () => {
     const orig = DOMPurify.isSupported;
     try {

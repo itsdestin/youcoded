@@ -5,7 +5,8 @@
 //   discovery — no chips/search active → hero + rails + bottom grid
 //   search    — any chip or search active → filtered grid only
 
-import { useMemo, useState, useEffect } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect } from "react";
+import { useChunkedReveal } from "../../hooks/use-chunked-reveal";
 import { useMarketplace } from "../../state/marketplace-context";
 import MarketplaceHero from "./MarketplaceHero";
 import MarketplaceFilterBar, {
@@ -263,8 +264,24 @@ export default function MarketplaceScreen({
     const skills = mp.skillEntries.filter(skillPass);
     const themes = mp.themeEntries.filter(themePass);
 
-    const combined: Array<{ kind: "skill"; entry: SkillEntry } | { kind: "theme"; entry: ThemeRegistryEntryWithStatus }> = [
-      ...skills.map((entry) => ({ kind: "skill" as const, entry })),
+    const combined: Array<
+      | { kind: "skill"; entry: SkillEntry; pluginBadge?: { name: string; onClick: () => void } }
+      | { kind: "theme"; entry: ThemeRegistryEntryWithStatus }
+    > = [
+      ...skills.map((entry) => ({
+        kind: "skill" as const,
+        entry,
+        // Fix round 1 (review finding #1): built ONCE per entry, here inside
+        // this memo — the search grid used to build this object literal
+        // inline in its .map() below, a fresh `pluginBadge` prop every render
+        // (independent of the onOpen fix), so bundle-member rows never got
+        // MarketplaceCard's memo benefit. `setDetail` (React's state setter)
+        // is already stable, so this closure needs no dependency to stay put.
+        pluginBadge: entry.catalog?.partOf ? {
+          name: `Part of ${entry.catalog.partOf.displayName}`,
+          onClick: () => setDetail({ kind: "skill", id: entry.catalog!.partOf!.id }),
+        } : undefined,
+      })),
       ...themes.map((entry) => ({ kind: "theme" as const, entry })),
     ];
 
@@ -287,9 +304,68 @@ export default function MarketplaceScreen({
 
   const open = (t: DetailTarget) => setDetail(t);
 
+  // Task 8 (render-cost consolidation 2026-09-18): MarketplaceCard is memoized
+  // now, so a chunked list must hand every row the SAME onOpen reference — a
+  // fresh `() => open(...)` closure per row (the old shape) defeats the memo
+  // on every render. The card reports its OWN id (its existing "theme:<slug>"
+  // convention for themes, bare id for skills — see MarketplaceCard's `id`
+  // local), so this one useCallback serves every row of both chunked grids.
+  const openEntry = useCallback((id: string) => {
+    setDetail(id.startsWith("theme:") ? { kind: "theme", slug: id.slice("theme:".length) } : { kind: "skill", id });
+  }, []);
+
+  // Fix round 1 (review finding #2, explicit instruction): the integrations
+  // rail passed a fresh `() => setIntegrationDetail(item)` closure per row,
+  // defeating MarketplaceCard's memo the same way an unstable onOpen did
+  // everywhere else. MarketplaceCard reports its OWN id (skillLike.id below
+  // is set to item.slug), so one id-taking handler that looks the integration
+  // back up by slug covers every row. Depends on `integrations` (not `[]`)
+  // because that's the only thing that legitimately changes this lookup —
+  // an unrelated marketplace-context render (e.g. installingIds) does not.
+  const openIntegration = useCallback((slug: string) => {
+    const match = integrations.find((it) => it.slug === slug);
+    if (match) setIntegrationDetail(match);
+  }, [integrations]);
+
   // P-1 #5: see the header below — decides whether the "Esc · Back to chat"
   // button exists at all, not just whether it is displayed.
   const compact = useNarrowViewport();
+
+  // Task 8: both chunked grids (bottom catalog + search results) scroll the
+  // SAME outer container (ref'd below) — draw-more triggers off it either way.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // The grouped "Explore everything" list, pre-wrapped into MarketplaceCard's
+  // `item` shape ONCE here rather than inline in the .map() below. Fix round 1
+  // (review finding #1): `item={{ kind: "skill", entry: s }}` inline built a
+  // fresh object every render, so MarketplaceCard's memo (Task 8) never held —
+  // every visible card redrew on every MarketplaceScreen render (e.g. every
+  // install click, since the marketplace context value changes with
+  // installingIds). Memoized here, keyed on mp.skillEntries, so `item`'s
+  // identity (and useChunkedReveal's window) is stable per entry across
+  // unrelated re-renders and only changes when the underlying catalog does.
+  const exploreItems = useMemo(
+    () => mp.skillEntries
+      .filter((s) => !s.catalog?.partOf)
+      .map((entry) => ({ kind: "skill" as const, entry })),
+    [mp.skillEntries],
+  );
+  // resetKey is the filter's VALUES: while in discovery mode filter is always
+  // the empty shape (isActive() is what flips `mode` to "search"), so this
+  // never resets the explore grid mid-browse; it resets the search grid to
+  // the top on every new query/chip. Deliberately NOT keyed on install state
+  // (filter carries none), so installing an entry mid-scroll can't collapse
+  // the window back to one chunk under the user.
+  const filterKey = JSON.stringify(filter);
+  const explore = useChunkedReveal(exploreItems, {
+    resetKey: filterKey,
+    rootRef: scrollRef,
+    active: mode === "discovery",
+  });
+  const searchReveal = useChunkedReveal(filtered, {
+    resetKey: filterKey,
+    rootRef: scrollRef,
+    active: mode === "search",
+  });
 
   // P-1 #4: "Explore everything" used to render its heading over nothing while
   // the registry loaded — and forever if it couldn't be reached. Only the
@@ -312,8 +388,10 @@ export default function MarketplaceScreen({
           stays pinned to the viewport while content scrolls over it. */}
       <WallpaperBackdrop />
       {/* Scroll happens on the inner div. overflow-x-hidden suppresses any
-          stray horizontal wiggle from rail cards / wallpaper transform. */}
-      <div className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          stray horizontal wiggle from rail cards / wallpaper transform. Ref'd
+          for both chunked grids' useChunkedReveal (Task 8) — it's the one
+          scrolling root either mode uses. */}
+      <div ref={scrollRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {/* Top bar — stays visible on scroll; holds Auth, title, library, exit. */}
       <div className="flex items-center justify-between gap-2 p-3">
         {/* Auth chip sits flush-left before the title so the GitHub sign-in
@@ -452,7 +530,7 @@ export default function MarketplaceScreen({
                         accentColor={item.accentColor}
                         suppressCorner
                         statusBadge={integrationStatusBadge(item)}
-                        onOpen={() => setIntegrationDetail(item)}
+                        onOpen={openIntegration}
                       />
                     </div>
                   );
@@ -483,37 +561,48 @@ export default function MarketplaceScreen({
                           ? !!mp.updateAvailable[item.entry.id]
                           : !!mp.updateAvailable[item.entry.slug]
                       }
-                      onOpen={() =>
-                        open(item.kind === "skill"
-                          ? { kind: "skill", id: item.entry.id }
-                          : { kind: "theme", slug: item.entry.slug })
-                      }
+                      // Fix round 1 (review finding #2): was a fresh
+                      // `() => open(...)` closure per row — openEntry (Task 8's
+                      // own stable handler) does the identical routing from the
+                      // card's own id, so it's reused here instead of a new one.
+                      onOpen={openEntry}
                     />
                   ))}
                 </MarketplaceRail>
               );
             })}
 
-            {/* Bottom catalog — denser surface; ALL skills in default sort.
-                Previously slice(0, 48) capped this at 48 entries which silently
-                hid most of the marketplace as it grew. No virtualization needed
-                yet (~200-card budget renders fine on phone), but if it grows
-                beyond that consider content-visibility:auto per PITFALLS. */}
+            {/* Bottom catalog — denser surface; ALL skills in default sort,
+                drawn 50 at a time as you scroll (Task 8, render-cost
+                consolidation 2026-09-18). Previously slice(0, 48) capped this
+                at 48 entries, which silently hid most of the marketplace as it
+                grew; drawing every entry at once after that fix stalled at
+                catalog-growth scale (~58,000 page elements at stress scale).
+                content-visibility:auto (the alternative PITFALLS used to
+                suggest here) is retired app-wide — its implicit contain:paint
+                clips card box-shadow glows (globals.css, use-entry-folding.ts).
+                The chunked window keeps every entry reachable by scrolling,
+                same as the removed slice(0, 48) never did. */}
             <section className="flex flex-col gap-2">
               <h3 className="text-lg font-medium text-fg px-1">Explore everything</h3>
               {/* P-1 #4: loading / unreachable state under the heading. */}
               {registryState ?? (
-                <MarketplaceGrid dense>
+                <MarketplaceGrid
+                  dense
+                  sentinel={explore.hasMore && (
+                    <div ref={explore.sentinelRef} className="col-span-full h-px" aria-hidden />
+                  )}
+                >
                   {/* Overhaul: the grouped view — bundles and standalone items
                       only. Rows that live inside a bundle are reached through
                       the type tabs, search, or the bundle's own page. */}
-                  {mp.skillEntries.filter((s) => !s.catalog?.partOf).map((s) => (
+                  {explore.visible.map((item) => (
                     <MarketplaceCard
-                      key={s.id}
-                      item={{ kind: "skill", entry: s }}
-                      installed={isInstalled(s)}
-                      updateAvailable={!!mp.updateAvailable[s.id]}
-                      onOpen={() => open({ kind: "skill", id: s.id })}
+                      key={item.entry.id}
+                      item={item}
+                      installed={isInstalled(item.entry)}
+                      updateAvailable={!!mp.updateAvailable[item.entry.id]}
+                      onOpen={openEntry}
                     />
                   ))}
                 </MarketplaceGrid>
@@ -534,26 +623,30 @@ export default function MarketplaceScreen({
               />
             ) : (
               <>
+                {/* filtered.length, not searchReveal.visible.length — the
+                    header counts the whole match set, not just what's drawn
+                    so far (Task 8). */}
                 <h3 className="text-sm text-fg-dim px-1 mb-2">
                   {filtered.length} result{filtered.length === 1 ? "" : "s"}
                 </h3>
-                <MarketplaceGrid dense>
-                  {filtered.map((item) => (
+                <MarketplaceGrid
+                  dense
+                  sentinel={searchReveal.hasMore && (
+                    <div ref={searchReveal.sentinelRef} className="col-span-full h-px" aria-hidden />
+                  )}
+                >
+                  {searchReveal.visible.map((item) => (
                     <MarketplaceCard
                       key={item.kind === "skill" ? item.entry.id : `theme:${item.entry.slug}`}
                       item={item}
                       installed={item.kind === "skill" && isInstalled(item.entry)}
                       // Overhaul: a member row says which bundle it came from;
-                      // the tag jumps to the bundle's page.
-                      pluginBadge={item.kind === "skill" && item.entry.catalog?.partOf ? {
-                        name: `Part of ${item.entry.catalog.partOf.displayName}`,
-                        onClick: () => open({ kind: "skill", id: item.entry.catalog!.partOf!.id }),
-                      } : undefined}
-                      onOpen={() =>
-                        open(item.kind === "skill"
-                          ? { kind: "skill", id: item.entry.id }
-                          : { kind: "theme", slug: item.entry.slug })
-                      }
+                      // the tag jumps to the bundle's page. Fix round 1: the
+                      // badge object itself now comes off `item` (built once
+                      // in the `filtered` memo above) instead of being
+                      // rebuilt inline here every render.
+                      pluginBadge={item.kind === "skill" ? item.pluginBadge : undefined}
+                      onOpen={openEntry}
                     />
                   ))}
                 </MarketplaceGrid>

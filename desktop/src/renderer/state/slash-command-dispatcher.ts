@@ -79,7 +79,7 @@ export interface DispatcherInput {
  *  stays provider-agnostic on purpose — it names the intent, and the caller (who
  *  is the one that knows the session's provider) picks the transport. */
 export type NativeSlashAction =
-  | { kind: 'compact' }
+  | { kind: 'compact'; focus?: string }
   | { kind: 'clear' }
   /** M3 item 1. `skill` is the command word; `args` is whatever followed it, so a
    *  skill can act on what the user typed rather than only on its own body. */
@@ -137,7 +137,7 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
   // discriminator: no command or skill id contains one — the app's two
   // inventories (cc-builtin-commands.ts, youcoded-commands.ts) hold 30 names
   // with no slash, and skill ids namespace with ':' (plugin:skill).
-  // Guard: tests/slash-command-filepath.test.ts.
+  // Guard: tests/slash-command-dispatcher-filepath.test.ts.
   if (cmd.includes('/', 1)) {
     return { handled: false };
   }
@@ -160,13 +160,15 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
         sessionId: input.sessionId,
         cardId: `compact-${Date.now()}`,
         beforeContextTokens: snapshot?.contextTokens ?? null,
+        // Native: runNativeSlashAction ends the spinner from the call's answer.
+        ...(input.deferUiEffectsToRuntime ? { awaitsResult: true } : {}),
       });
       // Forward original command (with any optional focus args) to PTY.
       // Claude Code parses /compact [instructions] itself. A native session has
       // no PTY — `nativeAction` tells the caller to drive the harness's own
       // two-stage compaction instead. Both are returned; the caller picks by
       // provider, so this stays a pure function of the input text.
-      return { handled: true, alsoSendToPty: `/compact${args ? ' ' + args : ''}\r`, nativeAction: { kind: 'compact' } };
+      return { handled: true, alsoSendToPty: `/compact${args ? ' ' + args : ''}\r`, nativeAction: { kind: 'compact', ...(args.trim() ? { focus: args.trim() } : {}) } };
     }
 
     case '/clear':

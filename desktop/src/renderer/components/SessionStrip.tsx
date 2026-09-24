@@ -11,11 +11,12 @@ import { packSessions, PILL_GAP, type SessionMeasurement, type PackResult } from
 import { pillLabelStyle } from './header/pill-label-style';
 import { pillMetrics, NAME_FONT, type PillMetrics } from './header/pill-metrics';
 import { sessionRuntimeLabel } from './header/session-runtime-label';
+import { pillSurfaceClass } from './header/control-states';
 import { ProviderIcon } from './ProviderIcon';
 import { nextSlotId, clampFloatLeft, layoutRects, reorderIndices, neighbourOffsets, mapToSettled, DRAG_TUNE, type PillRect } from './header/drag-order';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
 import { useScrollFade } from '../hooks/useScrollFade';
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactDispatch } from '../state/ArtifactContext';
 import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -361,7 +362,7 @@ export default function SessionStrip({
   // Artifact dispatch — SessionStrip renders only in the main window, inside
   // the ArtifactContext provider, so calling the hook at top level is safe.
   // Used by the FolderSwitcher "Manage projects…" footer to open Project View.
-  const { dispatch: artifactDispatch } = useArtifact();
+  const artifactDispatch = useArtifactDispatch(); // dispatch only: never redraws for artifact state (perf, 2026-09-23)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   // THE DRAG VISUALS ARE STATE, NOT THE isDragging REF (2026-09-03, R10). The
   // twin, the neighbours' step-aside and the hidden in-flow box used to read
@@ -1971,10 +1972,7 @@ export default function SessionStrip({
           const pillClass = `
                   relative flex items-center gap-1 rounded-full px-1.5 py-px
                   border select-none touch-none overflow-hidden
-                  ${showName && (isActive || !displayPack.expanded.has(s.id))
-                    ? 'border-edge bg-panel'
-                    : 'border-transparent'
-                  }`;
+                  ${pillSurfaceClass(showName && (isActive || !displayPack.expanded.has(s.id)), dragging)}`;
           const pillBody = (
             <>
                 <SessionDot color={color} isActive={isActive} />

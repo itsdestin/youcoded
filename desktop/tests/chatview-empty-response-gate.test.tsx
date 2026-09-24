@@ -9,7 +9,7 @@
 // the shape the empty_response footer exists for. This test crosses the
 // ChatView boundary: state in, rendered footer out.
 //
-// Scaffolding mirrors chat-pane-layout-containment.test.tsx (the established
+// Scaffolding mirrors ChatView.test.tsx (the established
 // ChatView mounting pattern): chat-context and app-wide contexts are mocked,
 // jsdom gets an IntersectionObserver stub.
 import React from 'react';
@@ -45,12 +45,14 @@ vi.mock('../src/renderer/state/chat-context', () => ({
   useChatDispatch: () => vi.fn(),
 }));
 
-vi.mock('../src/renderer/state/ArtifactContext', () => ({
-  useArtifact: () => ({
-    state: { drawerOpenBySession: {}, drawerExpanded: false },
-    dispatch: vi.fn(),
-  }),
-}));
+vi.mock('../src/renderer/state/ArtifactContext', () => {
+  // ChatView reads the artifact store through narrow selectors (perf, 2026-09-23).
+  const state = { drawerOpenBySession: {}, drawerExpanded: false };
+  return {
+    useArtifactSelector: (select: (s: any) => unknown) => select(state),
+    useArtifactDispatch: () => vi.fn(),
+  };
+});
 
 if (typeof (globalThis as any).IntersectionObserver === 'undefined') {
   (globalThis as any).IntersectionObserver = class {

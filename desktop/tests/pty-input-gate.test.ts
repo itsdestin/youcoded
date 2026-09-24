@@ -3,6 +3,8 @@ import {
   hasPendingInteraction,
   canRetrySubmit,
   canPtySend,
+  pendingInteractionKind,
+  pendingInteractionRefusalCopy,
 } from '../src/renderer/state/pty-input-gate';
 import { createSessionChatState, SessionChatState, HISTORY_EXPAND_PROMPT_ID } from '../src/renderer/state/chat-types';
 import type { ToolCallState } from '../src/renderer/state/chat-types';
@@ -161,4 +163,30 @@ describe('canPtySend (M1 honest guard)', () => {
     expect(canPtySend({ provider: 'claude' }, { attentionState: 'ok' })).toBe(true));
   it('allows when chat state has not materialized yet (boot window)', () =>
     expect(canPtySend({ provider: 'claude' }, undefined)).toBe(true));
+});
+
+// The send-refusal toast names what is blocking: a card in the chat (including a
+// kept card whose hook closed) or a prompt scraped from the terminal.
+describe('pendingInteractionKind and its refusal copy', () => {
+  it('an awaiting card — live or kept — is an approval', () => {
+    expect(pendingInteractionKind(withTool(createSessionChatState(), makeTool({ status: 'awaiting-approval', requestId: 'r' })))).toBe('approval');
+    expect(pendingInteractionKind(withTool(createSessionChatState(), makeTool({ status: 'awaiting-approval', expired: true })))).toBe('approval');
+  });
+
+  it('nothing blocking is null', () => {
+    expect(pendingInteractionKind(createSessionChatState())).toBeNull();
+  });
+
+  it('agrees with hasPendingInteraction on whether anything blocks', () => {
+    for (const status of ['running', 'awaiting-approval', 'complete'] as const) {
+      const session = withTool(createSessionChatState(), makeTool({ status }));
+      expect(pendingInteractionKind(session) !== null).toBe(hasPendingInteraction(session));
+    }
+  });
+
+  it('the copy points at the card for an approval, at the prompt otherwise', () => {
+    expect(pendingInteractionRefusalCopy('approval')).toMatch(/answer the card in the chat first/);
+    expect(pendingInteractionRefusalCopy('prompt')).toMatch(/answer the prompt first/);
+    expect(pendingInteractionRefusalCopy(null)).toMatch(/answer the prompt first/);
+  });
 });

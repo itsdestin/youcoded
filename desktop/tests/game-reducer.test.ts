@@ -219,7 +219,7 @@ describe('gameReducer — the state split', () => {
 // Connect 4 record against Mira, captioned "You lead 5-1", under a chess win
 // over Jake. Wrong about ANOTHER PERSON is the failure this feature must not
 // have, so anything that does not match is dropped rather than guessed at.
-describe('gameReducer — MATCH_RECORDED (games §6.2)', () => {
+describe('gameReducer — MATCH_RECORDED', () => {
   // Mid-match: chess against Jake, second game in room AAAA.
   const playing: GameState = {
     ...createInitialGameState(),
@@ -271,5 +271,26 @@ describe('gameReducer — MATCH_RECORDED (games §6.2)', () => {
       matchId: 'AAAA#2',
     });
     expect(s.record).toBeNull();
+  });
+});
+
+describe('gameReducer — CHAT_MESSAGE cap', () => {
+  it('keeps the last 200 of 250 messages, dropping the oldest', () => {
+    let s = createInitialGameState();
+    for (let i = 0; i < 250; i++) {
+      s = gameReducer(s, { type: 'CHAT_MESSAGE', from: 'Alice', text: `msg-${i}` });
+    }
+    expect(s.chatMessages).toHaveLength(200);
+    // Oldest 50 (msg-0..msg-49) aged out; the newest survives at the tail.
+    expect(s.chatMessages[0].text).toBe('msg-50');
+    expect(s.chatMessages[s.chatMessages.length - 1].text).toBe('msg-249');
+  });
+
+  it('does not truncate under the cap', () => {
+    let s = createInitialGameState();
+    for (let i = 0; i < 5; i++) {
+      s = gameReducer(s, { type: 'CHAT_MESSAGE', from: 'Bob', text: `hi-${i}` });
+    }
+    expect(s.chatMessages).toHaveLength(5);
   });
 });

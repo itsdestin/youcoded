@@ -3,7 +3,7 @@
 // InstallFavoriteCorner; integrations render through the same component via
 // optional iconUrl + accentColor props (no separate IntegrationCard).
 
-import { useId, useState } from "react";
+import { memo, useId, useState } from "react";
 import type { SkillEntry, SkillComponents } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
 import { useMarketplaceStats } from "../../state/marketplace-stats-context";
@@ -27,7 +27,13 @@ export type MarketplaceCardEntry =
 
 interface Props {
   item: MarketplaceCardEntry;
-  onOpen(): void;
+  // Task 8 (render-cost consolidation 2026-09-18): takes the card's OWN id
+  // (this card's `id` local below — bare skill id, or `theme:<slug>`) rather
+  // than being called with none. The card is memoized (see the `export
+  // default` below); a per-row list now hands every card the SAME onOpen
+  // reference and lets each one report which row it is, instead of a fresh
+  // `() => open(id)` closure per row that would defeat the memo every render.
+  onOpen(id: string): void;
   installed?: boolean;
   updateAvailable?: boolean;
   /** Optional custom icon (integrations). Renders top-left inside the tile. */
@@ -86,7 +92,7 @@ function componentSummary(c: SkillComponents | null | undefined): string | null 
   return parts.join(" · ") || null;
 }
 
-export default function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, accentColor, suppressCorner, statusBadge, pluginBadge, compact }: Props) {
+function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, accentColor, suppressCorner, statusBadge, pluginBadge, compact }: Props) {
   const stats = useMarketplaceStats();
   const mp = useMarketplace();
   const kind = item.kind;
@@ -232,11 +238,11 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
       <div
         role="button"
         tabIndex={0}
-        onClick={onOpen}
+        onClick={() => onOpen(id)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            onOpen();
+            onOpen(id);
           }
         }}
         className="layer-surface flex flex-row items-center gap-3 p-3 text-left transition-colors hover:bg-inset focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -318,11 +324,11 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
     <div
       role="button"
       tabIndex={0}
-      onClick={onOpen}
+      onClick={() => onOpen(id)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onOpen();
+          onOpen(id);
         }
       }}
       // hover-lift replaces `transition-transform duration-200 hover:scale-[1.02]`:
@@ -478,3 +484,18 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
     </div>
   );
 }
+
+// WHY memo (render-cost consolidation 2026-09-18): the two lists that window
+// through useChunkedReveal (MarketplaceScreen's bottom catalog and search grid)
+// pass stable `item` objects and a stable `onOpen`, so a MarketplaceScreen
+// re-render that changes nothing a card shows skips every card
+// (pinned in tests/MarketplaceScreen.test.tsx).
+// Known limit: this card reads useMarketplace() itself, and React re-renders
+// every context reader when the value changes — so an install click still
+// redraws the (at most 50–100) visible cards. That is one short redraw per
+// click, not the thousands of elements the window removed; closing it needs a
+// selector-scoped marketplace store, the same shape as splitting
+// ArtifactContext (plan: "Deliberately out of scope").
+// Your Library's cards gain nothing from this memo (their `item` objects are
+// per render) — deliberately, see LibraryScreen's openLibraryEntry comment.
+export default memo(MarketplaceCard);

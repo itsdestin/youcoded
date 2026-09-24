@@ -128,7 +128,7 @@ describe('built-ins declare their own link colors', () => {
   });
 });
 
-describe('built-in text ladder (P-11, 2026-08-25 UI audit)', () => {
+describe('built-in text ladder', () => {
   // fg-muted is the smallest text people are meant to READ (status bar, hints,
   // timestamps) and it sits on raised surfaces, so it must clear AA there; the
   // audit found every built-in at 3.0–3.3:1 on inset. fg-faint stays at ~2:1 on

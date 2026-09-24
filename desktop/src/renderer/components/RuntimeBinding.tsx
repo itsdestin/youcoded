@@ -3,6 +3,7 @@ import { isAndroid, isRemoteMode } from '../platform';
 import { PRESETS } from '../../shared/harness-manifest';
 import { FieldError, SettingRow, Toggle } from './ui';
 import { plainMessage } from '../utils/ipc-error';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 // The two built-in native harness presets (personality profiles, not capability
 // tiers). A native session is stamped with one at create time; it drives the
@@ -193,7 +194,12 @@ export function useNativeBinding({ active, runtime, binding, setBinding }: {
   const [memVerdict, setMemVerdict] = useState<MemVerdict | null>(null);
   const [memDetailOpen, setMemDetailOpen] = useState(false);
 
-  // Load providers + catalog when the native runtime is selected in an open form.
+  // Load providers + catalog when the native runtime is selected in an open form, and
+  // again after a remote reconnect (a read lost during a drop left the form's provider
+  // list empty until it was reopened — 2026-09-11 phone pass sweep). Inert while the
+  // native runtime is switched off for remote clients (isNativeSupported).
+  const [reconnects, setReconnects] = useState(0);
+  useOnRemoteReconnect(() => setReconnects((n) => n + 1));
   useEffect(() => {
     if (!nativeSupported || runtime !== 'native' || !active) return;
     let cancelled = false;
@@ -206,7 +212,7 @@ export function useNativeBinding({ active, runtime, binding, setBinding }: {
       setModelCatalog(Array.isArray(cat) ? (cat as CatalogRow[]) : []);
     });
     return () => { cancelled = true; };
-  }, [nativeSupported, runtime, active]);
+  }, [nativeSupported, runtime, active, reconnects]);
 
   const readyProviders = providersList.filter((p) => p.ready);
   // NOTHING IS SUBSTITUTED (Destin, 2026-09-07 — "nothing should be overridden.
@@ -352,8 +358,9 @@ export function NativeExtras({ nb, preset, onPreset }: {
       {nb.memVerdict && nb.memVerdict.verdict !== 'ok' && (
         // Round-4 (Destin, screenshot): "doesn't look like any other surface in the
         // app". So it IS another surface in the app — the expandable SettingRow every
-        // Settings screen uses (G-22): the sentence is the row title, the chevron on
-        // the right flips down, and what it reveals is one numbers line plus the
+        // Settings screen uses (design guide G-29; it was numbered G-22 until
+        // 2026-09-18, a number the find bar also used): the sentence is the row
+        // title, the chevron on the right flips down, and what it reveals is one numbers line plus the
         // "Warn me about this model" toggle row. No status dot, no Less button.
         // Round-5 note (Destin): the toggle is a SUB-CARD inside the expanded warning card,
         // not a sibling row — so the card is one container that grows, and the toggle row's

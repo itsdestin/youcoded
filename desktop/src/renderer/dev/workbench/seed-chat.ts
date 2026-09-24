@@ -66,6 +66,13 @@ function planLimitRequested(): boolean {
   return new URLSearchParams(location.search).get('planLimit') === '1';
 }
 
+/** `?providerError=<case>`: replay one OpenRouter failure card on the native
+ *  session (see LoadOptions.providerError). Same node-test guard as above. */
+function providerErrorRequested(): string | null {
+  if (typeof location === 'undefined') return null;
+  return new URLSearchParams(location.search).get('providerError');
+}
+
 function seedRequested(): string | null {
   if (typeof location === 'undefined') return null;
   return new URLSearchParams(location.search).get('seed');
@@ -178,7 +185,7 @@ export function buildHydratePayload(): SerializedChatState {
       continue;
     }
 
-    const { actions, error } = loadFixture(name, raw, sessionId, { includeStalled: stalledRequested(), includePlanLimit: planLimitRequested() });
+    const { actions, error } = loadFixture(name, raw, sessionId, { includeStalled: stalledRequested(), includePlanLimit: planLimitRequested(), providerError: providerErrorRequested() });
     if (error) { console.warn(`[workbench] ${error}`); continue; }
 
     state = chatReducer(state, { type: 'SESSION_INIT', sessionId });

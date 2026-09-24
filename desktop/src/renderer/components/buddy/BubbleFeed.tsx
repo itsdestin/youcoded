@@ -17,6 +17,8 @@ import CompactingCard from '../CompactingCard';
 import ThinkingIndicator from '../ThinkingIndicator';
 import { useTheme } from '../../state/theme-context';
 import { markPlanReceived } from '../../state/plan-received';
+import { useEntryFolding } from '../../hooks/use-entry-folding';
+import { findArchiveBoundary, archivedTooltip } from '../../state/archive-boundary';
 
 interface Props {
   sessionId: string | null;
@@ -52,6 +54,17 @@ export function BubbleFeed({ sessionId }: Props) {
   // content GROW (the scroll container itself is height:100% and never resizes).
   // Mirrors ChatView.tsx's contentRef — see the observer effect below.
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // Perf cycle 3, extended to the buddy floater (Task 7): a distant entry
+  // renders as a same-height spacer instead of its full body
+  // (use-entry-folding.ts) — the buddy feed renders the SAME long-running
+  // conversation the main chat does, so it pays the identical per-node cost
+  // as a session grows without this.
+  // WHY always enabled (unlike ChatView's `!findOpen`): nothing opens a find
+  // bar over the buddy feed — `ContentFindBar` only hosts in ChatView and the
+  // drawer's own artifact branch, and BubbleFeed has neither — so there is no
+  // DOM-walking search this could ever need to suspend for.
+  const folding = useEntryFolding(true, scrollContainerRef);
 
   // Mirror state in a ref so async event handlers see fresh values
   // without needing to list state in useEffect deps (which would cause
@@ -268,6 +281,11 @@ export function BubbleFeed({ sessionId }: Props) {
             batchDispatch({
               type: 'TRANSCRIPT_THINKING_HEARTBEAT',
               sessionId: event.sessionId,
+              // WHY: mirror App's stamped, display-only progress path so a
+              // delayed attach cannot replace a newer live measurement.
+              usageProgress: event.data?.usageProgress,
+              uuid: event.uuid,
+              timestamp: event.timestamp,
               // Native watchdog stall countdown + parked turn — payload sets,
               // absence clears. MUST mirror App.tsx or the two windows diverge.
               stallWarning: event.data?.stallWarning,
@@ -281,7 +299,9 @@ export function BubbleFeed({ sessionId }: Props) {
           batchDispatch({
             type: 'NATIVE_SESSION_ERROR',
             sessionId: event.sessionId,
+            timestamp: event.timestamp,
             message: event.data.text ?? 'The model request failed.',
+            errorCode: event.data.errorCode,
           });
           break;
         // compact-summary: buddy doesn't drive compaction UI (no /compact command),
@@ -299,6 +319,7 @@ export function BubbleFeed({ sessionId }: Props) {
               // Forward summary so buddy's marker matches main window's expandable behavior.
               ...(event.data.summary ? { summary: event.data.summary } : {}),
               ...(event.data.autoCompaction ? { auto: true } : {}),
+              ...(event.data.retainedFromUuid !== undefined ? { retainedFromUuid: event.data.retainedFromUuid } : {}),
             });
           }
           break;
@@ -338,10 +359,12 @@ export function BubbleFeed({ sessionId }: Props) {
 
     dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId });
     // Retried, and on the same terms as the main window's first page
-    // (first-page-retry.ts). The floater has no scroll-up sentinel, so a
-    // single attempt that main could not resolve — a just-resumed session
-    // whose transcript path CC has not reported yet — silently showed a feed
-    // starting mid-conversation, with nothing to nudge it.
+    // (first-page-retry.ts, including its reconcileInterrupted recovery
+    // verdict — WHY: the buddy has its own reducer, so it must apply the
+    // same recovery verdict as App). The floater has no scroll-up sentinel,
+    // so a single attempt that main could not resolve — a just-resumed
+    // session whose transcript path CC has not reported yet — silently
+    // showed a feed starting mid-conversation, with nothing to nudge it.
     // Task 5a: then main's memory-only state (open asks, specialist/shell
     // records, plan card records) is re-sent to THIS window, after the page is
     // reduced — the same chained loader every main-window path uses. Nothing
@@ -521,14 +544,10 @@ export function BubbleFeed({ sessionId }: Props) {
           {(() => {
             // Fade entries above the most recent compaction marker — Claude's
             // context no longer includes them, consistent with main ChatView.
-            let lastCompactIdx = -1;
-            for (let i = state.timeline.length - 1; i >= 0; i--) {
-              const e = state.timeline[i];
-              if (e.kind === 'system-marker' && e.marker.variant === 'compact') {
-                lastCompactIdx = i;
-                break;
-              }
-            }
+            // WHY the shared helper: a native compaction keeps a recent tail
+            // above its marker, and only archive-boundary.ts knows to stop the
+            // fade there. Compact-only, as before: the buddy never faded /clear.
+            const lastCompactIdx = findArchiveBoundary(state.timeline, ['compact']).index;
             return state.timeline.map((entry, idx) => {
               const isPreCompaction = lastCompactIdx >= 0 && idx < lastCompactIdx;
               let key: string;
@@ -601,13 +620,21 @@ export function BubbleFeed({ sessionId }: Props) {
                   return null;
               }
 
+              // Folded: render the wrapper at exactly the height its body last
+              // occupied and omit the body — same shape as ChatView.tsx's
+              // fold wrapper (this feed MUST mirror it).
+              const folded = folding.isFolded(key!);
+              const foldHeight = folded ? folding.heightOf(key!) : undefined;
               return (
                 <div
                   key={key!}
+                  ref={folding.registerEntry}
+                  data-entry-key={key!}
                   className={`timeline-entry${isPreCompaction ? ' opacity-60 transition-opacity' : ''}`}
-                  title={isPreCompaction ? "Archived by compaction — not in Claude's active context" : undefined}
+                  title={isPreCompaction ? archivedTooltip('compact') : undefined}
+                  style={folded && foldHeight ? { height: foldHeight } : undefined}
                 >
-                  {content}
+                  {folded && foldHeight ? null : content}
                 </div>
               );
             });

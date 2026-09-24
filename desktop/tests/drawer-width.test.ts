@@ -4,7 +4,7 @@
 // jsdom because this module now writes CSS vars on <html> and reads
 // localStorage — the two independent right-pane widths (artifact drawer vs
 // games pane) are only meaningfully testable against a real document.
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import {
   clampDrawerWidth, DEFAULT_DRAWER_WIDTH, MIN_DRAWER_WIDTH,
   applyPaneWidthVar, applyDrawerWidthVar, applyGameWidthVar,
@@ -91,6 +91,22 @@ describe('the two right-pane widths are independent', () => {
   it('applyPaneWidthVar is the one writer both flavours go through', () => {
     applyPaneWidthVar('--made-up-width', 333);
     expect(document.documentElement.style.getPropertyValue('--made-up-width')).toBe('333px');
+  });
+
+  it('skips a write that would not change the width var', () => {
+    // Each write to a var on <html> restyles the whole page; a drag that pins at
+    // the min/max keeps producing the same width, so only real changes may write.
+    const spy = vi.spyOn(document.documentElement.style, 'setProperty');
+    applyDrawerWidthVar(500);
+    applyDrawerWidthVar(500);
+    applyDrawerWidthVar(501);
+    expect(spy.mock.calls.filter(([name]) => name === DRAWER_WIDTH_VAR).map(([, v]) => v))
+      .toEqual(['500px', '501px']);
+    spy.mockRestore();
+    // A var removed from under it is written again, not wrongly skipped.
+    document.documentElement.style.removeProperty(DRAWER_WIDTH_VAR);
+    applyDrawerWidthVar(501);
+    expect(document.documentElement.style.getPropertyValue(DRAWER_WIDTH_VAR)).toBe('501px');
   });
 
   it('shares one clamp, so neither pane can be thinner or wider than the other allows', () => {

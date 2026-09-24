@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
+import { EventEmitter } from 'node:events';
 import { NativeHome } from '../src/main/native-home';
 import { commentTurnText, COMMENT_MODEL_NOTE } from '../src/main/harness/plans/plan-host-bridge';
 import { SessionStore } from '../src/main/harness/session-store';
@@ -52,6 +53,27 @@ const POLL_TRIES = 1_500;
  */
 function rmHostRoot(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+}
+
+/** destroyAll(), then wait for the ledger writes it starts without waiting.
+ *  WHY: tearing down a parent marks each still-running helper 'interrupted' in
+ *  the ledger FIRE-AND-FORGET (native-session-host.ts destroyChildrenOf — by
+ *  design, so a slow ledger lock never hangs a teardown). A test that recorded
+ *  a running helper and then let afterEach delete the folder raced that write:
+ *  rmdir hit ENOTEMPTY on '.youcoded/sessions' in CI (youcoded#533, Linux),
+ *  even with rmHostRoot's retries. Waiting on the row itself is the signal. */
+async function destroyAllAndSettle(h: any, cwd: string, parentId = 'root-1'): Promise<void> {
+  const ledger = h.ledger;
+  const running = (ledger?.listFor(cwd, parentId) ?? [])
+    // Only a helper that is actually live gets the teardown write; a row a
+    // test wrote as 'running' with no live child is never touched.
+    .filter((r: any) => r.status === 'running' && h.live?.has(r.childId)).map((r: any) => r.childId);
+  await h.destroyAll();
+  if (running.length === 0) return;
+  await vi.waitFor(() => {
+    const rows = ledger.listFor(cwd, parentId);
+    expect(running.every((id: string) => rows.find((r: any) => r.childId === id)?.status !== 'running')).toBe(true);
+  });
 }
 
 
@@ -198,6 +220,157 @@ describe('NativeSessionHost', () => {
   });
   afterEach(async () => { await host.destroyAll(); rmHostRoot(root); });
 
+  it('refuses handoff evidence after a swallowed append failure even when destroy and dispose succeed', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    const append = store.append.bind(store);
+    let failed = false;
+    vi.spyOn(store, 'append').mockImplementation(async (cwd, event) => {
+      if (!failed) { failed = true; throw new Error('disk unavailable'); }
+      return append(cwd, event);
+    });
+    const dispose = vi.spyOn(store, 'dispose');
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('s-1');
+    expect(captured?.transcriptPath).toBe(store.transcriptPath('s-1', root));
+    host.send('s-1', 'hello');
+    await waitForTurnComplete(host, 1);
+    await host.drain('s-1');
+    await host.destroy('s-1');
+    expect(failed).toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(captured?.persisted()).toBe(false);
+  });
+
+  it('refuses native evidence if stream disposal rejects after successful appends', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    vi.spyOn(store, 'dispose').mockRejectedValueOnce(new Error('dispose failed'));
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('s-1');
+    await expect(host.destroy('s-1')).rejects.toThrow('dispose failed');
+    expect(captured?.persisted()).toBe(false);
+  });
+
+  it.each(['live', 'completed'])('a %s child append failure rejects parent handoff without wedging parent appends', async (phase) => {
+    const store = new SessionStore(new NativeHome(root));
+    const append = store.append.bind(store);
+    let parentAppended = false;
+    vi.spyOn(store, 'append').mockImplementation(async (cwd, event) => {
+      if (event.sessionId === 'child-1') throw new Error('child disk failure');
+      if (event.sessionId === 'root-1') parentAppended = true;
+      return append(cwd, event);
+    });
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('root-1');
+    const child = new EventEmitter() as any;
+    child.binding = { modelId: 'm' }; child.interrupt = vi.fn(); child.destroy = () => child.removeAllListeners();
+    (host as any).wireChildLive('root-1', 'child-1', root, child, { providerId: 'openrouter', modelId: 'm' }, 'tc-1');
+    child.emit('transcript-event', { sessionId: 'child-1', type: 'user-message', uuid: 'child-u', timestamp: Date.now(), data: { text: 'child' } });
+    await host.drain('child-1');
+    if (phase === 'completed') {
+      await host.destroy('child-1');
+      expect((host as any).childrenOf.get('root-1')?.has('child-1')).toBeFalsy();
+    }
+    (host as any).live.get('root-1').session.emit('transcript-event',
+      { sessionId: 'root-1', type: 'user-message', uuid: 'root-u', timestamp: Date.now(), data: { text: 'parent' } });
+    await host.drain('root-1');
+    expect(parentAppended).toBe(true);
+    await host.destroy('root-1');
+    expect(captured?.persisted()).toBe(false);
+    // A different generation with the same id must not inherit this failure.
+    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const resumed = host.captureHandoffWriter('root-1');
+    await host.destroy('root-1');
+    expect(resumed?.persisted()).toBe(true);
+  });
+
+  it('waits for a deregistered child still draining appends before certifying its parent', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    const append = store.append.bind(store);
+    const dispose = store.dispose.bind(store);
+    const order: string[] = [];
+    vi.spyOn(store, 'dispose').mockImplementation(async (id) => {
+      if (id === 'root-1') order.push('parent-dispose');
+      return dispose(id);
+    });
+    let started!: () => void, reject!: (e: Error) => void;
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    const blocked = new Promise<void>((_resolve, fail) => { reject = fail; });
+    vi.spyOn(store, 'append').mockImplementation(async (cwd, event) => {
+      if (event.sessionId === 'child-1') {
+        started();
+        try { await blocked; } catch (error) { order.push('child-failed'); throw error; }
+      }
+      return append(cwd, event);
+    });
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('root-1');
+    const child = new EventEmitter() as any;
+    child.binding = { modelId: 'm' }; child.interrupt = vi.fn(); child.destroy = () => child.removeAllListeners();
+    (host as any).wireChildLive('root-1', 'child-1', root, child, { providerId: 'openrouter', modelId: 'm' }, 'tc-1');
+    child.emit('transcript-event', { sessionId: 'child-1', type: 'user-message', uuid: 'child-u', timestamp: Date.now(), data: { text: 'child' } });
+    await entered;
+    const childStop = host.destroy('child-1');
+    await vi.waitFor(() => expect((host as any).childrenOf.get('root-1')?.has('child-1')).toBeFalsy());
+    let enteredCascade!: () => void, releaseCascade!: () => void;
+    const cascadeEntered = new Promise<void>((resolve) => { enteredCascade = resolve; });
+    const cascadeGate = new Promise<void>((resolve) => { releaseCascade = resolve; });
+    const cascade = (host as any).destroyChildrenOf.bind(host);
+    vi.spyOn(host as any, 'destroyChildrenOf').mockImplementation(async (id: string) => {
+      await cascade(id);
+      if (id === 'root-1') { enteredCascade(); await cascadeGate; }
+    });
+    const parentStop = host.destroy('root-1');
+    await cascadeEntered;
+    releaseCascade();
+    // Let the cascade's microtasks run to the next event-loop phase. Without
+    // the fence, dispose begins here; with it, the parent is still awaiting child.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    reject(new Error('child write failed'));
+    await childStop;
+    await parentStop;
+    // Assert event ordering, not scheduler speed. A parent that didn't join the
+    // deregistered child could dispose before the child's append catches.
+    expect(order).toEqual(['child-failed', 'parent-dispose']);
+    expect(captured?.persisted()).toBe(false);
+  });
+
+  it('retains a failed child disposal on the parent after the child is deregistered', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    const dispose = store.dispose.bind(store);
+    let failed = false;
+    vi.spyOn(store, 'dispose').mockImplementation(async (id) => {
+      if (id === 'child-1' && !failed) { failed = true; throw new Error('child disposal failed'); }
+      return dispose(id);
+    });
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('root-1');
+    const child = new EventEmitter() as any;
+    child.binding = { modelId: 'm' }; child.interrupt = vi.fn(); child.destroy = () => child.removeAllListeners();
+    (host as any).wireChildLive('root-1', 'child-1', root, child, { providerId: 'openrouter', modelId: 'm' }, 'tc-1');
+    await expect(host.destroy('child-1')).rejects.toThrow('child disposal failed');
+    expect((host as any).childrenOf.get('root-1')?.has('child-1')).toBeFalsy();
+    await host.destroy('root-1');
+    expect(captured?.persisted()).toBe(false);
+    await host.destroy('child-1'); // failed child's retained entry is still cleanable
+  });
+
+  it('coalesces concurrent native teardown and certifies only its captured generation', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    const dispose = vi.spyOn(store, 'dispose');
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('s-1');
+    expect(captured?.persisted()).toBe(false);
+    await Promise.all([host.destroy('s-1'), host.destroy('s-1')]);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(captured?.persisted()).toBe(true);
+  });
+
   it('pendingAskEventsFor delegates to the broker for one session', () => {
     // Task 0 (ROADMAP #permissions): TRANSCRIPT_REPLAY needs a host-level
     // method to re-send open asks after a reload — this just proves the host
@@ -216,6 +389,21 @@ describe('NativeSessionHost', () => {
     expect(events[0].sessionId).toBe('s1');
     expect(events[0].type).toBe('PermissionRequest');
     expect(events[0].payload._requestId).toBe(emitted[0].payload._requestId);
+  });
+
+  it('exposes only active root progress and forgets it when idle or destroyed', async () => {
+    await host.create({ sessionId: 's-progress', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const entry = (host as any).live.get('s-progress');
+    const progress = { type: 'assistant-thinking', sessionId: 's-progress', uuid: 'progress', timestamp: 100,
+      data: { usageProgress: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 } } };
+    entry.session._currentUsageProgress = progress;
+    expect(host.currentUsageProgressFor('s-progress')).toBeNull();
+    entry.inFlight = true;
+    expect(host.currentUsageProgressFor('s-progress')).toBe(progress);
+    entry.inFlight = false;
+    expect(host.currentUsageProgressFor('s-progress')).toBeNull();
+    await host.destroy('s-progress');
+    expect(host.currentUsageProgressFor('s-progress')).toBeNull();
   });
 
   it('create → send → events forwarded AND persisted; getHistory replays them', async () => {
@@ -575,7 +763,7 @@ describe('NativeSessionHost', () => {
   // teardown method — invoked by ipc-handlers.ts cleanup() from main.ts's
   // window-all-closed handler). Without this, an MCP server subprocess would
   // outlive the app.
-  describe('MCP teardown (Task 4)', () => {
+  describe('MCP teardown', () => {
     it('destroyAll() also tears down the pooled MCP connections', async () => {
       const mcpDestroyAll = vi.fn(async () => {});
       const h = new NativeSessionHost(
@@ -596,7 +784,7 @@ describe('NativeSessionHost', () => {
   // ---- Task 6: the host is the ONE production caller of McpManager's
   // acquire()/release() — create()/resume() acquire this session's servers
   // and thread them into the HarnessSession; destroy() releases the hold. ----
-  describe('MCP session wiring (Task 6)', () => {
+  describe('MCP session wiring', () => {
     const fakeServer = (id: string) => ({
       id, label: id, tools: [], call: async () => ({ text: 'ok', isError: false }),
     });
@@ -725,7 +913,7 @@ describe('NativeSessionHost', () => {
   // ONE synchronous call, so a throw or an await between "checked" and "set"
   // can no longer let two parallel Task calls both win the same reservation.
   // ----
-  describe('specialist slot + writer-lock bookkeeping (Task 6)', () => {
+  describe('specialist slot + writer-lock bookkeeping', () => {
     it('ceiling: HOSTED_MAX_CONCURRENT_SPECIALISTS reserves succeed for one parent, the next is refused', () => {
       for (let i = 0; i < HOSTED_MAX_CONCURRENT_SPECIALISTS; i++) {
         expect(host.reserveSpecialist('A', { writer: false }).ok).toBe(true);
@@ -818,7 +1006,7 @@ describe('NativeSessionHost', () => {
   // session's real ceiling can be smaller than hosted's. The fallback constant
   // above still applies whenever no live session backs the parent id (the
   // 'never created' cases in the describe block above). ----
-  describe('specialist concurrency cap follows the profile (Task 13)', () => {
+  describe('specialist concurrency cap follows the profile', () => {
     const providerTypeFor = async (b: any) => (b.providerId === 'local' ? 'local-engine' : 'openrouter');
     // Fix pass 2: contextLengthFor collapsed into contextAndSlotsFor — this
     // fixture doesn't care about slots (totalSlots: null keeps the Layer 3
@@ -1113,7 +1301,7 @@ describe('NativeSessionHost', () => {
     // (it is a transport — the same engine serves vision and text-only GGUFs),
     // and 'mystery-3b' matches no KNOWN_MODELS entry, so the closure's `true`
     // is the ONLY thing in the system that can make this assertion pass.
-    it('a discovered supportsVision:true reaches the profile of a LOCAL-ENGINE binding too (T18)', async () => {
+    it('a discovered supportsVision:true reaches the profile of a LOCAL-ENGINE binding too', async () => {
       const h = new NativeSessionHost(
         new SessionStore(new NativeHome(root)), factory, contextAndSlotsFor as any, providerTypeFor as any,
         async () => true,
@@ -1126,7 +1314,7 @@ describe('NativeSessionHost', () => {
     // And the text-only half: a local model whose router row said `["text"]`
     // resolves to a hard false, so the harness tells it the picture cannot be
     // delivered rather than sending bytes the model cannot read.
-    it('a discovered supportsVision:false keeps a LOCAL-ENGINE profile text-only (T18)', async () => {
+    it('a discovered supportsVision:false keeps a LOCAL-ENGINE profile text-only', async () => {
       const h = new NativeSessionHost(
         new SessionStore(new NativeHome(root)), factory, contextAndSlotsFor as any, providerTypeFor as any,
         async () => false,
@@ -1988,7 +2176,7 @@ describe('NativeSessionHost', () => {
   // queued message would start a NEW turn AFTER the flush and append past it,
   // corrupting the transcript the requester is about to pull. quiesce guarantees
   // the opposite: after it resolves, NO further appends happen until a new send.
-  describe('quiesce (Task 9 — takeover/teardown)', () => {
+  describe('quiesce (takeover/teardown)', () => {
     it('quiesce clears the queue, aborts mid-stream, and no appends occur after it resolves', async () => {
       const store = new SessionStore(new NativeHome(root));
       const appendSpy = vi.spyOn(store, 'append');
@@ -2031,12 +2219,55 @@ describe('NativeSessionHost', () => {
       expect(types).not.toContain('turn-complete');
       await qHost.destroyAll();
     });
+
+    // A send arriving WHILE quiesce is winding down (idle session, so it would
+    // dispatch a fresh turn) used to run a whole turn on the old device before
+    // the handoff. It is refused instead, and the renderer keeps the draft.
+    it('a send that arrives while quiesce is in progress, or after it, is refused until the takeover ends', async () => {
+      const store = new SessionStore(new NativeHome(root));
+      const qHost = new NativeSessionHost(store, delayedFactory, NO_CONTEXT, async () => null, async () => null);
+      await qHost.create({ sessionId: 'qz3', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const quiesced = qHost.quiesce('qz3');
+      expect(qHost.send('qz3', 'mid-quiesce')).toEqual({ status: 'failed', reason: 'not-live' });
+      await quiesced;
+      await new Promise((r) => setTimeout(r, 80));
+      expect(store.readEvents('qz3', root).some((e) => e.type === 'user-message')).toBe(false);
+      // Still refused after quiesce returns: the takeover's flush and lease
+      // release come next, and only destroy ends the session.
+      expect(qHost.send('qz3', 'after')).toEqual({ status: 'failed', reason: 'not-live' });
+      // A takeover that did not go ahead lifts it.
+      qHost.endQuiesce('qz3');
+      expect(qHost.send('qz3', 'after')).toEqual({ status: 'sent' });
+      await qHost.destroyAll();
+    });
+
+    // The same refusal guards every other way a quiesced session could start
+    // work past the takeover's flush: /compact, /clear, a skill, and an idle
+    // delivery pass (a finished specialist's report waking the model).
+    it('while quiesced, compact / clear / invokeSkill refuse and an idle delivery pass does not start', async () => {
+      const store = new SessionStore(new NativeHome(root));
+      const appendSpy = vi.spyOn(store, 'append');
+      const qHost = new NativeSessionHost(store, delayedFactory, NO_CONTEXT, async () => null, async () => null);
+      await qHost.create({ sessionId: 'qz4', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      await qHost.quiesce('qz4');
+      const appendsAtQuiesce = appendSpy.mock.calls.length;
+
+      expect(await qHost.compact('qz4')).toEqual({ ok: false, reason: 'not-live' });
+      expect(qHost.clear('qz4')).toEqual({ ok: false, reason: 'not-live' });
+      expect(await qHost.invokeSkill('qz4', 'any-skill')).toEqual({ ok: false, reason: 'not-live' });
+      (qHost as any).kickIdleDeliveryPass('qz4');
+      expect((qHost as any).live.get('qz4').inFlight).toBeFalsy();
+
+      await new Promise((r) => setTimeout(r, 80));
+      expect(appendSpy.mock.calls.length).toBe(appendsAtQuiesce);
+      await qHost.destroyAll();
+    });
   });
 
   // ---- Specialists (plan 1a, Task 5): createChild mints a CHILD session —
   // an ordinary HarnessSession marked by parentage, cold-started, with a
   // charter-capped tool + permission surface and no route to a user ask.
-  describe('specialist children (Task 5)', () => {
+  describe('specialist children', () => {
     const EXPLORER = resolveSpecialist('explorer')!;
     // Boot a host we hold the store handle for (the suite's shared `host`
     // builds its store inline) so a test can read the child's header back.
@@ -2169,7 +2400,7 @@ describe('NativeSessionHost', () => {
       await h.destroyAll();
     });
 
-    it("a child's events persist under its OWN id and never reach the host emitter (display copies are Task 7)", async () => {
+    it("a child's events persist under its OWN id and never reach the host emitter", async () => {
       const { store, h } = await withParent();
       const { childId } = await h.createChild('root-1', {
         specialist: EXPLORER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
@@ -2208,7 +2439,7 @@ describe('NativeSessionHost', () => {
       await h.destroyAll();
     });
 
-    it("the destructive deny-list cuts through the envelope, but now ROUTES to the parent instead of hard-denying (Task 8)", async () => {
+    it("the destructive deny-list cuts through the envelope, but now ROUTES to the parent instead of hard-denying", async () => {
       // Critical review fix (plan 1a): launch consent (the envelope) is consent
       // for the specialist's CHARTER of work, not for `rm -rf` — spec §5 says no
       // charter or envelope overrides the destructive deny-list. Worker is
@@ -2279,7 +2510,7 @@ describe('NativeSessionHost', () => {
     // through child-ask-router.ts instead, scoped to the specialist's
     // agentType so the grant can never widen the root session's own
     // permissions or leak to a different specialist type.
-    describe('"Always allow" on a routed child ask (Task 11 dropped-decision fix)', () => {
+    describe('"Always allow" on a routed child ask is persisted, not dropped', () => {
       const rmOnce = () => scriptedModel([
         stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
         stream(...textChunks('t', 'done'), finishChunk('stop')),
@@ -2846,23 +3077,28 @@ describe('NativeSessionHost', () => {
         rawReport: 'the real, already-finished report', delivered: false, owner: OWNER, missedSteers: [],
       });
 
+      // WHY spy on the guarded write: interruptSpecialist and destroyAll both
+      // start it fire-and-forget. Polling the row proved nothing — recordStart
+      // above already wrote it, so the poll passed before the guarded write
+      // had even run (the assertion could pass for the wrong reason), and the
+      // still-running write raced afterEach's folder removal into ENOTEMPTY on
+      // '.youcoded/sessions' (Linux CI, 2026-09-19). Awaiting the write itself
+      // is the signal.
+      const guarded = vi.spyOn((h as any).ledger, 'updateUnlessCompleted');
+      const settleWrites = () => Promise.allSettled(guarded.mock.results.map((r) => r.value));
+
       const result = h.interruptSpecialist('root-1', childId);
       expect(result.status).toBe('ok'); // the interrupt call itself still succeeds — only the ledger write is guarded
+      expect(guarded).toHaveBeenCalledTimes(1);
+      await settleWrites();
 
-      // The ledger write is fire-and-forget — poll for it, then assert it
-      // never actually clobbered the completed row. (The comment said "poll"
-      // and the code slept 30ms; a slow machine reached the assertion before
-      // the guarded write had run at all, which passes for the wrong reason.)
-      let rec: any;
-      await vi.waitFor(() => {
-        rec = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
-        expect(rec).toBeTruthy();
-      });
+      const rec = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
       expect(rec?.status).toBe('completed');
       const claimed = await (h as any).ledger.claimUndelivered(root, 'root-1');
       expect(claimed?.childId).toBe(childId);
 
       await h.destroyAll();
+      await settleWrites();
     });
   });
 
@@ -2873,7 +3109,7 @@ describe('NativeSessionHost', () => {
   // dispatch logic (refusal wording, reservation sizing) is exercised through
   // the Task tool instead — task-tool.test.ts — since that's the surface a
   // model actually calls; these two are host-internal invariants.
-  describe('task_id management (Task 6)', () => {
+  describe('task_id management', () => {
     const EXPLORER = resolveSpecialist('explorer')!;
 
     it('resume() refuses a specialist header — children re-enter only through resumeSpecialist', async () => {
@@ -3655,7 +3891,7 @@ describe('NativeSessionHost', () => {
   // management (Task 6) above already covers postSteer's in-flight branch) —
   // these tests are about the NOTE recording and the EVENT feed layered on
   // top of it.
-  describe('user-facing steer/stop + specialists-event feed (Task 5, plan 1c)', () => {
+  describe('user-facing steer/stop + specialists-event feed', () => {
     const EXPLORER = resolveSpecialist('explorer')!;
 
     function bootHostWithLedger(modelFactory: any = factory) {
@@ -3698,7 +3934,7 @@ describe('NativeSessionHost', () => {
       const bookkeepingFields = ['delivered', 'injectionAttempted', 'claimedBy', 'claimedAt', 'owner', 'missedSteers', 'rawReport', 'reportPath'];
       for (const f of bookkeepingFields) expect(first.run).not.toHaveProperty(f);
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('steerSpecialist appends the note to the record for a LIVE delivery (one write) and for a PARKED steer (the same write as the parked steer) — the run event carries it either way', async () => {
@@ -3777,7 +4013,7 @@ describe('NativeSessionHost', () => {
       expect(parkedEvents).toHaveLength(1);
       expect(parkedEvents[0].run.notes).toEqual([{ text: 'check config.ts instead', from: 'assistant', at: expect.any(Number) }]);
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('steerFromUser: empty → error, 2001 chars → error naming the limit and the length, foreign childId → error, ok → {ok:true}', async () => {
@@ -3806,7 +4042,7 @@ describe('NativeSessionHost', () => {
 
       expect(h.steerFromUser('root-1', childId, 'a real note')).toEqual({ ok: true });
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     // Review finding fix (plan 1c, Task 5): SPECIALIST_NOTE_MAX_CHARS was only
@@ -3870,7 +4106,7 @@ describe('NativeSessionHost', () => {
       expect(rec.missedSteers).toEqual([]);
 
       await turn;
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('an under-cap ASSISTANT steer is recorded byte-for-byte unchanged', async () => {
@@ -3905,7 +4141,7 @@ describe('NativeSessionHost', () => {
       expect(rec.notes).toEqual([{ text: shortText, from: 'assistant', at: expect.any(Number) }]);
 
       await turn;
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('steerFromUser still REJECTS an over-cap note rather than clamping it — the assistant-path clamp does not leak into the user-facing surface', async () => {
@@ -3931,7 +4167,7 @@ describe('NativeSessionHost', () => {
       const rec = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
       expect(rec.notes ?? []).toEqual([]);
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('interruptFromUser mirrors the outcome mapping', async () => {
@@ -3959,7 +4195,7 @@ describe('NativeSessionHost', () => {
         ok: false, error: 'This helper has already finished.',
       });
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('the spawn-time model lands on the record and in the run view', async () => {
@@ -3983,7 +4219,7 @@ describe('NativeSessionHost', () => {
       const runEvent = events.find((e) => e.run.childId === childId);
       expect(runEvent.run.model).toEqual({ label: 'anthropic/claude-opus-5', via: 'named', fallback: false });
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
   });
 
@@ -4081,7 +4317,7 @@ describe('NativeSessionHost', () => {
   // a per-turn block; this suite pins what it reports given a stamped ledger, reaching the private ledger
   // directly (same pattern the Task 2 tests above use) rather than driving a
   // real specialist run end-to-end.
-  describe('specialist status text (Task 5, plan 1b — on demand since 2026-09-09)', () => {
+  describe('specialist status text (on demand)', () => {
     it('the host status block lists running and undelivered-finished specialists and omits delivered ones', async () => {
       const store = new SessionStore(new NativeHome(root));
       const h = new NativeSessionHost(
@@ -4116,7 +4352,7 @@ describe('NativeSessionHost', () => {
       // Delivered specialist never appears.
       expect(status).not.toContain('Priya');
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('returns null (and wires nothing to inject) when the session has no delegations at all', async () => {
@@ -4129,7 +4365,7 @@ describe('NativeSessionHost', () => {
 
       expect((h as any).buildSpecialistStatus('root-1', root)).toBeNull();
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     // Fix pass, Finding 1: DelegationRecord.steps is only ever written AT
@@ -4158,7 +4394,7 @@ describe('NativeSessionHost', () => {
       expect(status).not.toContain('step 0');
       expect(status).not.toMatch(/step \d/);
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     // Fix pass, Finding 2: `stale` only ever means "at least SPECIALIST_IDLE_
@@ -4184,7 +4420,7 @@ describe('NativeSessionHost', () => {
 
       expect(status).toContain('no activity for at least 2m');
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     // Fix pass, Finding 3 (original): 'interrupted' records never get
@@ -4235,7 +4471,7 @@ describe('NativeSessionHost', () => {
       expect(interruptedLine).toBe('Greg (writer): interrupted — no report will arrive');
       expect(interruptedLine).not.toContain('delivery pending');
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
   });
 
@@ -4248,7 +4484,7 @@ describe('NativeSessionHost', () => {
   // own construction site), the session's assembled services.models.catalog()
   // resolves to REAL rows, and ModelSearch reports actual matches instead of
   // the "catalog not loaded" fallback.
-  describe('a real catalog reaches services.models.catalog() (Task 14 fix pass, Finding 1)', () => {
+  describe('a real catalog reaches services.models.catalog()', () => {
     const CATALOG: CatalogModel[] = [
       { id: 'anthropic/claude-opus-5', providerId: 'openrouter', label: 'Claude Opus 5', pricing: { in: 15, out: 75 }, contextLength: 200_000 },
     ];
@@ -4312,7 +4548,7 @@ describe('NativeSessionHost', () => {
   // binding the live catalog doesn't recognize — a stale/unconfirmed model
   // would let a helper spawn on something that no longer exists with nothing
   // on screen explaining why.
-  describe('getDelegatedModels / setDelegatedModel (Task 8)', () => {
+  describe('getDelegatedModels / setDelegatedModel', () => {
     const CATALOG: CatalogModel[] = [
       { id: 'claude-opus-5', providerId: 'anthropic', label: 'Claude Opus 5' },
     ];
@@ -4377,7 +4613,7 @@ describe('NativeSessionHost', () => {
   // "restart recovery + subagent-card replay (Task 9, plan 1b)" describe
   // just below (that comment already flags the reused number; same reason
   // applies here — not renamed to avoid an unrelated diff).
-  describe('specialistRunsFor (Task 9, plan 1c — run replay on attach)', () => {
+  describe('specialistRunsFor (run replay on attach)', () => {
     it('returns toRunView of every ledger record for the live parent, and [] for an unknown session', async () => {
       const store = new SessionStore(new NativeHome(root));
       const h = new NativeSessionHost(
@@ -4446,7 +4682,7 @@ describe('NativeSessionHost', () => {
   // root), same as the Task 4 background-delivery suite in
   // specialist-run.test.ts — the delivery loop and reconcile both read/write
   // it directly, so a fake would just be reimplementing the real thing.
-  describe('restart recovery + subagent-card replay (Task 9, plan 1b)', () => {
+  describe('restart recovery + subagent-card replay', () => {
     const EXPLORER = resolveSpecialist('explorer')!;
 
     function bootHost(home: NativeHome, store: SessionStore, modelFactory: any = factory) {
@@ -4872,7 +5108,7 @@ describe('NativeSessionHost', () => {
   // re-read at the start of every root turn when a file changed, and the
   // Task tool is rebuilt from the in-memory roster every turn (never once).
   // ---------------------------------------------------------------------
-  describe('specialist catalog wiring (Task 4, plan 1c)', () => {
+  describe('specialist catalog wiring', () => {
     let projectDir: string;
 
     function ccFile(name: string): string {

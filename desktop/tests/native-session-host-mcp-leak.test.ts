@@ -24,7 +24,7 @@ import { NativeHome } from '../src/main/native-home';
 import { SessionStore } from '../src/main/harness/session-store';
 import { NativeSessionHost } from '../src/main/harness/native-session-host';
 
-describe('NativeSessionHost — MCP acquire/release leak guard (fix pass 1, Finding 3)', () => {
+describe('NativeSessionHost — MCP acquire/release leak guard', () => {
   it('releases the acquired MCP hold when create() throws before wire()', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-host-leak-'));
     const release = vi.fn(async () => {});

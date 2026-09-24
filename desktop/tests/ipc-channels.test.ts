@@ -77,6 +77,24 @@ describe('IPC channel consistency', () => {
   const preloadIpc = ipcConstants(preloadSource, /const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
   const typesIpc = ipcConstants(typesSource, /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
 
+  test('handoff channels explicitly refuse Android-local while both desktop transports expose them', () => {
+    const kotlin = readSource('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+    const host = readSource('src', 'main', 'remote-server.ts');
+    const shim = readSource('src', 'renderer', 'remote-shim.ts');
+    // WHY: a missing Android branch returns unsupported by default, but explicit refusal pins the intent.
+    for (const [name, action] of Object.entries({ HANDOFF_BEGIN: 'begin', HANDOFF_STATUS: 'status',
+      HANDOFF_WAIT: 'wait', HANDOFF_RETRY: 'retry', HANDOFF_SAVED_COPY: 'saved-copy', HANDOFF_FORCE: 'force',
+      HANDOFF_CANCEL: 'cancel', HANDOFF_CREATE_PARAMS: 'create-params' })) {
+      const channel = `handoff:${action}`;
+      expect(preloadIpc.get(name)).toBe(channel);
+      expect(typesIpc.get(name)).toBe(channel);
+      expect(kotlin).toContain(`"${channel}"`);
+      expect(host).toContain(`case '${channel}':`);
+      expect(shim).toContain(`invoke('${channel}'`);
+    }
+    expect(kotlin).toMatch(/"handoff:create-params"\s*->\s*\{[\s\S]*?put\("unsupported", true\)/);
+  });
+
   // Without this, every assertion below passes vacuously the moment one of the
   // two extractions stops matching — which has happened here before.
   test('both IPC maps were actually parsed', () => {
@@ -595,6 +613,8 @@ describe('artifact IPC parity', () => {
     SEARCH_CONTENT: 'artifacts:search-content',
     // One tapped chat path resolved on the host (read-service.ts resolveArtifactPath).
     RESOLVE_PATH: 'artifacts:resolve-path',
+    // One folder of Project Files, a page at a time (folder-listing.ts).
+    LIST_FOLDER: 'artifacts:list-folder',
   }).reduce<Record<string, string>>((acc, [name, value]) => {
     acc[value] = `ARTIFACT_IPC.${name}`;
     return acc;
@@ -917,7 +937,7 @@ describe('native runtime capability parity', () => {
 
 describe('native:*/provider:* channel parity', () => {
   const NEW_TYPES = [
-    'native:send', 'native:interrupt', 'native:set-binding', 'native:set-permission-mode',
+    'native:send', 'native:interrupt', 'native:set-binding', 'native:switch-model', 'native:set-permission-mode',
     // Task 14 — read-side mode fetch that seeds the chip on create/resume.
     'native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:sessions-list',
     'native:get-context-preferences', 'native:set-context-preferences',
@@ -930,6 +950,7 @@ describe('native:*/provider:* channel parity', () => {
   const CHANNEL_TO_CONST: Record<string, string> = {
     'native:send': 'IPC.NATIVE_SEND', 'native:interrupt': 'IPC.NATIVE_INTERRUPT',
     'native:set-binding': 'IPC.NATIVE_SET_BINDING', 'native:set-permission-mode': 'IPC.NATIVE_SET_PERMISSION_MODE',
+    'native:switch-model': 'IPC.NATIVE_SWITCH_MODEL',
     'native:get-permission-mode': 'IPC.NATIVE_GET_PERMISSION_MODE',
     'native:get-context-preferences': 'IPC.NATIVE_GET_CONTEXT_PREFERENCES',
     'native:set-context-preferences': 'IPC.NATIVE_SET_CONTEXT_PREFERENCES',
@@ -1249,7 +1270,7 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
 
 // Model memory lifecycle (2026-07-14): per-model residency push + memory guard
 // + [Reload Model]. Same self-contained parity shape as the Plan B/C describes.
-describe('model memory lifecycle channel parity (2026-07-14)', () => {
+describe('model memory lifecycle channel parity', () => {
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   const invokeChannels: Array<[string, string]> = [
     ['engine:models', 'ENGINE_MODELS'],
@@ -1278,7 +1299,7 @@ describe('model memory lifecycle channel parity (2026-07-14)', () => {
   });
 });
 
-describe('git:* IPC parity (git surface, spec 2026-07-22)', () => {
+describe('git:* IPC parity (git surface)', () => {
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
   const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
@@ -1336,6 +1357,7 @@ describe('native:* channel parity', () => {
     'native:clear',
     'native:invoke-skill',
     'native:set-binding',
+    'native:switch-model',
     'native:set-permission-mode',
     'native:get-permission-mode',
     'native:sessions-list',
@@ -1927,6 +1949,59 @@ describe('voice:* channel parity', () => {
 // and Android has no native runtime to hold any of that until M8. A REAL arm
 // there would be wrong, and a missing entry would make a phone's invoke hang
 // ~30 s instead of rejecting fast.
+// Sign in with OpenRouter (2026-09-18) — the same five-surface contract as
+// chatgpt:* below, including the invoke-through-the-constant check (review T4 F2).
+describe('openrouter:* sign-in channel parity', () => {
+  const CONSTS: Record<string, string> = {
+    'openrouter:sign-in-status': 'OPENROUTER_SIGN_IN_STATUS',
+    'openrouter:sign-in': 'OPENROUTER_SIGN_IN',
+    'openrouter:cancel-sign-in': 'OPENROUTER_CANCEL_SIGN_IN',
+  };
+  const TYPES = Object.keys(CONSTS);
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+
+  it('exposed in preload.ts and actually invoked there', () => {
+    const src = read('src', 'main', 'preload.ts');
+    for (const t of TYPES) {
+      expect(src, t + ' missing from preload.ts').toContain("'" + t + "'");
+      expect(src, t + ' is only in the constants table').toContain('ipcRenderer.invoke(IPC.' + CONSTS[t] + ')');
+    }
+  });
+
+  it('registered in ipc-handlers.ts through the shared constants', () => {
+    const types = read('src', 'shared', 'types.ts');
+    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    for (const t of TYPES) {
+      expect(types).toContain(`${CONSTS[t]}: '${t}'`);
+      expect(handlers).toContain(`ipcMain.handle(IPC.${CONSTS[t]}`);
+    }
+  });
+
+  it('exposed in remote-shim.ts and handled by remote-server.ts', () => {
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    const server = read('src', 'main', 'remote-server.ts');
+    for (const t of TYPES) {
+      expect(shim, `${t} missing from remote-shim.ts`).toContain(`invoke('${t}')`);
+      expect(server, `${t} missing from remote-server.ts`).toContain(`case '${t}'`);
+    }
+  });
+
+  it('is listed in the Android not-implemented fall-through, NOT a real arm', () => {
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
+    for (const t of TYPES) {
+      expect(kt).toContain(`"${t}"`);
+      expect(kt).not.toContain(`"${t}" ->`);
+    }
+  });
+
+  it('supported is set on every surface: on in preload and the workbench, off over remote', () => {
+    expect(read('src', 'main', 'preload.ts')).toMatch(/openrouter:\s*\{\s*supported: process\.env\.YOUCODED_NATIVE !== '0'/);
+    expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts')).toMatch(/const openrouter = \{[\s\S]*?supported: true,/);
+    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/openrouter:\s*\{\s*supported: false,/);
+  });
+});
+
 describe('chatgpt:* channel parity', () => {
   const TYPES = ['chatgpt:status', 'chatgpt:sign-in', 'chatgpt:cancel-sign-in', 'chatgpt:sign-out'];
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
@@ -2184,5 +2259,57 @@ describe('Sign in with ChatGPT - the wiring that has no other guard', () => {
     // installer there leaves the user with no way forward at all.
     expect(main.slice(Math.max(0, i - 400), i), 'markSetupCompleted() must run before forceStep(AUTHENTICATE)')
       .toContain('markSetupCompleted()');
+  });
+});
+
+// YouCoded Pages Phase 2 — connections, keys and `pages:fetch`.
+//
+// A channel has FIVE surfaces (.claude/rules/ipc-bridge.md), and remote-server.ts
+// is the one that gets forgotten because everything else is exercised by simply
+// running the desktop app. A page's approval screen is reachable from a phone,
+// so a missing case there would leave Allow doing nothing at all over remote.
+describe('pages:* Phase 2 channel parity', () => {
+  const PHASE_2 = [
+    'pages:approve', 'pages:remove-connection', 'pages:refresh',
+    'pages:saved-keys', 'pages:delete-saved-key', 'pages:fetch',
+  ];
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+
+  it('every type is declared in shared/types.ts and preload.ts, which cannot import it', () => {
+    const shared = read('src', 'shared', 'types.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    for (const t of PHASE_2) {
+      expect(shared, t).toContain(`'${t}'`);
+      expect(preload, t).toContain(`'${t}'`);
+    }
+  });
+
+  it('every type is handled by the desktop IPC handlers', () => {
+    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    for (const t of PHASE_2) {
+      // ipc-handlers registers through the IPC.* constant, so the constant NAME
+      // is what to look for — resolved from the spelling preload declares.
+      const name = new RegExp(`(PAGES_[A-Z_]+): '${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`).exec(preload)?.[1];
+      expect(name, `no IPC constant is named for ${t}`).toBeTruthy();
+      expect(handlers, t).toContain(`IPC.${name}`);
+    }
+  });
+
+  it('every type is invoked by the remote shim AND answered by the remote host', () => {
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    const server = read('src', 'main', 'remote-server.ts');
+    for (const t of PHASE_2) {
+      expect(shim, t).toContain(`invoke('${t}'`);
+      expect(server, t).toContain(`case '${t}':`);
+    }
+  });
+
+  it('main, not the renderer, is where a pasted key from a phone is refused', () => {
+    // "No keys on the phone" was a renderer rule until design review 1 finding
+    // 13. The remote host must mark its caller remote, and the desktop handler
+    // must not — otherwise either every phone can paste a key, or no desktop can.
+    expect(read('src', 'main', 'remote-server.ts')).toMatch(/\.approve\([\s\S]{0,200}?remote: true/);
+    expect(read('src', 'main', 'ipc-handlers.ts')).toMatch(/pagesService\.approve\([\s\S]{0,200}?remote: false/);
   });
 });

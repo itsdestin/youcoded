@@ -76,6 +76,11 @@ vi.mock('../src/main/harness/native-session-host', async () => {
 
     async getHistoryAsync(id: string) { return this.getHistory(id); }
 
+    // Master's 2026-09-16 C2 fix: sendLiveOnlyState reads this to attach an
+    // in-flight measured-usage heartbeat to the replay. No test here drives a
+    // live turn mid-replay, so the fake always reports nothing pending.
+    currentUsageProgressFor(_id: string) { return null; }
+
     pendingAskEventsFor() { return []; }
 
     specialistRunsFor() { return []; }

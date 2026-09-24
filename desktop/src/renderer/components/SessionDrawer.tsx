@@ -7,7 +7,7 @@
 // History: Task 6.x scaffolded a fixed 180px-list + viewer split. This file
 // replaced that split with the push-sidebar layout (2026-06).
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import { useTheme } from '../state/theme-context';
 import { clampDrawerWidth, applyDrawerWidthVar } from '../state/drawer-width';
 import { useEscClose } from '../hooks/use-esc-close';
@@ -22,7 +22,7 @@ import SessionPreviewPane from './SessionPreviewPane';
 // The A1/A2/A4 preview header (Resume + tag/note sheet) now uses COPY too, so
 // this import no longer goes away if that block is cut.
 import { COPY } from '../../shared/chatsearch-refs';
-import { useArtifactContent } from './artifact-views/useArtifactContent';
+import { useArtifactContent, contentPathFor } from './artifact-views/useArtifactContent';
 import { useUnsavedGuard } from './artifact-views/UnsavedChangesDialog';
 import { ContentFindBar } from './ContentFindBar';
 import { GitReviewView } from './git/GitReviewView';
@@ -157,21 +157,26 @@ function IconBtn({ name, title, onClick, active, glyph }: { name?: string; title
 // all plain strings that only change when you switch conversation or project, so
 // a shallow compare skips the whole drawer — the file list, the open file's
 // viewer, the git footer — for the entire length of a reply. It has no chat
-// subscription of its own; the one thing it does watch, ArtifactContext, is
-// memoized at the provider (App.tsx), so a context change still redraws it.
+// subscription of its own; the one thing it does watch is ITS session's slice
+// of the artifact store (per-key selectors below), so another session's file
+// activity does not redraw it either.
 export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, projectRoot, projectId, projectName, cwd }: Props) {
-  const { state, dispatch } = useArtifact();
+  // WHY one selector per value (perf, 2026-09-23): each reads only THIS
+  // session's entry, so the drawer redraws when its own state moves and not
+  // when another session writes a file. Defaults (`?? []`) stay outside the
+  // selectors — a fresh array inside one would read as a change every time.
+  const dispatch = useArtifactDispatch();
   const { showDeletedArtifacts, setShowDeletedArtifacts, drawerWidth, setDrawerWidth, resetDrawerWidth } = useTheme();
-  const allArtifacts = state.sessionArtifacts[sessionId] ?? [];
+  const allArtifacts = useArtifactSelector((s) => s.sessionArtifacts[sessionId]) ?? [];
   // Drawer open/closed AND the selected artifact are per-session (remembered
   // across switches). This drawer instance belongs to `sessionId`.
-  const drawerOpen = state.drawerOpenBySession[sessionId] ?? false;
-  const activeArtifactId = state.activeArtifactBySession[sessionId] ?? null;
+  const drawerOpen = useArtifactSelector((s) => s.drawerOpenBySession[sessionId] ?? false);
+  const activeArtifactId = useArtifactSelector((s) => s.activeArtifactBySession[sessionId] ?? null);
   // A previewed past conversation occupies the content pane INSTEAD of an
   // artifact — mutually exclusive with activeArtifactId (see artifact-tracker.ts).
-  const activePreview = state.activeSessionPreviewBySession[sessionId] ?? null;
+  const activePreview = useArtifactSelector((s) => s.activeSessionPreviewBySession[sessionId] ?? null);
   // "Referenced conversations" list (6b, cut candidate — see Task 6 brief).
-  const referenced = state.referencedSessionsBySession[sessionId] ?? [];
+  const referenced = useArtifactSelector((s) => s.referencedSessionsBySession[sessionId]) ?? [];
 
   // ── Preview header: Resume + tag/note sheet (spec A1/A2/A4, 2026-08-26) ──
   // Called HERE, unconditionally, rather than inside the `activePreview ?`
@@ -268,11 +273,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // watcher in main is refcounted, so open drawers on the same project share one.
   // (Subscribed below, after listRetry exists: a reconnect re-lists through it.)
   // Set when a pill click couldn't resolve; cleared on next click/selection/close.
-  const pillError = state.pillError?.[sessionId] ?? null;
+  const pillError = useArtifactSelector((s) => s.pillError?.[sessionId] ?? null);
   // Set while a tapped file is still being looked up (the file's name). WHY:
   // the drawer used to open onto "Nothing here yet" for the whole lookup — up
   // to seconds on a phone — contradicting the file just tapped (2026-09-11).
-  const pillPending = state.pillPending?.[sessionId] ?? null;
+  const pillPending = useArtifactSelector((s) => s.pillPending?.[sessionId] ?? null);
 
   // Re-list this session's files whenever the drawer opens against a resolved
   // project root.
@@ -371,13 +376,13 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // FilesTab used to carry duplicate effects that conflated "loading" with
   // "no longer on disk" (the flash bug).
   const { content, setContent, contentInfo, contentState, retryRead, applyDiskRead } =
-    useArtifactContent(projectRoot, active?.id ?? null, active?.path ?? null);
+    useArtifactContent(projectRoot, active?.id ?? null, contentPathFor(active));
 
   // ── B2 panel UI state ──
   // The list stays open once toggled; it closes on the ☰ toggle, on selecting an
   // artifact, or on entering edit mode. (No pin — that was removed by request.)
   const [listOpen, setListOpen] = useState(false);  // push list shown
-  const expanded = state.drawerExpanded;             // fill-the-region (shared, drives ChatView)
+  const expanded = useArtifactSelector((s) => s.drawerExpanded);            // fill-the-region (shared, drives ChatView)
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   // Inline rename failure message (e.g. name taken). Null = no error.
@@ -422,7 +427,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     return () => document.removeEventListener('mousedown', onDown);
   }, [filterOpen]);
   const isElectron = getPlatform() === 'electron';
-  const gitReviewOpen = state.gitReviewBySession?.[sessionId] ?? false;
+  const gitReviewOpen = useArtifactSelector((s) => s.gitReviewBySession?.[sessionId] ?? false);
   // Footer git status only for the open file, only while the drawer is visible.
   const gitStatus = useGitFileStatus(projectRoot, active && isElectron ? active.path : null, drawerOpen, active?.id ?? null);
   const gitFooter = gitFooterState(gitStatus);
@@ -632,6 +637,49 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     }
   }, [projectRoot, sessionId, activeArtifactId, dispatch]);
 
+  // Task 12: ArtifactListItem is React.memo'd on data props alone (artifact/
+  // isActive/isDeleted/sessionId — see below), so onSelectId/onRemoveId must
+  // be the SAME function identity across every one of THIS component's own
+  // re-renders (typing in search, toggling a filter, expanding/collapsing) or
+  // every row's shallow-props comparison fails and the whole list redraws on
+  // every keystroke, defeating the memo. `rowActions` holds the latest values
+  // the click logic needs; the two callbacks below read through it instead of
+  // closing over render-scoped state, so a row whose render WAS skipped still
+  // fires the newest select/remove behaviour — the same "latest handlers ref"
+  // idea SkillCard.tsx and ResumeBrowser's RowMemo use.
+  const rowActions = useRef({
+    renaming, narrowViewport, activeArtifactId, guardUnsaved, dispatch,
+    sessionId, setListOpen, cancelRename, handleRemoveRecord,
+  });
+  rowActions.current = {
+    renaming, narrowViewport, activeArtifactId, guardUnsaved, dispatch,
+    sessionId, setListOpen, cancelRename, handleRemoveRecord,
+  };
+  const onSelectId = useCallback((id: string) => {
+    const { renaming, narrowViewport, activeArtifactId, guardUnsaved, dispatch, sessionId, setListOpen, cancelRename } = rowActions.current;
+    // Preview-on-click: set the active artifact but KEEP the list open so the
+    // user can click across artifacts to preview them. The list collapses
+    // only when they engage the content pane (see the contentRef effect:
+    // click into it or scroll it).
+    // Cancel any in-progress rename first so its open field doesn't bleed
+    // onto the newly-selected artifact.
+    if (renameActiveRef.current || renaming) cancelRename();
+    // On a phone the list and the file take turns (stack navigation, see
+    // drawer-body below), so a tap must SHOW the file — the first phone
+    // tester (2026-09-10, U3) tapped a row, saw only a title bar appear above
+    // the same list, and assumed the tap had failed.
+    const keepListOpen = !narrowViewport;
+    // Re-selecting the open file never discards anything — skip the guard.
+    if (id === activeArtifactId) { setListOpen(keepListOpen); return; }
+    guardUnsaved(() => {
+      dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: id });
+      setListOpen(keepListOpen);
+    });
+  }, []);
+  const onRemoveId = useCallback((id: string) => {
+    rowActions.current.handleRemoveRecord(id);
+  }, []);
+
   // ── ESC / back: rename → find → edit → expand → gitReview → list → active → drawer ──
   const handleBack = useCallback(() => {
     if (renameActiveRef.current) { cancelRename(); return; }
@@ -647,7 +695,13 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     dispatch({ type: 'DRAWER_CLOSED', sessionId });
   }, [findOpen, editState.editing, expanded, gitReviewOpen, listOpen, activePreview, activeArtifactId, dispatch, cancelRename, sessionId, guardUnsaved, closeGitReview]);
 
-  useEscClose(drawerOpen, handleBack);
+  // WHY layeredWhile (review 2026-09-23, F2): the drawer sits beside the chat
+  // and the app opens it itself mid-reply, while Escape is how the user stops
+  // the assistant. It takes at most one Escape while the keyboard is in the
+  // chat (as before); peeling back through its layers applies only while focus
+  // is inside the drawer. See use-esc-close.tsx EscStore.activeTop.
+  const focusInsideDrawer = useCallback(() => !!asideRef.current?.contains(document.activeElement), []);
+  useEscClose(drawerOpen, handleBack, { layeredWhile: focusInsideDrawer });
 
   // Drag-to-resize state (youcoded#105). These three hooks MUST stay above the
   // `!drawerOpen` early return below — they used to sit next to the pointer
@@ -780,6 +834,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             />
           )
         ) : (
+          // Task 12: onSelectId/onRemoveId are the SAME function on every row
+          // (see rowActions above) — an id-taking prop instead of a fresh
+          // per-row closure, so React.memo's default shallow compare on
+          // ArtifactListItem's props actually holds across a re-render this
+          // list's own state (search, filters…) causes.
           listedArtifacts.map((a) => (
             <ArtifactListItem
               key={a.id}
@@ -787,28 +846,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
               isActive={activeArtifactId === a.id}
               isDeleted={a.status === 'deleted' || orphanIds.has(a.id)}
               sessionId={sessionId}
-              onSelect={() => {
-                // Preview-on-click: set the active artifact but KEEP the list open
-                // so the user can click across artifacts to preview them. The list
-                // collapses only when they engage the content pane (see the
-                // contentRef effect: click into it or scroll it).
-                // Cancel any in-progress rename first so its open field doesn't
-                // bleed onto the newly-selected artifact.
-                if (renameActiveRef.current || renaming) cancelRename();
-                // On a phone the list and the file take turns (stack navigation,
-                // see drawer-body below), so a tap must SHOW the file — the first
-                // phone tester (2026-09-10, U3) tapped a row, saw only a title
-                // bar appear above the same list, and assumed the tap had failed.
-                const keepListOpen = !narrowViewport;
-                // Re-selecting the open file never discards anything — skip the guard.
-                if (a.id === activeArtifactId) { setListOpen(keepListOpen); return; }
-                guardUnsaved(() => {
-                  dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: a.id });
-                  setListOpen(keepListOpen);
-                });
-              }}
-              // Discovered records have no sidecar entry to remove.
-              onRemove={(a as any).discovered ? undefined : () => handleRemoveRecord(a.id)}
+              onSelectId={onSelectId}
+              onRemoveId={onRemoveId}
             />
           ))
         )}
@@ -1321,16 +1360,25 @@ interface ListItemProps {
   // WHY: the row's word/timestamp describe what THIS session did to the file,
   // not the record's whole history — see statusInfo/lastModifiedInSession.
   sessionId: string;
-  onSelect: () => void;
-  // Remove the tracking RECORD (never the file). Clears accidental pill-click
-  // tracks and dead deleted rows; Claude editing the file again re-adds it.
-  onRemove?: () => void;
+  // Task 12: id-taking instead of a bound closure — the SAME function on
+  // every row (see `rowActions`/onSelectId/onRemoveId in SessionDrawer above)
+  // so this component's React.memo wrapper can bail out on unaffected rows.
+  // A skipped render still calls the CURRENT behaviour: the handler reads it
+  // through a ref, not through this prop's closure.
+  onSelectId: (id: string) => void;
+  onRemoveId: (id: string) => void;
 }
 
-function ArtifactListItem({ artifact, isActive, isDeleted, sessionId, onSelect, onRemove }: ListItemProps) {
+function ArtifactListItemImpl({ artifact, isActive, isDeleted, sessionId, onSelectId, onRemoveId }: ListItemProps) {
   const statusWord = statusInfo(artifact, isDeleted, sessionId);
   const relTime = formatRelativeTime(lastModifiedInSession(artifact, sessionId));
   const fileName = artifact.path.split('/').pop() ?? artifact.path;
+  // Discovered (on-disk-only) records have no sidecar entry to remove — read
+  // off the artifact DATA itself (same check the old per-row
+  // `onRemove={discovered ? undefined : …}` made) rather than as a separate
+  // prop, so every prop this component takes stays either data or the one
+  // shared stable handler — exactly what the memo below needs.
+  const canRemove = !(artifact as any).discovered;
 
   return (
     // group/relative wrapper hosts the hover-revealed remove × (a button can't
@@ -1338,10 +1386,10 @@ function ArtifactListItem({ artifact, isActive, isDeleted, sessionId, onSelect, 
     <div className="group relative">
       <Tooltip text={isDeleted ? 'Deleted (file is no longer on disk)' : ''}>
       <button
-        className={`w-full text-left px-2 py-2 ${onRemove ? 'pr-8' : ''} hover:bg-inset border-b border-edge-dim transition-colors ${
+        className={`w-full text-left px-2 py-2 ${canRemove ? 'pr-8' : ''} hover:bg-inset border-b border-edge-dim transition-colors ${
           isActive ? 'bg-inset' : ''
         } ${isDeleted ? 'opacity-50' : ''}`}
-        onClick={onSelect}
+        onClick={() => onSelectId(artifact.id)}
       >
         <div className="flex items-center gap-1 min-w-0">
           <span className={`font-mono text-xs truncate flex-1 ${isDeleted ? 'line-through' : ''}`}>{fileName}</span>
@@ -1350,20 +1398,32 @@ function ArtifactListItem({ artifact, isActive, isDeleted, sessionId, onSelect, 
         <div className="text-3xs text-fg-muted ml-0.5">{statusWord} · {relTime}</div>
       </button>
       </Tooltip>
-      {onRemove && (
+      {canRemove && (
         <Tooltip text={`Remove ${fileName} from this list (the file itself is not deleted)`}>
           <CloseButton
             // w-6 h-6 survives as a className override: hover-revealed row affordance,
             // sized to the row rather than the standard 28px panel-header closer.
             className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity w-6 h-6 rounded-md"
             label={`Remove ${fileName} from this list`}
-            onClick={(e) => { e.stopPropagation(); onRemove(); }}
+            onClick={(e) => { e.stopPropagation(); onRemoveId(artifact.id); }}
           />
         </Tooltip>
       )}
     </div>
   );
 }
+
+// Task 12 ("Side drawer rows memoised"): default shallow compare is safe
+// because every prop is now either DATA — artifact (same object reference
+// across a `listedArtifacts` recompute: filter/slice/sort never clone
+// elements — see the useMemo above), isActive/isDeleted (primitives,
+// `===` per row), sessionId (this drawer's own session, constant while it
+// draws one session's list) — or the ONE stable onSelectId/onRemoveId pair
+// every row shares. Before this, `onSelect`/`onRemove` were fresh closures
+// built inside the `.map()` on every SessionDrawer render (a keystroke in
+// the search box included), so every row redrew regardless of whether ITS
+// data had changed.
+const ArtifactListItem = React.memo(ArtifactListItemImpl);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

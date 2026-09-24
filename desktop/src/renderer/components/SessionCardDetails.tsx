@@ -25,6 +25,20 @@ export function formatRelativeTime(epochMs: number): string {
   return new Date(epochMs).toLocaleDateString();
 }
 
+// WHY shared card surface + title (render-cost consolidation 2026-09-18): the
+// Resume browser and the Projects → Conversations tab draw the same card, and
+// both spelled these classes out by hand — two copies that agree today and
+// drift the first time one is touched. The BASE is split out because the Resume
+// card swaps its border colour (accent when selected, no hover when inert), so
+// it cannot take the resting border + hover pair; everything else it shares.
+export const SESSION_CARD_SURFACE_BASE = 'rounded-lg border bg-inset transition-colors';
+export const SESSION_CARD_SURFACE = `${SESSION_CARD_SURFACE_BASE} border-edge-dim hover:border-edge`;
+
+/** The card's bold one-line title (Conversations tab). */
+export function SessionCardTitle({ title }: { title: string }) {
+  return <span className="block py-1 text-sm-tight font-semibold text-fg truncate">{title}</span>;
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   const kb = Math.round(bytes / 1024);

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // ImageView reads its own bytes, so this must stub BOTH the IPC read and
 // URL.createObjectURL (jsdom ships neither). No existing test gets ImageView
-// past the byte read — artifact-content-loading.test.tsx asserts the
+// past the byte read — ActiveArtifactView.test.tsx asserts the
 // 'unavailable' error state instead.
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

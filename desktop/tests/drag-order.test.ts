@@ -47,7 +47,7 @@ describe('nearestSlotId', () => {
     expect(nearestSlotId(rects, 'b', 152, 2)).toBeNull();
   });
 
-  it('keeps a wide pill within half a dot of its hole (the 2026-09-01 drag void)', () => {
+  it('keeps a wide pill within half a dot of its hole', () => {
     // The old nearest-NEIGHBOUR test needed the cursor at a dot's centre before
     // that dot stepped aside, so a 179px pill overlapped three dots before its
     // gap opened. Now the gap follows the pill's centre: 13px past the first

@@ -33,7 +33,9 @@ vi.mock('../src/renderer/state/chat-context', () => ({
   useChatDispatch: () => vi.fn(),
 }));
 vi.mock('../src/renderer/state/ArtifactContext', () => ({
-  useArtifact: () => ({ state: { drawerOpenBySession: {}, drawerExpanded: false }, dispatch: vi.fn() }),
+  // ChatView reads the artifact store through narrow selectors (perf, 2026-09-23).
+  useArtifactSelector: (select: (s: any) => unknown) => select({ drawerOpenBySession: {}, drawerExpanded: false }),
+  useArtifactDispatch: () => vi.fn(),
 }));
 
 import ChatView from '../src/renderer/components/ChatView';

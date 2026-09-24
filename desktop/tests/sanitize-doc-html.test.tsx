@@ -10,7 +10,7 @@ const mount = (html: string): HTMLElement => {
   return host;
 };
 
-describe('sanitizeDocHtml — what a .docx preview may contain (2026-09-10)', () => {
+describe('sanitizeDocHtml — what a .docx preview may contain', () => {
   it('removes code and file links but keeps their text', () => {
     const host = mount(
       '<p><a href="javascript:alert(1)">a</a><a href=" JaVaScRiPt:alert(1)">b</a>' +
@@ -56,7 +56,7 @@ describe('sanitizeDocHtml — what a .docx preview may contain (2026-09-10)', ()
   });
 });
 
-describe('sanitizeDocHtml fails CLOSED if DOMPurify is unsupported (2026-09-10 review)', () => {
+describe('sanitizeDocHtml fails CLOSED if DOMPurify is unsupported', () => {
   it('throws (→ DocxView error state) rather than returning the raw HTML', () => {
     const orig = DOMPurify.isSupported;
     try {

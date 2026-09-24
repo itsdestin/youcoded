@@ -15,6 +15,10 @@ const os = require('os');
 
 const TIMEOUT_MS = 30_000;
 const CHECK_INTERVAL_MS = 1500;
+const READY_GRACE_MS = 3000;
+// Must match src/main/smoke-probe.ts exactly (this plain script can't import TS).
+const SMOKE_READY = '[smoke] ready';
+const SMOKE_BLANK = '[smoke] failed: blank window';
 
 // Resolve the unpacked app directory
 function findUnpackedDir(customPath) {
@@ -87,7 +91,6 @@ async function main() {
 
   console.log(`Smoke test: launching ${exe}`);
 
-  // Launch with a JS snippet that checks renderer health via executeJavaScript.
   // The --enable-logging flag captures console errors from the renderer.
   const port = await findFreePort();
   const child = execFile(exe, [
@@ -100,7 +103,7 @@ async function main() {
       ...process.env,
       // Prevent port conflicts with any running instance
       YOUCODED_REMOTE_PORT: String(port),
-      // Signal to the app that this is a smoke test (not used yet, but useful for future)
+      // Enables the renderer probe and keeps this ephemeral launch out of analytics.
       YOUCODED_SMOKE_TEST: '1',
     },
     timeout: TIMEOUT_MS,
@@ -114,6 +117,7 @@ async function main() {
   // Wait for the renderer to either crash or succeed
   const startTime = Date.now();
   let passed = false;
+  let readyAt = 0;
 
   await new Promise((resolve) => {
     const checkInterval = setInterval(() => {
@@ -129,12 +133,20 @@ async function main() {
         return;
       }
 
-      // Check for successful hook installation — means main process is healthy
-      // and the renderer loaded far enough to establish IPC
-      if (combined.includes('Hooks installed') && combined.includes('RemoteServer')) {
-        // Give the renderer an extra moment to crash (the error comes shortly after)
-        if (Date.now() - startTime > 5000) {
-          // No crash detected after 5s with a healthy main process — pass
+      // The app's own answer (src/main/smoke-probe.ts), printed only under
+      // YOUCODED_SMOKE_TEST=1. WHY not ordinary log lines: this used to wait for
+      // "Hooks installed" + "RemoteServer", which a refactor silently moved and
+      // which never proved the window drew anything. Pinned by smoke-probe.test.ts.
+      if (combined.includes(SMOKE_BLANK)) {
+        clearInterval(checkInterval);
+        console.error('SMOKE TEST FAIL: The main window stayed blank (nothing rendered)');
+        resolve(undefined);
+        return;
+      }
+      if (combined.includes(SMOKE_READY)) {
+        if (readyAt === 0) readyAt = Date.now();
+        // Give the renderer a moment to crash right after mounting.
+        if (Date.now() - readyAt >= READY_GRACE_MS) {
           passed = true;
           clearInterval(checkInterval);
           resolve(undefined);

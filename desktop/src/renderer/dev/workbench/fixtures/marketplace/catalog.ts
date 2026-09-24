@@ -323,6 +323,26 @@ export function buildCatalog(plugins: readonly unknown[]): SkillEntry[] {
   return [...bundles, ...STANDALONE_ENTRIES, ...buildMemberEntries(bundles)];
 }
 
+/** Render-cost plan (docs/archive/investigations/2026-09-18-list-render-cost-sweep.md,
+ *  Task 0 step 2b): the workbench `stress` scenario's marketplace. The sampled
+ *  catalog is ~60 rows, so "Explore everything" never showed what drawing the
+ *  whole list costs; this pads it with generated standalone rows (same shape as
+ *  STANDALONE_ENTRIES, unique ids) until it holds `total` entries. */
+export function buildStressCatalog(plugins: readonly unknown[], total: number): SkillEntry[] {
+  const real = buildCatalog(plugins);
+  const extra: SkillEntry[] = [];
+  for (let i = 0; real.length + extra.length < total; i++) {
+    const src = STANDALONE_ENTRIES[i % STANDALONE_ENTRIES.length];
+    extra.push({
+      ...src,
+      id: `stress/${src.id.split('/').pop()}-${i}`,
+      displayName: `${src.displayName} ${i}`,
+      prompt: `/${src.id.split('/').pop()}-${i}`,
+    });
+  }
+  return [...real, ...extra];
+}
+
 // ── Fake feedback ────────────────────────────────────────────────────────────
 
 export const FAKE_STATS: Record<string, { installs: number; review_count: number; rating: number; thumbs_up: number; thumbs_down: number }> = {

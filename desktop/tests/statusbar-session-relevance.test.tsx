@@ -5,7 +5,7 @@
 // subscription a native session doesn't spend; Fast mode is a Claude Code
 // toggle nothing native honours (spec §3).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { makeStoreWrapper } from './helpers/chat-store-harness';
 import '@testing-library/jest-dom/vitest';
@@ -58,7 +58,7 @@ afterEach(cleanup);
 beforeEach(() => {
   // This repo's jsdom ships no localStorage (Node's experimental global
   // storage needs --localstorage-file, which isn't passed) — stub it the same
-  // way tests/remote-shim-unsupported.test.ts does.
+  // way tests/remote-shim-refusals.test.ts does.
   (window as any).localStorage = {
     _s: {} as Record<string, string>,
     getItem(k: string) { return this._s[k] ?? null; },
@@ -157,6 +157,49 @@ describe('StatusBar renders no empty chips', () => {
 const withWidgets = (ids: string[]) =>
   window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(ids));
 
+describe('StatusBar live native session totals', () => {
+  it('shows first request before any turn completes and keeps absent costs hidden', () => {
+    withWidgets(['tokens-in', 'tokens-out', 'cache-stats', 'session-cost']);
+    const { wrapper, store } = makeStoreWrapper(['s1']);
+    rtlRender(<StatusBar statusData={statusData} provider="native" nativeTotals={emptyTotals()} sessionId="s1" />, { wrapper });
+    expect(screen.queryByText('In:')).toBeNull();
+    act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
+      usageProgress: { inputTokens: 40, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      timestamp: 10, uuid: 'first' }));
+    expect(byHint(/Input tokens: 40\./)).toBeInTheDocument();
+    expect(byHint(/Output tokens: 5\./)).toBeInTheDocument();
+    expect(byHint(/Cache read: 0 \| Cache created: 0/)).toBeInTheDocument();
+    expect(screen.queryByText('Cost:')).toBeNull();
+  });
+
+  it('shows cumulative request progress plus durable specialists and replaces it at completion', () => {
+    withWidgets(['tokens-in', 'tokens-out', 'cache-stats', 'cache-hit-rate', 'session-cost']);
+    const { wrapper, store } = makeStoreWrapper(['s1']);
+    const totals = { ...emptyTotals(), inputTokens: 100, outputTokens: 20, cacheReadTokens: 30,
+      costUsd: 0.02, anyPriced: true, specialistCostUsd: 0.02, specialistRuns: 1 };
+    const progress = (inputTokens: number, outputTokens: number, cacheReadTokens: number, costUsd: number) =>
+      ({ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens: 0, costUsd });
+    const ui = (t = totals) => <StatusBar statusData={statusData} provider="native" nativeTotals={t} sessionId="s1" />;
+    const view = rtlRender(ui(), { wrapper });
+    act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
+      usageProgress: progress(200, 30, 50, 0.04), timestamp: 10, uuid: 'p1' }));
+    expect(byHint(/Input tokens: 300\./)).toBeInTheDocument();
+    expect(byHint(/Output tokens: 50\./)).toBeInTheDocument();
+    expect(byHint(/Cache read: 80 \| Cache created: 0/)).toBeInTheDocument();
+    expect(screen.getByText('$0.06')).toBeInTheDocument();
+    act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
+      usageProgress: progress(350, 55, 90, 0.07), timestamp: 11, uuid: 'p2' }));
+    expect(byHint(/Input tokens: 450\./)).toBeInTheDocument();
+    expect(screen.getByText('$0.09')).toBeInTheDocument();
+    act(() => store.dispatch({ type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: 's1',
+      uuid: 'done', timestamp: 12, model: null, anthropicRequestId: null,
+      stopReason: 'end_turn', usage: progress(350, 55, 90, 0.07) }));
+    view.rerender(ui({ ...totals, inputTokens: 450, outputTokens: 75, cacheReadTokens: 120, costUsd: 0.09 }));
+    expect(byHint(/Input tokens: 450\./)).toBeInTheDocument();
+    expect(screen.getByText('$0.09')).toBeInTheDocument();
+  });
+});
+
 describe('StatusBar session totals', () => {
   it('renders cumulative In/Out from totals in a native session, abbreviated, with the exact count in the tooltip', () => {
     withWidgets(['tokens-in', 'tokens-out']);
@@ -201,7 +244,7 @@ describe('StatusBar session totals', () => {
   });
 });
 
-describe('StatusBar — a brand-new native session has measured nothing (Finding 1)', () => {
+describe('StatusBar — a brand-new native session has measured nothing', () => {
   // createSessionChatState() seeds a fresh native session's totals with
   // emptyTotals() — all-zero, NOT null — the instant the session enters the
   // store, before any turn has completed. The token chips used to gate on
@@ -242,7 +285,7 @@ describe('StatusBar — a brand-new native session has measured nothing (Finding
     expect(screen.getByText('40%')).toBeInTheDocument();
   });
 
-  it('uses friendlier zero-reuse tooltip copy for a native session with real prompt tokens but no cache hits (Finding 4)', () => {
+  it('uses friendlier zero-reuse tooltip copy for a native session with real prompt tokens but no cache hits', () => {
     withWidgets(['cache-hit-rate']);
     const totals = { ...emptyTotals(), inputTokens: 1000, cacheReadTokens: 0 };
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={totals} turnsWithUsage={2} sessionId="s1" />);
@@ -458,7 +501,7 @@ describe('Session Cost chip', () => {
 // (a local model has no rate card), the accumulator read the null alone as
 // "unpriced", and the bar drew "Cost: not listed" with a tooltip claiming the
 // provider bills the user for a model running on their own machine.
-describe('Session Cost — a purely local session, end to end (Task 21)', () => {
+describe('Session Cost — a purely local session, end to end', () => {
   // Built through the real accumulator, never by hand: hand-built flags are
   // what let this through the first time.
   const localSessionTotals = () => {

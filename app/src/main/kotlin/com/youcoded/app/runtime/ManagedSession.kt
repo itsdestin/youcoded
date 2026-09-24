@@ -253,13 +253,18 @@ class ManagedSession(
                             ))
                         }
                         is HookEvent.PermissionExpired -> {
-                            // Socket closed before user responded — relay timed out
-                            // or Claude Code killed the hook. Clear the stale approval
-                            // card in React UI. Desktop equivalent: main.ts
-                            // hookRelay.on('permission-expired') handler.
+                            // Ended without a delivered decision (the app's 2h hold
+                            // fired, a respond() write failed, or the relay/hook
+                            // died). `reason` tells React whether to keep the card
+                            // (hook-closed: Claude Code's menu may still be live) or
+                            // resolve it. Desktop equivalent: main.ts
+                            // hookRelay.on('permission-expired'). Routed by this
+                            // session's own `id`, NEVER event.sessionId — the
+                            // write-failure path emits that as "" (EventBridge.kt).
                             server.broadcast(HookSerializer.permissionExpired(
                                 sessionId = id,
                                 requestId = event.requestId,
+                                reason = event.reason,
                             ))
                         }
                         is HookEvent.Notification -> {

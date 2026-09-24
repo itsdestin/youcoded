@@ -188,6 +188,29 @@ describe('minting a link', () => {
     expect(await mint(path.join(stray, 'unlisted.md'), { projectRoot: stray, artifactId: 'art-1' })).toMatchObject({ ok: false, error: 'outside-roots' });
   });
 
+  it('a trusted ../ record downloads at its judged location; a refused one does not', async () => {
+    // Re-review C5: the artifact route resolved a relative record against the
+    // app's own folder. A project under HOME (only those vouch — review F1).
+    const proj = fs.realpathSync(fs.mkdtempSync(path.join(process.env.HOME!, 'yc-dl-dotdot-')));
+    try {
+      fs.mkdirSync(path.join(proj, 'sub'));
+      fs.mkdirSync(path.join(proj, '.youcoded'));
+      fs.writeFileSync(path.join(proj, 'here.md'), 'judged');
+      const rec = (id: string, rel: string) => ({ id, path: path.basename(rel), kind: 'external', absolutePath: rel,
+        lastModified: new Date().toISOString(), status: 'active', versions: [], comments: [], tags: [] });
+      fs.writeFileSync(path.join(proj, '.youcoded', 'artifacts.json'), JSON.stringify({
+        $schema: SIDECAR_SCHEMA_VERSION, projectId: 'dd', name: 'dd',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        artifacts: [rec('ok', 'sub/../here.md'), rec('far', path.relative(proj, path.join(stray, 'unlisted.md')))],
+        manualExcludes: [], manualIncludes: [],
+      }));
+      const res = await mint(path.join(proj, 'here.md'), { projectRoot: proj, artifactId: 'ok' });
+      expect(res.ok).toBe(true);
+      expect(await (await fetch(res.url)).text()).toBe('judged');
+      expect(await mint(path.join(stray, 'unlisted.md'), { projectRoot: proj, artifactId: 'far' })).toMatchObject({ ok: false });
+    } finally { fs.rmSync(proj, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+
   it('a file whose inode is 0 is refused as not-allowed rather than accepted unpinnable', async () => {
     const dl = makeDownloads({
       // A real BigIntStats (isFile() and all) with its inode zeroed, as a
@@ -364,7 +387,7 @@ describe('GET /download/<token>', () => {
   });
 });
 
-describe('at most two live streams per socket (R3-7)', () => {
+describe('at most two live streams per socket', () => {
   it('a third mint answers busy while two streams are open; an abort releases its slot', async () => {
     const who = { deviceId: 'phone-2', socketId: 'sock-busy' };
     const big = path.join(root, 'big.bin');
@@ -491,7 +514,7 @@ describe('download hardening', () => {
     }
   });
 
-  it('a stream the phone stops reading is ended after the idle timeout, freeing its slot (finding 5)', async () => {
+  it('a stream the phone stops reading is ended after the idle timeout, freeing its slot', async () => {
     const dl = makeDownloads({ idleTimeoutMs: 300 });
     const { server: srv, origin: o } = await serveWith(dl);
     const who = { deviceId: 'phone-idle', socketId: 'sock-idle' };
@@ -508,7 +531,7 @@ describe('download hardening', () => {
     }
   });
 
-  it('a link stays alive for five minutes after a transfer ENDS, so a long download that drops can resume (finding 6)', async () => {
+  it('a link stays alive for five minutes after a transfer ENDS, so a long download that drops can resume', async () => {
     const dl = makeDownloads();
     const { server: srv, origin: o } = await serveWith(dl);
     const who = { deviceId: 'phone-long', socketId: 'sock-long' };
@@ -528,7 +551,7 @@ describe('download hardening', () => {
     }
   });
 
-  it('a resume whose If-Match no longer matches answers 412, never a stitched file (finding 7)', async () => {
+  it('a resume whose If-Match no longer matches answers 412, never a stitched file', async () => {
     const { url } = await mint(path.join(root, 'notes.md'));
     const first = await fetch(url, { headers: { Range: 'bytes=0-9' } });
     const etag = first.headers.get('etag')!;
@@ -541,7 +564,7 @@ describe('download hardening', () => {
     await fresh.arrayBuffer();
   });
 
-  it('one device holds at most MAX_TOKENS_PER_DEVICE links; the oldest goes first (finding 10)', async () => {
+  it('one device holds at most MAX_TOKENS_PER_DEVICE links; the oldest goes first', async () => {
     const who = { deviceId: 'phone-cap', socketId: 'sock-cap' };
     const urls: string[] = [];
     for (let i = 0; i <= MAX_TOKENS_PER_DEVICE; i++) urls.push((await mint(path.join(root, 'notes.md'), {}, downloads, who)).url);
@@ -564,7 +587,7 @@ describe('download hardening', () => {
     } finally { fs.unlinkSync(fifo); }
   });
 
-  it.skipIf(!posix)('a pipe swapped in after mint answers 404 at once instead of freezing a file thread (finding 11)', async () => {
+  it.skipIf(!posix)('a pipe swapped in after mint answers 404 at once instead of freezing a file thread', async () => {
     const file = path.join(root, 'pipe-swap.txt');
     fs.writeFileSync(file, 'ordinary');
     const { url } = await mint(file);
@@ -582,7 +605,7 @@ describe('download hardening', () => {
     }
   });
 
-  it('a file cut short during a download ends the connection instead of leaving the phone waiting (finding 12)', async () => {
+  it('a file cut short during a download ends the connection instead of leaving the phone waiting', async () => {
     const file = path.join(root, 'shrinks.bin');
     const fd = fs.openSync(file, 'w');
     fs.ftruncateSync(fd, 32 * 1024 * 1024);
@@ -604,7 +627,7 @@ describe('download hardening', () => {
     }
   });
 
-  it.skipIf(!canSymlink)('a folder on the path swapped for a link to a secret while the mint is authorizing is refused (finding 3, mint)', async () => {
+  it.skipIf(!canSymlink)('a folder on the path swapped for a link to a secret while the mint is authorizing is refused', async () => {
     const dir = path.join(root, 'swapdir');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'id_rsa'), 'a harmless file that shares a name');
@@ -622,7 +645,7 @@ describe('download hardening', () => {
     }
   });
 
-  it.skipIf(!canSymlink)('a folder on the path swapped for a link after mint answers 404, even to the same inode (finding 3, GET)', async () => {
+  it.skipIf(!canSymlink)('a folder on the path swapped for a link after mint answers 404, even to the same inode', async () => {
     // Two targets, because the private-path check alone already refuses the
     // secret folder: the re-resolved path must equal the minted one even when
     // the link leads somewhere merely unlisted.
@@ -653,7 +676,7 @@ describe('download hardening', () => {
     }
   });
 
-  it('HTTP details: a malformed download path is 404 not the app; an inverted range is ignored; a dated If-Range restarts; filename* encodes quote-like characters (finding 14)', async () => {
+  it('HTTP details: a malformed download path is 404 not the app; an inverted range is ignored; a dated If-Range restarts; filename* encodes quote-like characters', async () => {
     const odd = await fetch(`${origin}/download/${'A'.repeat(43)}/a/b`);
     expect(odd.status).toBe(404);
     expect(await odd.text()).toBe('');
@@ -682,7 +705,7 @@ describe('download hardening', () => {
     await res.arrayBuffer();
   });
 
-  it('over the WS host: a session-only folder downloads only its recorded files, and a record in an unknown folder is ignored (T7 re-review, findings 1, 6)', async () => {
+  it('over the WS host: a session-only folder downloads only its recorded files, and a record in an unknown folder is ignored', async () => {
     const sessionOnly = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-dl-session-')));
     fs.writeFileSync(path.join(sessionOnly, 'todo.md'), 'from a live session');
     fs.writeFileSync(path.join(sessionOnly, 'untracked.md'), 'never recorded');
@@ -737,7 +760,7 @@ describe('download hardening', () => {
 describe('download hardening, second review', () => {
   const closeServer = (srv: http.Server) => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); });
 
-  it("a completed download leaves the connection to the server's own keep-alive timeout (finding 2)", async () => {
+  it("a completed download leaves the connection to the server's own keep-alive timeout", async () => {
     const dl = makeDownloads();
     const { server: srv, origin: o } = await serveWith(dl);
     srv.keepAliveTimeout = 300;
@@ -764,7 +787,7 @@ describe('download hardening, second review', () => {
     }
   });
 
-  it.skipIf(process.platform !== 'linux' || !canSymlink)('a folder swapped for a link and swapped back while the mint opens the file is refused (finding 3)', async () => {
+  it.skipIf(process.platform !== 'linux' || !canSymlink)('a folder swapped for a link and swapped back while the mint opens the file is refused', async () => {
     const dir = path.join(root, 'swapback');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'id_rsa'), 'a harmless file that shares a name');
@@ -788,7 +811,7 @@ describe('download hardening, second review', () => {
     }
   });
 
-  it('removing a device ends a download that is already streaming (finding 4, contract R10)', async () => {
+  it('removing a device ends a download that is already streaming', async () => {
     const dl = makeDownloads();
     const { server: srv, origin: o } = await serveWith(dl);
     const who = { deviceId: 'phone-removed', socketId: 'sock-removed' };
@@ -815,7 +838,7 @@ describe('download hardening, second review', () => {
     }
   });
 
-  it('the link cap never drops a link that is mid-download (finding 5)', async () => {
+  it('the link cap never drops a link that is mid-download', async () => {
     const dl = makeDownloads();
     const { server: srv, origin: o } = await serveWith(dl);
     const who = { deviceId: 'phone-batch', socketId: 'sock-batch' };
@@ -835,7 +858,7 @@ describe('download hardening, second review', () => {
     }
   });
 
-  it('a failed request does not keep a link alive (finding 7)', async () => {
+  it('a failed request does not keep a link alive', async () => {
     const { url } = await mint(path.join(root, 'notes.md'));
     clock += DOWNLOAD_TOKEN_TTL_MS - 1000;
     const refused = await fetch(url, { headers: { Range: 'bytes=99999-' } });

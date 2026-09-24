@@ -15,25 +15,25 @@
 // framed with no side bar" — so the button lights while its page is the
 // focused one, and a second press returns to chat, like the Pages button.
 //
-// Both call useArtifact(), so like ProjectsButton they must render inside
+// Both call the artifact hooks, so like ProjectsButton they must render inside
 // ArtifactProvider (HeaderBar's only render site, App.tsx, does).
 import React from 'react';
-import { useArtifact } from '../../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { Tooltip } from '../ui';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { PageGlyph, PagesIcon } from './page-icons';
 import { usePages } from './use-pages';
-
-const HEADER_ICON_BUTTON =
-  'relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg';
+// Shared with Settings and Projects — it used to be a private copy here.
+import { HEADER_ICON_BUTTON } from '../header/control-states';
 
 export function PagesButton({ active = false }: { active?: boolean } = {}) {
-  const { state, dispatch } = useArtifact();
+  const dispatch = useArtifactDispatch();
   // A second press leaves the page view (Destin, 2026-09-17: "clicking the
   // page button again should exit/go back to chat"). From a FOCUSED page (a
   // pinned button's, no panel) it is not lit, and a press brings the panel
   // back instead — PAGE_VIEW_OPENED keeps the page and clears the focus.
-  const inView = state.pageViewOpen && !state.pageFocus;
+  // Narrow selector (perf, 2026-09-23): redraws only when this flag flips.
+  const inView = useArtifactSelector((s) => s.pageViewOpen && !s.pageFocus);
   const toggle = () => dispatch({ type: inView ? 'PAGE_VIEW_CLOSED' : 'PAGE_VIEW_OPENED' });
   return (
     <Tooltip text={active ? 'Back to chat' : 'Pages'} placement="bottom">
@@ -52,11 +52,12 @@ export function PagesButton({ active = false }: { active?: boolean } = {}) {
 }
 
 export function PinnedPageButtons() {
-  const { state, dispatch } = useArtifact();
+  const dispatch = useArtifactDispatch();
+  // Selected BEFORE the early return below — hooks must run on every render.
+  const focusedId = useArtifactSelector((s) => (s.pageViewOpen && s.pageFocus ? s.openPageId : null));
   const { pages } = usePages();
   const pinned = pages.filter((p) => p.pinned).slice(0, MAX_PINNED_PAGES);
   if (pinned.length === 0) return null;
-  const focusedId = state.pageViewOpen && state.pageFocus ? state.openPageId : null;
   return (
     <>
       {pinned.map((p) => {

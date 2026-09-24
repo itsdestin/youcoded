@@ -478,7 +478,7 @@ export class PlanJournal {
   /** Copy the damaged bytes aside once (content-addressed, never overwritten). */
   private async quarantine(ref: PlanRef): Promise<string> {
     const rel = this.relPath(ref);
-    const bytes = this.home.readRawBytes(rel) ?? Buffer.alloc(0);
+    const bytes = await this.home.readRawBytesAsync(rel) ?? Buffer.alloc(0);
     const digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16);
     const quarantineRel = `${rel}.quarantine-${digest}`;
     await this.home.createFileExclusive(quarantineRel, bytes);
@@ -486,7 +486,7 @@ export class PlanJournal {
   }
 
   async read(ref: PlanRef): Promise<JournalReadResult> {
-    const bytes = this.home.readRawBytes(this.relPath(ref));
+    const bytes = await this.home.readRawBytesAsync(this.relPath(ref));
     if (bytes === null) return { kind: 'absent' };
     const parsed = parseJournal(bytes.toString('utf8'));
     if (parsed.ok) return { kind: 'valid', file: parsed.file };
@@ -520,7 +520,7 @@ export class PlanJournal {
     const result = await this.read(ref);
     if (result.kind === 'absent') return [];
     if (result.kind === 'valid') return result.file.plans.map((p) => projectPlan(p, this.now()));
-    return salvagedFailedViews(this.home.readRawBytes(this.relPath(ref))?.toString('utf8') ?? '', result.detail);
+    return salvagedFailedViews((await this.home.readRawBytesAsync(this.relPath(ref)))?.toString('utf8') ?? '', result.detail);
   }
 
   async get(ref: PlanRef, planId: string): Promise<PlanRecord | undefined> {
@@ -547,7 +547,7 @@ export class PlanJournal {
     // would change nothing — or would throw — must not reach the lock at all,
     // or merely checking a plan-less conversation would leave an empty folder.
     let precomputed: AppliedMutation<T> | undefined;
-    if (this.home.readRawBytes(rel) === null) {
+    if (await this.home.readRawBytesAsync(rel) === null) {
       precomputed = applyMutation(emptyJournal(), fn); // a throw propagates; disk untouched
       if (!precomputed.write) return precomputed.result;
     }

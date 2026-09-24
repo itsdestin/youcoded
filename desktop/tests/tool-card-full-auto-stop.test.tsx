@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import React from 'react';
 import ToolCard from '../src/renderer/components/ToolCard';
+import { bashNoGrantNote } from '../src/shared/bash-grant-shapes';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import type { ToolCallState } from '../src/shared/types';
 
@@ -99,5 +100,78 @@ describe('full-auto safety stop', () => {
     renderCard(stopTool({ input: {} }));
     expect(screen.getByText('Stopped before a risky command')).toBeTruthy();
     expect(screen.getByText('Full auto still stops here.')).toBeTruthy();
+  });
+});
+
+// The removal-target floor (harness rm-target.ts) forces a stop no saved grant
+// can skip, so the band must not offer a grant it could never honour.
+describe('full-auto stop for a removal the floor always asks about', () => {
+  it('shows Run it / Skip it and no Always Allow', () => {
+    renderCard(stopTool({ input: { command: 'rm -rf ~' }, floorStop: 'removal' }));
+    expect(screen.getByRole('button', { name: 'Run it' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Skip it' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Always Allow' })).toBeNull();
+    expect(screen.getByText('Stopped before deleting files')).toBeTruthy();
+  });
+
+  it('the generic row hides Always allow for the same ask outside Full auto', () => {
+    renderCard(stopTool({ input: { command: 'rm -rf ~' }, floorStop: 'removal', permissionMode: 'ask' }));
+    expect(screen.getByRole('button', { name: /^yes$/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /always/i })).toBeNull();
+  });
+});
+
+describe('full-auto stop for a command that names a secret file', () => {
+  it('names the secret-file floor and offers no Always Allow', () => {
+    renderCard(stopTool({ input: { command: 'cat ~/.ssh/id_rsa' }, floorStop: 'secret-path' }));
+    expect(screen.getByText('Stopped before using a secret file')).toBeTruthy();
+    expect(screen.getByText('Full auto still stops here — this uses a file that holds passwords or keys.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Run it' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Always Allow' })).toBeNull();
+  });
+
+  it('a command the deny-list can name keeps the deny-list wording', () => {
+    renderCard(stopTool({ input: { command: 'rm ~/.ssh/old_key' }, floorStop: 'secret-path' }));
+    expect(screen.getByText('Stopped before deleting files')).toBeTruthy();
+  });
+});
+
+// Review F7: outside Full auto a floor's card lost "Always allow" with no word
+// of why. One line now says it will always ask, and the reason.
+describe('Ask-mode card forced by a floor', () => {
+  // Each line claims only what the floor knows (re-review N11).
+  it.each([
+    ['removal', 'rm -rf ~', 'Always asks: this deletes a protected folder'],
+    ['removal-if-empty', 'rm -rf "$BUILD_DIR"/', 'Always asks: this could delete a protected folder if a variable in it is empty'],
+    ['removal-unknown', 'rm -rf $(pwd)', "Always asks: which folder this deletes can't be known in advance"],
+    ['secret-path', 'cat ~/.ssh/id_rsa', 'Always asks: this uses a file that holds passwords or keys'],
+    ['secret-maybe', 'cat .env*', 'Always asks: this could read a file that holds passwords or keys'],
+  ] as const)('%s explains itself in one line', (floorStop, command, line) => {
+    renderCard(stopTool({ input: { command }, floorStop, permissionMode: 'ask' }));
+    expect(screen.getByText(line)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /always/i })).toBeNull();
+  });
+
+  it('an ordinary ask shows no such line', () => {
+    renderCard(stopTool({ input: { command: 'npm test' }, denyListed: false, permissionMode: 'ask' }));
+    expect(screen.queryByText(/^Always asks:/)).toBeNull();
+  });
+
+  // The floor's line REPLACES the shape note, so the card never gives two reasons.
+  it('a floor line replaces the no-grant shape note', () => {
+    const shapeNote = bashNoGrantNote('git push');
+    expect(shapeNote).toBeTruthy(); // sanity: this command really has a shape note
+    renderCard(stopTool({ input: { command: 'git push' }, denyListed: false, permissionMode: 'ask' }));
+    expect(screen.getByText(shapeNote!)).toBeTruthy();
+    cleanup();
+    renderCard(stopTool({ input: { command: 'git push' }, floorStop: 'secret-path', permissionMode: 'ask' }));
+    expect(screen.queryByText(shapeNote!)).toBeNull();
+    expect(screen.getByText('Always asks: this uses a file that holds passwords or keys')).toBeTruthy();
+  });
+
+  it('Full auto names a "could" floor as a possibility', () => {
+    renderCard(stopTool({ input: { command: 'cat .env*' }, floorStop: 'secret-maybe' }));
+    expect(screen.getByText('Stopped at a possible secret file')).toBeTruthy();
+    expect(screen.getByText('Full auto still stops here — this could read a file that holds passwords or keys.')).toBeTruthy();
   });
 });

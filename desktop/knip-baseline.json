@@ -1,5 +1,5 @@
 {
-  "//": "Ceilings for knip's warning-level categories, enforced by scripts/knip-ratchet.js (`npm run knip`). A change may not push either count above its number; when a cleanup brings one down, lower the number in the same commit. Never raise one — delete the unused export instead.",
-  "exports": 135,
-  "types": 189
+  "//": "Ceilings for knip's warning-level categories, enforced by scripts/knip-ratchet.js (`npm run knip`). A change may not push either count above its number; when a cleanup brings one down, lower the number in the same commit. Never raise one \u2014 delete the unused export instead. (2026-09-24: exports 134\u2192133, merging origin/master into feat/specialists-plans-ui landed one fewer unused export than either side alone; types stays 187 at the baseline.)",
+  "exports": 133,
+  "types": 187
 }

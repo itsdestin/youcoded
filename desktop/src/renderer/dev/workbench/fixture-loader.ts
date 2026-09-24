@@ -66,6 +66,10 @@ export interface LoadOptions {
    *  `?planLimit=1` turns it on. A session_error line with no `optIn` always
    *  replays. */
   includePlanLimit?: boolean;
+  /** Replay the ONE `{"type":"session_error", "optIn":"providerError",
+   *  "case": <name>}` line whose case matches — the OpenRouter failure cards
+   *  (connection-trust review, 2026-09-18). `?providerError=<case>`. */
+  providerError?: string | null;
 }
 
 // Fixed base timestamp, not Date.now(): fixtures must replay identically on
@@ -207,7 +211,11 @@ export function loadFixture(
         // 'session-error' transcript event, replayed through the real reducer
         // so the error banner (and its plan-limit variant) is reviewable.
         if (parsed.optIn === 'planLimit' && !opts.includePlanLimit) continue;
-        const action: ChatAction = { type: 'NATIVE_SESSION_ERROR', sessionId, message: parsed.text };
+        if (parsed.optIn === 'providerError' && parsed.case !== opts.providerError) continue;
+        const action: ChatAction = {
+          type: 'NATIVE_SESSION_ERROR', sessionId, message: parsed.text,
+          ...(typeof parsed.errorCode === 'string' ? { errorCode: parsed.errorCode } : {}),
+        };
         state = chatReducer(state, action);
         actions.push(action);
       } else if (parsed.type === 'session_context') {
@@ -332,6 +340,27 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'permission_expired') {
+        // WHY: the KEPT card (PERMISSION_EXPIRED 'hook-closed') — the hook socket
+        // died but Claude Code's own menu may still be live, so the card stays
+        // awaiting-approval with `expired`, no requestId, and "Dismiss — I
+        // answered in the terminal". Nothing else in the workbench produces
+        // that state, so a fixture line has to. Follows a permission_request
+        // line for the same tool_use_id and swaps its block IN PLACE (the
+        // reducer returns a new tool object; the earlier block is a snapshot).
+        const action: ChatAction = {
+          type: 'PERMISSION_EXPIRED',
+          sessionId,
+          requestId: parsed.requestId,
+          reason: parsed.reason ?? 'hook-closed',
+        };
+        state = chatReducer(state, action);
+        actions.push(action);
+        const tool = state.get(sessionId)?.toolCalls.get(parsed.tool_use_id);
+        if (tool) {
+          const idx = blocks.findIndex((b) => b.kind === 'tool' && b.tool.toolUseId === parsed.tool_use_id);
+          if (idx !== -1) blocks[idx] = { kind: 'tool', tool };
+        }
       } else if (parsed.type === 'subagent_permission_request') {
         // Specialists 1c: a CHILD's routed ask. Nests under the parent Task
         // card (specialist.parentToolCallId) — the reducer binds it to the

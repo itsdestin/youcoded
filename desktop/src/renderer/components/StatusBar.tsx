@@ -1,4 +1,5 @@
-import { useState, useCallback, memo } from 'react';
+import { useState, useCallback, useEffect, useSyncExternalStore, memo } from 'react';
+import { useChatStore } from '../state/chat-context';
 import { useEscClose } from '../hooks/use-esc-close';
 import { createPortal } from 'react-dom';
 import { useTheme, type ContextDisplay } from '../state/theme-context';
@@ -7,7 +8,7 @@ import type { NativePermissionMode } from '../../shared/permission-types';
 import { isExpired } from '../../shared/announcement';
 import type { SyncWarning } from '../../main/sync-state';
 import { deriveWarningSeverity } from '../state/sync-display-state';
-import { type WidgetId, type SessionRuntime, type RelevanceContext, widgetApplies, widgetUnavailableReason } from '../state/status-widgets';
+import { type WidgetId, type SessionRuntime, type RelevanceContext, nativeDisplayTotals, widgetApplies, widgetUnavailableReason } from '../state/status-widgets';
 import { FastIcon } from './Icons';
 import UpdatePanel from './UpdatePanel';
 import ContextPopup from './ContextPopup';
@@ -166,9 +167,8 @@ export const PERMISSION_DISPLAY: Record<PermissionMode | NativePermissionMode | 
 // stamped on turn-complete (see chat-reducer TRANSCRIPT_TURN_COMPLETE). This is
 // a small PURE function so the derivation is unit-tested in isolation.
 //
-// v1 limitation (spec decision 7): chips reflect the LAST COMPLETED turn, not
-// mid-turn progress — during a long agentic turn the context chip lags until the
-// turn completes. Mid-turn liveness is a deliberate follow-up, not this task.
+// Live measured progress takes precedence while a turn is running; otherwise
+// chips reflect the latest completed turn (including legacy transcript records).
 
 /** Usage payload shape the selector accepts. Superset-tolerant: only in/out
  *  tokens are required; tokensPerSecond + cache fields are optional so both the
@@ -179,6 +179,7 @@ export interface NativeUsageInput {
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
   tokensPerSecond?: number;
+  liveProgress?: true;
   /** How full the window is: the LAST step's prompt + its output. Distinct from
    *  inputTokens, which sums every step and so re-counts history once per step.
    *  Absent on records written before 2026-07-28. */
@@ -190,10 +191,10 @@ export interface NativeStatusChips {
    *  null when the real context window is unknown — the other chips still show. */
   contextPct: number | null;
   /** Tokens OCCUPYING the window (what the pill shows in "tokens" mode). */
-  contextUsedTokens: number;
+  contextUsedTokens: number | null;
   inputTokens: number;
   outputTokens: number;
-  tokensPerSecond: number;
+  tokensPerSecond: number | null;
   /** Cache tokens for the Cached/Hit chips. null (NOT 0) when the provider sent
    *  none — 0 reads is a real 0% hit rate and must render as such, while absent
    *  must stay '--'. Collapsing the two would invent a statistic. */
@@ -219,23 +220,24 @@ export function selectNativeStatusChips(
   contextUsedOverride?: number | null,
 ): NativeStatusChips | null {
   if (!usage) return null;
-  const tokensPerSecond = usage.tokensPerSecond ?? 0;
+  const tokensPerSecond = usage.tokensPerSecond ?? null;
   // Fix: the gauge asks "how close is the user to filling the window?", which is
   // OCCUPANCY — the last prompt plus its reply. It used to sum in+out across
   // every step of the turn, which both re-counted history per step AND reset to
   // near-zero each turn (Destin, 2026-07-28). Older records carry no
-  // contextUsedTokens; the in+out sum is the closest thing they have.
+  // contextUsedTokens; the in+out sum is the closest thing they have. Live
+  // progress is cumulative and cannot use that legacy fallback.
   //
   // The override wins where it exists, for the reason in its doc above. `?? `
   // and not a truthiness check: 0 is a legitimate post-/clear reading on a
   // session with no system prompt, and must not fall through to the stale turn.
   const contextUsedTokens = contextUsedOverride
     ?? usage.contextUsedTokens
-    ?? (usage.inputTokens + usage.outputTokens);
+    ?? (usage.liveProgress ? null : usage.inputTokens + usage.outputTokens);
   // contextPct is REMAINING context. Falsy contextLength (unknown window) → null
   // so we never fabricate a percentage; the token + speed chips remain valid.
   let contextPct: number | null = null;
-  if (contextLength) {
+  if (contextLength && contextUsedTokens != null) {
     const remaining = Math.round(((contextLength - contextUsedTokens) / contextLength) * 100);
     contextPct = Math.max(0, Math.min(100, remaining)); // clamp to [0,100]
   }
@@ -484,6 +486,46 @@ interface WidgetCategory {
 }
 
 const WIDGET_CATEGORIES: WidgetCategory[] = [
+  // WHY first and locked: these are the controls the bar always draws. Listing
+  // them here (instead of a lone "always on" tag beside Tags & Note) tells the
+  // user up front what cannot be switched off, so the rows below are all choices.
+  {
+    name: 'Always On',
+    widgets: [
+      {
+        id: 'model',
+        label: 'Model',
+        defaultVisible: true,
+        locked: true,
+        description: 'Which model this session is using. Click it to switch models.',
+        bestFor: 'Everyone. Always know which model is answering.',
+      },
+      {
+        id: 'permission-mode',
+        label: 'Permissions',
+        defaultVisible: true,
+        locked: true,
+        description: 'How much Claude may do without asking first. Click it to change the mode.',
+        bestFor: 'Everyone. Always see whether Claude will ask before acting.',
+      },
+      {
+        id: 'session-tags',
+        label: 'Tags & Note',
+        defaultVisible: true,
+        locked: true,
+        description: 'Tag the current session and attach a freeform note. Always shown next to the model and permission controls.',
+        bestFor: 'Everyone. Organize and annotate sessions so they\'re easy to find and resume later.',
+      },
+      {
+        id: 'announcement',
+        label: 'Announcements',
+        defaultVisible: true,
+        locked: true,
+        description: 'Messages from the YouCoded team — new releases, outages, tips. Click the announcement in the bar to read the whole message.',
+        bestFor: 'Everyone. Only appears when there is something to say.',
+      },
+    ],
+  },
   {
     name: 'Rate Limits',
     widgets: [
@@ -506,14 +548,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
   {
     name: 'Session',
     widgets: [
-      {
-        id: 'session-tags',
-        label: 'Tags & Note',
-        defaultVisible: true,
-        locked: true,
-        description: 'Tag the current session and attach a freeform note. Always shown next to the model and permission controls.',
-        bestFor: 'Everyone. Organize and annotate sessions so they\'re easy to find and resume later.',
-      },
       {
         id: 'context',
         label: 'Context %',
@@ -600,7 +634,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
       {
         id: 'git-branch',
         label: 'Git Branch',
-        defaultVisible: true,
+        defaultVisible: false,
         description: 'The current git repository and branch for your working directory.',
         bestFor: 'Developers working across multiple branches or repos.',
       },
@@ -644,23 +678,13 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
       },
     ],
   },
-  {
-    name: 'Updates',
-    widgets: [
-      {
-        id: 'announcement',
-        label: 'Announcement',
-        defaultVisible: true,
-        description: 'Platform announcements from the YouCoded team — new releases, outages, tips. Pulled every hour from the announcement cache.',
-        bestFor: 'Everyone. Hides automatically when there is no active announcement.',
-      },
-    ],
-  },
 ];
 
 // Flat list for iteration
 const ALL_WIDGET_DEFS = WIDGET_CATEGORIES.flatMap((c) => c.widgets);
 const DEFAULT_VISIBLE = new Set<WidgetId>(ALL_WIDGET_DEFS.filter((w) => w.defaultVisible).map((w) => w.id));
+
+const LOCKED_WIDGETS = new Set<WidgetId>(ALL_WIDGET_DEFS.filter((w) => w.locked).map((w) => w.id));
 
 const STORAGE_KEY = 'youcoded-statusbar-widgets';
 
@@ -809,7 +833,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                           <button
                             onClick={() => { if (!w.locked) toggle(w.id); }}
                             disabled={w.locked}
-                            className={`flex items-center gap-2 flex-1 text-left ${w.locked ? 'cursor-default' : ''}`}
+                            className={`flex items-center gap-2 flex-1 text-left rounded-md px-1 -mx-1 ${w.locked ? 'cursor-default' : 'state-layer stepped-hover'}`}
                           >
                             <span
                               className={`w-3.5 h-3.5 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
@@ -825,7 +849,6 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                               )}
                             </span>
                             <span className="text-2xs text-fg">{w.label}</span>
-                            {w.locked && <span className="text-4xs text-fg-muted">always on</span>}
                           </button>
                           )}
 
@@ -978,6 +1001,13 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   // Version pill now opens the in-app UpdatePanel (changelog + update action) instead of firing external URLs.
   const [updatePanelOpen, setUpdatePanelOpen] = useState(false);
   const [contextPopupOpen, setContextPopupOpen] = useState(false);
+  // Full-text view of the announcement chip — the chip itself truncates at 280px,
+  // so longer messages are read here.
+  const [announcementOpen, setAnnouncementOpen] = useState(false);
+  const hasAnnouncement = !!statusData.announcement?.message && !isExpired(statusData.announcement.expires);
+  // WHY: without this, an announcement that expires while its popup is open would
+  // leave the flag set, and the NEXT announcement would pop open unprompted.
+  useEffect(() => { if (!hasAnnouncement) setAnnouncementOpen(false); }, [hasAnnouncement]);
 
   // Runtime gate (spec §3, Rule 2): a widget that belongs to the OTHER runtime
   // never renders here, whatever the user's saved on/off choice says. The choice
@@ -987,7 +1017,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   // gate reserves for Claude Code apply again — fed with the ChatGPT windows
   // App put in `usage` for exactly this session.
   const chatgptWindows = usagePlan === 'chatgpt';
-  const show = (id: WidgetId) => visible.has(id)
+  // Locked (Always On) widgets ignore the saved choice, so anyone who hid the
+  // announcement before it became always-on sees it again.
+  const show = (id: WidgetId) => (LOCKED_WIDGETS.has(id) || visible.has(id))
     && (widgetApplies(id, runtime) || (chatgptWindows && (id === 'usage-5h' || id === 'usage-7d')));
   // Where a usage chip goes when clicked: the Claude account page, or — for a
   // ChatGPT plan — the Model Providers row that shows the plan and its windows.
@@ -1002,6 +1034,16 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   // extra. Fed the session's real context window (resolved in main) so the
   // context % is accurate for the local model, not a hardcoded guess.
   const nativeChips = selectNativeStatusChips(nativeUsage, nativeContextLength, nativeContextOverride);
+  // Read the store-owned progress separately from the selected usage prop: that
+  // prop falls back to the last completed turn, which must NEVER be added again.
+  const chatStore = useChatStore();
+  const subscribeProgress = useCallback((cb: () => void) => chatStore.subscribeAll(cb), [chatStore]);
+  const getProgress = useCallback(() => runtime === 'native' && sessionId
+    ? chatStore.getState().get(sessionId)?.inProgressUsage ?? null : null,
+  [chatStore, runtime, sessionId]);
+  const inProgressUsage = useSyncExternalStore(subscribeProgress, getProgress);
+  const displayTotals = runtime === 'native'
+    ? nativeDisplayTotals(nativeTotals, inProgressUsage) : nativeTotals ?? null;
 
   // In/Out are SESSION TOTALS for both runtimes. They used to come from the last
   // completed turn, which made one label mean two different measurements
@@ -1025,16 +1067,14 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   // of 0 cache reads, which is common and must render) from a session that has
   // not run a turn (nothing to say, so no chip). Now a zero in any OTHER field
   // is always a real measurement and always renders.
-  const measured = !!nativeTotals && nativeTotals.inputTokens > 0;
+  const measured = !!displayTotals && displayTotals.inputTokens > 0;
   const totalTokens = (v: number | undefined) => (measured ? v ?? null : null);
-  const inTokens = totalTokens(nativeTotals?.inputTokens);
-  const outTokens = totalTokens(nativeTotals?.outputTokens);
-  // Cached/Reuse get the identical treatment: CC's statusline first (real
-  // measurement, 0 included), then session totals for native (0 -> null,
-  // nothing measured yet) — never the last-turn nativeChips, which would
-  // blend "this session so far" and "the last turn" under one label again.
-  const cacheReadTotal = totalTokens(nativeTotals?.cacheReadTokens);
-  const cacheCreationTotal = totalTokens(nativeTotals?.cacheCreationTokens);
+  const inTokens = totalTokens(displayTotals?.inputTokens);
+  const outTokens = totalTokens(displayTotals?.outputTokens);
+  // Cached/Reuse use the same session scope as In/Out, including the current
+  // native turn's cumulative snapshot. Never add the last completed turn again.
+  const cacheReadTotal = totalTokens(displayTotals?.cacheReadTokens);
+  const cacheCreationTotal = totalTokens(displayTotals?.cacheCreationTokens);
   // Speed had the identical problem: a CC chip stuck at "--" for native sessions
   // beside a native chip that duplicated it AND ignored show('output-speed'), so
   // hiding Speed in settings didn't hide it. CC derives it from the statusline's
@@ -1233,14 +1273,14 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           null for native sessions (they write no .context-* file), so there is no
           duplicate context chip. Reuses the exact CC chip markup — no restyle.
 
-          v1 limitation: values reflect the LAST COMPLETED turn, so during a long
-          agentic turn the context chip lags until the turn finishes (spec #7). */}
+          Live measurements take precedence; after completion, the latest turn
+          supplies the reading. */}
       {nativeChips && (
         <>
           {/* Context remaining — reuses the CC context chip's visual style. Not a
               button: the CC version opens ContextPopup (CC-only /compact + /clear
               actions); native compaction is engine-driven, so this is display-only. */}
-          {show('context') && nativeChips.contextPct != null && (() => {
+          {show('context') && nativeChips.contextPct != null && nativeChips.contextUsedTokens != null && (() => {
             // Native passes its MEASURED used-token count straight through — unlike
             // the CC chip above, which has to derive "used" from a rounded percent.
             const pill = formatContextPill(
@@ -1288,7 +1328,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           (spec §5). Nothing priced → no chip, never "$0.00". */}
       {show('session-cost') && (() => {
         const ccCost = ss?.costUsd ?? null;
-        const nativeCost = nativeTotals?.anyPriced ? nativeTotals.costUsd : null;
+        const nativeCost = displayTotals?.anyPriced ? displayTotals.costUsd : null;
         const cost = ccCost ?? nativeCost;
         if (cost == null) {
           // NEW branch (checkpoint #3). Nothing could be priced — but WHY not
@@ -1303,7 +1343,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           //   - anyFree only (a local model), or nothing measured at all →
           //     render nothing, exactly as before. Destin declined a "Free"
           //     chip (checkpoint #2); silence stays the answer there.
-          if (ccCost == null && nativeTotals?.anyUnpriced) {
+          if (ccCost == null && displayTotals?.anyUnpriced) {
             return (
               <Tooltip text={"This provider bills for usage, but no price is available for this model here, so the session cost can't be totalled."}>
               <span
@@ -1335,7 +1375,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         // zero isn't a rounding artifact at all and takes the no-chip path
         // above, same as "nothing was priced".
         if (cost <= 0) return null;
-        const partial = ccCost == null && nativeTotals?.anyUnpriced;
+        const partial = ccCost == null && displayTotals?.anyUnpriced;
         // Checkpoint #4 — name where the money came from. Only on the NATIVE
         // figure: a Claude Code session's cost is Claude Code's own total, and
         // this app's specialist accounting is no part of it, so attributing a
@@ -1477,12 +1517,12 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {show('cache-hit-rate') && (() => {
         // Session totals only — passing `ss` here would make Reuse describe the
         // last request while In:/Out:/Cached: beside it describe the session.
-        const reuse = selectCacheReuse(null, nativeTotals);
+        const reuse = selectCacheReuse(null, displayTotals);
         const display = selectReuseDisplay(reuse, turnsWithUsage);
         if (display.kind === 'unknown') return null;
         const prompt = (reuse.promptTokens ?? 0).toLocaleString();
         // Always the session scope now — see the reuse source above.
-        const usingTotals = nativeTotals != null;
+        const usingTotals = displayTotals != null;
         // Fix: zero reuse on a session TOTAL (as opposed to a single turn)
         // reads as an accusation — "Reused 0 of X" sounds like the cache is
         // broken, when it's just as likely nothing has been reused yet.
@@ -1642,9 +1682,10 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {show('announcement') &&
         statusData.announcement?.message &&
         !isExpired(statusData.announcement.expires) && (
-        <Tooltip text={statusData.announcement.message}>
-        <span
-          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border truncate max-w-[280px]"
+        <Tooltip text="Click to read the full announcement">
+        <button
+          onClick={() => setAnnouncementOpen(true)}
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border truncate max-w-[280px] cursor-pointer hover:bg-inset transition-colors"
           style={{
             color: '#EA580C',
             borderColor: 'rgba(234,88,12,0.35)',
@@ -1652,7 +1693,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         >
           <span aria-hidden>★</span>
           <span className="truncate">{statusData.announcement.message}</span>
-        </span>
+        </button>
         </Tooltip>
       )}
 
@@ -1715,8 +1756,18 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         toggle={toggle}
         // anyUnpriced rides along because the bar draws a "Cost: not listed"
         // chip for it — the menu has to offer the row whenever the chip is up.
-        relevance={{ runtime, hasPricedWork: nativeTotals?.anyPriced ?? true, anyUnpriced: nativeTotals?.anyUnpriced ?? false, runsLocally: nativeTotals?.anyFree ?? false, chatgptWindows }}
+        relevance={{ runtime, hasPricedWork: displayTotals?.anyPriced ?? true, anyUnpriced: displayTotals?.anyUnpriced ?? false, runsLocally: displayTotals?.anyFree ?? false, chatgptWindows }}
       />
+
+      {/* Announcement popup — the whole message, since the chip truncates it.
+          pre-wrap keeps the line breaks the author wrote. */}
+      {hasAnnouncement && statusData.announcement && (
+        <Dialog open={announcementOpen} onClose={() => setAnnouncementOpen(false)} title="Announcement" size="panel">
+          <p className="text-sm text-fg whitespace-pre-wrap break-words leading-relaxed">
+            {statusData.announcement.message}
+          </p>
+        </Dialog>
+      )}
 
       {/* Update panel — opened from the version pill. Guard on updateStatus
          since the pill is only rendered when it exists, but the mount lives outside that gate. */}
