@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button, ChevronDown, PluginIcon, SettingRow, Toggle, Tooltip } from '../../../components/ui';
 import { SkillIcon, ToolIcon } from '../../../components/marketplace/type-icons';
 
@@ -9,8 +9,17 @@ type Plugin = { name: string; defaultOn: boolean; bundled?: boolean; parts?: Par
 const RESEARCH: Plugin = { name: 'Research Kit', defaultOn: false, parts: [
   { name: 'Find sources', kind: 'Skill' },
   { name: 'Summarize sources', kind: 'Skill' },
-  { name: 'Research sources', kind: 'MCP server', active: true },
+  { name: 'Research sources', kind: 'Tool connection', active: true },
 ] };
+// WHY: the post-install screen promises "Choices save as you make them". A
+// module-level store keeps that promise inside one workbench page load, so
+// closing and reopening the panel, or visiting the project's Skills & tools
+// tab, shows the same switches. It is still sample state: nothing is written.
+type Choice = { enabled: boolean; parts: boolean[]; chosen: boolean };
+const previewChoices = new Map<string, Choice>();
+const previewInstalled: Plugin[] = [];
+const choiceKey = (project: string, plugin: Plugin) => `${project}::${plugin.name}`;
+
 const BUNDLED: Plugin[] = [
   { name: 'Chat Search', defaultOn: true, bundled: true },
   { name: 'Page Builder', defaultOn: true, bundled: true },
@@ -19,12 +28,22 @@ const BUNDLED: Plugin[] = [
 ];
 
 function PluginRow({ plugin, project, locked = false, initiallyOpen = false, flat = false, projectTab = false, onEnabledChange }: { plugin: Plugin; project: string; locked?: boolean; initiallyOpen?: boolean; flat?: boolean; projectTab?: boolean; onEnabledChange?: (enabled: boolean) => void }) {
-  const [enabled, setEnabled] = useState(locked || plugin.defaultOn);
-  const [hasChosenParts, setHasChosenParts] = useState(false);
+  const saved = locked ? undefined : previewChoices.get(choiceKey(project, plugin));
+  const [enabled, setEnabled] = useState(saved?.enabled ?? (locked || plugin.defaultOn));
+  const [hasChosenParts, setHasChosenParts] = useState(saved?.chosen ?? false);
   const [expanded, setExpanded] = useState(initiallyOpen);
-  const [parts, setParts] = useState(() => (plugin.parts ?? []).map(() => false));
+  const [parts, setParts] = useState(() => saved?.parts ?? (plugin.parts ?? []).map(() => false));
   const [pending, setPending] = useState<{ kind: 'master' | 'part'; index?: number } | null>(null);
+  useEffect(() => {
+    if (!locked) previewChoices.set(choiceKey(project, plugin), { enabled, parts, chosen: hasChosenParts });
+  }, [locked, project, plugin, enabled, parts, hasChosenParts]);
   const hasActivePart = plugin.parts?.some(part => part.active) ?? false;
+  // WHY: the decision is ONE confirmation naming every part that connects or runs
+  // on its own; a hardcoded sample name would be wrong for any other plugin.
+  const risky = pending?.kind === 'part' && pending.index !== undefined
+    ? [plugin.parts![pending.index].name]
+    : (plugin.parts ?? []).filter(part => part.active).map(part => part.name);
+  const riskCopy = `${risky.join(', ')} can connect to outside services or run on ${risky.length > 1 ? 'their' : 'its'} own when a new conversation in ${project} begins. Only turn this on if you trust ${plugin.name}.`;
   const toggleMaster = (next: boolean) => {
     if (next && hasActivePart && !enabled) { setPending({ kind: 'master' }); return; }
     setEnabled(next);
@@ -67,18 +86,18 @@ function PluginRow({ plugin, project, locked = false, initiallyOpen = false, fla
     // headers, font scale and one-row-per-item rhythm without undoing the sketch.
     return <section className="rounded-lg border border-edge-dim bg-panel overflow-hidden">
       <SettingRow variant="nav" className="!bg-transparent" icon={<PluginIcon />} title={plugin.name}
-        description={description}
+        description={description} descriptionClassName={WRAP}
         accessory={plugin.parts?.length ? <Button variant="ghost" size="icon" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${plugin.name} items`} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? '' : '-rotate-90'}`} /></Button> : undefined}
         control={masterControl} />
       {!!plugin.parts?.length && expanded && <div className="space-y-2 px-3 pb-3 sm:pl-12">{plugin.parts.map((part, index) => {
         const control = <Toggle checked={parts[index]} disabled={!enabled} onChange={next => togglePart(index, next)} aria-label={`${part.name} in ${project}`} />;
         const status = !enabled ? 'Paused with plugin' : `Automatic use ${parts[index] ? 'on' : 'off'}`;
         return <SettingRow key={part.name} variant="nav" className="!bg-inset/50 border border-edge-dim" icon={part.active ? <ToolIcon size={17} /> : <SkillIcon size={17} />}
-          title={part.name} description={`${part.kind} · ${status}${part.active ? ' · Needs local setup' : ''}`} control={control} />;
+          title={part.name} description={`${part.kind} · ${status}${part.active ? ' · Needs local setup' : ''}`} descriptionClassName={WRAP} control={control} />;
       })}</div>}
       {pending && <div role="alertdialog" aria-label="Confirm automatic connection" className="mx-3 mb-3 rounded-lg border border-edge bg-inset p-3">
         <div className="text-sm font-medium text-fg">Allow automatic connections?</div>
-        <p className="mt-1 text-xs text-fg-2">Research sources can connect to its configured server when a new conversation begins. Review what it can access before enabling it in {project}.</p>
+        <p className="mt-1 text-xs text-fg-2">{riskCopy}</p>
         <div className="mt-3 flex gap-2"><Button size="sm" variant="primary" onClick={confirm}>Enable</Button><Button size="sm" variant="secondary" onClick={() => setPending(null)}>Cancel</Button></div>
       </div>}
     </section>;
@@ -110,15 +129,35 @@ function PluginRow({ plugin, project, locked = false, initiallyOpen = false, fla
     </>}
     {pending && <div role="alertdialog" aria-label="Confirm automatic connection" className="mt-4 rounded-lg border border-edge bg-inset p-3">
       <div className="text-sm font-medium text-fg">Allow automatic connections?</div>
-      <p className="mt-1 text-xs text-fg-2">Research sources can connect to its configured server when a new conversation begins. Review what it can access before enabling it in {project}.</p>
+      <p className="mt-1 text-xs text-fg-2">{riskCopy}</p>
       <div className="mt-3 flex gap-2"><Button size="sm" variant="primary" onClick={confirm}>Enable</Button><Button size="sm" variant="secondary" onClick={() => setPending(null)}>Cancel</Button></div>
     </div>}
   </section>;
 }
 
+// WHY: SettingRow's nav density truncates descriptions to one line, which on a
+// 390px phone cut "Add the skill file here…" mid-word. These rows carry the
+// only explanation of what to do, so they wrap instead.
+const WRAP = 'text-fg-muted !whitespace-normal';
+
+// WHY: "Set up locally" had no destination. No YouCoded screen manages tool
+// connections today, so the honest preview is a short explanation plus the two
+// things a user could actually do; which one ships is a question for Destin.
+function NeedsSetupRow({ icon, title, kind, need, actions }: { icon: React.ReactNode; title: string; kind: string; need: string; actions: string[] }) {
+  const [open, setOpen] = useState(false);
+  return <div className="rounded-lg border border-edge-dim bg-panel">
+    <SettingRow variant="nav" className="!bg-transparent" icon={icon} title={title} description={`${kind} · Not on this device`} descriptionClassName={WRAP}
+      accessory={<Button size="sm" variant="secondary" aria-expanded={open} onClick={() => setOpen(value => !value)}>Set up here</Button>} />
+    {open && <div className="mx-3 mb-3 rounded-lg border border-edge-dim bg-inset p-3">
+      <p className="text-xs text-fg-2">{need}</p>
+      <div className="mt-3 flex flex-wrap gap-2">{actions.map((label, index) => <Button key={label} size="sm" variant={index === 0 ? 'primary' : 'secondary'}>{label}</Button>)}</div>
+    </div>}
+  </div>;
+}
+
 function FreshProjectRow({ name, plugin, initiallyOpen = false }: { name: string; plugin: Plugin; initiallyOpen?: boolean }) {
   const [expanded, setExpanded] = useState(initiallyOpen);
-  const [active, setActive] = useState(false);
+  const [active, setActive] = useState(() => previewChoices.get(choiceKey(name, plugin))?.enabled ?? plugin.defaultOn);
   // WHY: reuse the group anatomy of AssistantTurnBubble: one outlined parent,
   // a shared header, and children lifted inside a symmetric inset body.
   return <section className="overflow-hidden rounded-lg border border-edge bg-panel">
@@ -157,13 +196,21 @@ export function ProjectSkillsTabDemo({ projectName }: { projectName: string }) {
       </section>
       <section aria-label="Installed plugins" className="mb-5 shrink-0">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mb-2 px-1"><span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Added on this device</span><span className="text-xs text-fg-muted">Choose which parts can be used automatically</span></div>
-        <PluginRow plugin={RESEARCH} project={projectName} initiallyOpen projectTab />
+        <div className="flex flex-col gap-2">
+          <PluginRow plugin={RESEARCH} project={projectName} initiallyOpen projectTab />
+          {/* WHY: a plugin set up from the Marketplace preview appears here with the same switches. */}
+          {previewInstalled.map(plugin => <PluginRow key={plugin.name} plugin={plugin} project={projectName} projectTab />)}
+        </div>
       </section>
       <section id="project-tools-needing-setup" aria-label="Items needing setup on this device" className="mb-5 shrink-0">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mb-2 px-1"><span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Needs setup on this device</span><span className="text-xs text-fg-muted">Project choices are saved; these items cannot run here yet</span></div>
         <div className="flex flex-col gap-2">
-          <div className="rounded-lg border border-edge-dim bg-panel"><SettingRow variant="nav" className="!bg-transparent" icon={<SkillIcon size={17} />} title="Writing helper" description="Personal skill · Add the skill file here to use it" accessory={<Button size="sm" variant="secondary">Add locally</Button>} /></div>
-          <div className="rounded-lg border border-edge-dim bg-panel"><SettingRow variant="nav" className="!bg-transparent" icon={<ToolIcon size={17} />} title="Library search" description="MCP server · Connect it on this device" accessory={<Button size="sm" variant="secondary">Set up locally</Button>} /></div>
+          <NeedsSetupRow icon={<SkillIcon size={17} />} title="Writing helper" kind="Personal skill"
+            need="This project has Writing helper turned on, but its skill file was added on another device. Personal skill files don't sync yet."
+            actions={['Ask assistant to add it', 'Choose skill file']} />
+          <NeedsSetupRow icon={<ToolIcon size={17} />} title="Library search" kind="Tool connection (MCP server)"
+            need="This project has Library search turned on. Its connection and any sign-in stay on the device where they were set up, so it needs setting up here too."
+            actions={['Ask assistant to set it up']} />
         </div>
       </section>
     </div>
@@ -172,6 +219,9 @@ export function ProjectSkillsTabDemo({ projectName }: { projectName: string }) {
 
 export function ProjectPluginControlsDemo({ arrangement, previewPlugin, previewProjects, titleInParent = false }: { arrangement: 'fresh' | 'library'; previewPlugin?: Plugin; previewProjects?: string[]; titleInParent?: boolean }) {
   const plugin = previewPlugin ?? RESEARCH;
+  useEffect(() => {
+    if (previewPlugin && !previewInstalled.some(p => p.name === previewPlugin.name)) previewInstalled.push(previewPlugin);
+  }, [previewPlugin]);
   const projects = previewProjects ?? ['Your Assistant', 'Personal', 'School notes'];
   if (arrangement === 'fresh') return <main className="mx-auto max-w-[820px] space-y-4 p-4 text-fg">
     <div>{!titleInParent && <h2 className="text-lg font-semibold">{plugin.name}</h2>}<p className="text-xs text-fg-muted">Installed on this device. Choose where the assistant can use it automatically in new conversations.</p></div>

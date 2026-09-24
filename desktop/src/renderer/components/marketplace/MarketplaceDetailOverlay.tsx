@@ -141,7 +141,10 @@ export default function MarketplaceDetailOverlay({
     }
   }
 
-  if (isWorkbenchMode() && setupPreview && target.kind === 'skill' && target.id === 'youcoded-inbox') {
+  // WHY: the flag outlives a Related-item navigation inside this overlay; tie it
+  // to the Inbox target so another plugin's page never gets the setup title.
+  const showSetupPreview = isWorkbenchMode() && setupPreview && target.kind === 'skill' && target.id === 'youcoded-inbox';
+  if (showSetupPreview) {
     content = <div data-project-install-preview>
       <ProjectPluginControlsDemo arrangement="fresh" titleInParent previewPlugin={{ name: 'Inbox', defaultOn: false, parts: [{ name: 'Process inbox', kind: 'Skill' }] }} previewProjects={['youcoded', 'wecoded-themes', 'recipes']} />
       <div className="mx-auto max-w-[820px] px-4 pb-4 flex justify-end"><Button variant="primary" onClick={onClose}>Done</Button></div>
@@ -158,7 +161,7 @@ export default function MarketplaceDetailOverlay({
         className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
       >
         <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
-          <h2 className="text-lg font-semibold text-fg">{setupPreview ? 'Set up Inbox' : 'Details'}</h2>
+          <h2 className="text-lg font-semibold text-fg">{showSetupPreview ? 'Set up Inbox' : 'Details'}</h2>
           {/* Wide: Esc-text hint. Narrow: bordered close-X matching the marketplace top bar. */}
           <button
             type="button"

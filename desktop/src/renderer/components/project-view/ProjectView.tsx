@@ -86,7 +86,7 @@ function readStoredFileView(): FileViewMode {
     return localStorage.getItem(FILE_VIEW_KEY) === 'list' ? 'list' : 'grid';
   } catch { return 'grid'; } // storage blocked (some Android WebView configs)
 }
-import { Button, Checkbox, SearchFilterPill } from '../ui';
+import { Button, Checkbox, PluginIcon, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
 import { isRemoteMode } from '../../platform';
 
@@ -199,7 +199,7 @@ export function ProjectView(props: ProjectViewProps) {
     return () => window.removeEventListener('workbench:open-project-skills', openPreview);
   }, [dispatch]);
   useEffect(() => {
-    if (!isWorkbenchMode() || !previewNeedsSetup || !state.projectViewOpen || !activeProject || tab !== 'skills') return;
+    if (!isWorkbenchMode() || !previewNeedsSetup || !projectViewOpen || !activeProject || tab !== 'skills') return;
     // WHY: navigation from a missing skill lands on the actionable section,
     // not just the Projects shell; wait for the selected project to render.
     const frame = requestAnimationFrame(() => {
@@ -207,7 +207,7 @@ export function ProjectView(props: ProjectViewProps) {
       setPreviewNeedsSetup(false);
     });
     return () => cancelAnimationFrame(frame);
-  }, [previewNeedsSetup, state.projectViewOpen, activeProject, tab]);
+  }, [previewNeedsSetup, projectViewOpen, activeProject, tab]);
   // Artifacts search query (lifted out of FilesTab so it can sit on the
   // shared seg-row next to the segmented control, matching the design).
   const [artifactSearch, setArtifactSearch] = useState('');
@@ -754,7 +754,7 @@ export function ProjectView(props: ProjectViewProps) {
     { id: 'context', label: 'Instructions & Memories', icon: <DocIcon />, count: String(heroStats.contextFiles) },
     // WHY: show the proposal in the REAL Projects shell without a production entry point.
     ...(isWorkbenchMode() && new URLSearchParams(location.search).get('pluginControlsBefore') !== '1'
-      ? [{ id: 'skills' as const, label: 'Skills & tools', icon: <DocIcon />, count: '' }] : []),
+      ? [{ id: 'skills' as const, label: 'Skills & tools', icon: <PluginIcon />, count: '' }] : []),
   ];
 
   // Per-active-project sync props for the hero. `dot` is null when syncStatus is
