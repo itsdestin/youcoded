@@ -25,6 +25,16 @@ class Bootstrap(internal val context: Context) {
         // Last Claude Code release shipping cli.js. See the comment on
         // isFullySetup and installClaudeCode() for why this is pinned.
         private const val PINNED_CLAUDE_CODE_VERSION = "2.1.112"
+
+        /** Events wired to the fire-and-forget relay (see installHooks).
+         *  WHY SessionStart (2026-09-23, review F2): EventBridge's HookOwnerGate
+         *  claims a session's owner from its first SessionStart — the real
+         *  Claude Code fires it at launch, before it can start a nested
+         *  `claude`. Desktop has always registered it (install-hooks.js).
+         *  Pinned by BootstrapHookEventsTest. */
+        internal val RELAY_HOOK_EVENTS = listOf(
+            "SessionStart", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "Notification"
+        )
     }
 
     val usrDir: File get() = File(context.filesDir, "usr")
@@ -909,16 +919,8 @@ class Bootstrap(internal val context: Context) {
         val hookCommand = "$nodePath $relayPath"
         val blockingHookCommand = "$nodePath $blockingRelayPath"
 
-        // Fire-and-forget events use relay.js.
-        // WHY SessionStart (2026-09-23, review F2): EventBridge's HookOwnerGate
-        // claims a session's owner from its first SessionStart — the real
-        // Claude Code fires it at launch, before it can run anything that could
-        // start a nested `claude`. Without it the first hook of ANY kind would
-        // claim, and a nested process reporting first would lock the real one
-        // out. Desktop has always registered it (install-hooks.js).
-        val hookEvents = listOf(
-            "SessionStart", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "Notification"
-        )
+        // Fire-and-forget events use relay.js — see RELAY_HOOK_EVENTS.
+        val hookEvents = RELAY_HOOK_EVENTS
 
         // Read existing settings and merge (additive — don't overwrite user hooks)
         val existingJson = if (settingsFile.exists()) {

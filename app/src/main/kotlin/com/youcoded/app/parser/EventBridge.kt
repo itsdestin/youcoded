@@ -82,6 +82,33 @@ class EventBridge(private val socketName: String) {
         }
     }
 
+    /**
+     * The first half of handling one hook line, split out so a JVM test can
+     * drive it without a LocalSocket (review B1). Returns the parsed event to
+     * route, or null when the connection should just be closed: unparseable,
+     * refused by HookOwnerGate (a `claude` nested inside this session — closing
+     * with no reply lets a blocking relay exit so the nested process uses its
+     * own prompt), or a SessionStart, which is registered only to claim the
+     * owner and refresh the maps (there is no HookEvent for it).
+     */
+    internal fun admit(line: String): JSONObject? {
+        val json = try { JSONObject(line) } catch (_: Exception) { return null }
+        val eventName = json.optString("hook_event_name", "")
+        val mobileSessionId = json.optString("mobileSessionId", "")
+        if (!owners.accept(mobileSessionId, json.optString("claudePid", ""), eventName == "SessionStart")) return null
+
+        val claudeSessionId = json.optString("session_id", "")
+        if (mobileSessionId.isNotBlank() && claudeSessionId.isNotBlank()) {
+            sessionIdMap[mobileSessionId] = claudeSessionId
+        }
+        // Claude Code includes transcript_path on every hook event.
+        val transcriptPath = json.optString("transcript_path", "")
+        if (mobileSessionId.isNotBlank() && transcriptPath.isNotBlank()) {
+            transcriptPathMap[mobileSessionId] = transcriptPath
+        }
+        return if (eventName == "SessionStart") null else json
+    }
+
     // Non-suspend (master fix) — uses tryEmit to avoid blocking the coroutine.
     private fun handleClient(client: LocalSocket) {
         try {
@@ -89,37 +116,9 @@ class EventBridge(private val socketName: String) {
             val line = reader.readLine() ?: run { client.close(); return }
             if (com.youcoded.app.BuildConfig.DEBUG) android.util.Log.d("EventBridge", "Received: ${line.take(300)}")
 
-            // Peek at event type to decide whether to hold the socket
-            val json = try { JSONObject(line) } catch (_: Exception) { client.close(); return }
+            // Parse, gate, record the session maps; null = nothing more to do.
+            val json = admit(line) ?: run { client.close(); return }
             val eventName = json.optString("hook_event_name", "")
-
-            // A hook from a `claude` nested inside this session (Bash tool,
-            // script) — see HookOwnerGate. Dropped before it can remap the
-            // session or show a card; closing with no reply lets a blocking
-            // relay exit so the nested process uses its own prompt.
-            val ownerSessionId = json.optString("mobileSessionId", "")
-            if (!owners.accept(ownerSessionId, json.optString("claudePid", ""), eventName == "SessionStart")) {
-                client.close()
-                return
-            }
-
-            // Extract session ID mapping if present
-            val mobileSessionId = json.optString("mobileSessionId", "")
-            val claudeSessionId = json.optString("session_id", "")
-            if (mobileSessionId.isNotBlank() && claudeSessionId.isNotBlank()) {
-                sessionIdMap[mobileSessionId] = claudeSessionId
-            }
-
-            // Extract transcript path if present (Claude Code includes this on every hook event)
-            val transcriptPath = json.optString("transcript_path", "")
-            if (mobileSessionId.isNotBlank() && transcriptPath.isNotBlank()) {
-                transcriptPathMap[mobileSessionId] = transcriptPath
-            }
-
-            // SessionStart is registered only to claim the owner (and it
-            // refreshes the maps above); there is no HookEvent for it, so it
-            // stops here rather than logging a parse failure every launch.
-            if (eventName == "SessionStart") { client.close(); return }
 
             if (eventName == "PermissionRequest") {
                 // Hold socket open for blocking response
@@ -264,15 +263,27 @@ class EventBridge(private val socketName: String) {
  */
 class HookOwnerGate {
     private val owners = ConcurrentHashMap<String, String>()
+    // First pid that sent a non-SessionStart hook before any owner was claimed.
+    private val firstToolPid = ConcurrentHashMap<String, String>()
 
+    /**
+     * WHY a claim can go to an EARLIER pid (review C2): if the real process's
+     * SessionStart is lost, its tool hooks arrive with no owner, and a nested
+     * `claude`'s SessionStart would otherwise claim the session and drop every
+     * real hook. A nested process exists only after the real one ran a tool,
+     * and the real one fires SessionStart before any tool, so a pid that sent
+     * tool hooks before any claim is the real one. Mirrors desktop.
+     */
+    @Synchronized
     fun accept(sessionId: String, claudePid: String, isSessionStart: Boolean): Boolean {
         if (sessionId.isBlank() || claudePid.isBlank()) return true
-        val owner = owners[sessionId]
-        if (owner == null) {
-            if (!isSessionStart) return true
-            val raced = owners.putIfAbsent(sessionId, claudePid) ?: return true
-            return raced == claudePid
+        owners[sessionId]?.let { return it == claudePid }
+        if (!isSessionStart) {
+            firstToolPid.putIfAbsent(sessionId, claudePid)
+            return true
         }
-        return owner == claudePid
+        val claimed = firstToolPid.remove(sessionId) ?: claudePid
+        owners[sessionId] = claimed
+        return claimed == claudePid
     }
 }
