@@ -859,3 +859,137 @@ describe('GitTransport credentialed against real git', () => {
     }
   });
 });
+
+// Sync-safety 2026-09-23: files the app must never upload (secrets), and local
+// files a pull must never silently replace. Real git; fake bytes only.
+describe('GitTransport never-sync files and unmanaged local files', () => {
+  const rawGit = (s: SyncSpace, args: string[]) => execFileSync('git', args, {
+    cwd: s.root, encoding: 'utf8',
+    env: { ...process.env, GIT_DIR: path.join(s.root, '.youcoded', 'sync.git'), GIT_WORK_TREE: s.root },
+  });
+  const remoteTree = (s: SyncSpace) => rawGit(s, ['ls-tree', '-r', '--name-only', 'origin/main']).split('\n').filter(Boolean);
+  const remoteShow = (s: SyncSpace, rel: string) => rawGit(s, ['show', `origin/main:${rel}`]);
+  // Models an OLDER app version (or a hand-made commit) publishing a secret.
+  const forcePublish = (s: SyncSpace, rel: string, bytes: string) => {
+    fs.writeFileSync(path.join(s.root, rel), bytes);
+    rawGit(s, ['add', '-f', '--', rel]);
+    rawGit(s, ['commit', '-q', '-m', 'old-version publish']);
+    rawGit(s, ['push', '-q', 'origin', 'main']);
+  };
+  const read = (s: SyncSpace, rel: string) => fs.readFileSync(path.join(s.root, rel), 'utf8');
+
+  it("a project's .gitignore cannot re-include a secret (!.env) into the upload", async () => {
+    const h = await makeHarness();
+    try {
+      const a = await h.makeDeviceSpace();
+      fs.writeFileSync(path.join(a.root, '.gitignore'), '!.env\n!*.pem\n');
+      fs.writeFileSync(path.join(a.root, '.env'), 'FAKE=1\n');
+      fs.writeFileSync(path.join(a.root, 'deploy.pem'), 'FAKE PEM\n');
+      // A conflict copy of a secret is still that secret.
+      fs.writeFileSync(path.join(a.root, '.env (from Laptop, 2026-09-01)'), 'FAKE=2\n');
+      fs.writeFileSync(path.join(a.root, 'notes.md'), 'hello');
+      expect((await h.transport.push(a, 'x')).pushed).toBe(true);
+      expect(remoteTree(a).sort()).toEqual(['.gitignore', 'notes.md']);
+      // Held back, never deleted: the local files are untouched.
+      expect(read(a, '.env')).toBe('FAKE=1\n');
+      expect(read(a, 'deploy.pem')).toBe('FAKE PEM\n');
+    } finally { await h.cleanup(); }
+  });
+
+  it('a secret published before this fix: new edits stay local, and it is NOT deleted for other devices', async () => {
+    const h = await makeHarness();
+    try {
+      const a = await h.makeDeviceSpace();
+      fs.writeFileSync(path.join(a.root, 'notes.md'), 'hello');
+      await h.transport.push(a, 'seed');
+      forcePublish(a, '.env', 'OLD=1\n');
+      fs.writeFileSync(path.join(a.root, '.env'), 'ROTATED=2\n');
+      fs.writeFileSync(path.join(a.root, 'notes.md'), 'hello again');
+      await h.transport.push(a, 'edit');
+      expect(remoteShow(a, '.env')).toBe('OLD=1\n');
+      expect(remoteShow(a, 'notes.md')).toBe('hello again');
+      expect(read(a, '.env')).toBe('ROTATED=2\n');
+      // Deleting it locally does not propagate a deletion either.
+      fs.rmSync(path.join(a.root, '.env'));
+      await h.transport.push(a, 'rm');
+      expect(remoteTree(a)).toContain('.env');
+    } finally { await h.cleanup(); }
+  });
+
+  it("first sync on a fresh device keeps the device's own ignored secret", async () => {
+    const h = await makeHarness();
+    try {
+      const a = await h.makeDeviceSpace();
+      fs.writeFileSync(path.join(a.root, 'notes.md'), 'hello');
+      await h.transport.push(a, 'seed');
+      forcePublish(a, '.env', 'REMOTE=1\n');
+      const b = await h.makeDeviceSpace();
+      fs.writeFileSync(path.join(b.root, '.env'), 'LOCAL=1\n');
+      const r = await h.transport.pull(b);
+      expect(r.updated).toBe(true);
+      expect(read(b, 'notes.md')).toBe('hello');
+      expect(read(b, '.env')).toBe('LOCAL=1\n');
+      // And it never uploads, or rides a conflict copy out.
+      await h.transport.push(b, 'after');
+      expect(remoteShow(b, '.env')).toBe('REMOTE=1\n');
+      expect(remoteTree(b).some((n) => n.includes('(from '))).toBe(false);
+    } finally { await h.cleanup(); }
+  });
+
+  it('first sync keeps an ignored non-secret local file as a "(from …)" copy', async () => {
+    const h = await makeHarness();
+    try {
+      const a = await h.makeDeviceSpace();
+      fs.mkdirSync(path.join(a.root, 'build'));
+      forcePublish(a, 'build/out.txt', 'remote build');
+      const b = await h.makeDeviceSpace();
+      fs.mkdirSync(path.join(b.root, 'build'));
+      fs.writeFileSync(path.join(b.root, 'build', 'out.txt'), 'local build');
+      const r = await h.transport.pull(b);
+      expect(read(b, 'build/out.txt')).toBe('remote build'); // remote wins the name
+      expect(r.conflictCopies).toHaveLength(1);
+      expect(read(b, r.conflictCopies[0])).toBe('local build');
+    } finally { await h.cleanup(); }
+  });
+
+  it("a merge keeps a file this device's .gitignore hides but the remote tracks", async () => {
+    const h = await makeHarness();
+    try {
+      const a = await h.makeDeviceSpace();
+      fs.writeFileSync(path.join(a.root, 'data.log'), 'remote log');
+      await h.transport.push(a, 'a');
+      const b = await h.makeDeviceSpace();
+      fs.writeFileSync(path.join(b.root, '.gitignore'), '*.log\n');
+      fs.writeFileSync(path.join(b.root, 'data.log'), 'local log');
+      const r = await h.transport.pull(b);
+      expect(r.updated).toBe(true);
+      expect(read(b, 'data.log')).toBe('remote log');
+      expect(r.conflictCopies).toHaveLength(1);
+      expect(read(b, r.conflictCopies[0])).toBe('local log');
+    } finally { await h.cleanup(); }
+  });
+
+  it('a held-back secret edit does not wedge sync when an older device changes it', async () => {
+    const h = await makeHarness();
+    try {
+      const a = await h.makeDeviceSpace();
+      fs.writeFileSync(path.join(a.root, 'notes.md'), 'hello');
+      await h.transport.push(a, 'seed');
+      forcePublish(a, '.env', 'V1=1\n');
+      const b = await h.makeDeviceSpace();
+      await h.transport.pull(b);
+      fs.writeFileSync(path.join(b.root, '.env'), 'B_LOCAL=1\n');
+      await h.transport.push(b, 'b');
+      await h.transport.pull(a);
+      forcePublish(a, '.env', 'V2=1\n');
+      fs.writeFileSync(path.join(a.root, 'notes.md'), 'from a');
+      await h.transport.push(a, 'a2');
+      const r = await h.transport.pull(b);
+      expect(r.updated).toBe(true);
+      expect(read(b, 'notes.md')).toBe('from a');
+      expect(read(b, '.env')).toBe('B_LOCAL=1\n');
+      await h.transport.push(b, 'b2');
+      expect(remoteShow(b, '.env')).toBe('V2=1\n');
+    } finally { await h.cleanup(); }
+  });
+});
