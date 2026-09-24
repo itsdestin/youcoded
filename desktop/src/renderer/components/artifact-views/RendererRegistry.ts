@@ -107,6 +107,14 @@ export function isTextContentViewer(v: unknown): boolean {
   return TEXT_CONTENT_VIEWERS.has(v as ViewSpec);
 }
 
+// WHY its own check, not exporting CodeEditorView itself: doc comments (mockup,
+// Style A) give code files a simpler, non-scroll-synced comments rail than
+// MarkdownView's inline margin — ActiveArtifactView needs to know "is this the
+// CM6 viewer" without importing the lazy chunk directly.
+export function isCodeEditorViewer(v: unknown): boolean {
+  return v === CodeEditorView;
+}
+
 export function getViewer(path: string, opts?: { textHint?: boolean; binaryHint?: boolean }): ViewSpec {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
   const hit = REGISTRY[ext];

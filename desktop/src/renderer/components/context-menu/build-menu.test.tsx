@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-// Pins the artifact-viewer branch of the right-click menu: the "Ask about this"
-// scaffold must cite SOURCE LINE NUMBERS for raw text/code views and fall back to
-// a quote for rendered markdown (whose DOM doesn't map back to source lines).
+// Pins the artifact-viewer branch of the right-click menu: "Ask about this"
+// must cite SOURCE LINE NUMBERS for raw text/code views and fall back to a
+// quote for rendered markdown (whose DOM doesn't map back to source lines).
+// Redesigned (doc-comments mockup): the menu no longer builds a scaffold
+// STRING to insert into the composer textarea — it attaches a {quote,
+// sourceLabel} reference via youcoded:compose-add-reference instead, which
+// InputBar renders as a chip (spec: never put quoted text in the typing box).
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { buildContextMenu } from './build-menu';
-import { COPY } from '../../../shared/chatsearch-refs';
 
 // Builds the DOM shape MarkdownView emits for raw text (txt) and rendered md.
 // CODE files no longer use this shape — CodeMirror replaced CodeView, and its
@@ -33,17 +36,17 @@ function selectWithin(node: Node, start: number, end: number) {
   sel.addRange(range);
 }
 
-// Runs the menu's "Ask about this" action and returns the text it would insert
-// into the composer (delivered via the youcoded:compose-insert CustomEvent).
-function composedTextFor(container: HTMLElement): string | null {
+// Runs the menu's "Ask about this" action and returns the reference it would
+// attach to the composer (delivered via youcoded:compose-add-reference).
+function referenceFor(container: HTMLElement): { quote: string; sourceLabel: string } | null {
   const entries = buildContextMenu(container);
   const ask = entries?.find((e) => e.type === 'item' && e.id === 'ask');
   if (!ask || ask.type !== 'item') return null;
   const spy = vi.fn();
-  window.addEventListener('youcoded:compose-insert', spy);
+  window.addEventListener('youcoded:compose-add-reference', spy);
   ask.run();
-  window.removeEventListener('youcoded:compose-insert', spy);
-  return (spy.mock.calls[0]?.[0] as CustomEvent)?.detail?.text ?? null;
+  window.removeEventListener('youcoded:compose-add-reference', spy);
+  return (spy.mock.calls[0]?.[0] as CustomEvent)?.detail ?? null;
 }
 
 const FILE = 'alpha\nbravo\ncharlie\ndelta';
@@ -140,25 +143,33 @@ describe('artifact viewer context menu', () => {
   it('cites a single source line for a one-line selection', () => {
     const { container, pre } = mountViewer({ path: 'docs/notes.txt', source: 'raw', body: FILE });
     selectWithin(pre, 6, 11); // "bravo" — second line
-    expect(composedTextFor(container)).toBe(
-      'The user is referencing line 2 from "docs/notes.txt". Respond to the following prompt accordingly:\n\n',
-    );
+    expect(referenceFor(container)).toEqual({ quote: 'bravo', sourceLabel: 'line 2 · notes.txt' });
   });
 
   it('cites a line RANGE for a multi-line selection', () => {
     const { container, pre } = mountViewer({ path: 'src/app.ts', source: 'raw', body: FILE });
     selectWithin(pre, 6, 19); // "bravo\ncharlie" — lines 2-3
-    expect(composedTextFor(container)).toBe(
-      'The user is referencing lines 2-3 from "src/app.ts". Respond to the following prompt accordingly:\n\n',
-    );
+    expect(referenceFor(container)).toEqual({ quote: 'bravo\ncharlie', sourceLabel: 'lines 2-3 · app.ts' });
   });
 
-  it('falls back to a quote for rendered markdown (no reliable source mapping)', () => {
+  it('falls back to just the file name for rendered markdown (no reliable source mapping)', () => {
     const { container, pre } = mountViewer({ path: 'README.md', source: 'rendered', body: FILE });
     selectWithin(pre, 6, 11);
-    expect(composedTextFor(container)).toBe(
-      'The user is referencing "bravo" from "README.md". Respond to the following prompt accordingly:\n\n',
-    );
+    expect(referenceFor(container)).toEqual({ quote: 'bravo', sourceLabel: 'README.md' });
+  });
+
+  it('"Add comment" writes straight into the shared doc-comments store, anchored to the same selection', async () => {
+    const { container, pre } = mountViewer({ path: 'docs/notes.txt', source: 'raw', body: FILE });
+    selectWithin(pre, 6, 11);
+    const entries = buildContextMenu(container);
+    const comment = entries?.find((e) => e.type === 'item' && e.id === 'comment');
+    expect(comment, 'Add comment must exist for a selection').toBeTruthy();
+    const { commentsForPath } = await import('../../state/doc-comments-store');
+    const before = commentsForPath('docs/notes.txt').length;
+    if (comment?.type === 'item') comment.run();
+    const after = commentsForPath('docs/notes.txt');
+    expect(after.length).toBe(before + 1);
+    expect(after[after.length - 1]).toMatchObject({ quote: 'bravo', sourceLabel: 'line 2 · notes.txt', resolved: false });
   });
 
   it('offers no "Ask about this" without a selection — the whole file is never implied', () => {
@@ -231,26 +242,24 @@ describe('previewed-conversation right-click (spec §A3)', () => {
     expect(entries?.some((e) => e.type === 'item' && e.id === 'ask')).toBe(true);
   });
 
-  it('the preview scaffold names the conversation: contains both its id and its title', () => {
+  it('the preview reference is sourced from the conversation title, not a generic "message" label', () => {
     const bubble = mountBubble({ scroll: 'preview', role: 'assistant', text: 'hello world', conversationId: 'conv-1', conversationTitle: 'Debugging sync' });
-    const composed = composedTextFor(bubble);
-    expect(composed).toContain('conv-1');
-    expect(composed).toContain('Debugging sync');
-    expect(composed).toBe(`${COPY.askPreviewContext('Debugging sync', 'conv-1')} In an earlier message, you said:\n"hello world"\n\nThe user has a follow-up: `);
+    expect(referenceFor(bubble)).toEqual({ quote: 'hello world', sourceLabel: 'Debugging sync' });
   });
 
-  it('PIN: the live chat scaffold is byte-for-byte unchanged — no conversation reference appears', () => {
+  it('the live chat reference names the speaker, not a conversation (no preview marker)', () => {
     const bubble = mountBubble({ scroll: 'chat-scroll', role: 'assistant', text: 'hello world' });
-    const composed = composedTextFor(bubble);
-    expect(composed).toBe('In an earlier message, you said:\n"hello world"\n\nThe user has a follow-up: ');
-    expect(composed).not.toContain('conv-1');
-    expect(composed).not.toContain('past conversation');
+    expect(referenceFor(bubble)).toEqual({ quote: 'hello world', sourceLabel: "Claude's message" });
   });
 
-  it('the user bubble variant is also named in a preview (role-specific lead preserved)', () => {
+  it('the user bubble variant is named "your message", still role-specific', () => {
+    const bubble = mountBubble({ scroll: 'chat-scroll', role: 'user', text: 'my question' });
+    expect(referenceFor(bubble)).toEqual({ quote: 'my question', sourceLabel: 'your message' });
+  });
+
+  it('a previewed user bubble still prefers the conversation title over the role label', () => {
     const bubble = mountBubble({ scroll: 'preview', role: 'user', text: 'my question', conversationId: 'conv-2', conversationTitle: 'Untitled thread' });
-    const composed = composedTextFor(bubble);
-    expect(composed).toBe(`${COPY.askPreviewContext('Untitled thread', 'conv-2')} Earlier I wrote:\n"my question"\n\nThe user has a follow-up: `);
+    expect(referenceFor(bubble)).toEqual({ quote: 'my question', sourceLabel: 'Untitled thread' });
   });
 });
 
@@ -297,8 +306,7 @@ describe('app chrome is not copy material', () => {
 
   it('"Ask about this" on the prose quotes the message without the tool title, keeping the file name', () => {
     const { prose } = mountMessageWithChrome();
-    const composed = composedTextFor(prose);
-    expect(composed).toBe('In an earlier message, you said:\n"Edited app.ts"\n\nThe user has a follow-up: ');
+    expect(referenceFor(prose)).toEqual({ quote: 'Edited app.ts', sourceLabel: "Claude's message" });
   });
 
   it('whole-message Copy leaves chrome text out', async () => {

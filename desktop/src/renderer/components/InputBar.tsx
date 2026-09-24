@@ -4,6 +4,7 @@ import QuickChips, { QuickChip } from './QuickChips';
 import TerminalToolbar from './TerminalToolbar';
 import { Button } from './ui';
 import { AttachmentChip } from './AttachmentChip';
+import { QuoteReferenceChip } from './comments/QuoteReferenceChip';
 import { AttachIcon, CompassIcon } from './Icons';
 import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { StatusStrip } from './ui/StatusStrip';
@@ -20,6 +21,7 @@ import { runNativeSlashAction, routeSlashResult } from '../state/native-slash-ac
 import type { UsageSnapshot } from '../state/chat-types';
 import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
+import { referenceToken } from '../../shared/chat-references';
 import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
@@ -109,6 +111,19 @@ interface Attachment {
   isImage: boolean;
 }
 
+// Doc comments (mockup, Style A "Margin"): a reference attached to the
+// composer — "Ask about this" produces one, the review bar's "Send to
+// assistant" produces several at once. Same family as Attachment, but there
+// is no file on disk to preview — QuoteReferenceChip shows the quote itself.
+interface QuoteRef {
+  id: string;
+  quote: string;
+  sourceLabel: string;
+  /** A held comment's own note — shown on the chip when a batch send
+   *  carries it (an "Ask about this" reference never has one). */
+  note?: string;
+}
+
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
 
 function isImagePath(p: string): boolean {
@@ -164,6 +179,7 @@ function sendFailureCopy(result: NativeSendResult | undefined): string {
 const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [references, setReferences] = useState<QuoteRef[]>([]);
 
   // Voice prompting (deck 2026-09-05). The draft stays the one source of truth:
   // `text` holds what was typed plus the words the engine has SETTLED on;
@@ -561,35 +577,58 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     return () => window.removeEventListener('youcoded:composer-paste-image', listener);
   }, [addFiles]);
 
-  // External "insert into composer" entry point — the chat right-click menu's
-  // "Ask about this" action dispatches this window CustomEvent with a pre-built
-  // quote + follow-up scaffold. Mirrors buddy:attach-file so no prop threading
-  // is needed. We PREPEND the scaffold and drop the caret right after it, so any
-  // draft the user was already typing survives as the follow-up text.
+  // External "attach a reference" entry point — the right-click menu's "Ask
+  // about this" (on a file selection or a chat message) dispatches this
+  // window CustomEvent with a quote + compact source label. Mirrors
+  // buddy:attach-file so no prop threading is needed. Redesigned from the
+  // old compose-insert (which prepended scaffold TEXT into the box, visible
+  // and editable): the quote now shows as a QuoteReferenceChip above the
+  // composer — the box itself stays empty and focused for the user's own
+  // words, never holding text they didn't type.
   useEffect(() => {
     const listener = (e: Event) => {
-      const insert = (e as CustomEvent<{ text?: string }>).detail?.text;
-      if (!insert) return;
-      setText((prev) => insert + prev);
-      requestAnimationFrame(() => {
-        const el = inputRef.current;
-        if (!el) return;
-        el.focus();
-        el.setSelectionRange(insert.length, insert.length);
-      });
+      const detail = (e as CustomEvent<{ quote?: string; sourceLabel?: string }>).detail;
+      if (!detail?.quote) return;
+      setReferences((prev) => [...prev, { id: `ref-${Date.now()}-${prev.length}`, quote: detail.quote!, sourceLabel: detail.sourceLabel ?? '' }]);
+      requestAnimationFrame(() => inputRef.current?.focus());
     };
-    window.addEventListener('youcoded:compose-insert', listener);
-    return () => window.removeEventListener('youcoded:compose-insert', listener);
+    window.addEventListener('youcoded:compose-add-reference', listener);
+    return () => window.removeEventListener('youcoded:compose-add-reference', listener);
+  }, []);
+
+  // The doc-comments review bar's "Send to assistant" — ONE system with
+  // "Ask about this" above (same QuoteRef shape, same chip), but this one
+  // calls the composer's normal send path itself rather than waiting for a
+  // click: the comments already carry their own note text, so there is
+  // nothing left for the user to type.
+  useEffect(() => {
+    const listener = (e: Event) => {
+      const detail = (e as CustomEvent<{ lead?: string; refs?: Array<{ quote: string; sourceLabel: string; note: string }> }>).detail;
+      if (!detail?.refs?.length) return;
+      const refs: QuoteRef[] = detail.refs.map((r, i) => ({ id: `batch-${Date.now()}-${i}`, quote: r.quote, sourceLabel: r.sourceLabel, note: r.note }));
+      setReferences(refs);
+      setText(detail.lead ?? '');
+      // A React state update isn't visible to the DOM textarea until the next
+      // paint — send() deliberately reads inputRef.current.value (see its own
+      // WHY) to dodge stale-closure races, so it must run AFTER that paint.
+      requestAnimationFrame(() => sendRef.current(false));
+    };
+    window.addEventListener('youcoded:compose-send-comments', listener);
+    return () => window.removeEventListener('youcoded:compose-send-comments', listener);
   }, []);
 
   const removeAttachment = useCallback((path: string) => {
     setAttachments((prev) => prev.filter((a) => a.path !== path));
   }, []);
 
+  const removeReference = useCallback((id: string) => {
+    setReferences((prev) => prev.filter((r) => r.id !== id));
+  }, []);
+
   // Returns true when the message was consumed (input can clear), false when
   // the send was refused and the draft should stay in the input bar.
   const sendMessage = useCallback(
-    (message: string, files: Attachment[] = [], force = false): boolean => {
+    (message: string, files: Attachment[] = [], force = false, refs: QuoteRef[] = []): boolean => {
       // Prompt gate: while a permission request / AskUserQuestion / plan
       // approval / trust prompt is pending, Claude Code's native Ink select
       // menu is LIVE in the PTY. Anything we write would be interpreted as
@@ -673,12 +712,24 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // produces, but the compiler can't see that through the route value.
       const effectiveMessage = (!dispatchResult.handled && dispatchResult.rewritten) || message;
 
+      // Doc comments/Ask-about-this references (spec: "must NOT put quoted
+      // text into the typing box") ride in the SAME sanitized string as the
+      // typed text, as compact bracket tokens — a real Claude Code session
+      // gets the quote's context, and UserMessage.tsx strips this exact
+      // prefix back out to redraw as chips, the same way it already does
+      // for attachment paths below.
+      const refTokens = refs.map((r) => referenceToken(r.sourceLabel)).join(' ');
+      const messageWithRefs = refTokens ? `${refTokens} ${effectiveMessage}`.trim() : effectiveMessage;
+      // For the bubble: just quote + source, never the whole QuoteRef (an id,
+      // and a batch comment's note, are composer-only bookkeeping).
+      const referencesForDispatch = refs.length ? refs.map((r) => ({ quote: r.quote, sourceLabel: r.sourceLabel })) : undefined;
+
       // One sanitized source string for BOTH the optimistic bubble and the PTY
       // send. The transcript confirms the bubble by EXACT content match, so if
       // the bubble kept newlines the send stripped, a multiline message could
       // never be confirmed — `pending` stayed set forever and
       // useSubmitConfirmation fired a stray recovery \r. See outgoing-message.ts.
-      const outgoing = buildOutgoingMessage(effectiveMessage, files.map((f) => f.path));
+      const outgoing = buildOutgoingMessage(messageWithRefs, files.map((f) => f.path));
       if (!outgoing) return true; // nothing to send — treat as consumed
       if (disabled) return false;
 
@@ -748,6 +799,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               content: outgoing.content,
               timestamp: Date.now(),
               attachments: files.map((f) => f.path),
+              references: referencesForDispatch,
             });
           }
         })();
@@ -762,6 +814,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         sessionId,
         content: outgoing.content,
         timestamp: Date.now(),
+        references: referencesForDispatch,
         // Exact attachment paths so UserMessage can render each as a clickable
         // pill — file-picker paths routinely contain spaces, which the joined
         // content string can't be split back out of.
@@ -841,7 +894,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     // anyway" override, which re-enters here past the gate (see sendMessage).
     // WHY guard here, not only on the button: Enter, form submit, global keys,
     // and the pending-prompt retry all reach this path. No override grants freshness.
-    if (sendBlocked || !sendMessage(currentText, attachments, force)) return;
+    if (sendBlocked || !sendMessage(currentText, attachments, force, references)) return;
     // The message has gone, so the dictation behind it goes too. Without this,
     // sending mid-sentence sent the unsettled GREY words along with it AND left
     // them in the box, and the next thing the engine said re-typed the whole
@@ -854,11 +907,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     if (voicePhaseRef.current !== 'idle') void voiceCancelRef.current();
     setText('');
     setAttachments([]);
+    setReferences([]);
     draftsRef.current.delete(sessionId); // Clear stored draft after sending
     onCloseDrawer?.();
     // Reset height after clearing
     if (inputRef.current) inputRef.current.style.height = 'auto';
-  }, [text, attachments, sendMessage, sendBlocked, onCloseDrawer, sessionId]);
+  }, [text, attachments, references, sendMessage, sendBlocked, onCloseDrawer, sessionId]);
 
   // Keep sendRef pointing at the latest send so the global keydown handler
   // (which can't depend on send without thrashing the listener) stays current
@@ -957,6 +1011,25 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           the same "pill row above input bar" visual inside one container. */}
       {minimal && <TerminalToolbar sessionId={sessionId} />}
       {!minimal && !compact && <QuickChips onChipTap={handleChip} />}
+
+      {references.length > 0 && (
+        <div className="flex gap-2 px-3 py-2 overflow-x-auto">
+          {/* Doc comments (mockup, Style A): "Ask about this" attaches one of
+              these; the review bar's "Send to assistant" attaches several at
+              once and sends immediately (see the compose-send-comments
+              listener above) — this row is what a viewer sees mid-send, and
+              is the same card the sent bubble shows (UserMessage.tsx). */}
+          {references.map((ref) => (
+            <QuoteReferenceChip
+              key={ref.id}
+              quote={ref.quote}
+              sourceLabel={ref.sourceLabel}
+              note={ref.note}
+              onRemove={() => removeReference(ref.id)}
+            />
+          ))}
+        </div>
+      )}
 
       {attachments.length > 0 && (
         <div className="flex gap-2 px-3 py-2 overflow-x-auto">
@@ -1245,7 +1318,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             type="submit"
             size="icon"
             aria-label="Send message"
-            disabled={disabled || sendBlocked || (!minimal && !text.trim() && attachments.length === 0)}
+            disabled={disabled || sendBlocked || (!minimal && !text.trim() && attachments.length === 0 && references.length === 0)}
             className="shrink-0 disabled:opacity-30"
           >
             <svg className="w-4 h-4 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

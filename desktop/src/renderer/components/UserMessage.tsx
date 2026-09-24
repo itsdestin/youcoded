@@ -1,10 +1,12 @@
 import React from 'react';
 import { ChatMessage } from '../../shared/types';
+import { referenceToken } from '../../shared/chat-references';
 import LinkableText from './LinkableText';
 import { splitFlowingKeywords } from './FlowingKeywords';
 import { formatBubbleTime } from '../utils/format-time';
 import { detectFilepaths } from '../hooks/useInlineFilepathDetector';
 import { FilepathToken } from './FilepathToken';
+import { QuoteReferenceChip } from './comments/QuoteReferenceChip';
 
 interface Props {
   message: ChatMessage;
@@ -44,6 +46,22 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
     if (i < attachments.length - 1 || text.length > 0) attachmentPills.push(' ');
   }
 
+  // Doc comments / "Ask about this" (mockup, Style A "Margin"): same
+  // prefix-strip idiom as attachments above, one level further in — InputBar
+  // joins [...attachmentPaths, ...refTokens, typedText], so references are
+  // stripped SECOND. Each chip shows the quote from message.references, not
+  // the bracket token itself (the token only exists so a real Claude Code
+  // session reads the same context the chip shows).
+  const references = message.references ?? [];
+  const referenceChips: React.ReactNode[] = [];
+  for (let i = 0; i < references.length; i++) {
+    const ref = references[i];
+    const token = referenceToken(ref.sourceLabel);
+    if (!text.startsWith(token)) break;
+    text = text.slice(token.length).replace(/^ /, '');
+    referenceChips.push(<QuoteReferenceChip key={`r${i}`} quote={ref.quote} sourceLabel={ref.sourceLabel} />);
+  }
+
   // Detect filepaths in the (remaining) typed text and render each as a
   // clickable pill that opens in the artifact viewer, same as assistant
   // messages. Non-path spans keep the flowing-keyword + URL-link treatment.
@@ -68,7 +86,14 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
   body = [...attachmentPills, ...body];
 
   return (
-    <div className="flex justify-end px-4 py-2">
+    <div className="flex flex-col items-end gap-1.5 px-4 py-2">
+      {/* Reference chips sit ABOVE the bubble, not inline in its text — the
+          same QuoteReferenceChip the composer showed while this was being
+          written (spec surface 4: sent references render as those same
+          cards on the user's bubble). */}
+      {referenceChips.length > 0 && (
+        <div className="flex flex-wrap justify-end gap-2 max-w-[80%]">{referenceChips}</div>
+      )}
       <div className="user-bubble max-w-[80%] break-words rounded-2xl rounded-br-sm bg-accent px-5 py-3 text-sm text-on-accent whitespace-pre-wrap">
         {body}
         {showTimestamps && (

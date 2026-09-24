@@ -12,6 +12,7 @@ export type MenuIconName =
   | 'paste'
   | 'select-all'
   | 'ask'
+  | 'comment'
   | 'code'
   | 'open'
   | 'link'
@@ -52,6 +53,10 @@ const PATHS: Record<MenuIconName, React.ReactNode> = {
       <path d="M18.5 14.5l.6 1.8 1.8.6-1.8.6-.6 1.8-.6-1.8-1.8-.6 1.8-.6z" />
     </>
   ),
+  // WHY its own glyph, distinct from the "ask" sparkle: a comment stays in the
+  // margin (Docs-style markup), an ask goes straight to the assistant — the
+  // two rows next to each other on a selection need visibly different icons.
+  comment: <path d="M4 5h16v11H9l-5 4V5Z" />,
   code: <path d="m8 8-4 4 4 4M16 8l4 4-4 4M13 6l-2 12" />,
   open: <path d="M14 4h6v6M20 4l-9 9M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5" />,
   link: (

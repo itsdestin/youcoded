@@ -69,12 +69,12 @@ describe('CM6 artifact context menu (real component)', () => {
     const ask = entries.find((e: any) => e.id === 'ask') as any;
     expect(ask, 'Ask about this must exist for a CM6 selection').toBeTruthy();
     const spy = vi.fn();
-    window.addEventListener('youcoded:compose-insert', spy);
+    window.addEventListener('youcoded:compose-add-reference', spy);
     ask.run();
-    window.removeEventListener('youcoded:compose-insert', spy);
-    const composed = (spy.mock.calls[0]?.[0] as CustomEvent)?.detail?.text ?? '';
-    expect(composed).toContain('line 800');
-    expect(composed).toContain('"src/big.ts"');
+    window.removeEventListener('youcoded:compose-add-reference', spy);
+    const detail = (spy.mock.calls[0]?.[0] as CustomEvent)?.detail ?? {};
+    expect(detail.sourceLabel).toContain('line 800');
+    expect(detail.sourceLabel).toContain('big.ts');
   });
 
   it('cites a range across lines', () => {
@@ -83,11 +83,11 @@ describe('CM6 artifact context menu (real component)', () => {
     const entries = buildContextMenu(container)!;
     const ask = entries.find((e: any) => e.id === 'ask') as any;
     const spy = vi.fn();
-    window.addEventListener('youcoded:compose-insert', spy);
+    window.addEventListener('youcoded:compose-add-reference', spy);
     ask.run();
-    window.removeEventListener('youcoded:compose-insert', spy);
-    const composed = (spy.mock.calls[0]?.[0] as CustomEvent)?.detail?.text ?? '';
-    expect(composed).toContain('lines 42-45');
+    window.removeEventListener('youcoded:compose-add-reference', spy);
+    const detail = (spy.mock.calls[0]?.[0] as CustomEvent)?.detail ?? {};
+    expect(detail.sourceLabel).toContain('lines 42-45');
   });
 
   it('read-only CM6 falls through to the artifact menu, not the editable menu', () => {

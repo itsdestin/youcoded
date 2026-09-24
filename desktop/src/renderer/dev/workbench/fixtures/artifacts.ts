@@ -96,6 +96,21 @@ const BY_PROJECT: Record<string, ArtifactRecord[]> = {
       tags: [],
     },
     {
+      // Doc comments mockup (Style A "Margin"): a plan with headings, lists
+      // and a table — realistic material for several comments at once. Its
+      // exact prose is quoted verbatim by the seeded comments in
+      // state/doc-comments-store.ts, so the highlights land on first paint.
+      id: 'a-onboarding-plan',
+      path: 'docs/active/plans/2026-09-24-onboarding-redesign.md',
+      kind: 'internal',
+      absolutePath: null,
+      lastModified: T,
+      status: 'active',
+      versions: [version('wb-1', 'create', T)],
+      comments: [],
+      tags: [],
+    },
+    {
       // Over-cap TEXT, under FULL_READ_MAX_BYTES -> partial banner + "Load the
       // whole file". mock-shim's OVERSIZE_FIXTURES supplies the pretend size.
       id: 'a-big-log',
@@ -388,6 +403,60 @@ export const CONTENT: Record<string, string> = {
   // sizeBytes, so the partial-view states are reachable without an 8 MB file.
   'a-big-log': `2026-08-25T14:00:00Z  INFO  request 1000 handled in 0ms\n2026-08-25T14:01:01Z  INFO  request 1001 handled in 3ms\n2026-08-25T14:02:02Z  INFO  request 1002 handled in 6ms\n2026-08-25T14:03:03Z  INFO  request 1003 handled in 9ms\n2026-08-25T14:04:04Z  INFO  request 1004 handled in 12ms\n2026-08-25T14:05:05Z  INFO  request 1005 handled in 15ms\n2026-08-25T14:06:06Z  INFO  request 1006 handled in 18ms\n2026-08-25T14:07:07Z  INFO  request 1007 handled in 21ms\n2026-08-25T14:08:08Z  INFO  request 1008 handled in 24ms\n2026-08-25T14:09:09Z  INFO  request 1009 handled in 27ms\n2026-08-25T14:10:00Z  INFO  request 1010 handled in 30ms\n2026-08-25T14:11:01Z  INFO  request 1011 handled in 33ms\n2026-08-25T14:12:02Z  INFO  request 1012 handled in 36ms\n2026-08-25T14:13:03Z  INFO  request 1013 handled in 39ms\n2026-08-25T14:14:04Z  INFO  request 1014 handled in 42ms\n2026-08-25T14:15:05Z  INFO  request 1015 handled in 45ms\n2026-08-25T14:16:06Z  INFO  request 1016 handled in 48ms\n2026-08-25T14:17:07Z  INFO  request 1017 handled in 51ms\n2026-08-25T14:18:08Z  INFO  request 1018 handled in 54ms\n2026-08-25T14:19:09Z  INFO  request 1019 handled in 57ms\n2026-08-25T14:20:00Z  INFO  request 1020 handled in 60ms\n2026-08-25T14:21:01Z  INFO  request 1021 handled in 63ms\n2026-08-25T14:22:02Z  INFO  request 1022 handled in 66ms\n2026-08-25T14:23:03Z  INFO  request 1023 handled in 69ms\n2026-08-25T14:24:04Z  INFO  request 1024 handled in 72ms\n2026-08-25T14:25:05Z  INFO  request 1025 handled in 75ms\n2026-08-25T14:26:06Z  INFO  request 1026 handled in 78ms\n2026-08-25T14:27:07Z  INFO  request 1027 handled in 81ms\n2026-08-25T14:28:08Z  INFO  request 1028 handled in 84ms\n2026-08-25T14:29:09Z  INFO  request 1029 handled in 87ms\n2026-08-25T14:30:00Z  INFO  request 1030 handled in 90ms\n2026-08-25T14:31:01Z  INFO  request 1031 handled in 93ms\n2026-08-25T14:32:02Z  INFO  request 1032 handled in 96ms\n2026-08-25T14:33:03Z  INFO  request 1033 handled in 99ms\n2026-08-25T14:34:04Z  INFO  request 1034 handled in 102ms\n2026-08-25T14:35:05Z  INFO  request 1035 handled in 105ms\n2026-08-25T14:36:06Z  INFO  request 1036 handled in 108ms\n2026-08-25T14:37:07Z  INFO  request 1037 handled in 111ms\n2026-08-25T14:38:08Z  INFO  request 1038 handled in 114ms\n2026-08-25T14:39:09Z  INFO  request 1039 handled in 117ms`,
   'a-huge-dump': `2026-08-25T14:00:00Z  INFO  request 1000 handled in 0ms\n2026-08-25T14:01:01Z  INFO  request 1001 handled in 3ms\n2026-08-25T14:02:02Z  INFO  request 1002 handled in 6ms\n2026-08-25T14:03:03Z  INFO  request 1003 handled in 9ms\n2026-08-25T14:04:04Z  INFO  request 1004 handled in 12ms\n2026-08-25T14:05:05Z  INFO  request 1005 handled in 15ms\n2026-08-25T14:06:06Z  INFO  request 1006 handled in 18ms\n2026-08-25T14:07:07Z  INFO  request 1007 handled in 21ms\n2026-08-25T14:08:08Z  INFO  request 1008 handled in 24ms\n2026-08-25T14:09:09Z  INFO  request 1009 handled in 27ms\n2026-08-25T14:10:00Z  INFO  request 1010 handled in 30ms\n2026-08-25T14:11:01Z  INFO  request 1011 handled in 33ms\n2026-08-25T14:12:02Z  INFO  request 1012 handled in 36ms\n2026-08-25T14:13:03Z  INFO  request 1013 handled in 39ms\n2026-08-25T14:14:04Z  INFO  request 1014 handled in 42ms\n2026-08-25T14:15:05Z  INFO  request 1015 handled in 45ms\n2026-08-25T14:16:06Z  INFO  request 1016 handled in 48ms\n2026-08-25T14:17:07Z  INFO  request 1017 handled in 51ms\n2026-08-25T14:18:08Z  INFO  request 1018 handled in 54ms\n2026-08-25T14:19:09Z  INFO  request 1019 handled in 57ms\n2026-08-25T14:20:00Z  INFO  request 1020 handled in 60ms\n2026-08-25T14:21:01Z  INFO  request 1021 handled in 63ms\n2026-08-25T14:22:02Z  INFO  request 1022 handled in 66ms\n2026-08-25T14:23:03Z  INFO  request 1023 handled in 69ms\n2026-08-25T14:24:04Z  INFO  request 1024 handled in 72ms\n2026-08-25T14:25:05Z  INFO  request 1025 handled in 75ms\n2026-08-25T14:26:06Z  INFO  request 1026 handled in 78ms\n2026-08-25T14:27:07Z  INFO  request 1027 handled in 81ms\n2026-08-25T14:28:08Z  INFO  request 1028 handled in 84ms\n2026-08-25T14:29:09Z  INFO  request 1029 handled in 87ms\n2026-08-25T14:30:00Z  INFO  request 1030 handled in 90ms\n2026-08-25T14:31:01Z  INFO  request 1031 handled in 93ms\n2026-08-25T14:32:02Z  INFO  request 1032 handled in 96ms\n2026-08-25T14:33:03Z  INFO  request 1033 handled in 99ms\n2026-08-25T14:34:04Z  INFO  request 1034 handled in 102ms\n2026-08-25T14:35:05Z  INFO  request 1035 handled in 105ms\n2026-08-25T14:36:06Z  INFO  request 1036 handled in 108ms\n2026-08-25T14:37:07Z  INFO  request 1037 handled in 111ms\n2026-08-25T14:38:08Z  INFO  request 1038 handled in 114ms\n2026-08-25T14:39:09Z  INFO  request 1039 handled in 117ms`,
+  // Doc comments mockup fixture — every seeded comment's quote in
+  // state/doc-comments-store.ts is an exact substring of this text.
+  'a-onboarding-plan': `# Onboarding Redesign Plan
+
+**Goal:** get a brand-new user from first launch to their first real answer
+in under two minutes, without a wall of text explaining the app before they
+can use it.
+
+## Background
+
+Today's first-run flow shows five screens before the composer is reachable:
+a welcome slide, a permissions primer, a model picker, a theme picker, and a
+tips carousel. Session recordings show most people thumb through all five
+without reading them, then ask their first question anyway.
+
+## Goals
+
+- Reach a working composer in one screen, not five
+- Explain permissions at the moment they matter, not up front
+- Let model and theme choices happen later, from Settings, with sensible defaults
+- Keep the tone plain — no "unlock your workflow" language
+
+## Non-goals
+
+- Redesigning Settings itself
+- Changing the accounts/sign-in flow
+- Any change to the Android install flow (tracked separately)
+
+## Proposed flow
+
+1. App opens straight into a chat with the composer focused
+2. A single welcome bubble from the assistant explains what to try
+3. The first tool permission prompt doubles as the only "how this works" moment
+4. A dismissible strip offers the theme picker once, after the first reply
+
+## Screens removed vs kept
+
+| Screen | Today | Proposed |
+|---|---|---|
+| Welcome slide | Full screen, 3 taps to dismiss | Removed — folded into the first bubble |
+| Permissions primer | Full screen | Removed — explained inline at first prompt |
+| Model picker | Full screen | Moved to Settings, sensible default picked |
+| Theme picker | Full screen | One-time dismissible strip after first reply |
+| Tips carousel | Full screen, 4 slides | Removed entirely |
+
+## Open questions
+
+- Does removing the model picker hurt people who came specifically for a local model?
+- Should the theme strip be able to come back later from Settings if dismissed?
+
+## Rollout
+
+Ship behind a flag for one release, watch first-session completion rate, then default it on.
+`,
   'a-sent-report': `# Scroll performance report
 
 **Verdict:** the re-arm check ran on every scroll event — ~1,400 calls/s while

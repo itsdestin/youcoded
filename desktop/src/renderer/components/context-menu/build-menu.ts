@@ -2,7 +2,10 @@ import { isAndroid, isRemoteMode } from '../../platform';
 import { copyText, readText } from './clipboard';
 import { editorViewFor } from '../artifact-views/cm/editor-registry';
 import type { MenuIconName } from './menu-icons';
-import { COPY } from '../../../shared/chatsearch-refs';
+// "Add comment" writes straight into the shared doc-comments store — no
+// event needed (unlike "Ask about this", which must reach InputBar, a
+// component this module has no other handle on).
+import { addComment as addDocComment } from '../../state/doc-comments-store';
 
 // Builds the chat right-click menu for a given DOM target. Pure inspection of
 // the DOM + current selection → a list of entries; the host owns positioning,
@@ -95,17 +98,32 @@ function selectElementContents(el: Element): void {
   sel.addRange(range);
 }
 
-// "Ask about this" drops a quoted reference + follow-up scaffold into the
-// composer (InputBar listens for this CustomEvent — see InputBar.tsx). Simple v1
-// per Destin (2026-07-17): plain prompt text, no new plumbing. The caret lands
-// right after the scaffold so any existing draft becomes the follow-up.
-function askAboutThis(text: string): void {
-  window.dispatchEvent(new CustomEvent('youcoded:compose-insert', { detail: { text } }));
+// "Ask about this" attaches a quoted reference above the composer instead of
+// dropping scaffold text into the textarea (redesign, doc-comments mockup:
+// Destin didn't want a quote living in the box he's about to type over).
+// InputBar listens for this CustomEvent, adds a reference chip, and focuses
+// the (still empty) textarea for the user's own follow-up — same "simple v1,
+// no new plumbing" spirit as the scaffold this replaces (2026-07-17).
+function addReference(quote: string, sourceLabel: string): void {
+  window.dispatchEvent(new CustomEvent('youcoded:compose-add-reference', { detail: { quote, sourceLabel } }));
 }
 
-function scaffold(lead: string, body: string, fenced: boolean): string {
-  const quoted = fenced ? '```\n' + body + '\n```' : `"${body}"`;
-  return `${lead}\n${quoted}\n\nThe user has a follow-up: `;
+/** "line N" / "lines N-M" from describeArtifactSelection's own strings, or
+ *  null when it fell back to a quote (no reliable source mapping). */
+function parseLineRef(ref: string): { startLine: number; endLine: number } | null {
+  const single = /^line (\d+)$/.exec(ref);
+  if (single) return { startLine: +single[1], endLine: +single[1] };
+  const range = /^lines (\d+)-(\d+)$/.exec(ref);
+  if (range) return { startLine: +range[1], endLine: +range[2] };
+  return null;
+}
+
+/** Compact chip label for a reference/comment anchor: "line 12-18 · file.ts"
+ *  when there's a real source mapping, else just the file name (a quote
+ *  fallback already IS the anchor — repeating it as a label is noise). */
+function sourceLabelFor(ref: string, path: string): string {
+  const line = parseLineRef(ref);
+  return line ? `${ref} · ${baseName(path)}` : baseName(path);
 }
 
 // Copy + Select all — shared tail for every read-only chat menu.
@@ -238,15 +256,12 @@ function linkMenu(a: HTMLAnchorElement, target: HTMLElement): MenuEntry[] {
 
 function codeMenu(pre: HTMLElement, target: HTMLElement): MenuEntry[] {
   const code = pre.innerText.replace(/\n+$/, '');
-  // Preview-only: prefix the lead with which past conversation this code came
-  // from (see closestPreviewConversation) — a no-op in the live chat, where
-  // this stays exactly 'Earlier, you shared this code:'.
+  // Preview-only: name which past conversation this code came from
+  // (see closestPreviewConversation) — a no-op in the live chat.
   const previewRef = closestPreviewConversation(target);
-  const lead = previewRef
-    ? `${COPY.askPreviewContext(previewRef.title, previewRef.id)} Earlier, you shared this code:`
-    : 'Earlier, you shared this code:';
+  const sourceLabel = previewRef ? previewRef.title : 'a code block you shared';
   return [
-    { type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, disabled: !code, run: () => askAboutThis(scaffold(lead, code, true)) },
+    { type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, disabled: !code, run: () => addReference(code, sourceLabel) },
     { type: 'item', id: 'copy-code', label: 'Copy code block', icon: 'code', disabled: !code, run: () => void copyText(code) },
     { type: 'sep' },
     ...textBasics(closestBubble(target)),
@@ -303,13 +318,27 @@ function artifactMenu(container: HTMLElement): MenuEntry[] {
   const entries: MenuEntry[] = [];
   if (sel && path) {
     const ref = describeArtifactSelection(sel, container);
+    const sourceLabel = sourceLabelFor(ref, path);
+    const lineOpts = parseLineRef(ref) ?? undefined;
     entries.push({
       type: 'item',
       id: 'ask',
       label: 'Ask about this',
       icon: 'ask',
       primary: true,
-      run: () => askAboutThis(`The user is referencing ${ref} from "${path}". Respond to the following prompt accordingly:\n\n`),
+      run: () => addReference(sel, sourceLabel),
+    });
+    // "Add comment" is the doc-comments mockup's second entry point (the
+    // first is selection + this same right-click menu, per spec surface 1):
+    // it opens an empty margin card anchored to the selection instead of
+    // sending anything — many of these get held and batched via the review
+    // bar's "Send to assistant", unlike "Ask about this" above.
+    entries.push({
+      type: 'item',
+      id: 'comment',
+      label: 'Add comment',
+      icon: 'comment',
+      run: () => { addDocComment(path, sel, sourceLabel, lineOpts); },
     });
   }
   entries.push(...textBasics(container));
@@ -321,22 +350,17 @@ function textMenu(target: HTMLElement): MenuEntry[] {
   // readableText: "Ask about this" quotes the message as a user could have
   // selected it, without tool card titles or other chrome.
   const quote = (selectionText().trim() || (bubble ? readableText(bubble).trim() : '')) ?? '';
-  // "you said" reads right for an assistant message; flip it for the user's own
-  // bubble, and stay neutral if we can't tell.
-  const lead = bubble?.classList.contains('assistant-bubble')
-    ? 'In an earlier message, you said:'
-    : bubble?.classList.contains('user-bubble')
-      ? 'Earlier I wrote:'
-      : 'Regarding this:';
+  const isAssistant = bubble?.classList.contains('assistant-bubble');
+  const isUser = bubble?.classList.contains('user-bubble');
+  // Preview-only: name which past conversation this quote came from, so the
+  // chip reads like a real source — a no-op in the live chat.
+  const previewRef = closestPreviewConversation(target);
+  const sourceLabel = previewRef
+    ? previewRef.title
+    : isAssistant ? "Claude's message" : isUser ? 'your message' : 'this message';
   const entries: MenuEntry[] = [];
   if (quote) {
-    // Preview-only: name which past conversation this quote came from, so
-    // the assistant answering it can `show`/`turns` its way into the rest —
-    // a no-op in the live chat, where `finalLead` === `lead` and the
-    // scaffold this produces is unchanged (pinned by build-menu.test.tsx).
-    const previewRef = closestPreviewConversation(target);
-    const finalLead = previewRef ? `${COPY.askPreviewContext(previewRef.title, previewRef.id)} ${lead}` : lead;
-    entries.push({ type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, run: () => askAboutThis(scaffold(finalLead, quote, false)) });
+    entries.push({ type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, run: () => addReference(quote, sourceLabel) });
   }
   entries.push(...textBasics(bubble));
   return entries;

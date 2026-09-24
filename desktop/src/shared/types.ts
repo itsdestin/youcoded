@@ -1080,6 +1080,13 @@ export interface ToolGroupState {
   toolIds: string[];
 }
 
+/** A quoted doc-comment/"Ask about this" reference riding on a sent message —
+ *  see ChatMessage.references. */
+export interface ChatMessageReference {
+  quote: string;
+  sourceLabel: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -1091,6 +1098,11 @@ export interface ChatMessage {
   // contains spaces (regex detection can't recover those from the joined
   // string). Live-bubble only: transcript-confirmed entries don't carry it.
   attachments?: string[];
+  // Doc comments / "Ask about this" (mockup, Style A "Margin"): the quotes this
+  // message referenced, so UserMessage can render each as a QuoteReferenceChip
+  // instead of the bracket token InputBar embedded in `content` for a real
+  // session to read. Live-bubble only, same as attachments above.
+  references?: ChatMessageReference[];
 }
 
 // --- Command drawer / marketplace types ---

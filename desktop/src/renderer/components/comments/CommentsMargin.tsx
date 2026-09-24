@@ -1,0 +1,253 @@
+// CommentsMargin — the right-hand rail that holds comment cards, each
+// vertically aligned to its highlighted span (Docs/Word "Margin" style).
+// Renders INSIDE the same scrolling container as the document text (a flex
+// row sibling of the content column — see MarkdownView.tsx), so the margin
+// scrolls together with the document for free, with no scroll-position code
+// of our own. Below the narrow-viewport breakpoint it collapses to small
+// markers that open a popover instead (narrow-viewport.md: "collapse into a
+// menu/popover, never just hide a control").
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { CommentCard } from './CommentCard';
+import { CheckIcon } from '../Icons';
+import { Scrim, OverlayPanel } from '../overlays/Overlay';
+import { CloseButton } from '../ui/CloseButton';
+import { useDocComments, type DocComment } from '../../state/doc-comments-store';
+
+const MARK_ATTR = 'data-comment-mark';
+const GAP_PX = 10;
+// Soft accent tint (G-8 reads this as the "selected span" case — the same
+// bg-accent/10-15 family FolderSwitcher and SettingsPanel already use for an
+// active row) — an OPEN comment's anchor; resolved fades to neutral, matching
+// the card's own faded state. ACTIVE_CLASSES layer on top so hovering either
+// the highlight or its card lights up both (brief: "hover/click links card
+// ⇄ highlight").
+const MARK_OPEN = 'bg-accent/15 hover:bg-accent/25 rounded-sm cursor-pointer transition-colors';
+const MARK_RESOLVED = 'bg-fg-muted/10 text-fg-muted rounded-sm cursor-pointer';
+const ACTIVE_CLASSES = ['ring-2', 'ring-accent/60'];
+// Fixed estimates rather than a measure-then-reflow pass: comment counts here
+// are small (a handful per file, never a "list of the user's things" that
+// renderer-lists.md governs), so an exact per-card height isn't worth a
+// second render pass — an approximate stack that never overlaps is enough.
+const OPEN_CARD_H = 150;
+const REPLY_H = 46;
+const RESOLVED_CARD_H = 46;
+// Narrow mode's markers are 24px dots (see the `narrow` branch below), not
+// cards — collision-avoidance stacking using the WIDE card heights here was
+// spacing two 24px dots 150+px apart, pushing the second marker off the
+// bottom of a short document entirely (found reviewing this mockup's own
+// screenshots).
+const MARKER_H = 28;
+
+function estimateHeight(c: DocComment, narrow: boolean): number {
+  if (narrow) return MARKER_H;
+  return c.resolved ? RESOLVED_CARD_H : OPEN_CARD_H + c.replies.length * REPLY_H;
+}
+
+/**
+ * Wraps each visible comment's quote text in a `<mark>` inside `container`,
+ * best-effort first-occurrence matching — the same caveat build-menu.ts's
+ * describeArtifactSelection documents for source citing: a quote that recurs
+ * earlier in the document, or that crosses an inline-formatting boundary,
+ * may miss or land on the wrong occurrence. The card still renders either way;
+ * only the in-text highlight and the margin's vertical alignment depend on it.
+ */
+function useQuoteMarks(
+  containerRef: React.RefObject<HTMLElement | null>,
+  comments: DocComment[],
+): Map<string, HTMLElement> {
+  const [marks, setMarks] = useState<Map<string, HTMLElement>>(new Map());
+  useLayoutEffect(() => {
+    const root = containerRef.current;
+    if (!root) {
+      setMarks(new Map());
+      return;
+    }
+    // Undo the previous pass's marks first so re-highlighting never nests
+    // <mark>s inside <mark>s as comments/content change.
+    root.querySelectorAll(`[${MARK_ATTR}]`).forEach((el) => {
+      el.replaceWith(document.createTextNode(el.textContent ?? ''));
+    });
+    root.normalize();
+    const found = new Map<string, HTMLElement>();
+    for (const c of comments) {
+      const quote = c.quote.trim();
+      if (!quote) continue;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const text = node.textContent ?? '';
+        const idx = text.indexOf(quote);
+        if (idx === -1) continue;
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + quote.length);
+        const mark = document.createElement('mark');
+        mark.setAttribute(MARK_ATTR, '');
+        mark.setAttribute('data-comment-id', c.id);
+        mark.className = c.resolved ? MARK_RESOLVED : MARK_OPEN;
+        try {
+          range.surroundContents(mark);
+          found.set(c.id, mark);
+        } catch {
+          // Selection crosses an element boundary (bold/link mid-quote) —
+          // skip the highlight; the card still renders in the margin.
+        }
+        break;
+      }
+    }
+    setMarks(found);
+  }, [containerRef, comments]);
+  return marks;
+}
+
+/** Each mark's offset from the top of the margin column — both columns are
+ *  normal-flow children of the SAME scrolling ancestor, so plain
+ *  getBoundingClientRect deltas stay correct at any scroll position without
+ *  a scroll listener of our own. */
+function useAnchorTops(marks: Map<string, HTMLElement>, marginRef: React.RefObject<HTMLElement | null>): Map<string, number> {
+  const [tops, setTops] = useState<Map<string, number>>(new Map());
+  useLayoutEffect(() => {
+    const col = marginRef.current;
+    if (!col) return;
+    const colTop = col.getBoundingClientRect().top;
+    const next = new Map<string, number>();
+    for (const [id, mark] of marks) {
+      next.set(id, Math.max(0, mark.getBoundingClientRect().top - colTop));
+    }
+    setTops(next);
+  }, [marks, marginRef]);
+  return tops;
+}
+
+function stackedTops(order: DocComment[], rawTop: Map<string, number>, narrow: boolean): Map<string, number> {
+  const sorted = order.slice().sort((a, b) => (rawTop.get(a.id) ?? 0) - (rawTop.get(b.id) ?? 0));
+  const out = new Map<string, number>();
+  let cursor = 0;
+  for (const c of sorted) {
+    const top = Math.max(rawTop.get(c.id) ?? cursor, cursor);
+    out.set(c.id, top);
+    cursor = top + estimateHeight(c, narrow) + GAP_PX;
+  }
+  return out;
+}
+
+interface Props {
+  containerRef: React.RefObject<HTMLElement | null>;
+  path: string;
+  narrow: boolean;
+}
+
+export function CommentsMargin({ containerRef, path, narrow }: Props) {
+  // WHY read from the shared store, not a prop: CommentsReviewBar (a
+  // different subtree — the viewer's header, not its body) owns the "Show
+  // resolved" toggle's UI, and both need the SAME boolean without threading
+  // it through ActiveArtifactView.
+  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path);
+  const visible = useMemo(
+    () => comments.filter((c) => showResolved || !c.resolved).sort((a, b) => a.createdAt - b.createdAt),
+    [comments, showResolved],
+  );
+  const marginRef = useRef<HTMLDivElement>(null);
+  const marks = useQuoteMarks(containerRef, visible);
+  const rawTops = useAnchorTops(marks, marginRef);
+  const tops = useMemo(() => stackedTops(visible, rawTops, narrow), [visible, rawTops, narrow]);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  const jump = (id: string) => marks.get(id)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+
+  // Hovering or clicking the in-document highlight scrolls/highlights its
+  // card; hovering the card (below) highlights the mark back — one DOM
+  // listener pair per mark, since <mark> lives outside React's tree.
+  useEffect(() => {
+    const offs: Array<() => void> = [];
+    for (const [id, mark] of marks) {
+      const enter = () => setActiveId(id);
+      const leave = () => setActiveId((cur) => (cur === id ? null : cur));
+      const click = () => jump(id);
+      mark.addEventListener('mouseenter', enter);
+      mark.addEventListener('mouseleave', leave);
+      mark.addEventListener('click', click);
+      offs.push(() => {
+        mark.removeEventListener('mouseenter', enter);
+        mark.removeEventListener('mouseleave', leave);
+        mark.removeEventListener('click', click);
+      });
+    }
+    return () => offs.forEach((off) => off());
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- jump reads marks via closure; marks is the real dep
+  }, [marks]);
+
+  useEffect(() => {
+    for (const [id, mark] of marks) {
+      ACTIVE_CLASSES.forEach((cls) => mark.classList.toggle(cls, id === activeId));
+    }
+  }, [marks, activeId]);
+
+  if (narrow) {
+    const openComment = visible.find((c) => c.id === openId) ?? null;
+    return (
+      <>
+        <div ref={marginRef} className="relative w-9 shrink-0 border-l border-edge" style={{ minHeight: '100%' }}>
+          {visible.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setOpenId(c.id)}
+              aria-label={c.resolved ? `Resolved comment: ${c.quote}` : `Comment: ${c.quote}`}
+              className={`absolute left-1.5 coarse-hit w-6 h-6 rounded-full border flex items-center justify-center text-2xs
+                ${c.resolved ? 'bg-inset border-edge-dim text-fg-muted' : 'bg-panel border-edge text-fg-2'}`}
+              style={{ top: tops.get(c.id) ?? 0 }}
+            >
+              {c.resolved ? <CheckIcon className="w-3 h-3" /> : '💬'}
+            </button>
+          ))}
+        </div>
+        {openComment && (
+          <>
+            <Scrim layer={2} onClick={() => setOpenId(null)} />
+            <OverlayPanel layer={2} className="fixed inset-x-3 bottom-3 max-h-[70vh] overflow-auto p-2 rounded-lg">
+              <div className="flex justify-end mb-1">
+                <CloseButton onClick={() => setOpenId(null)} label="Close comment" />
+              </div>
+              <CommentCard
+                comment={openComment}
+                autoFocus={openComment.id === focusId}
+                onTextChange={(t) => setCommentText(openComment.id, t)}
+                onReply={(t) => addReply(openComment.id, 'user', t)}
+                onResolve={() => { resolveComment(openComment.id, 'user'); setOpenId(null); }}
+                onReopen={() => reopenComment(openComment.id)}
+                onDelete={() => { removeComment(openComment.id); setOpenId(null); }}
+                onJump={() => { jump(openComment.id); setOpenId(null); }}
+              />
+            </OverlayPanel>
+          </>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <div ref={marginRef} className="relative w-64 shrink-0 border-l border-edge px-2 py-3" style={{ minHeight: '100%' }}>
+      {visible.map((c) => (
+        <div
+          key={c.id}
+          className={`absolute left-2 right-2 rounded-lg transition-shadow ${c.id === activeId ? 'ring-2 ring-accent/60' : ''}`}
+          style={{ top: tops.get(c.id) ?? 0 }}
+          onMouseEnter={() => setActiveId(c.id)}
+          onMouseLeave={() => setActiveId((cur) => (cur === c.id ? null : cur))}
+        >
+          <CommentCard
+            comment={c}
+            autoFocus={c.id === focusId}
+            onTextChange={(t) => setCommentText(c.id, t)}
+            onReply={(t) => addReply(c.id, 'user', t)}
+            onResolve={() => resolveComment(c.id, 'user')}
+            onReopen={() => reopenComment(c.id)}
+            onDelete={() => removeComment(c.id)}
+            onJump={() => jump(c.id)}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}

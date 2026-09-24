@@ -2,7 +2,7 @@
 // Extracted from SessionDrawer.tsx (Task 7.2) so both SessionDrawer and ProjectView
 // can use it identically without duplicating the edit state + conflict-detection logic.
 import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
-import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer } from './RendererRegistry';
+import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer, isCodeEditorViewer } from './RendererRegistry';
 import { PartialFileBanner } from './PartialFileBanner';
 import { canEditArtifact } from './edit-permission';
 import { ViewerErrorBoundary } from './ViewerErrorBoundary';
@@ -14,6 +14,11 @@ import { LoadingState, ErrorState } from '../ui/states';
 import { RemoteFileCard } from './RemoteFileCard';
 import { describeReadError } from './read-error-copy';
 import { isRemoteMode } from '../../platform';
+// Doc comments (mockup, Style A "Margin"): the review bar is common to every
+// text-content viewer; the code-file rail is CM6-specific (see its own WHY).
+import { CommentsReviewBar } from '../comments/CommentsReviewBar';
+import { CodeCommentsRail } from '../comments/CodeCommentsRail';
+import { useNarrowByRef } from '../../hooks/use-container-narrow';
 
 /** Absolute on-disk path of an artifact — the same join SessionDrawer and
  *  FilesTab make for Copy path, so Download asks the host for the same file. */
@@ -532,6 +537,16 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   const sniffedBinaryTextFile = contentInfo?.binary === true
     && isTextContentViewer(getViewer(artifact.path));
 
+  // Doc comments (mockup, Style A): reading only, and only on a viewer that
+  // renders real text — a binary preview (image/pdf/csv grid) has nothing a
+  // selection or a line number could anchor to.
+  const showComments = !editing && isTextContentViewer(ViewerComponent);
+  const showCodeRail = showComments && isCodeEditorViewer(ViewerComponent);
+  // SessionDrawer's pane is a fixed ~480px regardless of window width, so the
+  // review bar needs the PANE's own width, same reasoning as MarkdownView's
+  // margin collapse (use-container-narrow.ts has the full WHY).
+  const narrowPane = useNarrowByRef(rootRef, 640);
+
   const showPartialBanner = !editing
     && contentInfo?.truncated === true
     && typeof contentInfo.sizeBytes === 'number'
@@ -635,30 +650,42 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           <UnifiedDiff oldStr={conflict.disk} newStr={draft} fill />
         </div>
       )}
-      <div className="flex-1 overflow-hidden">
-        {/* Boundary catches lazy chunk-load failures + viewer render crashes
-            (Suspense alone can't — lazy() THROWS its rejection). Keyed by
-            artifact so switching files retries with a clean slate. */}
-        <ViewerErrorBoundary key={artifact.id} path={artifact.path}>
-        <Suspense fallback={<div className="flex items-center justify-center h-full text-fg-muted text-sm">Loading viewer…</div>}>
-          <ViewerComponent
-            path={artifact.path}
-            content={content}
-            contentInfo={contentInfo}
-            sniffedBinaryTextFile={sniffedBinaryTextFile}
-            absolutePath={absolutePath}
-            isEditable={isEditable}
-            editing={editing}
-            draft={draft}
-            onDraftChange={setDraft}
-            onStartEdit={handleStartEdit}
-            onSaveEdit={handleSave}
-            onCancelEdit={handleCancel}
-            hideControls={controlsInHeader}
-            findBarOpen={findBarOpen}
-          />
-        </Suspense>
-        </ViewerErrorBoundary>
+      {/* Doc comments (mockup, Style A "Margin"): the review bar is common to
+          every text file; comments themselves only make sense while reading,
+          not while a raw textarea draft is on screen mid-edit. */}
+      {showComments && <CommentsReviewBar path={artifact.path} narrow={narrowPane} />}
+      <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 min-w-0 h-full">
+          {/* Boundary catches lazy chunk-load failures + viewer render crashes
+              (Suspense alone can't — lazy() THROWS its rejection). Keyed by
+              artifact so switching files retries with a clean slate. */}
+          <ViewerErrorBoundary key={artifact.id} path={artifact.path}>
+          <Suspense fallback={<div className="flex items-center justify-center h-full text-fg-muted text-sm">Loading viewer…</div>}>
+            <ViewerComponent
+              path={artifact.path}
+              content={content}
+              contentInfo={contentInfo}
+              sniffedBinaryTextFile={sniffedBinaryTextFile}
+              absolutePath={absolutePath}
+              isEditable={isEditable}
+              editing={editing}
+              draft={draft}
+              onDraftChange={setDraft}
+              onStartEdit={handleStartEdit}
+              onSaveEdit={handleSave}
+              onCancelEdit={handleCancel}
+              hideControls={controlsInHeader}
+              findBarOpen={findBarOpen}
+            />
+          </Suspense>
+          </ViewerErrorBoundary>
+        </div>
+        {/* CM6 virtualizes its DOM, so it gets the simpler non-scroll-synced
+            rail (CodeCommentsRail's own comment has the full WHY) rather than
+            MarkdownView's inline highlight-and-align margin. */}
+        {showCodeRail && (
+          <CodeCommentsRail path={artifact.path} onJumpToLine={(line) => revealLineIn(rootRef.current, line)} />
+        )}
       </div>
       {/* Partial-view notice — floats over the BOTTOM of the doc pane, in the
           spot the Edit pill would occupy (a file this large is read-only, so
