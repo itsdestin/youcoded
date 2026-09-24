@@ -147,7 +147,10 @@ describe('the approved float look', () => {
 
   it('gives the session menu the switcher\'s surface and restyles every scroll bar', () => {
     const css = floatCSS();
-    expect(css).toMatch(/\.session-menu\.glass-overlay \{\s*background-color: color-mix\(in srgb, var\(--inset\) 16%/);
+    // See-through only over a wallpaper; a flat theme keeps the solid panel.
+    expect(css).toMatch(/\[data-wallpaper\] \[data-chrome-style='float'\] \.session-menu\.glass-overlay \{\s*background-color: color-mix\(in srgb, var\(--inset\) 24%/);
+    // The list's ends fade to clear (a mask), not under a painted panel band.
+    expect(css).toMatch(/\.session-menu \.scroll-fade::after \{\s*display: none/);
     expect(readSource(join(RENDERER, 'components/SessionStrip.tsx'))).toContain('className="session-menu glass-overlay');
     // WHY the fill is restated: Golden Sunbreak's custom_css paints its own gold thumb.
     expect(css).toMatch(/::-webkit-scrollbar-thumb \{\s*background: var\(--scrollbar-thumb\)/);

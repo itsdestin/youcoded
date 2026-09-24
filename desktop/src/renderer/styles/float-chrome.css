@@ -401,22 +401,51 @@
    The menu takes the switcher's exact surface; the class is its own
    (SessionStrip.tsx) so the app's other pop-up menus keep theirs. */
 [data-chrome-style='float'] .session-menu.glass-overlay {
-  background-color: color-mix(in srgb, var(--inset) 16%, transparent) !important;
   border-color: transparent !important;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--edge) 40%, transparent), 0 8px 24px -10px rgba(0, 0, 0, .3) !important;
 }
-/* !important: the theme engine injects the theme's own (heavier) overlay blur,
+/* See-through only over a wallpaper. With nothing to blur (Midnight, Light),
+   a 24% fill left the chat's bubbles and buttons sharp behind the menu's rows,
+   so a flat theme keeps the menu's solid panel.
+   24%, not the switcher's 16%: "just a smidge less transparent on the panel"
+   (Destin, deck minimalist-round7, R7-1) — a list of names needs more body.
+   !important: the theme engine injects the theme's own (heavier) overlay blur,
    unlayered, after this file. */
 [data-wallpaper] [data-chrome-style='float'] .session-menu.glass-overlay {
+  background-color: color-mix(in srgb, var(--inset) 24%, transparent) !important;
   backdrop-filter: blur(6px) saturate(1.1) !important;
   -webkit-backdrop-filter: blur(6px) saturate(1.1) !important;
 }
 /* Overlays make their inner fills opaque so wallpaper cannot leak through;
    here the wallpaper IS the look, so the selected row matches the switcher's
    selected session instead. */
-[data-chrome-style='float'] .session-menu :is(.bg-inset, .bg-panel) {
+[data-wallpaper] [data-chrome-style='float'] .session-menu :is(.bg-inset, .bg-panel) {
   background-color: color-mix(in srgb, var(--panel) 26%, transparent) !important;
 }
+/* The session list's edge fade. .scroll-fade paints a solid --panel gradient
+   over the rows' ends, which on this see-through menu read as a dark band.
+   Here the rows themselves fade to clear, like messages under the controls
+   (R7-1: "make this fade/scroll effect match the new effect we're using
+   elsewhere"). The painted pseudos carry matching negative margins, so hiding
+   them moves nothing. No row in this list has a blur of its own, so masking
+   the list costs no glass. */
+[data-chrome-style='float'] .session-menu .scroll-fade::before,
+[data-chrome-style='float'] .session-menu .scroll-fade::after {
+  display: none;
+}
+[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-top='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 28px);
+}
+[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-bottom='true'] {
+  -webkit-mask-image: linear-gradient(to top, transparent 0, black 28px);
+  mask-image: linear-gradient(to top, transparent 0, black 28px);
+}
+[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-top='true'][data-fade-bottom='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
+}
+
 /* Scroll bars: the same light see-through fill with a hairline edge, instead of
    the theme's solid grey bar. Tokens, so every scroll bar (including the
    terminal's drawn thumb) follows. */
