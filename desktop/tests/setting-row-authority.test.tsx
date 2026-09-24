@@ -156,7 +156,13 @@ describe('setting row adoption', () => {
         + 'the only row in the family whose label lives OUTSIDE it (in the tab above), '
         + 'so it has no title for the description to sit under',
     },
-    'SyncPanel.tsx': { count: 2, why: 'K6 sync-space list rows — a per-item list, not settings rows' },
+    // WHY count dropped 2 -> 1 (fix batch 1, 2026-09-24): the "Additional
+    // backups" master toggle moved into a SettingRow's control slot when that
+    // section was flattened out of its old border-dashed card (design guide
+    // "Groups are flat"). The one remaining exemption is the main sync status
+    // card's own enable toggle, which is not — the status card is a K6
+    // per-item surface, not a settings row.
+    'SyncPanel.tsx': { count: 1, why: 'K6 sync-space status card toggle — a per-item status surface, not a settings row' },
     'ProvidersSection.tsx': { count: 1, why: 'K6 provider list row' },
     'SyncSetupWizard.tsx': { count: 1, why: 'a wizard step, not a settings menu' },
     'ResumeBrowser.tsx': { count: 1, why: 'L1 drawer — out of the dialog family entirely' },

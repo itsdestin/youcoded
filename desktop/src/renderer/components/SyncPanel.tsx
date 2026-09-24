@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Button, Callout, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow, RowStatus } from './ui';
+import { Badge, Button, Callout, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
@@ -1038,9 +1038,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           />
         ) : (
         // D1: header, close and scroll body all come from the shell now.
-        // `space-y-6` rather than Dialog's default `space-y-5`, so this panel's
-        // section rhythm is unchanged.
-        <div className="space-y-6">
+        // WHY space-y-4 (fix batch 1, 2026-09-24): design guide Settings
+        // spacing, 16px between groups — was space-y-6 (24px).
+        <div className="space-y-4">
 
             {/* ============================================================
                 PRIMARY — Cross-Device Backup & Sync box (redesign 2026-07-15).
@@ -1364,34 +1364,40 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 list.length > 0 ? `${pausedCount} destination${pausedCount === 1 ? '' : 's'} paused` :
                 'A second copy on top of GitHub — Drive or iCloud';
 
+              // WHY flat, no wrapping card (fix batch 1, 2026-09-24 — design
+              // guide "Groups are flat", decisions.md SA-3: a small label, the
+              // rows directly under it, a normal button, no box inside a box).
+              // This used to be a `border-dashed` card wrapping a title, an
+              // "optional" eyebrow pill, a master toggle, per-backend bordered
+              // rows AND a dashed "+ Add a backup" button — box inside box,
+              // named directly in settings-screens.md's audit. The title/hint/
+              // toggle row is exactly a SettingRow; "Optional" moves to a plain
+              // Badge (rule: status pills are for status, not attributes); the
+              // per-backend rows and the Add-a-backup button are now siblings
+              // at the same flat level, not nested inside another card.
               return (
-                <div className="rounded-lg border border-dashed border-edge px-3 py-3">
-                  {/* Header: title + optional pill + master toggle (always present). */}
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-fg">Additional backups</span>
-                        <span className="text-4xs font-medium text-fg-muted tracking-wider uppercase px-1.5 py-0.5 rounded-full bg-inset">optional</span>
-                      </div>
-                      <p className="text-2xs text-fg-muted mt-1 leading-relaxed">{sub}</p>
-                    </div>
-                    {/* Master toggle: pause-all / resume-all / reveal picker (handleAdditionalToggle). */}
-                    {/* Shared Toggle (spec changes 15/16) — same 36x20 geometry, but the
-                        on-state is the theme accent instead of hardcoded green-600.
-                        handleAdditionalToggle derives the direction itself from the
-                        backend list, so the `next` value it's handed is ignored. */}
-                    <Toggle
-                      checked={masterOn}
-                      onChange={() => void handleAdditionalToggle()}
-                      className="mt-0.5"
-                      title={masterOn ? 'Additional backups on — click to pause all' : 'Additional backups off — click to turn on'}
-                    />
-                  </div>
+                <div className="space-y-1.5">
+                  <SettingRow
+                    variant="item"
+                    title={<span className="flex items-center gap-2">Additional backups<Badge>Optional</Badge></span>}
+                    description={sub}
+                    control={
+                      // Shared Toggle (spec changes 15/16) — same 36x20 geometry, but the
+                      // on-state is the theme accent instead of hardcoded green-600.
+                      // handleAdditionalToggle derives the direction itself from the
+                      // backend list, so the `next` value it's handed is ignored.
+                      <Toggle
+                        checked={masterOn}
+                        onChange={() => void handleAdditionalToggle()}
+                        title={masterOn ? 'Additional backups on — click to pause all' : 'Additional backups off — click to turn on'}
+                      />
+                    }
+                  />
 
                   {/* Backend rows — shown whenever any exist (kept visible even when paused,
                       so turning the master off doesn't hide/lose destinations). */}
                   {list.length > 0 && (
-                    <div className="mt-3 space-y-2">
+                    <div className="space-y-2">
                       {list.map(b => {
                         // Pending = sync-enabled backend that can't currently push (offline or errored).
                         const isPending = b.syncEnabled && (b.lastError != null || isOffline);
@@ -1484,7 +1490,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   {/* Inline picker — master on but nothing connected yet. Opens the wizard
                       straight into per-type config (initialType skips the type picker). */}
                   {masterOn && list.length === 0 && (
-                    <div className="mt-3 flex gap-2">
+                    <div className="flex gap-2">
                       <button
                         onClick={() => { setAddType('drive'); setView('add-config'); }}
                         className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-edge bg-well hover:bg-inset text-xs text-fg-2 transition-colors"
@@ -1505,15 +1511,16 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   {/* Add-a-backup + compact "Back up all now" (replaces the standalone Back
                       up now row; keeps handleForceSync's syncing state + label behavior). */}
                   {list.length > 0 && (
-                    <div className="mt-2 space-y-2">
-                      {/* Dashed border is a documented exception (spec decision 64): the dash
-                          is what marks this as an "add" affordance rather than a real action,
-                          so it rides on top of `secondary` as a className override. The label
-                          also lifts from fg-muted to the variant's fg-2. */}
+                    <div className="space-y-2">
+                      {/* WHY a plain outlined button, not dashed (fix batch 1,
+                          2026-09-24): design guide "Groups are flat … no
+                          dashed 'add' boxes — use a normal outlined full-width
+                          button." Was a `border-dashed` override on `secondary`
+                          (spec decision 64) — that exception is retired. */}
                       <Button
                         variant="secondary"
                         onClick={() => setView('add-type')}
-                        className="w-full border-dashed py-2.5"
+                        className="w-full py-2.5"
                       >
                         ＋ Add a backup
                       </Button>
@@ -1535,7 +1542,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             {/* 3. Warnings — typed SyncWarning objects with title/body/fix-action/stderr */}
             {status?.warnings && status.warnings.length > 0 && (
               <div>
-                <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Warnings</h3>
+                <SectionLabel className="mb-2">Warnings</SectionLabel>
                 <div className="space-y-2">
                   {status.warnings.map((w) => (
                     <div
@@ -1588,7 +1595,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 could omit. */}
             {status && (status.syncedCategories?.length ?? 0) > 0 && (
               <div>
-                <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Includes </span>
+                {/* WHY normal case, no letter-spacing (fix batch 1, 2026-09-24):
+                    design guide — no spaced-out capitals, even inline. */}
+                <span className="text-3xs font-medium text-fg-muted">Includes </span>
                 <span className="text-2xs text-fg-dim">
                   {(status.syncedCategories ?? []).flatMap((cat, i) => {
                     const label = (
@@ -1611,12 +1620,12 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     try { const log = await claude.sync.getLog(30); setLogLines(log); } catch {}
                   }
                 }}
-                className="flex items-center gap-1.5 text-3xs font-medium text-fg-muted tracking-wider uppercase hover:text-fg-2 transition-colors"
+                className="flex items-center gap-1.5 text-3xs font-medium text-fg-muted hover:text-fg-2 transition-colors"
               >
                 <svg className={`w-3 h-3 transition-transform ${showLog ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                 </svg>
-                Sync Log
+                Sync log
               </button>
 
               {showLog && (
