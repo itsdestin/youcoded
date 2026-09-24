@@ -64,3 +64,18 @@ const ANDROID_SESSION_READY_PROMPT_ID = '_session_ready';
 export function promptShowMeansStarted(promptId: string): boolean {
   return promptId === ANDROID_SESSION_READY_PROMPT_ID;
 }
+
+/**
+ * Is the message box (and, on touch, the terminal key row) switched off?
+ *
+ * Chat view: until the session has started — a message typed then would land
+ * in a startup dialog. Terminal view on a touch device (phone, remote browser):
+ * that box IS the terminal's keyboard — its Send types Enter into whatever
+ * Claude Code shows — so it must work BEFORE the session starts, or a startup
+ * dialog the chat cannot show ("Answer in terminal view") could only be
+ * Esc'd away (second review F2). Desktop terminal view types into xterm
+ * directly and was never gated.
+ */
+export function composerDisabled(s: { trustGate: boolean; moved: boolean; started: boolean; terminalTouch: boolean }): boolean {
+  return s.trustGate || s.moved || (!s.started && !s.terminalTouch);
+}

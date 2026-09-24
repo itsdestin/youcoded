@@ -75,7 +75,7 @@ import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
 import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
 import { InitializingCover } from './components/InitializingCover';
-import { promptShowMeansStarted } from './state/startup-dialog-store';
+import { promptShowMeansStarted, composerDisabled } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
@@ -3897,7 +3897,7 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
+                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
                   // Name the blocker so reaching for "Send anyway" is an informed
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).
