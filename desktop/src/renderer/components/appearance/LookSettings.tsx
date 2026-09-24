@@ -4,6 +4,12 @@
 // appearance-panel-questions deck, 2026-09-24: AP-1 (one picker for layout),
 // AP-2 (glass presets with Fine-tune on request), AP-4 (bubble shape, message
 // box, roundness), AP-S1 (nobody's look changes until they change a setting).
+//
+// INTERIM UI (Destin, 2026-09-24): the Appearance panel's look is to be rebuilt
+// from the design-guidelines work in a separate session; what is meant to last
+// is the FUNCTIONALITY — `lookOverrides` / `setLookOverrides` on useTheme(),
+// the rules in themes/look-overrides.ts, and "absent field = Theme's choice".
+// A redesign should keep that contract and replace these controls freely.
 
 import { useState } from 'react';
 import { useTheme } from '../../state/theme-context';
