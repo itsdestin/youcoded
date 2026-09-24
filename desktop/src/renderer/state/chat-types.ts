@@ -1,4 +1,4 @@
-import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop, type ChatMessageReference } from '../../shared/types';
+import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -497,9 +497,6 @@ export type ChatAction =
       // Exact attached-file paths (see ChatMessage.attachments) — lets the
       // bubble render pills for paths with spaces that regex detection misses.
       attachments?: string[];
-      // Doc comments / "Ask about this" quotes this message referenced (see
-      // ChatMessage.references) — lets the bubble render QuoteReferenceChips.
-      references?: ChatMessageReference[];
     }
   | {
       // Task 12: a native send came back 'queued' (host FIFO'd it behind an

@@ -33,4 +33,16 @@ export interface ArtifactViewProps {
    *  corner (ContentFindBar's default `top-2 right-2`). A viewer with its own
    *  floating control up there moves it down out of the way. */
   findBarOpen?: boolean;
+  // Doc comments (mockup, round 2): Reading mode (highlights + hover cards,
+  // full width) vs Comments mode (the margin/markers rail). Owned by
+  // ActiveArtifactView (the toggle lives in its header bar) — MarkdownView is
+  // the only consumer today; CodeEditorView's simpler treatment (its rail
+  // shown/hidden by mode) lives entirely in ActiveArtifactView instead.
+  commentsMode?: 'reading' | 'comments';
+  /** "Open in comments" (the hover card's link) — switches mode AND focuses
+   *  the given thread. Owned by ActiveArtifactView for the same reason. */
+  onOpenComments?: (commentId?: string) => void;
+  /** The thread "Open in comments" asked to focus — set once per click, read
+   *  once by CommentsMargin (via MarkdownView) to scroll/highlight it. */
+  focusThreadId?: string;
 }

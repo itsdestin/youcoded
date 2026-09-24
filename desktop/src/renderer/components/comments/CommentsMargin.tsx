@@ -12,18 +12,12 @@ import { CheckIcon } from '../Icons';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { CloseButton } from '../ui/CloseButton';
 import { useDocComments, type DocComment } from '../../state/doc-comments-store';
+// Round 2: mark-wrapping moved to a shared hook — ReadingHighlights (Reading
+// mode) needs the identical highlight, and the two modes are mutually
+// exclusive so sharing costs nothing (see use-quote-marks.ts's own WHY).
+import { useQuoteMarks, ACTIVE_CLASSES } from './use-quote-marks';
 
-const MARK_ATTR = 'data-comment-mark';
 const GAP_PX = 10;
-// Soft accent tint (G-8 reads this as the "selected span" case — the same
-// bg-accent/10-15 family FolderSwitcher and SettingsPanel already use for an
-// active row) — an OPEN comment's anchor; resolved fades to neutral, matching
-// the card's own faded state. ACTIVE_CLASSES layer on top so hovering either
-// the highlight or its card lights up both (brief: "hover/click links card
-// ⇄ highlight").
-const MARK_OPEN = 'bg-accent/15 hover:bg-accent/25 rounded-sm cursor-pointer transition-colors';
-const MARK_RESOLVED = 'bg-fg-muted/10 text-fg-muted rounded-sm cursor-pointer';
-const ACTIVE_CLASSES = ['ring-2', 'ring-accent/60'];
 // Fixed estimates rather than a measure-then-reflow pass: comment counts here
 // are small (a handful per file, never a "list of the user's things" that
 // renderer-lists.md governs), so an exact per-card height isn't worth a
@@ -41,62 +35,6 @@ const MARKER_H = 28;
 function estimateHeight(c: DocComment, narrow: boolean): number {
   if (narrow) return MARKER_H;
   return c.resolved ? RESOLVED_CARD_H : OPEN_CARD_H + c.replies.length * REPLY_H;
-}
-
-/**
- * Wraps each visible comment's quote text in a `<mark>` inside `container`,
- * best-effort first-occurrence matching — the same caveat build-menu.ts's
- * describeArtifactSelection documents for source citing: a quote that recurs
- * earlier in the document, or that crosses an inline-formatting boundary,
- * may miss or land on the wrong occurrence. The card still renders either way;
- * only the in-text highlight and the margin's vertical alignment depend on it.
- */
-function useQuoteMarks(
-  containerRef: React.RefObject<HTMLElement | null>,
-  comments: DocComment[],
-): Map<string, HTMLElement> {
-  const [marks, setMarks] = useState<Map<string, HTMLElement>>(new Map());
-  useLayoutEffect(() => {
-    const root = containerRef.current;
-    if (!root) {
-      setMarks(new Map());
-      return;
-    }
-    // Undo the previous pass's marks first so re-highlighting never nests
-    // <mark>s inside <mark>s as comments/content change.
-    root.querySelectorAll(`[${MARK_ATTR}]`).forEach((el) => {
-      el.replaceWith(document.createTextNode(el.textContent ?? ''));
-    });
-    root.normalize();
-    const found = new Map<string, HTMLElement>();
-    for (const c of comments) {
-      const quote = c.quote.trim();
-      if (!quote) continue;
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const text = node.textContent ?? '';
-        const idx = text.indexOf(quote);
-        if (idx === -1) continue;
-        const range = document.createRange();
-        range.setStart(node, idx);
-        range.setEnd(node, idx + quote.length);
-        const mark = document.createElement('mark');
-        mark.setAttribute(MARK_ATTR, '');
-        mark.setAttribute('data-comment-id', c.id);
-        mark.className = c.resolved ? MARK_RESOLVED : MARK_OPEN;
-        try {
-          range.surroundContents(mark);
-          found.set(c.id, mark);
-        } catch {
-          // Selection crosses an element boundary (bold/link mid-quote) —
-          // skip the highlight; the card still renders in the margin.
-        }
-        break;
-      }
-    }
-    setMarks(found);
-  }, [containerRef, comments]);
-  return marks;
 }
 
 /** Each mark's offset from the top of the margin column — both columns are
@@ -156,9 +94,13 @@ interface Props {
   containerRef: React.RefObject<HTMLElement | null>;
   path: string;
   narrow: boolean;
+  /** "Open in comments" (Reading mode's hover card) asked to focus this
+   *  thread — scroll/highlight it once when this changes. ActiveArtifactView
+   *  already made sure it's not hidden behind "Show resolved". */
+  openThreadId?: string;
 }
 
-export function CommentsMargin({ containerRef, path, narrow }: Props) {
+export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Props) {
   // WHY read from the shared store, not a prop: CommentsReviewBar (a
   // different subtree — the viewer's header, not its body) owns the "Show
   // resolved" toggle's UI, and both need the SAME boolean without threading
@@ -176,6 +118,14 @@ export function CommentsMargin({ containerRef, path, narrow }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const jump = (id: string) => marks.get(id)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+
+  useEffect(() => {
+    if (!openThreadId || !marks.has(openThreadId)) return;
+    jump(openThreadId);
+    setActiveId(openThreadId);
+    if (narrow) setOpenId(openThreadId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- jump/marks read via closure; openThreadId (+ marks becoming ready) is the real trigger
+  }, [openThreadId, marks, narrow]);
 
   // Hovering or clicking the in-document highlight scrolls/highlights its
   // card; hovering the card (below) highlights the mark back — one DOM

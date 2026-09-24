@@ -2,12 +2,12 @@
 // Pins the artifact-viewer branch of the right-click menu: "Ask about this"
 // must cite SOURCE LINE NUMBERS for raw text/code views and fall back to a
 // quote for rendered markdown (whose DOM doesn't map back to source lines).
-// Redesigned (doc-comments mockup): the menu no longer builds a scaffold
-// STRING to insert into the composer textarea — it attaches a {quote,
-// sourceLabel} reference via youcoded:compose-add-reference instead, which
-// InputBar renders as a chip (spec: never put quoted text in the typing box).
+// Round 2 (Destin): the menu no longer builds a scaffold STRING, nor a
+// {quote, sourceLabel} chip (round 1) — it attaches a ComposeRef PILL via
+// youcoded:compose-insert, ported from session/comments-mock-c (compose-ref.ts).
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { buildContextMenu } from './build-menu';
+import type { ComposeRef } from './compose-ref';
 
 // Builds the DOM shape MarkdownView emits for raw text (txt) and rendered md.
 // CODE files no longer use this shape — CodeMirror replaced CodeView, and its
@@ -36,17 +36,17 @@ function selectWithin(node: Node, start: number, end: number) {
   sel.addRange(range);
 }
 
-// Runs the menu's "Ask about this" action and returns the reference it would
-// attach to the composer (delivered via youcoded:compose-add-reference).
-function referenceFor(container: HTMLElement): { quote: string; sourceLabel: string } | null {
+// Runs the menu's "Ask about this" action and returns the ComposeRef pill it
+// would attach to the composer (delivered via youcoded:compose-insert).
+function referenceFor(container: HTMLElement): ComposeRef | null {
   const entries = buildContextMenu(container);
   const ask = entries?.find((e) => e.type === 'item' && e.id === 'ask');
   if (!ask || ask.type !== 'item') return null;
   const spy = vi.fn();
-  window.addEventListener('youcoded:compose-add-reference', spy);
+  window.addEventListener('youcoded:compose-insert', spy);
   ask.run();
-  window.removeEventListener('youcoded:compose-add-reference', spy);
-  return (spy.mock.calls[0]?.[0] as CustomEvent)?.detail ?? null;
+  window.removeEventListener('youcoded:compose-insert', spy);
+  return (spy.mock.calls[0]?.[0] as CustomEvent)?.detail?.ref ?? null;
 }
 
 const FILE = 'alpha\nbravo\ncharlie\ndelta';
@@ -143,19 +143,19 @@ describe('artifact viewer context menu', () => {
   it('cites a single source line for a one-line selection', () => {
     const { container, pre } = mountViewer({ path: 'docs/notes.txt', source: 'raw', body: FILE });
     selectWithin(pre, 6, 11); // "bravo" — second line
-    expect(referenceFor(container)).toEqual({ quote: 'bravo', sourceLabel: 'line 2 · notes.txt' });
+    expect(referenceFor(container)).toMatchObject({ kind: 'doc', path: 'docs/notes.txt', fileName: 'notes.txt', label: 'line 2 · notes.txt', lineRange: [2, 2] });
   });
 
   it('cites a line RANGE for a multi-line selection', () => {
     const { container, pre } = mountViewer({ path: 'src/app.ts', source: 'raw', body: FILE });
     selectWithin(pre, 6, 19); // "bravo\ncharlie" — lines 2-3
-    expect(referenceFor(container)).toEqual({ quote: 'bravo\ncharlie', sourceLabel: 'lines 2-3 · app.ts' });
+    expect(referenceFor(container)).toMatchObject({ kind: 'doc', path: 'src/app.ts', label: 'lines 2-3 · app.ts', lineRange: [2, 3] });
   });
 
-  it('falls back to just the file name for rendered markdown (no reliable source mapping)', () => {
+  it('falls back to a paragraph mark + quote for rendered markdown (no reliable source mapping)', () => {
     const { container, pre } = mountViewer({ path: 'README.md', source: 'rendered', body: FILE });
     selectWithin(pre, 6, 11);
-    expect(referenceFor(container)).toEqual({ quote: 'bravo', sourceLabel: 'README.md' });
+    expect(referenceFor(container)).toMatchObject({ kind: 'doc', path: 'README.md', label: '¶ "bravo"', lineRange: undefined });
   });
 
   it('"Add comment" writes straight into the shared doc-comments store, anchored to the same selection', async () => {
@@ -242,24 +242,24 @@ describe('previewed-conversation right-click (spec §A3)', () => {
     expect(entries?.some((e) => e.type === 'item' && e.id === 'ask')).toBe(true);
   });
 
-  it('the preview reference is sourced from the conversation title, not a generic "message" label', () => {
+  it('the preview reference names the pill after the conversation title, not a generic "message" label', () => {
     const bubble = mountBubble({ scroll: 'preview', role: 'assistant', text: 'hello world', conversationId: 'conv-1', conversationTitle: 'Debugging sync' });
-    expect(referenceFor(bubble)).toEqual({ quote: 'hello world', sourceLabel: 'Debugging sync' });
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '"Debugging sync" · "hello world"' });
   });
 
-  it('the live chat reference names the speaker, not a conversation (no preview marker)', () => {
+  it('the live chat reference is generic (no preview marker to name)', () => {
     const bubble = mountBubble({ scroll: 'chat-scroll', role: 'assistant', text: 'hello world' });
-    expect(referenceFor(bubble)).toEqual({ quote: 'hello world', sourceLabel: "Claude's message" });
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: 'message · "hello world"' });
   });
 
-  it('the user bubble variant is named "your message", still role-specific', () => {
+  it('a user bubble with no preview reads the same generic way', () => {
     const bubble = mountBubble({ scroll: 'chat-scroll', role: 'user', text: 'my question' });
-    expect(referenceFor(bubble)).toEqual({ quote: 'my question', sourceLabel: 'your message' });
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: 'message · "my question"' });
   });
 
-  it('a previewed user bubble still prefers the conversation title over the role label', () => {
+  it('a previewed user bubble still prefers the conversation title', () => {
     const bubble = mountBubble({ scroll: 'preview', role: 'user', text: 'my question', conversationId: 'conv-2', conversationTitle: 'Untitled thread' });
-    expect(referenceFor(bubble)).toEqual({ quote: 'my question', sourceLabel: 'Untitled thread' });
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '"Untitled thread" · "my question"' });
   });
 });
 
@@ -306,7 +306,7 @@ describe('app chrome is not copy material', () => {
 
   it('"Ask about this" on the prose quotes the message without the tool title, keeping the file name', () => {
     const { prose } = mountMessageWithChrome();
-    expect(referenceFor(prose)).toEqual({ quote: 'Edited app.ts', sourceLabel: "Claude's message" });
+    expect(referenceFor(prose)).toMatchObject({ kind: 'chat', label: 'message · "Edited app.ts"' });
   });
 
   it('whole-message Copy leaves chrome text out', async () => {

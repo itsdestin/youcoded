@@ -14,10 +14,13 @@ import { LoadingState, ErrorState } from '../ui/states';
 import { RemoteFileCard } from './RemoteFileCard';
 import { describeReadError } from './read-error-copy';
 import { isRemoteMode } from '../../platform';
-// Doc comments (mockup, Style A "Margin"): the review bar is common to every
-// text-content viewer; the code-file rail is CM6-specific (see its own WHY).
+// Doc comments (round 2, Destin): Reading mode (default) vs Comments mode
+// (the review bar + margin/rail) — CommentsModeToggle is the header control
+// that switches between them; the review bar only renders IN Comments mode.
+import { CommentsModeToggle } from '../comments/CommentsModeToggle';
 import { CommentsReviewBar } from '../comments/CommentsReviewBar';
 import { CodeCommentsRail } from '../comments/CodeCommentsRail';
+import { useDocComments } from '../../state/doc-comments-store';
 import { useNarrowByRef } from '../../hooks/use-container-narrow';
 
 /** Absolute on-disk path of an artifact — the same join SessionDrawer and
@@ -537,15 +540,36 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   const sniffedBinaryTextFile = contentInfo?.binary === true
     && isTextContentViewer(getViewer(artifact.path));
 
-  // Doc comments (mockup, Style A): reading only, and only on a viewer that
-  // renders real text — a binary preview (image/pdf/csv grid) has nothing a
-  // selection or a line number could anchor to.
+  // Doc comments (round 2, Destin): only on a viewer that renders real text —
+  // a binary preview (image/pdf/csv grid) has nothing a selection or a line
+  // number could anchor to. Comments mode/Reading mode is a distinct toggle
+  // now, not always-on: "kinda be a distinct 'mode' entered by the user".
   const showComments = !editing && isTextContentViewer(ViewerComponent);
   const showCodeRail = showComments && isCodeEditorViewer(ViewerComponent);
   // SessionDrawer's pane is a fixed ~480px regardless of window width, so the
   // review bar needs the PANE's own width, same reasoning as MarkdownView's
   // margin collapse (use-container-narrow.ts has the full WHY).
   const narrowPane = useNarrowByRef(rootRef, 640);
+
+  // Reading mode is the default every time a file opens (brief: "READING
+  // MODE (default when a file opens)") — reset on every artifact switch
+  // rather than a single mount-time default, since this component instance
+  // is reused across files (SessionDrawer/ProjectView never remount it).
+  const [commentsMode, setCommentsMode] = useState<'reading' | 'comments'>('reading');
+  const [focusThreadId, setFocusThreadId] = useState<string | undefined>(undefined);
+  useEffect(() => { setCommentsMode('reading'); setFocusThreadId(undefined); }, [artifact.id]);
+  // WHY read the store here too (Comments mode/ReadingHighlights each read
+  // it independently): "Open in comments" on a RESOLVED thread must reveal
+  // it — Comments mode hides resolved by default, and jumping to a thread
+  // nobody can see would look like the link did nothing.
+  const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(artifact.path);
+  const openComments = useCallback((commentId?: string) => {
+    if (commentId) {
+      if (pathComments.find((c) => c.id === commentId)?.resolved) setPathShowResolved(true);
+      setFocusThreadId(commentId);
+    }
+    setCommentsMode('comments');
+  }, [pathComments, setPathShowResolved]);
 
   const showPartialBanner = !editing
     && contentInfo?.truncated === true
@@ -650,10 +674,25 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           <UnifiedDiff oldStr={conflict.disk} newStr={draft} fill />
         </div>
       )}
-      {/* Doc comments (mockup, Style A "Margin"): the review bar is common to
-          every text file; comments themselves only make sense while reading,
-          not while a raw textarea draft is on screen mid-edit. */}
-      {showComments && <CommentsReviewBar path={artifact.path} narrow={narrowPane} />}
+      {/* Doc comments header strip (round 2): the mode toggle is always here
+          on any text file; the rest of the review bar (Show resolved, Send)
+          only renders IN Comments mode — that's what makes the mode visibly
+          distinct, not just an internal flag (brief: "must be clearly a
+          different mode… the review bar only appears here"). */}
+      {showComments && (
+        <div className="flex items-center gap-2 px-2 py-1.5 border-b border-edge bg-panel shrink-0">
+          <CommentsModeToggle
+            active={commentsMode === 'comments'}
+            count={pathComments.length}
+            onToggle={() => setCommentsMode((m) => (m === 'comments' ? 'reading' : 'comments'))}
+          />
+          {commentsMode === 'comments' && (
+            <div className="flex-1 min-w-0 -my-1.5 -mr-2">
+              <CommentsReviewBar path={artifact.path} narrow={narrowPane} />
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex-1 overflow-hidden flex">
         <div className="flex-1 min-w-0 h-full">
           {/* Boundary catches lazy chunk-load failures + viewer render crashes
@@ -676,14 +715,19 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
               onCancelEdit={handleCancel}
               hideControls={controlsInHeader}
               findBarOpen={findBarOpen}
+              commentsMode={commentsMode}
+              onOpenComments={openComments}
+              focusThreadId={focusThreadId}
             />
           </Suspense>
           </ViewerErrorBoundary>
         </div>
         {/* CM6 virtualizes its DOM, so it gets the simpler non-scroll-synced
             rail (CodeCommentsRail's own comment has the full WHY) rather than
-            MarkdownView's inline highlight-and-align margin. */}
-        {showCodeRail && (
+            MarkdownView's inline highlight-and-align margin — and, round 2,
+            only shows in Comments mode at all (Reading mode for code is just
+            the plain editor, full width, same as markdown). */}
+        {showCodeRail && commentsMode === 'comments' && (
           <CodeCommentsRail path={artifact.path} onJumpToLine={(line) => revealLineIn(rootRef.current, line)} />
         )}
       </div>

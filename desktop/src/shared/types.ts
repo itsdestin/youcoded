@@ -1080,13 +1080,6 @@ export interface ToolGroupState {
   toolIds: string[];
 }
 
-/** A quoted doc-comment/"Ask about this" reference riding on a sent message —
- *  see ChatMessage.references. */
-export interface ChatMessageReference {
-  quote: string;
-  sourceLabel: string;
-}
-
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -1098,11 +1091,12 @@ export interface ChatMessage {
   // contains spaces (regex detection can't recover those from the joined
   // string). Live-bubble only: transcript-confirmed entries don't carry it.
   attachments?: string[];
-  // Doc comments / "Ask about this" (mockup, Style A "Margin"): the quotes this
-  // message referenced, so UserMessage can render each as a QuoteReferenceChip
-  // instead of the bracket token InputBar embedded in `content` for a real
-  // session to read. Live-bubble only, same as attachments above.
-  references?: ChatMessageReference[];
+  // NOTE (round 2, doc-comments mockup): a "Ask about this" / "Send to
+  // assistant" reference no longer needs a field here — it rides inside
+  // `content` itself as an inline marker (compose-ref.ts) that UserMessage
+  // decodes back into the same pill the composer showed. See compose-ref.ts's
+  // own header comment for why (a round-1 `references` array + separate chip
+  // row above the composer is gone).
 }
 
 // --- Command drawer / marketplace types ---

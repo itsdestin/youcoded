@@ -1057,9 +1057,6 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // even when a path contains spaces. Content stays the space-joined
         // string — the transcript dedup matches on content, don't change it.
         ...(action.attachments?.length ? { attachments: action.attachments } : {}),
-        // Doc comments / "Ask about this" references (mockup, Style A) — same
-        // "carried alongside content" pattern as attachments above.
-        ...(action.references?.length ? { references: action.references } : {}),
       };
 
       // Task 12: the queued-send branch that used to live here (append a

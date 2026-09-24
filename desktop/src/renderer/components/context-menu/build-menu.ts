@@ -6,6 +6,9 @@ import type { MenuIconName } from './menu-icons';
 // event needed (unlike "Ask about this", which must reach InputBar, a
 // component this module has no other handle on).
 import { addComment as addDocComment } from '../../state/doc-comments-store';
+// Round 2: "Ask about this" builds a ComposeRef pill (ported from
+// session/comments-mock-c) instead of a {quote, sourceLabel} chip.
+import { genRefId, truncateQuote, type ComposeRef } from './compose-ref';
 
 // Builds the chat right-click menu for a given DOM target. Pure inspection of
 // the DOM + current selection → a list of entries; the host owns positioning,
@@ -98,14 +101,15 @@ function selectElementContents(el: Element): void {
   sel.addRange(range);
 }
 
-// "Ask about this" attaches a quoted reference above the composer instead of
-// dropping scaffold text into the textarea (redesign, doc-comments mockup:
-// Destin didn't want a quote living in the box he's about to type over).
-// InputBar listens for this CustomEvent, adds a reference chip, and focuses
-// the (still empty) textarea for the user's own follow-up — same "simple v1,
-// no new plumbing" spirit as the scaffold this replaces (2026-07-17).
-function addReference(quote: string, sourceLabel: string): void {
-  window.dispatchEvent(new CustomEvent('youcoded:compose-add-reference', { detail: { quote, sourceLabel } }));
+// "Ask about this" attaches a reference PILL inline in the composer's own
+// sentence instead of dropping scaffold text into the textarea (redesign,
+// doc-comments mockup round 2, Destin: "I'd rather have the comment
+// primarily be seen as highlighted text… ask-about → pill inside the
+// sentence"). Ported mechanism: compose-ref.ts + InputBar's mirror layer
+// (session/comments-mock-c). InputBar appends the marker to the current
+// draft and focuses the textarea for the user's own follow-up.
+function addReference(ref: ComposeRef): void {
+  window.dispatchEvent(new CustomEvent('youcoded:compose-insert', { detail: { ref } }));
 }
 
 /** "line N" / "lines N-M" from describeArtifactSelection's own strings, or
@@ -118,13 +122,33 @@ function parseLineRef(ref: string): { startLine: number; endLine: number } | nul
   return null;
 }
 
-/** Compact chip label for a reference/comment anchor: "line 12-18 · file.ts"
- *  when there's a real source mapping, else just the file name (a quote
- *  fallback already IS the anchor — repeating it as a label is noise). */
+/** Compact MARGIN-CARD anchor label: "line 12-18 · file.ts" when there's a
+ *  real source mapping, else just the file name (a quote fallback already
+ *  IS the anchor — repeating it as a label is noise). Comments only — the
+ *  compose-ref PILL label below reads differently (a paragraph mark + the
+ *  quote itself, since a pill has no separate quote sliver to lean on). */
 function sourceLabelFor(ref: string, path: string): string {
   const line = parseLineRef(ref);
   return line ? `${ref} · ${baseName(path)}` : baseName(path);
 }
+
+/** Builds the ComposeRef for a DOC selection's "Ask about this" pill: a real
+ *  line range reads as "line 12-18 · file.ts"; a rendered-markdown quote
+ *  fallback (no line mapping) reads as a paragraph mark + the quote, since
+ *  that's the only anchor available. */
+function buildDocRef(quote: string, ref: string, path: string): ComposeRef {
+  const line = parseLineRef(ref);
+  const fileName = baseName(path);
+  return {
+    id: genRefId(),
+    kind: 'doc',
+    path,
+    fileName,
+    label: line ? `${ref} · ${fileName}` : `¶ "${truncateQuote(quote)}"`,
+    lineRange: line ? [line.startLine, line.endLine] : undefined,
+  };
+}
+
 
 // Copy + Select all — shared tail for every read-only chat menu.
 function textBasics(bubble: Element | null): MenuEntry[] {
@@ -256,12 +280,10 @@ function linkMenu(a: HTMLAnchorElement, target: HTMLElement): MenuEntry[] {
 
 function codeMenu(pre: HTMLElement, target: HTMLElement): MenuEntry[] {
   const code = pre.innerText.replace(/\n+$/, '');
-  // Preview-only: name which past conversation this code came from
-  // (see closestPreviewConversation) — a no-op in the live chat.
-  const previewRef = closestPreviewConversation(target);
-  const sourceLabel = previewRef ? previewRef.title : 'a code block you shared';
+  const firstLine = code.split('\n', 1)[0] ?? '';
+  const ref: ComposeRef = { id: genRefId(), kind: 'chat', label: `code · "${truncateQuote(firstLine, 24)}"` };
   return [
-    { type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, disabled: !code, run: () => addReference(code, sourceLabel) },
+    { type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, disabled: !code, run: () => addReference(ref) },
     { type: 'item', id: 'copy-code', label: 'Copy code block', icon: 'code', disabled: !code, run: () => void copyText(code) },
     { type: 'sep' },
     ...textBasics(closestBubble(target)),
@@ -326,7 +348,7 @@ function artifactMenu(container: HTMLElement): MenuEntry[] {
       label: 'Ask about this',
       icon: 'ask',
       primary: true,
-      run: () => addReference(sel, sourceLabel),
+      run: () => addReference(buildDocRef(sel, ref, path)),
     });
     // "Add comment" is the doc-comments mockup's second entry point (the
     // first is selection + this same right-click menu, per spec surface 1):
@@ -350,17 +372,16 @@ function textMenu(target: HTMLElement): MenuEntry[] {
   // readableText: "Ask about this" quotes the message as a user could have
   // selected it, without tool card titles or other chrome.
   const quote = (selectionText().trim() || (bubble ? readableText(bubble).trim() : '')) ?? '';
-  const isAssistant = bubble?.classList.contains('assistant-bubble');
-  const isUser = bubble?.classList.contains('user-bubble');
-  // Preview-only: name which past conversation this quote came from, so the
-  // chip reads like a real source — a no-op in the live chat.
-  const previewRef = closestPreviewConversation(target);
-  const sourceLabel = previewRef
-    ? previewRef.title
-    : isAssistant ? "Claude's message" : isUser ? 'your message' : 'this message';
   const entries: MenuEntry[] = [];
   if (quote) {
-    entries.push({ type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, run: () => addReference(quote, sourceLabel) });
+    // Preview-only: name which past conversation this quote came from, right
+    // in the pill — a no-op in the live chat, where the label is just the quote.
+    const previewRef = closestPreviewConversation(target);
+    const label = previewRef
+      ? `"${previewRef.title || 'Untitled thread'}" · "${truncateQuote(quote, 20)}"`
+      : `message · "${truncateQuote(quote, 24)}"`;
+    const ref: ComposeRef = { id: genRefId(), kind: 'chat', label };
+    entries.push({ type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, run: () => addReference(ref) });
   }
   entries.push(...textBasics(bubble));
   return entries;

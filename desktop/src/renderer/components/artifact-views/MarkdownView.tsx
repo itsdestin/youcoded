@@ -4,12 +4,15 @@
 import { useRef } from 'react';
 import MarkdownContent from '../MarkdownContent';
 import type { ArtifactViewProps } from './types';
-// Doc comments (mockup, Style A "Margin"): the margin rail lives INSIDE this
-// same overflow-auto element, as a flex sibling of the text column — that is
-// what lets it scroll together with the document for free (CommentsMargin's
-// own header comment has the full WHY). Skipped in edit mode: a highlighted
-// span over a live textarea draft has nothing to anchor to.
+// Doc comments (round 2, Destin): Reading mode (default) shows highlights +
+// hover cards at full width; Comments mode shows the margin/markers rail —
+// both live INSIDE this same overflow-auto element, as a flex sibling of the
+// text column, so whichever one is active scrolls together with the
+// document for free (CommentsMargin's own header comment has the full WHY).
+// Skipped in edit mode: a highlighted span over a live textarea draft has
+// nothing to anchor to.
 import { CommentsMargin } from '../comments/CommentsMargin';
+import { ReadingHighlights } from '../comments/ReadingHighlights';
 import { useContainerNarrow } from '../../hooks/use-container-narrow';
 
 // 640px, same NUMBER the app's viewport breakpoint uses, but measuring the
@@ -25,6 +28,7 @@ const MARGIN_COLLAPSE_PX = 640;
 export function MarkdownView({
   path, content,
   editing = false, draft = '', onDraftChange,
+  commentsMode = 'reading', onOpenComments, focusThreadId,
 }: ArtifactViewProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [rootRef, narrow] = useContainerNarrow<HTMLDivElement>(MARGIN_COLLAPSE_PX);
@@ -77,7 +81,9 @@ export function MarkdownView({
             ? <MarkdownContent content={content} />
             : <pre className="font-mono text-sm whitespace-pre-wrap">{content}</pre>}
         </div>
-        <CommentsMargin containerRef={contentRef} path={path} narrow={narrow} />
+        {commentsMode === 'comments'
+          ? <CommentsMargin containerRef={contentRef} path={path} narrow={narrow} openThreadId={focusThreadId} />
+          : <ReadingHighlights containerRef={contentRef} path={path} onOpenComments={onOpenComments ?? (() => {})} />}
       </div>
     </div>
   );
