@@ -804,7 +804,10 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
   // "Settled" is what auto-collapses Activity. For a background hire the tool
   // result is only the launch ack, so keying on `response` collapsed a card
   // whose child was still streaming (Test 4) — the run record is the truth.
-  const settled = run ? run.status !== 'running' : !!tool.response;
+  // Claude Code helpers run in the background too (2026-09-24): their tool
+  // result is the launch receipt, so the run record decides here as well.
+  const ccBg = isNative ? undefined : tool.ccBackground;
+  const settled = run ? run.status !== 'running' : ccBg ? ccBg.status !== 'running' : !!tool.response;
 
   // Auto-expand the activity section while running; auto-collapse once
   // settled. User toggles stick for the rest of the session.
@@ -834,9 +837,15 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
   // The report section. Foreground: the tool result IS the report. Background:
   // the delivered report folded into this card (specialistReport). A task_id
   // call's result is the management outcome ("Steer delivered…") — a Response.
+  // A CC background helper's report is the <result> of its end notice; until
+  // then there is none — the receipt ("Async agent launched… internal ID, do
+  // not mention to user") is Claude Code's note to the model, never a report.
+  const ccReport = ccBg ? (ccBg.result ?? (ccBg.status === 'completed' ? undefined : ccBg.summary)) : undefined;
   const report = tool.specialistReport
     ? { title: tool.specialistReport.status === 'failed' ? 'Report — failed' : 'Report', text: displayReport(tool.specialistReport.text) }
-    : tool.response && !taskId && (run ? run.background === false : isNative)
+    : ccBg
+      ? (ccReport ? { title: ccBg.status === 'failed' ? 'Report — failed' : 'Report', text: ccReport } : null)
+      : tool.response && !taskId && (run ? run.background === false : isNative)
       ? { title: 'Report', text: displayReport(tool.response) }
       : tool.response
         ? { title: 'Response', text: tool.response }

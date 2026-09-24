@@ -14,17 +14,17 @@
     "main/harness/harness-session.ts": 4155,
     "renderer/components/SettingsPanel.tsx": 3228,
     "renderer/remote-shim.ts": 3165,
-    "renderer/state/chat-reducer.ts": 3215,
+    "renderer/state/chat-reducer.ts": 3258,
     "renderer/styles/globals.css": 2940,
     "renderer/components/SessionStrip.tsx": 2774,
     "main/main.ts": 2494,
-    "shared/types.ts": 2296,
+    "shared/types.ts": 2338,
     "renderer/components/SyncPanel.tsx": 2041,
     "main/engine/engine-manager.ts": 2035,
     "renderer/components/ResumeBrowser.tsx": 1837,
     "main/preload.ts": 1919,
     "renderer/components/StatusBar.tsx": 1799,
-    "renderer/components/ToolCard.tsx": 1605,
+    "renderer/components/ToolCard.tsx": 1618,
     "renderer/components/ChatView.tsx": 1538
   }
 }
