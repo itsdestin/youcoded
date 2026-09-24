@@ -24,12 +24,16 @@ export interface PlanFixture {
   outcome: Record<string, unknown>;
 }
 
-export function listPlanFixtures(): string[] {
-  return fs.readdirSync(PLAN_FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+/** Startup-dialog captures (test-conpty/capture-startup-dialogs.mjs) share the
+ *  plan captures' shape — raw chunks + marks — so the same terminal replays them. */
+export const STARTUP_FIXTURE_DIR = path.join(__dirname, '..', 'fixtures', 'startup-dialogs');
+
+export function listPlanFixtures(dir = PLAN_FIXTURE_DIR): string[] {
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
 }
 
-export function loadPlanFixture(file: string): PlanFixture {
-  return JSON.parse(fs.readFileSync(path.join(PLAN_FIXTURE_DIR, file), 'utf8'));
+export function loadPlanFixture(file: string, dir = PLAN_FIXTURE_DIR): PlanFixture {
+  return JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
 }
 
 export function markIndex(fx: PlanFixture, label: string): number {

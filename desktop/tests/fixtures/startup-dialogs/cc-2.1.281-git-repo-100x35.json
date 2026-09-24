@@ -1,0 +1,149 @@
+{
+ "ccVersion": "2.1.281",
+ "scenario": "git-repo",
+ "key": "git-repo-100x35",
+ "folder": "git",
+ "trusted": false,
+ "args": [],
+ "files": [],
+ "auth": false,
+ "cols": 100,
+ "rows": 35,
+ "capturedAt": "2026-09-24T04:47:46.966Z",
+ "chunks": [
+  {
+   "t": 200,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 211,
+   "b64": "G1s/MjVs"
+  },
+  {
+   "t": 211,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 216,
+   "b64": "DQ0KG1szODsyOzI1NTsxOTM7N23ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAbWzM5bQ0NChtbMkcbWzM4OzI7MjU1OzE5Mzs3bRtbMW1BY2Nlc3NpbmcbWzEyR3dvcmtzcGFjZTobWzIybRtbMzltDQ0KDQ0KG1syRxtbMW0vdG1wL3N0YXJ0dXAtZ2l0LXJlcG8tRXlSbThML3Byb2plY3QbWzIybQ0NCg0NChtbMkdRdWljaxtbOEdzYWZldHkbWzE1R2NoZWNrOhtbMjJHSXMbWzI1R3RoaXMbWzMwR2EbWzMyR3Byb2plY3QbWzQwR3lvdRtbNDRHY3JlYXRlZBtbNTJHb3IbWzU1R29uZRtbNTlHeW91G1s2M0d0cnVzdD8bWzcwRyhMaWtlG1s3Nkd5b3VyG1s4MUdvd24bWzg1R2NvZGUsG1s5MUdhDQ0KG1syR3dlbGwta25vd24bWzEzR29wZW4bWzE4R3NvdXJjZRtbMjVHcHJvamVjdCwbWzM0R29yG1szN0d3b3JrG1s0Mkdmcm9tG1s0N0d5b3VyG1s1Mkd0ZWFtKS4bWzU5R0lmG1s2Mkdub3QsG1s2N0d0YWtlG1s3MkdhG1s3NEdtb21lbnQbWzgxR3RvG1s4NEdyZXZpZXcbWzkxR3doYXQncxtbOThHaW4NDQobWzJHdGhpcxtbN0dmb2xkZXIbWzE0R2ZpcnN0Lg0NCg0NChtbMkdDbGF1ZGUbWzlHQ29kZSdsbBtbMTdHYmUbWzIwR2FibGUbWzI1R3RvG1syOEdyZWFkLBtbMzRHZWRpdCwbWzQwR2FuZBtbNDRHZXhlY3V0ZRtbNTJHZmlsZXMbWzU4R2hlcmUuDQ0KDQ0KG1syRxtbMzg7MjsxNTM7MTUzOzE1M21TZWN1cml0eRtbMTFHZ3VpZGUbWzM5bQ0NCg0NChtbMkcbWzM4OzI7MTc3OzE4NTsyNDlt4p2vG1s0R05vLBtbOEdleGl0G1szOW0NDQobWzRHWWVzLBtbOUdJG1sxMUd0cnVzdBtbMTdHdGhpcxtbMjJHZm9sZGVyDQ0KDQ0KG1syRxtbMzg7MjsxNTM7MTUzOzE1M21FbnRlchtbOEd0bxtbMTFHY29uZmlybRtbMTlHwrcbWzIxR0VzYxtbMjVHdG8bWzI4R2NhbmNlbBtbMzltDQ0KG1sxQxtbNEE="
+  },
+  {
+   "t": 217,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 975,
+   "b64": "G1sxRBtbNEING1sxQxtbNEEgG1s0R05vLCBleGl0DRtbMUMbWzFCG1szODsyOzE3NzsxODU7MjQ5beKdrxtbNEdZZXMsIEkgdHJ1c3QgdGhpcyBmb2xkZXIbWzM5bQ0NCg0KDQobWzFDG1szQQ=="
+  },
+  {
+   "t": 1064,
+   "b64": "G1s+NG0bWzx1G1s/MTAwNGwbWz8yMDMxbBtbPzIwMDRs"
+  },
+  {
+   "t": 1065,
+   "b64": "G1sxRBtbM0IbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbRxtbMUEbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMTdB"
+  },
+  {
+   "t": 1169,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 1179,
+   "b64": "G10wO+KcsyBDbGF1ZGUgQ29kZQc="
+  },
+  {
+   "t": 1213,
+   "b64": "G1szODsyOzIxNTsxMTk7ODdtIOKWkBtbNDg7MjswOzA7MG3ilpvilojilojilojilpvilogbWzEyRxtbMzltG1s0OW0bWzFtQ2xhdWRlG1sxOUdDb2RlG1syNEcbWzIybRtbMzg7MjsxNTM7MTUzOzE1M212Mi4xLjI4MRtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdt4pad4pacG1s0ODsyOzA7MDswbeKWiOKWiOKWiOKWiOKWiBtbNDlt4paI4paAG1sxMkcbWzM4OzI7MTUzOzE1MzsxNTNtT3B1cxtbMTdHNS41G1syMUcoMU0bWzI1R2NvbnRleHQpG1szNEfCtxtbMzZHQVBJG1s0MEdVc2FnZRtbNDZHQmlsbGluZxtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdtIBtbM0filp3ilp0bWzZH4pad4padG1sxMkcbWzM4OzI7MTUzOzE1MzsxNTNtL3RtcC9zdGFydHVwLWdpdC1yZXBvLUV5Um04TC9wcm9qZWN0G1szOW0NDQoNDQoNDQobWzM4OzI7MTM2OzEzNjsxMzZt4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSAG1szOW0NDQrina/CoBtbN20gG1syN20NDQobWzM4OzI7MTM2OzEzNjsxMzZt4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSAG1szOW0NDQobWzNHG1szODsyOzE1MzsxNTM7MTUzbeKPuBtbNUdtYW51YWwbWzEyR21vZGUbWzE3R29uG1syMEfCtxtbMjJHPxtbMjRHZm9yG1syOEdzaG9ydGN1dHMbWzM4R8K3G1s0MEfihpAbWzQyR2ZvchtbNDZHYWdlbnRzG1s3M0cbWzM4OzI7MjU1OzEwNzsxMjhtTm90G1s3N0dsb2dnZWQbWzg0R2luG1s4N0fCtxtbODlHUnVuG1s5M0cvbG9naW4bWzM5bQ0NChtbODFHG1szODsyOzE1MzsxNTM7MTUzbeKXkBtbODNHbWVkaXVtG1s5MEfCtxtbOTJHL2VmZm9ydBtbMzltDQ0KG1syQxtbNEE="
+  },
+  {
+   "t": 1303,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 1793,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 2045,
+   "b64": "G1syRBtbNEI="
+  },
+  {
+   "t": 2046,
+   "b64": "G1s/MTAwNGwbWz40bRtbPHUbWz8yMDMxbBtbPzIwMDRsGyhCDxtbPzEwMTZsG1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGwbWz8yNWgbNxtbchs4G10wOwc="
+  }
+ ],
+ "marks": [
+  {
+   "t": 969,
+   "label": "dialog-1-visible",
+   "chunkIndex": 5
+  },
+  {
+   "t": 969,
+   "label": "send",
+   "chunkIndex": 5,
+   "data": "\u001b[B"
+  },
+  {
+   "t": 1050,
+   "label": "send",
+   "chunkIndex": 6,
+   "data": "\r"
+  },
+  {
+   "t": 1130,
+   "label": "dialog-1-gone",
+   "chunkIndex": 8
+  },
+  {
+   "t": 1290,
+   "label": "main-prompt-visible",
+   "chunkIndex": 11
+  }
+ ],
+ "dialogs": [
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "Accessing workspace:",
+   "options": [
+    "No, exit",
+    "Yes, I trust this folder"
+   ],
+   "numbers": [
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "<tmp-path>",
+    "Quick safety check: Is this a project you created or one you trust? (Like your own code, a",
+    "well-known open source project, or work from your team). If not, take a moment to review what's in",
+    "this folder first.",
+    "Claude Code'll be able to read, edit, and execute files here.",
+    "Security guide"
+   ]
+  }
+ ],
+ "outcome": {
+  "steps": [
+   {
+    "dialog": 1,
+    "answered": "Yes, I trust this folder",
+    "gone": true
+   }
+  ],
+  "reachedMainPrompt": true,
+  "exitCode": null,
+  "folderTrusted": true,
+  "bypassAccepted": false,
+  "userSettingsKeys": [
+   "hooks"
+  ],
+  "sessionStartHookAt": [
+   1298
+  ]
+ }
+}
