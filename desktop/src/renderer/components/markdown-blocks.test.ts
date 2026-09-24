@@ -211,6 +211,15 @@ describe('advanceStream: the groups a growing message is drawn as', () => {
     expect(v.groups.length).toBe(5);
   });
 
+  // A bare <details> pairs only when a <summary> block comes next; once a
+  // finished block that is not one follows, it stays text for good and must not
+  // hold every later group unsettled (re-walked on every word).
+  it('settles the groups after a <details> that can never pair', () => {
+    const md = 'A\n\n<details>\n\nnot a summary\n\nB\n\nC\n\nD\n\nE\n\nF';
+    const v = run(prefixesOf(tokenDeltas(md))).at(-1)!;
+    expect(v.settled.length).toBeGreaterThanOrEqual(v.groups.length - 2);
+  });
+
   it('starts over as one document when the content is replaced, then splits the next append', () => {
     const views = run(['one\n\ntwo', 'one\n\ntwo\n\nthree', 'ONE\n\ntwo', 'ONE\n\ntwo\n\nthree']);
     expect(keysAndText(views[2])).toEqual([[0, 'ONE\n\ntwo']]);

@@ -384,11 +384,17 @@ function planStream(blocks: MarkdownBlocks, floor: number, settledIn: DrawnGroup
       paired = true;
       contentStart = i + 2;
     }
+    // WHY (review 2, F4): a bare opener whose next drawn block is FROZEN and is
+    // not a <summary> can never pair — it is text for good. Treating it as
+    // undecided held every later group unsettled forever, re-walked per word.
+    // Only an opener that could still pair waits for its closing block.
+    const next = flat[i + 1];
+    const mayPair = h.opener === 'with-summary' || !next || next.piece >= frozenCount || !!next.info?.summary;
     let closing = -1;
     for (let k = i + 1; k < flat.length; k++) if (flat[k].info?.close) { closing = k; break; }
     // Decided for good only when a FROZEN closing block follows (a live one can
     // still grow into something else — "</details>\nmore").
-    if (closing === -1 || flat[closing].piece >= frozenCount) unsettledFrom = Math.min(unsettledFrom, flat[i].piece);
+    if (mayPair && (closing === -1 || flat[closing].piece >= frozenCount)) unsettledFrom = Math.min(unsettledFrom, flat[i].piece);
     if (!paired || closing === -1 || closing < contentStart) continue;
     let nested = false;
     for (let k = contentStart; k < closing; k++) if (flat[k].info?.nested) { nested = true; break; }
