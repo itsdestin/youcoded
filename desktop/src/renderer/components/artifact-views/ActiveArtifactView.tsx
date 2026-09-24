@@ -49,7 +49,7 @@ function saveErrorMessage(res: any): string {
     return 'Editing this file needs an explicit confirmation. Leave and re-enter edit mode to confirm.';
   }
   // A `../` record refused at save time says the same as when it is opened.
-  if (err === 'outside-projects' || err === 'record-unreadable') return describeReadError(err, res?.code);
+  if (err === 'outside-projects' || err === 'not-in-home-project' || err === 'record-unreadable') return describeReadError(err, res?.code);
   return `Save failed: ${String(err ?? 'unknown error')}`;
 }
 
@@ -111,7 +111,9 @@ export type ArtifactContentState =
   // rides with it: over remote access a too-large answer carries the file's real
   // size so the phone can show "24.0 MB · PDF" with a Download button rather
   // than a bare error (RemoteFileCard).
-  | { phase: 'error'; message: string; code?: string; sizeBytes?: number };
+  // `resolvedPath`: where the host judged a `../` record to be, on a too-large
+  // answer — the phone's Download asks for that file (re-review C5).
+  | { phase: 'error'; message: string; code?: string; sizeBytes?: number; resolvedPath?: string };
 
 export interface ActiveArtifactViewProps {
   artifact: ArtifactRecord;
@@ -551,7 +553,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     // A phone asked for a file over its preview ceiling. Not an error to retry —
     // the host answered honestly with the size — so the card offers Download
     // (questions deck 2026-09-10, Q-6/Q-8).
-    return <RemoteFileCard path={absoluteArtifactPath(projectRoot, artifact)} sizeBytes={readState.sizeBytes} reason="too-large" projectRoot={projectRoot} artifactId={artifact.id} />;
+    return <RemoteFileCard path={readState.resolvedPath ?? absoluteArtifactPath(projectRoot, artifact)} sizeBytes={readState.sizeBytes} reason="too-large" projectRoot={projectRoot} artifactId={artifact.id} />;
   }
   if (!editing && readState.phase === 'error') {
     // The REAL failure with a Retry — never mapped to "no longer on disk"

@@ -105,7 +105,7 @@ export function useArtifactContent(
       } else {
         // Keep the handler's own code and the size beside the message: the
         // remote too-large answer needs both to render as a file card.
-        setContentState({ phase: 'error', message: describeReadError(res?.error, res?.code), code: res?.error, sizeBytes: res?.sizeBytes });
+        setContentState({ phase: 'error', message: describeReadError(res?.error, res?.code), code: res?.error, sizeBytes: res?.sizeBytes, ...(typeof res?.resolvedPath === 'string' ? { resolvedPath: res.resolvedPath } : {}) });
       }
     }).catch((e: any) => {
       // A rejected invoke (e.g. EACCES thrown in the handler) is a read

@@ -3578,8 +3578,9 @@ class SessionService : Service() {
                             .put("artifact", artifact.toJson()).put("content", org.json.JSONObject.NULL)
                         is com.youcoded.app.artifacts.RelativeRecordVerdict.Protected -> org.json.JSONObject().put("ok", false).put("error", "protected-path")
                         is com.youcoded.app.artifacts.RelativeRecordVerdict.OutsideProjects -> org.json.JSONObject().put("ok", false).put("error", "outside-projects")
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.NotInHomeProject -> org.json.JSONObject().put("ok", false).put("error", "not-in-home-project")
                         is com.youcoded.app.artifacts.RelativeRecordVerdict.Unreadable -> org.json.JSONObject().put("ok", false)
-                            .put("error", "record-unreadable").put("code", v.detail)
+                            .put("error", "record-unreadable").put("code", v.code)
                     }
                     if (refusal != null) {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, refusal) }
@@ -3826,8 +3827,9 @@ class SessionService : Service() {
                         is com.youcoded.app.artifacts.RelativeRecordVerdict.Missing -> org.json.JSONObject().put("ok", false).put("error", "artifact-not-found")
                         is com.youcoded.app.artifacts.RelativeRecordVerdict.Protected -> org.json.JSONObject().put("ok", false).put("error", "protected-path")
                         is com.youcoded.app.artifacts.RelativeRecordVerdict.OutsideProjects -> org.json.JSONObject().put("ok", false).put("error", "outside-projects")
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.NotInHomeProject -> org.json.JSONObject().put("ok", false).put("error", "not-in-home-project")
                         is com.youcoded.app.artifacts.RelativeRecordVerdict.Unreadable -> org.json.JSONObject().put("ok", false)
-                            .put("error", "record-unreadable").put("code", v.detail)
+                            .put("error", "record-unreadable").put("code", v.code)
                     }
                     if (refusal != null) {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, refusal) }

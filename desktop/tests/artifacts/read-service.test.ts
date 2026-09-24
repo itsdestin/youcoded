@@ -93,6 +93,12 @@ describe('reading a ../ record', () => {
     expect(r).toEqual({ ok: false, error: 'protected-path' });
   });
 
+  it('keeps the judged location on a too-large answer, so a phone can download it', async () => {
+    const r = await readArtifactText(projectRoot, 'inside', { maxBytes: 1 }) as any;
+    expect(r).toMatchObject({ ok: false, error: 'too-large' });
+    expect(r.resolvedPath).toMatch(/\/proj\/here\.md$/);
+  });
+
   it('says a file is gone only when it is', async () => {
     expect(await readArtifactText(projectRoot, 'gone')).toMatchObject({ ok: true, orphan: true });
     const { missingIds } = await checkArtifactExistence(projectRoot, ['inside', 'outside', 'planted', 'gone']);

@@ -486,6 +486,7 @@ describe('a ../ record through both transports', () => {
   let world: string;
   let proj: string;
   let notes: string;
+  let savedBefore = '[]';
   beforeAll(() => {
     const home = process.env.HOME!;
     world = fs.realpathSync(fs.mkdtempSync(path.join(home, 'yc-dotdot-')));
@@ -506,15 +507,20 @@ describe('a ../ record through both transports', () => {
       artifacts: [rec('plan', '../notes/plan.md'), rec('loose', '../loose.md'), rec('planted', path.relative(proj, path.join(home, '.git-credentials')))],
       manualExcludes: [], manualIncludes: [],
     }));
-    // The saved folders now include `notes` and — as on Destin's machine — HOME itself.
+    // The saved folders gain `notes` and `proj`. NOT the home folder: this
+    // sandbox file is read by other suites' handlers too, and a saved home
+    // changes their answers (the home-as-saved-folder case is pinned with an
+    // explicit home in write-authorization.test.ts).
     const file = path.join(home, '.claude', 'youcoded-folders.json');
-    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-    fs.writeFileSync(file, JSON.stringify([...saved,
+    savedBefore = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, JSON.stringify([...JSON.parse(savedBefore),
       { path: notes, nickname: 'notes', addedAt: Date.now() },
-      { path: home, nickname: 'home', addedAt: Date.now() },
       { path: proj, nickname: 'proj', addedAt: Date.now() }]));
   });
-  afterAll(() => fs.rmSync(world, { recursive: true, force: true, maxRetries: 3 }));
+  afterAll(() => {
+    fs.writeFileSync(path.join(process.env.HOME!, '.claude', 'youcoded-folders.json'), savedBefore);
+    fs.rmSync(world, { recursive: true, force: true, maxRetries: 3 });
+  });
 
   it('saves a trusted one at its real location', async () => {
     const res = await overIpc('artifacts:save', proj, 'dotdot', 'proj', 'plan', 'new\n', 'sess-1', {});
@@ -522,7 +528,7 @@ describe('a ../ record through both transports', () => {
     expect(fs.readFileSync(path.join(notes, 'plan.md'), 'utf8')).toBe('new\n');
   });
 
-  it('refuses a planted credential on read and save, even with home saved as a folder', async () => {
+  it('refuses a planted credential on read and save', async () => {
     expect(await overIpc('artifacts:get', proj, 'planted')).toEqual({ ok: false, error: 'protected-path' });
     expect(await overIpc('artifacts:save', proj, 'dotdot', 'proj', 'planted', 'x', 'sess-1', {})).toEqual({ ok: false, error: 'protected-path' });
     expect(fs.readFileSync(path.join(process.env.HOME!, '.git-credentials'), 'utf8')).toContain('github.com');

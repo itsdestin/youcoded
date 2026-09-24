@@ -58,7 +58,7 @@ export function isAbsoluteRecorded(p: string): boolean {
  *  `code` carries the filesystem's own error code, never a guessed cause. */
 export type RelativeRecordVerdict =
   | { ok: true; realPath: string }
-  | { ok: false; reason: 'missing' | 'protected-path' | 'outside-projects' }
+  | { ok: false; reason: 'missing' | 'protected-path' | 'outside-projects' | 'not-in-home-project' }
   | { ok: false; reason: 'unreadable'; code: string };
 
 /**
@@ -110,15 +110,24 @@ export async function judgeRelativeRecord(
     if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') return { ok: false, reason: 'missing' };
     // F4: a symlink loop or a permission error is not "missing" and not a
     // crash — say the check failed, with the filesystem's own code.
-    return { ok: false, reason: 'unreadable', code: String(e?.code ?? e?.message ?? 'unknown') };
+    // Only the CODE travels (review C4): a message can carry the path.
+    return { ok: false, reason: 'unreadable', code: typeof e?.code === 'string' ? e.code : 'unknown' };
   }
   // Checked BEFORE the root test, so a secret is refused as private whatever
   // folder it sits in.
   if (privateForRecordTrust(canonicalize(realPath, null))) return { ok: false, reason: 'protected-path' };
   const realHome = await fs.promises.realpath(home).catch(() => null);
-  for (const root of new Set([projectRoot, ...allowedRoots])) {
+  const roots = [...new Set([projectRoot, ...allowedRoots])];
+  for (const root of roots) {
     const r = await vouchingRoot(root, realHome);
     if (r && (realPath === r || realPath.startsWith(r + path.sep))) return { ok: true, realPath };
+  }
+  // WHY a second reason (re-review C1): a file inside a project that is NOT
+  // below home (/opt/work, /mnt/data, an external drive) or directly in a saved
+  // HOME folder is refused by design — but "outside your project folders"
+  // would be false for it. Say what the rule actually is.
+  for (const root of roots) {
+    if (root && await inRealRoot(root, realPath)) return { ok: false, reason: 'not-in-home-project' };
   }
   return { ok: false, reason: 'outside-projects' };
 }
@@ -126,7 +135,8 @@ export async function judgeRelativeRecord(
 async function inRealRoot(projectRoot: string, realPath: string): Promise<boolean> {
   const realRoot = await fs.promises.realpath(path.resolve(projectRoot)).catch(() => null);
   if (!realRoot) return false;
-  return realPath === realRoot || realPath.startsWith(realRoot + path.sep);
+  // A filesystem root already ends in its separator ("/", "C:\\").
+  return realPath === realRoot || realPath.startsWith(realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep);
 }
 
 /**

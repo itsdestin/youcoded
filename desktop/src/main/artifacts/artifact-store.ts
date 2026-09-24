@@ -579,7 +579,11 @@ export async function repairRelativeExternals(
  * surprising and a lock-contention risk.
  */
 export async function runSidecarMigration(
-  projectRoot: string
+  projectRoot: string,
+  // Injectable so a test can change the saved-folder list without writing the
+  // shared sandbox file other suites write (remote-files.test.ts).
+  savedRootsOf: () => string[] = () => readFolders().map((f) => f.path),
+  home?: string,
 ): Promise<{ migrated: boolean; reclassified: number; merged: number }> {
   const NOTHING = { migrated: false, reclassified: 0, merged: 0 };
   // Fix: key the memo on the CANONICAL form, not the raw string. This function
@@ -598,7 +602,7 @@ export async function runSidecarMigration(
   // record outside every project today becomes repairable the moment its
   // folder is saved as a project, so a changed list re-runs the repair
   // instead of the "done" memo holding for the rest of the process.
-  const savedRoots = readFolders().map((f) => f.path);
+  const savedRoots = savedRootsOf();
   const key = `${canonicalize(projectRoot, null)}\0${[...savedRoots].sort().join('\0')}`;
   if (migrationChecked.has(key)) return NOTHING;
 
@@ -629,7 +633,7 @@ export async function runSidecarMigration(
 
       const result = migrateRelativeExternals(current, projectRoot);
       // `../` records the pure pass leaves external (see repairRelativeExternals).
-      const escaped = await repairRelativeExternals(result.sidecar, projectRoot, savedRoots);
+      const escaped = await repairRelativeExternals(result.sidecar, projectRoot, savedRoots, home);
       if (result.reclassified === 0 && escaped.repaired.length === 0) {
         migrationChecked.add(key);   // nothing to do — don't re-scan this process
         return NOTHING;

@@ -228,6 +228,25 @@ describe('useEscClose', () => {
     expect(onBack).toHaveBeenCalledTimes(3);
   });
 
+  it('Android Back keeps peeling a panel that Escape already spent, and never reports the stack empty while it is open', () => {
+    // Re-review C2: a spent drawer counted as empty, which switched Android's
+    // Back interception off — the next Back left the app with the drawer open.
+    const onBack = vi.fn();
+    let dismiss: () => void = () => {};
+    const empties: boolean[] = [];
+    function Panel() { useEscClose(true, onBack, { layeredWhile: () => false }); return null; }
+    function Probe() { dismiss = useDismissTop(); empties.push(useEscStackEmpty()); return null; }
+    render(<EscCloseProvider><Probe /><Panel /></EscCloseProvider>);
+    // One Escape from the chat spends the panel…
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+    expect(onBack).toHaveBeenCalledTimes(1);
+    // …but the stack is still not empty, and Back still reaches the panel.
+    expect(empties[empties.length - 1]).toBe(false);
+    act(() => { dismiss(); });
+    act(() => { dismiss(); });
+    expect(onBack).toHaveBeenCalledTimes(3);
+  });
+
   it('useDismissTop is a no-op when the stack is empty', () => {
     let dismiss: () => void = () => {};
     function Capturer() {

@@ -87,8 +87,18 @@ class EscStore {
     if (c.spent !== !inside) { c.spent = !inside; this.emit(); }
   }
 
+  /** The real top, spent or not — what the Android Back button acts on. */
+  top(): Closer | undefined {
+    return this.stack[this.stack.length - 1];
+  }
+
+  // WHY every entry counts, spent or not (re-review C2): this drives Android's
+  // Back interception (App.tsx → MainActivity). Counting a spent drawer as
+  // empty turned Back off, so the second Back sent the app to the background
+  // with the files drawer still open. The "one Escape, then the chat" rule is
+  // a KEYBOARD rule (the stop key); Back has no chat to reach.
   get isEmpty(): boolean {
-    return this.stack.every((c) => c.spent);
+    return this.stack.length === 0;
   }
 
   subscribe(l: StoreListener): () => void {
@@ -183,9 +193,10 @@ export function useDismissTop(): () => void {
   const store = useContext(EscStoreContext);
   return useCallback(() => {
     if (!store) return;
-    const top = store.activeTop();
+    // Back peels the drawer's layers and then closes it — every press, focus
+    // or not (re-review C2); the spent rule is for Escape only.
+    const top = store.top();
     if (!top) return;
-    store.handled(top);
     try {
       top.ref.current();
     } catch (err) {

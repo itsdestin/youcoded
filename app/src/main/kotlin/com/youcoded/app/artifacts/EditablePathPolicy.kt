@@ -75,8 +75,10 @@ object EditablePathPolicy {
     )
 
     fun privateForRecordTrust(canonicalPath: String): Boolean {
-        if (editTier(canonicalPath) != EditTier.FREE) return true
+        // Lowercased BEFORE editTier too (re-review C3): its names are
+        // case-sensitive, and `.SSH/id_rsa` must not dodge a trust decision.
         val lower = canonicalPath.lowercase()
+        if (editTier(lower) != EditTier.FREE) return true
         val base = lower.split('/').lastOrNull() ?: ""
         if (base in RECORD_PRIVATE_BASENAMES) return true
         return RECORD_PRIVATE_SUBPATHS.any { lower.contains(it) || lower.endsWith(it.trimEnd('/')) }
