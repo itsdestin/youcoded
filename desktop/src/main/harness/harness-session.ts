@@ -13,6 +13,7 @@
 // new event types.
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
+import { isContextOverflow } from '../providers/context-overflow';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
@@ -170,9 +171,9 @@ import { formatArgErrors } from './tools/arg-errors';
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile } from './capability-profile';
 import { adaptForWire } from './wire-adapter';
-import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, type CompactionConfig } from './compaction';
+import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
 import { toReport, type PrefillProgress } from '../providers/prefill-progress';
-import { messageTokens, messagesTokens, APPROX_CHARS_PER_TOKEN } from './message-size';
+import { messageTokens, messagesTokens, requestOccupancy, requestFixedTokens, type UsageAnchor, APPROX_CHARS_PER_TOKEN } from './message-size';
 import { createSkillTool } from './tools/skill';
 import { createTaskTool } from './tools/task';
 import { ModelSearchTool } from './tools/model-search';
@@ -195,6 +196,12 @@ export interface HarnessSessionOpts {
   sessionId: string; cwd: string; harness: HarnessManifest; binding: ModelBinding;
   /** Model context window (from the catalog); null → conservative 32k default. */
   contextLength?: number | null;
+  /** Host-only durable commit. Its resolved event has already been appended;
+   *  a rejection must leave this history unchanged and emit no summary marker. */
+  commitCompaction?: (proposal: {
+    event: TranscriptEvent; resumeFromEventUuid: string; coveredThroughEventUuid: string;
+    sourceRevision: number; eventUuids: string[];
+  }) => Promise<TranscriptEvent>;
   /** Resolved price for the bound model, or null when none is published.
    *  Re-resolved on setBinding, so a mid-session model swap prices only the
    *  turns that run AFTER it — a turn is never repriced retroactively. */
@@ -318,6 +325,7 @@ interface StepUsage { inputTokens: number; outputTokens: number; cacheReadTokens
 // What one consumed step returns to the loop.
 interface StepResult {
   text: string; toolCalls: ToolCall[]; usage: StepUsage;
+  requestAnchor?: Omit<UsageAnchor, 'inputTokens'>;
   /** Only provider-reported counters; never includes the output-char fallback in usage. */
   measuredUsage?: StepUsage;
   /** Both prompt and completion totals are known, so a priced total/context is meaningful. */
@@ -722,6 +730,51 @@ export class HarnessSession extends EventEmitter {
   /** Which transcript events the CURRENT history is accepted from (cache Stage 4).
    *  Every `this.history` mutation below reports here — see accepted-history-capture.ts. */
   private capture = new AcceptedHistoryCapture();
+  // Positional provenance for portable tail cuts. Never infer an index from the
+  // capture's flat list: one assistant/tool message can consume several events.
+  private historyOrigins: Array<string[] | null> = [];
+
+  /** First event of a retained suffix, only when the entire map is aligned and
+   *  the cut begins at a distinct, event-backed message. No guessed resume point. */
+  firstEventForCut(cut: number): string | null {
+    if (!Number.isInteger(cut) || cut < 0 || cut >= this.history.length ||
+        this.historyOrigins.length !== this.history.length) return null;
+    const firstMessage = this.history[cut];
+    if (firstMessage.role === 'tool' && Array.isArray(firstMessage.content)) {
+      // WHY: a result alone cannot start a replayable suffix when its call was
+      // retired. Normal cut selection avoids this; the public lookup must also
+      // fail closed if a caller supplies an unsafe index.
+      const resultIds = new Set(firstMessage.content.filter(part => part.type === 'tool-result').map(part => part.toolCallId));
+      if (this.history.slice(0, cut).some(message => message.role === 'assistant' &&
+          Array.isArray(message.content) && message.content.some(part =>
+            part.type === 'tool-call' && resultIds.has(part.toolCallId)))) return null;
+    }
+    const origins = this.historyOrigins[cut];
+    const first = origins?.[0];
+    // WHY: a replay from this UUID must recover the WHOLE kept suffix. A
+    // synthetic steer/rule anywhere after it has no event and would disappear.
+    if (!first || this.historyOrigins.slice(cut).some(part => !part?.length || part.some(uuid => !uuid)) ||
+        this.historyOrigins.slice(0, cut).some(previous => previous?.includes(first))) return null;
+    return first;
+  }
+  /** The user-role event that opens the kept tail's turn, for the chat's dimming.
+   *  WHY: the marker lands AFTER the kept tail, so "dim everything above the
+   *  marker" faded messages the model still sees. A tail that starts inside a
+   *  turn keeps that whole turn bright (the conservative side). null when that
+   *  turn's opener is the previous summary or not event-backed: the renderer
+   *  then leaves its previous fade line where it was rather than guess. */
+  retainedTurnStart(cut: number): string | null {
+    if (this.historyOrigins.length !== this.history.length) return null;
+    for (let i = Math.min(cut, this.history.length - 1); i >= 0; i--) {
+      const message = this.history[i];
+      if (message.role !== 'user') continue;
+      if (typeof message.content === 'string' && message.content.startsWith('[Earlier conversation summary]\n')) return null;
+      // A project-rule injection has no event and no chat entry — look past it.
+      const uuid = this.historyOrigins[i]?.[0];
+      if (uuid) return uuid;
+    }
+    return null;
+  }
   /** The most recent stream attempt, for the ONE acceptance decision that happens
    *  outside the turn loop: send()'s catch, which pushes in-flight partial text
    *  after the step threw and so never saw a StepResult. */
@@ -746,6 +799,8 @@ export class HarnessSession extends EventEmitter {
    *  trim, so in practice the map is cleared first; the residual exposure is
    *  the same narrow tiny-window case documented for shownImages. */
   private servedReads = new Map<string, ServedRead>();
+  /** Skill repeat guard (ToolContext.servedSkills): cleared wherever servedReads is, same reason. */
+  private servedSkills = new Set<string>();
   /** 1-based running count of tool calls dispatched — lets Read say "N calls ago". */
   private toolCallCount = 0;
   private bashOutputReadsThisTurn = 0;   // G-1 per-turn cap, reset in beginTurn
@@ -840,6 +895,12 @@ export class HarnessSession extends EventEmitter {
   // real occupancy — Destin, 2026-07-28). The last step's prompt already
   // contains everything, so lastIn + lastOut is the honest "how full".
   private _contextUsedTokens: number | null = null;
+  private usageAnchor: UsageAnchor | null = null;
+  private failedCompactionRevision: number | null = null;
+  private overflowOutputStarted = false;
+  private legacyReopenFit = false;
+  private summaryInputCannotFit = false;
+  private activeSizingTools: Record<string, { description?: string; inputSchema?: unknown }> | null = null;
   /** Tokens occupying this session's window after its last COMPLETED step. Mid-
    *  turn it is stale by at most one step, which is fine for a budget heuristic
    *  — the alternative is a per-step event nobody else needs.
@@ -852,7 +913,13 @@ export class HarnessSession extends EventEmitter {
    *  in that case; mirror it here so this accessor and that payload never
    *  disagree. Only returns null if the estimate itself were ever unavailable
    *  (it isn't today — chars/4 always produces a number). */
-  get contextUsedTokens(): number | null { return this._contextUsedTokens ?? this.estimateContextTokens(); }
+  get contextUsedTokens(): number | null {
+    if (this.usageAnchor) return requestOccupancy({
+      history: this.history, identity: this.requestSizingIdentity(), revision: this.capture.revision,
+      fixedCost: this.requestFixedCost(), anchor: this.usageAnchor,
+    }).tokens;
+    return this._contextUsedTokens ?? this.estimateContextTokens();
+  }
   /** This session's resolved context window in tokens (null when no source
    *  could answer). Paired with contextUsedTokens: "remaining" needs both, and
    *  the session is the only place that tracks the CURRENT one — setBinding
@@ -894,8 +961,22 @@ export class HarnessSession extends EventEmitter {
    *  with a `seed` — restores a durable accepted-history checkpoint (cache
    *  Stage 4). Without a seed the capture starts empty at the next revision, so
    *  the session becomes durable again at its first publish. */
-  seedHistory(messages: ModelMessage[], seed?: AcceptedHistorySeed & { continuationBinding?: string }): void {
+  seedHistory(messages: ModelMessage[], seed?: AcceptedHistorySeed & {
+    continuationBinding?: string; messageOrigins?: Array<string[] | null>;
+  }): void {
     this.history = messages;
+    // WHY: a flat accepted seed cannot locate a tail cut. Only the event-by-
+    // event rebuild supplies aligned origins; reject a mismatched or invented
+    // map instead of guessing a portable resume point.
+    const known = new Set(seed?.eventUuids ?? []);
+    this.historyOrigins = seed?.messageOrigins?.length === messages.length &&
+      seed.messageOrigins.every(part => part === null || part.every(uuid => known.has(uuid)))
+      ? seed.messageOrigins.map(part => part ? [...part] : null)
+      : messages.map(() => null);
+    this.legacyReopenFit = !seed;
+    this.failedCompactionRevision = null;
+    this.usageAnchor = null;
+    this._contextUsedTokens = null;
     this.capture.reset(seed);
     // WHY both: the restored ciphertext was accepted under THIS identity, so the
     // first dispatch must compare against it and strip on a mismatch — and the
@@ -910,6 +991,7 @@ export class HarnessSession extends EventEmitter {
     this.readRegistry.clear();
     this.shownImages.clear();
     this.servedReads.clear(); // G-11: the earlier Read results are not in a resumed session's view
+    this.servedSkills.clear();
     this.todos.length = 0;
     this.shellCwd = null; // a resumed session starts back at the workspace root
     this.shellEnv = null; // same contract — a resumed session starts with a fresh env too
@@ -970,7 +1052,12 @@ export class HarnessSession extends EventEmitter {
     // Caches are model-scoped on every provider, so a real swap makes the next
     // request a known full miss. A same-binding call (a pricing or context
     // refresh) moves nothing and must not claim to.
-    if (changed) this.prefixMoved = true;
+    if (changed) {
+      this.prefixMoved = true;
+      this.activeSizingTools = null;
+      this.usageAnchor = null;
+      this._contextUsedTokens = null;
+    }
     this.continuationBinding = undefined;
     // WHY only when `changed` (fix pass, review finding 1, then this pass):
     // a real swap makes the OLD identity unquotable — left in place, the seeded
@@ -1003,8 +1090,12 @@ export class HarnessSession extends EventEmitter {
     // a no-op strip would invalidate a published checkpoint (and force a
     // republish) for a history that is byte-for-byte what it was.
     let changed = false;
-    this.history = this.history.flatMap(message => {
-      if (message.role !== 'assistant' || !Array.isArray(message.content)) return [message];
+    const origins: Array<string[] | null> = [];
+    this.history = this.history.flatMap((message, index) => {
+      if (message.role !== 'assistant' || !Array.isArray(message.content)) {
+        origins.push(this.historyOrigins[index] ?? null);
+        return [message];
+      }
       const content = (message.content as any[]).filter(part => {
         if (part?.type !== 'reasoning') return true;
         changed = true;
@@ -1017,8 +1108,12 @@ export class HarnessSession extends EventEmitter {
           return plain;
         });
       if (content.length === 0) { changed = true; return []; }
+      origins.push(content.length !== (message.content as any[]).length ||
+        content.some((part, i) => part !== (message.content as any[])[i])
+        ? null : this.historyOrigins[index] ?? null);
       return [{ ...message, content } as ModelMessage];
     });
+    this.historyOrigins = origins;
     // A strip rewrites history in place: the messages that survive no longer
     // descend byte-for-byte from the events they were accepted from, so any
     // checkpoint taken before this one is stale.
@@ -1073,10 +1168,27 @@ export class HarnessSession extends EventEmitter {
    *  tokens (small local servers — the smallest windows, where being optimistic
    *  hurts most), and the occupancy left after a /clear, which is the system
    *  prompt and the tool schemas and nothing else. */
+  private requestFixedCost(): number {
+    return this.activeSizingTools
+      ? requestFixedTokens(this.systemText, this.activeSizingTools)
+      : Math.ceil(this.systemText.length / APPROX_CHARS_PER_TOKEN)
+        + (this.profile.supportsTools ? estimateToolSchemaTokens([...this.toolByName.values()]) : 0);
+  }
+
+  private requestSizingIdentity(): string {
+    // WHY: names alone cannot fence a changed schema or prompt. Never mix an old
+    // provider's measured input with a new model's (or newly configured tools').
+    return JSON.stringify([this.binding.providerId, this.binding.modelId, this.continuationBinding,
+      this.systemText, this.profile.maxToolPresentation, this.profile.supportsVision,
+      this.activeSizingTools ? Object.entries(this.activeSizingTools).map(([name, t]) =>
+        [name, t.description, (t.inputSchema as { jsonSchema?: unknown })?.jsonSchema ?? t.inputSchema])
+        : this.profile.supportsTools && [...this.toolByName.values()].map(t =>
+          [t.name, t.description, t.rawInputSchema ?? null, String(t.inputSchema)]),
+    ]);
+  }
+
   private estimateContextTokens(): number {
-    return Math.ceil(this.systemText.length / APPROX_CHARS_PER_TOKEN)
-      + estimateToolSchemaTokens([...this.toolByName.values()])
-      + messagesTokens(this.history);   // binary-aware — see message-size.ts
+    return this.requestFixedCost() + messagesTokens(this.history);
   }
 
   /** Re-base `_contextUsedTokens` after a HISTORY-ONLY rewrite (compaction,
@@ -1105,8 +1217,16 @@ export class HarnessSession extends EventEmitter {
    *  Falls back to the plain estimate when nothing has been measured yet — the
    *  same fallback the emit site and the accessor already use for a
    *  usage-silent provider. */
+  private previewReprojectedContext(estimateBefore: number | null, replacement: ModelMessage[]): number {
+    const estimateAfter = this.requestFixedCost() + messagesTokens(replacement);
+    const measured = this._contextUsedTokens;
+    if (measured === null || estimateBefore === null) return estimateAfter;
+    return Math.max(0, measured - Math.max(0, estimateBefore - estimateAfter));
+  }
+
   private reprojectContextUsed(estimateBefore: number | null): number {
-    const estimateAfter = this.estimateContextTokens();
+    const projected = this.previewReprojectedContext(estimateBefore, this.history);
+    this.usageAnchor = null; // a rewrite cannot inherit the preceding request's prefix
     const measured = this._contextUsedTokens;
     // WHY this returns WITHOUT writing the field (review finding, 2026-09-16):
     // `_contextUsedTokens` means "a measured prompt-token count", and its only
@@ -1117,12 +1237,9 @@ export class HarnessSession extends EventEmitter {
     // and only re-estimates when handed 0, so a frozen sub-trigger number would
     // stop compaction firing for the rest of the session. The accessor already
     // falls back to this same estimate, so leaving the field null costs nothing.
-    if (measured === null || estimateBefore === null) return estimateAfter;
-    // Both Math.max guards are for a shrink that reads as a GROWTH (an estimator
-    // quirk on a rewrite that replaced a span with a longer summary): clamp the
-    // delta at 0 rather than inflating the measured figure, and clamp the result
-    // at 0 rather than reporting a negative window.
-    const projected = Math.max(0, measured - Math.max(0, estimateBefore - estimateAfter));
+    if (measured === null || estimateBefore === null) return projected;
+    // The pure preview applied the same clamped measured delta that this
+    // mutation uses; persisted and live events must report one reading.
     this._contextUsedTokens = projected;
     return projected;
   }
@@ -1150,6 +1267,28 @@ export class HarnessSession extends EventEmitter {
       costUsd: this.opts.free ? null : costForUsage(u, this.opts.pricing),
       free: this.opts.free ?? false,
     };
+  }
+
+  /** Prepare a summary event without announcing a rewrite that is not durable.
+   *  A host callback resolves only after the referenced tail and record append;
+   *  standalone harness tests keep the original in-memory path. */
+  private async commitSummaryCandidate(data: TranscriptEvent['data'], cut: number,
+                                       sourceRevision: number): Promise<TranscriptEvent | null> {
+    const event: TranscriptEvent = { type: 'compact-summary', sessionId: this.opts.sessionId,
+      uuid: randomUUID(), timestamp: Date.now(), data };
+    if (!this.opts.commitCompaction) return event;
+    if (this.abort?.signal.aborted || this.capture.revision !== sourceRevision) return null;
+    const resumeFromEventUuid = this.firstEventForCut(cut);
+    const capture = this.capture.snapshot();
+    const resumeIndex = resumeFromEventUuid ? capture.eventUuids.indexOf(resumeFromEventUuid) : -1;
+    if (resumeIndex < 1) return null; // no known persisted prefix to cover
+    try {
+      return await this.opts.commitCompaction({ event, resumeFromEventUuid: resumeFromEventUuid!,
+        coveredThroughEventUuid: capture.eventUuids[resumeIndex - 1],
+        sourceRevision, eventUuids: capture.eventUuids });
+    } catch {
+      return null; // persistence failure cannot adopt or announce a candidate
+    }
   }
 
   /** Returns the uuid it minted so a caller that ALSO changes history can record
@@ -1230,10 +1369,11 @@ export class HarnessSession extends EventEmitter {
         // t.source is the rule's path relative to cwd — inside the project, so the
         // model can actually read it when the notice tells it to.
         const fitted = fitInjection(t.body, this.profile.injectionBudgetTokens, t.source);
-        this.history.push({
+        this.historyOrigins.push(null);
+        this.history.push(markAppGenerated({
           role: 'user',
           content: `<project-rule source="${t.source}">\n${fitted.text}\n</project-rule>`,
-        });
+        }));
         this.capture.mutated();   // injected rule text, backed by no event
       }
     }
@@ -1463,7 +1603,7 @@ export class HarnessSession extends EventEmitter {
     // clear any stale drop list from a PRIOR (tool-capable) binding — "no tools
     // at all" is a different reason than "dropped for budget", and leaving the
     // old list around would misreport why MCP servers are unavailable.
-    if (!this.profile.supportsTools) { this._droppedMcpServers = []; return {}; }
+    if (!this.profile.supportsTools) { this._droppedMcpServers = []; this.activeSizingTools = {}; return {}; }
     this.syncSkillTool();
     this.syncTaskTool();
     this.syncMcpTools();
@@ -1490,6 +1630,7 @@ export class HarnessSession extends EventEmitter {
       const shortDesc = t.shortDescriptionFor?.({ supportsVision: this.profile.supportsVision }) ?? t.shortDescription ?? full;
       out[t.name] = tool({ description: simplified ? shortDesc : full, inputSchema: schema });
     }
+    this.activeSizingTools = out;
     return out;
   }
 
@@ -1683,70 +1824,57 @@ export class HarnessSession extends EventEmitter {
     return contextBudget({ contextLength: this.opts.contextLength ?? null, maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
   }
 
-  /** Two-stage compaction (spec §4.4). PRUNE when pruning alone frees enough
-   *  (planCompaction's 'prune' — batched by minPruneSavings); otherwise SUMMARIZE
-   *  the condensed span, keeping the last 2 user-delimited turns verbatim, and
-   *  emit compact-summary. FAIL-SAFE: a summary that throws or comes back empty
-   *  leaves history exactly as it was — fitToContext (in consumeStep) is the
-   *  hard floor, so the turn never bricks.
-   *
-   *  WHY history is touched ONLY on a 'prune' decision or a summary that
-   *  succeeded (cache follow-ups item 3, 2026-09-10): this used to "always
-   *  prune first" on both decisions. On the summarize path that prune was
-   *  usually a small edit in the MIDDLE of the history — and when the summary
-   *  then bailed (too few user turns, a trivial span, a failed call) the edit
-   *  stood, so the next step's prefix had moved and every provider re-billed
-   *  everything after it. On a small local window that repeated every step
-   *  until a summary finally landed. The prune the model reads before a
-   *  summary is now done on a copy and committed together with the summary. */
-  private async maybeCompact(model: LanguageModel, lastInputTokens: number, aiTools: Record<string, any>): Promise<void> {
-    const cfg = this.compactionConfig();
-    const decision = planCompaction(this.history, cfg, lastInputTokens);
-    if (decision.action === 'none') return;
-    if (decision.action === 'prune') {
-      // Read BEFORE the mutation — reprojectContextUsed sizes the rewrite against it.
-      const estimateBefore = this.rewriteBaseline();
-      this.commitPrune(pruneToolOutputs(this.history, cfg));
-      // No event: a pure prune only ever runs INSIDE the turn loop, and the
-      // turn-complete a few steps later re-measures the window for the UI. This
-      // keeps the IN-PROCESS figure honest in the meantime — it sizes a
-      // specialist's report against the parent's headroom (see the field's WHY).
-      this.reprojectContextUsed(estimateBefore);
-      return;
-    }
-    // Summarize. Decide whether a summary will actually run BEFORE touching
-    // anything. The cut depends only on message roles; the thrash guard is
-    // measured on the span AS THE MODEL WILL READ IT — the unpruned front of the
-    // history (below) — so a span large only because of prunable tool output
-    // now proceeds to a summary where it used to bail on the pruned measure.
-    const cut = this.summarizeCutIndex();
-    if (cut <= 0) return;                                  // nothing safely condensable → history stands
+  /** Automatic selection retires complete groups into one summary. A failed
+   * candidate leaves accepted history intact and fences this exact revision. */
+  private async maybeCompact(model: LanguageModel, aiTools: Record<string, any>, force = false): Promise<boolean> {
+    const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
+      revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
+    const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
+      fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
+      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096, estimatedInput });
+    if (!force && plan.status === 'fits') return false;
+    if (this.failedCompactionRevision === this.capture.revision) return false;
+    // Routine compaction summarizes; legacy prune transforms remain available
+    // for decoding already-published accepted-history snapshots.
+    // Select before touching history. Token sizing and call/result groups,
+    // rather than the number of user-role messages, determine the safe tail.
+    const cut = force ? selectCompactionCut(this.history, Math.max(1, Math.floor(plan.tail / 2))) : this.compactionCut();
+    if (cut <= 0) { this.failedCompactionRevision = this.capture.revision; return false; }
     const span = this.history.slice(0, cut);
-    // I3 thrash guard: if the last-2-turns `keep` span ALONE exceeds the trigger
-    // (e.g. a fresh 6k-token tool result in an 8k window), the condensable `span`
-    // is tiny yet planCompaction keeps saying 'summarize' every step. Re-summarizing
-    // a near-empty span burns a model call + emits a dead compact-summary each step
-    // (~25/turn). Bail when the span is trivial — history stands and fitToContext
-    // remains the floor.
-    if (span.length <= 1 || estimateTokens(span) < HarnessSession.MIN_SUMMARIZE_SPAN_TOKENS) return;
-    // WHY the summary reads the UNPRUNED span (review finding, 2026-09-10): the
-    // provider cached the bytes the chat request sent, and that was the unpruned
-    // history. A pruned copy diverges at the first pruned message and everything
-    // after it is billed cold — the exact cost generateSummary's warm prefix
-    // exists to avoid. Pruning still happens, on a copy, and is committed only
-    // together with the summary: the kept tail goes forward pruned.
-    const pruned = pruneToolOutputs(this.history, cfg);
-    const keep = pruned.slice(cut);
+    // Avoid repeatedly paying to summarize a trivial retired prefix when the
+    // newest indivisible group alone exceeds the allowance.
+    if (estimateTokens(span) < HarnessSession.MIN_SUMMARIZE_SPAN_TOKENS && !force) {
+      this.failedCompactionRevision = this.capture.revision;
+      return false;
+    }
+    // The kept tail remains byte-identical; only the retired summary copy may
+    // differ (provenance labels for app-generated user-role messages).
+    const keep = this.history.slice(cut);
+    const sourceRevision = this.capture.revision;
     let generated: { text: string; usage?: StepUsage } = { text: '' };
+    this.summaryInputCannotFit = false;
     try { generated = await this.generateSummary(model, span, aiTools); } catch { generated = { text: '' }; }
     const summary = generated.text;
-    if (!summary.trim()) return;                          // FAIL-SAFE: no summary → history untouched
-    // Taken HERE, not at the top: every bail-out above (`cut <= 0`, the thrash
-    // guard, an empty summary) returns without touching history, and commitPrune
-    // below is this path's first mutation — so a walk of the whole history is
-    // spent only on the compactions that actually happen.
+    if (!summary.trim() || !this.compactionCandidateFits(summary, keep)) {
+      this.failedCompactionRevision = this.capture.revision;
+      return false;
+    }
+    // WHY: the host may hold this promise at the transcript append. Until it
+    // resolves, neither the working history nor the marker may say "compacted".
+    const replacement = [markAppGenerated({ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage), ...keep];
     const estimateBefore = this.rewriteBaseline();
-    this.commitPrune(pruned);
+    const contextUsedBefore = this._contextUsedTokens;
+    const committed = await this.commitSummaryCandidate({
+      summary, autoCompaction: true, retainedFromUuid: this.retainedTurnStart(cut),
+      contextUsedAfter: this.previewReprojectedContext(estimateBefore, replacement),
+      ...(contextUsedBefore === null ? {} : { contextUsedBefore }),
+      ...(generated.usage ? { usage: this.priceSummaryUsage(generated.usage) } : {}),
+    }, cut, sourceRevision);
+    if (!committed) { this.failedCompactionRevision = this.capture.revision; return false; }
+    // Every bail-out above returns before the first history mutation.
+    // WHY servedSkills too: a skill body in the retired span is now only in
+    // the summary, so the repeat guard must not call it "already loaded".
+    this.servedReads.clear(); this.servedSkills.clear();
     // WHY the history swap happens BEFORE the emit (2026-09-16): the event now
     // carries the window's occupancy AFTER this rewrite, and that number cannot
     // be read off a history the rewrite has not landed in yet. emitEvent is
@@ -1764,9 +1892,9 @@ export class HarnessSession extends EventEmitter {
     // false "already visible" bug /clear had (Fix 1), reachable here
     // automatically at the trigger instead of only on an explicit /clear.
     this.shownImages.clear();
-    this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
-    const contextUsedBefore = this._contextUsedTokens;
-    const contextUsedAfter = this.reprojectContextUsed(estimateBefore);
+    this.history = replacement;
+    this.historyOrigins = [null, ...this.historyOrigins.slice(cut)];
+    this.reprojectContextUsed(estimateBefore);
     // Existing frozen event (no new type). `summary` is the canonical field the
     // renderer reads (types.ts / App.tsx / BubbleFeed.tsx). `autoCompaction` tags
     // this as a SPONTANEOUS native compaction so the renderer surfaces the marker
@@ -1775,13 +1903,8 @@ export class HarnessSession extends EventEmitter {
     // untouched. `usage` is the summary call's own bill (see generateSummary),
     // priced here so it can be totalled. The two context figures let the status
     // bar re-base its gauge and the marker say what was actually freed.
-    const summaryUuid = this.emitEvent('compact-summary', {
-      summary,
-      autoCompaction: true,
-      contextUsedAfter,
-      ...(contextUsedBefore === null ? {} : { contextUsedBefore }),
-      ...(generated.usage ? { usage: this.priceSummaryUsage(generated.usage) } : {}),
-    });
+    this.emit('transcript-event', committed);
+    const summaryUuid = committed.uuid;
     this.prefixMoved = true;   // the next request starts with the summary — a known full miss
     // The new leading message IS that event's summary text, so the uuid enters
     // BOTH lists: the transformation says how history was rewritten, while the
@@ -1789,8 +1912,12 @@ export class HarnessSession extends EventEmitter {
     // recordEvent the summary has no event to point at and gets persisted as a
     // bounded copy of its own text (architecture doc → Capture: recordEvent
     // covers "user-message, skill-invoked, tool-use, tool-result, compact-summary").
+    this.historyOrigins[0] = [summaryUuid];
     this.capture.recordEvent(summaryUuid);
-    this.capture.markSummary(summaryUuid);
+    this.capture.markSummary(summaryUuid, this.historyOrigins[1]?.[0]);
+    this.failedCompactionRevision = null;
+    this.legacyReopenFit = false;
+    return true;
   }
 
   /** Make a pruned copy of the history the live history, with every
@@ -1804,6 +1931,7 @@ export class HarnessSession extends EventEmitter {
     // the swap to catch it.
     const imagesBefore = countImageOutputs(before);
     this.history = pruned;
+    this.historyOrigins = pruned.map((message, i) => message === before[i] ? this.historyOrigins[i] ?? null : null);
     // WHY the per-message identity check (fix pass, review finding 2):
     // pruneToolOutputs always returns a NEW array, so array identity says
     // nothing — but it returns each individual message it did not touch as the
@@ -1821,7 +1949,7 @@ export class HarnessSession extends EventEmitter {
     // commit rather than diffed, because a text prune has no cheap
     // before/after signal the way images do; the cost of over-clearing is one
     // redundant re-read, the cost of under-clearing is a false notice.
-    this.servedReads.clear();
+    this.servedReads.clear(); this.servedSkills.clear();
   }
 
   // Live prefill progress from llama.cpp, forwarded onto the SAME
@@ -1840,6 +1968,7 @@ export class HarnessSession extends EventEmitter {
    *  RETRIED from scratch, which is what made progress appear to reset itself
    *  (Destin, 2026-07-26). */
   private rearmStallWatchdog: (() => void) | null = null;
+  private rearmSummaryWatchdog: (() => void) | null = null;
   /** True once THIS turn has parked on a stall the user was told about.
    *  WHY it outlives the step: a manual Retry re-runs the step from the top,
    *  which lands back on the FIRST-BYTE clock (Clock 1). Without this flag a
@@ -1918,40 +2047,42 @@ export class HarnessSession extends EventEmitter {
    *  interruptible via interrupt() exactly like a turn's, and makes a concurrent
    *  send() hit the existing re-entrancy guard instead of mutating history
    *  underneath us. Cleared in a finally so a throw can't brick the session. */
-  async compactNow(): Promise<{ ok: true } | { ok: false; reason: 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed' }> {
+  /** U11 — would this conversation fit a model with `contextLength`?
+   *  'fits' switches as today; 'needs-summary' asks first; 'too-small' means the
+   *  model cannot hold even this session's fixed prompt and a reply, so a summary
+   *  could not help. Measured with THIS session's prompt and tools; the ordinary
+   *  pre-request check still guards the first request on the new model. */
+  fitForWindow(contextLength: number | null | undefined): 'fits' | 'needs-summary' | 'too-small' {
+    // WHY: an unknown window would be planned as 32k and block chats that most
+    // likely fit. Don't block on a guess; the pre-request check still applies.
+    if (contextLength == null) return 'fits';
+    const base = { contextLength, fixedCost: this.requestFixedCost(),
+      summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
+      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 };
+    if (planContextBudget(base).status === 'cannot-fit') return 'too-small';
+    const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
+      revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
+    return planContextBudget({ ...base, estimatedInput }).status === 'fits' ? 'fits' : 'needs-summary';
+  }
+
+  /** `targetContextLength` (U11 Summarize and switch): the summary still runs on
+   *  the CURRENT model, but the kept tail and the post-compaction check are sized
+   *  for the smaller model about to take over, so success means it fits there. */
+  async compactNow(focus?: string, targetContextLength?: number): Promise<{ ok: true } | { ok: false; reason: 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed' | 'interrupted' | 'cannot-fit' }> {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     this.abort = new AbortController();
+    // Idle here (abort was null), so no turn owns this flag; a leftover from the
+    // last turn's Stop must not make this summary read as stopped.
+    this.interrupted = false;
     try {
-      const cfg = this.compactionConfig();
-      // Prune first — same order as the automatic path, and it shrinks the span
-      // the model has to read before we pay for a summary. Same image-collapse
-      // diff as maybeCompact's prune call — see its comment for why this is
-      // keyed on an actual count decrease, not on whether summarize runs next.
-      const imagesBeforePrune = countImageOutputs(this.history);
-      // The window as it stood when the user pressed Compact — the marker's
-      // "freed N tokens" measures against THIS, so it is read before the prune
-      // rather than between the prune and the summary.
       const contextUsedBefore = this._contextUsedTokens;
-      // Re-based in TWO stages (prune, then summary), each against its own
-      // estimate, because the refusal returns below sit between them: a
-      // compaction refused as 'nothing-to-compact' or 'summary-failed' has still
-      // pruned, and leaving the old figure standing would report a window this
-      // session no longer has. See reprojectContextUsed for why it subtracts.
-      const estimateBeforePrune = this.rewriteBaseline();
-      const beforePrune = this.history;
-      this.history = pruneToolOutputs(this.history, cfg);
-      // Same per-message identity check as maybeCompact's prune — see its WHY.
-      if (this.history.some((m, i) => m !== beforePrune[i])) { this.capture.markPruned(); this.prefixMoved = true; }
-      if (countImageOutputs(this.history) < imagesBeforePrune) this.shownImages.clear();
-      this.servedReads.clear(); // G-11: same reasoning as maybeCompact — prune may have cut a served Read
-      this.reprojectContextUsed(estimateBeforePrune);
-      const cut = this.summarizeCutIndex();
-      // <2 user turns means there is no boundary we can cut on without risking
-      // splitting a tool-call/result pair, so there is genuinely nothing to do.
+      const cut = this.compactionCut(true, focus, targetContextLength);
+      // Nothing before a safe retained group can be retired.
       if (cut <= 0) return { ok: false, reason: 'nothing-to-compact' };
       const keep = this.history.slice(cut);
       const span = this.history.slice(0, cut);
       if (span.length === 0) return { ok: false, reason: 'nothing-to-compact' };
+      const sourceRevision = this.capture.revision;
       let generated: { text: string; usage?: StepUsage } = { text: '' };
       try {
         const model = await this.modelFactory(this.binding, {
@@ -1960,15 +2091,18 @@ export class HarnessSession extends EventEmitter {
         });
         // The same tool set a turn would carry, so the summary request's
         // prefix matches the conversation's (see generateSummary).
-        generated = await this.generateSummary(model, span, this.buildAiTools());
+        generated = await this.generateSummary(model, span, this.buildAiTools(), focus);
       } catch {
         generated = { text: '' };
       }
       const summary = generated.text;
-      // FAIL-SAFE, same as the automatic path: a failed or empty summary leaves
-      // the PRUNED history in place rather than discarding anything. The user
-      // still gets a real (if smaller) reduction, and never a lost conversation.
+      // WHY: Stop is not a model failure; say so, so the user is not told to
+      // retry. `interrupted`, not the abort signal: the stall timeout aborts too.
+      if (this.interrupted) return { ok: false, reason: 'interrupted' };
+      // FAIL-SAFE: a failed or empty summary leaves history untouched.
       if (!summary.trim()) return { ok: false, reason: 'summary-failed' };
+      if (!this.compactionCandidateFits(summary, keep, focus, targetContextLength))
+        return { ok: false, reason: targetContextLength === undefined ? 'summary-failed' : 'cannot-fit' };
       // Commit the new history BEFORE announcing it, for the same reason as the
       // automatic path: the event carries the occupancy this rewrite leaves
       // behind, and emitEvent runs its listeners synchronously.
@@ -1978,18 +2112,25 @@ export class HarnessSession extends EventEmitter {
       // the dedupe cache must be cleared here too or it keeps vouching for
       // images this summary just removed.
       const estimateBeforeSummary = this.rewriteBaseline();
-      this.shownImages.clear();
-      this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
-      const contextUsedAfter = this.reprojectContextUsed(estimateBeforeSummary);
-      const summaryUuid = this.emitEvent('compact-summary', {
-        summary,
-        contextUsedAfter,
+      const replacement = [markAppGenerated({ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage), ...keep];
+      const committed = await this.commitSummaryCandidate({
+        summary, retainedFromUuid: this.retainedTurnStart(cut),
+        contextUsedAfter: this.previewReprojectedContext(estimateBeforeSummary, replacement),
         ...(contextUsedBefore === null ? {} : { contextUsedBefore }),
         ...(generated.usage ? { usage: this.priceSummaryUsage(generated.usage) } : {}),
-      });
+      }, cut, sourceRevision);
+      if (!committed) return { ok: false, reason: 'summary-failed' };
+      this.shownImages.clear();
+      this.servedReads.clear(); this.servedSkills.clear(); // same reason as maybeCompact
+      this.history = replacement;
+      this.historyOrigins = [null, ...this.historyOrigins.slice(cut)];
+      this.reprojectContextUsed(estimateBeforeSummary);
+      this.emit('transcript-event', committed);
+      const summaryUuid = committed.uuid;
       this.prefixMoved = true;   // same as the auto path: the next request is a known full miss
+      this.historyOrigins[0] = [summaryUuid];
       this.capture.recordEvent(summaryUuid);   // same reasoning as maybeCompact's
-      this.capture.markSummary(summaryUuid);
+      this.capture.markSummary(summaryUuid, this.historyOrigins[1]?.[0]);
       return { ok: true };
     } finally {
       this.abort = null;
@@ -2013,6 +2154,7 @@ export class HarnessSession extends EventEmitter {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     const estimateBefore = this.rewriteBaseline();
     this.history = [];
+    this.historyOrigins = [];
     // What the model still holds after the barrier: the system prompt and the
     // tool schemas, not the conversation. Without this the status bar kept
     // showing the pre-clear window — the sharpest form of the staleness, since
@@ -2031,6 +2173,7 @@ export class HarnessSession extends EventEmitter {
     // of that file deliver for real, matching what "already visible" claims.
     this.shownImages.clear();
     this.servedReads.clear(); // G-11: same contract — the served Read results are gone with the history
+    this.servedSkills.clear();
     // Emitted (not just persisted) so the store appends it through the host's
     // normal chain AND every attached surface — other windows, the remote web
     // client — learns the conversation was cleared. On replay this same event
@@ -2040,55 +2183,61 @@ export class HarnessSession extends EventEmitter {
     return { ok: true };
   }
 
-  /** Index where the last 2 user-message-delimited turns begin (0 if <2 turns).
-   *  Injected rule messages are role:'user' but are NOT turns — counting them
-   *  shrank the protected window to "the last 2 injections" when a step
-   *  touched several rule-matched paths (2026-08-11, compaction accounting).
-   *  Detected by content shape rather than a flag: injectPathTriggers (above)
-   *  pushes them as `<project-rule source="...">...`, and that's the only
-   *  thing this method has to go on — synthetic wire messages never enter
-   *  history at all, so they were already immune by construction.
-   *  (The per-turn `<specialists-status>` block that once shared this
-   *  exclusion was retired 2026-09-09; Task `list: true` replaced it.) */
-  private summarizeCutIndex(): number {
-    const userIdx: number[] = [];
-    this.history.forEach((m, i) => {
-      const c = (m as any).content;
-      const isSyntheticInjection = typeof c === 'string'
-        && c.startsWith('<project-rule ');
-      if ((m as any).role === 'user' && !isSyntheticInjection) userIdx.push(i);
-    });
-    return userIdx.length < 2 ? 0 : userIdx[userIdx.length - 2];
+  private compactionCandidateFits(summary: string, keep: ModelMessage[], focus?: string, contextLength?: number): boolean {
+    const plan = planContextBudget({ contextLength: contextLength ?? this.opts.contextLength ?? null,
+      fixedCost: this.requestFixedCost(),
+      summaryOverhead: Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN),
+      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+    // WHY: a complete summary is not necessarily an effective one. Validate
+    // actual finished text with current tools and the untouched retained tail
+    // before changing the accepted history or publishing a completion marker.
+    const candidate: ModelMessage[] = [
+      { role: 'user', content: `[Earlier conversation summary]\n${summary}` }, ...keep,
+    ];
+    return validateCompactionCandidate(plan, this.history, candidate) === 'fits';
   }
 
-  /** Model-generated summary of the condensed span. Bounds the span first so the
-   *  summary call itself can't overflow (hard-trim oldest messages until it fits ~60%
-   *  of the window). The caller wraps this in try/catch (fail-safe).
-   *
-   *  C1 — the summary runs on the SAME (possibly stalled) local model this whole
-   *  branch targets, so we consume it EXACTLY like consumeStep does: an explicit
-   *  iterator raced against BOTH the turn's abort signal AND a wall-clock timeout.
-   *  A plain `for await` would block forever on a provider that stops emitting
-   *  without honoring abort — ESC could not break it, send() would never resolve,
-   *  and this.abort would stay non-null, bricking every future send() via the
-   *  re-entrancy guard. On abort OR timeout we stop consuming and return whatever
-   *  partial text we have (the fail-safe tolerates ''): the summary never wedges
-   *  the turn. */
-  private async generateSummary(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>): Promise<{ text: string; usage?: StepUsage }> {
-    // Bound the span to the same floor the conversation's own request is fitted
-    // to (system + span + instruction ≤ trimBudget). In steady state the span
-    // is a prefix of a history that already fit, so this trims nothing — which
-    // is what keeps the prefix below warm. It used to be a flat 60% of the
-    // window, which sat BELOW the compaction trigger and so cut the front of
-    // most spans, defeating the prefix match on every summary.
-    const systemTokens = Math.ceil(this.systemText.length / APPROX_CHARS_PER_TOKEN);
-    const instructionTokens = Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN);
-    // Floored at a quarter of the window: on a tiny window a large system prompt
-    // can eat the whole trim budget, and a budget ≤ 0 would collapse the span to
-    // one message and "summarize" a single turn (review finding 7).
-    const spanBudget = Math.max(this.budget().trimBudget - systemTokens - instructionTokens, Math.floor((this.opts.contextLength ?? 32_768) / 4));
-    let bounded = span;
-    while (estimateTokens(bounded) > spanBudget && bounded.length > 1) bounded = bounded.slice(1);
+  private compactionCut(manual = false, focus?: string, targetContextLength?: number): number {
+    const plan = planContextBudget({ contextLength: targetContextLength ?? this.opts.contextLength ?? null,
+      fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN),
+      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+    // Explicit manual compact may retire history below the automatic threshold;
+    // it still returns a no-op when no complete prefix can be retired. A switch
+    // uses the target model's own tail allowance: it is already the smaller one.
+    const tail = manual && targetContextLength === undefined
+      ? Math.min(plan.tail, Math.floor(estimateTokens(this.history) / 2)) : plan.tail;
+    return selectCompactionCut(this.history, tail);
+  }
+
+  /** Model-generated summary of the retired span. Only the summarizer's tool
+   * output copy may be shortened; the accepted history is never front-trimmed.
+   * WHY: incomplete streams and failed fits must leave history untouched. */
+  private async generateSummary(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>, focus?: string): Promise<{ text: string; usage?: StepUsage }> {
+    // Preserve the whole retired prefix. The old hard trim removed messages
+    // from the front of this span, potentially losing the original request or
+    // a paired tool batch before the model could summarize either.
+    // Provenance rides at the END of the instruction so the span stays
+    // byte-identical to what the provider cached (see summaryProvenanceNote).
+    const instruction = summarizePrompt(focus) + summaryProvenanceNote(span);
+    const instructionTokens = Math.ceil(instruction.length / APPROX_CHARS_PER_TOKEN);
+    const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
+      fixedCost: requestFixedTokens(this.systemText, aiTools), summaryOverhead: instructionTokens,
+      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+    // WHY: the summary has its own output allowance. An oversized tool result
+    // may push this request past that limit between steps; shorten only its
+    // summarizer copy, largest first, never the accepted history or recent tail.
+    const spanBudget = plan.contextLength - plan.fixedCost
+      - messageTokens({ role: 'user', content: instruction }) - plan.summaryAllowance - plan.margin
+      - 32; // SDK wire envelope/role conversion varies by provider; leave small additional headroom.
+    if (spanBudget <= 0 || plan.summaryAllowance <= 0) {
+      this.summaryInputCannotFit = true;
+      return { text: '' };
+    }
+    const bounded = fitSummaryToolOutputs(span, spanBudget);
+    if (!bounded) {
+      this.summaryInputCannotFit = true;
+      return { text: '' };
+    }
     // WHY the request is shaped like the CONVERSATION's own request (cache
     // follow-ups item 4, 2026-09-10): the span IS the front of the history, so
     // a request that starts with the same system text, the same tools and the
@@ -2105,38 +2254,49 @@ export class HarnessSession extends EventEmitter {
     const streamArgs: Parameters<typeof streamText>[0] = {
       model,
       system: this.systemText,
-      messages: [...adaptForWire(bounded, { nativeImageToolResults: this.profile.nativeImageToolResults, supportsVision: this.profile.supportsVision }), { role: 'user', content: summarizePrompt() } as ModelMessage],
+      messages: [...adaptForWire(bounded, { nativeImageToolResults: this.profile.nativeImageToolResults, supportsVision: this.profile.supportsVision }), { role: 'user', content: instruction } as ModelMessage],
+      maxOutputTokens: plan.summaryAllowance,
       toolChoice: 'none',
       abortSignal: this.abort!.signal,
     };
     if (Object.keys(aiTools).length > 0) streamArgs.tools = aiTools;
     const result = withChatGptRequest(this.opts.sessionId, 'summary', () => streamText(streamArgs));
 
-    // Race iterator.next() against the abort signal AND a 30s wall-clock floor —
-    // the same hardening consumeStep uses, since a stalled local stream honors
-    // neither on its own.
-    const iterator = (result.textStream as AsyncIterable<string>)[Symbol.asyncIterator]();
+    // Read fullStream so reasoning counts as activity and the final output is
+    // accepted only when the provider reports a normal stop. Race every read
+    // against cancellation/watchdogs because local providers may ignore abort.
+    const iterator = result.fullStream[Symbol.asyncIterator]();
     const abortSignal = this.abort!.signal;
     let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    let active = false;
+    let stopped = false;
+    let resolveStop!: () => void;
     const stopPromise = new Promise<'stop'>((resolve) => {
-      if (abortSignal.aborted) { resolve('stop'); return; }
-      stopTimer = setTimeout(() => resolve('stop'), 30_000);
-      abortSignal.addEventListener('abort', () => { clearTimeout(stopTimer); resolve('stop'); }, { once: true });
+      resolveStop = () => { stopped = true; clearTimeout(stopTimer); resolve('stop'); };
+      if (abortSignal.aborted) { resolveStop(); return; }
+      abortSignal.addEventListener('abort', resolveStop, { once: true });
+      const arm = () => {
+        clearTimeout(stopTimer);
+        stopTimer = setTimeout(() => { this.abort?.abort(); resolveStop(); }, active ? 60_000 : 5 * 60_000);
+      };
+      this.rearmSummaryWatchdog = () => { active = true; arm(); };
+      arm();
     });
 
+    try {
     let text = '';
     while (true) {
       const nextPromise = iterator.next();
       const chunk = await Promise.race([nextPromise, stopPromise]);
       if (chunk === 'stop') {
-        // Abort or timeout won: release the reader/socket (a provider that ignores
-        // abort would otherwise leak it) and stop with the partial text so far.
         nextPromise.catch(() => {});
         iterator.return?.().catch(() => {});
         break;
       }
       if (chunk.done) break;
-      if (chunk.value) text += chunk.value;
+      const part = chunk.value;
+      if (part.type === 'text-delta') text += part.text;
+      if (part.type === 'text-delta' || part.type === 'reasoning-delta') this.rearmSummaryWatchdog?.();
     }
     // The summary call's own usage, raced against the SAME stop promise so it
     // can never reintroduce the hang C1 exists to prevent: after a clean finish
@@ -2152,15 +2312,21 @@ export class HarnessSession extends EventEmitter {
     // an OpenRouter summary's cache writes are counted like a step's are.
     let usage: StepUsage | undefined;
     const settled = await Promise.race([
-      Promise.all([result.usage, result.providerMetadata]).then(([u, meta]) => ({ u, meta }), () => 'stop' as const),
+      Promise.all([result.usage, result.providerMetadata, result.finishReason]).then(([u, meta, finishReason]) => ({ u, meta, finishReason }), () => 'stop' as const),
       stopPromise,
     ]);
+    let complete = false;
     if (settled !== 'stop') {
-      const { u, meta } = settled;
+      const { u, meta, finishReason } = settled;
+      complete = finishReason === 'stop' && text.trim().length > 0;
       usage = { inputTokens: u?.inputTokens ?? 0, outputTokens: u?.outputTokens ?? 0, ...cacheTokensForStep(u, meta) };
     }
-    clearTimeout(stopTimer);   // the clean path used to leave the 30s handle alive (review finding 8)
-    return { text: text.trim(), usage };
+    return { text: complete && !stopped ? text.trim() : '', usage };
+    } finally {
+      clearTimeout(stopTimer);
+      abortSignal.removeEventListener('abort', resolveStop);
+      this.rearmSummaryWatchdog = null;
+    }
   }
 
   /** Run a user-invoked skill (/skill-name, M3 item 1).
@@ -2175,12 +2341,13 @@ export class HarnessSession extends EventEmitter {
    *  model history on resume. Without it a resumed conversation would replay a
    *  turn whose opening move has no visible cause.
    */
-  async runSkill(inv: { skillId: string; displayName: string; body: string; args?: string; skillPath?: string }): Promise<void> {
+  async runSkill(inv: { skillId: string; displayName: string; body: string; args?: string; skillPath?: string; cut?: boolean }): Promise<void> {
+    if (!inv.cut) this.servedSkills.add(inv.skillId); // a WHOLE body is now in history: a model Skill call for it is a repeat
     const historyText = inv.args ? `${inv.body}\n\n${inv.args}` : inv.body;
     return this.beginTurn(historyText, () => this.emitEvent('skill-invoked', {
       skillId: inv.skillId, displayName: inv.displayName, args: inv.args,
       body: inv.body, skillPath: inv.skillPath,
-    }));
+    }), [], true);
   }
 
   /** `attachments` are absolute paths to files the user attached in the composer.
@@ -2227,7 +2394,7 @@ export class HarnessSession extends EventEmitter {
       // optional so every existing caller/test that passes text alone is
       // unchanged; the card falls back to the prose when it's absent.
       ...(meta ? { injectedMeta: meta } : {}),
-    }));
+    }), [], true);
   }
 
   /** The quiet twin of runNotice: the same text and the same `user-message`
@@ -2245,7 +2412,8 @@ export class HarnessSession extends EventEmitter {
     }
     const injected = injectedLabel(meta);
     const uuid = this.emitEvent('user-message', { text, injected, ...(meta ? { injectedMeta: meta } : {}) });
-    this.history.push({ role: 'user', content: text });
+    this.history.push(markAppGenerated({ role: 'user', content: text }));
+    this.historyOrigins.push([uuid]);
     // WHY (cache Stage 4): this push is exactly beginTurn's user push — the
     // message text IS the emitted event's text — so it must be recorded the
     // same way. Without this the store has no event to reference and falls
@@ -2343,7 +2511,7 @@ export class HarnessSession extends EventEmitter {
   /** The turn driver. `emit` names how this turn ENTERED the conversation — a
    *  typed message, or a skill invocation — which is the only thing that differs
    *  between send() and runSkill(). Everything downstream is identical. */
-  private async beginTurn(text: string, emit: () => string, attachments: string[] = []): Promise<void> {
+  private async beginTurn(text: string, emit: () => string, attachments: string[] = [], appGenerated = false): Promise<void> {
     // Re-entrancy guard: a non-null abort means a turn is already streaming.
     // Throw loudly rather than corrupt the single-slot turn state (see the
     // class-level CONCURRENCY PRECONDITION note).
@@ -2360,9 +2528,11 @@ export class HarnessSession extends EventEmitter {
     // shape every existing test and rebuildHistory() already assert on, so the
     // no-attachment path must not become a one-element parts array.
     const imageParts = this.imagePartsFor(attachments);
-    this.history.push(imageParts.length
-      ? { role: 'user', content: [{ type: 'text', text }, ...imageParts] } as any
-      : { role: 'user', content: text });
+    const enteringMessage = (imageParts.length
+      ? { role: 'user', content: [{ type: 'text', text }, ...imageParts] } as ModelMessage
+      : { role: 'user', content: text } as ModelMessage);
+    this.history.push(appGenerated ? markAppGenerated(enteringMessage) : enteringMessage);
+    this.historyOrigins.push([enteringEventUuid]);
     // Both shapes descend from the SAME event — its text, and (for the image
     // parts) the attachment paths it carries.
     this.capture.recordEvent(enteringEventUuid);
@@ -2500,6 +2670,10 @@ export class HarnessSession extends EventEmitter {
       // it re-counts the entire history once per step, so a 5-step turn reports
       // roughly 5x the real occupancy (Destin, 2026-07-28).
       let lastOutputTokens = 0;
+      // WHY: oxlint's no-unreachable-loop treats the labeled break paths as
+      // exhaustive, although successful tool steps reach the bottom and loop.
+      // Multi-step scripted tests verify this continuation into the next request.
+      // oxlint-disable-next-line no-unreachable-loop
       turnLoop: while (true) {
         // Reset per STEP (not per retry attempt inside withRetry): the required
         // immediate-error retry never needs this reset itself, since it emits
@@ -2521,13 +2695,13 @@ export class HarnessSession extends EventEmitter {
         if (this.pendingSteers.length > 0) {
           for (const s of this.pendingSteers.splice(0)) {
             this.history.push({ role: 'user', content: `<steer>\n${s}\n</steer>` });
+            this.historyOrigins.push(null);
             this.capture.mutated();   // history-only, exactly like an injection
           }
         }
-        // Two-stage compaction FIRST (spec §4.4) — prune, then summarize only if
-        // pruning can't get under budget. Inert (returns immediately) below the
-        // trigger, so the existing loop behavior is unchanged for normal turns.
-        await this.maybeCompact(model, lastInputTokens > 0 ? lastInputTokens : (this._contextUsedTokens ?? 0), aiTools);
+        // Check the NEXT request after steers, tool results and new input. A
+        // prior step's measured input alone cannot represent these additions.
+        await this.maybeCompact(model, aiTools);
         // Consume the prefix-moved flag into THIS request: everything above
         // (compaction, a swap between turns) has had its say, and the request
         // below is the one that pays for it. See the field's WHY.
@@ -2537,9 +2711,25 @@ export class HarnessSession extends EventEmitter {
         // errors as {type:'error'} fullStream parts AND rejected promises, so
         // only wrapping the call would miss them (verified ai@7 facts).
         // WHY: all retries belong to this logical step, not newly allocated steps.
-        const step = await withChatGptRequest(this.opts.sessionId, this.opts.isSpecialistChild ? 'specialist' : 'chat', () => this.withRetry(() =>
-          this.consumeStep(model, aiTools, (t) => { partialAssistantText = t; }),
-        ));
+        let step: StepResult;
+        let overflowRetried = false;
+        this.overflowOutputStarted = false;
+        while (true) {
+          try {
+            step = await withChatGptRequest(this.opts.sessionId, this.opts.isSpecialistChild ? 'specialist' : 'chat', () => this.withRetry(() =>
+              this.consumeStep(model, aiTools, (t) => { partialAssistantText = t; }),
+            ));
+            break;
+          } catch (err) {
+            // Only a rejected request with no emitted output is safe to replay.
+            // Completed tools were already appended before this step and are never rerun.
+            if (overflowRetried || partialAssistantText || this.overflowOutputStarted || !isContextOverflow(err, this.binding.providerId)
+              || !await this.maybeCompact(model, aiTools, true)) throw err;
+            overflowRetried = true;
+            this.prefixMoved = true;
+            turnUsage.expectedRebuild = true;
+          }
+        }
 
         lastInputTokens = step.usage.inputTokens;   // feed the NEXT compaction check
         lastOutputTokens = step.usage.outputTokens;
@@ -2549,7 +2739,11 @@ export class HarnessSession extends EventEmitter {
         // existing inside this closure. Guarded on inputTokens > 0 for the same
         // reason the emit site is: a provider that reports nothing must not
         // overwrite a real reading with a zero.
-        if (lastInputTokens > 0) this._contextUsedTokens = lastInputTokens + lastOutputTokens;
+        if (lastInputTokens > 0) {
+          this._contextUsedTokens = lastInputTokens + lastOutputTokens;
+          this.usageAnchor = step.requestAnchor ? { ...step.requestAnchor, inputTokens: lastInputTokens } : null;
+          if (!step.requestAnchor) this._contextUsedTokens = null; // fitted request: no valid prefix to project
+        }
 
         // Accumulate this step's usage into the turn total.
         turnUsage.inputTokens += step.usage.inputTokens;
@@ -2599,6 +2793,7 @@ export class HarnessSession extends EventEmitter {
           // leaves a junk assistant message in history for every later turn.
           if (step.text && step.text.trim().length > 0) {
             this.history.push({ role: 'assistant', content: step.text });
+            this.historyOrigins.push(this.capture.attemptOrigins(step.attempt, true));
             // Only the TEXT deltas: the pushed string is exactly their
             // concatenation, and this attempt's reasoning never completed.
             this.capture.acceptAttemptText(step.attempt);
@@ -2627,13 +2822,25 @@ export class HarnessSession extends EventEmitter {
         // Record the assistant message (text + any tool-call parts). Skip an
         // empty one (no real text and no calls) so we never push a content-less
         // turn.
+        let assistantOriginIndex = -1;
         if (stepHasText || step.toolCalls.length > 0) {
           // WHY: the completed SDK response is the only faithful ordering and
           // metadata authority. Non-Responses models keep the established
           // flattened shape; SDK tool messages are never copied.
-          this.history.push(...(step.responseMessages.length > 0
-            ? step.responseMessages
-            : [this.assistantMessage(step.text, step.toolCalls)]));
+          const response = step.responseMessages.length > 0
+            ? step.responseMessages : [this.assistantMessage(step.text, step.toolCalls)];
+          this.history.push(...response);
+          // Multiple SDK messages cannot be matched to individual deltas without
+          // a part-level correspondence. Fail closed for that response shape.
+          assistantOriginIndex = this.historyOrigins.length;
+          // WHY: SDK streams can emit reasoning that is absent from their final
+          // response message. A resume at its UUID would begin before the actual
+          // retained message; include reasoning only when the message kept it.
+          const retainsReasoning = response.length === 1 && response[0].role === 'assistant' &&
+            Array.isArray(response[0].content) && response[0].content.some(p => p.type === 'reasoning');
+          const attemptOrigins = this.capture.attemptOrigins(step.attempt, !retainsReasoning);
+          this.historyOrigins.push(...response.map(() => response.length === 1 && response[0].role === 'assistant'
+            ? [...attemptOrigins] : null));
           this.capture.acceptAttempt(step.attempt);
           // WHY the clear lands HERE, not only at the next loop top: everything
           // between this push and that loop top can throw into send()'s catch —
@@ -2734,12 +2941,17 @@ export class HarnessSession extends EventEmitter {
           // The call parts are already in the accepted assistant message above;
           // recording the event is what lets the store cite id/name/input from
           // the transcript rather than copying them into the manifest.
-          this.capture.recordEvent(
-            this.emitEvent('tool-use', { toolUseId: call.toolCallId, toolName: call.toolName, toolInput: call.input }));
+          const uuid = this.emitEvent('tool-use', { toolUseId: call.toolCallId, toolName: call.toolName, toolInput: call.input });
+          this.capture.recordEvent(uuid);
+          // Text/reasoning preceded tool-use in this same assistant message.
+          if (assistantOriginIndex >= 0 && this.historyOrigins[assistantOriginIndex])
+            this.historyOrigins[assistantOriginIndex]!.push(uuid);
         }
 
         // Execute tool calls SERIALLY; collect their results for the next step.
         const resultParts: any[] = [];
+        const resultOrigins: string[] = [];
+        const recordResult = (uuid: string): void => { this.capture.recordEvent(uuid); resultOrigins.push(uuid); };
         for (let i = 0; i < step.toolCalls.length; i++) {
           const call = step.toolCalls[i];
           const payload = await this.runOneTool(call, recentCalls);   // NEVER throws
@@ -2757,11 +2969,12 @@ export class HarnessSession extends EventEmitter {
             // the model-facing history.
             for (let j = i; j < step.toolCalls.length; j++) {
               const rem = step.toolCalls[j];
-              this.capture.recordEvent(
+              recordResult(
                 this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: CANCELED_TOOL_TEXT, isError: true }));
               resultParts.push(this.toolResultPart(rem, CANCELED_TOOL_TEXT));
             }
             this.history.push({ role: 'tool', content: resultParts });
+            this.historyOrigins.push([...resultOrigins]);
             this.emitEvent('user-interrupt', abandonedTurnUsage());
             return;
           }
@@ -2774,18 +2987,19 @@ export class HarnessSession extends EventEmitter {
           // over. The max_steps gate below is the existing precedent for a
           // driver-decided orderly stop.
           if ('kind' in payload) {
-            this.capture.recordEvent(this.emitEvent('tool-result', {
+            recordResult(this.emitEvent('tool-result', {
               toolUseId: call.toolCallId, toolName: call.toolName,
               toolResult: payload.payload.text, isError: true,
             }));
             resultParts.push(this.toolResultPart(call, payload.payload.text));
             for (let j = i + 1; j < step.toolCalls.length; j++) {
               const rem = step.toolCalls[j];
-              this.capture.recordEvent(
+              recordResult(
                 this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: NOT_RUN_TOOL_TEXT, isError: true }));
               resultParts.push(this.toolResultPart(rem, NOT_RUN_TOOL_TEXT));
             }
             this.history.push({ role: 'tool', content: resultParts });
+            this.historyOrigins.push([...resultOrigins]);
             stopReason = DISMISSED_STOP_REASON;
             break turnLoop;
           }
@@ -2793,7 +3007,10 @@ export class HarnessSession extends EventEmitter {
           // the per-turn budget/dedupe and amending the text with a named note
           // for every skip (Task 5 — the driver never promises silently).
           const delivered = this.resolveToolImages(payload, imageBudget);
-          this.capture.recordEvent(this.emitEvent('tool-result', {
+          // WHY: the tool-result event is also the visible persisted transcript.
+          // Never trim it here for a small model; an unfit newest group must
+          // fail explicitly, not erase data before the summarizer can see it.
+          recordResult(this.emitEvent('tool-result', {
             toolUseId: call.toolCallId, toolName: call.toolName,
             toolResult: delivered.text, isError: payload.isError ?? false,
             ...(payload.structuredPatch ? { structuredPatch: payload.structuredPatch } : {}),
@@ -2803,6 +3020,7 @@ export class HarnessSession extends EventEmitter {
           resultParts.push(this.toolResultPart(call, delivered.text, delivered.images));
         }
         this.history.push({ role: 'tool', content: resultParts });
+        this.historyOrigins.push([...resultOrigins]);
         // Path-triggered content (M3 item 3): a project rule or a nested
         // AGENTS.md/CLAUDE.md governing a path this step just touched. Appended
         // AFTER the tool results so the model reads the rule alongside what it
@@ -2958,6 +3176,7 @@ export class HarnessSession extends EventEmitter {
       // StepResult — this is the one acceptance decision made outside it.
       if (partialAssistantText) {
         this.history.push({ role: 'assistant', content: partialAssistantText });
+        this.historyOrigins.push(this.lastAttempt === undefined ? null : this.capture.attemptOrigins(this.lastAttempt, true));
         if (this.lastAttempt !== undefined) this.capture.acceptAttemptText(this.lastAttempt);
       } else if (this.lastAttempt !== undefined) {
         this.capture.abandonAttempt(this.lastAttempt);
@@ -3024,6 +3243,20 @@ export class HarnessSession extends EventEmitter {
     // until the turn loop (or send()'s catch) says what became of the step.
     const attempt = this.capture.beginAttempt();
     this.lastAttempt = attempt;
+    // The moving-front guard is reserved for an old rebuilt reopen after a
+    // summary failed. Normal requests preserve the accepted prefix intact.
+    let fittedHistory = this.legacyReopenFit && this.summaryInputCannotFit && this.failedCompactionRevision === this.capture.revision
+      ? this.fitToContext(this.history) : this.history;
+    const requestPlan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
+      fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
+      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096,
+      // WHY: the pre-request gate uses the provider's measured prefix when it
+      // still matches this history. The sent reply cap must use that SAME
+      // occupancy, not a lower chars/4 estimate that promises extra output.
+      estimatedInput: requestOccupancy({ history: fittedHistory, identity: this.requestSizingIdentity(),
+        revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens });
+    if (requestPlan.replyCap <= 0)
+      throw new Error('The conversation cannot fit this model’s context window.');
     const streamArgs: any = {
       model,
       system: this.systemText,
@@ -3032,7 +3265,7 @@ export class HarnessSession extends EventEmitter {
       // pushed to history under a vision model is stripped here at build time
       // if the NEXT request targets a model that can't carry or can't see it,
       // rather than riding along stale from whenever it was written.
-      messages: adaptForWire(this.fitToContext(this.history), {
+      messages: adaptForWire(fittedHistory, {
         nativeImageToolResults: this.profile.nativeImageToolResults,
         supportsVision: this.profile.supportsVision,
       }),
@@ -3040,7 +3273,7 @@ export class HarnessSession extends EventEmitter {
       // window at most a quarter of it, so a reply can never overflow the
       // space the history was fitted to. Absent stays absent — the manifest
       // comment above explains why an uncapped request is its own hazard.
-      maxOutputTokens: this.opts.harness.limits?.maxTokens === undefined ? undefined : this.budget().replyReserve,
+      maxOutputTokens: this.opts.harness.limits?.maxTokens === undefined ? undefined : requestPlan.replyCap,
       abortSignal: this.abort!.signal,
       // Fix (2026-08-10 incident): streamText's DEFAULT onError is
       // `({ error }) => console.error(error)` — Node's console.error on a raw
@@ -3066,11 +3299,20 @@ export class HarnessSession extends EventEmitter {
     if (dispatchBinding !== this.continuationBinding) {
       if (this.continuationBinding !== undefined) this.stripOpenAIContinuation();
       this.continuationBinding = dispatchBinding;
-      streamArgs.messages = adaptForWire(this.fitToContext(this.history), {
+      fittedHistory = this.legacyReopenFit && this.summaryInputCannotFit && this.failedCompactionRevision === this.capture.revision
+        ? this.fitToContext(this.history) : this.history;
+      streamArgs.messages = adaptForWire(fittedHistory, {
         nativeImageToolResults: this.profile.nativeImageToolResults,
         supportsVision: this.profile.supportsVision,
       });
     }
+    // A fitted/truncated request cannot anchor the *unfitted* accepted history.
+    // A later request estimates afresh until it reports its own complete input.
+    const requestAnchor = streamArgs.messages.length === this.history.length
+      && streamArgs.messages.every((m: ModelMessage, i: number) => m === this.history[i])
+      ? { history: [...this.history], revision: this.capture.revision,
+          identity: this.requestSizingIdentity(), fixedCost: this.requestFixedCost() }
+      : undefined;
     const result = streamText(streamArgs);
 
     let assistantText = '';
@@ -3341,6 +3583,7 @@ export class HarnessSession extends EventEmitter {
             const t = deltaText(part);
             if (!t) break;
             emittedAny = true;
+            this.overflowOutputStarted = true;
             assistantText += t; outputChars += t.length;
             reportPartial(assistantText);
             // partId = the SDK's part id (fresh per streamText call). A tool-group
@@ -3355,6 +3598,7 @@ export class HarnessSession extends EventEmitter {
             const t = deltaText(part);
             if (!t) break;
             emittedAny = true;
+            this.overflowOutputStarted = true;
             outputChars += t.length;
             // assistant-thinking WITH data.text → the reducer's reasoning path;
             // payload-less would stay a heartbeat.
@@ -3412,6 +3656,7 @@ export class HarnessSession extends EventEmitter {
             // input is the PARSED object here (streamText parses the raw JSON-string
             // args — verified ai@7 contract). Collected; executed by the loop.
             emittedAny = true;
+            this.overflowOutputStarted = true;
             const rawParallel = (part.providerMetadata ?? part.providerOptions)?.openai?.parallelToolCall;
             const parallelToolCall = this.validParallelToolCall(rawParallel);
             toolCalls.push({
@@ -3427,6 +3672,7 @@ export class HarnessSession extends EventEmitter {
             interrupted = true;
             break;
           case 'error':
+            this.overflowOutputStarted ||= emittedAny;
             // Fix (2026-08-10 Kimi K3 incident): a fullStream 'error' part's
             // `.error` is NOT guaranteed to be an Error instance — the AI SDK
             // hands back whatever the provider layer produced. The old
@@ -3522,6 +3768,7 @@ export class HarnessSession extends EventEmitter {
     return {
       text: assistantText,
       toolCalls,
+      requestAnchor,
       responseMessages,
       pendingPreparing,
       usage: {
@@ -3747,6 +3994,7 @@ export class HarnessSession extends EventEmitter {
       binding: this.binding,
       readRegistry: this.readRegistry,
       servedReads: this.servedReads,      // G-11 re-read dedupe (see the field's WHY)
+      servedSkills: this.servedSkills,    // Skill repeat guard (see the field's WHY)
       toolCallIndex: this.toolCallCount,
       shellCwd: this.shellCwd ?? this.opts.cwd,
       setShellCwd: (next: string) => {

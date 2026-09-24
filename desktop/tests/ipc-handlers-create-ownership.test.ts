@@ -371,7 +371,7 @@ describe('session:create — a Claude Code chat is described too', () => {
   it('does NOT send one for a native chat — the harness host owns that', async () => {
     // Two records for one chat would race, and the host's is the one that knows
     // the budget things were sized against.
-    const { sends } = await runSessionCreate({ provider: 'native', cwd: '/tmp' });
+    const { sends } = await runSessionCreate({ provider: 'native', cwd: '/tmp', binding: { providerId: 'p', modelId: 'm' } });
     expect(sends.find((s) => s.channel === 'native:session-context')).toBeUndefined();
   });
 });

@@ -36,6 +36,10 @@ vi.mock('../src/renderer/state/chat-context', () => ({
 // ChatView pulls several app-wide contexts it would normally get from App.
 // These tests only care about the pane itself, so they are stubbed rather
 // than provided for real.
+// The drawer's contents are unrelated; keep its pane open without needing a
+// project/artifact fixture just to test the model strip's containing block.
+vi.mock('../src/renderer/components/SessionDrawer', () => ({ SessionDrawer: () => <div>Files</div> }));
+
 vi.mock('../src/renderer/state/ArtifactContext', () => ({
   // ChatView reads the artifact store through narrow selectors (perf, 2026-09-23).
   useArtifactSelector: (select: (s: any) => unknown) => select(mocks.artifact),
@@ -64,6 +68,22 @@ import { ContentFindBar } from '../src/renderer/components/ContentFindBar';
 // not under the header. The artifact viewer keeps the floating card
 // (ContentFindBar's default layout) — untouched.
 const ctrlF = () => fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+
+describe('model status placement', () => {
+  beforeEach(() => { cleanup(); mocks.artifact.drawerOpenBySession = {}; });
+
+  it('keeps the local-model floater within the chat column even with a drawer', () => {
+    mocks.artifact.drawerOpenBySession.s1 = true;
+    const { container } = render(<ChatView sessionId="s1" visible sessionActive modelLoadingDemo />);
+    expect(container.querySelector('.drawer-pane')).toBeTruthy();
+    const model = container.querySelector('.model-status-strip') as HTMLElement;
+    expect(model).toBeTruthy();
+    expect(model.parentElement?.classList.contains('chat-pane')).toBe(true);
+    expect(model.className).toContain('inset-x-3');
+    expect(model.className).not.toContain('w-[min(');
+    delete mocks.artifact.drawerOpenBySession.s1;
+  });
+});
 
 describe('chat find bar row', () => {
   beforeEach(() => cleanup());

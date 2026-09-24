@@ -932,6 +932,15 @@ class SessionService : Service() {
         msg: MessageRouter.ParsedMessage
     ) {
         when (msg.type) {
+            // WHY: Android-local has no desktop lease/receipt controller; never claim a pending transfer exists.
+            "handoff:begin", "handoff:status", "handoff:wait", "handoff:retry",
+            "handoff:saved-copy", "handoff:force", "handoff:cancel", "handoff:create-params" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                    put("ok", false)
+                    put("unsupported", true)
+                    put("error", "Handoff attempts are not supported on this phone.")
+                }) }
+            }
             "session:create" -> {
                 val cwd = msg.payload.optString("cwd", bootstrap?.homeDir?.absolutePath ?: "")
                 // Security note: skipPermissions is safe to read from the payload because
@@ -4180,6 +4189,8 @@ class SessionService : Service() {
             // harness to load a skill's instructions into until M8.
             "native:invoke-skill",
             "native:set-binding",
+            // U11 fit-checked model switch: desktop-only like set-binding.
+            "native:switch-model",
             "native:set-permission-mode",
             "native:get-permission-mode",
             // Cloud context defaults belong to the desktop native runtime.
@@ -4236,6 +4247,14 @@ class SessionService : Service() {
             "pages:get",
             "pages:set-pinned",
             "pages:set-data",
+            // Phase 2 (connections) joins them by name rather than falling to the
+            // catch-all, so both halves of Pages answer the phone the same way.
+            "pages:approve",
+            "pages:remove-connection",
+            "pages:refresh",
+            "pages:saved-keys",
+            "pages:delete-saved-key",
+            "pages:fetch",
             // Remembered "Always allow" rules (M5 2a — permissions management UI).
             // These read/revoke the DESKTOP native harness's ~/.youcoded/permissions.json;
             // Android has no native harness to hold those grants until M8, which is

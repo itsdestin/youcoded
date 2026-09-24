@@ -440,6 +440,10 @@ function getWsUrl(): string {
  * this goes wrong again is a new channel quietly defaulting to the queue.
  */
 export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'transport'>> = {
+  // WHY: never replay a stale attempt action on a newly authenticated connection.
+  'handoff:begin': 'user-action', 'handoff:status': 'user-action', 'handoff:wait': 'user-action',
+  'handoff:retry': 'user-action', 'handoff:saved-copy': 'user-action', 'handoff:force': 'user-action',
+  'handoff:cancel': 'user-action', 'handoff:create-params': 'user-action',
   'session:input': 'user-action',
   'session:resize': 'read',
   'session:terminal-ready': 'transport',
@@ -635,7 +639,13 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
     }, timeoutMs);
     pending.set(id, { resolve, reject, timeout, type });
     if (REHYDRATE_ON_RECONNECT.includes(type)) lastReadPayload.set(type, payload);
-    send({ type, id, payload });
+    // WHY: user actions are never queued; reject immediately and forget their
+    // timeout instead of leaving a phantom pending action for reconnect.
+    if (!send({ type, id, payload }) && type.startsWith('handoff:')) {
+      clearTimeout(timeout);
+      pending.delete(id);
+      reject(new Error('The connection is unavailable. Try again when connected.'));
+    }
   });
 }
 
@@ -699,6 +709,11 @@ export function markConnectedForNotices(): void {
  *  `{ ok:false }` object and is NOT in this list, and LocalModelsSection casts
  *  its answer straight to an array and filters it. That predates this list. */
 export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
+  // Startup errors reject; a structured lease-denied result remains data.
+  'session:create',
+  // WHY: Android-local's unsupported response and host failures must reject, not masquerade as statuses.
+  'handoff:begin', 'handoff:status', 'handoff:wait', 'handoff:retry',
+  'handoff:saved-copy', 'handoff:force', 'handoff:cancel', 'handoff:create-params',
   // Reads a phone loads at start, answered by the host since 2026-09-11. A failure there comes
   // back as { ok:false, error } and must reach the caller's catch, not land as a "list".
   'theme:list',
@@ -1891,6 +1906,17 @@ export function installShim(): void {
         unwrapRemote(invoke('session-naming:rename', { sessionId, title })),
     },
     session: {
+      // WHY: the Android-local router explicitly refuses these; a paired desktop uses its real admission owner.
+      handoff: {
+        begin: (conversationId: string, provider: 'claude' | 'native', create?: import('../shared/types').HandoffCreateParams) => invoke('handoff:begin', { conversationId, provider, create }),
+        status: (id: string) => invoke('handoff:status', { id }),
+        wait: (id: string) => invoke('handoff:wait', { id }),
+        retry: (id: string) => invoke('handoff:retry', { id }),
+        savedCopy: (id: string, consent: boolean) => invoke('handoff:saved-copy', { id, consent }),
+        force: (id: string, consent: boolean, expectedHolderId: string) => invoke('handoff:force', { id, consent, expectedHolderId }),
+        cancel: (id: string) => invoke('handoff:cancel', { id }),
+        setCreateParams: (id: string, create: import('../shared/types').HandoffCreateParams) => invoke('handoff:create-params', { id, create }),
+      },
       create: (opts: any) => invoke('session:create', opts),
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
       list: () => invoke('session:list'),
@@ -2524,6 +2550,17 @@ export function installShim(): void {
         addListener('pages:changed', handler);
         return () => removeListener('pages:changed', handler);
       },
+      // Phase 2. Approving from here may only REUSE a key already saved on the
+      // desktop; the host refuses pasted key material from a remote caller, so
+      // the rule holds even if this file is bypassed entirely.
+      approve: (id: string, keys: Record<string, string>) => invoke('pages:approve', { id, keys }),
+      removeConnection: (id: string, connectionId: string) => invoke('pages:remove-connection', { id, connectionId }),
+      refresh: (id: string) => invoke('pages:refresh', { id }),
+      savedKeys: () => invoke('pages:saved-keys'),
+      deleteSavedKey: (service: string, address: string) => invoke('pages:delete-saved-key', { service, address }),
+      // The request runs on the desktop, with the desktop's credential; only
+      // the redacted answer crosses the socket.
+      fetch: (id: string, request: unknown) => invoke('pages:fetch', { id, request }),
     },
     git: {
       fileStatus: (projectRoot: string, relPath: string) =>
@@ -2912,10 +2949,11 @@ export function installShim(): void {
       retry: (sessionId: string) => fire('native:retry', { sessionId }),
       // Request/response (mirrors preload.ts) — the remote UI needs the same
       // {ok, reason} so a refused compaction explains itself over remote too.
-      compact: (sessionId: string) => invoke('native:compact', { sessionId }),
+      compact: (sessionId: string, focus?: string) => invoke('native:compact', { sessionId, focus }),
       clear: (sessionId: string) => invoke('native:clear', { sessionId }),
       invokeSkill: (sessionId: string, skill: string, args?: string) => invoke('native:invoke-skill', { sessionId, skill, args }),
       setBinding: (sessionId: string, binding: unknown) => invoke('native:set-binding', { sessionId, binding }),
+      switchModel: (sessionId: string, binding: unknown, summarize?: boolean) => invoke('native:switch-model', { sessionId, binding, summarize }),
       setPermissionMode: (sessionId: string, mode: string) => invoke('native:set-permission-mode', { sessionId, mode }),
       getPermissionMode: (sessionId: string) => invoke('native:get-permission-mode', { sessionId }),
       getContextPreferences: () => invoke('native:get-context-preferences'),

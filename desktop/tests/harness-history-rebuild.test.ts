@@ -11,7 +11,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { HarnessSession, type HarnessSessionOpts } from '../src/main/harness/harness-session';
-import { rebuildHistory } from '../src/main/harness/history-rebuild';
+import { rebuildHistory, rebuildHistoryWithOrigins, restorePortableHistory } from '../src/main/harness/history-rebuild';
+import { compactionSourceDigest } from '../src/main/harness/compaction-record';
 import { NativeHome } from '../src/main/native-home';
 import { SessionStore, type NativeSessionHeader } from '../src/main/harness/session-store';
 import type { HarnessManifest } from '../src/shared/harness-manifest';
@@ -82,6 +83,111 @@ async function throughStore(events: TranscriptEvent[]): Promise<TranscriptEvent[
   }
 }
 
+describe('portable compaction restore', () => {
+  const event = (uuid: string, type: TranscriptEvent['type'], data: any): TranscriptEvent =>
+    ({ uuid, sessionId: 's-1', timestamp: 0, type, data });
+  const user = (uuid: string, text: string) => event(uuid, 'user-message', { text });
+  const ref = (e: TranscriptEvent) => ({ eventUuid: e.uuid, anchorUuid: e.uuid, type: e.type,
+    start: 0, end: JSON.stringify(e.data).length });
+  const old = user('old', 'SECRET-before-summary');
+  const tail = user('tail', 'retained');
+  const summary = (uuid = 'sum', resume = ref(tail), covered = ref(old), source: TranscriptEvent[] = [old, tail]) => {
+    const marker = event(uuid, 'compact-summary', { summary: 'memory', compactionRecord: {
+      v: 1, generation: 1, sourceRevision: 2, resumeFrom: resume, coveredThrough: covered,
+    } });
+    marker.data.compactionRecord!.sourceDigest = compactionSourceDigest(source, marker.data.summary!, marker.data.compactionRecord!);
+    return marker;
+  };
+  it('restores summary + retained suffix + subsequent turns exactly once, with backed origins', () => {
+    const events = [old, tail, summary(), user('after', 'later')];
+    const restored = restorePortableHistory(events);
+    expect(restored?.messages.map(m => m.content)).toEqual([
+      '[Earlier conversation summary]\nmemory', 'retained', 'later',
+    ]);
+    expect(restored?.origins).toEqual([['sum'], ['tail'], ['after']]);
+    expect(restored?.eventUuids).toEqual(['sum', 'tail', 'after']);
+    expect(JSON.stringify(restored?.messages)).not.toContain('SECRET-before-summary');
+  });
+  it('rejects shifted, torn, missing, reordered and cross-chat references', () => {
+    const invalid = [
+      { ...ref(tail), start: 1 }, { ...ref(tail), end: ref(tail).end - 1 },
+      { ...ref(tail), anchorUuid: 'missing' }, { ...ref(tail), type: 'tool-result' },
+    ];
+    for (const bad of invalid) expect(restorePortableHistory([old, tail, summary('sum', bad as any)])).toBeNull();
+    expect(restorePortableHistory([tail, old, summary()])).toBeNull();
+    expect(restorePortableHistory([old, tail, { ...summary(), sessionId: 'another' }])).toBeNull();
+  });
+  it('rejects a damaged source digest even when every cut reference still looks valid', () => {
+    const marker = summary();
+    marker.data.compactionRecord!.sourceDigest = '0'.repeat(64);
+    const reasons: string[] = [];
+    expect(restorePortableHistory([old, tail, marker], undefined, reason => reasons.push(reason))).toBeNull();
+    expect(reasons).toEqual(['invalid-record']);
+    const later = user('later', 'also covered?');
+    const shifted = summary('shifted', ref(tail), ref(old), [old, tail, later]);
+    shifted.data.compactionRecord!.resumeFrom = ref(later); // valid-looking, not the committed cut
+    expect(restorePortableHistory([old, tail, later, shifted])).toBeNull();
+  });
+  it('falls back to the previous valid checkpoint, but never crosses clear', () => {
+    const bad = summary('bad', { ...ref(tail), start: 2 });
+    expect(restorePortableHistory([old, tail, summary(), bad, user('after', 'later')])?.eventUuids)
+      .toEqual(['sum', 'tail', 'after']);
+    expect(restorePortableHistory([old, tail, summary(), event('clear', 'context-clear', {}), bad])).toBeNull();
+  });
+  it('repeated compactions retire the first summary and a post-summary prefix', () => {
+    const later = user('later', 'next');
+    const first = summary();
+    const next = summary('next', ref(later), ref(tail), [old, tail, first, later]);
+    next.data.summary = 'new memory';
+    next.data.compactionRecord!.generation = 2;
+    next.data.compactionRecord!.sourceDigest = compactionSourceDigest([old, tail, first, later], next.data.summary, next.data.compactionRecord!);
+    const restored = restorePortableHistory([old, tail, first, later, next, user('last', 'post')]);
+    expect(restored?.messages.map(m => m.content)).toEqual([
+      '[Earlier conversation summary]\nnew memory', 'next', 'post',
+    ]);
+  });
+  it('validates coalesced persisted part anchors and rejects unverifiable delta UUIDs', () => {
+    const text = event('part', 'assistant-text', { text: 'whole part', partId: 'p' });
+    const textRef = { eventUuid: 'part', anchorUuid: 'part', type: 'assistant-text' as const,
+      partId: 'p', start: 0, end: 'whole part'.length };
+    const restored = restorePortableHistory([old, text, summary('sum', textRef, ref(old), [old, text])]);
+    expect((restored?.messages[1].content as any)[0].text).toBe('whole part');
+    expect(restorePortableHistory([old, text, summary('sum', { ...textRef, eventUuid: 'lost-delta' }, ref(old), [old, text])])).toBeNull();
+    expect(restorePortableHistory([old, text, summary('sum', { ...textRef, end: 4 }, ref(old), [old, text])])).toBeNull();
+    const retired = event('retired', 'assistant-text', { text: 'past', partId: 'old', deltaReferences: [
+      { eventUuid: 'retired', start: 0, end: 2 }, { eventUuid: 'retired-last', start: 2, end: 4 },
+    ] });
+    const terminal = { eventUuid: 'retired-last', anchorUuid: 'retired', type: 'assistant-text' as const,
+      partId: 'old', start: 2, end: 4 };
+    expect(restorePortableHistory([retired, tail, summary('sum', ref(tail), terminal, [retired, tail])])?.messages.map(m => m.content))
+      .toEqual(['[Earlier conversation summary]\nmemory', 'retained']);
+    // A changed UUID or offset cannot borrow the valid anchor's text range.
+    expect(restorePortableHistory([retired, tail, summary('sum', ref(tail), { ...terminal, eventUuid: 'made-up' }, [retired, tail])])).toBeNull();
+    expect(restorePortableHistory([retired, tail, summary('sum', ref(tail), { ...terminal, start: 1 }, [retired, tail])])).toBeNull();
+  });
+  it('omits persisted retry-discarded parts but keeps replacements using the same partId', () => {
+    const abandoned = event('a1', 'assistant-text', { text: 'abandoned', partId: 'text-0' });
+    const flush = event('r1', 'assistant-thinking', { text: 'next part', partId: 'reason-1' });
+    const discard = event('drop', 'assistant-thinking', { dropPart: { partIds: ['text-0', 'reason-1'] } });
+    const replacement = event('a2', 'assistant-text', { text: 'replacement', partId: 'text-0' });
+    const suffix = [tail, abandoned, flush, discard, replacement, event('done', 'turn-complete', {})];
+    expect(rebuildHistory(suffix).map(m => m.content)).toEqual([
+      'retained', [{ type: 'text', text: 'replacement' }],
+    ]);
+    expect(restorePortableHistory([old, ...suffix, summary('sum', ref(tail), ref(old), [old, ...suffix])])?.messages.map(m => m.content))
+      .toEqual(['[Earlier conversation summary]\nmemory', 'retained', [{ type: 'text', text: 'replacement' }]]);
+    const prior = event('prior', 'assistant-text', { text: 'completed step', partId: 'text-0' });
+    const result = event('tool-done', 'tool-result', { toolUseId: 'old', toolName: 'Read', toolResult: 'ok' });
+    const followed = rebuildHistory([tail, prior, result, ...suffix.slice(1)]);
+    expect(JSON.stringify(followed)).toContain('completed step');
+    expect(JSON.stringify(followed)).not.toContain('abandoned');
+  });
+  it('declines an unbacked crash repair in the retained suffix', () => {
+    const use = event('use', 'tool-use', { toolUseId: 'c', toolName: 'Read', toolInput: {} });
+    expect(restorePortableHistory([old, use, summary('sum', ref(use), ref(old), [old, use])])).toBeNull();
+  });
+});
+
 describe('rebuildHistory — the resume deep-equal contract', () => {
   it('two-step tool turn: rebuild(emitted) deep-equals the live history', async () => {
     const read = fakeTool('Read');
@@ -102,7 +208,22 @@ describe('rebuildHistory — the resume deep-equal contract', () => {
 
     // (2) The PRODUCTION path — events persisted and read back through the store
     // — rebuilds identically. This is what resume() actually does.
-    expect(rebuildHistory(await throughStore(events))).toEqual(live);
+    const persisted = await throughStore(events);
+    expect(rebuildHistory(persisted)).toEqual(live);
+    // WHY: the portable cut must point to the first persisted event of its
+    // retained message, not to an arbitrary UUID from the whole transcript.
+    const rebuilt = rebuildHistoryWithOrigins(persisted);
+    expect(rebuilt.messages).toEqual(live);
+    const byType = (type: string) => persisted.filter(e => e.type === type).map(e => e.uuid);
+    expect(rebuilt.origins).toEqual([
+      byType('user-message'),
+      [byType('assistant-text')[0], ...byType('tool-use')],
+      byType('tool-result'),
+      [byType('assistant-text')[1]],
+    ]);
+    const resumed = new HarnessSession(makeOpts({}), async () => model as any);
+    resumed.seedHistory(rebuilt.messages, { eventUuids: persisted.map(e => e.uuid), messageOrigins: rebuilt.origins });
+    expect(resumed.firstEventForCut(3)).toBe(byType('assistant-text')[1]);
 
     // Sanity: the live history really is the multi-step tool shape we expect.
     expect(live).toEqual([

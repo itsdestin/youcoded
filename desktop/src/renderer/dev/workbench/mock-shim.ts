@@ -91,8 +91,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'off', 'removeAllListeners',
   'session.list', 'session.create', 'session.browse', 'session.destroy',
   'session.setFlag', 'session.setTag', 'session.setNote', 'session.getMeta',
-  'session.sendInput', 'session.respondToPermission', 'on.transcriptEvent', 'on.hookEvent',
-  'native.send', 'native.setBinding',
+  'session.sendInput', 'session.respondToPermission', 'session.handoff', 'on.transcriptEvent', 'on.hookEvent',
+  'native.send', 'native.setBinding', 'native.switchModel',
   'providers.list', 'providers.catalog', 'providers.test', 'providers.setKey', 'models.memoryCheck',
   // Local Models rows + Resume (2026-08-26). WHY these must be listed: the
   // contract test only checks members named here, so a hand-written mock left
@@ -205,6 +205,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // carries the four rows. The fake keeps pin state for the tab's lifetime so the
   // header's pinned buttons follow the library's pin toggles.
   'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
+  // Pages Phase 2 (connections) — designed ahead of the backend; rows in mock-only.ts.
+  'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -461,7 +463,7 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
-import type { PagesBridge, PageDocument, PageSummary } from '../../../shared/pages-types';
+import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
  *
@@ -878,11 +880,58 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // once from the resume path with the row's id — and only the FIRST ask per
   // session id runs. So the locator-less ask must already know the row.
   const resumedFrom = new Map<string, string>();
+  // Explicit handoff (?lease=held:<device>): the real pending tab, notices and
+  // draft rules run against this. The first wait ends "may have newer
+  // messages"; Try again, Continue or a forced takeover then opens the session.
+  // No ownership or freshness is proven here — the backend owns that.
+  const handoffs = new Map<string, { create?: any; state: any; tries: number }>();
+  const handoffRows = new Set<string>();
+  const handoffOpen = async (id: string, source: 'confirmed' | 'saved-copy') => {
+    const h = handoffs.get(id)!;
+    leaseReleased = true;
+    const created = await session.create!(h.create);
+    h.state = { id, status: 'admitted', source, session: created };
+    return h.state;
+  };
+  const handoff = {
+    begin: async (conversationId: string, _provider: string, create?: any) => {
+      handoffRows.add(conversationId);
+      const id = `wb-handoff-${handoffs.size + 1}`;
+      handoffs.set(id, { create, state: { id, status: 'waiting' }, tries: 0 });
+      return { id, status: 'waiting' };
+    },
+    status: async (id: string) => handoffs.get(id)?.state ?? { id, status: 'failed' },
+    wait: async (id: string) => {
+      const h = handoffs.get(id);
+      if (!h) return { id, status: 'failed' };
+      await new Promise((r) => setTimeout(r, 5000));
+      if (h.state.status !== 'waiting') return h.state;
+      if (h.tries === 0) {
+        h.state = { id, status: 'incomplete', cause: 'receipt not confirmed', holder: { deviceId: 'wb-holder', device: leaseHolder ?? 'Laptop' } };
+        return h.state;
+      }
+      return handoffOpen(id, 'confirmed');
+    },
+    retry: async (id: string) => {
+      const h = handoffs.get(id)!;
+      h.tries++;
+      h.state = { id, status: 'waiting' };
+      return h.state;
+    },
+    savedCopy: async (id: string) => handoffOpen(id, 'saved-copy'),
+    force: async (id: string) => handoffOpen(id, 'saved-copy'),
+    cancel: async (id: string) => { const h = handoffs.get(id); if (h) h.state = { id, status: 'cancelled' }; return h?.state ?? { id, status: 'cancelled' }; },
+    setCreateParams: async (id: string, create: any) => { const h = handoffs.get(id)!; h.create = create; return h.state; },
+  };
   const session: Ns<'session'> & UntypedSessionWrites = {
+    handoff: handoff as any,
     list: async () => store.getState().sessions,
     browse: async () => store.getState().past,
 
     create: async (opts) => {
+      // Admission belongs to creation, just like the desktop backend. A race
+      // fixture must deny BEFORE it emits a session-created event or adds a row.
+      if (opts.resumeSessionId && leaseHolder && !leaseReleased) return { status: 'lease-denied', device: leaseHolder };
       // Deterministic-ish id without Date.now(): the store's length is enough
       // to keep ids unique within a page, and stable across reloads.
       const id = `wb-new-${store.getState().sessions.length + 1}`;
@@ -893,8 +942,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // session..." for good. Take the title from the Resume row itself, and
       // send the first hook event App is waiting for (below) — the promo's
       // phone beat takes a session over and has to land in its conversation.
-      const resumedRow = (opts as any).resumeSessionId
-        ? store.getState().past.find((p) => p.sessionId === (opts as any).resumeSessionId) : undefined;
+      // Inline conversation cards use the separate UUID-backed fixture index,
+      // not wb-past-* ids. They must emit initialization too, or testing a real
+      // resume route here strands the screen behind a fake startup failure.
+      const ref = opts.resumeSessionId ? resolveFixture(opts.resumeSessionId) : undefined;
+      const resumedRow = store.getState().past.find((p) => p.sessionId === opts.resumeSessionId)
+        ?? (ref?.status === 'ok' ? { sessionId: ref.id, name: ref.title } : undefined);
       if (resumedRow) resumedFrom.set(id, resumedRow.sessionId);
       const created = {
         id,
@@ -909,6 +962,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         provider: opts.provider ?? 'claude',
         harnessId: (opts as any).harnessId,
         model: opts.model,
+        ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
       };
       store.setState((s) => ({ ...s, sessions: [...s.sessions, created as any] }));
       // WHY emit: the renderer does not poll. App re-fetches on
@@ -1677,6 +1731,21 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       }));
       return true;
     },
+    // U11 model-switch popup. `?switchFit=summary` makes every pick ask first
+    // (so the popup can be reviewed); `?switchFit=working` also leaves the
+    // summary running forever, `?switchFit=error` makes it fail. Default: fits.
+    switchModel: async (sessionId: string, b: { providerId: string; modelId: string }, summarize?: boolean) => {
+      const fit = new URLSearchParams(location.search).get('switchFit');
+      if (fit && !summarize) return { status: 'needs-summary' };
+      if (fit === 'working') return new Promise(() => {});
+      if (fit === 'error') return { status: 'failed', reason: 'cannot-fit' };
+      if (store.refuseWrites) return { status: 'failed', reason: 'not-live' };
+      store.setState((s) => ({
+        ...s,
+        sessions: s.sessions.map((x: any) => x.id === sessionId ? { ...x, model: b.modelId, providerId: b.providerId } : x),
+      }));
+      return { status: 'switched' };
+    },
     // G-1: the card's Stop just resolves — the gallery fixture stays in its
     // captured state rather than spawning anything real.
     killShell: async (_sessionId: string, _shellId: string) => ({ ok: true }),
@@ -1871,10 +1940,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     syncNow: async () => ({ ok: true }),
     stopProject: async () => ({ ok: true }),
     renameProject: async () => ({ ok: true }),
-    // Promo: the conversation-lease gate App.tsx runs before a resume.
-    leaseQuery: async () => leaseHolder ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },
-    leaseTakeover: async () => ({ outcome: 'acquired' as const }),
-    leaseForce: async () => ({ ok: true }),
+    leaseQuery: async () => leaseHolder && leaseMode !== 'raced' && !leaseReleased
+      ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },
+    leaseTakeover: async () => {
+      if (leaseMode === 'timeout' || leaseMode === 'undeliverable') return { outcome: leaseMode };
+      leaseReleased = true;
+      return { outcome: 'ready' as const };
+    },
+    leaseForce: async () => { leaseReleased = true; return { ok: true }; },
     // The synced device registry behind the popup's Devices count-tab. Without
     // it the catch-all answers [] and the demo reads "0 Devices / No devices
     // yet" directly under "All synced", which contradicts itself — cross-device
@@ -2161,7 +2234,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // resume raise the "active on another device" takeover dialog.
   const remoteSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('remote') : null;
   const leaseSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('lease') : null;
-  const leaseHolder = leaseSwitch?.startsWith('held:') ? leaseSwitch.slice(5) : null;
+  const leaseMode = leaseSwitch?.split(':', 1)[0];
+  const leaseHolder = leaseSwitch?.includes(':') ? leaseSwitch.slice(leaseSwitch.indexOf(':') + 1) : null;
+  let leaseReleased = false;
   // `&student=1` (scenarios.ts reads the same flag for sessions/past/tags):
   // the student persona also owns Project View, the Session Files drawer and
   // the history of a resumed session below, so a promo scene never shows the
@@ -2758,6 +2833,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     requestTranscriptPage: async (req: { sessionId: string; claudeSessionId?: string }) => {
       const empty = { events: [] as TranscriptEvent[], cursor: null, hasMore: false };
       const row = req.claudeSessionId ?? resumedFrom.get(req.sessionId);
+      // A handoff opens on the same saved history its pending tab previewed.
+      if (row && handoffRows.has(row)) {
+        const page = await chatsearch.read({ provider: 'claude', id: row });
+        return { events: (page.events ?? []).map((e: any) => ({ ...e, sessionId: req.sessionId })) as TranscriptEvent[], cursor: null, hasMore: false };
+      }
       if (!studentSwitch || row !== 'wb-past-0') return empty;
       const raw = REPLY_SCRIPTS['./fixtures/replies/briefing.jsonl'];
       if (!raw) return empty;
@@ -2865,6 +2945,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // (playReply in sendInput above). Same attachment pattern as specialistEvent
   // below — Ns<'on'> doesn't carry these members.
   (on as any).transcriptEvent = (cb: (e: any) => void) => { subs.transcript.add(cb); return () => { subs.transcript.delete(cb); }; };
+  // Probe hook, same shape as __workbenchAppearanceSync: play one transcript
+  // event (e.g. a native compact-summary) into the renderer for a screenshot.
+  if (typeof window !== 'undefined') (window as any).__workbenchTranscript = (e: unknown) => { subs.transcript.forEach((f) => f(e)); return subs.transcript.size; };
   (on as any).hookEvent = (cb: (e: any) => void) => { subs.hook.add(cb); return () => { subs.hook.delete(cb); }; };
   // Specialists 1c: the delegation feed (run records + delivered notes). Not
   // on Ns<'on'> yet (no real channel) — attached separately so the typed
@@ -3186,6 +3269,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {
   let pages: PageDocument[] = empty ? [] : seedPages();
+  // One key is saved from the start (Trip board uses it), so the Weather page
+  // can show "Uses your saved OpenWeather key".
+  const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);
   const subs = new Set<(p: PageSummary[]) => void>();
   const summaries = () => pages.map(({ html: _html, data: _data, ...rest }) => rest);
   const publish = () => subs.forEach((cb) => cb(summaries()));
@@ -3209,8 +3295,58 @@ function createPagesMock(empty: boolean): PagesBridge {
       pages = pages.map((p) => (p.id === id ? { ...p, data } : p));
       return { ok: true };
     },
+    // The workbench never reaches the network: every fixture page's numbers are
+    // baked in. The door still answers, so a page that calls it gets an honest
+    // refusal rather than a promise that never settles.
+    fetch: async () => ({ ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' }),
     onChanged: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
+    // ── Phase 2 (connections) — no backend yet; mock-only.ts carries the rows ──
+    // Allow: every waiting line becomes approved, a pasted key becomes a saved
+    // key, and the page gets its first "Updated just now".
+    approve: async (id, keys) => {
+      await delay();
+      pages = pages.map((p) => {
+        if (p.id !== id) return p;
+        for (const c of p.connections ?? []) {
+          if (c.kind === 'key' && keys[c.id] && keys[c.id] !== 'saved') savedServices.set(c.service, c.address);
+        }
+        // Allowing (or dismissing "code changed") records the current code too.
+        return { ...p, codeChanged: false, connections: (p.connections ?? []).map((c) => ({ ...c, approved: true, ...(c.kind === 'key' ? { savedKey: true } : {}) })), refresh: p.refresh ?? { at: new Date().toISOString(), failed: false } };
+      });
+      publish();
+      return { ok: true, pages: summaries() };
+    },
+    // Remove: the line stays listed but goes back to waiting, so the page asks
+    // again next time it opens (deck S-remove).
+    removeConnection: async (id, connectionId) => {
+      pages = pages.map((p) => (p.id !== id ? p : { ...p, refresh: undefined, connections: (p.connections ?? []).map((c) => (c.id === connectionId ? { ...c, approved: false } : c)) }));
+      publish();
+      return summaries();
+    },
+    // Refresh always succeeds here, so a failed page can be seen recovering.
+    refresh: async (id) => {
+      await delay(900);
+      pages = pages.map((p) => (p.id === id ? { ...p, refresh: { at: new Date().toISOString(), failed: false } } : p));
+      publish();
+      return summaries();
+    },
+    savedKeys: async () => listSavedKeys(),
+    // A key is service AND address, so the workbench deletes by both — the real
+    // store cannot offer one page's key to another page's host.
+    deleteSavedKey: async (service, address) => {
+      if (savedServices.get(service) === address) savedServices.delete(service);
+      pages = pages.map((p) => ({ ...p, refresh: p.connections?.some((c) => c.kind === 'key' && c.service === service) ? undefined : p.refresh, connections: p.connections?.map((c) => (c.kind === 'key' && c.service === service ? { ...c, approved: false, savedKey: false } : c)) }));
+      publish();
+      return listSavedKeys();
+    },
   };
+  function delay(ms = 350) { return new Promise((r) => setTimeout(r, ms)); }
+  function listSavedKeys(): SavedPageKey[] {
+    return [...savedServices.entries()].map(([service, address]) => ({
+      service, address,
+      usedBy: pages.filter((p) => p.connections?.some((c) => c.kind === 'key' && c.service === service && c.approved)).map((p) => ({ id: p.id, name: p.name })),
+    }));
+  }
 }
 
 const VOICE_SCRIPT = "Can you look at the budget spreadsheet I sent yesterday? Row 14 is wrong: it says $2,300 but Sarah's invoice was $2,030. Fix it and draft a short reply to her.".split(' ');

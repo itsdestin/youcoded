@@ -3,7 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { KwinHelper, type KwinHelperIo } from '../src/main/kwin-helper';
+import {
+  KwinHelper, type KwinHelperIo, helperStatus, syncHelperOnLaunch,
+  installHelper, removeHelper, setExperimentKwinDisabled,
+} from '../src/main/kwin-helper';
 import type { KdeSession } from '../src/main/kde-dbus';
 
 // ---------------------------------------------------------------------------
@@ -15,6 +18,38 @@ import type { KdeSession } from '../src/main/kde-dbus';
 // name itself "YC:mascot@0,0" and get always-on-top plus arbitrary
 // repositioning out of the compositor.
 // ---------------------------------------------------------------------------
+
+describe('Luna experiment compositor isolation', () => {
+  it('enables the no-compositor gate before the profile is selected', () => {
+    const main = fs.readFileSync(path.resolve(__dirname, '../src/main/main.ts'), 'utf8');
+    const gate = main.indexOf('setExperimentKwinDisabled(Boolean(LUNA_REQUEST_GUARD))');
+    expect(gate).toBeGreaterThan(0);
+    expect(gate).toBeLessThan(main.indexOf("app.setPath('userData'"));
+  });
+
+  it('does not call any helper lifecycle or status path', async () => {
+    // All potentially live KWin operations are mocked before invoking the
+    // module facade, even for the intentionally failing pre-fix test.
+    const touched = vi.fn(async () => { throw new Error('COMPOSITOR_CALLED'); });
+    const spies = [
+      vi.spyOn(KwinHelper.prototype, 'syncOnLaunch').mockImplementation(touched),
+      vi.spyOn(KwinHelper.prototype, 'status').mockImplementation(touched),
+      vi.spyOn(KwinHelper.prototype, 'install').mockImplementation(touched),
+      vi.spyOn(KwinHelper.prototype, 'remove').mockImplementation(touched),
+    ];
+    try {
+      setExperimentKwinDisabled?.(true);
+      await expect(syncHelperOnLaunch()).resolves.toBeUndefined();
+      await expect(helperStatus()).resolves.toEqual({ needed: false, supported: false, installed: false });
+      await expect(installHelper()).resolves.toMatchObject({ ok: false });
+      await expect(removeHelper()).resolves.toMatchObject({ ok: false });
+      expect(touched).not.toHaveBeenCalled();
+    } finally {
+      setExperimentKwinDisabled?.(false);
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+});
 
 const HELPER_MAIN = path.resolve(__dirname, '../assets/kwin-helper/contents/code/main.js');
 const BUNDLED_DIR = path.resolve(__dirname, '../assets/kwin-helper');

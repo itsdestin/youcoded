@@ -4,7 +4,7 @@ import { createHash } from 'crypto';
 import type { ModelMessage } from 'ai';
 import type { TranscriptEvent } from '../../shared/types';
 import type { PersistedEventReference } from './session-store';
-import { imageCollapsedToolResultText, prunedToolResultText } from './compaction';
+import { imageCollapsedToolResultText, isAppGenerated, markAppGenerated, prunedToolResultText } from './compaction';
 import { restoreContinuationSizing, durableContinuationSizing } from './openai-continuation';
 
 const VERSION = 1;
@@ -85,7 +85,30 @@ type ContentDescriptor =
 interface MessageDescriptor {
   role: ModelMessage['role'];
   content: ContentDescriptor;
+  /** Private provenance for anchorless app-authored user literals; never provider content. */
+  appGenerated?: true;
   sizing?: { reasoningTokens?: number; reasoningEstimateIncomplete: boolean };
+}
+
+/** Only a wholly replayable message may start or follow a portable cut. The
+ * private sidecar can restore encrypted reasoning, pruned bytes and generated
+ * literals, but none can be reconstructed from the public transcript. */
+function replayableOrigin(content: ContentDescriptor): string[] | null {
+  if (content.kind === 'literal') return null;
+  if (content.kind === 'event' || content.kind === 'concat') {
+    if (content.field === 'reasoning-text' || ('pruned' in content && content.pruned)) return null;
+    return content.kind === 'event' ? [content.uuid] : [...content.uuids];
+  }
+  if (content.kind !== 'parts') return null;
+  const uuids: string[] = [];
+  for (const part of content.parts) {
+    if (part.kind === 'empty' || part.kind === 'image' || part.field === 'reasoning-text' ||
+        ('pruned' in part && part.pruned) ||
+        (part.kind === 'event' && part.providerOptions &&
+          (part.providerOptions as { openai?: { parallelToolCall?: unknown } }).openai?.parallelToolCall)) return null;
+    uuids.push(...(part.kind === 'event' ? [part.uuid] : part.uuids));
+  }
+  return uuids.length ? uuids : null;
 }
 
 type Transformation = { kind: 'pruned' } | { kind: 'summary'; summaryEventUuid: string };
@@ -134,7 +157,7 @@ export interface AcceptedHistoryStoreHooks {
 }
 
 export type AcceptedHistoryRestore =
-  | { ok: true; messages: ModelMessage[]; eventUuids: string[]; revision: number; transformation?: Transformation }
+  | { ok: true; messages: ModelMessage[]; messageOrigins: Array<string[] | null>; eventUuids: string[]; revision: number; transformation?: Transformation }
   | { ok: false; reason: FailureReason };
 
 function digest(data: Buffer | string): string {
@@ -505,8 +528,32 @@ export class AcceptedHistoryStore {
         this.transcriptBySession.set(proposal.sessionId, proposal.transcriptPath);
         const raw = await this.reader.read(proposal.transcriptPath);
         if (!raw) return { ok: false, reason: 'unreferenced-history' } as const;
-        const eventUuids = acceptedAnchors(proposal.references, raw.events);
-        if (!eventUuids) return { ok: false, reason: 'unreferenced-history' } as const;
+        const allAccepted = acceptedAnchors(proposal.references, raw.events);
+        if (!allAccepted) return { ok: false, reason: 'unreferenced-history' } as const;
+        let eventUuids = allAccepted;
+        if (proposal.transformation?.kind === 'summary') {
+          const marker = raw.events.get(proposal.transformation.summaryEventUuid);
+          const record = marker?.data?.compactionRecord;
+          const chronological = [...raw.events.keys()];
+          const summary = chronological.indexOf(proposal.transformation.summaryEventUuid);
+          if (!marker || summary < 0) return { ok: false, reason: 'unreferenced-history' } as const;
+          if (record?.v === 1) {
+            // WHY: a pre-summary user may say the exact same thing as the
+            // retained user. Never spend that retired anchor just because its
+            // text matches first in the JSONL.
+            const from = chronological.indexOf(record.resumeFrom?.anchorUuid);
+            if (from < 0 || summary <= from) return { ok: false, reason: 'unreferenced-history' } as const;
+            const retained = new Set(chronological.slice(from));
+            eventUuids = allAccepted.filter(uuid => retained.has(uuid));
+          } else {
+            // Legacy markers have no resumeFrom, so no pre-marker tail can be
+            // certified. An accepted UUID before this summary makes its next
+            // private publication ineligible rather than misattribute repeats.
+            const retired = new Set(chronological.slice(0, summary));
+            if (allAccepted.some(uuid => retired.has(uuid))) return { ok: false, reason: 'unreferenced-history' } as const;
+            eventUuids = allAccepted.filter(uuid => !retired.has(uuid));
+          }
+        }
         const messages = describeMessages(proposal.messages, new AnchorSet(eventUuids, raw.events));
         if (!messages) return { ok: false, reason: 'unreferenced-history' } as const;
         const manifest: Manifest = {
@@ -555,18 +602,31 @@ export class AcceptedHistoryStore {
     if (raw.bytes !== manifest.transcript.bytes || raw.digest !== manifest.transcript.digest) return { ok: false, reason: 'transcript-advanced' };
     const accepted = new Set(manifest.eventUuids);
     const messages: ModelMessage[] = [];
+    const messageOrigins: Array<string[] | null> = [];
     for (const descriptor of manifest.messages) {
       // WHY: the role goes straight into a ModelMessage the provider will send, so an
       // unrecognised one is a corrupt manifest, not something to pass through.
-      if (!record(descriptor) || !ROLES.includes(descriptor.role)) return { ok: false, reason: 'malformed' };
+      if (!record(descriptor) || !ROLES.includes(descriptor.role) ||
+        (descriptor.appGenerated !== undefined && (descriptor.appGenerated !== true || descriptor.role !== 'user' || descriptor.content?.kind !== 'literal'))) return { ok: false, reason: 'malformed' };
       const content = restoreContent(descriptor?.content, raw.events, accepted);
       if ('reason' in content) return { ok: false, reason: content.reason };
       const message = { role: descriptor.role, content: content.value } as ModelMessage;
+      // A transcript reference proves origin; text that merely LOOKS like a
+      // summary or skill body does not. Anchorless literals need the provenance
+      // recorded at publish time, not a guess based on their text.
+      if (message.role === 'user' && (descriptor.appGenerated === true || (descriptor.content?.kind === 'event' &&
+        (descriptor.content.field === 'skill-text' || descriptor.content.field === 'summary-text' ||
+          (descriptor.content.field === 'user-text' && Boolean(raw.events.get(descriptor.content.uuid)?.data?.injected)))))) {
+        markAppGenerated(message);
+      }
       if (descriptor.sizing) restoreContinuationSizing(message, descriptor.sizing);
       messages.push(message);
+      // restoreContent proved the descriptors against the accepted transcript;
+      // an unsupported/private part still makes this message uncuttable.
+      messageOrigins.push(replayableOrigin(descriptor.content));
     }
     return {
-      ok: true, messages, eventUuids: [...manifest.eventUuids], revision: manifest.revision,
+      ok: true, messages, messageOrigins, eventUuids: [...manifest.eventUuids], revision: manifest.revision,
       ...(manifest.transformation ? { transformation: manifest.transformation } : {}),
     };
   }
@@ -805,7 +865,9 @@ function describeMessages(messages: ModelMessage[], anchors: AnchorSet): Message
     if (typeof message.content === 'string') {
       const content = describeString(message, anchors);
       if (!content) return null;
-      out.push({ role: message.role, content, ...tail });
+      // WHY: no transcript anchor proves an injected rule's origin. Persist only
+      // its boolean provenance in the private sidecar; the symbol stays off-wire.
+      out.push({ role: message.role, content, ...(content.kind === 'literal' && isAppGenerated(message) ? { appGenerated: true as const } : {}), ...tail });
       continue;
     }
     if (!Array.isArray(message.content)) return null;
@@ -825,6 +887,18 @@ function describeString(message: ModelMessage, anchors: AnchorSet): ContentDescr
     return uuids.length === 1 ? { kind: 'event', uuid: uuids[0], field: 'assistant-text' } : { kind: 'concat', uuids, field: 'assistant-text' };
   }
   if (message.role !== 'user') return null;
+  // WHY: origin, not identical bytes, determines whether an app-authored
+  // message can claim an anchor. Skills, summaries and injected user events
+  // really are persisted; an anchorless rule must never spend a human event.
+  if (isAppGenerated(message)) {
+    const injected = anchors.matchEvent('user-text', event => Boolean(event.data?.injected) && eventText(event, 'user-text') === text);
+    if (injected) return { kind: 'event', uuid: injected.uuid, field: 'user-text' };
+    for (const field of ['skill-text', 'summary-text'] as const) {
+      const uuids = anchors.matchText(field, text, 1);
+      if (uuids) return { kind: 'event', uuid: uuids[0], field };
+    }
+    return Buffer.byteLength(text) <= LITERAL_MAX_BYTES ? { kind: 'literal', value: text } : null;
+  }
   for (const field of ['user-text', 'skill-text', 'summary-text'] as const) {
     // Only a single anchor is describable here, and asking for one leaves the cursor
     // untouched when a longer run would have matched.

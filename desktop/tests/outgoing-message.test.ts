@@ -25,6 +25,16 @@ describe('buildOutgoingMessage', () => {
     expect(out!.content).toBe(out!.ptyText);
   });
 
+  // Destin, 2026-09-23: text copied from a table carries TABs between cells. Written to
+  // the PTY, Claude Code takes each one as the Tab KEY (it recorded "Purpose\tPath" as
+  // "PurposePath"), so the bubble could never be confirmed and stayed pinned at the bottom.
+  it('replaces tabs with spaces in BOTH content and ptyText', () => {
+    const out = buildOutgoingMessage('Purpose\tPath\nnotes.md\t\tdone', []);
+    expect(out!.ptyText).toBe('Purpose Path notes.md  done');
+    expect(out!.ptyText).not.toContain('\t');
+    expect(out!.content).toBe(out!.ptyText);
+  });
+
   it('trims surrounding whitespace', () => {
     const out = buildOutgoingMessage('  hi  ', []);
     expect(out!.content).toBe('hi');

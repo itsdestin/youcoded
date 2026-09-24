@@ -77,7 +77,19 @@ export type NativeSendResult =
   // created, 'starting' is one that has not finished starting yet (a big local
   // model can take a minute to load). One code for both is what told Destin a
   // brand-new session was "no longer running" — see NativeSessionHost.startingSends.
-  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' };
+  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' | 'compacting' };
+
+/** U11 — the model picker's native switch (`native:switch-model`). 'needs-summary'
+ *  means nothing changed yet: the chat is too long for the chosen model and the
+ *  renderer asks before summarizing. Every failure leaves the current model. */
+export type NativeSwitchFailure =
+  | 'not-live' | 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed'
+  | 'interrupted' | 'cannot-fit' | 'too-small' | 'error';
+export type NativeSwitchResult =
+  // `summarized`: a summary committed first, so its marker ends the chat's card.
+  | { status: 'switched'; summarized?: true }
+  | { status: 'needs-summary' }
+  | { status: 'failed'; reason: NativeSwitchFailure; detail?: string };
 
 export interface SessionInfo {
   id: string;
@@ -100,6 +112,9 @@ export interface SessionInfo {
   harnessId?: string;
   /** Model alias the session was started with (e.g. 'claude-sonnet-4-6') */
   model?: string;
+  /** The saved conversation this session resumed, when it resumed one. Lets a
+   *  pending handoff tab recognise its own session's creation push exactly. */
+  resumeSessionId?: string;
   /** Native runtime only: which KIND of provider the bound model runs on
    *  ('chatgpt' | 'openrouter' | 'local-engine' | …), as main already resolves
    *  it in conversations/portable-model.ts.
@@ -118,6 +133,17 @@ export interface SessionInfo {
    *  a consumed-set ref so it never re-fires on re-renders. */
   initialInput?: string;
 }
+
+// A refused resume creates no session. Keep it distinct from both startup
+// errors and offline access (which may still produce a real SessionInfo).
+export type SessionCreateResult = (SessionInfo & { reused?: true }) | { status: 'lease-denied'; device?: string };
+
+// WHY: only admitted attempts carry a real session; saved-copy is explicit consent, not confirmation.
+export type HandoffAttemptResult =
+  | { id: string; status: 'waiting' | 'incomplete' | 'cancelled' | 'failed'; cause?: string;
+      holder?: { deviceId: string; device: string } }
+  | { id: string; status: 'admitted'; source: 'confirmed' | 'saved-copy'; session: SessionInfo };
+export type HandoffCreateParams = { name: string; cwd: string; skipPermissions: boolean; resumeSessionId: string; provider: 'claude' | 'native'; model?: string; binding?: { providerId: string; modelId: string }; cols?: number; rows?: number; preset?: string };
 
 export interface HookEvent {
   type: string;
@@ -492,6 +518,22 @@ export interface TranscriptEvent {
      * unchanged.
      */
     autoCompaction?: boolean;
+    /** Native compact-summary only: the user-message event opening the kept
+     *  tail's turn (null = unknown). Its PRESENCE tells the renderer this
+     *  compaction kept a tail, so only entries above that message dim. */
+    retainedFromUuid?: string | null;
+    /** Persisted coalesced-part UUID/range witness; no duplicate text or private metadata. */
+    deltaReferences?: Array<{ eventUuid: string; start: number; end: number }>;
+    /** Native compact-summary portable checkpoint; references cite persisted parts. */
+    compactionRecord?: {
+      v: 1;
+      generation: number;
+      sourceRevision: number;
+      /** Hash of the source transcript plus the claimed cut; no copied text. */
+      sourceDigest?: string;
+      resumeFrom: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+      coveredThrough: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+    };
     /** `skill-invoked` only (M3 item 1). `skillId` is the resolved, qualified id
      *  (wecoded-themes-plugin:theme-builder); `body` is the SKILL.md text that
      *  enters model history on rebuild and is deliberately NOT rendered;
@@ -1444,8 +1486,8 @@ export interface BuddyApi {
   // preload, remote-shim, and renderer callers all agree on one contract.
   /** Fire-and-forget: mascot renderer signals drag release (edge-snap check). */
   dragEnded(): void;
-  /** Restore + focus the main window, switching to the buddy's viewed session. */
-  openMain(): Promise<void>;
+  /** Restore + focus main; a buddy resume is re-resolved through main's admission flow. */
+  openMain(request?: { resume: string }): Promise<void>;
   /** Hide the buddy for this app run only (preference stays enabled). */
   dismiss(): Promise<void>;
   getStatus(): Promise<{ dismissed: boolean; visible: boolean }>;
@@ -1610,6 +1652,15 @@ export interface IntegrationInfo {
 export const IPC = {
   // Renderer -> Main
   SESSION_CREATE: 'session:create',
+  // WHY: pending handoff is not a started session; keep its actions off session:create.
+  HANDOFF_BEGIN: 'handoff:begin',
+  HANDOFF_STATUS: 'handoff:status',
+  HANDOFF_WAIT: 'handoff:wait',
+  HANDOFF_RETRY: 'handoff:retry',
+  HANDOFF_SAVED_COPY: 'handoff:saved-copy',
+  HANDOFF_FORCE: 'handoff:force',
+  HANDOFF_CANCEL: 'handoff:cancel',
+  HANDOFF_CREATE_PARAMS: 'handoff:create-params',
   SESSION_DESTROY: 'session:destroy',
   SESSION_INPUT: 'session:input',
   SESSION_RESIZE: 'session:resize',
@@ -1986,6 +2037,8 @@ export const IPC = {
   NATIVE_CLEAR: 'native:clear',
   NATIVE_INVOKE_SKILL: 'native:invoke-skill',
   NATIVE_SET_BINDING: 'native:set-binding',
+  // U11: fit-checked switch from the model picker (NativeSwitchResult).
+  NATIVE_SWITCH_MODEL: 'native:switch-model',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   // Read the session's current native permission mode. Seeds the StatusBar chip
   // on create/resume so a fresh Coder session shows AUTO EDIT (not the default ASK).
@@ -2047,6 +2100,13 @@ export const IPC = {
   PAGES_SET_PINNED: 'pages:set-pinned',
   PAGES_SET_DATA: 'pages:set-data',
   PAGES_CHANGED: 'pages:changed',
+  // ---- Phase 2: connections, keys and the one door out of a page ----
+  PAGES_APPROVE: 'pages:approve',
+  PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
+  PAGES_REFRESH: 'pages:refresh',
+  PAGES_SAVED_KEYS: 'pages:saved-keys',
+  PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
+  PAGES_FETCH: 'pages:fetch',
   // ---- Remembered "Always allow" rules (M5 2a: permissions management UI) ----
   // list = every project's stored grants; remove/remove-project revoke them.
   // Keyed by PROJECT SLUG, not cwd — permissions.json never stored the cwd for

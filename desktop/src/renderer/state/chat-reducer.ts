@@ -52,6 +52,11 @@ function isCompactCommandEcho(text: string): boolean {
   return /^\/compact(\s|$)/.test(text.trim());
 }
 
+/** A message's text minus every space, tab and line break (see sameUserMessage). */
+function visibleText(s: string): string {
+  return s.replace(/\s+/g, '');
+}
+
 /**
  * Whether a transcript user line is the message a pending bubble drew: the exact text, or, for a
  * message sent with attachments, the same words once the bubble's attachment paths and Claude
@@ -61,12 +66,16 @@ function isCompactCommandEcho(text: string): boolean {
  */
 function sameUserMessage(message: { content: string; attachments?: string[] }, recorded: string): boolean {
   if (message.content === recorded) return true;
+  // WHY spacing is ignored (2026-09-23): CC can record a message with its spacing changed (a
+  // pasted tab swallowed as the Tab key), and an exact-only match drew the recorded copy at the
+  // top while the bubble stayed pinned below every reply. See docs/chat-reducer.md.
+  if (visibleText(message.content) === visibleText(recorded)) return true;
   const paths = message.attachments;
   if (!paths?.length) return false;
   const words = (s: string) => {
     let out = s;
     for (const p of paths) out = out.split(p).join(' ');
-    return out.replace(/\[Image #\d+\]/g, ' ').replace(/\s+/g, ' ').trim();
+    return visibleText(out.replace(/\[Image #\d+\]/g, ' '));
   };
   return words(message.content) === words(recorded);
 }
@@ -895,12 +904,15 @@ function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState)
   copy.timeline.forEach((e, i) => {
     if (i <= lastKnown || e.kind !== 'user' || e.pending || e.injected) return;
     if (e.uuid && seen.has(e.uuid)) return;
-    unapplied.set(e.message.content, (unapplied.get(e.message.content) ?? 0) + 1);
+    const key = visibleText(e.message.content);
+    unapplied.set(key, (unapplied.get(key) ?? 0) + 1);
   });
+  // visibleText, like sameUserMessage: the copy holds CC's RECORDED text, spacing may differ.
   const consume = (text: string) => {
-    const n = unapplied.get(text) ?? 0;
+    const key = visibleText(text);
+    const n = unapplied.get(key) ?? 0;
     if (n <= 0) return false;
-    unapplied.set(text, n - 1);
+    unapplied.set(key, n - 1);
     return true;
   };
   const carried = prev.timeline.filter((e) => e.kind === 'user' && e.pending && !consume(e.message.content));
@@ -2867,7 +2879,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         timeline: [...filtered, { kind: 'compacting', id: action.cardId, startedAt }],
-        compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens },
+        compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens,
+          ...(action.awaitsResult ? { awaitsResult: true } : {}) },
+      });
+      return next;
+    }
+
+    case 'COMPACTION_CANCELLED': {
+      const session = next.get(action.sessionId);
+      if (!session || !session.compactionPending) return state;
+      next.set(action.sessionId, {
+        ...session,
+        timeline: session.timeline.filter((e) => e.kind !== 'compacting'),
+        compactionPending: null,
       });
       return next;
     }
@@ -2888,6 +2912,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // the manual/CC path the guard still drops stale/spurious events (notably CC
       // resume-from-summary, which must NOT insert a marker).
       if (!session.compactionPending && !action.auto) return state; // Stale event — ignore
+      // WHY: live replay can deliver the same automatic summary again while the
+      // turn is still running. The marker's event ID is the dedupe authority.
+      if (session.timeline.some(e => e.kind === 'system-marker' && e.marker.id === action.markerId)) return state;
       // The harness's own figure wins where it exists: it is the only source a
       // NATIVE session has, and it measures the same window the chip does. The
       // compactionPending fallback is Claude Code's statusline reading, captured
@@ -2907,7 +2934,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const preserved = session.timeline.filter((e) => e.kind !== 'compacting');
       next.set(action.sessionId, {
         ...session,
-        ...endTurn(session),
+        // WHY: native auto compaction is a history rewrite inside the SAME
+        // turn; ending it here loses running tools and shows a false turn end.
+        // Manual /compact and Claude Code compaction still end their turns.
+        ...(action.auto ? {} : endTurn(session)),
         timeline: [
           ...preserved,
           {
@@ -2921,6 +2951,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
               // marker can click-to-expand inline. Absent on aborted/watchdog
               // completions (no summary available).
               ...(action.summary ? { summary: action.summary } : {}),
+              // WHY: lets the fade stop at the kept tail instead of the marker.
+              ...(action.retainedFromUuid !== undefined ? { retainedFromUuid: action.retainedFromUuid } : {}),
             },
           },
         ],

@@ -25,6 +25,9 @@
 import * as path from 'path';
 import type { TranscriptEvent } from '../../shared/types';
 import type { ModelMessage, TextPart, ToolCallPart, ToolResultPart } from 'ai';
+import { markAppGenerated } from './compaction';
+import { validatedDeltaReferences } from './session-store';
+import { compactionSourceDigest } from './compaction-record';
 
 // Synthesized result text for a tool-call that has no persisted result — a
 // transcript truncated by a crash mid-execution (see backfillUnpairedToolCalls).
@@ -35,17 +38,134 @@ const CRASH_UNPAIRED_TEXT = 'Canceled: this call never completed (the app was cl
  *  image-support.readImageFromDisk. #290 follow-up fix 2. */
 export type RebuildImageReader = (absPath: string) => { mediaType: string; data: Buffer } | null;
 
-export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildImageReader): ModelMessage[] {
+/** Restore only from a checkpoint whose cut can be proven against the persisted
+ * events. New coalesced parts carry validated UUID/range witnesses; legacy parts
+ * without them can prove only their anchor, never an inferred later delta. */
+export function restorePortableHistory(events: TranscriptEvent[], readImage?: RebuildImageReader,
+                                       onReject?: (reason: 'invalid-record') => void): {
+  messages: ModelMessage[]; origins: Array<string[] | null>; eventUuids: string[]; generation: number;
+} | null {
+  const clear = events.reduce((last, e, i) => e.type === 'context-clear' ? i : last, -1);
+  const active = events.slice(clear + 1);
+  const positions = new Map(active.map((e, i) => [e.uuid, i]));
+  const validRef = (value: any, full: boolean): number => {
+    if (!value || typeof value !== 'object' || typeof value.eventUuid !== 'string' ||
+        typeof value.anchorUuid !== 'string' || typeof value.type !== 'string' ||
+        !Number.isSafeInteger(value.start) || !Number.isSafeInteger(value.end)) return -1;
+    const index = positions.get(value.anchorUuid);
+    if (index === undefined) return -1;
+    const anchor = active[index];
+    if (anchor.type !== value.type || !anchor.uuid ||
+        (anchor.data?.partId == null ? value.partId !== undefined :
+          value.partId !== String(anchor.data.partId))) return -1;
+    const coalesced = (anchor.type === 'assistant-text' || anchor.type === 'assistant-thinking') && anchor.data?.partId != null;
+    const length = coalesced ? String(anchor.data?.text ?? '').length : JSON.stringify(anchor.data ?? {}).length;
+    // A cut can only start/end at a whole persisted part boundary. The exact
+    // delta reference is checked against disk witnesses, not a guessed offset.
+    if (value.start < 0 || value.end !== length || value.start >= value.end ||
+        (full && value.start !== 0)) return -1;
+    if (coalesced) {
+      const witnesses = validatedDeltaReferences(anchor);
+      if (witnesses) {
+        if (!witnesses.some(delta => delta.eventUuid === value.eventUuid &&
+          delta.start === value.start && delta.end === value.end)) return -1;
+      } else if (anchor.data?.deltaReferences !== undefined || value.eventUuid !== anchor.uuid ||
+                 value.start !== 0) return -1;
+    } else if (value.eventUuid !== anchor.uuid || value.start !== 0) return -1;
+    return index;
+  };
+  for (let i = active.length - 1; i >= 0; i--) {
+    const marker = active[i];
+    if (marker.type !== 'compact-summary') continue;
+    const record: any = marker.data?.compactionRecord;
+    if (!record) continue; // legacy summary-only records had no portable cut
+    const reject = () => onReject?.('invalid-record');
+    if (record.v !== 1 || !Number.isSafeInteger(record.generation) || record.generation < 1 ||
+        !Number.isSafeInteger(record.sourceRevision) || record.sourceRevision < 1 ||
+        typeof marker.data?.summary !== 'string' || !marker.data.summary.trim() ||
+        !marker.uuid || !marker.sessionId ||
+        typeof record.sourceDigest !== 'string' || !/^[a-f0-9]{64}$/.test(record.sourceDigest) ||
+        compactionSourceDigest(events.slice(0, clear + 1 + i), marker.data.summary, record) !== record.sourceDigest) {
+      reject(); continue;
+    }
+    const from = validRef(record.resumeFrom, true);
+    const through = validRef(record.coveredThrough, false);
+    if (from <= through || through < 0 || from >= i ||
+        active[from].sessionId !== marker.sessionId || active[through].sessionId !== marker.sessionId ||
+        active.slice(i + 1).some(e => e.sessionId !== marker.sessionId) ||
+        active.slice(through + 1, from).some(e =>
+          ['user-message', 'assistant-text', 'tool-use', 'tool-result', 'skill-invoked'].includes(e.type)) ||
+        active.slice(from, i).some(e => e.sessionId !== marker.sessionId)) {
+      reject(); continue;
+    }
+    const suffix = [...active.slice(from, i), ...active.slice(i + 1)]
+      .filter(e => e.type !== 'compact-summary');
+    const rebuilt = rebuildHistoryWithOrigins(suffix, readImage);
+    // Synthetic tool repairs have no persisted UUID. Refuse to publish an
+    // apparently portable history whose tail cannot be cited on a later cut.
+    if (rebuilt.origins.some(origin => !origin?.length)) { reject(); continue; }
+    const summary = markAppGenerated({ role: 'user', content: `[Earlier conversation summary]\n${marker.data.summary}` } as ModelMessage);
+    return { messages: [summary, ...rebuilt.messages], origins: [[marker.uuid], ...rebuilt.origins],
+      eventUuids: [marker.uuid, ...suffix.map(e => e.uuid).filter((uuid): uuid is string => typeof uuid === 'string' && !!uuid)],
+      generation: record.generation };
+  }
+  return null;
+}
+
+/** A retry tombstone names only parts of its current model step. Walk backward
+ * to the last turn/tool-result boundary, never erase a replacement with the
+ * same partId emitted after the tombstone. Legacy logs have no tombstone. */
+function withoutDiscardedRetryParts(events: TranscriptEvent[]): TranscriptEvent[] {
+  const removed = new Set<number>();
+  let stepStart = 0;
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    if (event.type === 'assistant-thinking' && event.data?.dropPart) {
+      const ids = new Set(event.data.dropPart.partIds);
+      for (let j = stepStart; j < i; j++) {
+        const prior = events[j];
+        if ((prior.type === 'assistant-text' || prior.type === 'assistant-thinking') &&
+            prior.data?.partId != null && ids.has(String(prior.data.partId))) removed.add(j);
+      }
+    }
+    if (event.type === 'user-message' || event.type === 'tool-result' ||
+        event.type === 'turn-complete' || event.type === 'user-interrupt' ||
+        event.type === 'context-clear') stepStart = i + 1;
+  }
+  return events.filter((_, index) => !removed.has(index));
+}
+
+export function rebuildHistoryWithOrigins(events: TranscriptEvent[], readImage?: RebuildImageReader): {
+  messages: ModelMessage[]; origins: Array<string[] | null>;
+} {
+  const origins: Array<string[] | null> = [];
+  const messages = rebuildHistory(events, readImage, origins);
+  return { messages, origins };
+}
+
+export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildImageReader,
+                               collectedOrigins?: Array<string[] | null>): ModelMessage[] {
   const out: ModelMessage[] = [];
+  const origins: Array<string[] | null> = [];
   let assistantParts: Array<TextPart | ToolCallPart> = [];
+  let assistantOriginUuids: string[] = [];
   let toolResults: ToolResultPart[] = [];
+  let toolOriginUuids: string[] = [];
   const flushAssistant = () => {
-    if (assistantParts.length) { out.push({ role: 'assistant', content: assistantParts }); assistantParts = []; }
+    if (assistantParts.length) {
+      out.push({ role: 'assistant', content: assistantParts });
+      origins.push(assistantOriginUuids.length ? assistantOriginUuids : null);
+      assistantParts = []; assistantOriginUuids = [];
+    }
   };
   const flushResults = () => {
-    if (toolResults.length) { out.push({ role: 'tool', content: toolResults }); toolResults = []; }
+    if (toolResults.length) {
+      out.push({ role: 'tool', content: toolResults });
+      origins.push(toolOriginUuids.length ? toolOriginUuids : null);
+      toolResults = []; toolOriginUuids = [];
+    }
   };
-  for (const e of events) {
+  for (const e of withoutDiscardedRetryParts(events)) {
     switch (e.type) {
       case 'user-message': {
         flushAssistant(); flushResults();
@@ -57,9 +177,11 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
         const paths = Array.isArray(e.data?.attachments) ? (e.data.attachments as string[]) : [];
         const parts: Array<{ type: 'file'; mediaType: string; data: Buffer }> = [];
         if (readImage) for (const p of paths) { const img = readImage(p); if (img) parts.push({ type: 'file', mediaType: img.mediaType, data: img.data }); }
-        out.push(parts.length
-          ? ({ role: 'user', content: [{ type: 'text', text }, ...parts] } as any)
-          : { role: 'user', content: text });
+        const message = parts.length
+          ? ({ role: 'user', content: [{ type: 'text', text }, ...parts] } as ModelMessage)
+          : { role: 'user', content: text } as ModelMessage;
+        out.push(e.data?.injected ? markAppGenerated(message) : message);
+        origins.push([e.uuid]);
         break;
       }
       case 'assistant-text': {
@@ -76,16 +198,19 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
         const last = assistantParts[assistantParts.length - 1];
         if (last && last.type === 'text') last.text += text;
         else assistantParts.push({ type: 'text', text });
+        assistantOriginUuids.push(e.uuid);
         break;
       }
       case 'tool-use':
         flushResults();
         assistantParts.push({ type: 'tool-call', toolCallId: String(e.data?.toolUseId ?? ''), toolName: String(e.data?.toolName ?? ''), input: e.data?.toolInput ?? {} });
+        assistantOriginUuids.push(e.uuid);
         break;
       case 'tool-result': {
         // Close the assistant(tool-call) message this result answers — this
         // flush is what prevents the NEXT step's text from merging into it.
         flushAssistant();
+        toolOriginUuids.push(e.uuid);
         const base = String(e.data?.toolResult ?? '');
         const imagePaths = Array.isArray(e.data?.images) ? (e.data.images as string[]) : [];
         if (!imagePaths.length || !readImage) {
@@ -138,13 +263,15 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
       // this a resumed session would replay a turn whose opening move has no cause.
       case 'skill-invoked':
         if (e.data.body) {
-          out.push({ role: 'user', content: e.data.args ? `${e.data.body}\n\n${e.data.args}` : e.data.body });
+          out.push(markAppGenerated({ role: 'user', content: e.data.args ? `${e.data.body}\n\n${e.data.args}` : e.data.body }));
+          origins.push([e.uuid]);
         }
         break;
       case 'context-clear':
         out.length = 0;
-        assistantParts = [];
-        toolResults = [];
+        origins.length = 0;
+        assistantParts = []; assistantOriginUuids = [];
+        toolResults = []; toolOriginUuids = [];
         break;
       default:
         // assistant-thinking, compact-summary, session-error, and any unknown
@@ -153,7 +280,15 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
     }
   }
   flushAssistant(); flushResults();
-  return backfillUnpairedToolCalls(out);
+  const repaired = backfillUnpairedToolCalls(out);
+  if (collectedOrigins) {
+    // WHY: crash backfills create tool-result messages with no event, or replace
+    // a partially covered tool message. Mark those as unbacked, never invent a
+    // replay reference for them; unchanged messages retain object identity.
+    const byMessage = new Map(out.map((message, index) => [message, origins[index]]));
+    collectedOrigins.push(...repaired.map(message => byMessage.get(message) ?? null));
+  }
+  return repaired;
 }
 
 /**
