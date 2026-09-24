@@ -475,6 +475,29 @@ describe('the startup-dialog driver never guesses — each check on its own', ()
     expect(cc.writes).toEqual(['\u001b[A', '\r']);
   });
 
+  it('an identical dialog whose default row IS our pick, redrawn after Enter, is the next dialog — not "didn\'t react"', async () => {
+    let out = 0;
+    const cc = scripted(mcpScreen(2), (k, s) => { if (k === '\r') out++; return s; });
+    const r = await answerInkMenu({ signature: mcpSig, index: 2, label: MCP_OPTS[2] }, { ...cc.io, outputCount: () => out });
+    expect(r).toEqual({ ok: true });
+  });
+
+  it('a late piece of the last arrow\'s redraw is not taken for a reaction to Enter', async () => {
+    // Output keeps trickling for two settles after the arrow, then stops; the
+    // Enter itself changes nothing. Waiting for quiet before Enter makes the
+    // trickle part of the "before" count.
+    let out = 0;
+    let trickle = 0;
+    const cc = scripted(mcpScreen(1), (k, s) => (k === '\u001b[B' ? (trickle = 2, mcpScreen(2)) : s));
+    const io: InkMenuIO = {
+      ...cc.io,
+      settle: async (ms) => { if (trickle > 0) { trickle--; out++; } await cc.io.settle(ms); },
+      outputCount: () => out,
+    };
+    const r = await answerInkMenu({ signature: mcpSig, index: 2, label: MCP_OPTS[2] }, io);
+    expect(r).toEqual({ ok: false, reason: 'not-taken', typed: true });
+  });
+
   it('without any output after Enter the same dialog is "not taken" — never assumed answered', async () => {
     // Even with its cursor somewhere else afterwards (say, moved in terminal
     // view): no redraw from Claude Code after our Enter = not proof it acted.

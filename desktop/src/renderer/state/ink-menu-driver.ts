@@ -47,6 +47,8 @@ export const INK_MENU_TIMING = {
   reactMs: 3000,
   /** How long the menu must stay off screen to count as answered. */
   goneForMs: 400,
+  /** No terminal output for this long = the screen has settled before Enter. */
+  quietMs: 150,
   /** How long to wait for the menu to leave after Enter. */
   leaveMs: 6000,
 };
@@ -129,15 +131,27 @@ export async function answerInkMenu(
   // this exact dialog with the cursor on the target — and the label at the
   // target was checked against the button before the first key. So Enter goes
   // only where the button's label is.
+  // Let the screen go quiet first, so a late piece of the last arrow's redraw
+  // can never be mistaken for Claude Code reacting to our Enter (below).
+  if (io.outputCount) {
+    const quietEnd = io.now() + INK_MENU_TIMING.reactMs;
+    for (;;) {
+      const c = io.outputCount();
+      await io.settle(INK_MENU_TIMING.quietMs);
+      if (io.outputCount() === c || io.now() >= quietEnd) break;
+    }
+  }
   const outputBefore = io.outputCount?.() ?? 0;
   io.write('\r');
 
   // Answered = THIS dialog has been off screen continuously for goneForMs
   // (a following, different dialog counts as "off screen"). One exception:
-  // Claude Code redrew the screen after our Enter and an IDENTICAL dialog is
-  // there — Ink always acts on an Enter that arrives, so that is the next
-  // dialog, not ours ignoring the key (review F5). The detector then gives the
-  // new one a fresh card rather than reusing this one.
+  // Claude Code redrew the screen after our Enter (the screen was quiet before
+  // it) and an IDENTICAL dialog is there — Ink always acts on an Enter that
+  // arrives, so that is the next dialog, not ours ignoring the key (review F5).
+  // The redraw is the evidence, not the cursor: the next dialog's default row
+  // may well be the row we picked (second review F7). The detector then gives
+  // the new one a fresh card rather than reusing this one.
   const end = io.now() + INK_MENU_TIMING.leaveMs;
   let goneSince: number | null = null;
   for (;;) {
@@ -147,7 +161,7 @@ export async function answerInkMenu(
       if (io.now() - goneSince >= INK_MENU_TIMING.goneForMs) return { ok: true };
     } else {
       goneSince = null;
-      if (io.outputCount && io.outputCount() > outputBefore && m.selectedIndex !== pick.index) return { ok: true };
+      if (io.outputCount && io.outputCount() > outputBefore) return { ok: true };
     }
     if (io.now() >= end) return fail('not-taken', true);
     await io.settle(80);
