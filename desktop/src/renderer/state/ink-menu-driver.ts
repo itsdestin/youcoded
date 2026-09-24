@@ -25,7 +25,11 @@
 import { parseInkSelect, type ParsedMenu } from '../parser/ink-select-parser';
 import type { PlanDriverIO } from './plan-menu-driver';
 
-export type InkMenuIO = PlanDriverIO;
+export type InkMenuIO = PlanDriverIO & {
+  /** How many times the terminal has been written to (optional). Lets the
+   *  driver tell "Claude Code redrew after our Enter" from "nothing happened". */
+  outputCount?(): number;
+};
 
 type InkMenuFailure =
   /** The options on screen are not the ones the card showed. Nothing typed. */
@@ -50,11 +54,15 @@ export const INK_MENU_TIMING = {
 const DOWN = '\u001b[B';
 const UP = '\u001b[A';
 
-function readMenu(io: InkMenuIO, signature: string): ParsedMenu | 'absent' | 'other' {
+function readMenu(io: InkMenuIO): ParsedMenu | null {
   const screen = io.read();
-  const menu = screen ? parseInkSelect(screen) : null;
-  if (!menu) return 'absent';
-  return menu.signature === signature ? menu : 'other';
+  return screen ? parseInkSelect(screen) : null;
+}
+
+/** The words of the question itself (heading + body), which tell apart two
+ *  dialogs that happen to offer the same options (review F5, 2026-09-24). */
+function questionOf(m: ParsedMenu): string {
+  return `${m.heading ?? ''}\u241f${m.description ?? ''}`;
 }
 
 async function waitFor(io: InkMenuIO, ms: number, ok: () => boolean): Promise<boolean> {
@@ -69,6 +77,10 @@ async function waitFor(io: InkMenuIO, ms: number, ok: () => boolean): Promise<bo
 /**
  * Pick option `index` of the menu whose option set is `signature`, confirming
  * on screen that its label is `label`.
+ *
+ * Every check below is its own line on purpose — each is pinned by a test that
+ * fails without it (tests/startup-dialogs.test.ts, "the startup-dialog driver
+ * never guesses"; review F3, 2026-09-24).
  */
 export async function answerInkMenu(
   pick: { signature: string; index: number; label: string },
@@ -76,45 +88,65 @@ export async function answerInkMenu(
 ): Promise<InkMenuResult> {
   const fail = (reason: InkMenuFailure, typed: boolean): InkMenuResult => ({ ok: false, reason, typed });
 
-  const start = readMenu(io, pick.signature);
-  if (start === 'absent') return fail('menu-gone', false);
-  if (start === 'other') return fail('menu-changed', false);
+  const start = readMenu(io);
+  if (!start) return fail('menu-gone', false);
+  if (start.signature !== pick.signature) return fail('menu-changed', false);
   if (start.options[pick.index] !== pick.label) return fail('menu-changed', false);
+  // THIS dialog: the same options AND the same question. A dialog that follows
+  // with the same options but different words is a different dialog.
+  const question = questionOf(start);
+  const ours = (m: ParsedMenu | null): m is ParsedMenu =>
+    !!m && m.signature === pick.signature && questionOf(m) === question;
 
   let typed = false;
   // At most one full lap: the cursor can never need more steps than rows.
   for (let step = 0; step <= start.options.length; step++) {
-    const now = readMenu(io, pick.signature);
-    if (typeof now !== 'object') return fail(now === 'absent' ? 'menu-gone' : 'menu-changed', typed);
+    const now = readMenu(io);
+    // Option-set check at the top of every step: the screen may have changed
+    // since the last confirmed move.
+    if (!now) return fail('menu-gone', typed);
+    if (!ours(now)) return fail('menu-changed', typed);
     if (now.selectedIndex === pick.index) break;
     if (step === start.options.length) return fail('not-taken', typed);
     const from = now.selectedIndex;
+    // Exactly ONE row toward the target — a cursor that lands anywhere else
+    // (a jump, a redraw that reset it) is not the move we made.
     const expected = pick.index > from ? from + 1 : from - 1;
     io.write(pick.index > from ? DOWN : UP);
     typed = true;
     const moved = await waitFor(io, INK_MENU_TIMING.reactMs, () => {
-      const m = readMenu(io, pick.signature);
-      return typeof m === 'object' && m.selectedIndex === expected;
+      const m = readMenu(io);
+      // Option-set check inside the wait: a different menu whose cursor
+      // happens to sit on the expected row is not a confirmed move.
+      if (!ours(m)) return false;
+      return m.selectedIndex === expected;
     });
     if (!moved) return fail('not-taken', true);
   }
 
   // The loop only breaks on a read (just now, nothing awaited since) showing
-  // this exact option set with the cursor on the target — and the label at the
+  // this exact dialog with the cursor on the target — and the label at the
   // target was checked against the button before the first key. So Enter goes
   // only where the button's label is.
+  const outputBefore = io.outputCount?.() ?? 0;
   io.write('\r');
 
-  // Gone = this option set has been off screen continuously for goneForMs.
+  // Answered = THIS dialog has been off screen continuously for goneForMs
+  // (a following, different dialog counts as "off screen"). One exception:
+  // Claude Code redrew the screen after our Enter and an IDENTICAL dialog is
+  // there — Ink always acts on an Enter that arrives, so that is the next
+  // dialog, not ours ignoring the key (review F5). The detector then gives the
+  // new one a fresh card rather than reusing this one.
   const end = io.now() + INK_MENU_TIMING.leaveMs;
   let goneSince: number | null = null;
   for (;;) {
-    const m = readMenu(io, pick.signature);
-    if (typeof m !== 'object') {
+    const m = readMenu(io);
+    if (!ours(m)) {
       goneSince ??= io.now();
       if (io.now() - goneSince >= INK_MENU_TIMING.goneForMs) return { ok: true };
     } else {
       goneSince = null;
+      if (io.outputCount && io.outputCount() > outputBefore && m.selectedIndex !== pick.index) return { ok: true };
     }
     if (io.now() >= end) return fail('not-taken', true);
     await io.settle(80);

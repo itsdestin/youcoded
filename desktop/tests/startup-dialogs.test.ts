@@ -188,6 +188,10 @@ describe('answering a startup dialog types exactly what real Claude Code accepte
       file: 'bypass-answer-no-100x35', dialog: 1, label: 'No, exit', exits: true,
       check: (fx) => { expect(fx.outcome.bypassAccepted).toBe(false); expect(fx.outcome.exitCode).not.toBeNull(); },
     },
+    // Dialog 1 answered and dialog 2 drawn straight after: "answered" means
+    // THIS dialog left, even though another menu is now on screen.
+    { file: 'bypass-untrusted-100x35', dialog: 1, label: 'Yes, I trust this folder', check: (fx) => expect(fx.outcome.folderTrusted).toBe(true) },
+    { file: 'mcp-one-100x35', dialog: 1, label: 'Yes, I trust this folder', check: (fx) => expect(fx.outcome.folderTrusted).toBe(true) },
     { file: 'bypass-untrusted-100x35', dialog: 2, label: 'Yes, I accept', check: (fx) => expect(fx.outcome.bypassAccepted).toBe(true) },
     { file: 'bypass-untrusted-50x30', dialog: 2, label: 'Yes, I accept', check: (fx) => expect(fx.outcome.bypassAccepted).toBe(true) },
     { file: 'mcp-one-100x35', dialog: 2, label: 'Continue without using this MCP server', check: (fx) => expect(fx.outcome.reachedMainPrompt).toBe(true) },
@@ -390,5 +394,90 @@ describe.skipIf(!!process.env.STARTUP_FIXTURE_DIR)('Android parity screens', () 
     for (const [name, body] of want) {
       expect(fs.readFileSync(path.join(ANDROID_DIR, name), 'utf8').replace(/\r/g, ''), name).toBe(body);
     }
+  });
+});
+
+// ---- review F3/F5: each driver check pinned on its own ---------------------
+const MCP_RULE = '─'.repeat(100);
+const MCP_OPTS = ['Use this MCP server', 'Use this and all future MCP servers in this project', 'Continue without using this MCP server'];
+function mcpScreen(cursor: number, opts: { server?: string; options?: string[] } = {}): string {
+  const options = opts.options ?? MCP_OPTS;
+  return [
+    MCP_RULE,
+    `  New MCP server found in this project: ${opts.server ?? 'demo'}`,
+    '',
+    '  MCP servers may execute code or access system resources. All tool calls require approval. Learn',
+    '  more in the MCP documentation.',
+    '',
+    ...options.map((o, i) => (i === cursor ? `  ❯ ${o}` : `    ${o}`)),
+    '',
+    '  Enter to confirm · Esc to cancel',
+  ].join('\n');
+}
+const OTHER_OPTS = ['First', 'Second', 'Third'];
+const mcpSig = parseInkSelect(mcpScreen(0))!.signature!;
+
+/** A Claude Code whose screen is a fixed sequence of reads (the last repeats). */
+function sequence(reads: string[]) {
+  const writes: string[] = [];
+  let i = 0;
+  let t = 0;
+  const io: InkMenuIO = {
+    read: () => reads[Math.min(i++, reads.length - 1)],
+    write: (d) => { writes.push(d); },
+    settle: async (ms) => { t += ms; },
+    now: () => t,
+  };
+  return { io, writes };
+}
+
+describe('the startup-dialog driver never guesses — each check on its own', () => {
+  it('re-checks the option set at the top of every step (a change after a confirmed move stops it)', async () => {
+    // reads: start, step0 (cursor 0), wait (cursor 1 — confirmed), step1: a DIFFERENT menu
+    // whose cursor happens to sit on the target row.
+    const cc = sequence([mcpScreen(0), mcpScreen(0), mcpScreen(1), mcpScreen(2, { options: OTHER_OPTS })]);
+    const r = await answerInkMenu({ signature: mcpSig, index: 2, label: MCP_OPTS[2] }, cc.io);
+    expect(r).toEqual({ ok: false, reason: 'menu-changed', typed: true });
+    expect(cc.writes).toEqual(['\u001b[B']);
+  });
+
+  it('re-checks the option set inside the wait (another menu\'s cursor is not our move)', async () => {
+    // After the arrow: a different menu with its cursor on the expected row, then
+    // ours again with the cursor never moved.
+    const cc = sequence([mcpScreen(0), mcpScreen(0), mcpScreen(1, { options: OTHER_OPTS }), mcpScreen(0)]);
+    const r = await answerInkMenu({ signature: mcpSig, index: 1, label: MCP_OPTS[1] }, cc.io);
+    expect(r).toEqual({ ok: false, reason: 'not-taken', typed: true });
+    expect(cc.writes).toEqual(['\u001b[B']);
+  });
+
+  it('accepts only a move of exactly one row (a jump is not our move, and Enter is never sent)', async () => {
+    const cc = sequence([mcpScreen(0), mcpScreen(0), mcpScreen(2)]);
+    const r = await answerInkMenu({ signature: mcpSig, index: 2, label: MCP_OPTS[2] }, cc.io);
+    expect(r).toEqual({ ok: false, reason: 'not-taken', typed: true });
+    expect(cc.writes).toEqual(['\u001b[B']);
+  });
+
+  it('a following dialog with the same options but a different question counts as answered', async () => {
+    const cc = scripted(mcpScreen(2), (k, s) => (k === '\r' ? mcpScreen(2, { server: 'other' }) : s));
+    const r = await answerInkMenu({ signature: mcpSig, index: 2, label: MCP_OPTS[2] }, cc.io);
+    expect(r).toEqual({ ok: true });
+  });
+
+  it('an IDENTICAL dialog redrawn after our Enter, cursor back on its default, is the next dialog', async () => {
+    let out = 0;
+    const cc = scripted(mcpScreen(1), (k, s) => {
+      if (k === '\u001b[A') return mcpScreen(0);
+      if (k === '\r') { out++; return mcpScreen(2); }
+      return s;
+    });
+    const r = await answerInkMenu({ signature: mcpSig, index: 0, label: MCP_OPTS[0] }, { ...cc.io, outputCount: () => out });
+    expect(r).toEqual({ ok: true });
+    expect(cc.writes).toEqual(['\u001b[A', '\r']);
+  });
+
+  it('without any output after Enter the same dialog is "not taken" — never assumed answered', async () => {
+    const cc = scripted(mcpScreen(0), (_k, s) => s);
+    const r = await answerInkMenu({ signature: mcpSig, index: 0, label: MCP_OPTS[0] }, { ...cc.io, outputCount: () => 0 });
+    expect(r).toEqual({ ok: false, reason: 'not-taken', typed: true });
   });
 });
