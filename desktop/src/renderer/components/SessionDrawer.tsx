@@ -1303,8 +1303,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   only while the full column is on screen — not with the file
                   list's pop-in rule, and not over the collapsed marker rail. */}
               {active && commentsState.paneVisible && (
-                // right = the cards' 8px inset + the document scrollbar the
-                // column sits beside (measured, round 11).
+                // right = the cards' 8px inset + the comment list's own
+                // scrollbar, when it has one (measured, rounds 11/13).
                 <div className="absolute bottom-9 w-60 z-20 pointer-events-none" style={{ right: 8 + commentsState.scrollbarW }}>
                   <CommentsFloatingActions path={active.path} />
                 </div>
@@ -1319,11 +1319,12 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   {/* Comments + Edit sit over the DOCUMENT: in Comments mode they
                       move left past the 256px comment column (right-68 = 16px
                       clearance + 256px), otherwise their usual 16px from the edge. */}
-                  {/* In Comments mode: 16px clear of the 256px column, plus the
-                      scrollbar the column sits beside (measured, round 11). */}
+                  {/* In Comments mode: 16px clear of the 256px column. Round 13:
+                      the column is at the pane's right edge with its OWN
+                      scrollbar inside it, so no scrollbar offset here. */}
                   <div
                     className="absolute bottom-0 flex items-center gap-2"
-                    style={{ right: commentsState.paneVisible ? 272 + commentsState.scrollbarW : 16 }}
+                    style={{ right: commentsState.paneVisible ? 272 : 16 }}
                   >
                   {commentsState.available && !editState.editing && (
                     <CommentsBtn

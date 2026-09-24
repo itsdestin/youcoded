@@ -11,6 +11,7 @@ import { CommentCard } from './CommentCard';
 import { CheckIcon } from '../Icons';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { CloseButton } from '../ui/CloseButton';
+import { EmptyState } from '../ui/states';
 import { useDocComments, type DocComment } from '../../state/doc-comments-store';
 // Round 2: mark-wrapping moved to a shared hook — ReadingHighlights (Reading
 // mode) needs the identical highlight, and the two modes are mutually
@@ -115,14 +116,26 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   const rawTops = useAnchorTops(marks, marginRef, containerRef);
   const tops = useMemo(() => stackedTops(visible, rawTops, narrow), [visible, rawTops, narrow]);
   const [openId, setOpenId] = useState<string | null>(null);
+  // activeId = whatever the pointer is on (card or highlight); selectedId =
+  // the thread last clicked, which stays lit until another is picked
+  // (round 13: "clicking a comment should focus the relevant highlight").
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const litId = activeId ?? selectedId;
+  const cardRefs = useRef(new Map<string, HTMLDivElement>());
 
   const jump = (id: string) => marks.get(id)?.[0]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  // Select a thread from either side: scroll the document to its highlight
+  // and the list to its card, and keep both lit.
+  const focusThread = (id: string) => {
+    setSelectedId(id);
+    jump(id);
+    cardRefs.current.get(id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
 
   useEffect(() => {
     if (!openThreadId || !marks.has(openThreadId)) return;
-    jump(openThreadId);
-    setActiveId(openThreadId);
+    focusThread(openThreadId);
     if (narrow) setOpenId(openThreadId);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- jump/marks read via closure; openThreadId (+ marks becoming ready) is the real trigger
   }, [openThreadId, marks, narrow]);
@@ -136,7 +149,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
     for (const [id, segs] of marks) for (const mark of segs) {
       const enter = () => setActiveId(id);
       const leave = () => setActiveId((cur) => (cur === id ? null : cur));
-      const click = () => jump(id);
+      const click = () => focusThread(id);
       mark.addEventListener('mouseenter', enter);
       mark.addEventListener('mouseleave', leave);
       mark.addEventListener('click', click);
@@ -152,9 +165,22 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
 
   useEffect(() => {
     for (const [id, segs] of marks) for (const mark of segs) {
-      ACTIVE_CLASSES.forEach((cls) => mark.classList.toggle(cls, id === activeId));
+      ACTIVE_CLASSES.forEach((cls) => mark.classList.toggle(cls, id === litId));
     }
-  }, [marks, activeId]);
+  }, [marks, litId]);
+
+  // Round 13 (Destin: "i want the comments to all snap upwards/to the
+  // top"): the wide column is a plain top-down list, no longer pinned beside
+  // each highlight — in DOCUMENT order (the order you meet the highlights
+  // reading down), comments whose text couldn't be found last.
+  const ordered = useMemo(() => {
+    const withMark = visible.filter((c) => marks.has(c.id));
+    withMark.sort((a, b) => {
+      const pos = marks.get(a.id)![0].compareDocumentPosition(marks.get(b.id)![0]);
+      return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : pos & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+    });
+    return [...withMark, ...visible.filter((c) => !marks.has(c.id))];
+  }, [visible, marks]);
 
   if (narrow) {
     const openComment = visible.find((c) => c.id === openId) ?? null;
@@ -199,26 +225,41 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   }
 
   return (
-    <div ref={marginRef} className="relative w-64 shrink-0 border-l border-edge bg-panel" style={{ minHeight: '100%' }}>
-      {visible.map((c) => (
-        <div
-          key={c.id}
-          className={`absolute left-2 right-2 rounded-lg transition-shadow ${c.id === activeId ? 'ring-2 ring-accent/60' : ''}`}
-          style={{ top: tops.get(c.id) ?? 0 }}
-          onMouseEnter={() => setActiveId(c.id)}
-          onMouseLeave={() => setActiveId((cur) => (cur === c.id ? null : cur))}
-        >
-          <CommentCard
-            comment={c}
-            autoFocus={c.id === focusId}
-            onTextChange={(t) => setCommentText(c.id, t)}
-            onReply={(t) => addReply(c.id, 'user', t)}
-            onResolve={() => resolveComment(c.id, 'user')}
-            onReopen={() => reopenComment(c.id)}
-            onDelete={() => removeComment(c.id)}
-          />
-        </div>
-      ))}
+    // Its own scroller (MarkdownView renders it BESIDE the document's
+    // scroller, not inside it): with cards no longer tied to their
+    // highlights, scrolling the document must not carry the list away.
+    // data-comments-scroller: ActiveArtifactView measures this scrollbar so
+    // the floating comment actions line up with the cards. pb-28: room to
+    // scroll the last card up past those floating actions.
+    <div ref={marginRef} data-comments-scroller className="w-64 shrink-0 border-l border-edge bg-panel overflow-y-auto">
+      <div className="flex flex-col gap-2 p-2 pb-28">
+        {ordered.length === 0 && <EmptyState message="No comments on this file yet." variant="inline" />}
+        {ordered.map((c) => (
+          <div
+            key={c.id}
+            ref={(el) => { if (el) cardRefs.current.set(c.id, el); else cardRefs.current.delete(c.id); }}
+            // Clicking a card's background focuses its highlight; clicks on
+            // the card's own controls (reply, send, resolve) are left alone.
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest('button, input, textarea')) return;
+              focusThread(c.id);
+            }}
+            className={`rounded-lg cursor-pointer transition-shadow ${c.id === litId ? 'ring-2 ring-accent/60' : ''}`}
+            onMouseEnter={() => setActiveId(c.id)}
+            onMouseLeave={() => setActiveId((cur) => (cur === c.id ? null : cur))}
+          >
+            <CommentCard
+              comment={c}
+              autoFocus={c.id === focusId}
+              onTextChange={(t) => setCommentText(c.id, t)}
+              onReply={(t) => addReply(c.id, 'user', t)}
+              onResolve={() => resolveComment(c.id, 'user')}
+              onReopen={() => reopenComment(c.id)}
+              onDelete={() => removeComment(c.id)}
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

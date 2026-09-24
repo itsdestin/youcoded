@@ -32,7 +32,6 @@ export function MarkdownView({
 }: ArtifactViewProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [rootRef, narrow] = useContainerNarrow<HTMLDivElement>(MARGIN_COLLAPSE_PX);
-  const inComments = commentsMode === 'comments' && !editing;
 
   if (content === null) {
     // Loading / missing / read-error are rendered by ActiveArtifactView (which
@@ -62,25 +61,22 @@ export function MarkdownView({
   }
 
   const isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
+  // Round 13: the wide comment list is its own scroller BESIDE the document
+  // (cards stack from the top, no longer pinned to their highlights). Only
+  // the narrow marker rail still lives inside the document's scroller, since
+  // its markers do sit level with their highlights.
+  const wideComments = commentsMode === 'comments' && !narrow;
   return (
-    <div ref={rootRef} className="flex flex-col h-full">
-      {/* The scrolling ancestor is this flex row, not the text column alone —
-          the margin (or, narrow, its marker rail) is a SIBLING inside it, so
-          both move together on scroll with no listener of our own. */}
-      {/* data-comments-scroller: ActiveArtifactView measures this element's
-          scrollbar so the floating comment actions line up with the column. */}
-      <div className="flex-1 overflow-auto" data-comments-scroller>
+    <div ref={rootRef} className="flex h-full">
+      <div className="flex-1 min-w-0 overflow-auto">
         {/* WHY an inner min-h-full flex row: a scroller's own flex children
-            stretch only to the scroller's VISIBLE height, so the margin
-            column (and its divider line) ended one screen down while the
-            text kept going. This row grows to the full document height, so
-            the margin runs the whole length beside it. */}
+            stretch only to the scroller's VISIBLE height, so the marker rail
+            (and its divider line) would end one screen down while the text
+            kept going. This row grows to the full document height. */}
         <div className="flex min-h-full">
         <div
           ref={contentRef}
-          // pb-48 in Comments mode: room to scroll the last cards up past
-          // the floating Ask/Show resolved buttons (SessionDrawer's cluster).
-          className={`flex-1 min-w-0 p-4 ${inComments ? 'pb-48' : ''}`}
+          className="flex-1 min-w-0 p-4"
           data-artifact-viewer
           data-doc-path={path}
           // Rendered markdown prose doesn't map back to source line numbers (see
@@ -93,10 +89,11 @@ export function MarkdownView({
             : <pre className="font-mono text-sm whitespace-pre-wrap">{content}</pre>}
         </div>
         {commentsMode === 'comments'
-          ? <CommentsMargin containerRef={contentRef} path={path} narrow={narrow} openThreadId={focusThreadId} />
+          ? (narrow && <CommentsMargin containerRef={contentRef} path={path} narrow openThreadId={focusThreadId} />)
           : <ReadingHighlights containerRef={contentRef} path={path} onOpenComments={onOpenComments ?? (() => {})} />}
         </div>
       </div>
+      {wideComments && <CommentsMargin containerRef={contentRef} path={path} narrow={false} openThreadId={focusThreadId} />}
     </div>
   );
 }
