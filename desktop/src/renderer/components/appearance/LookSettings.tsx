@@ -5,7 +5,7 @@
 // with Fine-tune on request, AP-4 bubble shape / roundness, AP-S1
 // nobody's look changes until they change a setting; appearance-panel-review-3 —
 // pictures for every choice, painted in the theme's real colours, and the Look
-// settings behind one "Customize look" row; review-4 — no Message box setting (it now
+// settings behind one "Additional Customizations" row (under Layout — review-5 AR5-2); review-4 — no Message box setting (it now
 // rides on the layout, look-overrides.ts), and the opened settings live inside that row's box.
 //
 // What must last is the FUNCTIONALITY — `lookOverrides` / `setLookOverrides` on
@@ -340,7 +340,7 @@ export function LayoutSettings() {
 
 const LOOK_KEYS: (keyof LookOverrides)[] = ['glass', 'bubbleStyle', 'roundness'];
 
-/** Bubbles, message box, roundness and glass, behind one "Customize look" row.
+/** Bubbles, message box, roundness and glass, behind one "Additional Customizations" row (under Layout — review-5 AR5-2).
  *  WHY folded (Destin, review-3 AR3-2, picked "Look tucked away"): the most-used
  *  settings — layout, themes, the two switches — stay up front; these open in place. */
 export function LookSettings() {
@@ -363,7 +363,7 @@ export function LookSettings() {
     <div>
       <SettingRow
         variant="item"
-        title="Customize look"
+        title="Additional Customizations"
         description={changed === 0 ? 'Message bubbles, corners, glass' : `${changed} changed from the theme`}
         expanded={open}
         onClick={() => setOpen(v => !v)}
