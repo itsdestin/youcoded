@@ -5209,22 +5209,6 @@ export class NativeSessionHost extends EventEmitter {
     if ('tokens' in limit) return limit.tokens;
     return NaN;
   }
-  // T7 (design §6, revision 1 D5): `addPlanBudget` is off every wire surface
-  // — no channel, no preload/remote-shim/remote-server entry, no
-  // `PlanRequestHost` member, nothing `plan-requests.ts` can reach. A bare
-  // method is kept here, UNCHANGED (still an unconditional refusal), only
-  // because `tests/native-session-host.test.ts`'s pre-T1 "Task 4" describe
-  // block (never migrated across T1–T6 — its own fixture docs still carry the
-  // retired `budget_tokens` field, so every test in it already fails plan
-  // proposal's schema check before this method is even reached) calls it by
-  // name; deleting it would turn that PRE-EXISTING runtime breakage into a
-  // compile error for the whole project. Migrating that block to the spend
-  // model (mirroring this task's `plans-lifecycle.integration.test.ts`
-  // rewrite) is real, scoped-out follow-up work, not something to paper over
-  // here — flagged in this task's report rather than silently expanded into.
-  addPlanBudget(_sessionId: string, _planId: string, _tokens: number, _requestId?: unknown): Promise<PlanActionResult> {
-    return Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
-  }
   setPlanLimit(sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null): Promise<PlanActionResult> {
     return this.plans?.setLimit(sessionId, planId, NativeSessionHost.limitNumber(limit) ?? null) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
