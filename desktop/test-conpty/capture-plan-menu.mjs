@@ -47,7 +47,7 @@ import os from 'node:os';
 import path from 'node:path';
 // Shared isolation helpers (temp HOME, cleaned env, access-token-only sign-in) —
 // the startup-dialog capture uses the same ones, so the guarantees live once.
-import { stripAnsi, resolveClaude, cleanEnv, ccVersionOf, copyAccessTokenOnly } from './cc-capture-lib.mjs';
+import { stripAnsi, resolveClaude, cleanEnv, ccVersionOf, copyAccessTokenOnly, removeTempTree } from './cc-capture-lib.mjs';
 
 const require = createRequire(import.meta.url);
 const pty = require('node-pty');
@@ -336,5 +336,6 @@ fs.writeFileSync(file, JSON.stringify({
 }, null, 1));
 console.log(`wrote ${file}`);
 console.log(JSON.stringify({ ...outcome, tailText: undefined }, null, 2));
-fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+// WHY removeTempTree: the same background marketplace clone can still be writing here.
+await removeTempTree(root);
 process.exit(0);
