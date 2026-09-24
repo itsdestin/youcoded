@@ -2538,7 +2538,10 @@ async function runShutdown(): Promise<void> {
   // Stop the cross-device sync-spaces engine (clears its backup timer + watchers).
   // .catch, not try/catch: it's an async fn, so a failure arrives as a rejected
   // promise — the old `void` call left that rejection unhandled at quit.
-  stopSyncSpaces().catch(() => {});
+  // WHY captured (2026-09-24): stopSyncSpaces() now also flushes the sync state
+  // file's pending write (SpaceManager writes asynchronously). Joining the capped
+  // race below means turning sync off and quitting at once can't be lost.
+  const syncStopped = stopSyncSpaces().catch(() => {});
   // Stop the Conversation Store (Phase 2a) — unsubscribes the sync-spaces
   // listener, clears the periodic reconciler + pending debounce timers. Sync fn.
   try { stopConversationStore(); } catch {}
@@ -2561,7 +2564,7 @@ async function runShutdown(): Promise<void> {
   // flight lands, and a poll's read-modify-write cut off half-way is exactly the
   // torn account file the lock exists to prevent (review T4 F5). Same 4s cap.
   await Promise.race([
-    Promise.all([engineStopped, chatgptDisposed]),
+    Promise.all([engineStopped, chatgptDisposed, syncStopped]),
     new Promise<void>((r) => setTimeout(r, 4_000)),
   ]).catch(() => {});
 }

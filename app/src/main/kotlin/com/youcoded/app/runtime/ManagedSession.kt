@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import java.io.File
@@ -31,35 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.input.TextFieldValue
 
-// --- Permission override classification ---
-// In bypass mode, Claude Code still fires PermissionRequest for protected paths,
-// compound cd commands, and AskUserQuestion. These regexes classify each request
-// so the user's per-category overrides can selectively auto-approve them.
-private val TITLE_HOOK_RE = Regex("""[>|].*[/\\]\.claude[/\\]topics[/\\]topic-""")
-private val CONFIG_FILE_RE = Regex("""\.(bashrc|bash_profile|zshrc|zprofile|profile|gitconfig|gitmodules|ripgreprc)\b|\.mcp\.json|\.claude\.json""")
-private val PROTECTED_DIR_RE = Regex("""[/\\]\.git[/\\]|[/\\]\.claude[/\\]""")
-private val CD_REDIRECT_RE = Regex("""\bcd\b.*[>]""")
-private val CD_GIT_RE = Regex("""\bcd\b.*\bgit\b""")
-
-private fun classifyPermission(toolName: String, toolInput: JSONObject): String {
-    val cmd = toolInput.optString("command", "")
-    val filePath = toolInput.optString("file_path", "")
-    val target = cmd.ifEmpty { filePath }
-
-    if (toolName == "Bash" && TITLE_HOOK_RE.containsMatchIn(cmd)) return "titleHook"
-    if (toolName == "Bash") {
-        if (CD_GIT_RE.containsMatchIn(cmd)) return "compoundCdGit"
-        if (CD_REDIRECT_RE.containsMatchIn(cmd)) return "compoundCdRedirect"
-    }
-    if (CONFIG_FILE_RE.containsMatchIn(target)) return "protectedConfigFiles"
-    if (PROTECTED_DIR_RE.containsMatchIn(target)) return "protectedDirectories"
-    return "unknown"
-}
-
-private fun shouldAutoApprove(category: String, overrides: JSONObject): Boolean {
-    if (overrides.optBoolean("approveAll", false)) return true
-    return overrides.optBoolean(category, false)
-}
+// Permission override classification lives in PermissionAutoApprove.kt (pure, unit-tested).
 
 /** Matches desktop's SessionStatusColor: green, red, blue, gray */
 enum class SessionStatus { Active, AwaitingApproval, Unseen, Idle, Dead }
@@ -84,6 +57,11 @@ class ManagedSession(
     /** Callback when session leaves AwaitingApproval (for notification clearing). */
     var onApprovalCleared: ((sessionId: String) -> Unit)? = null,
 ) {
+    /** Still on its startup dialogs: Claude Code has not run a hook yet
+     *  (SessionInfo.awaitingStart on desktop). Shell sessions never wait. */
+    val awaitingStart: Boolean
+        get() = !shellMode && ptyBridge?.getEventBridge()?.sessionStarted?.value != true
+
     /** Bridge server for forwarding events to React UI. Set by SessionRegistry. */
     var bridgeServer: LocalBridgeServer? = null
 
@@ -212,6 +190,16 @@ class ManagedSession(
                 delay(200)
                 eventBridge = bridge.getEventBridge()
             }
+            // Tell React the session has STARTED only when Claude Code runs its first
+            // hook — it runs none until every startup dialog is answered. Until then
+            // React keeps the input gated and its startup safety net on (desktop
+            // parity: App.tsx's first-hook rule). The old trigger, "the screen showed
+            // anything", fired before the dialogs (review F1, 2026-09-24).
+            val readyBridge = eventBridge
+            scope.launch {
+                readyBridge.sessionStarted.first { it }
+                withContext(Dispatchers.Main) { broadcastSessionReady() }
+            }
             eventBridge.events.collect { event ->
                 // Check for session ID mapping and start topic/transcript observers
                 val claudeSessionId = eventBridge.getClaudeSessionId(id)
@@ -227,19 +215,16 @@ class ManagedSession(
                 bridgeServer?.let { server ->
                     when (event) {
                         is HookEvent.PermissionRequest -> {
-                            // Classify and auto-approve based on user's override settings.
-                            // Title hooks always auto-approved; other categories per user config.
-                            // AskUserQuestion is never auto-approved (needs real user input).
-                            if (event.toolName != "AskUserQuestion") {
-                                val category = classifyPermission(event.toolName, event.toolInput)
-                                val overrides = permissionOverridesCache
-                                val shouldApprove = category == "titleHook" || shouldAutoApprove(category, overrides)
-                                if (shouldApprove) {
-                                    val decision = JSONObject().put("decision",
-                                        JSONObject().put("behavior", "allow"))
-                                    ptyBridge?.getEventBridge()?.respond(event.requestId, decision)
-                                    return@let
-                                }
+                            // Auto-approve per the user's override settings. WHY one call
+                            // (2026-09-24): the decision is shouldAutoApprove in
+                            // PermissionAutoApprove.kt, which never allows ExitPlanMode or
+                            // AskUserQuestion — Claude Code ignores a hook allow for them,
+                            // so an allow only hid the card while the menu stayed live.
+                            if (shouldAutoApprove(event.toolName, event.toolInput, permissionOverridesCache)) {
+                                val decision = JSONObject().put("decision",
+                                    JSONObject().put("behavior", "allow"))
+                                ptyBridge?.getEventBridge()?.respond(event.requestId, decision)
+                                return@let
                             }
                             val suggestions = event.permissionSuggestions?.let { arr ->
                                 (0 until arr.length()).map { arr.optString(it) }
@@ -299,7 +284,8 @@ class ManagedSession(
                         is TranscriptEvent.UserMessage -> TranscriptSerializer.userMessage(event.sessionId, event.uuid, event.timestamp, event.text, event.slashCommand)
                         is TranscriptEvent.AssistantText -> TranscriptSerializer.assistantText(event.sessionId, event.uuid, event.timestamp, event.text, event.model, event.parentAgentToolUseId, event.agentId)
                         is TranscriptEvent.ToolUse -> TranscriptSerializer.toolUse(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.toolName, event.toolInput, event.parentAgentToolUseId, event.agentId)
-                        is TranscriptEvent.ToolResult -> TranscriptSerializer.toolResult(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.result, event.isError, event.parentAgentToolUseId, event.agentId)
+                        is TranscriptEvent.ToolResult -> TranscriptSerializer.toolResult(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.result, event.isError, event.parentAgentToolUseId, event.agentId, event.backgroundTaskId, event.resumedTaskId)
+                        is TranscriptEvent.BackgroundTask -> TranscriptSerializer.backgroundTask(event)
                         is TranscriptEvent.TurnComplete -> TranscriptSerializer.turnComplete(
                             event.sessionId, event.uuid, event.timestamp,
                             stopReason = event.stopReason,
@@ -343,7 +329,6 @@ class ManagedSession(
             try {
                 val activePrompts = mutableSetOf<String>()
                 var lastScreenHash = 0
-                var sessionReadyBroadcast = false
                 while (true) {
                     delay(1000)
                     if (!bridge.isRunning) break
@@ -358,29 +343,8 @@ class ManagedSession(
                         detectPrompts(screen, combined, activePrompts)
                         detectPermissionMode(screen)
 
-                        // Detect Claude Code ready state — dismiss React "Initializing" overlay
-                        if (!sessionReadyBroadcast && screen.isNotBlank()) {
-                            // Claude Code shows a ">" prompt or has visible content
-                            // Any non-blank screen after session start means it's alive
-                            sessionReadyBroadcast = true
-                            bridgeServer?.broadcast(JSONObject().apply {
-                                put("type", "prompt:show")
-                                put("payload", JSONObject().apply {
-                                    put("sessionId", id)
-                                    put("promptId", "_session_ready")
-                                    put("title", "")
-                                    put("buttons", org.json.JSONArray())
-                                })
-                            })
-                            // Immediately dismiss it
-                            bridgeServer?.broadcast(JSONObject().apply {
-                                put("type", "prompt:dismiss")
-                                put("payload", JSONObject().apply {
-                                    put("sessionId", id)
-                                    put("promptId", "_session_ready")
-                                })
-                            })
-                        }
+                        // (No "any screen output = ready" here any more — see the
+                        // sessionStarted collector above, in the hook-event coroutine; review F1.)
                     }
                 }
             } catch (_: Exception) {}
@@ -409,6 +373,10 @@ class ManagedSession(
         // Startup dialog when CLAUDE.md imports files outside the cwd. Previously it was
         // mislabeled "Trust This Folder?" by the stale trust anchor (2026-07-26).
         "Allow External Imports?",
+        // CC 2.1.281: the bypass warning (was a hardcoded handler) and the project
+        // MCP-server approval. Both unnumbered — answered by verified navigation.
+        "Skip Permissions Warning",
+        "New MCP Server Found",
     )
 
     /** Detect permission mode from visible screen only (not raw buffer).
@@ -480,35 +448,11 @@ class ManagedSession(
             }
         }
 
-        // --- Hardcoded: Bypass permissions warning ---
-        // Two-option menu: "No, exit" (index 0, default selected) and
-        // "Yes, accept" (index 1). This one is hardcoded rather than parsed, so we
-        // don't know whether CC numbers its options — it therefore uses the arrow
-        // FALLBACK: one DOWN, then the Enter as a SEPARATE write. Arrows and "\r"
-        // in the same write are not both honoured (CC drops the arrows and acts on
-        // the Enter alone, which here would pick "No, exit"). Exit still sends ESC.
-        if ("bypass permission" in screenLower && "enter to confirm" in screenLower) {
-            absentPollCounts.remove("bypass_warning")
-            if ("bypass_warning" !in activePrompts && "bypass_warning" !in completedPromptIds) {
-                activePrompts.add("bypass_warning")
-                val down = "\u001b[B"
-                broadcastPrompt("bypass_warning",
-                    "Bypass Permissions Mode — Claude will run tools without asking for approval.",
-                    listOf(
-                        PromptButton("Accept the Risks", input = down, submitInput = "\r"),
-                        PromptButton("Exit", "\u001b"),
-                    ))
-            }
-            return
-        } else if ("bypass_warning" in activePrompts) {
-            val count = absentPollCounts.getOrDefault("bypass_warning", 0) + 1
-            absentPollCounts["bypass_warning"] = count
-            if (count >= DISMISS_THRESHOLD) {
-                activePrompts.remove("bypass_warning")
-                broadcastPromptDismiss("bypass_warning")
-                absentPollCounts.remove("bypass_warning")
-            }
-        }
+        // (The bypass-permissions warning used to be a hardcoded handler here that
+        // typed a blind "DOWN, then Enter". Since 2026-09-24 it goes through the
+        // generic parser below as "Skip Permissions Warning": CC 2.1.281 draws it
+        // unnumbered, "No, exit" first, and its buttons are answered by the
+        // renderer's verified navigation.)
 
         // --- Generic Ink Select menu detection ---
         // Only broadcast menus that are known setup prompts. Permission prompts
@@ -530,8 +474,10 @@ class ManagedSession(
                     absentPollCounts.remove(stale)
                 }
                 activePrompts.add(parsed.id)
-                broadcastPrompt(parsed.id, parsed.title,
-                    InkSelectParser.toPromptButtons(parsed), parsed.description)
+                val buttons = InkSelectParser.toPromptButtons(parsed)
+                // An unnumbered dialog starts on Claude Code's own cursor ("No, exit").
+                broadcastPrompt(parsed.id, parsed.title, buttons, parsed.description,
+                    defaultIndex = if (buttons.any { it.pick != null }) parsed.selectedIndex else null)
             }
         } else {
             val staleMenus = activePrompts.filter { it.startsWith("menu_") }
@@ -601,7 +547,13 @@ class ManagedSession(
     }
 
     /** Broadcast a prompt event to the React UI via bridge server. */
-    private fun broadcastPrompt(promptId: String, title: String, buttons: List<PromptButton>, description: String? = null) {
+    private fun broadcastPrompt(
+        promptId: String,
+        title: String,
+        buttons: List<PromptButton>,
+        description: String? = null,
+        defaultIndex: Int? = null,
+    ) {
         bridgeServer?.broadcast(JSONObject().apply {
             put("type", "prompt:show")
             put("payload", JSONObject().apply {
@@ -610,6 +562,7 @@ class ManagedSession(
                 put("title", title)
                 // Include description when present (e.g., resume session trade-off text)
                 if (description != null) put("description", description)
+                if (defaultIndex != null) put("defaultIndex", defaultIndex)
                 put("buttons", org.json.JSONArray().also { arr ->
                     buttons.forEach { btn ->
                         arr.put(JSONObject().apply {
@@ -618,11 +571,34 @@ class ManagedSession(
                             // Second write for the arrow fallback only — arrows and
                             // "\r" must never share one pty write (see InkSelectParser).
                             btn.submitInput?.let { put("submitInput", it) }
+                            // Verified navigation (renderer: state/ink-menu-driver.ts).
+                            btn.pick?.let { p ->
+                                put("pick", JSONObject().apply {
+                                    put("signature", p.signature)
+                                    put("index", p.index)
+                                })
+                            }
                         })
                     }
                 })
             })
         })
+    }
+
+    /** The "session started" signal React listens for: prompt:show of
+     *  "_session_ready" (ANDROID_SESSION_READY_PROMPT_ID in the renderer's
+     *  state/startup-dialog-store.ts), dismissed at once — see App.tsx promptShow. */
+    private fun broadcastSessionReady() {
+        bridgeServer?.broadcast(JSONObject().apply {
+            put("type", "prompt:show")
+            put("payload", JSONObject().apply {
+                put("sessionId", id)
+                put("promptId", "_session_ready")
+                put("title", "")
+                put("buttons", org.json.JSONArray())
+            })
+        })
+        broadcastPromptDismiss("_session_ready")
     }
 
     private fun broadcastPromptDismiss(promptId: String) {
@@ -751,5 +727,11 @@ class ManagedSession(
         ptyBridge?.stop()
         directShellBridge?.stop()
         try { titleFile.delete() } catch (_: Exception) {}
+        // The scope is this session's own (SessionRegistry makes one per session,
+        // shared only with its TranscriptWatcher and EventBridge). Cancelling it
+        // ends every collector it started — the hook-event collector and the
+        // "wait for the first hook" one, which would otherwise wait forever for a
+        // session destroyed before Claude Code ran any hook (second review F10).
+        scope.cancel()
     }
 }

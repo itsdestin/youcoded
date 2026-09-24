@@ -205,8 +205,10 @@ describe('runHealthCheck — primary (GitHub sync spaces) vs additional backups'
   it('stays quiet when GitHub sync is on and no legacy backend exists', async () => {
     // Written through the real SpaceManager, at its real default path.
     const homedir = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
-    new SpaceManager().setEnabled(true);
+    const sm = new SpaceManager();
+    sm.setEnabled(true);
     homedir.mockRestore();
+    await sm.flush(); // the state write is async (main-blocking-calls B6)
     expect(fs.existsSync(path.join(toolkitState, 'sync-spaces.json'))).toBe(true);
 
     await makeService().runHealthCheck();
@@ -216,8 +218,10 @@ describe('runHealthCheck — primary (GitHub sync spaces) vs additional backups'
 
   it('still warns when GitHub sync is off and nothing else is configured', async () => {
     const homedir = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
-    new SpaceManager().setEnabled(false);
+    const sm = new SpaceManager();
+    sm.setEnabled(false);
     homedir.mockRestore();
+    await sm.flush(); // the state write is async (main-blocking-calls B6)
 
     await makeService().runHealthCheck();
 
@@ -238,8 +242,10 @@ describe('runHealthCheck — primary (GitHub sync spaces) vs additional backups'
 
   it('a stale legacy backend is reported as EXTRA backups, not as sync failing', async () => {
     const homedir = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
-    new SpaceManager().setEnabled(true);
+    const sm = new SpaceManager();
+    sm.setEnabled(true);
     homedir.mockRestore();
+    await sm.flush(); // the state write is async (main-blocking-calls B6)
     fs.writeFileSync(path.join(toolkitState, 'config.json'), JSON.stringify({
       storage_backends: [
         { id: 'drive-1', type: 'drive', label: 'Personal Drive', syncEnabled: true, config: {} },
@@ -311,10 +317,12 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
   }
 
   /** Turn the PRIMARY (GitHub sync spaces) system on or off, at its real path. */
-  function setPrimarySync(enabled: boolean) {
+  async function setPrimarySync(enabled: boolean) {
     const homedir = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
-    new SpaceManager().setEnabled(enabled);
+    const sm = new SpaceManager();
+    sm.setEnabled(enabled);
     homedir.mockRestore();
+    await sm.flush(); // the state write is async (main-blocking-calls B6)
   }
 
   beforeEach(async () => {
@@ -329,7 +337,7 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
   });
 
   it('clears OFFLINE on the next check once the network is back', async () => {
-    setPrimarySync(true);
+    await setPrimarySync(true);
     const { svc, net } = makeService(false);
 
     await goOffline(svc);
@@ -342,7 +350,7 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
   });
 
   it('needs two consecutive failed probes before crying offline', async () => {
-    setPrimarySync(true);
+    await setPrimarySync(true);
     const { svc, net } = makeService(false);
 
     // A single failure is the launch race / resolver hiccup that produced the
@@ -359,20 +367,20 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
   });
 
   it('clears PERSONAL_NOT_CONFIGURED when sync is set up mid-session', async () => {
-    setPrimarySync(false);
+    await setPrimarySync(false);
     const { svc } = makeService(true);
 
     await svc.runHealthCheck();
     expect(await codes()).toContain('PERSONAL_NOT_CONFIGURED');
 
-    setPrimarySync(true);
+    await setPrimarySync(true);
 
     await svc.runHealthCheck({ probeBackends: false });
     expect(await codes()).not.toContain('PERSONAL_NOT_CONFIGURED');
   });
 
   it('does not shell out to the backend probe on a periodic re-check', async () => {
-    setPrimarySync(true);
+    await setPrimarySync(true);
     const { svc } = makeService(true);
 
     await svc.runHealthCheck({ probeBackends: false });
@@ -383,7 +391,7 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
   });
 
   it('a still-true warning survives the re-check', async () => {
-    setPrimarySync(true);
+    await setPrimarySync(true);
     const { svc } = makeService(false);
 
     await goOffline(svc);
@@ -393,7 +401,7 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
   });
 
   it('does not resurrect a warning the user dismissed this run', async () => {
-    setPrimarySync(true);
+    await setPrimarySync(true);
     const { svc } = makeService(false);
 
     await goOffline(svc);
@@ -406,7 +414,7 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
   });
 
   it('leaves push-failure warnings alone (they are owned by the push path)', async () => {
-    setPrimarySync(true);
+    await setPrimarySync(true);
     await writeWarnings([{
       code: 'AUTH_FAILED',
       level: 'danger',
@@ -432,7 +440,7 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
   it('start() keeps re-checking, and stop() ends it', async () => {
     vi.useFakeTimers();
     try {
-      setPrimarySync(true);
+      await setPrimarySync(true);
       // Online: a failed launch probe would put the re-check on the 60 s retry
       // cadence (audit W12, pinned in tests/sync-service.test.ts) — this test
       // pins only that a re-check happens at all, and that stop() ends it.
@@ -466,7 +474,7 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
   });
 
   it('skips the file write when nothing changed', async () => {
-    setPrimarySync(true);
+    await setPrimarySync(true);
     const { svc } = makeService(false);
 
     await goOffline(svc);

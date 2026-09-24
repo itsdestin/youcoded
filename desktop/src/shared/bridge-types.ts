@@ -59,6 +59,8 @@ interface SessionBridge {
   switch(sessionId: string): Promise<unknown>;
   noteSelected(sessionId: string | null): void;
   setFlag(sessionId: string, flag: string, value: boolean): Promise<unknown>;
+  /** Per-session lock for answering a menu by verified navigation (one device at a time). */
+  menuLock(sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean>;
   setTag(sessionId: string, tagId: string, value: boolean): Promise<unknown>;
   setNote(sessionId: string, note: string): Promise<unknown>;
   getMeta(sessionId: string): Promise<SessionMetaResult>;

@@ -230,6 +230,9 @@ export function formatLongRunningNotice(run: Pick<ShellRun, 'shellId' | 'command
 
 export class ShellRegistry extends EventEmitter {
   private runs = new Map<string, ShellRun>();
+  /** Per-run tail of in-flight read()s — see read(). WeakMap so a run's chain
+   *  never outlives the run. */
+  private readonly readChains = new WeakMap<ShellRun, Promise<unknown>>();
   private readonly longRunNoticeMs: readonly number[];
 
   /** `longRunNoticeMs` is a test seam — production callers pass nothing and
@@ -406,11 +409,14 @@ export class ShellRegistry extends EventEmitter {
       else if (signal) run.signal = signal;
     }
     if (run.partial) { run.tail.push(run.partial); run.partial = ''; if (run.tail.length > RING_LINES) run.tail.shift(); }
-    run.logDone = new Promise<void>((res) => {
+    const logClosed = new Promise<void>((res) => {
       if (run.logStream.destroyed) return res();
       run.logStream.end(() => res());
     });
-    if (run.captureEnv) this.unlinkEnvFile(run);
+    // WHY folded into logDone (2026-09-24 blocking-calls B8): the env-file
+    // delete is async now, and read() awaits logDone — so no BashOutput after
+    // exit can observe the file still there, same as the old sync unlink.
+    run.logDone = run.captureEnv ? Promise.all([logClosed, this.unlinkEnvFile(run)]).then(() => undefined) : logClosed;
     this.emitChangeNow(run);
     run.resolveExited();
     this.emit('exit', run);
@@ -419,12 +425,15 @@ export class ShellRegistry extends EventEmitter {
   /** D6: the persistent_env temp file the probe wrote when the handed-off
    *  command finally exited — bash.ts's finish() never ran for this call, so
    *  nobody else will delete it. */
-  private unlinkEnvFile(run: ShellRun): void {
+  private async unlinkEnvFile(run: ShellRun): Promise<void> {
     for (let i = run.tail.length - 1; i >= 0; i--) {
       const line = run.tail[i];
       if (!line.startsWith(ENV_SENTINEL)) continue;
       const file = line.slice(ENV_SENTINEL.length).trim();
-      if (file) { try { fs.unlinkSync(file); } catch { /* already gone */ } }
+      // WHY async (2026-09-24 blocking-calls B8): runs on the child's exit
+      // event, which must not hold the main thread. Never rejects: a missing
+      // file is fine, and logDone must still settle.
+      if (file) await fs.promises.unlink(file).catch(() => { /* already gone */ });
       return;
     }
   }
@@ -466,21 +475,36 @@ export class ShellRegistry extends EventEmitter {
   async read(shellId: string): Promise<{ run: ShellRun; text: string; truncated: boolean } | undefined> {
     const run = this.runs.get(shellId);
     if (!run) return undefined;
+    // WHY serialized per run (2026-09-24 blocking-calls B8): the log read below
+    // is now async, so two BashOutput calls for the same shell in one parallel
+    // tool batch could both read from the same cursor and hand the model the
+    // same output twice. Each read waits for the previous one on this run, so
+    // the cursor advances exactly as it did when the read was synchronous.
+    const prev = this.readChains.get(run) ?? Promise.resolve();
+    const next = prev.then(() => this.readOnce(run));
+    this.readChains.set(run, next.catch(() => undefined));
+    return next;
+  }
+
+  private async readOnce(run: ShellRun): Promise<{ run: ShellRun; text: string; truncated: boolean }> {
     await this.flushLog(run);
-    let fd: number | undefined;
+    let fh: fs.promises.FileHandle | undefined;
     let text = '';
     let truncated = false;
     let size = run.lastReadBytes;
     try {
-      fd = fs.openSync(run.logPath, 'r');
-      size = fs.fstatSync(fd).size;
+      // WHY fs.promises (2026-09-24 blocking-calls B8): BashOutput runs up to
+      // eight times a turn (a stuck command was once polled ~150 times); each
+      // sync open/stat/read/close held every window while it ran.
+      fh = await fs.promises.open(run.logPath, 'r');
+      size = (await fh.stat()).size;
       const pending = Math.max(0, size - run.lastReadBytes);
       const want = Math.min(pending, READ_MAX_BYTES);
       truncated = pending > want;
       if (want > 0) {
         const buf = Buffer.alloc(want);
-        fs.readSync(fd, buf, 0, want, size - want);
-        text = buf.toString('utf8');
+        const { bytesRead } = await fh.read(buf, 0, want, size - want);
+        text = buf.toString('utf8', 0, bytesRead);
         // A bounded read can start mid-line; drop the first partial line rather
         // than hand the model half a word it cannot place.
         if (truncated) text = text.slice(text.indexOf('\n') + 1);
@@ -490,7 +514,7 @@ export class ShellRegistry extends EventEmitter {
       // in-memory ring so a read still answers with the truth we do hold.
       text = run.lastReadBytes === 0 ? this.tailText(run, RING_LINES) : '';
     } finally {
-      if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already closed */ } }
+      if (fh !== undefined) { try { await fh.close(); } catch { /* already closed */ } }
     }
     run.lastReadBytes = size;
     return { run, text: stripSentinelLines(text), truncated };

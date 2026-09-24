@@ -181,11 +181,31 @@ export function BubbleFeed({ sessionId }: Props) {
             result: event.data.toolResult || '',
             isError: event.data.isError || false,
             structuredPatch: event.data.structuredPatch,
+            backgroundTaskId: event.data.backgroundTaskId,
+            resumedTaskId: event.data.resumedTaskId,
             // Route subagent tool_result into the parent Agent card's
             // subagentSegments — see assistant-text comment above.
             parentAgentToolUseId: event.data.parentAgentToolUseId,
             agentId: event.data.agentId,
           });
+          break;
+        case 'background-task':
+          // Claude Code: background work a card launched has ended — the only
+          // signal that it did (its tool result was just the launch receipt).
+          // Three mirrors: App.tsx, BubbleFeed.tsx, transcript-page-actions.ts.
+          if (event.data.backgroundTask) {
+            batchDispatch({
+              type: 'TRANSCRIPT_BACKGROUND_TASK',
+              sessionId: event.sessionId,
+              uuid: event.uuid,
+              toolUseId: event.data.toolUseId,
+              taskIds: event.data.backgroundTask.taskIds,
+              status: event.data.backgroundTask.status,
+              summary: event.data.backgroundTask.summary,
+              result: event.data.backgroundTask.result,
+              parentAgentToolUseId: event.data.parentAgentToolUseId,
+            });
+          }
           break;
         case 'turn-complete':
           // Forward per-turn metadata so the buddy reducer stamps stopReason,

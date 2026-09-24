@@ -45,7 +45,9 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+// Shared isolation helpers (temp HOME, cleaned env, access-token-only sign-in) —
+// the startup-dialog capture uses the same ones, so the guarantees live once.
+import { stripAnsi, resolveClaude, cleanEnv, ccVersionOf, copyAccessTokenOnly, removeTempTree } from './cc-capture-lib.mjs';
 
 const require = createRequire(import.meta.url);
 const pty = require('node-pty');
@@ -91,35 +93,8 @@ const mcpScript = arg('mcp-script', null);
 // --skill <name> — install a tiny personal skill with that name.
 const skillName = arg('skill', null);
 
-function stripAnsi(s) {
-  return String(s)
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, '')
-    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
-    .replace(/\x1b./g, '');
-}
-
-function resolveClaude() {
-  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
-    const full = path.join(dir, 'claude');
-    if (fs.existsSync(full)) return full;
-  }
-  throw new Error('claude not found on PATH');
-}
-
 const claudeBin = resolveClaude();
-const ccVersion = execFileSync(claudeBin, ['--version'], {
-  encoding: 'utf8',
-  env: cleanEnv(process.env),
-}).trim().split(/\s+/)[0];
-
-function cleanEnv(src) {
-  const env = {};
-  for (const [k, v] of Object.entries(src)) {
-    if (/^CLAUDE/.test(k) || k === 'ANTHROPIC_API_KEY') continue;
-    env[k] = v;
-  }
-  return env;
-}
+const ccVersion = ccVersionOf(claudeBin);
 
 // ---- isolated home -------------------------------------------------------
 const stamp = `${Date.now()}-${process.pid}`;
@@ -130,23 +105,7 @@ const project = path.join(root, 'project');
 fs.mkdirSync(configDir, { recursive: true });
 fs.mkdirSync(project, { recursive: true });
 
-const realCreds = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), 'utf8'));
-const oauth = realCreds.claudeAiOauth || {};
-const minutesLeft = (oauth.expiresAt - Date.now()) / 60000;
-if (!oauth.accessToken || !(minutesLeft > 20)) {
-  console.error(`refusing: copied access token has ${minutesLeft.toFixed(0)} min left (need > 20)`);
-  process.exit(3);
-}
-// Access token only — no refreshToken, so this copy can never rotate it.
-fs.writeFileSync(path.join(configDir, '.credentials.json'), JSON.stringify({
-  claudeAiOauth: {
-    accessToken: oauth.accessToken,
-    expiresAt: oauth.expiresAt,
-    scopes: oauth.scopes,
-    subscriptionType: oauth.subscriptionType,
-    rateLimitTier: oauth.rateLimitTier,
-  },
-}), { mode: 0o600 });
+copyAccessTokenOnly(configDir);
 
 // A PermissionRequest hook that NEVER answers, mirroring the app: while the
 // app's relay holds its socket, Claude Code's own menu stays live in the PTY.
@@ -377,5 +336,6 @@ fs.writeFileSync(file, JSON.stringify({
 }, null, 1));
 console.log(`wrote ${file}`);
 console.log(JSON.stringify({ ...outcome, tailText: undefined }, null, 2));
-fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+// WHY removeTempTree: the same background marketplace clone can still be writing here.
+await removeTempTree(root);
 process.exit(0);

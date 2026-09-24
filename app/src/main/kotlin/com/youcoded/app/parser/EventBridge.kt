@@ -4,7 +4,9 @@ import android.net.LocalServerSocket
 import android.net.LocalSocket
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -69,6 +71,19 @@ class EventBridge(private val socketName: String, private val ownSessionId: Stri
     /** First Claude Code process heard per session (desktop hook-relay.ts mirror). */
     private val owners = HookOwnerGate()
 
+    /** True once Claude Code has run its first hook for this session — which it does
+     *  only after every startup dialog (trust, bypass, MCP approval) is answered.
+     *  The ONLY signal that the session has started: the React UI keeps its input
+     *  gated and its startup safety net on until then. Replaces "the screen showed
+     *  anything" (review F1, 2026-09-24), which fired ~1 s after launch, BEFORE the
+     *  dialogs, and let chat text be typed into a live multi-select MCP dialog.
+     *  Desktop's equivalent: App.tsx marks a session started on its first hook event. */
+    private val _sessionStarted = MutableStateFlow(false)
+    val sessionStarted: StateFlow<Boolean> = _sessionStarted
+
+    /** Tests only: clear the started flag to watch what a LATER hook does alone. */
+    internal fun resetStartedForTest() { _sessionStarted.value = false }
+
     /** Stored scope for launching socket-closure monitor coroutines. */
     private var monitorScope: CoroutineScope? = null
 
@@ -131,6 +146,9 @@ class EventBridge(private val socketName: String, private val ownSessionId: Stri
         val eventName = json.optString("hook_event_name", "")
         val mobileSessionId = json.optString("mobileSessionId", "")
         if (!owners.accept(mobileSessionId, json.optString("claudePid", ""), eventName == "SessionStart")) return null
+        // Any admitted hook (SessionStart, or a later one if SessionStart was lost)
+        // proves the startup dialogs are behind us. A refused (nested) one does not.
+        _sessionStarted.value = true
 
         val claudeSessionId = json.optString("session_id", "")
         if (mobileSessionId.isNotBlank() && claudeSessionId.isNotBlank()) {

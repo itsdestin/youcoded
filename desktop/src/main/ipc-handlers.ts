@@ -119,6 +119,8 @@ import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } 
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
+import { attachStartupDialogLog } from './startup-dialog-log';
+import { menuAnswerLock } from './menu-answer-lock';
 import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus, clearWorkspaceSetupStatus } from './dev-tools';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost } from './update-installer';
 import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
@@ -789,6 +791,7 @@ export function registerIpcHandlers(
   sessionManager.on('session-created', (info) => {
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
+  attachStartupDialogLog(sessionManager, hookRelay, log, (id) => sessionManager.markStarted(id)); // desktop.log + SessionInfo.awaitingStart
 
   // window.claude.terminal.getScreenText — reads the visible xterm buffer
   // for the given session. The actual read happens in the renderer (xterm
@@ -3434,7 +3437,7 @@ export function registerIpcHandlers(
     let nativeEvents: TranscriptEvent[] | null;
     try {
       nativeEvents = await nativeHost.getHistoryAsync(sessionId);
-      events = nativeEvents ?? transcriptWatcher.getHistory(sessionId);
+      events = nativeEvents ?? []; // WHY no CC replay (B1): nothing sends this channel; history pages via TRANSCRIPT_PAGE
     } catch (err) {
       log('WARN', 'IPC', 'transcript replay failed to read the history', { sessionId, error: String((err as any)?.message ?? err) });
       return;
@@ -4356,6 +4359,7 @@ export function registerIpcHandlers(
     catch { return 'claude'; }
   };
 
+  ipcMain.handle(IPC.SESSION_MENU_LOCK, (_e, sid: string, holder: string, action: string) => menuAnswerLock.handle(sid, holder, action));
   ipcMain.handle(IPC.SESSION_SET_FLAG, async (_event, sessionId: string, flag: string, value: boolean) => {
     if (!SESSION_FLAG_NAMES.includes(flag as SessionFlagName)) {
       return { ok: false, error: `unknown flag: ${flag}` };

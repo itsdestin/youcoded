@@ -65,6 +65,8 @@ class SessionService : Service() {
     // pattern. On Android there's typically one client, so we also allow input
     // if there's only one authenticated connection (covers reconnect cases).
     private val sessionOwnership = ConcurrentHashMap<String, String>()
+    /** Per-session answer lock for verified menu navigation (review F4). */
+    private val menuAnswerLock = MenuAnswerLock()
 
     // Tracks the per-session coroutine job that collects rawByteFlow and
     // broadcasts pty:raw-bytes push events. Cancelled when the session is destroyed
@@ -1027,7 +1029,8 @@ class SessionService : Service() {
                         status = if (session.status.value == SessionStatus.Dead) "destroyed" else "active",
                         permissionMode = session.permissionMode,
                         skipPermissions = session.dangerousMode,
-                        createdAt = session.createdAt
+                        createdAt = session.createdAt,
+                        awaitingStart = session.awaitingStart,
                     )
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray(sessions)) }
@@ -1698,6 +1701,15 @@ class SessionService : Service() {
                     .put("unsupported", true)
                     .put("error", "not-implemented-on-mobile")
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
+            }
+            "session:menu-lock" -> {
+                // One device at a time answers a menu by verified navigation
+                // (desktop: menu-answer-lock.ts, review F4). On the phone's own
+                // runtime there is one WebView, but the rule is the same.
+                val sid = msg.payload.optString("sessionId", "")
+                val holder = msg.payload.optString("holder", "")
+                val granted = menuAnswerLock.handle(sid, holder, msg.payload.optString("action", ""))
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, granted) }
             }
             "session:set-flag" -> {
                 // Set a named flag on a past session. Writes the same
