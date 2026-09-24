@@ -18,7 +18,7 @@
 // the target from a reader (a script file, `eval`, base64) passes it by
 // construction. Same posture as guards.ts — honest friction, not a boundary.
 import * as path from 'path';
-import { tokenize, expandHome, homeVariable, commandIndex, type Op, type Word } from './shell-words';
+import { tokenize, expandHome, homeVariable, commandIndex, splitHeredocs, inlineShellScript, baseName, SHELL_FEEDERS, type Op, type Word } from './shell-words';
 
 export interface RmTargetContext {
   /** The workspace (session) root. Removing it or any folder above it is protected. */
@@ -54,15 +54,27 @@ const RM_SHORT_FLAGS = /^-[rRfviIdP]+$/;
 
 function isRecursiveFlag(flag: string): boolean {
   const lower = flag.toLowerCase();
-  if (lower === '--recursive' || lower === '/s') return true;
+  // GNU accepts any unambiguous prefix of a long option: `--rec` is `--recursive`.
+  if (lower === '/s' || (lower.length >= 3 && '--recursive'.startsWith(lower))) return true;
   if (RM_SHORT_FLAGS.test(flag)) return /r/i.test(flag);
   return lower.startsWith('-rec');
 }
+
+/** How sure the floor is — the card's one line is chosen from this so it is
+ *  always true (review N11): 'removal' = the text proves it; 'removal-if-empty'
+ *  = only if a variable is empty; 'removal-unknown' = the folder is a command's
+ *  output or reached by a cd the text cannot follow. */
+export type RmFloorKind = 'removal' | 'removal-if-empty' | 'removal-unknown';
+export interface RmVerdict { reason: string; kind: RmFloorKind }
 
 /** Why `command` would remove a protected directory, or null when it would not.
  *  The text is shown as the reason for the card, so every branch states only
  *  what the command text proves (docs/error-message-standards.md). */
 export function destructiveRmReason(command: string, ctx: RmTargetContext): string | null {
+  return destructiveRmVerdict(command, ctx)?.reason ?? null;
+}
+
+export function destructiveRmVerdict(command: string, ctx: RmTargetContext): RmVerdict | null {
   const win = (ctx.platform ?? process.platform) === 'win32';
   const P = win ? path.win32 : path.posix;
   const norm = (p: string) => { const r = P.resolve(p); return win ? r.toLowerCase() : r; };
@@ -85,9 +97,11 @@ export function destructiveRmReason(command: string, ctx: RmTargetContext): stri
 
   /** Judge one target as literally written (variables already resolved or
    *  removed by the caller). `glob` marks unquoted glob characters. */
-  const judgeLiteral = (value: string, glob: boolean[], tilde: boolean, recursive: boolean, base: string | null): string | null => {
+  const judgeLiteral = (value: string, glob: boolean[], tilde: boolean, recursive: boolean, base: string | null): RmVerdict | null => {
     let raw = value;
     let contentsOnly = false;
+    // `~/*/` and `dir/` name the same thing without the trailing slash.
+    while (value.length > 1 && /[\\/]$/.test(value)) { value = value.slice(0, -1); glob = glob.slice(0, -1); }
     if (glob.includes(true)) {
       const segs = value.split(win ? /[\\/]/ : '/');
       const last = segs[segs.length - 1];
@@ -102,14 +116,24 @@ export function destructiveRmReason(command: string, ctx: RmTargetContext): stri
     if (!recursive && !contentsOnly) return null;
     if (base === null && !P.isAbsolute(target)) {
       const onlyDots = target.split(/[\\/]/).every((s) => s === '.' || s === '..' || s === '');
-      return onlyDots ? `removes ${value} after changing to a folder that can't be known in advance` : null;
+      return onlyDots ? { reason: `removes ${value} after changing to a folder that can't be known in advance`, kind: 'removal-unknown' } : null;
     }
     const why = protectedReason(P.resolve(base ?? ctx.cwd, target));
     if (!why) return null;
-    return contentsOnly ? `removes everything inside ${why}` : `removes ${why}`;
+    return { reason: contentsOnly ? `removes everything inside ${why}` : `removes ${why}`, kind: 'removal' };
   };
 
-  const judgeTarget = (t: Word, recursive: boolean, base: string | null): string | null => {
+  const judgeTarget = (word: Word, recursive: boolean, base: string | null): RmVerdict | null => {
+    // `$PWD` / `${PWD}` is the current folder: read it as `.`.
+    const pwd = word.value.match(/^(\$PWD|\$\{PWD(?::?[-?=+][^}]*)?\})(?=$|\/)/);
+    const t: Word = pwd
+      ? {
+          ...word,
+          value: `.${word.value.slice(pwd[0].length)}`,
+          glob: [false, ...word.glob.slice(pwd[0].length)],
+          vars: word.vars.filter((v) => v.start !== 0).map((v) => ({ ...v, start: v.start - pwd[0].length + 1, end: v.end - pwd[0].length + 1 })),
+        }
+      : word;
     // A command's output (`rm -rf $(pwd)`) cannot be resolved by reading the
     // text. Ask when it LEADS the path and the removal is recursive or wipes a
     // folder's contents — `rm -f $(find …)` (plain files) stays quiet.
@@ -117,7 +141,7 @@ export function destructiveRmReason(command: string, ctx: RmTargetContext): stri
       const last = t.value.split(/[\\/]/).pop() ?? '';
       const wipes = t.glob.includes(true) && WHOLE_CONTENTS.test(last);
       return recursive || wipes
-        ? `removes a path given by a command's output (${t.value}), which can't be checked before it runs`
+        ? { reason: `removes a path given by a command's output (${t.value}), which can't be checked before it runs`, kind: 'removal-unknown' }
         : null;
     }
     // A leading $HOME / ${HOME} is the home folder, not an unknown.
@@ -141,10 +165,12 @@ export function destructiveRmReason(command: string, ctx: RmTargetContext): stri
     const why = judgeLiteral(value, glob, t.tilde, recursive, base);
     if (!why) return null;
     const names = unguarded.map((v) => t.value.slice(v.start, v.end)).join(' and ');
-    return `${why} if ${names} is empty (the command reads ${t.value})`;
+    return { reason: `${why.reason} if ${names} is empty (the command reads ${t.value})`, kind: why.kind === 'removal' ? 'removal-if-empty' : why.kind };
   };
 
-  const analyse = (text: string, startBase: string | null): string | null => {
+  const analyse = (source: string, startBase: string | null): RmVerdict | null => {
+    // Heredoc bodies are text unless a shell runs them (review N9).
+    const { text, bodies } = splitHeredocs(source);
     const { tokens, nested } = tokenize(text, !win);
     // Where relative targets resolve: the shell's folder, moved by any `cd`
     // earlier in the line. null = moved somewhere a reader cannot know.
@@ -152,13 +178,25 @@ export function destructiveRmReason(command: string, ctx: RmTargetContext): stri
     let base: string | null = startBase;
     const stack: Array<string | null> = [];
     let words: Word[] = [];
-    const runCommand = (): string | null => {
+    // Variables this line set to a fresh temp folder (`tmp=$(mktemp -d)`):
+    // `cd "$tmp" && rm -rf *` then clears that temp folder, a known place —
+    // the everyday idiom must not read as "a folder that can't be known".
+    const tempVars = new Set<string>();
+    const runCommand = (): RmVerdict | null => {
       const cmd = words;
       words = [];
+      for (const a of cmd) {
+        const m = a.value.match(/^([A-Za-z_][A-Za-z0-9_]*)=\$\(mktemp(\s[^)]*)?\)$/);
+        if (m) tempVars.add(m[1]);
+      }
       const w = commandIndex(cmd);
       if (w >= cmd.length) return null;
-      const name = P.basename(cmd[w].value).toLowerCase().replace(/\.exe$/, '');
+      const name = baseName(cmd[w].value);
       const args = cmd.slice(w + 1);
+      // `bash -c 'rm -rf ~'`, `sudo sh -c -- '…'`, `eval "…"`: the script is a
+      // command line of its own, run from this folder (review N1).
+      const script = inlineShellScript(name, args);
+      if (script !== null) return analyse(script, base);
       if (CHANGE_DIR.has(name)) {
         const dest = args.find((a) => !a.value.startsWith('-') || a.value === '-');
         if (name === 'popd' || dest?.value === '-') base = null; // the previous folder is not in the text
@@ -166,7 +204,9 @@ export function destructiveRmReason(command: string, ctx: RmTargetContext): stri
         else {
           const to = expandHome(dest.value, dest.tilde, ctx.home);
           const unknown = (dest.vars.length > 0 || dest.subs.length > 0) && to === dest.value;
-          if (unknown) base = null;
+          const tempName = dest.value.match(/^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/)?.[1];
+          if (tempName && tempVars.has(tempName)) base = P.resolve(P.sep, 'tmp', `mktemp-${tempName}`);
+          else if (unknown) base = null;
           else if (base !== null || P.isAbsolute(to)) base = P.resolve(base ?? ctx.cwd, to);
         }
         return null;
@@ -202,6 +242,11 @@ export function destructiveRmReason(command: string, ctx: RmTargetContext): stri
     // Substitutions run as commands of their own, from the same folder.
     for (const inner of nested) {
       const why = analyse(inner, startBase);
+      if (why) return why;
+    }
+    for (const h of bodies) {
+      if (!SHELL_FEEDERS.has(h.feeder)) continue;
+      const why = analyse(h.body, startBase);
       if (why) return why;
     }
     return null;

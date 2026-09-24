@@ -1,4 +1,6 @@
 import { HookEvent, type FloorStop } from '../../shared/types';
+
+const FLOOR_STOPS: FloorStop[] = ['removal', 'removal-if-empty', 'removal-unknown', 'secret-path', 'secret-maybe'];
 import { ChatAction } from './chat-types';
 
 /**
@@ -26,8 +28,8 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
       // A floor's forced ask (permission-broker.ts `floorStop`): no "Always
       // allow", for the same can-never-be-honoured reason. Validated against
       // the union — a peer on another build degrades to an ordinary ask.
-      const floorStop: FloorStop | undefined =
-        payload.floorStop === 'removal' || payload.floorStop === 'secret-path' ? payload.floorStop : undefined;
+      const floorStop: FloorStop | undefined = FLOOR_STOPS.includes(payload.floorStop as FloorStop)
+        ? payload.floorStop as FloorStop : undefined;
       // Validate against the union rather than trusting the wire — a remote
       // peer on an older/newer build must degrade to the generic row, never
       // to a mode-shaped string the safety-stop footer misreads.

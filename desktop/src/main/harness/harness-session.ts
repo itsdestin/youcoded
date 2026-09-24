@@ -33,8 +33,8 @@ import type { PermissionDecision, PermissionRule } from '../../shared/permission
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
-import { destructiveRmReason } from './tools/rm-target';
-import { secretPathIn } from './tools/bash-secret-paths';
+import { destructiveRmVerdict } from './tools/rm-target';
+import { secretPathVerdict } from './tools/bash-secret-paths';
 import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES } from './image-support';
 
@@ -3743,10 +3743,11 @@ export class HarnessSession extends EventEmitter {
     //     Bash used to read those with no card at all (Destin, 2026-09-23, option B).
     const bashCtx = { cwd: this.opts.cwd, shellCwd: this.shellCwd ?? undefined, home: os.homedir() };
     const isBash = call.toolName === 'Bash' && typeof subject === 'string';
-    const rmFloor = isBash ? destructiveRmReason(subject, bashCtx) : null;
-    const secretFloor = isBash && !rmFloor ? secretPathIn(subject, bashCtx) : null;
-    const floorStop: FloorStop | undefined = rmFloor ? 'removal' : secretFloor ? 'secret-path' : undefined;
-    if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop, reason: rmFloor ?? `names ${secretFloor}` });
+    const rmFloor = isBash ? destructiveRmVerdict(subject, bashCtx) : null;
+    const secretFloor = isBash && !rmFloor ? secretPathVerdict(subject, bashCtx) : null;
+    // The kind picks the card's wording, so it never claims more than the check knows.
+    const floorStop: FloorStop | undefined = rmFloor?.kind ?? secretFloor?.kind;
+    if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop, reason: rmFloor?.reason ?? `names ${secretFloor?.path}` });
 
     // 4. Configured decision. An external-directory path forces 'ask' regardless
     //    of rules; otherwise consult decide() (default: ask — never silent-allow).

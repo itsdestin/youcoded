@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { destructiveRmReason, type RmTargetContext } from '../src/main/harness/tools/rm-target';
+import { destructiveRmReason, destructiveRmVerdict, type RmTargetContext } from '../src/main/harness/tools/rm-target';
 
 const ctx: RmTargetContext = { cwd: '/home/ana/proj', home: '/home/ana', platform: 'linux' };
 const flagged = (cmd: string, c: RmTargetContext = ctx) => destructiveRmReason(cmd, c);
@@ -127,5 +127,46 @@ describe('removal-target floor: ordinary removals are left alone', () => {
     'rm -Force build',
   ])('%s', (cmd) => {
     expect(flagged(cmd)).toBeNull();
+  });
+});
+
+// Re-review (2026-09-23): scripts run by a shell, comments, heredocs.
+describe('removal-target floor: scripts, comments and heredocs', () => {
+  it.each([
+    ["bash -c 'rm -rf ~'", 'home folder'],
+    ["sh -c -- 'rm -rf ~'", 'home folder'],
+    ["sudo bash -c 'rm -rf /etc'", 'system folder'],
+    ['eval "rm -rf ~"', 'home folder'],
+    ["bash <<'EOF'\nrm -rf ~\nEOF", 'home folder'],
+    ["ssh host <<'EOF'\nrm -rf ~\nEOF", 'home folder'],
+    ['/usr/bin/sudo rm -rf /etc', 'system folder'],
+    ['rm --rec ~', 'home folder'],
+    // eslint-disable-next-line no-template-curly-in-string -- shell syntax under test, not a JS template
+    ['rm -rf "${HOME:?}"/', 'home folder'],
+    // eslint-disable-next-line no-template-curly-in-string -- shell syntax under test, not a JS template
+    ['rm -rf ${HOME:?}/*', 'everything inside your home folder'],
+    ['rm -rf "$PWD"', 'whole workspace'],
+    ['rm -rf ~/*/', 'everything inside your home folder'],
+  ])('%s asks', (cmd, why) => {
+    expect(flagged(cmd)).toContain(why);
+  });
+
+  it.each([
+    'rm -rf build # clean everything in ~',
+    'rm -rf .next  # wipes /',
+    "cat > notes.md <<'EOF'\nrm -rf ~\nEOF",
+    "git commit -m \"$(cat <<'EOF'\nrm -rf / is now asked about\nEOF\n)\"",
+    'tmp=$(mktemp -d) && cd "$tmp" && rm -rf *',
+    "bash -c 'npm test'",
+  ])('%s stays quiet', (cmd) => {
+    expect(flagged(cmd)).toBeNull();
+  });
+
+  // The card's line is picked from the kind, so it never claims more than the check knows.
+  it('reports how sure it is', () => {
+    expect(destructiveRmVerdict('rm -rf ~', ctx)?.kind).toBe('removal');
+    expect(destructiveRmVerdict('rm -rf "$BUILD_DIR"/', ctx)?.kind).toBe('removal-if-empty');
+    expect(destructiveRmVerdict('rm -rf $(pwd)', ctx)?.kind).toBe('removal-unknown');
+    expect(destructiveRmVerdict('cd - && rm -rf ..', ctx)?.kind).toBe('removal-unknown');
   });
 });
