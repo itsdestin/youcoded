@@ -335,6 +335,13 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
       if (!win.isDestroyed()) win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
     }
   },
+  // Welcome back (design §2): a phone/remote browser's own X on a session must
+  // untrack it here too — this WS host answers session:destroy independently
+  // of the desktop's SESSION_DESTROY IPC handler and never reaches it. Same
+  // lazy-closure-over-a-module-var pattern as `prepareCreate` above:
+  // welcomeBackStore is constructed later, in app.whenReady(), but this
+  // closure only runs when a remote client actually destroys a session.
+  untrackWelcomeBack: (id) => welcomeBackStore?.untrack(id),
 });
 
 // WHY push and not poll: a bind failure happens once, seconds after launch, and a panel
