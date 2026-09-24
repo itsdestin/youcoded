@@ -89,7 +89,7 @@ import { ddgBackend } from './harness/search/backends/ddg';
 import { tavilyBackend } from './harness/search/backends/tavily';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
-import { listPastSessions, loadHistory } from './session-browser';
+import { listPastSessions, loadHistory, readSessionTranscriptMeta } from './session-browser';
 import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
 import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
@@ -867,6 +867,23 @@ export function registerIpcHandlers(
       // message actually lands (the hook on the transcript-event listeners
       // below). 'shell' has no conversation id to remember (welcome-back-store.ts).
       if (info.provider !== 'shell') trackWelcomeBack(info.id, opts.resumeSessionId, info.provider);
+      // WHY: a resumed Claude Code session's pill sat on the 'Resuming...'
+      // placeholder for its whole life — only native resumes re-applied the
+      // stored title below (Destin, 2026-09-24). Same re-apply, same rename
+      // pair, keyed by the CONVERSATION id (a Claude session's desktop id
+      // differs). No stored title → the opening words, read by the same
+      // reader the Resume browser row uses, so the pill matches the row the
+      // user clicked; provisional, so the namer can still give it a real one.
+      // Fire-and-forget: never lets a title read delay or fail the resume.
+      if (info.provider === 'claude') {
+        const conversationId = opts.resumeSessionId;
+        const jsonlPath = resumeBoundary?.jsonlPath;
+        void reapplyStoredTitle({
+          getStoredTitle: async () => (await getConversationStore()?.get('claude', conversationId))?.title,
+          onTitle: resumeTitleDeps.onTitle,
+          getOpeningTitle: async () => (jsonlPath ? (await readSessionTranscriptMeta(jsonlPath, true)).fallbackTitle ?? undefined : undefined),
+        }, info.id);
+      }
     }
     // WHY: assign ownership BEFORE the first native await. session-created is
     // forwarded on nextTick; otherwise it reaches the wrong window (pinned by

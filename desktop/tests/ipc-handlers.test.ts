@@ -4,7 +4,7 @@ import {
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { nativeStoreSlug } from '../src/main/slug-encoding';
+import { nativeStoreSlug, ccProjectSlug } from '../src/main/slug-encoding';
 
 // Mock electron before importing ipc-handlers, which transitively imports
 // main.ts (for setPermissionOverrides). main.ts uses protocol.registerSchemesAsPrivileged
@@ -1035,6 +1035,75 @@ describe('session:create native resume refusals', () => {
         'This conversation could not be resumed — its saved data is missing.',
       );
     });
+  });
+});
+
+// A resumed Claude Code session's pill used to stay on the 'Resuming...'
+// placeholder for the life of the session: only native resumes re-applied the
+// stored title (native-resume-title.ts). Destin, 2026-09-24: "we should fix
+// the 'resuming' [name] as well". The pill now gets the same name the Resume
+// browser row showed — the stored title, else the conversation's opening words.
+describe('session:create Claude Code resume names the pill', () => {
+  let tmpHome: string;
+  let tmpConvRoot: string;
+  let prevHome: string | undefined;
+  let prevUserProfile: string | undefined;
+  const CONV = '11111111-2222-3333-4444-555555555555';
+
+  beforeAll(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-cc-title-'));
+    prevHome = process.env.HOME;
+    prevUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tmpHome;
+    process.env.USERPROFILE = tmpHome;
+  });
+  afterAll(() => {
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
+  });
+  beforeEach(async () => {
+    tmpConvRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-cc-title-store-'));
+    await startConversationStore({
+      conversationsRoot: tmpConvRoot,
+      projectsDir: path.join(tmpHome, '.claude', 'projects'),
+      topicsDir: path.join(tmpHome, '.claude', 'topics'),
+      device: 'test-device',
+    });
+    // The conversation's transcript, where Claude Code keeps it for this cwd.
+    const dir = path.join(tmpHome, '.claude', 'projects', ccProjectSlug(tmpHome));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${CONV}.jsonl`), JSON.stringify({
+      type: 'user', promptId: 'p1', timestamp: '2026-09-24T12:00:00.000Z', sessionId: CONV,
+      message: { role: 'user', content: 'what did we decide about the scroll bug' },
+    }) + '\n');
+  });
+  afterEach(() => {
+    stopConversationStore();
+    try { fs.rmSync(tmpConvRoot, { recursive: true, force: true }); } catch {}
+  });
+
+  const resume = (handler: any) => handler('session:create')(
+    { sender: { id: 1 } },
+    { provider: 'claude', resumeSessionId: CONV, cwd: tmpHome, name: 'Resuming...', skipPermissions: false },
+  );
+  const renamedTo = (send: any) => (send.mock.calls as any[][])
+    .filter((c) => c[0] === 'session:renamed' && c[1] === 'desktop-cc-1').map((c) => c[2]);
+
+  it('puts the stored title on the pill', async () => {
+    await getConversationStore()!.upsert({ provider: 'claude', id: CONV, projectName: path.basename(tmpHome), originalPath: tmpHome, title: 'Scroll bug decision' });
+    const { handler, mockWindow } = setup({
+      createSession: vi.fn(() => ({ id: 'desktop-cc-1', name: 'Resuming...', cwd: tmpHome, status: 'active', provider: 'claude' })),
+    });
+    await resume(handler);
+    await vi.waitFor(() => expect(renamedTo(mockWindow.webContents.send)).toEqual(['Scroll bug decision']));
+  });
+
+  it('with no stored title, uses the opening words the Resume browser row shows', async () => {
+    const { handler, mockWindow } = setup({
+      createSession: vi.fn(() => ({ id: 'desktop-cc-1', name: 'Resuming...', cwd: tmpHome, status: 'active', provider: 'claude' })),
+    });
+    await resume(handler);
+    await vi.waitFor(() => expect(renamedTo(mockWindow.webContents.send)).toEqual(['what did we decide about the scroll bug']));
   });
 });
 
