@@ -88,6 +88,30 @@ export class NativeHome {
     }
   }
 
+  /**
+   * Async twin of readJson (project-extensions/store.ts, 2026-09-24): a hot
+   * IPC path (project-extensions:get, called on every Skills & tools tab
+   * open) must never synchronously read ~/.youcoded/ — same reasoning as
+   * readSessionLinesAsync/readSessionHeadAsync/listSessionFilesAsync above.
+   * Same "missing file / corrupt JSON both read as null" contract as the
+   * sync readJson.
+   */
+  async readJsonAsync(rel: string): Promise<unknown | null> {
+    const p = path.join(this.dir, rel);
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(p, 'utf8');
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return null;
+      throw e;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
   async writeJson(rel: string, value: unknown): Promise<void> {
     // A plain write is just a mutate that ignores what's on disk — one code
     // path means one locking story.

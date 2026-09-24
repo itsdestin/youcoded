@@ -19,7 +19,7 @@ import UpdateButton from "./UpdateButton";
 import { ScanBadge, AuthorBadge } from "./TrustBadges";
 import { capabilityLine } from "./CapabilityList";
 import { ThumbsSummary } from "./FeedbackSection";
-import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
+import { CATALOG_TYPE_LABEL, isInstallableSource, pluginHasParts } from "../../../shared/catalog-types";
 
 export type MarketplaceCardEntry =
   | { kind: "skill"; entry: SkillEntry }
@@ -62,6 +62,15 @@ interface Props {
   /** When true, render as a horizontal list row optimized for narrow viewports.
    *  Used by MarketplaceGrid below 640px. Rails always pass false (omit). */
   compact?: boolean;
+  /** U2 fix (beta review 2): fires after a SUCCESSFUL install of a plugin
+   *  with parts (skills or tool connections) — never for a theme, an
+   *  integration (suppressCorner skips this path entirely) or a prompt-only
+   *  skill. The card's own install button (corner or the compact inline one)
+   *  is a second entry point beside MarketplaceDetailOverlay's Install
+   *  button; both must reach the same post-install "choose your projects"
+   *  setup panel, so this hands the id/displayName back to the parent
+   *  (MarketplaceScreen), which opens the detail overlay in its setup state. */
+  onInstalledWithParts?(id: string, displayName: string): void;
 }
 
 // Tone-class map copied from the retired IntegrationCard.tsx so integrations
@@ -92,7 +101,7 @@ function componentSummary(c: SkillComponents | null | undefined): string | null 
   return parts.join(" · ") || null;
 }
 
-function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, accentColor, suppressCorner, statusBadge, pluginBadge, compact }: Props) {
+function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, accentColor, suppressCorner, statusBadge, pluginBadge, compact, onInstalledWithParts }: Props) {
   const stats = useMarketplaceStats();
   const mp = useMarketplace();
   const kind = item.kind;
@@ -124,9 +133,17 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
     else mp.setFavorite(item.entry.id, !isFavorited).catch(() => {});
   };
 
+  // U2 fix: a successful plugin install (not a theme) reports back to the
+  // parent when the entry has parts, so MarketplaceScreen can open the
+  // detail overlay straight into its setup state — this card's own install
+  // button never showed that panel before (U2, beta review 2).
   const install = () => {
-    if (kind === "theme") mp.installTheme(item.entry.slug).catch(() => {});
-    else mp.installSkill(item.entry.id).catch(() => {});
+    if (kind === "theme") { mp.installTheme(item.entry.slug).catch(() => {}); return; }
+    mp.installSkill(item.entry.id).then(() => {
+      if (onInstalledWithParts && pluginHasParts(item.entry)) {
+        onInstalledWithParts(item.entry.id, item.entry.displayName);
+      }
+    }).catch(() => {});
   };
 
   const id = item.kind === "skill" ? item.entry.id : `theme:${item.entry.slug}`;

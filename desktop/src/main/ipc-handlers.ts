@@ -61,6 +61,17 @@ import { detectEndpoints } from './models/endpoint-detectors';
 import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
+import { listProjectKeyCandidatesAsync } from './project-extensions/candidates';
+import { readFeatureFirstRunAt } from './project-extensions/feature-first-run';
+// T3 (project-plugin-controls): the Skills & tools IPC surface. Shared with
+// remote-server.ts via ipc-shell.ts (same extraction convention as
+// artifacts/projects-index.ts) so the two transports cannot drift.
+import {
+  projectExtensionsGet, projectExtensionsSet, projectExtensionsForSession,
+  type ProjectExtensionsIpcDeps,
+} from './project-extensions/ipc-shell';
+import { importSkillFolder } from './project-extensions/import-skill';
+import type { ProjectExtensionsChange } from './project-extensions/view';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
@@ -2969,7 +2980,54 @@ export function registerIpcHandlers(
     // up can never disagree. It throws when ChatGPT is signed out; the host
     // treats that as a fallback to ordinary reconstruction.
     { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
+    // skillConfigStore (16th param, T2 project-plugin-controls): marketplace
+    // installedAt tracking, the last input the host's per-project
+    // availability resolution needs. Reuses skillProvider's OWN store rather
+    // than constructing a second one — same ~/.claude/youcoded-skills.json,
+    // never two writers.
+    skillProvider.configStore,
+    // resolveProjectAvailabilityInputs (17th param, T2 project-plugin-controls)
+    // — the ONLY production construction site, deliberately explicit rather
+    // than a constructor default (see that param's own comment on why: a
+    // default reading real global state would make every bare TEST
+    // construction of the host quietly depend on it too). ManagedRoots may
+    // not exist yet (sync spaces disabled/not started) — `stores` is then
+    // null, which resolveSessionAvailability treats as "don't know" (fail
+    // open), same as no NativeHome being wired.
+    async () => {
+      const roots = getManagedRoots();
+      const candidates = await listProjectKeyCandidatesAsync(roots?.projectsRoot ?? null);
+      // featureFirstRunAt (F1 review fix, T6): the SAME per-device instant
+      // main.ts's startup chore writes once (feature-first-run.ts) — never
+      // recomputed or defaulted to `now` here.
+      const featureFirstRunAt = await readFeatureFirstRunAt(nativeHome);
+      return {
+        candidates,
+        featureFirstRunAt,
+        stores: roots?.personalRoot ? { personalRoot: roots.personalRoot, home: nativeHome } : null,
+      };
+    },
   );
+
+  // T3 (project-plugin-controls, design §4) — the Skills & tools tab's IPC
+  // surface. `path` on every channel below is the project's canonical path
+  // (see ipc-shell.ts's own header comment) — never store.ts's internal
+  // sync-name-or-path storage key. `nativeHost` satisfies the `nativeSessions`
+  // seam via its own public `listAsync()`.
+  const projectExtensionsDeps: ProjectExtensionsIpcDeps = {
+    nativeHome,
+    mcpManager,
+    skillConfigStore: skillProvider.configStore,
+    nativeSessions: nativeHost,
+  };
+  ipcMain.handle('project-extensions:get', async (_e, path: string) => projectExtensionsGet(projectExtensionsDeps, path));
+  ipcMain.handle('project-extensions:set', async (_e, path: string, changes: ProjectExtensionsChange[]) =>
+    projectExtensionsSet(projectExtensionsDeps, path, changes));
+  ipcMain.handle('project-extensions:for-session', async (_e, sessionId: string) =>
+    projectExtensionsForSession(projectExtensionsDeps, sessionId));
+  // Not bundled with the deps above — importSkillFolder needs none of them
+  // (it only touches ~/.claude/skills/ and the source path it's handed).
+  ipcMain.handle('project-extensions:import-skill', async (_e, skillMdPath: string) => importSkillFolder(skillMdPath));
 
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref
   // noteModelUsed persists — thin async wrapper around bindingToPortableModel
@@ -3261,7 +3319,7 @@ export function registerIpcHandlers(
   // stale data relative to whichever surface wrote last.
   // chatgptAuth (Sign in with ChatGPT §5): the remote chatgpt:* WS cases read
   // the SAME account object, already kill-switched (null → signed-out/false).
-  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount, openRouterSignIn });
+  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount, openRouterSignIn, mcpManager });
 
   // Plan 2b Task 11: give the remote server the SAME lease client/requester +
   // deviceId so its WS clients reach the identical lease/device state the

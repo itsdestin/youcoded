@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { SkillEntry, CommandEntry } from '../../shared/types';
-import SkillCard from './SkillCard';
+import SkillCard, { AvailabilityStatusChip } from './SkillCard';
 import { useSkills } from '../state/skill-context';
 import { useMarketplace } from '../state/marketplace-context';
 import { useScrollFade } from '../hooks/useScrollFade';
@@ -8,10 +8,19 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { isAndroid } from '../platform';
 import { EmptyState, ErrorState, FilterChip } from './ui';
 import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-store';
+import { useSessionAvailability, type SessionAvailabilityMissingRow } from '../hooks/useSessionAvailability';
+import { catalogKeyForSkill } from '../utils/skill-catalog-key';
+import { useArtifactDispatchOptional } from '../state/ArtifactContext';
 
 interface Props {
   open: boolean;
   searchMode: boolean;
+  // T5 (project-plugin-controls): the active session id, passed as a plain
+  // prop rather than a new context (design §5) — App already tracks it as
+  // `sessionId` at its own top level. Drives useSessionAvailability below;
+  // optional/null/undefined outside a session, or in a caller with no
+  // session concept at all (nothing to fetch, chips stay hidden).
+  sessionId?: string | null;
   externalFilter?: string; // Filter driven by InputBar when slash-triggered
   // WHY: App passes the filter as a store the drawer subscribes to, instead of
   // the string itself, so typing after "/" re-renders only this drawer and not
@@ -33,12 +42,45 @@ interface Props {
 const categoryChips = ['personal', 'work', 'development', 'admin', 'other'] as const;
 type CategoryChip = typeof categoryChips[number];
 
-export default function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, filterStore, onSelect, onSelectCommand, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary, onOpenMarketplaceDetail }: Props) {
+export default function CommandDrawer({ open, searchMode, sessionId = null, externalFilter: externalFilterProp, filterStore, onSelect, onSelectCommand, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary, onOpenMarketplaceDetail }: Props) {
   const { drawerSkills, drawerCommands, favorites, setFavorite, loadError, retryLoad } = useSkills();
   // Mounted under every session whether or not it is showing, so only OPENING
   // it asks the marketplace to load (audit W16); the plugin-name badges fill
   // in a beat after the first open.
   const mp = useMarketplace(open);
+  // T5: this conversation's frozen skill availability — same open-gated fetch
+  // pattern as useMarketplace(open) above (design §5). null whenever there is
+  // no real availability data to show (drawer closed, no session yet, mobile,
+  // or an error) — chips and the missing-item cards below all key off it.
+  const availability = useSessionAvailability(sessionId, open);
+  // Optional (not useArtifactDispatch): CommandDrawer always renders under
+  // App's real ArtifactProvider in production, but several existing unit
+  // tests render it bare (no provider) to exercise unrelated behaviour —
+  // same "degrade gracefully" convention as ToolBody's own dispatch read.
+  const artifactDispatch = useArtifactDispatchOptional();
+  // Real frozen decision only when `frozenSkillIds` is a non-null array — an
+  // EMPTY array (e.g. a B-1 "outside any project" session) is still real and
+  // renders every card amber; `null` (no stored frozen set at all) renders no
+  // chips, matching design §5's "don't claim a status that isn't real".
+  const frozenSkillIdSet = useMemo(
+    () => (availability?.frozenSkillIds ? new Set(availability.frozenSkillIds) : null),
+    [availability?.frozenSkillIds],
+  );
+  const skillStatus = useCallback(
+    (skill: SkillEntry) => (frozenSkillIdSet ? (frozenSkillIdSet.has(catalogKeyForSkill(skill)) ? 'automatic' : 'manual') : undefined),
+    [frozenSkillIdSet],
+  );
+  // R14: closes the drawer and opens Projects → Skills & tools for the
+  // missing item's own project, which SkillsToolsTab's own effect (T4)
+  // scrolls to the needs-setup section. `projectPath` is the row's real
+  // canonical path (ipc-shell.ts always echoes the session's own cwd here,
+  // never an internal storage key), so this works for any project, not just
+  // the one this conversation happens to be in.
+  const openMissingSetup = useCallback((row: SessionAvailabilityMissingRow) => {
+    onClose();
+    // WHY itemKey: land on THIS missing item's row, not just the section (R14).
+    artifactDispatch?.({ type: 'PROJECT_VIEW_OPEN_SKILLS_TAB', projectPath: row.projectKey, itemKey: row.key });
+  }, [onClose, artifactDispatch]);
   const storeFilter = useDrawerFilter(filterStore);
   const externalFilter = filterStore ? storeFilter : externalFilterProp;
   const [search, setSearch] = useState('');
@@ -194,9 +236,50 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
         onClick={onSelect}
         favorite={{ filled: isFav, onToggle: () => setFavorite(favId, !isFav) }}
         pluginBadge={pluginBadge}
+        status={skillStatus(skill)}
       />
     );
   };
+
+  // T5: a project has this item turned on but it isn't installed/set up on
+  // this device — the drawer's own dimmed, clickable card (design §5's
+  // "approved shape"), rendered after the installed grid. Kind-specific copy
+  // mirrors SkillsToolsTab's `kindLabel`/`needCopy` tone without importing
+  // from it (that file's helpers aren't exported — see its own header on
+  // why the row/group shapes are inlined rather than shared).
+  const missingKindLabel = (kind: SessionAvailabilityMissingRow['kind']): string => {
+    if (kind === 'personal-skill') return 'Personal skill';
+    if (kind === 'tool-connection') return 'Tool connection';
+    return 'Plugin';
+  };
+  const missingSubtitle = (kind: SessionAvailabilityMissingRow['kind']): string => {
+    if (kind === 'personal-skill') return 'Choice saved for this project; skill file missing here';
+    if (kind === 'tool-connection') return 'Choice saved for this project; needs setup here';
+    return 'Choice saved for this project; not installed here';
+  };
+  const renderMissingCard = (row: SessionAvailabilityMissingRow) => (
+    <button
+      key={row.key}
+      type="button"
+      // Same dimmed-card treatment SkillCard's own grid uses; a native
+      // <button> is keyboard-focusable and Enter/Space-activatable with no
+      // extra wiring. Clicking anywhere on the card — including the chip,
+      // which has no click handler of its own — opens the same setup route.
+      className="group rounded-lg border border-edge-dim bg-panel p-3 text-left text-fg-muted opacity-75 flex flex-col hover:opacity-100 hover:border-edge focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent"
+      aria-label={`${row.displayName} unavailable on this device; open project setup`}
+      title={`Open Projects → Skills & tools for ${row.displayName}`}
+      onClick={() => openMissingSetup(row)}
+    >
+      <span className="text-sm font-medium">{row.displayName}</span>
+      <span className="mt-1 text-2xs flex-1">{missingSubtitle(row.kind)}</span>
+      <span className="mt-2 flex w-full flex-wrap items-center justify-between gap-1">
+        <span className="text-4xs">{missingKindLabel(row.kind)}</span>
+        <span className="group-hover:brightness-125 group-focus-visible:brightness-125">
+          <AvailabilityStatusChip kind="unavailable" />
+        </span>
+      </span>
+    </button>
+  );
 
   return (
     <>
@@ -291,6 +374,17 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
           </div>
         </div>
 
+        {/* Q-2's quiet line: this conversation's chips reflect what it froze
+            at create time, which can lag the project's current setting once
+            it's changed mid-conversation (design §5, combined-review Q-2).
+            Shown in both modes — it's about what the WHOLE drawer is showing,
+            not a browse-mode-only affordance like the category chips. */}
+        {availability?.settingsDiffer && (
+          <div className="px-4 pb-2 text-2xs text-fg-muted" role="status">
+            Project settings changed — they apply in your next new conversation.
+          </div>
+        )}
+
         {/* Scrollable content.
              "Add Skills +" is the last box of whatever list is showing, so the
              marketplace is always one click away. When a search has zero matches
@@ -337,6 +431,12 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
                   ★ Favorites only
                 </FilterChip>
               </div>
+              {/* Only shown when there's a real frozen set to explain — an
+                  empty array (B-1, outside any project) still counts, since
+                  every card gets a real amber chip in that case too. */}
+              {frozenSkillIdSet && <div className="mx-3 mt-2 flex flex-wrap gap-x-4 gap-y-1 text-2xs text-fg-muted" role="note">
+                <span>Automatic: assistant may choose</span><span>Manual use: type / to choose</span>
+              </div>}
 
               {/* Favorites section. Hosts "Add Skills" only when it is the last
                   section on screen (favorites-only on, or nothing else installed). */}
@@ -359,6 +459,20 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
                     {othersSorted.map(renderSkillCard)}
                     <AddSkillsCard onClick={openMarketplace} />
+                  </div>
+                </section>
+              )}
+
+              {/* T5: items this project has turned on but that aren't
+                  installed/set up on this device — the drawer's own dimmed
+                  cards, after the installed grid (design §5's "approved
+                  shape"). Not shown in search mode: these aren't skills the
+                  user can search for or run, only a route to fix them. */}
+              {!!availability?.missing.length && (
+                <section className="px-2 pt-3">
+                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 px-1">Needs setup here</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
+                    {availability.missing.map(renderMissingCard)}
                   </div>
                 </section>
               )}

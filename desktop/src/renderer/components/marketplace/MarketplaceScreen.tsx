@@ -68,6 +68,14 @@ export default function MarketplaceScreen({
     return f;
   });
   const [detail, setDetail] = useState<DetailTarget | null>(null);
+  // U2 fix (beta review 2): which plugin just finished installing via a
+  // CARD's own install button (not the detail overlay's) — handed to
+  // MarketplaceDetailOverlay's openSetupFor so it opens straight into the
+  // "choose your projects" setup state, same as installing from the detail
+  // page already does. Cleared by the overlay itself once applied
+  // (onSetupForConsumed), one-shot like initialDetailId/onDetailConsumed
+  // below.
+  const [installedWithParts, setInstalledWithParts] = useState<{ id: string; displayName: string } | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationCardItem[]>([]);
   // Integration click-to-expand — mirrors the plugin detail-overlay pattern
   // but renders IntegrationDetailOverlay (below) because integrations aren't
@@ -312,6 +320,16 @@ export default function MarketplaceScreen({
   // local), so this one useCallback serves every row of both chunked grids.
   const openEntry = useCallback((id: string) => {
     setDetail(id.startsWith("theme:") ? { kind: "theme", slug: id.slice("theme:".length) } : { kind: "skill", id });
+  }, []);
+
+  // U2 fix: every skill card's own install button (rails, explore grid,
+  // search grid) reports here on a successful install with parts. Stable
+  // reference (renderer-lists.md: "a memoised row gets stable props") — a
+  // fresh closure per card per render would defeat MarketplaceCard's memo
+  // for every row, not just the one installed.
+  const handleInstalledWithParts = useCallback((id: string, displayName: string) => {
+    setInstalledWithParts({ id, displayName });
+    setDetail({ kind: "skill", id });
   }, []);
 
   // Fix round 1 (review finding #2, explicit instruction): the integrations
@@ -566,6 +584,7 @@ export default function MarketplaceScreen({
                       // own stable handler) does the identical routing from the
                       // card's own id, so it's reused here instead of a new one.
                       onOpen={openEntry}
+                      onInstalledWithParts={handleInstalledWithParts}
                     />
                   ))}
                 </MarketplaceRail>
@@ -603,6 +622,7 @@ export default function MarketplaceScreen({
                       installed={isInstalled(item.entry)}
                       updateAvailable={!!mp.updateAvailable[item.entry.id]}
                       onOpen={openEntry}
+                      onInstalledWithParts={handleInstalledWithParts}
                     />
                   ))}
                 </MarketplaceGrid>
@@ -647,6 +667,7 @@ export default function MarketplaceScreen({
                       // rebuilt inline here every render.
                       pluginBadge={item.kind === "skill" ? item.pluginBadge : undefined}
                       onOpen={openEntry}
+                      onInstalledWithParts={handleInstalledWithParts}
                     />
                   ))}
                 </MarketplaceGrid>
@@ -659,10 +680,16 @@ export default function MarketplaceScreen({
       {detail && (
         <MarketplaceDetailOverlay
           target={detail}
-          onClose={() => setDetail(null)}
+          // U2 fix: clear the pending card-install setup state on close too —
+          // belt-and-braces alongside the overlay's own onSetupForConsumed,
+          // in case the overlay closes before its effect ever ran (e.g. a
+          // fast re-close in a test).
+          onClose={() => { setDetail(null); setInstalledWithParts(null); }}
           onNavigate={setDetail}
           onOpenShareSheet={onOpenShareSheet}
           onOpenThemeShare={onOpenThemeShare}
+          openSetupFor={installedWithParts}
+          onSetupForConsumed={() => setInstalledWithParts(null)}
         />
       )}
 

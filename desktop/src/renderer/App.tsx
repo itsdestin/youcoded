@@ -2963,6 +2963,18 @@ function AppInner() {
     }
   }, [currentModel]);
 
+  // T4 (project-plugin-controls): ProjectView's own onNewConversation prop,
+  // hoisted to a stable identity — Skills & tools' SkillsToolsTab is kept
+  // mounted while hidden (perf rule 2: hidden + memo + STABLE PROPS), and the
+  // inline arrow this used to be got a fresh identity on every AppInner
+  // render, which would have defeated that memoization for no reason. Also
+  // now threads an optional initialInput through to createSession, for "Ask
+  // assistant to set it up"'s prefilled request.
+  const onProjectViewNewConversation = useCallback((cwd: string, initialInput?: string) => {
+    dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+    void createSession(cwd, false, undefined, undefined, undefined, undefined, undefined, initialInput);
+  }, [dispatchArtifact, createSession]);
+
   // Client-side removal for a session that is ALREADY dead in the main process
   // (Moved Gate Exit/Resume, where `session.destroy()` would no-op and emit no
   // session:destroyed event). Mirrors destroyedHandler's state cleanup MINUS the
@@ -3887,6 +3899,7 @@ function AppInner() {
                 <CommandDrawer
                   open={drawerOpen}
                   searchMode={drawerSearchMode}
+                  sessionId={sessionId}
                   filterStore={drawerFilterStore}
                   onSelect={handleSelectSkill}
                   onSelectCommand={handleSelectCommand}
@@ -4218,7 +4231,7 @@ function AppInner() {
       <ProjectView
         // Project view homes to the focused conversation's folder on every open.
         activeSessionCwd={currentSession?.cwd}
-        onNewConversation={(cwd) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); createSession(cwd, false); }}
+        onNewConversation={onProjectViewNewConversation}
         // Project View closes first, as it always has, so whatever the resume
         // shows (the chat, a take-over prompt) is not under it.
         onResumeConversation={(...args) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); return handleResumeSession(...args); }}

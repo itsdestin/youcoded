@@ -22,6 +22,7 @@ import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { ScreenBand } from '../ScreenBand';
 import { workbenchScreenFrame } from '../../workbench-mode';
+import { SkillsToolsTab, needsSetupRowDomId } from './SkillsToolsTab';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { CentralIndexProject, ArtifactRecord } from '../../../shared/artifacts/types';
 import type { PastSession } from '../../../shared/types';
@@ -50,7 +51,9 @@ import { ContextEditorOverlay } from './ContextEditorOverlay';
 // 2026-07-23: the Artifacts tab merged into Files. Artifacts was not a subset of
 // All files, so the merge moved externals into their own section inside this tab
 // rather than deleting them — see the file-merge spec.
-type TabId = 'files' | 'conversations' | 'context';
+// 'skills' (T4, project-plugin-controls): Skills & tools — a real tab for
+// everyone, not a workbench-only preview.
+type TabId = 'files' | 'conversations' | 'context' | 'skills';
 
 // Live hero stats, computed from the project:* / artifacts:* IPC (not the stale
 // stats.artifactCount). null repo means the project folder has no git remote.
@@ -84,7 +87,7 @@ function readStoredFileView(): FileViewMode {
     return localStorage.getItem(FILE_VIEW_KEY) === 'list' ? 'list' : 'grid';
   } catch { return 'grid'; } // storage blocked (some Android WebView configs)
 }
-import { Button, Checkbox, SearchFilterPill } from '../ui';
+import { Button, Checkbox, PluginIcon, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
 import { isRemoteMode } from '../../platform';
 
@@ -93,8 +96,12 @@ interface ProjectViewProps {
   // screen). Project view re-homes to this folder's project on every open — see
   // the load effect. Not used for anything else.
   activeSessionCwd?: string;
-  // Threaded from App: starts a new conversation in the given cwd.
-  onNewConversation: (cwd: string) => void;
+  // Threaded from App: starts a new conversation in the given cwd. T4
+  // (project-plugin-controls): the Skills & tools tab's "Ask assistant to set
+  // it up" reuses this SAME path with a prefilled initialInput rather than a
+  // second one — App's own handler is a stable useCallback so this stays a
+  // valid stable prop for the kept-mounted, memoized SkillsToolsTab.
+  onNewConversation: (cwd: string, initialInput?: string) => void;
   // App's own resume entry (handleResumeSession), so the preview's model
   // picker and launch switches reach it exactly as the Resume browser's do.
   onResumeConversation: ResumeHandler;
@@ -187,6 +194,106 @@ export function ProjectView(props: ProjectViewProps) {
   const activeCwdRef = useRef(props.activeSessionCwd);
   activeCwdRef.current = props.activeSessionCwd;
   const [tab, setTab] = useState<TabId>('files');
+  // T4 (project-plugin-controls): the ONE production route to Skills & tools,
+  // scrolled to its needs-setup section — dispatched by T5's red "missing"
+  // chip with a real project path, and (with no path) by the workbench's
+  // "Writing helper" preview card, which used to hand-roll this same
+  // open+select-tab+scroll sequence via a bespoke window event and local
+  // state. Both paths now go through the SAME action.
+  const openSkillsTabRequest = useArtifactSelector((s) => s.openSkillsTabRequest);
+  const [scrollToNeedsSetup, setScrollToNeedsSetup] = useState(false);
+  // F6 (T4 review): which needs-setup ROW to scroll to, when the request
+  // named one (`needsSetupRowDomId` in SkillsToolsTab.tsx builds the matching
+  // id) — falls back to the whole section when absent (a path-less workbench
+  // preview, or a caller dispatching the action before it gained this field;
+  // the action stays backward-compatible — see its own comment).
+  const [scrollItemKey, setScrollItemKey] = useState<string | null>(null);
+  // A request naming a specific project may arrive before the project index
+  // has loaded (or before the named project appears in it, e.g. it was just
+  // added) — OR while Project View is already open and fully loaded (T4
+  // review F1). STATE, not a ref: a ref here sat un-consumed forever in the
+  // already-open case, because nothing else in this component re-runs on a
+  // ref mutation alone. `projects`/`indexLoaded` only change on a
+  // CLOSED→open transition (the fetch effect below is keyed on
+  // `projectViewOpen` flipping false→true) — they do NOT change just because
+  // `PROJECT_VIEW_OPEN_SKILLS_TAB` fires again while already open, so the old
+  // ref-consuming effect (keyed on `[projects, indexLoaded]`) never re-fired
+  // and silently kept whatever project was already active. Making this state
+  // means the assignment below is itself a dependency change the consuming
+  // effect sees, whether or not the index needed to reload.
+  const [pendingSkillsProjectPath, setPendingSkillsProjectPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (!openSkillsTabRequest) return;
+    // Consume immediately: a later request (even to the same project) must
+    // start from null again so this effect is guaranteed to re-fire for it.
+    dispatch({ type: 'PROJECT_VIEW_SKILLS_REQUEST_HANDLED' });
+    dispatch({ type: 'PROJECT_VIEW_OPENED' });
+    setPendingSkillsProjectPath(openSkillsTabRequest.projectPath ?? null);
+    setTab('skills');
+    setScrollToNeedsSetup(true);
+    setScrollItemKey(openSkillsTabRequest.itemKey ?? null);
+  }, [openSkillsTabRequest, dispatch]);
+  // Route a pending request's named project into the active selection —
+  // whether the index was already loaded (Project View already open: this
+  // fires the instant `pendingSkillsProjectPath` changes above, since it's
+  // now a dependency) or still loading (closed→open: fires once
+  // `indexLoaded`/`projects` land from the fetch effect below). A path
+  // matching no project (stale request, or the workbench's path-less
+  // preview) leaves the normal re-home-to-focused-conversation selection
+  // from the load effect below untouched — never overwritten by a null
+  // result here.
+  useEffect(() => {
+    if (pendingSkillsProjectPath === null || !indexLoaded) return;
+    const match = matchProjectByPath(projects, pendingSkillsProjectPath);
+    if (match) setActiveProject(match);
+    setPendingSkillsProjectPath(null);
+  }, [pendingSkillsProjectPath, projects, indexLoaded]);
+  useEffect(() => {
+    if (!scrollToNeedsSetup || !projectViewOpen || !activeProject || tab !== 'skills') return;
+    // WHY a RETRY LOOP, not one requestAnimationFrame (R14 fix, 2026-09-24):
+    // reaching this point only means the SKILLS tab is SELECTED — the
+    // target row still depends on two chained async IPC round trips: the
+    // projects-index load that resolves `activeProject` in the first place,
+    // then SkillsToolsTab's own lazy per-project fetch
+    // (useProjectExtensionsController's `projectExtensions:get`), which only
+    // starts once `hidden` flips false. Neither reliably lands within a
+    // single animation frame. The old code fired exactly ONE rAF, called
+    // `target?.scrollIntoView(...)` (a silent no-op when `target` was still
+    // null because the row — or even the whole needs-setup section — hadn't
+    // rendered yet) and then UNCONDITIONALLY cleared the pending flags, so a
+    // row that wasn't ready yet was simply never scrolled to. Verified live
+    // via scripts/ui-probe.mjs: scrollTop stuck at 0, row off-screen at the
+    // bottom of the panel. Poll every frame until the row (or, with no
+    // itemKey / no matching row, the section) actually EXISTS, then scroll —
+    // bounded so a request that never resolves (a failed load, or a stale
+    // itemKey the project no longer has) doesn't spin forever.
+    let cancelled = false;
+    let frame = 0;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 180; // ~3s at 60fps — generous for two chained IPC round trips
+    const tryScroll = () => {
+      if (cancelled) return;
+      const target = (scrollItemKey && document.getElementById(needsSetupRowDomId(scrollItemKey)))
+        || document.getElementById('project-tools-needing-setup');
+      if (target) {
+        target.scrollIntoView({ block: 'center' });
+        setScrollToNeedsSetup(false);
+        setScrollItemKey(null);
+        return;
+      }
+      attempts += 1;
+      if (attempts >= MAX_ATTEMPTS) {
+        // Give up quietly — Skills & tools is still open and usable, just
+        // not scrolled to a row that never appeared.
+        setScrollToNeedsSetup(false);
+        setScrollItemKey(null);
+        return;
+      }
+      frame = requestAnimationFrame(tryScroll);
+    };
+    frame = requestAnimationFrame(tryScroll);
+    return () => { cancelled = true; cancelAnimationFrame(frame); };
+  }, [scrollToNeedsSetup, scrollItemKey, projectViewOpen, activeProject, tab]);
   // Artifacts search query (lifted out of FilesTab so it can sit on the
   // shared seg-row next to the segmented control, matching the design).
   const [artifactSearch, setArtifactSearch] = useState('');
@@ -731,6 +838,10 @@ export function ProjectView(props: ProjectViewProps) {
     // (CLAUDE.md/AGENTS.md/rules) and memories — and "instructions" is the term
     // the product uses everywhere else a non-technical user meets this concept.
     { id: 'context', label: 'Instructions & Memories', icon: <DocIcon />, count: String(heroStats.contextFiles) },
+    // T4 (project-plugin-controls): a real tab for everyone now — the
+    // workbench-only gate (isWorkbenchMode() + the 'pluginControlsBefore'
+    // before/after review-deck flag) is gone.
+    { id: 'skills', label: 'Skills & tools', icon: <PluginIcon />, count: '' },
   ];
 
   // Per-active-project sync props for the hero. `dot` is null when syncStatus is
@@ -980,6 +1091,13 @@ export function ProjectView(props: ProjectViewProps) {
                 file you had open are still there when you come back. */}
             {activeProject && (
               <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={onFilesMutated} onClearSearch={onFilesClearSearch} onCurrentDirChange={setCurrentRelDir} pvActiveId={pvActiveId} artifactDispatch={dispatch} />
+            )}
+            {/* T4 (project-plugin-controls): kept mounted like FilesTab, not
+                conditional like Conversations/Context — perf rule 2's
+                hidden+memo+stable-props, so switching away and back never
+                re-fetches project-extensions:get. */}
+            {activeProject && (
+              <SkillsToolsTab hidden={tab !== 'skills'} project={activeProject} onNewConversation={props.onNewConversation} />
             )}
             {/* Keyed by project so a switch starts a fresh 50-card window at the
                 top, instead of keeping the last project's scroll depth. */}

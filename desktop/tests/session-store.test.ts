@@ -44,6 +44,29 @@ describe('SessionStore', () => {
     expect(store.list()[0]).not.toHaveProperty('stepGuard');
   });
 
+  // T2 (project-plugin-controls, design §3): the frozen availability set
+  // round-trips exactly, and a torn/hand-edited one is dropped (not thrown),
+  // resuming as "no stored set" — today's everything-on behaviour — same
+  // tolerant-additive-field contract as stepGuard above.
+  it('round-trips a well-formed availability set', async () => {
+    const availability = { projectKey: 'MyProject', skillCatalogIds: ['a', 'b'], mcpServerIds: ['gmail'] };
+    await store.create({ ...HEADER, availability });
+    expect(store.readHeader('s-1', HEADER.cwd)?.availability).toEqual(availability);
+  });
+
+  it('round-trips B-1\'s outside-any-project availability (projectKey null, empty sets)', async () => {
+    const availability = { projectKey: null, skillCatalogIds: [], mcpServerIds: [] };
+    await store.create({ ...HEADER, availability });
+    expect(store.readHeader('s-1', HEADER.cwd)?.availability).toEqual(availability);
+  });
+
+  it('drops a malformed availability field instead of throwing, resuming as "no stored set"', async () => {
+    await store.create({ ...HEADER, availability: { projectKey: 'x', skillCatalogIds: 'not-an-array' } as any });
+    const header = store.readHeader('s-1', HEADER.cwd);
+    expect(header).not.toHaveProperty('availability');
+    expect(header).toEqual(HEADER);
+  });
+
   // 2026-09-16 smoothness sweep, C6: the Resume list reads through listAsync,
   // whose rows and order must match list() exactly — a derived title, a
   // hidden specialist child, and the includeChildren opt-in included.

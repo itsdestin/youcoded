@@ -9,7 +9,7 @@
 // One place knows the on-disk layout (<skillDir>/SKILL.md). Do not add a second.
 import * as fs from 'fs';
 import * as path from 'path';
-import { scanProjectSkills, scanSkills } from '../../skill-scanner';
+import { scanProjectSkills, scanSkills, scanProjectSkillsAsync, scanSkillsAsync } from '../../skill-scanner';
 import type { SkillEntry } from '../../../shared/types';
 
 export interface LoadedSkill {
@@ -68,13 +68,44 @@ function stripFrontmatter(raw: string): string {
   return afterFence === -1 ? '' : raw.slice(afterFence + 1);
 }
 
-export function createSkillCatalog(entries?: SkillEntry[], projectCwd?: string): SkillCatalog {
+/**
+ * The discovery + dedupe half of createSkillCatalog, pulled out (T2,
+ * project-plugin-controls) so a caller that needs the FULL entries — not just
+ * a catalog's list()/load() — can scan ONCE and reuse the result, rather than
+ * scanning again through createSkillCatalog(undefined, cwd). native-session-
+ * host.ts's availability resolution is exactly that caller: it needs each
+ * entry's `source`/`pluginName` (resolve.ts's itemKeyForSkill), which a built
+ * SkillCatalog's list() ({id, description} only) doesn't expose.
+ */
+export function discoverSkillEntries(projectCwd?: string): SkillEntry[] {
   // Project skills take precedence only within this catalog. The global scanner
   // deliberately excludes them, because its app-wide inventory has no cwd.
-  const discovered = entries ?? [
+  return [
     ...(projectCwd ? scanProjectSkills(projectCwd) : []),
     ...scanSkills(),
   ].filter((entry, index, all) => all.findIndex((other) => other.id === entry.id) === index);
+}
+
+/**
+ * Async twin of discoverSkillEntries() — ONLY for project-extensions/
+ * ipc-shell.ts's get/set/for-session handlers (T3 review F2). Those fire on
+ * every CommandDrawer open and session switch, so the SYNC scan above (fine
+ * for its existing rare, already-reviewed callers — session create, tool
+ * wiring) would block the main thread on a much hotter path. See the WHY
+ * block above scanSkillsAsync()/scanProjectSkillsAsync() in skill-scanner.ts
+ * for why this is a second async scan rather than a cache.
+ */
+export async function discoverSkillEntriesAsync(projectCwd?: string): Promise<SkillEntry[]> {
+  const [projectSkills, globalSkills] = await Promise.all([
+    projectCwd ? scanProjectSkillsAsync(projectCwd) : Promise.resolve<SkillEntry[]>([]),
+    scanSkillsAsync(),
+  ]);
+  return [...projectSkills, ...globalSkills]
+    .filter((entry, index, all) => all.findIndex((other) => other.id === entry.id) === index);
+}
+
+export function createSkillCatalog(entries?: SkillEntry[], projectCwd?: string): SkillCatalog {
+  const discovered = entries ?? discoverSkillEntries(projectCwd);
   const byId = new Map(discovered.map((e) => [e.id, e]));
   return {
     list: () => discovered.map((e) => ({ id: e.id, description: e.description })),

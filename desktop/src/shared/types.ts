@@ -2336,3 +2336,103 @@ export interface CrossWindowCursor {
 
 // Discriminator for development-flow IPC payloads.
 export type DevIssueKind = 'bug' | 'feature';
+
+// ---------------------------------------------------------------------------
+// Project skills & tools (project-plugin-controls, T3 IPC layer, 2026-09-24)
+//
+// Mirrors desktop/src/main/project-extensions/view.ts's own shapes — inlined
+// (not split into the same separately-named row/group interfaces view.ts
+// uses internally) because shared/ must never import from main/ (this file's
+// own convention; see PortableModelRef's header for the same reasoning), and
+// knip's unused-exports check flags an export with no import site outside its
+// own file — a row/group type used only INSIDE one of the result types below
+// would be exactly that, since remote-shim.ts (the one real consumer today,
+// ahead of T4-T6's renderer code) only ever needs to name the top-level
+// result types it actually annotates with.
+//
+// Renderer-facing "projectKey": every field of that name below is the
+// project's CANONICAL PATH (the same value every `artifacts:list-projects-
+// index` row already carries as `.path`) — never store.ts's internal sync-
+// name-or-path storage key. See ipc-shell.ts's own header comment for why.
+// ---------------------------------------------------------------------------
+
+/** `project-extensions:set`'s `changes[]` entry — exactly one of `plugin`
+ *  (the master switch) or `item` (one part), never both, never neither. */
+export interface ProjectExtensionsChange {
+  plugin?: string;
+  item?: string;
+  on: boolean;
+}
+
+interface ProjectExtensionsPartRowShape {
+  /** resolve.ts's itemKey verbatim — the identity `project-extensions:set`'s
+   *  `changes[].item` takes. */
+  key: string;
+  kind: 'skill' | 'mcp';
+  displayName: string;
+  on: boolean;
+  /** kind:'mcp' only — true when this connection IS present in the registry
+   *  here but its secrets aren't. Never `false` — absent means no local-setup
+   *  issue. */
+  needsLocalSetup?: boolean;
+}
+
+interface ProjectExtensionsPluginGroupShape {
+  pluginId: string;
+  displayName: string;
+  bundled: boolean;
+  on: boolean;
+  /** Same boolean as `!on` for a plugin that has parts — its own named field
+   *  because "off" and "paused" read as different copy for a plugin with
+   *  chosen parts vs. one never touched, even though it's not a third stored
+   *  state (design §2). */
+  paused: boolean;
+  parts: ProjectExtensionsPartRowShape[];
+}
+
+interface ProjectExtensionsNeedsSetupRowShape {
+  key: string;
+  displayName: string;
+  kind: 'install' | 'personal-skill' | 'tool-connection';
+  projectKey: string;
+}
+
+export type ProjectExtensionsGetResult =
+  | {
+      ok: true;
+      view: {
+        projectKey: string;
+        builtIn: ProjectExtensionsPluginGroupShape[];
+        installed: ProjectExtensionsPluginGroupShape[];
+        /** Skills and tool connections owned by no plugin at all — a personal
+         *  or project skill, or a user/adopted MCP server — each
+         *  independently on/off. */
+        personal: ProjectExtensionsPartRowShape[];
+        needsSetup: ProjectExtensionsNeedsSetupRowShape[];
+      };
+    }
+  | { ok: false; error: string };
+
+export type ProjectExtensionsSetResult = ProjectExtensionsGetResult;
+
+export type ProjectExtensionsForSessionResult =
+  | {
+      ok: true;
+      /** The session's own cwd (a real canonical path) — usable to open
+       *  Projects → Skills & tools scrolled to the matching `.path`-keyed row. */
+      projectKey: string;
+      /** null means this session has no stored frozen set (created before
+       *  this feature, or its resolution failed open) — EVERY installed item
+       *  is Automatic, matching today's unrestricted behaviour. A non-null
+       *  value (including `[]`) is a REAL frozen decision — never the same
+       *  as null. */
+      frozenSkillIds: string[] | null;
+      frozenMcpIds: string[] | null;
+      missing: ProjectExtensionsNeedsSetupRowShape[];
+      settingsDiffer: boolean;
+    }
+  | { ok: false; error: string };
+
+export type ProjectExtensionsImportSkillResult =
+  | { ok: true; name: string; destination: string }
+  | { ok: false; error: string };

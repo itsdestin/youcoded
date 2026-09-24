@@ -144,6 +144,36 @@ export type SettingRowProps = {
   expanded?: boolean;
   /** Overrides the muted description color — e.g. Android's green "Connected". */
   descriptionClassName?: string;
+  /**
+   * Let a `nav` row's description WRAP instead of truncating to one line
+   * (T4, project-plugin-controls review F2). `nav` defaults to `truncate`
+   * because nav subtitles are normally one-liners (change 51) — but a row
+   * whose description is the ONLY explanation of what it means or what to do
+   * about it (Projects → Skills & tools' plugin/tool rows) needs it to wrap on
+   * a narrow viewport instead of cutting copy mid-word (R21). Before this
+   * existed, the only way to win was a caller-side `!whitespace-normal`
+   * fighting `truncate`'s equal specificity by declaration order — which is
+   * also what tripped `shadcn/no-restyle` and forced the design-lint ratchet
+   * up. This prop is the supported variant instead: no `!important` needed by
+   * any caller, `item` rows are unaffected (they never truncate).
+   */
+  wrapDescription?: boolean;
+  /**
+   * Omit the row's own `bg-inset/50` (T4, project-plugin-controls review F2)
+   * — for a row nested directly inside a container that already paints the
+   * surface it should read against (Skills & tools' bordered plugin/tool
+   * cards). Previously the only way to win this was a caller-side
+   * `!bg-transparent`, which reads as a restyle of a primitive the caller
+   * doesn't own and trips `shadcn/no-restyle`.
+   */
+  flat?: boolean;
+  /**
+   * Add the standard `border-edge-dim` ring (T4, project-plugin-controls
+   * review F2) — for a row that needs to stand out as its own tile inside an
+   * expanded group (Skills & tools' per-item rows under a plugin's chevron).
+   * Same story as `flat`: replaces a caller-side `border` override.
+   */
+  bordered?: boolean;
   className?: string;
 };
 
@@ -164,6 +194,9 @@ export function SettingRow({
   expanded,
   disabled,
   descriptionClassName,
+  wrapDescription,
+  flat,
+  bordered,
   className = '',
 }: SettingRowProps) {
   const d = DENSITY[variant];
@@ -208,7 +241,7 @@ export function SettingRow({
           // title grew. `truncate` on nav only — nav subtitles are one-liners by
           // design, in-menu descriptions are explanatory and must wrap.
           <p
-            className={`${d.desc} -mt-0.5 ${variant === 'nav' ? 'truncate' : ''} ${descriptionClassName ?? 'text-fg-muted'}`}
+            className={`${d.desc} -mt-0.5 ${variant === 'nav' && !wrapDescription ? 'truncate' : ''} ${descriptionClassName ?? 'text-fg-muted'}`}
           >
             {description}
           </p>
@@ -245,7 +278,13 @@ export function SettingRow({
     </>
   );
 
-  const cls = `${SETTING_ROW_BASE}${hover} ${disabled ? 'opacity-50' : ''} ${className}`.trim();
+  // `flat` strips OWN bg-inset/50 from a local copy of the base string — the
+  // EXPORTED `SETTING_ROW_BASE` constant itself stays untouched, since the
+  // Permissions folder-header caller takes it by reference (own header
+  // comment above). `bordered` appends the standard ring; see both props'
+  // own doc comments for why this exists instead of a caller className.
+  const surfaceBase = flat ? SETTING_ROW_BASE.replace('bg-inset/50', '') : SETTING_ROW_BASE;
+  const cls = `${surfaceBase}${hover} ${disabled ? 'opacity-50' : ''} ${bordered ? 'border border-edge-dim' : ''} ${className}`.trim();
 
   if (isButton) {
     return (

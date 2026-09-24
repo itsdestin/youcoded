@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import type { SkillEntry } from '../../shared/types';
 import FavoriteStar from './marketplace/FavoriteStar';
+import { STATUS_DOT_BG, STATUS_PILL_TONE } from './status-color-palette';
 
 interface FavoriteProps {
   filled: boolean;
@@ -22,6 +23,11 @@ interface Props {
    *  Clicking routes the user to that plugin's detail page. Skills with
    *  no matching marketplace plugin fall back to the source tag. */
   pluginBadge?: PluginBadgeProps;
+  /** T5 (project-plugin-controls): this conversation's frozen availability for
+   *  this skill — omitted entirely (no chip) when the drawer has no real
+   *  availability data for the active session (closed, pre-fetch, mobile,
+   *  error, or a session with no stored frozen set — design §5). */
+  status?: SkillCardStatus;
 }
 
 // Change 23: every badge this card renders is an IDENTITY badge — "YC",
@@ -32,6 +38,22 @@ interface Props {
 // only reason they differed before was that the map grew one key at a time.
 const IDENTITY_BADGE =
   'bg-accent/15 text-accent border border-accent/30';
+
+// WHY: match the SessionStrip status pill's tinted border + neutral word +
+// colored dot, instead of making the status WORD low-contrast in light
+// themes (design §5: "colored like the session switcher", R18).
+export type SkillCardStatus = 'automatic' | 'manual' | 'unavailable';
+const AVAILABILITY_STATUS = {
+  automatic: { tone: 'green', label: 'Automatic' },
+  manual: { tone: 'amber', label: 'Manual use' },
+  unavailable: { tone: 'red', label: 'Unavailable' },
+} as const;
+export function AvailabilityStatusChip({ kind }: { kind: SkillCardStatus }) {
+  const { tone, label } = AVAILABILITY_STATUS[kind];
+  return <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border pl-1 pr-1.5 py-[1px] text-2xs leading-none text-fg-2 ${STATUS_PILL_TONE[tone]}`}>
+    <span className={`h-2 w-2 rounded-full ${STATUS_DOT_BG[tone]}`} aria-hidden="true" />{label}
+  </span>;
+}
 
 const typeLabels: Record<string, string> = {
   prompt: 'Prompt',
@@ -119,13 +141,14 @@ type Handlers = {
 // refreshed by the OUTER SkillCard below on every one of ITS renders, and the
 // outer component is never memoized, so it runs on every CommandDrawer
 // render even when this inner one is skipped.
-function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPluginBadge, pluginName }: {
+function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPluginBadge, pluginName, status }: {
   skill: SkillEntry;
   handlersRef: React.RefObject<Handlers>;
   hasFavorite: boolean;
   favoriteFilled: boolean;
   hasPluginBadge: boolean;
   pluginName?: string;
+  status?: SkillCardStatus;
 }) {
   const onCardClick = () => handlersRef.current.onClick(skill);
   const onPluginClick = () => handlersRef.current.onPluginClick?.();
@@ -161,7 +184,13 @@ function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPlu
       )}
       <span className="text-sm font-medium text-fg leading-tight">{skill.displayName}</span>
       <span className="text-2xs text-fg-muted mt-1 leading-snug line-clamp-2 flex-1">{skill.description}</span>
-      <div className="mt-2 self-start">{badge}</div>
+      {/* WHY: master's exact markup is kept when no status is passed — the
+          drawer only has real availability data for the active session while
+          it's open (useSessionAvailability), so a card can render with no
+          chip at all rather than claim a status it doesn't have. */}
+      {status ? <div className="mt-2 flex w-full flex-wrap items-center gap-1.5">{badge}
+        <span className="ml-auto"><AvailabilityStatusChip kind={status} /></span>
+      </div> : <div className="mt-2 self-start">{badge}</div>}
     </div>
   );
 }
@@ -176,7 +205,7 @@ const SkillCardMemo = React.memo(SkillCardImpl);
 // (like ResumeBrowser itself, which owns rowActions.current). Its only job is
 // keeping handlersRef current so SkillCardMemo can skip re-rendering on data
 // alone without ever risking a stale click handler.
-function SkillCard({ skill, onClick, favorite, pluginBadge }: Props) {
+function SkillCard({ skill, onClick, favorite, pluginBadge, status }: Props) {
   const handlersRef = useRef<Handlers>({ onClick, onToggle: favorite?.onToggle, onPluginClick: pluginBadge?.onClick });
   handlersRef.current = { onClick, onToggle: favorite?.onToggle, onPluginClick: pluginBadge?.onClick };
   return (
@@ -187,6 +216,7 @@ function SkillCard({ skill, onClick, favorite, pluginBadge }: Props) {
       favoriteFilled={favorite?.filled ?? false}
       hasPluginBadge={pluginBadge != null}
       pluginName={pluginBadge?.name}
+      status={status}
     />
   );
 }

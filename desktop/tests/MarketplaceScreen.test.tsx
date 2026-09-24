@@ -6,8 +6,9 @@
 // (fix round 1: a stable `item` identity is what actually lets
 // React.memo(MarketplaceCard) skip them).
 import React from 'react';
+import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, cleanup, act } from '@testing-library/react';
+import { render, cleanup, act, fireEvent, screen } from '@testing-library/react';
 
 // Render-count probe: MarketplaceCard itself is the memo boundary (its default
 // export is memo(MarketplaceCard)), so counting calls to ITS function would
@@ -101,6 +102,16 @@ function setupWindowClaude() {
       marketplace: { list: vi.fn().mockResolvedValue([]), install: vi.fn(), uninstall: vi.fn(), update: vi.fn() },
     },
     appearance: { getFavoriteThemes: vi.fn().mockResolvedValue([]) },
+    // ProjectSetupPanel's own dependencies (U2 fix test below) — reached once
+    // a card install with parts opens the detail overlay in its setup state.
+    artifacts: { listProjectsIndex: vi.fn().mockResolvedValue({ ok: true, projects: [{ id: 'p1', path: '/a', name: 'Alpha' }] }) },
+    projectExtensions: {
+      get: vi.fn().mockResolvedValue({
+        ok: true,
+        view: { projectKey: '/a', personal: [], needsSetup: [], builtIn: [], installed: [] },
+      }),
+      set: vi.fn(),
+    },
   };
 }
 
@@ -185,5 +196,45 @@ describe('MarketplaceScreen', () => {
 
     expect(renders.corner).toBe(first);
     expect(cards(container)).toBe(REVEAL_CHUNK);
+  });
+
+  // U2 fix (beta review 2): the beta tester installed "Remember" from the
+  // Marketplace grid's OWN Install button (never opening the detail page
+  // first) and it then showed up nowhere — no project let them turn it on.
+  // The product decision is that EVERY plugin install with parts reaches the
+  // post-install "choose your projects" panel, not just the one started from
+  // the detail page's own Install button (already covered by
+  // MarketplaceDetailOverlay.test.tsx). This proves the card path specifically.
+  it('installing a plugin with parts from the grid CARD opens the detail overlay in its setup state', async () => {
+    const withParts: SkillEntry = {
+      id: 'remember', displayName: 'Remember', description: 'd', tagline: 'd', author: 'T',
+      category: 'productivity', prompt: '/remember', source: 'marketplace', type: 'plugin', visibility: 'published',
+      sourceType: 'url', sourceRef: 'https://github.com/o/r.git', repoUrl: 'https://github.com/o/r',
+      components: { skills: ['remember'], hooks: [], commands: [], agents: [], mcpServers: [], hasHooksManifest: false, hasMcpConfig: false },
+      lifeArea: [], tags: [],
+    } as any;
+    (window as any).claude.skills.listMarketplace.mockResolvedValue([withParts]);
+
+    const { container } = await renderScreen();
+    expect(cards(container)).toBe(1);
+
+    // The card's own corner affordance, NOT MarketplaceDetailOverlay's
+    // Install button — the detail page is never opened before this click.
+    const installButton = container.querySelector('[aria-label="Install"]') as HTMLElement | null;
+    expect(installButton).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(installButton!);
+      // installSkill() chains window.claude.skills.install → account.signedIn
+      // → fetchAll()/refreshDrawerSkills() before resolving — flush the
+      // microtask queue enough times for that chain to settle.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText('Set up Remember')).toBeInTheDocument();
+    expect(screen.getByText(/Installed on this device\. Choose where the assistant/)).toBeInTheDocument();
+    expect(await screen.findByText('Alpha')).toBeInTheDocument();
   });
 });

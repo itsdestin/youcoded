@@ -3,7 +3,7 @@
 // content from the same shell; the "What's inside" section only shows for
 // skills with extracted `components` data.
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useEscClose } from "../../hooks/use-esc-close";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
 import { useMarketplace, installTrackingKey } from "../../state/marketplace-context";
@@ -19,7 +19,7 @@ import LikeButton from "./LikeButton";
 import { SourceBadge, ScanBadge, AuthorBadge } from "./TrustBadges";
 import { CapabilityList } from "./CapabilityList";
 import FeedbackSection from "./FeedbackSection";
-import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
+import { CATALOG_TYPE_LABEL, isInstallableSource, pluginHasParts } from "../../../shared/catalog-types";
 import FileViewerOverlay, { type FileViewerTarget } from "./FileViewerOverlay";
 // Task 1: an installed item with an update available needs a way to take it —
 // the overlay swapped straight to Uninstall once installed, so the only route
@@ -29,6 +29,11 @@ import { Button, CloseButton, Callout } from "../ui";
 // Task 3: `longDescription` is markdown and used to be printed verbatim, so a
 // listing that wrote "**Heading**" showed the asterisks.
 import MarkdownContent from "../MarkdownContent";
+// T6 (project-plugin-controls): the production "choose your projects" panel,
+// replacing the workbench-only ProjectPluginControlsDemo fixture that used to
+// live here behind a hardcoded fixture id ('youcoded-inbox') and an
+// isWorkbenchMode() gate. This file is production code — no dev/ import.
+import { ProjectSetupPanel } from "./ProjectSetupPanel";
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -46,12 +51,44 @@ interface Props {
   // "Part of …" link, or a bundle's "What's inside" rows. The screen owns
   // the target, so this just swaps it.
   onNavigate?(target: DetailTarget): void;
+  // U2 fix (beta review 2): set by MarketplaceScreen right after a plugin
+  // install completed via the CARD's own install button (grid/rail/search) —
+  // not this overlay's Install button, which has its own onInstall below.
+  // Opens the overlay straight into the "choose your projects" setup state
+  // so a card install reaches the same panel a detail-page install already
+  // did. `null`/absent everywhere else (today's plain view).
+  openSetupFor?: { id: string; displayName: string } | null;
+  // Fires once openSetupFor has been applied, so the parent can clear its
+  // state and this doesn't replay if the same plugin's detail page is opened
+  // again later — same one-shot shape as MarketplaceScreen's own
+  // initialDetailId/onDetailConsumed pair above it.
+  onSetupForConsumed?(): void;
 }
 
 export default function MarketplaceDetailOverlay({
-  target, onClose, onOpenShareSheet, onOpenThemeShare, onNavigate,
+  target, onClose, onOpenShareSheet, onOpenThemeShare, onNavigate, openSetupFor, onSetupForConsumed,
 }: Props) {
   const mp = useMarketplace();
+  // T6: which plugin just finished installing, and its id — drives the
+  // post-install ProjectSetupPanel. null everywhere else (today's view).
+  const [justInstalled, setJustInstalled] = useState<{ id: string; displayName: string } | null>(null);
+  // WHY: the overlay is reused across in-panel navigation (no key), so a
+  // post-install panel from one install must not replay when the user comes
+  // back later (design §5: "resets on target change (targetKey)").
+  const targetKey = target.kind === 'theme' ? `theme:${target.slug}` : `${target.kind}:${target.id}`;
+  useEffect(() => { setJustInstalled(null); }, [targetKey]);
+  // U2 fix: the card-install path (see openSetupFor above) — runs AFTER the
+  // reset above (declaration order), so it applies on top of a fresh
+  // mount/navigation rather than being immediately wiped by it. Guarded on
+  // target.kind === 'skill' so a theme detail opened for some other reason
+  // can never pick up a stale skill's setup state.
+  useEffect(() => {
+    if (openSetupFor && target.kind === 'skill' && target.id === openSetupFor.id) {
+      setJustInstalled(openSetupFor);
+      onSetupForConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- targetKey covers target
+  }, [targetKey, openSetupFor, onSetupForConsumed]);
   // Needed for Apply action and isActive check in ThemeBody
   const { theme: activeThemeSlug, setTheme } = useTheme();
 
@@ -99,7 +136,12 @@ export default function MarketplaceDetailOverlay({
           updateAvailable={!!mp.updateAvailable[target.id]}
           onNavigate={onNavigate}
           memberId={memberId}
-          onInstall={() => mp.installSkill(entry.id).catch(() => undefined)}
+          onInstall={() => mp.installSkill(entry.id).then(() => {
+            // R19/design §5: show the setup panel after a SUCCESSFUL install
+            // of any plugin with skills or tool connections — never a
+            // fixture id, never for a theme or a prompt-only skill.
+            if (pluginHasParts(entry)) setJustInstalled({ id: entry.id, displayName: entry.displayName });
+          }).catch(() => undefined)}
           onUninstall={() => mp.uninstallSkill(entry.id).catch(() => undefined)}
           onToggleFavorite={() => mp.setFavorite(entry.id, !favorited).catch(() => undefined)}
           onShare={onOpenShareSheet ? () => onOpenShareSheet(entry.id) : undefined}
@@ -134,6 +176,19 @@ export default function MarketplaceDetailOverlay({
     }
   }
 
+  // WHY: `justInstalled` outlives a Related-item navigation inside this
+  // overlay (it's not tied to the currently-shown target's own id), but the
+  // targetKey reset effect above clears it the moment the shown target
+  // changes at all — so a plugin's own detail page never keeps showing a
+  // DIFFERENT plugin's setup panel after "What's inside" navigation.
+  const showProjectSetup = !!justInstalled && target.kind === 'skill' && target.id === justInstalled.id;
+  if (showProjectSetup && justInstalled) {
+    content = <div className="mx-auto max-w-[820px] space-y-4">
+      <ProjectSetupPanel pluginId={justInstalled.id} />
+      <div className="flex justify-end"><Button variant="primary" onClick={onClose}>Done</Button></div>
+    </div>;
+  }
+
   return (
     <>
       <Scrim layer={2} onClick={onClose} />
@@ -144,7 +199,7 @@ export default function MarketplaceDetailOverlay({
         className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
       >
         <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
-          <h2 className="text-lg font-semibold text-fg">Details</h2>
+          <h2 className="text-lg font-semibold text-fg">{showProjectSetup && justInstalled ? `Set up ${justInstalled.displayName}` : 'Details'}</h2>
           {/* Wide: Esc-text hint. Narrow: bordered close-X matching the marketplace top bar. */}
           <button
             type="button"

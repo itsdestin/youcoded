@@ -289,3 +289,230 @@ function readFrontmatterDescription(body: string): string | undefined {
   }
   return collected.join(' ').trim() || undefined;
 }
+
+// ---------------------------------------------------------------------------
+// Async twins (T3 review F2, 2026-09-24) — fs.promises versions of the two
+// scans above, byte-for-byte the same discovery/dedupe logic, kept ONLY for
+// project-extensions/ipc-shell.ts's get/set/for-session handlers. WHY a
+// second copy rather than a cache: those three IPC calls fire on every
+// CommandDrawer open and session switch (design §5's useSessionAvailability),
+// and performance rule 1 bans a blocking call on ANY path an IPC call
+// reaches — not just a "frequent" one. A cache keyed by cwd still runs the
+// sync scan on its first read of every cwd and on every invalidation/TTL
+// miss, which is exactly the blocking call this exists to remove; it would
+// also need new invalidation hooks at every skill install/uninstall/import
+// site, each one a place this dedicated path could quietly go stale. An
+// async re-scan is always correct (same fresh read every call, matching the
+// existing sync callers' semantics) and never blocks the main thread. The
+// original sync scanSkills()/scanProjectSkills() stay exactly as they are —
+// their existing callers (native-session-host.ts's create()-time resolution)
+// are already reviewed and allowlisted, and this task's scope is IPC-shell
+// only.
+async function readSkillMetaAsync(skillMdPath: string): Promise<{ name?: string; description?: string }> {
+  try {
+    const raw = await fs.promises.readFile(skillMdPath, 'utf8');
+    const fm = /^---\s*\n([\s\S]*?)\n---/m.exec(raw);
+    if (!fm) return {};
+    const body = fm[1];
+    const name = /^name:\s*["']?([^"'\n]+)["']?\s*$/m.exec(body)?.[1]?.trim();
+    return { name, description: readFrontmatterDescription(body) };
+  } catch { return {}; }
+}
+
+async function readdirSafeAsync(dir: string): Promise<fs.Dirent[]> {
+  try { return await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return []; }
+}
+
+async function existsAsync(p: string): Promise<boolean> {
+  try { await fs.promises.access(p); return true; } catch { return false; }
+}
+
+async function loadCuratedRegistryAsync(): Promise<Record<string, Omit<SkillEntry, 'id'>>> {
+  try {
+    const registryPath = path.join(__dirname, '..', 'renderer', 'data', 'skill-registry.json');
+    return JSON.parse(await fs.promises.readFile(registryPath, 'utf8'));
+  } catch {
+    try {
+      const devPath = path.join(__dirname, '..', '..', 'src', 'renderer', 'data', 'skill-registry.json');
+      return JSON.parse(await fs.promises.readFile(devPath, 'utf8'));
+    } catch {
+      console.warn('[skill-scanner] skill-registry.json not found in prod or dev paths');
+      return {};
+    }
+  }
+}
+
+/** Async twin of scanSkills() — see the block comment above. */
+export async function scanSkillsAsync(): Promise<SkillEntry[]> {
+  const registry = await loadCuratedRegistryAsync();
+  const discoveredIds = new Set<string>();
+  const skills: SkillEntry[] = [];
+
+  function addSkill(
+    id: string,
+    fallbackName: string,
+    fallbackDesc: string,
+    inferredSource: 'youcoded-core' | 'self' | 'project' | 'plugin',
+    pluginName?: string,
+    skillDir?: string,
+  ) {
+    if (discoveredIds.has(id)) return;
+    discoveredIds.add(id);
+
+    const curated = registry[id];
+    if (curated) {
+      skills.push({
+        id,
+        ...curated,
+        type: curated.type || 'plugin',
+        visibility: curated.visibility || 'published',
+        pluginName,
+        skillDir,
+      } as SkillEntry);
+    } else {
+      skills.push({
+        id,
+        displayName: fallbackName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+        description: fallbackDesc || `Run the ${fallbackName} skill`,
+        category: 'other',
+        prompt: `/${id}`,
+        source: inferredSource,
+        type: 'plugin',
+        visibility: 'published',
+        pluginName,
+        skillDir,
+      });
+    }
+  }
+
+  const claudeDir = path.join(os.homedir(), '.claude');
+  const pluginsDir = path.join(claudeDir, 'plugins');
+
+  // ── Pass 1: generic plugin scan ──────────────────────────────────────────
+  try {
+    const pluginEntries = await readdirSafeAsync(pluginsDir);
+    for (const pluginEntry of pluginEntries) {
+      if (!pluginEntry.isDirectory()) continue;
+      const pluginRoot = path.join(pluginsDir, pluginEntry.name);
+      const hasManifest =
+        (await existsAsync(path.join(pluginRoot, 'plugin.json'))) ||
+        (await existsAsync(path.join(pluginRoot, '.claude-plugin', 'plugin.json')));
+      if (!hasManifest) continue;
+
+      const skillsDirPath = path.join(pluginRoot, 'skills');
+      const skillEntries = await readdirSafeAsync(skillsDirPath);
+      for (const e of skillEntries) {
+        if (e.isDirectory() || e.isSymbolicLink()) {
+          const skillId = pluginEntry.name.startsWith('youcoded')
+            ? e.name
+            : `${pluginEntry.name}:${e.name}`;
+          const source = pluginEntry.name.startsWith('youcoded') ? 'youcoded-core' : 'plugin';
+          const skillDir = path.join(skillsDirPath, e.name);
+          const meta = await readSkillMetaAsync(path.join(skillDir, 'SKILL.md'));
+          addSkill(skillId, e.name, meta.description || '', source, pluginEntry.name, skillDir);
+        }
+      }
+    }
+  } catch { /* no plugins dir at all — same fail-open as the sync scan */ }
+
+  // ── Pass 2: installed_plugins.json (CLI-installed plugins) ───────────────
+  try {
+    const installedPath = path.join(pluginsDir, 'installed_plugins.json');
+    const installed = JSON.parse(await fs.promises.readFile(installedPath, 'utf8'));
+    const plugins = installed.plugins || {};
+
+    for (const [pluginKey, versions] of Object.entries(plugins) as Array<[string, any[]]>) {
+      const latest = versions[0];
+      if (!latest?.installPath) continue;
+      const installPath = latest.installPath;
+      const pluginSlug = pluginKey.split('@')[0];
+
+      const skillsDirPath = path.join(installPath, 'skills');
+      const skillEntries = await readdirSafeAsync(skillsDirPath);
+      for (const entry of skillEntries) {
+        if (entry.isDirectory()) {
+          const skillId = `${pluginSlug}:${entry.name}`;
+          const skillDir = path.join(skillsDirPath, entry.name);
+          const meta = await readSkillMetaAsync(path.join(skillDir, 'SKILL.md'));
+          addSkill(skillId, entry.name, meta.description || '', 'plugin', pluginSlug, skillDir);
+        }
+      }
+
+      const commandsDir = path.join(installPath, 'commands');
+      const cmdEntries = await readdirSafeAsync(commandsDir);
+      for (const entry of cmdEntries) {
+        if (entry.isDirectory()) {
+          const cmdId = `${pluginSlug}:${entry.name}`;
+          const cmdDir = path.join(commandsDir, entry.name);
+          const meta = await readSkillMetaAsync(path.join(cmdDir, 'SKILL.md'));
+          addSkill(cmdId, entry.name, meta.description || '', 'plugin', pluginSlug, cmdDir);
+        }
+      }
+    }
+  } catch { /* no installed_plugins.json — same fail-open as the sync scan */ }
+
+  // ── Pass 3: user-authored skills under ~/.claude/skills/ ─────────────────
+  try {
+    const userSkillsDir = path.join(claudeDir, 'skills');
+    const pluginDirEntries = await readdirSafeAsync(pluginsDir);
+    const youcodedCorePluginDirs = pluginDirEntries
+      .filter(d => d.isDirectory() && d.name.startsWith('youcoded'))
+      .map(d => path.join(pluginsDir, d.name));
+
+    for (const entry of await readdirSafeAsync(userSkillsDir)) {
+      if (!entry.isDirectory()) continue;
+      const skillDir = path.join(userSkillsDir, entry.name);
+
+      // Skip symlinks — those are toolkit-managed mirrors (legacy layout).
+      try { if ((await fs.promises.lstat(skillDir)).isSymbolicLink()) continue; } catch { continue; }
+
+      const isToolkitMirror = (await Promise.all(
+        youcodedCorePluginDirs.map((p) => existsAsync(path.join(p, 'skills', entry.name))),
+      )).some(Boolean);
+      if (isToolkitMirror) continue;
+
+      if (discoveredIds.has(entry.name)) continue;
+
+      const meta = await readSkillMetaAsync(path.join(skillDir, 'SKILL.md'));
+      discoveredIds.add(entry.name);
+      skills.push({
+        id: entry.name,
+        displayName: meta.name || entry.name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+        description: meta.description || '',
+        category: 'other',
+        prompt: `/${entry.name}`,
+        source: 'self',
+        type: 'plugin',
+        visibility: 'private',
+        skillDir,
+      });
+    }
+  } catch { /* no ~/.claude/skills at all — same fail-open as the sync scan */ }
+
+  return skills;
+}
+
+/** Async twin of scanProjectSkills() — see the block comment above. */
+export async function scanProjectSkillsAsync(projectCwd: string): Promise<SkillEntry[]> {
+  const projectSkillsDir = path.join(projectCwd, '.claude', 'skills');
+  const skills: SkillEntry[] = [];
+  for (const entry of await readdirSafeAsync(projectSkillsDir)) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(projectSkillsDir, entry.name);
+    const skillFile = path.join(skillDir, 'SKILL.md');
+    if (!(await existsAsync(skillFile))) continue;
+    const meta = await readSkillMetaAsync(skillFile);
+    skills.push({
+      id: entry.name,
+      displayName: meta.name || entry.name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+      description: meta.description || '',
+      category: 'other',
+      prompt: `/${entry.name}`,
+      source: 'project',
+      type: 'plugin',
+      visibility: 'private',
+      skillDir,
+    });
+  }
+  return skills;
+}

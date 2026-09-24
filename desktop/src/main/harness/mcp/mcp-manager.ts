@@ -122,6 +122,25 @@ export class McpManager {
    * is deliberately not the holder key — see McpLease for why that distinction
    * is the whole point.
    *
+   * `allowIds` (project-plugin-controls T2, design §3 "Enforcement"): an
+   * optional per-session allowlist of server ids, applied to
+   * `registry.resolveAllEnabled()` BEFORE this method ever touches
+   * `ensureConnected` — so a server the caller excluded is never connected,
+   * spawned, or added to the shared pool for this lease at all (not merely
+   * hidden from the returned list, the way a broken server is). `undefined`
+   * (every caller before this task, and any session outside a project) keeps
+   * today's behaviour exactly: every enabled server is eligible.
+   *
+   * `preResolved` (T2 review F2 fix): the SAME list a caller already read via
+   * `listEnabled()` to compute `allowIds` in the first place — pass it back
+   * in and this method skips its own `registry.resolveAllEnabled()` call
+   * entirely, rather than re-reading `~/.youcoded/mcp.json` (a synchronous
+   * fs read, performance rule 1) and re-decrypting every enabled server's
+   * secrets a second time on every native session create. `undefined` (every
+   * caller before this fix, and any caller with no availability resolution to
+   * reuse) keeps today's behaviour exactly: a fresh `resolveAllEnabled()`.
+   *
+
    * WHY THERE IS NO RACE MACHINERY HERE ANY MORE. The previous version carried
    * three cooperating mechanisms (an in-flight registration map, a touch
    * sequence number, a set of live acquire tokens) to defend a single leak
@@ -140,10 +159,15 @@ export class McpManager {
    * once. Without it a hung server blocks every server behind it from even
    * beginning to spawn.
    */
-  async acquire(sessionId: string): Promise<McpLease> {
+  async acquire(sessionId: string, allowIds?: Set<string>, preResolved?: ResolvedMcpServer[]): Promise<McpLease> {
     const leaseId = `${sessionId}#${++this.leaseSeq}`;
     try {
-      const servers = await this.registry.resolveAllEnabled();
+      let servers = preResolved ?? await this.registry.resolveAllEnabled();
+      // Filter BEFORE anything below ever sees an excluded server — never a
+      // post-hoc drop from the ready list, which is how a broken server is
+      // handled (that one still gets pooled/logged; this one must not exist
+      // for this lease at all). See this method's own "allowIds" doc above.
+      if (allowIds) servers = servers.filter((s) => allowIds.has(s.id));
       // Pass 1 — registration. ensureConnected() is synchronous (see its own
       // comment), so this maps over every server without yielding, which is
       // what makes every connect() start concurrently rather than in series.
@@ -313,6 +337,23 @@ export class McpManager {
         });
       }
     }
+  }
+
+  /**
+   * The raw enabled-server list (T2, project-plugin-controls) — for a caller
+   * that needs to know WHAT exists (id + origin) before deciding an
+   * `allowIds` set to pass to acquire(), without holding its own reference to
+   * the registry this manager already wraps. Never connects/spawns anything
+   * (same as acquire()'s own pass 1 registration, this only calls through to
+   * `registry.resolveAllEnabled()`) — NativeSessionHost's availability
+   * resolution is the one caller, and it deliberately runs BEFORE acquire().
+   * T2 review fix F2: the caller now threads this SAME resolved list back
+   * into acquire()'s own `preResolved` parameter, so the registry (a
+   * synchronous fs read plus one secrets decrypt per enabled server) is read
+   * exactly once per session create, never twice.
+   */
+  async listEnabled(): Promise<ResolvedMcpServer[]> {
+    return this.registry.resolveAllEnabled();
   }
 
   /** App-quit teardown: close every pooled connection regardless of

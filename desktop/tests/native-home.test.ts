@@ -36,6 +36,23 @@ describe('NativeHome', () => {
     expect(fs.existsSync(path.join(root, '.youcoded', 'providers.json'))).toBe(true);
   });
 
+  // readJsonAsync (project-extensions/store.ts, 2026-09-24): the async twin
+  // must answer identically to the sync readJson — missing file and corrupt
+  // JSON both read as null, never a throw.
+  it('readJsonAsync mirrors readJson: null for missing, round-trips a real write, null for corrupt JSON', async () => {
+    expect(await home.readJsonAsync('providers.json')).toBeNull();
+    await home.writeJson('providers.json', { v: 1, providers: [] });
+    expect(await home.readJsonAsync('providers.json')).toEqual({ v: 1, providers: [] });
+
+    fs.writeFileSync(path.join(root, '.youcoded', 'corrupt.json'), '{not json');
+    expect(await home.readJsonAsync('corrupt.json')).toBeNull();
+  });
+
+  it('readJsonAsync rethrows non-ENOENT I/O errors, same as readJson', async () => {
+    fs.mkdirSync(path.join(root, '.youcoded', 'a-directory.json'), { recursive: true });
+    await expect(home.readJsonAsync('a-directory.json')).rejects.toThrow();
+  });
+
   it('mutateJson applies read-modify-write under the lock', async () => {
     await home.writeJson('providers.json', { v: 1, providers: [] });
     await home.mutateJson('providers.json', (cur: any) => ({ ...cur, providers: [{ id: 'x' }] }));

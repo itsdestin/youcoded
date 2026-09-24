@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
+import { STATUS_DOT_BG, STATUS_PILL_TONE } from './status-color-palette';
 import { Button, Toggle, Tooltip } from './ui';
 import { isAndroid, isRemoteMode } from '../platform';
 import FolderSwitcher from './FolderSwitcher';
@@ -168,17 +169,6 @@ interface Props {
 
 /* ── Status dot color maps ───────────────────────────────── */
 
-const DOT_BG: Record<SessionStatusColor, string> = {
-  green: 'bg-green-400',
-  red: 'bg-red-400',
-  // Amber harmonizes with the buddy AttentionStrip's #f5a623 ("needs
-  // attention" convention). bg-amber-400 (#fbbf24) reads as the same status
-  // across surfaces.
-  amber: 'bg-amber-400',
-  blue: 'bg-blue-400',
-  gray: 'bg-gray-500',
-};
-
 const GLOW_SHADOW: Record<SessionStatusColor, string> = {
   green: '0 0 6px rgba(76,175,80,0.35)',
   red: '0 0 6px rgba(221,68,68,0.35)',
@@ -196,7 +186,7 @@ function SessionDot({ color, isActive }: { color: SessionStatusColor; isActive: 
   return (
     <span className="relative inline-flex items-center justify-center w-2.5 h-2.5 shrink-0">
       <span
-        className={`relative w-2 h-2 rounded-full ${DOT_BG[color]}`}
+        className={`relative w-2 h-2 rounded-full ${STATUS_DOT_BG[color]}`}
         // Perf: steps(8) instead of ease-in-out. This dot breathes whenever the
         // session isn't gray — i.e. for every non-idle session, in the
         // always-visible header — and on a 180Hz panel a smoothly-animating
@@ -213,26 +203,12 @@ function SessionDot({ color, isActive }: { color: SessionStatusColor; isActive: 
 
 /* ── Status pill ─────────────────────────────────────────── */
 
-// P-8 (2026-08-28): the menu used to show the bare dot and nothing else, so the
-// colour was the whole message and you had to remember what amber meant. The
-// pill says it in words. Background and border are the dot's own colour at low
-// strength; the WORD is the theme's text colour, because the dot palette is
-// fixed (bg-green-400 and friends) and a green word on a pale theme measured
-// well under a readable contrast.
-const STATUS_PILL: Record<SessionStatusColor, string> = {
-  green: 'bg-green-400/15 border-green-400/30',
-  red: 'bg-red-400/15 border-red-400/30',
-  amber: 'bg-amber-400/15 border-amber-400/30',
-  blue: 'bg-blue-400/15 border-blue-400/30',
-  gray: 'bg-gray-500/15 border-gray-500/30',
-};
-
 // `label` exists for ONE caller: the mock-up page that shows two candidate
 // wordings side by side. Everywhere in the app it is omitted, so STATUS_LABEL
 // stays the single source of the words.
 export function StatusPill({ color, isActive, label }: { color: SessionStatusColor; isActive: boolean; label?: string }) {
   return (
-    <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border text-4xs leading-none text-fg-2 ${STATUS_PILL[color]}`}>
+    <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border text-4xs leading-none text-fg-2 ${STATUS_PILL_TONE[color]}`}>
       <SessionDot color={color} isActive={isActive} />
       {label ?? STATUS_LABEL[color]}
     </span>

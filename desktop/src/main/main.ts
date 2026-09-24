@@ -38,6 +38,8 @@ import { VITE_DEV_PORT } from '../shared/ports';
 import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/handoff-draft';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
+import { NativeHome } from './native-home';
+import { ensureFeatureFirstRunAt } from './project-extensions/feature-first-run';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
@@ -1822,6 +1824,27 @@ void app.whenReady().then(async () => {
       log('ERROR', 'Main', 'Permission override migration failed', { error: String(e) });
     }
   }
+
+  // Project skills/tools (T6, F1 review fix): record featureFirstRunAt ONCE,
+  // the first time a build with this feature runs on this device — the sole
+  // lower bound the "a marketplace plugin installed after the feature
+  // shipped starts off" rule compares an install against (resolve.ts /
+  // feature-first-run.ts). Runs BEFORE registerIpcHandlers (called inside
+  // createWindow(), further below) so no `project-extensions:get` call or
+  // native session create — the two seed triggers — can race this write.
+  // Deliberately NOT gated on app.isPackaged (unlike the permission-override
+  // migration above): ~/.youcoded/ is the one home NativeHome already shares
+  // between a dev instance and the built app on purpose (store.ts's own
+  // header), so recording this per-device instant here is the same "real
+  // shared state" every other ~/.youcoded/ writer already touches — no
+  // separate dev-vs-built copy would make sense for "when did this feature
+  // first run on this device".
+  try {
+    await ensureFeatureFirstRunAt(new NativeHome());
+  } catch (e) {
+    log('ERROR', 'Main', 'Failed to record featureFirstRunAt — plugin seeding treats it as unknown (everything starts on)', { error: String(e) });
+  }
+  perfMark('main:chore:feature-first-run:done');
 
   try {
     await remoteServer.start();

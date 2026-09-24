@@ -128,6 +128,39 @@ describe('SettingRow structure', () => {
     render(<SettingRow variant="item" title="my-sound.wav" truncateTitle control={<span />} />);
     expect(screen.getByText('my-sound.wav').className).toContain('truncate');
   });
+
+  it('a nav description truncates by default and wraps only when asked (T4 review F2)', () => {
+    // Before `wrapDescription` existed, the only way a caller could win this
+    // was `!whitespace-normal` fighting `truncate`'s equal specificity by
+    // declaration order — which is what forced the design-lint ratchet up.
+    // `wrapDescription` is the supported variant: no caller className at all.
+    render(<SettingRow title="Research Kit" description="A description long enough to need wrapping on a narrow row" control={<span />} />);
+    expect(screen.getByText(/A description long enough/).className).toContain('truncate');
+    cleanup();
+    render(<SettingRow title="Research Kit" description="A description long enough to need wrapping on a narrow row" wrapDescription control={<span />} />);
+    expect(screen.getByText(/A description long enough/).className).not.toContain('truncate');
+  });
+
+  it('`flat` omits the row\'s own background and `bordered` adds the standard ring (T4 review F2)', () => {
+    // Same escape-hatch story as `wrapDescription`: a row nested inside an
+    // already-backgrounded/bordered container used to need a caller
+    // `!bg-transparent` / `border` override to avoid double-painting. Uses
+    // `container` directly rather than the shared `row()` helper — `row()`
+    // finds its element BY `.bg-inset\/50`, which `flat`'s whole point is to
+    // omit.
+    const r1 = render(<SettingRow variant="item" title="A" control={<span />} />);
+    expect((r1.container.firstElementChild as HTMLElement).className).toContain('bg-inset/50');
+    cleanup();
+    const r2 = render(<SettingRow variant="item" title="A" flat control={<span />} />);
+    const flatCls = (r2.container.firstElementChild as HTMLElement).className;
+    expect(flatCls).not.toContain('bg-inset/50');
+    expect(flatCls).not.toContain('border-edge-dim');
+    cleanup();
+    const r3 = render(<SettingRow variant="item" title="A" bordered control={<span />} />);
+    const borderedCls = (r3.container.firstElementChild as HTMLElement).className;
+    expect(borderedCls).toContain('bg-inset/50'); // bordered ADDS to the default surface, doesn't replace it
+    expect(borderedCls).toContain('border-edge-dim');
+  });
 });
 
 // ── The adoption guard ──────────────────────────────────────────────────────

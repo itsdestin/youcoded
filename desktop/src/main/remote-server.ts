@@ -47,6 +47,13 @@ import type { LocalSkillProvider } from './skill-provider';
 import type { SerializedChatState } from '../renderer/state/chat-types';
 import { VITE_DEV_PORT } from '../shared/ports';
 import type { NativeSessionHost } from './harness/native-session-host';
+// T3 (project-plugin-controls) — the one extra service the project-extensions
+// WS cases below need beyond nativeHost: a raw enabled-server read.
+import type { ResolvedMcpServer } from './harness/mcp/types';
+import {
+  projectExtensionsGet, projectExtensionsSet, projectExtensionsForSession,
+  type ProjectExtensionsIpcDeps,
+} from './project-extensions/ipc-shell';
 import type { NativeSendResult, SessionProvider, HookEvent, SpecialistsEvent, ShellEvent } from '../shared/types';
 import type { ProviderRegistry } from './providers/provider-registry';
 import type { ModelCatalog } from './providers/model-catalog';
@@ -347,7 +354,11 @@ export class RemoteServer {
   // field (Plan 2b) — both were added independently on master and this branch.
   // permissionStore (M5 2a) is carried for the READ side only — permissions:list.
   // The two revokes go through nativeHost, which also clears live in-memory state.
-  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null; openRouterSignIn?: OpenRouterSignIn | null } | null = null;
+  // mcpManager (T3, project-plugin-controls): optional + trailing, same
+  // additive convention as every other field here — absent on a bare/older
+  // construction just means the project-extensions WS cases see no MCP
+  // servers, never a crash.
+  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null; openRouterSignIn?: OpenRouterSignIn | null; mcpManager?: { listEnabled(): Promise<ResolvedMcpServer[]> } } | null = null;
   // Plan 2b Task 11: conversation-lease + device wiring, injected by ipc-handlers
   // via setLeaseWiring() AFTER main.ts builds the lease client/requester (they
   // live in the whenReady scope, not reachable at RemoteServer construction).
@@ -439,8 +450,23 @@ export class RemoteServer {
   /** Injected by ipc-handlers after it constructs the native stack, so remote
    *  WS clients reach the SAME nativeHost / providerRegistry / modelCatalog the
    *  Electron IPC handlers use (mirrors setLastTopic / broadcastStatusData). */
-  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null; openRouterSignIn?: OpenRouterSignIn | null }): void {
+  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null; openRouterSignIn?: OpenRouterSignIn | null; mcpManager?: { listEnabled(): Promise<ResolvedMcpServer[]> } }): void {
     this.nativeRuntime = rt;
+  }
+
+  /** T3 (project-plugin-controls) — null exactly when nativeRuntime isn't
+   *  wired yet (same "not connected" gate every other native-backed WS case
+   *  above uses). A fresh NativeHome() per call, same as this file's own
+   *  UpdateSettings construction elsewhere — cheap, and every write goes
+   *  through the shared lock file regardless of which instance issued it. */
+  private projectExtensionsDeps(): ProjectExtensionsIpcDeps | null {
+    if (!this.nativeRuntime) return null;
+    return {
+      nativeHome: new NativeHome(),
+      mcpManager: this.nativeRuntime.mcpManager,
+      skillConfigStore: this.skillProvider?.configStore,
+      nativeSessions: this.nativeRuntime.nativeHost,
+    };
   }
 
   /** Task 5: which Conversation Store bucket a session's meta reads/writes
@@ -2262,6 +2288,33 @@ export class RemoteServer {
           ? await this.nativeRuntime.nativeHost.revokeProject(payload.slug)
           : false;
         this.respond(client.ws, type, id, removed);
+        break;
+      }
+      // Project skills & tools (project-plugin-controls T3) — shared with the
+      // Electron IPC handlers via project-extensions/ipc-shell.ts (same
+      // extraction convention as artifacts:list-projects-index above), so a
+      // remote browser gets the identical view/set/for-session behaviour.
+      // `payload.path`/`payload.sessionId`/`payload.skillMdPath` — object-
+      // wrapped, matching every other remote-shim namespace's convention.
+      case 'project-extensions:get': {
+        const deps = this.projectExtensionsDeps();
+        this.respond(client.ws, type, id, deps ? await projectExtensionsGet(deps, payload.path) : { ok: false, error: 'Native runtime not available.' });
+        break;
+      }
+      case 'project-extensions:set': {
+        const deps = this.projectExtensionsDeps();
+        this.respond(client.ws, type, id, deps ? await projectExtensionsSet(deps, payload.path, payload.changes) : { ok: false, error: 'Native runtime not available.' });
+        break;
+      }
+      case 'project-extensions:for-session': {
+        const deps = this.projectExtensionsDeps();
+        this.respond(client.ws, type, id, deps ? await projectExtensionsForSession(deps, payload.sessionId) : { ok: false, error: 'Native runtime not available.' });
+        break;
+      }
+      case 'project-extensions:import-skill': {
+        // T3 review F1: no legitimate remote caller — a browser has no OS
+        // file picker (design §5). Type string stays wired for parity tests.
+        this.respond(client.ws, type, id, { ok: false, error: 'not-available-over-remote' });
         break;
       }
       // Specialists 1c (Task 8) — mirrors the desktop IPC handlers so a
