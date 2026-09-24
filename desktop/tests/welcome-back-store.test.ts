@@ -129,13 +129,70 @@ describe('createWelcomeBackStore', () => {
       expect(fake.calls.filter((c) => c.startsWith('write:'))).toEqual([]);
     });
 
-    it('a process exit alone (no untrack call) leaves the session tracked', async () => {
-      // This is the whole point of the design: destroySession/session-exit/
-      // crash never call untrack, so the session survives into the next
-      // startup() union as "was open, offer it back".
-      store.track('desktop-1', 'conv-1', 'claude');
+  });
+
+  describe('mutations made before ready resolves', () => {
+    // Every call below happens synchronously right after construction — the
+    // fake's readFile has not yet had a microtask turn to resolve, so these
+    // land while the load is still in flight. Review finding 1: the old
+    // implementation replaced `state` wholesale when the load landed, so a
+    // pre-ready mutation was silently lost (or a stale loaded value came back
+    // to life). These assert the result only AFTER awaiting ready.
+
+    it('a pre-ready track is not lost when the load lands', async () => {
+      const { fs, parsedNow } = createFakeFs();
+      const store = createWelcomeBackStore(FILE, fs);
+      store.track('desktop-1', 'conv-1', 'claude'); // before ready
+      await store.ready;
+      expect(store.offerIds()).toEqual([]); // sanity: open, not offer
       await store.flush();
-      expect(fake.parsedNow().open).toEqual({ 'desktop-1': { conversationId: 'conv-1', provider: 'claude' } });
+      expect(parsedNow().open).toEqual({ 'desktop-1': { conversationId: 'conv-1', provider: 'claude' } });
+    });
+
+    it('a pre-ready track then untrack of the same id cancel out, even when the loaded file disagrees', async () => {
+      const seeded = { version: 1, open: { 'desktop-1': { conversationId: 'stale', provider: 'claude' } }, offer: [] };
+      const { fs, parsedNow } = createFakeFs(JSON.stringify(seeded));
+      const store = createWelcomeBackStore(FILE, fs);
+      store.track('desktop-1', 'conv-1', 'claude'); // before ready
+      store.untrack('desktop-1'); // before ready — cancels the track above
+      await store.ready;
+      // The untrack must win over BOTH the pre-ready track AND whatever the
+      // file said about desktop-1 — it must not be resurrected by the load.
+      expect(store.offerIds()).toEqual([]);
+      await store.flush();
+      expect(parsedNow().open).toEqual({});
+    });
+
+    it('a pre-ready track wins over a stale value the loaded file has for the same desktopId', async () => {
+      const seeded = { version: 1, open: { 'desktop-1': { conversationId: 'stale-conv', provider: 'native' } }, offer: [] };
+      const { fs, parsedNow } = createFakeFs(JSON.stringify(seeded));
+      const store = createWelcomeBackStore(FILE, fs);
+      store.track('desktop-1', 'fresh-conv', 'claude'); // before ready — this is "current"
+      await store.ready;
+      await store.flush();
+      expect(parsedNow().open).toEqual({ 'desktop-1': { conversationId: 'fresh-conv', provider: 'claude' } });
+    });
+
+    it('a pre-ready forget removes an id that only the loaded file knew about', async () => {
+      const seeded = { version: 1, open: {}, offer: [{ conversationId: 'conv-x', provider: 'claude' }] };
+      const { fs, parsedNow } = createFakeFs(JSON.stringify(seeded));
+      const store = createWelcomeBackStore(FILE, fs);
+      store.forget(['conv-x']); // before ready — nothing in memory to remove yet, only the disk copy has it
+      await store.ready;
+      expect(store.offerIds()).toEqual([]);
+      await store.flush();
+      expect(parsedNow().offer).toEqual([]);
+    });
+
+    it('no write happens until after ready resolves, even though a mutation was queued', async () => {
+      const { fs, calls } = createFakeFs();
+      const store = createWelcomeBackStore(FILE, fs);
+      store.track('desktop-1', 'conv-1', 'claude'); // before ready
+      expect(calls.filter((c) => c.startsWith('write:'))).toEqual([]);
+      await store.ready;
+      // The catch-up write happens as part of ready settling — never a
+      // half-loaded snapshot on its own.
+      expect(calls.filter((c) => c.startsWith('write:')).length).toBe(1);
     });
   });
 

@@ -80,6 +80,29 @@ function dedupeByConversationId(entries: WelcomeBackEntry[]): WelcomeBackEntry[]
   return [...seen.values()];
 }
 
+// Pure mutators, shared between "apply now" (already loaded) and "replay onto
+// the just-loaded file" (see the `ready` IIFE below — review 1 finding: a
+// mutation made before the load finished used to be wiped out when the load
+// assigned `state` wholesale). Each is idempotent-shaped (a set or a filter,
+// never an increment), so replaying one that ALSO ran against the pre-load
+// placeholder state is harmless — only the replayed result survives anyway.
+function applyTrack(s: WelcomeBackState, desktopId: string, conversationId: string, provider: WelcomeBackProvider): void {
+  s.open[desktopId] = { conversationId, provider };
+}
+function applyRemap(s: WelcomeBackState, desktopId: string, conversationId: string): void {
+  const existing = s.open[desktopId];
+  if (!existing || existing.conversationId === conversationId) return;
+  s.open[desktopId] = { ...existing, conversationId };
+}
+function applyUntrack(s: WelcomeBackState, desktopId: string): void {
+  delete s.open[desktopId];
+}
+function applyForget(s: WelcomeBackState, ids: string[]): void {
+  if (!ids.length) return;
+  const remove = new Set(ids);
+  s.offer = s.offer.filter((entry) => !remove.has(entry.conversationId));
+}
+
 /** The subset of `fs.promises` this store needs. Callers pass `fs.promises`
  *  itself (structurally compatible); tests pass an in-memory fake. */
 export interface WelcomeBackFs {
@@ -121,6 +144,18 @@ export function createWelcomeBackStore(filePath: string, fs: WelcomeBackFs): Wel
   let state: WelcomeBackState = emptyState();
   const tmpPath = `${filePath}.tmp`;
 
+  // `loaded` is false until the on-disk file has been read and parsed.
+  // track/remap/untrack/forget called before that point must NOT touch
+  // `state` directly — the load is about to overwrite it wholesale — so they
+  // record what they meant to do here instead, and it is replayed ON TOP OF
+  // the loaded state once the load lands (review 1 finding 1: a pre-ready
+  // mutation used to be silently clobbered by the load). Recording the
+  // ORIGINAL call (not a snapshot of `state`) is what makes "current wins"
+  // work: replaying `applyForget(s, ids)` against the real loaded `offer`
+  // removes a match that didn't exist yet in the empty pre-load state.
+  let loaded = false;
+  let pendingOps: Array<(s: WelcomeBackState) => void> = [];
+
   // `tail` orders writes and never rejects, so one failed write can't wedge
   // every later one and can't surface as an unhandled rejection when nobody
   // is awaiting that particular call (track/untrack/remap/forget are
@@ -152,13 +187,27 @@ export function createWelcomeBackStore(filePath: string, fs: WelcomeBackFs): Wel
   }
 
   const ready: Promise<void> = (async () => {
+    let loadedState: WelcomeBackState;
     try {
       const raw = await fs.readFile(filePath, 'utf8');
-      state = parseState(raw);
+      loadedState = parseState(raw);
     } catch {
       // Missing file (first run) or unreadable file — both are "nothing saved".
-      state = emptyState();
+      loadedState = emptyState();
     }
+    // Replay every mutation that arrived while the read above was in flight,
+    // IN CALL ORDER, on top of the file's content — never the other way
+    // around, so a session tracked/untracked/forgotten before the load
+    // finished is never lost or resurrected by stale on-disk content.
+    state = loadedState;
+    for (const apply of pendingOps) apply(state);
+    const hadPendingWrite = pendingOps.length > 0;
+    pendingOps = [];
+    loaded = true;
+    // Only the merged result may ever reach disk — never the loaded snapshot
+    // on its own — so a crash right after startup can't persist a partial
+    // state that forgot what happened before the read resolved.
+    if (hadPendingWrite) await enqueueWrite();
   })();
 
   return {
@@ -175,7 +224,8 @@ export function createWelcomeBackStore(filePath: string, fs: WelcomeBackFs): Wel
     },
 
     track(desktopId, conversationId, provider): void {
-      state.open[desktopId] = { conversationId, provider };
+      if (!loaded) { pendingOps.push((s) => applyTrack(s, desktopId, conversationId, provider)); return; }
+      applyTrack(state, desktopId, conversationId, provider);
       // Fire-and-forget: the returned promise is `tail`-chained and self-caught
       // (see enqueueWrite), so an unawaited call here can never surface as an
       // unhandled rejection — `void` only satisfies the no-floating-promises lint.
@@ -183,16 +233,18 @@ export function createWelcomeBackStore(filePath: string, fs: WelcomeBackFs): Wel
     },
 
     remap(desktopId, conversationId): void {
+      if (!loaded) { pendingOps.push((s) => applyRemap(s, desktopId, conversationId)); return; }
       const existing = state.open[desktopId];
       if (!existing) return; // not tracked — nothing to remap (design §2)
       if (existing.conversationId === conversationId) return; // no change, no write
-      state.open[desktopId] = { ...existing, conversationId };
+      applyRemap(state, desktopId, conversationId);
       void enqueueWrite();
     },
 
     untrack(desktopId): void {
+      if (!loaded) { pendingOps.push((s) => applyUntrack(s, desktopId)); return; }
       if (!(desktopId in state.open)) return;
-      delete state.open[desktopId];
+      applyUntrack(state, desktopId);
       void enqueueWrite();
     },
 
@@ -201,11 +253,12 @@ export function createWelcomeBackStore(filePath: string, fs: WelcomeBackFs): Wel
     },
 
     forget(ids): void {
-      if (!ids.length || !state.offer.length) return;
-      const remove = new Set(ids);
-      const next = state.offer.filter((entry) => !remove.has(entry.conversationId));
-      if (next.length === state.offer.length) return; // nothing matched — no write
-      state.offer = next;
+      if (!ids.length) return;
+      if (!loaded) { pendingOps.push((s) => applyForget(s, ids)); return; }
+      if (!state.offer.length) return;
+      const before = state.offer.length;
+      applyForget(state, ids);
+      if (state.offer.length === before) return; // nothing matched — no write
       void enqueueWrite();
     },
 
