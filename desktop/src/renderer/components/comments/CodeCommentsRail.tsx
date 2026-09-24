@@ -23,7 +23,10 @@ export function CodeCommentsRail({ path, onJumpToLine }: Props) {
   return (
     // pb-48: room to scroll the last card up past the floating Ask/Show
     // resolved buttons (SessionDrawer's bottom-right cluster).
-    <div data-comments-scroller className="w-64 shrink-0 border-l border-edge bg-panel overflow-y-auto p-2 pb-48 flex flex-col gap-2">
+    // data-comments-pane / data-comments-list: measured by ActiveArtifactView
+    // so the floating comment actions line up with these cards.
+    <div data-comments-pane className="w-64 shrink-0 border-l border-edge bg-panel overflow-y-auto">
+    <div data-comments-list className="p-2 pb-48 flex flex-col gap-2">
       {visible.length === 0 && (
         <EmptyState message="No comments on this file yet." variant="inline" />
       )}
@@ -51,6 +54,7 @@ export function CodeCommentsRail({ path, onJumpToLine }: Props) {
           />
         </div>
       ))}
+    </div>
     </div>
   );
 }

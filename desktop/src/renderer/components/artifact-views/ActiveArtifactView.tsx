@@ -104,10 +104,14 @@ export interface CommentsHeaderState {
   /** The full comment column is on screen — Comments mode AND wide enough
    *  for the margin (not collapsed to its marker rail). */
   paneVisible: boolean;
-  /** Width of the scrollbar at the comment column's right edge, in px. The
-   *  host's floating buttons are placed from the pane's right edge, so they
-   *  must step in by this much to line up with the column (round 11). */
-  scrollbarW: number;
+  /** Where the comment cards sit, measured from this view's right edge:
+   *  `actionsRight`/`actionsWidth` line the floating comment actions up with
+   *  the cards; `paneLeft` is the comment pane's outer left edge, so
+   *  Comments/Edit can clear it. Measured rather than assumed because the
+   *  pane's framing (round 15), its scrollbar and its padding all move them. */
+  actionsRight: number;
+  actionsWidth: number;
+  paneLeft: number;
 }
 
 /** Metadata from the artifacts:get response that content alone cannot carry —
@@ -593,33 +597,41 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // it — Comments mode hides resolved by default, and jumping to a thread
   // nobody can see would look like the link did nothing.
   const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(artifact.path);
-  // Round 11 (Destin: "the spacing/centering of these buttons looks odd
-  // because of the scrollbar"): the comment column sits LEFT of the
-  // document's scrollbar, but the host places its floating buttons from the
-  // pane's right edge — so they sat one scrollbar-width too far right. Measure
-  // the real scrollbar (0 where scrollbars overlay, ~10px on a classic one)
-  // and report it. A ResizeObserver catches it appearing: when content starts
-  // to overflow, the scroller's content box narrows by the scrollbar's width.
-  const [scrollbarW, setScrollbarW] = useState(0);
+  // Rounds 11 + 15: measure where the comment cards actually are. The host
+  // positions its floating buttons from this view's right edge, and the
+  // cards' distance from that edge depends on the pane's framing, its
+  // padding and whether its list shows a scrollbar — so it is measured, not
+  // assumed. [data-comments-list] is the padded card list (cards sit 8px
+  // inside it; its box already excludes the list's own scrollbar);
+  // [data-comments-pane] is the pane's outer edge.
+  const [paneGeom, setPaneGeom] = useState({ actionsRight: 8, actionsWidth: 240, paneLeft: 256 });
   useEffect(() => {
     if (commentsMode !== 'comments') return;
     const root = rootRef.current;
     let ro: ResizeObserver | null = null;
-    // The scroller mounts with the viewer (a lazy chunk), so look for it on
-    // the next frame rather than in this pass.
+    // The pane mounts with the viewer (a lazy chunk): look on the next frame.
     const raf = requestAnimationFrame(() => {
-      const el = root?.querySelector<HTMLElement>('[data-comments-scroller]');
-      if (!el) return;
+      const list = root?.querySelector<HTMLElement>('[data-comments-list]');
+      const pane = root?.querySelector<HTMLElement>('[data-comments-pane]');
+      if (!root || !list || !pane) return;
       const measure = () => {
-        const w = el.offsetWidth - el.clientWidth;
-        setScrollbarW((cur) => (cur === w ? cur : w));
+        const r = root.getBoundingClientRect();
+        const l = list.getBoundingClientRect();
+        const p = pane.getBoundingClientRect();
+        const next = {
+          actionsRight: Math.round(r.right - (l.right - 8)),
+          actionsWidth: Math.round(l.width - 16),
+          paneLeft: Math.round(r.right - p.left),
+        };
+        setPaneGeom((cur) => (cur.actionsRight === next.actionsRight && cur.actionsWidth === next.actionsWidth && cur.paneLeft === next.paneLeft ? cur : next));
       };
       measure();
       ro = new ResizeObserver(measure);
-      ro.observe(el);
+      ro.observe(root);
+      ro.observe(list);
     });
     return () => { cancelAnimationFrame(raf); ro?.disconnect(); };
-  }, [commentsMode, artifact.id, showCodeRail]);
+  }, [commentsMode, artifact.id, showCodeRail, narrowPane]);
 
   // Round 4 (Destin): the Comments button lives in the host's header icon
   // row "alongside the other actions" — same imperative-handle + state
@@ -629,8 +641,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     // the same 640px pane width narrowPane measures here; the code rail is
     // always full width.
     const paneVisible = commentsMode === 'comments' && showComments && (showCodeRail || !narrowPane);
-    onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: pathComments.length, paneVisible, scrollbarW });
-  }, [showComments, showCodeRail, narrowPane, commentsMode, pathComments.length, scrollbarW, onCommentsStateChange]);
+    onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: pathComments.length, paneVisible, ...paneGeom });
+  }, [showComments, showCodeRail, narrowPane, commentsMode, pathComments.length, paneGeom, onCommentsStateChange]);
   const openComments = useCallback((commentId?: string) => {
     if (commentId) {
       if (pathComments.find((c) => c.id === commentId)?.resolved) setPathShowResolved(true);

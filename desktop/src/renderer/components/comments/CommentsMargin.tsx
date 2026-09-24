@@ -12,6 +12,8 @@ import { CheckIcon } from '../Icons';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { CloseButton } from '../ui/CloseButton';
 import { EmptyState } from '../ui/states';
+import { Button } from '../ui/Button';
+import { readPaneVariant } from './pane-variant';
 import { useDocComments, type DocComment } from '../../state/doc-comments-store';
 // Round 2: mark-wrapping moved to a shared hook — ReadingHighlights (Reading
 // mode) needs the identical highlight, and the two modes are mutually
@@ -106,7 +108,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   // "Show resolved" toggle's UI and the header's count reads the same store,
   // so all of them share ONE boolean without threading it through
   // ActiveArtifactView.
-  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path);
+  const { comments, focusId, showResolved, setShowResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path);
   const visible = useMemo(
     () => comments.filter((c) => showResolved || !c.resolved).sort((a, b) => a.createdAt - b.createdAt),
     [comments, showResolved],
@@ -224,42 +226,79 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
     );
   }
 
-  return (
-    // Its own scroller (MarkdownView renders it BESIDE the document's
-    // scroller, not inside it): with cards no longer tied to their
-    // highlights, scrolling the document must not carry the list away.
-    // data-comments-scroller: ActiveArtifactView measures this scrollbar so
-    // the floating comment actions line up with the cards. pb-28: room to
-    // scroll the last card up past those floating actions.
-    <div ref={marginRef} data-comments-scroller className="w-64 shrink-0 border-l border-edge bg-panel overflow-y-auto">
-      <div className="flex flex-col gap-2 p-2 pb-28">
-        {ordered.length === 0 && <EmptyState message="No comments on this file yet." variant="inline" />}
-        {ordered.map((c) => (
-          <div
-            key={c.id}
-            ref={(el) => { if (el) cardRefs.current.set(c.id, el); else cardRefs.current.delete(c.id); }}
-            // Clicking a card's background focuses its highlight; clicks on
-            // the card's own controls (reply, send, resolve) are left alone.
-            onClick={(e) => {
-              if ((e.target as HTMLElement).closest('button, input, textarea')) return;
-              focusThread(c.id);
-            }}
-            className={`rounded-lg cursor-pointer transition-shadow ${c.id === litId ? 'ring-2 ring-accent/60' : ''}`}
-            onMouseEnter={() => setActiveId(c.id)}
-            onMouseLeave={() => setActiveId((cur) => (cur === c.id ? null : cur))}
-          >
-            <CommentCard
-              comment={c}
-              autoFocus={c.id === focusId}
-              onTextChange={(t) => setCommentText(c.id, t)}
-              onReply={(t) => addReply(c.id, 'user', t)}
-              onResolve={() => resolveComment(c.id, 'user')}
-              onReopen={() => reopenComment(c.id)}
-              onDelete={() => removeComment(c.id)}
-            />
-          </div>
-        ))}
-      </div>
+  const variant = readPaneVariant();
+  const resolvedCount = comments.filter((c) => c.resolved).length;
+  const list = (
+    // data-comments-list: ActiveArtifactView measures this box to line the
+    // floating comment actions up with the cards, whatever the framing.
+    // pb-28: room to scroll the last card up past those floating actions.
+    <div data-comments-list className="flex flex-col gap-2 p-2 pb-28">
+      {ordered.length === 0 && <EmptyState message="No comments on this file yet." variant="inline" />}
+      {ordered.map((c) => (
+        <div
+          key={c.id}
+          ref={(el) => { if (el) cardRefs.current.set(c.id, el); else cardRefs.current.delete(c.id); }}
+          // Clicking a card's background focuses its highlight; clicks on
+          // the card's own controls (reply, send, resolve) are left alone.
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest('button, input, textarea')) return;
+            focusThread(c.id);
+          }}
+          className={`rounded-lg cursor-pointer transition-shadow ${c.id === litId ? 'ring-2 ring-accent/60' : ''}`}
+          onMouseEnter={() => setActiveId(c.id)}
+          onMouseLeave={() => setActiveId((cur) => (cur === c.id ? null : cur))}
+        >
+          <CommentCard
+            comment={c}
+            autoFocus={c.id === focusId}
+            onTextChange={(t) => setCommentText(c.id, t)}
+            onReply={(t) => addReply(c.id, 'user', t)}
+            onResolve={() => resolveComment(c.id, 'user')}
+            onReopen={() => reopenComment(c.id)}
+            onDelete={() => removeComment(c.id)}
+          />
+        </div>
+      ))}
     </div>
+  );
+
+  // The list is its own scroller in every framing (MarkdownView renders it
+  // BESIDE the document's scroller): with cards no longer tied to their
+  // highlights, scrolling the document must not carry the list away.
+  // data-comments-pane: the framing's outer edge, measured by
+  // ActiveArtifactView so Comments/Edit clear it.
+  if (variant === 'sheet') {
+    return (
+      <div ref={marginRef} data-comments-pane className="w-64 shrink-0 p-2">
+        <div className="h-full rounded-xl border border-edge bg-panel overflow-y-auto">{list}</div>
+      </div>
+    );
+  }
+  if (variant === 'margin') {
+    return (
+      <div ref={marginRef} data-comments-pane className="w-64 shrink-0 overflow-y-auto">{list}</div>
+    );
+  }
+  if (variant === 'titled') {
+    return (
+      <div ref={marginRef} data-comments-pane className="w-64 shrink-0 border-l border-edge bg-panel flex flex-col">
+        {/* The Session Files pane's title row (SessionDrawer.tsx): same
+            padding, border and title weight; the count is G-19's
+            "label + muted numeral". Show resolved moves up here, so only Ask
+            Your Assistant floats at the bottom in this framing. */}
+        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-edge shrink-0">
+          <span className="font-semibold text-sm">Comments <span className="font-normal text-fg-muted">{visible.filter((c) => !c.resolved).length}</span></span>
+          {resolvedCount > 0 && (
+            <Button variant="ghost" size="sm" aria-pressed={showResolved} onClick={() => setShowResolved(!showResolved)}>
+              {showResolved ? 'Hide resolved' : 'Show resolved'} <span className="text-fg-muted">{resolvedCount}</span>
+            </Button>
+          )}
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto">{list}</div>
+      </div>
+    );
+  }
+  return (
+    <div ref={marginRef} data-comments-pane className="w-64 shrink-0 border-l border-edge bg-panel overflow-y-auto">{list}</div>
   );
 }

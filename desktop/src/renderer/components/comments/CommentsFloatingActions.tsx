@@ -42,7 +42,7 @@ function useSendOpenComments(path: string) {
   return { openCount: open.length, send };
 }
 
-export function CommentsFloatingActions({ path }: { path: string }) {
+export function CommentsFloatingActions({ path, withShowResolved = true }: { path: string; withShowResolved?: boolean }) {
   const { comments, showResolved, setShowResolved } = useDocComments(path);
   const { openCount, send } = useSendOpenComments(path);
   const resolvedCount = comments.filter((c) => c.resolved).length;
@@ -58,7 +58,7 @@ export function CommentsFloatingActions({ path }: { path: string }) {
   // never an accent badge (G-8).
   return (
     <div className="flex flex-col gap-2 w-full">
-      {resolvedCount > 0 && (
+      {withShowResolved && resolvedCount > 0 && (
         // `raised` (solid panel fill + edge border) — the primitive's variant
         // for a control that sits ON other content. Round 8: `secondary` is
         // transparent/outlined, so floating over a card it read as a hole.

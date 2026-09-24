@@ -18,6 +18,7 @@ import { gitFooterState } from '../utils/git-footer';
 import { ActiveArtifactView, type ActiveArtifactHandle, type CommentsHeaderState } from './artifact-views/ActiveArtifactView';
 import { MenuIcon } from './context-menu/menu-icons';
 import { CommentsFloatingActions } from './comments/CommentsFloatingActions';
+import { readPaneVariant } from './comments/pane-variant';
 import SessionPreviewPane from './SessionPreviewPane';
 // 6b: COPY was originally added ONLY for the "Referenced
 // conversations" list block below (a cut candidate — see Task 6 brief 6b).
@@ -424,7 +425,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // this ref + mirrors its state so the toolbar can swap pencil ↔ save/cancel.
   const editRef = useRef<ActiveArtifactHandle>(null);
   const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean }>({ isEditable: false, editing: false });
-  const [commentsState, setCommentsState] = useState<CommentsHeaderState>({ available: false, active: false, count: 0, paneVisible: false, scrollbarW: 0 });
+  const [commentsState, setCommentsState] = useState<CommentsHeaderState>({ available: false, active: false, count: 0, paneVisible: false, actionsRight: 8, actionsWidth: 240, paneLeft: 256 });
   // Entering Comments mode folds the file list away however it was entered
   // (the Comments button, clicking a highlight, a sent pill) — the floating
   // comment actions share Edit's hide-while-the-list-is-open rule, so with the
@@ -1303,10 +1304,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   only while the full column is on screen — not with the file
                   list's pop-in rule, and not over the collapsed marker rail. */}
               {active && commentsState.paneVisible && (
-                // right = the cards' 8px inset + the comment list's own
-                // scrollbar, when it has one (measured, rounds 11/13).
-                <div className="absolute bottom-9 w-60 z-20 pointer-events-none" style={{ right: 8 + commentsState.scrollbarW }}>
-                  <CommentsFloatingActions path={active.path} />
+                // Lined up with the cards' measured edges (ActiveArtifactView,
+                // rounds 11/15) — right for every pane framing and scrollbar.
+                <div className="absolute bottom-9 z-20 pointer-events-none" style={{ right: commentsState.actionsRight, width: commentsState.actionsWidth }}>
+                  <CommentsFloatingActions path={active.path} withShowResolved={readPaneVariant() !== 'titled'} />
                 </div>
               )}
               {active && (
@@ -1319,12 +1320,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   {/* Comments + Edit sit over the DOCUMENT: in Comments mode they
                       move left past the 256px comment column (right-68 = 16px
                       clearance + 256px), otherwise their usual 16px from the edge. */}
-                  {/* In Comments mode: 16px clear of the 256px column. Round 13:
-                      the column is at the pane's right edge with its OWN
-                      scrollbar inside it, so no scrollbar offset here. */}
+                  {/* In Comments mode: 16px clear of the comment pane's measured
+                      left edge (rounds 13/15). */}
                   <div
                     className="absolute bottom-0 flex items-center gap-2"
-                    style={{ right: commentsState.paneVisible ? 272 : 16 }}
+                    style={{ right: commentsState.paneVisible ? commentsState.paneLeft + 16 : 16 }}
                   >
                   {commentsState.available && !editState.editing && (
                     <CommentsBtn
