@@ -39,20 +39,90 @@ const MARK_RESOLVED = 'bg-fg-muted/10 text-fg-muted rounded-sm cursor-pointer un
 // cheaper fix here since this is one property, not a whole conflict table).
 export const ACTIVE_CLASSES = ['!bg-accent/30'];
 
+/** One point in the document text: a text node and a character offset in it. */
+interface TextPoint { node: Text; offset: number }
+
 /**
- * Wraps each visible comment's quote text in a `<mark>` inside `container`,
- * best-effort first-occurrence matching — the same caveat build-menu.ts's
- * describeArtifactSelection documents for source citing: a quote that recurs
- * earlier in the document, or that crosses an inline-formatting boundary,
- * may miss or land on the wrong occurrence. The card/hover-card still
- * renders either way; only the in-text highlight and vertical alignment
- * (Comments mode's margin) depend on it.
+ * Finds `quote` in `root`'s text even when it spans several text nodes.
+ *
+ * WHY whitespace-free matching across ALL text nodes (Destin, round 3: "the
+ * tinted highlight … isn't even appearing" for comments he left on another
+ * file): the earlier version searched ONE text node at a time, so it only
+ * ever matched quotes that sat inside a single run of plain text. The seeded
+ * fixture quotes were written that way; a real selection almost never is —
+ * it crosses a **bold** word, a link, a list item or a paragraph break, and
+ * `selection.toString()` then carries newlines the DOM's text nodes don't
+ * have (or vice versa). Stripping whitespace on both sides and walking a
+ * character→node index makes those selections match. Mockup-grade anchoring;
+ * the real build stores prefix/suffix context (Web Annotation's
+ * TextQuoteSelector) so a repeated phrase lands on the right occurrence.
+ */
+function findQuote(root: HTMLElement, quote: string): { start: TextPoint; end: TextPoint } | null {
+  const needle = quote.replace(/\s+/g, '');
+  if (!needle) return null;
+  const points: TextPoint[] = [];
+  let compact = '';
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+    const text = n.data;
+    for (let i = 0; i < text.length; i++) {
+      if (/\s/.test(text[i])) continue;
+      compact += text[i];
+      points.push({ node: n, offset: i });
+    }
+  }
+  const idx = compact.indexOf(needle);
+  if (idx === -1) return null;
+  const last = points[idx + needle.length - 1];
+  return { start: points[idx], end: { node: last.node, offset: last.offset + 1 } };
+}
+
+/** Wraps [start, end) in one `<mark>` per text node it touches. */
+function wrapSegments(root: HTMLElement, start: TextPoint, end: TextPoint, make: () => HTMLElement): HTMLElement[] {
+  // Collect the text nodes first — splitting them while a TreeWalker is
+  // mid-walk would make it skip or revisit nodes.
+  const nodes: Text[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let inside = false;
+  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+    if (n === start.node) inside = true;
+    if (inside) nodes.push(n);
+    if (n === end.node) break;
+  }
+  const out: HTMLElement[] = [];
+  for (const node of nodes) {
+    const from = node === start.node ? start.offset : 0;
+    const to = node === end.node ? end.offset : node.data.length;
+    // WHY skip whitespace-only pieces: the "\n" text nodes React leaves
+    // between paragraphs/list items would otherwise become stray tinted
+    // blobs in the gaps between blocks.
+    if (!node.data.slice(from, to).trim()) continue;
+    let target = node;
+    if (to < target.data.length) target.splitText(to);
+    if (from > 0) target = target.splitText(from);
+    const mark = make();
+    target.parentNode?.insertBefore(mark, target);
+    mark.appendChild(target);
+    out.push(mark);
+  }
+  return out;
+}
+
+/**
+ * Wraps each visible comment's quote text in `<mark>`s inside `container` —
+ * one per text node the quote touches, all sharing `data-comment-id`, so a
+ * quote spanning bold text, links or several paragraphs still highlights as
+ * one comment. Returns every segment per comment; callers use `[0]` for
+ * position/scrolling and wire hover/active state on all of them.
+ * First-occurrence matching: a phrase that also appears earlier in the
+ * document lands on that earlier copy (see findQuote's WHY). The card and
+ * hover-card still render either way.
  */
 export function useQuoteMarks(
   containerRef: RefObject<HTMLElement | null>,
   comments: DocComment[],
-): Map<string, HTMLElement> {
-  const [marks, setMarks] = useState<Map<string, HTMLElement>>(new Map());
+): Map<string, HTMLElement[]> {
+  const [marks, setMarks] = useState<Map<string, HTMLElement[]>>(new Map());
   useLayoutEffect(() => {
     const root = containerRef.current;
     if (!root) {
@@ -65,33 +135,31 @@ export function useQuoteMarks(
       el.replaceWith(document.createTextNode(el.textContent ?? ''));
     });
     root.normalize();
-    const found = new Map<string, HTMLElement>();
+    const found = new Map<string, HTMLElement[]>();
     for (const c of comments) {
-      const quote = c.quote.trim();
-      if (!quote) continue;
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const text = node.textContent ?? '';
-        const idx = text.indexOf(quote);
-        if (idx === -1) continue;
-        const range = document.createRange();
-        range.setStart(node, idx);
-        range.setEnd(node, idx + quote.length);
+      const hit = findQuote(root, c.quote);
+      if (!hit) continue;
+      const segs = wrapSegments(root, hit.start, hit.end, () => {
         const mark = document.createElement('mark');
         mark.setAttribute(MARK_ATTR, '');
         mark.setAttribute('data-comment-id', c.id);
         mark.className = c.resolved ? MARK_RESOLVED : MARK_OPEN;
-        try {
-          range.surroundContents(mark);
-          found.set(c.id, mark);
-        } catch {
-          // Selection crosses an element boundary (bold/link mid-quote) —
-          // skip the highlight; the card still renders in the margin/hover-card.
-        }
-        break;
-      }
+        return mark;
+      });
+      if (segs.length) found.set(c.id, segs);
     }
     setMarks(found);
   }, [containerRef, comments]);
   return marks;
+}
+
+/** One rect spanning every segment — anchors hover cards below the WHOLE
+ *  quote, not just its first line. */
+export function segmentsRect(segs: HTMLElement[]): DOMRect {
+  const rects = segs.map((s) => s.getBoundingClientRect());
+  const left = Math.min(...rects.map((r) => r.left));
+  const top = Math.min(...rects.map((r) => r.top));
+  const right = Math.max(...rects.map((r) => r.right));
+  const bottom = Math.max(...rects.map((r) => r.bottom));
+  return new DOMRect(left, top, right - left, bottom - top);
 }

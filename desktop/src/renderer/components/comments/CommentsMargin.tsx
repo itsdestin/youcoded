@@ -42,7 +42,7 @@ function estimateHeight(c: DocComment, narrow: boolean): number {
  *  getBoundingClientRect deltas stay correct at any scroll position without
  *  a scroll listener of our own. */
 function useAnchorTops(
-  marks: Map<string, HTMLElement>,
+  marks: Map<string, HTMLElement[]>,
   marginRef: React.RefObject<HTMLElement | null>,
   containerRef: React.RefObject<HTMLElement | null>,
 ): Map<string, number> {
@@ -53,8 +53,8 @@ function useAnchorTops(
     const measure = () => {
       const colTop = col.getBoundingClientRect().top;
       const next = new Map<string, number>();
-      for (const [id, mark] of marks) {
-        next.set(id, Math.max(0, mark.getBoundingClientRect().top - colTop));
+      for (const [id, segs] of marks) {
+        next.set(id, Math.max(0, segs[0].getBoundingClientRect().top - colTop));
       }
       setTops(next);
     };
@@ -117,7 +117,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   const [openId, setOpenId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
 
-  const jump = (id: string) => marks.get(id)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const jump = (id: string) => marks.get(id)?.[0]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 
   useEffect(() => {
     if (!openThreadId || !marks.has(openThreadId)) return;
@@ -132,7 +132,8 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   // listener pair per mark, since <mark> lives outside React's tree.
   useEffect(() => {
     const offs: Array<() => void> = [];
-    for (const [id, mark] of marks) {
+    // Every segment of a multi-node quote links to the same card.
+    for (const [id, segs] of marks) for (const mark of segs) {
       const enter = () => setActiveId(id);
       const leave = () => setActiveId((cur) => (cur === id ? null : cur));
       const click = () => jump(id);
@@ -150,7 +151,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   }, [marks]);
 
   useEffect(() => {
-    for (const [id, mark] of marks) {
+    for (const [id, segs] of marks) for (const mark of segs) {
       ACTIVE_CLASSES.forEach((cls) => mark.classList.toggle(cls, id === activeId));
     }
   }, [marks, activeId]);

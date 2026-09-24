@@ -22,7 +22,7 @@ import { HighlightHoverCard } from './HighlightHoverCard';
 import { NewCommentPopover } from './NewCommentPopover';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import { buildContextMenu, type MenuEntry } from '../context-menu/build-menu';
-import { useQuoteMarks, ACTIVE_CLASSES } from './use-quote-marks';
+import { useQuoteMarks, ACTIVE_CLASSES, segmentsRect } from './use-quote-marks';
 import { useDocComments } from '../../state/doc-comments-store';
 
 // Hover-card open delay + close grace period (item 3): a highlight answering
@@ -82,13 +82,15 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
   // touched it (a resolved-state class comes from use-quote-marks either way).
   useEffect(() => {
     const offs: Array<() => void> = [];
-    for (const [id, mark] of marks) {
+    // A quote spanning several text nodes has several <mark> segments —
+    // every one of them must open the same card (see use-quote-marks.ts).
+    for (const [id, segs] of marks) for (const mark of segs) {
       const enter = () => {
         clearCloseTimer();
         clearOpenTimer();
         openTimerRef.current = window.setTimeout(() => {
           setHoveredId(id);
-          setCardRect(mark.getBoundingClientRect());
+          setCardRect(segmentsRect(segs));
         }, HOVER_OPEN_MS);
       };
       const leave = () => {
@@ -96,7 +98,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
         scheduleClose();
       };
       const click = () => {
-        setCardRect(mark.getBoundingClientRect());
+        setCardRect(segmentsRect(segs));
         setPinnedId((cur) => (cur === id ? null : id));
       };
       mark.addEventListener('mouseenter', enter);
@@ -116,7 +118,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
   }, [marks]);
 
   useEffect(() => {
-    for (const [id, mark] of marks) {
+    for (const [id, segs] of marks) for (const mark of segs) {
       ACTIVE_CLASSES.forEach((cls) => mark.classList.toggle(cls, id === activeId));
     }
   }, [marks, activeId]);
@@ -129,10 +131,10 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
     const listener = (e: Event) => {
       const commentId = (e as CustomEvent<{ commentId?: string }>).detail?.commentId;
       if (!commentId) return;
-      const mark = marks.get(commentId);
-      if (!mark) return;
-      mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      setCardRect(mark.getBoundingClientRect());
+      const segs = marks.get(commentId);
+      if (!segs) return;
+      segs[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+      setCardRect(segmentsRect(segs));
       setPinnedId(commentId);
     };
     window.addEventListener('youcoded:jump-to-ref', listener);
