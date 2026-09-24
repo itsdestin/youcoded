@@ -1207,7 +1207,11 @@ export class PlanExecutor implements PlanExecutorHooks {
       })();
       await child.commit;
       if (!invalid) return 'done';
-      if (run.halt || invalid.kind !== 'pause') { this.requestHalt(run, invalid); return 'done'; }
+      // WHY (T2 review S1): only an INVALID REPORT earns the automatic
+      // report-only retry. A pause for any other reason — e.g. the spend
+      // record couldn't be saved (PLAN_PROGRESS_NOT_SAVED) — must pause for
+      // the user as-is, never be fed back to the specialist as "feedback".
+      if (run.halt || invalid.kind !== 'pause' || invalid.why !== 'invalid-report') { this.requestHalt(run, invalid); return 'done'; }
       try {
         const next = await this.reportOnlyRetry(run, step, wave, child, invalid, finalLeaf);
         if (next === undefined) return 'done';

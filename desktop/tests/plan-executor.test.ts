@@ -221,6 +221,29 @@ describe('waves', () => {
     expect(runner.live).toBe(0);
   });
 
+  // T2 review S1: a spend record that couldn't be saved is a pause for the
+  // USER — never mistaken for an invalid report and auto-retried with an
+  // internal error fed back to the specialist as "feedback".
+  it('a failed spend write pauses the plan and never launches a report-only retry', async () => {
+    const runner = new FakeRunner(() => async (ctx) => {
+      ctx.launch.markWriteFailed();
+      return completes(`report ${ctx.launch.brief}`)(ctx);
+    });
+    runner.cap = 1;
+    const doc: PlanDocumentV1 = { goal: 'one', steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a', 'b'] },
+    ] };
+    const fence = await seed(record(doc));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    expect(p.status).toBe('paused');
+    expect(p.paused).toMatchObject({ kind: 'unexpected-error' });
+    expect(p.recoveries ?? []).toEqual([]);
+    expect(runner.launches).toHaveLength(1);
+  });
+
   it('a resolved cap below four narrows the waves', async () => {
     const runner = new FakeRunner(() => completes('ok'));
     runner.cap = 2;

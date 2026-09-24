@@ -204,3 +204,15 @@ describe('PlanSpend', () => {
     expect(p.usedTokens).toBe(billedEquivalentTokens(usage) * 3);
   });
 });
+
+// T2 review S2: the formula itself, pinned with literal numbers (never by
+// calling the function under test). inputTokens is the WHOLE prompt, cache
+// reads and writes included: 10,000 in = 1,500 uncached + 2,000 written +
+// 6,500 read back. Billed-equivalent = 1,500 + 2,000 + 400 out + ceil(650).
+describe('billedEquivalentTokens', () => {
+  it('counts uncached input, cache writes and output in full, cache reads at a tenth (rounded up)', () => {
+    expect(billedEquivalentTokens({ inputTokens: 10_000, outputTokens: 400, cacheReadTokens: 6_500, cacheCreationTokens: 2_000 })).toBe(4_550);
+    expect(billedEquivalentTokens({ inputTokens: 5, outputTokens: 0, cacheReadTokens: 5, cacheCreationTokens: 0 })).toBe(1);
+    expect(billedEquivalentTokens({ inputTokens: 1_000, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 })).toBe(1_050);
+  });
+});
