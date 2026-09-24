@@ -97,6 +97,10 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
   // was refused, why. While sending, every button is disabled: a second click
   // would start a second, interleaved cursor walk.
   const [sending, setSending] = useState(false);
+  // The guard itself is a ref, not the state: two activations in one frame
+  // (a click and an Enter, or a double click) both run before React re-renders
+  // with `sending` true, and each would start its own cursor walk.
+  const sendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
@@ -110,19 +114,21 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
         return;
       }
       setConfirmIdx(-1);
-      if (sending) return;
+      if (sendingRef.current) return;
       const outcome = onSelect(button, button.label);
       if (outcome && typeof (outcome as Promise<PromptAnswerResult>).then === 'function') {
+        sendingRef.current = true;
         setSending(true);
         setError(null);
         void (outcome as Promise<PromptAnswerResult>).then((r) => {
+          sendingRef.current = false;
           if (!mounted.current) return;
           setSending(false);
           if (!r.ok) setError(PROMPT_FAILURE_COPY[r.reason]);
         });
       }
     },
-    [buttons, confirmIdx, onSelect, sending],
+    [buttons, confirmIdx, onSelect],
   );
 
   // Keyboard: arrows rove, Enter activates, 1–9 pick directly. Window-level and

@@ -116,6 +116,7 @@ import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
 import { attachStartupDialogLog } from './startup-dialog-log';
+import { menuAnswerLock } from './menu-answer-lock';
 import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus, clearWorkspaceSetupStatus } from './dev-tools';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost } from './update-installer';
 import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
@@ -4274,6 +4275,7 @@ export function registerIpcHandlers(
     catch { return 'claude'; }
   };
 
+  ipcMain.handle(IPC.SESSION_MENU_LOCK, (_e, sid: string, holder: string, action: string) => menuAnswerLock.handle(sid, holder, action));
   ipcMain.handle(IPC.SESSION_SET_FLAG, async (_event, sessionId: string, flag: string, value: boolean) => {
     if (!SESSION_FLAG_NAMES.includes(flag as SessionFlagName)) {
       return { ok: false, error: `unknown flag: ${flag}` };

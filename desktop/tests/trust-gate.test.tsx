@@ -33,7 +33,7 @@ vi.mock('../src/renderer/state/chat-context', () => ({
 }));
 
 import TrustGate, { useTrustGateActive, usePendingPromptActive } from '../src/renderer/components/TrustGate';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 
 function promptEntry(title: string, completed: string | false = false) {
   return {
@@ -113,5 +113,39 @@ describe('usePendingPromptActive', () => {
   it('is false once it is answered', () => {
     mocks.state.timeline = [promptEntry('Skip Permissions Warning', 'Yes, I accept')];
     expect(renderHook(() => usePendingPromptActive('s1')).result.current).toBe(false);
+  });
+});
+
+describe('TrustGate — one answer at a time', () => {
+  const trust = () => ({
+    kind: 'prompt',
+    prompt: {
+      promptId: 'p1', title: 'Trust This Folder?', completed: false,
+      buttons: [
+        { label: 'No, exit', input: '', pick: { signature: 'sig', index: 0 } },
+        { label: 'Yes, I trust this folder', input: '', pick: { signature: 'sig', index: 1 } },
+      ],
+    },
+  });
+
+  it('disables both buttons while an answer is being typed', () => {
+    mocks.state.timeline = [trust()];
+    mocks.send.mockReset();
+    mocks.send.mockReturnValue(new Promise(() => {}));
+    render(<TrustGate sessionId="s1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'No, exit' }));
+    expect((screen.getByRole('button', { name: 'Yes, I trust this folder' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'No, exit' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('two clicks in one frame (before the re-render) start ONE answer, not two interleaved ones', () => {
+    mocks.state.timeline = [trust()];
+    mocks.send.mockReset();
+    mocks.send.mockReturnValue(new Promise(() => {}));
+    render(<TrustGate sessionId="s1" />);
+    const no = screen.getByRole('button', { name: 'No, exit' });
+    const yes = screen.getByRole('button', { name: 'Yes, I trust this folder' });
+    act(() => { no.click(); yes.click(); });
+    expect(mocks.send).toHaveBeenCalledTimes(1);
   });
 });

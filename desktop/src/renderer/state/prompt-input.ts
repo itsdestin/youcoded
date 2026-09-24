@@ -1,6 +1,6 @@
 import type { PromptButton } from '../parser/ink-select-parser';
 import { answerInkMenu, type InkMenuResult } from './ink-menu-driver';
-import { getVisibleScreenText } from '../hooks/terminal-registry';
+import { getVisibleScreenText, onBufferReady } from '../hooks/terminal-registry';
 import { nextTerminalUpdate } from '../hooks/usePlanMenu';
 
 // The one way YouCoded answers a Claude Code Ink select menu (trust dialog,
@@ -27,28 +27,55 @@ import { nextTerminalUpdate } from '../hooks/usePlanMenu';
  *  same sequence in ONE write commits the option that was already highlighted. */
 export const PROMPT_SUBMIT_DELAY_MS = 150;
 
-export type PromptAnswerResult = InkMenuResult;
+export type PromptAnswerResult = InkMenuResult | { ok: false; reason: 'busy'; typed: false };
 
-export function sendPromptInput(sessionId: string, button: PromptButton): Promise<PromptAnswerResult> {
+/** This window's identity for the host's answer lock (menu-answer-lock.ts). */
+const LOCK_HOLDER = `w-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+
+/** Count this session's terminal updates from now on — lets the driver tell
+ *  "Claude Code redrew after our Enter" from "nothing happened" (review F5). */
+function outputCounter(sessionId: string): { count: () => number; stop: () => void } {
+  let n = 0;
+  let armed = false; // skip onBufferReady's catch-up call made at subscribe time
+  const stop = onBufferReady((sid) => { if (armed && sid === sessionId) n++; });
+  queueMicrotask(() => { armed = true; });
+  return { count: () => n, stop };
+}
+
+export async function sendPromptInput(sessionId: string, button: PromptButton): Promise<PromptAnswerResult> {
   const session = (window as any).claude?.session;
-  if (!session?.sendInput) return Promise.resolve({ ok: false, reason: 'menu-gone', typed: false });
+  if (!session?.sendInput) return { ok: false, reason: 'menu-gone', typed: false };
   if (button.pick) {
-    return answerInkMenu(
-      { signature: button.pick.signature, index: button.pick.index, label: button.label },
-      {
-        read: () => getVisibleScreenText(sessionId),
-        write: (d) => session.sendInput(sessionId, d),
-        settle: (ms) => nextTerminalUpdate(sessionId, ms),
-        now: () => Date.now(),
-      },
-    );
+    // One device at a time (review F4): the lock lives on the HOST, so the
+    // desktop window and a phone clicking together cannot mix one's arrows
+    // with the other's Enter. A bridge without the call (older host) answers
+    // as before.
+    if (session.menuLock && !(await session.menuLock(sessionId, LOCK_HOLDER, 'acquire'))) {
+      return { ok: false, reason: 'busy', typed: false };
+    }
+    const out = outputCounter(sessionId);
+    try {
+      return await answerInkMenu(
+        { signature: button.pick.signature, index: button.pick.index, label: button.label },
+        {
+          read: () => getVisibleScreenText(sessionId),
+          write: (d) => session.sendInput(sessionId, d),
+          settle: (ms) => nextTerminalUpdate(sessionId, ms),
+          now: () => Date.now(),
+          outputCount: out.count,
+        },
+      );
+    } finally {
+      out.stop();
+      if (session.menuLock) void session.menuLock(sessionId, LOCK_HOLDER, 'release');
+    }
   }
   session.sendInput(sessionId, button.input);
   if (button.submitInput) {
     const submit = button.submitInput;
     setTimeout(() => session.sendInput(sessionId, submit), PROMPT_SUBMIT_DELAY_MS);
   }
-  return Promise.resolve({ ok: true });
+  return { ok: true };
 }
 
 /**
@@ -73,4 +100,5 @@ export const PROMPT_FAILURE_COPY: Record<Exclude<PromptAnswerResult, { ok: true 
   'menu-changed': "Claude Code's options changed before that went through, so nothing was sent. Check terminal view.",
   'menu-gone': 'This question is no longer waiting in Claude Code, so nothing was sent.',
   'not-taken': "Claude Code didn't react to that in time. Check terminal view to see where it stands.",
+  busy: 'Another device is answering this right now, so nothing was sent.',
 };

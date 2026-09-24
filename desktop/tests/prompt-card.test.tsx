@@ -19,7 +19,7 @@
  *     mis-click there is unrecoverable from inside the app.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import React from 'react';
 import PromptCard from '../src/renderer/components/PromptCard';
 import { parseInkSelect, menuToButtons } from '../src/renderer/parser/ink-select-parser';
@@ -199,5 +199,23 @@ describe('PromptCard — a dialog answered by verified navigation', () => {
     settle({ ok: false, reason: 'menu-changed', typed: false });
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringMatching(/options changed/));
     for (const b of screen.getAllByRole('button')) expect((b as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe('PromptCard — one answer at a time', () => {
+  it('ignores Enter while a click is still being answered', () => {
+    const onSelect = vi.fn(() => new Promise<any>(() => {}));
+    render(<PromptCard prompt={mcpPrompt()} sessionId="s1" onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole('button', { name: /Continue without/ }));
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a second activation in the same frame, before the buttons re-render disabled', () => {
+    const onSelect = vi.fn(() => new Promise<any>(() => {}));
+    render(<PromptCard prompt={mcpPrompt()} sessionId="s1" onSelect={onSelect} />);
+    const b = screen.getByRole('button', { name: /Continue without/ });
+    act(() => { b.click(); b.click(); });
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 });

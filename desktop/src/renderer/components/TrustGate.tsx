@@ -59,13 +59,17 @@ export default function TrustGate({ sessionId }: Props) {
   const trustPrompt = findTrustPrompt(state);
   // A verified answer in flight, and why the last one was refused (if it was).
   const [sending, setSending] = useState(false);
+  // The guard is a ref: two clicks in one frame both run before the re-render
+  // that disables the buttons, and each would start its own cursor walk.
+  const sendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
 
   const handleSelect = useCallback(
     async (button: PromptCardButton, label: string) => {
-      if (!trustPrompt || sending) return;
+      if (!trustPrompt || sendingRef.current) return;
+      sendingRef.current = true;
       // Deliberate menu-driving write: this answers the live Ink trust dialog.
       // Before the 2026-07-26 fix this sent arrows + `\r` in ONE write, which CC
       // collapses to a bare Enter — so clicking "No, exit" confirmed the
@@ -76,6 +80,7 @@ export default function TrustGate({ sessionId }: Props) {
       setSending(true);
       setError(null);
       const r = await sendPromptInput(sessionId, button);
+      sendingRef.current = false;
       if (!mounted.current) return;
       setSending(false);
       if (!r.ok) { setError(PROMPT_FAILURE_COPY[r.reason]); return; }
@@ -89,7 +94,7 @@ export default function TrustGate({ sessionId }: Props) {
       // Broadcast to other devices so their UI updates too
       (window as any).claude?.remote?.broadcastAction(action);
     },
-    [sessionId, trustPrompt, dispatch, sending],
+    [sessionId, trustPrompt, dispatch],
   );
 
   if (!trustPrompt) return null;
