@@ -1309,6 +1309,11 @@ function registerCloseRequestIpc() {
     if (!answer || typeof answer.requestId !== 'string') return;
     closeRequests.answer(answer.requestId, { close: !!answer.close, reopen: answer.reopen });
   });
+  // The renderer drew the prompt: it is not frozen, so the 5 s fallback must
+  // not close the window on someone still reading it (Destin, 2026-09-24).
+  ipcMain.on(IPC.WINDOW_CLOSE_REQUEST_SHOWN, (_evt, payload: { requestId?: unknown }) => {
+    if (payload && typeof payload.requestId === 'string') closeRequests.shown(payload.requestId);
+  });
 }
 
 // Detach subsystem: IPC handlers for drag-a-session-to-new-window feature.

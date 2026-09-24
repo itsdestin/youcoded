@@ -46,12 +46,14 @@ let app: BusyApp;
 let fireCloseRequest: (req: CloseRequest) => void;
 let fireCancelled: (payload: Cancelled) => void;
 let answers: unknown[];
+let shown: string[];
 
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: [...FAKE_TIMERS] });
   let onCloseRequestCb: ((req: CloseRequest) => void) | undefined;
   let onCancelledCb: ((payload: Cancelled) => void) | undefined;
   answers = [];
+  shown = [];
   app = await mountBusyApp({
     // mountBusyApp always ends by switching to sessionIds[0] through the
     // strip's All Sessions menu (tests/helpers/busy-app.tsx) — with a single
@@ -76,6 +78,7 @@ beforeEach(async () => {
         onCloseRequest: (cb: (req: CloseRequest) => void) => { onCloseRequestCb = cb; return () => { onCloseRequestCb = undefined; }; },
         onCloseRequestCancelled: (cb: (payload: Cancelled) => void) => { onCancelledCb = cb; return () => { onCancelledCb = undefined; }; },
         answerClose: (answer: unknown) => { answers.push(answer); },
+        closeRequestShown: (requestId: string) => { shown.push(requestId); },
       };
     },
   });
@@ -92,6 +95,14 @@ describe('App — the in-app quit warning', () => {
   it('renders QuitSessionsPrompt with the pushed session count', async () => {
     await act(async () => { fireCloseRequest({ requestId: 'r1', sessions: 4 }); });
     expect(screen.getByText('You have 4 active sessions - proceed?')).toBeInTheDocument();
+  });
+
+  // Main keeps a 5 s frozen-app fallback until it hears this; without it the
+  // window closed on someone still reading the prompt (Destin, 2026-09-24).
+  it('tells main the prompt is on screen, once, as soon as it renders', async () => {
+    await act(async () => { fireCloseRequest({ requestId: 'r1', sessions: 2 }); });
+    expect(screen.getByText('You have 2 active sessions - proceed?')).toBeInTheDocument();
+    expect(shown).toEqual(['r1']);
   });
 
   it('answering forwards the requestId alongside the choice', async () => {

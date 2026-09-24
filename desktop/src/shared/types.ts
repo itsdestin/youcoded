@@ -1846,6 +1846,7 @@ export const IPC = {
   WINDOW_CLOSE_REQUEST: 'window:close-request',                       // Main -> Renderer (push): {requestId, sessions}
   WINDOW_ANSWER_CLOSE: 'window:answer-close',                         // Renderer -> Main: {requestId, close, reopen?}
   WINDOW_CLOSE_REQUEST_CANCELLED: 'window:close-request-cancelled',   // Main -> Renderer (push): {requestId}
+  WINDOW_CLOSE_REQUEST_SHOWN: 'window:close-request-shown',           // Renderer -> Main (send): {requestId} — prompt is on screen
   // Zoom controls
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',

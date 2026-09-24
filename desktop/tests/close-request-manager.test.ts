@@ -72,6 +72,23 @@ describe('createCloseRequestManager', () => {
     await expect(promise).resolves.toEqual({ close: true, reopen: true });
   });
 
+  // The frozen-app fallback must never close the window on someone still
+  // reading the warning (Destin, 2026-09-24: "the app keeps closing while i'm
+  // still reading the popup"). Once the renderer says the prompt is on screen,
+  // the timer is gone and only a real answer settles the request.
+  it('once the prompt is shown, the frozen-app timeout no longer fires and it waits for the answer', async () => {
+    const promise = manager.request(1, 2, () => {});
+    manager.shown('req-1');
+    expect(timers.pendingCount()).toBe(0);
+    timers.fireDue(); // nothing left to fire
+    manager.answer('req-1', { close: false });
+    await expect(promise).resolves.toEqual({ close: false });
+  });
+
+  it('a shown signal for an unknown or settled request is a harmless no-op', () => {
+    expect(() => manager.shown('nope')).not.toThrow();
+  });
+
   it('a late answer after a timeout has already settled the request is ignored', async () => {
     const promise = manager.request(1, 1, () => {});
     timers.fireDue(); // settles as {close:true, reopen:true}

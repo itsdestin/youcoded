@@ -1151,6 +1151,7 @@ describe('window:close-request / window:answer-close / window:close-request-canc
       ['WINDOW_CLOSE_REQUEST', 'window:close-request'],
       ['WINDOW_ANSWER_CLOSE', 'window:answer-close'],
       ['WINDOW_CLOSE_REQUEST_CANCELLED', 'window:close-request-cancelled'],
+      ['WINDOW_CLOSE_REQUEST_SHOWN', 'window:close-request-shown'],
     ] as const) {
       expect(preload).toContain(`${name}: '${channel}'`);
       expect(sharedTypes).toContain(`${name}: '${channel}'`);
@@ -1161,12 +1162,14 @@ describe('window:close-request / window:answer-close / window:close-request-canc
     expect(preload).toMatch(/onCloseRequest:.*ipcRenderer\.on\(IPC\.WINDOW_CLOSE_REQUEST/s);
     expect(preload).toMatch(/answerClose:.*ipcRenderer\.invoke\(IPC\.WINDOW_ANSWER_CLOSE/s);
     expect(preload).toMatch(/onCloseRequestCancelled:.*ipcRenderer\.on\(IPC\.WINDOW_CLOSE_REQUEST_CANCELLED/s);
+    expect(preload).toMatch(/closeRequestShown:.*ipcRenderer\.send\(IPC\.WINDOW_CLOSE_REQUEST_SHOWN/s);
   });
 
   it('main.ts pushes the request/cancelled pair and handles the answer', () => {
     expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST');
     expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST_CANCELLED');
     expect(main).toMatch(/ipcMain\.handle\(IPC\.WINDOW_ANSWER_CLOSE,/);
+    expect(main).toMatch(/ipcMain\.on\(IPC\.WINDOW_CLOSE_REQUEST_SHOWN,/);
     // ipc-handlers.ts owns every OTHER window:* handler (WINDOW_CLOSE,
     // WINDOW_GET_ID, ...) — this one is registered in main.ts instead because
     // it must reach the module-scope closeRequests manager, not a per-window
@@ -1175,7 +1178,7 @@ describe('window:close-request / window:answer-close / window:close-request-canc
   });
 
   it('is absent from remote-shim.ts and SessionService.kt — Electron-only, no shim/Android twin', () => {
-    for (const channel of ['window:close-request', 'window:answer-close', 'window:close-request-cancelled']) {
+    for (const channel of ['window:close-request', 'window:answer-close', 'window:close-request-cancelled', 'window:close-request-shown']) {
       expect(remoteShim).not.toContain(channel);
       expect(kotlin).not.toContain(channel);
     }

@@ -181,6 +181,7 @@ const IPC = {
   WINDOW_CLOSE_REQUEST: 'window:close-request',
   WINDOW_ANSWER_CLOSE: 'window:answer-close',
   WINDOW_CLOSE_REQUEST_CANCELLED: 'window:close-request-cancelled',
+  WINDOW_CLOSE_REQUEST_SHOWN: 'window:close-request-shown',
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',
   ZOOM_RESET: 'zoom:reset',
@@ -1217,6 +1218,9 @@ contextBridge.exposeInMainWorld('claude', {
     },
     answerClose: (answer: { requestId: string; close: boolean; reopen?: boolean }) =>
       ipcRenderer.invoke(IPC.WINDOW_ANSWER_CLOSE, answer),
+    // The prompt is on screen, so this renderer is alive: main stops its
+    // frozen-app timeout and waits for the person, however long they read.
+    closeRequestShown: (requestId: string) => ipcRenderer.send(IPC.WINDOW_CLOSE_REQUEST_SHOWN, { requestId }),
     // Whole-app quit wins over a pending prompt (design §4 step 5): pushed
     // when shutdownApp() settles a request the renderer was still waiting on,
     // so the dialog does not sit open describing a window that is already

@@ -34,7 +34,9 @@ export interface CloseRequestManagerDeps {
   /** Mints a requestId. A real caller wants something unguessable
    *  (`randomUUID`); a test wants something deterministic. */
   genId: () => string;
-  /** Default 5s (design §4 step 2: "a frozen renderer cannot draw it"). */
+  /** Default 5s (design §4 step 2: "a frozen renderer cannot draw it"). It
+   *  only ever covers the gap before the renderer reports the prompt SHOWN —
+   *  never a person reading it (see `shown`). */
   timeoutMs?: number;
 }
 
@@ -62,6 +64,14 @@ export interface CloseRequestManager {
    *  settled (by timeout or by settleAll()) — a late answer changes nothing
    *  (design §4 step 5). */
   answer(requestId: string, answer: CloseAnswer): void;
+  /**
+   * The renderer has put `requestId`'s prompt on screen, so it is not frozen:
+   * cancel the frozen-app timeout and wait for the person's answer for as long
+   * as they take. WHY: the timeout used to keep running while the prompt was
+   * open, so the window closed on someone still reading it (Destin,
+   * 2026-09-24). A no-op for an unknown or already-settled request.
+   */
+  shown(requestId: string): void;
   /**
    * Whole-app quit wins over every prompt still in flight (design §4 step 5).
    * Resolves each pending request as `{close:true, reopen:true}` and calls
@@ -154,6 +164,16 @@ export function createCloseRequestManager(deps: CloseRequestManagerDeps): CloseR
       }
       // No matching pending entry — already settled by timeout or settleAll.
       // Ignored on purpose (design §4 step 5).
+    },
+
+    shown(requestId) {
+      for (const entry of pending.values()) {
+        if (entry.requestId === requestId) {
+          deps.clearTimer(entry.timer);
+          entry.timer = undefined;
+          return;
+        }
+      }
     },
 
     settleAll(cancelled) {
