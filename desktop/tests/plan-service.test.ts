@@ -1,12 +1,15 @@
 // Tests for PlanService — the propose/action/settings API over PlanJournal
-// (specialists plans, Task 2). Real NativeHome on a temp root; the executor,
-// budget adapter, manifest resolver and comment-turn queue are fakes because
-// those belong to Tasks 3–4.
+// (specialists plans, Task 2; spending rework T6, design §7/§8). Real
+// NativeHome on a temp root; the executor, manifest resolver and comment-turn
+// queue are fakes — those belong to other tasks. No PlanBudget/budget-adapter
+// any more (spending rework stage 1, design §1): spending is recorded, not
+// reserved, so nothing here reserves or tops up an allowance.
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path';
 import { NativeHome } from '../src/main/native-home';
 import { PlanJournal } from '../src/main/harness/plans/plan-journal';
 import { PlanService, type PlanExecutorHooks, type PlanServiceDeps } from '../src/main/harness/plans/plan-service';
+import { estimatePlan } from '../src/main/harness/plans/plan-estimate';
 import { PlanProposalError } from '../src/main/harness/plans/types';
 import type {
   ExecutionManifest, PlanActionResult, PlanAutoApproveRead, PlanEvent, PlanRef, PlanSettingsWriteResult,
@@ -17,14 +20,37 @@ import type { ToolServices } from '../src/main/harness/tools/types';
 const SID = 'parent-1';
 const REF: PlanRef = { cwd: '/proj', sessionId: SID };
 
-const doc = (budget = 1000, items = ['a', 'b']): PlanDocumentV1 => ({
+const doc = (items = ['a', 'b']): PlanDocumentV1 => ({
   goal: 'Review things',
-  steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: budget, summary: 'Plain sentence.', items }],
+  steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items }],
 });
+
+/** A document with two independent top-level leaf steps (M1: one may start
+ *  while the other is still pending). */
+const twoStepDoc = (): PlanDocumentV1 => ({
+  goal: 'Review two things',
+  steps: [
+    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a'] },
+    { id: 's2', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['b'] },
+  ],
+});
+
+const PRICED = { kind: 'priced' as const, rates: { in: 3, out: 15 } };
 
 const baseManifest = (): ExecutionManifest => ({
   modelLabel: 'Budget model',
-  specialists: { reviewer: { definitionFingerprint: 'def-1', binding: { providerId: 'openai', modelId: 'mini' }, pricing: { input: 1, output: 2 }, setupTokens: 250 } },
+  specialists: { reviewer: { definitionFingerprint: 'def-1' } },
+  steps: { s1: { binding: { providerId: 'openai', modelId: 'mini' }, label: 'mini', pricing: PRICED, source: 'default' } },
+  permissionFingerprint: 'perm-1',
+});
+
+const twoStepManifest = (): ExecutionManifest => ({
+  modelLabel: 'Budget model',
+  specialists: { reviewer: { definitionFingerprint: 'def-1' } },
+  steps: {
+    s1: { binding: { providerId: 'openai', modelId: 'mini' }, label: 'mini', pricing: PRICED, source: 'default' },
+    s2: { binding: { providerId: 'openai', modelId: 'mini' }, label: 'mini', pricing: PRICED, source: 'default' },
+  },
   permissionFingerprint: 'perm-1',
 });
 
@@ -61,11 +87,10 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
-async function propose(opts: { toolUseId?: string; turnId?: string; autoStartKey?: string; document?: PlanDocumentV1; ceilingTokens?: number; svc?: PlanService } = {}) {
+async function propose(opts: { toolUseId?: string; turnId?: string; autoStartKey?: string; document?: PlanDocumentV1; svc?: PlanService } = {}) {
   const document = opts.document ?? doc();
-  const ceiling = opts.ceilingTokens ?? document.steps.reduce((n, s) => n + s.budget_tokens * (s.items?.length ?? 1), 0);
   return (opts.svc ?? service).propose({
-    sessionId: SID, toolUseId: opts.toolUseId ?? 'tool-1', document, maximumAttempts: 2, ceilingTokens: ceiling, maxFanOut: 2,
+    sessionId: SID, toolUseId: opts.toolUseId ?? 'tool-1', document, maximumAttempts: 2, maxFanOut: 2,
     signal: new AbortController().signal, commit: () => true, turnId: opts.turnId,
     ...(opts.autoStartKey !== undefined ? { autoStartKey: opts.autoStartKey } : {}),
   });
@@ -74,7 +99,7 @@ async function propose(opts: { toolUseId?: string; turnId?: string; autoStartKey
 /** The journal's link from a plan to the one it revises (final review F32:
  *  the card itself no longer carries it). */
 const revisionOf = async (view: { planId: string }) => (await journal.get(REF, view.planId))!.revisionOf;
-const okPlan = (r: PlanActionResult) => { if (!r.ok) throw new Error(`expected ok, got ${r.error}`); return r.plan; };
+const okPlan = (r: PlanActionResult) => { if (!r.ok) throw new Error(`expected ok, got ${'error' in r ? r.error : r.notice}`); return r.plan; };
 
 describe('propose', () => {
   it('is structurally the ToolServices.plans callback', () => {
@@ -82,11 +107,10 @@ describe('propose', () => {
     expect(typeof plans.propose).toBe('function');
   });
 
-  it('journals a proposal with the frozen execution manifest and emits it', async () => {
+  it('journals a proposal with the frozen execution manifest, its estimate, and emits it', async () => {
     const view = await propose();
-    // Decision 4: each of the 2 specialists' 250-token setup is counted on top of its work budget.
-    expect(view).toMatchObject({ status: 'proposed', toolUseId: 'tool-1', title: 'Review things', ceilingTokens: 2500, ceilingUsd: null, model: { label: 'Budget model' }, seq: 1 });
-    expect(view.approximateLimit).toBeUndefined();
+    expect(view).toMatchObject({ status: 'proposed', toolUseId: 'tool-1', title: 'Review things', model: { label: 'Budget model' }, seq: 1 });
+    expect(view.estimate && 'highUsd' in view.estimate).toBe(true);
     const rec = await journal.get(REF, view.planId);
     expect(rec!.manifest).toEqual(baseManifest());
     expect(rec!.steps).toEqual([{ id: 's1', status: 'pending', attempts: [] }]);
@@ -94,32 +118,20 @@ describe('propose', () => {
     expect(executor.start).not.toHaveBeenCalled();
   });
 
-  it('prices the dollar limit from the frozen snapshot at the highest rate (Task 3)', async () => {
-    manifest.specialists.reviewer.pricing = { kind: 'priced', rates: { in: 3, out: 15, cacheWrite: 30 } };
-    const view = await propose();
-    // 2 items × (1,000 work + 250 setup) tokens, every token at $30/M.
-    expect(view.ceilingUsd).toBeCloseTo(2500 * 30 / 1e6, 12);
-  });
-
-  it('a ChatGPT specialist marks the plan limit as approximate (decision 5)', async () => {
-    manifest.specialists.reviewer.approximateLimit = true;
-    const view = await propose();
-    expect(view.approximateLimit).toBe(true);
-    expect((await journal.get(REF, view.planId))!.approximateLimit).toBe(true);
-  });
-
-  it('a local or unpriced plan shows tokens only — no fabricated $0.00 (Task 3)', async () => {
-    manifest.specialists.reviewer.pricing = { kind: 'local' };
-    expect((await propose({ toolUseId: 'local' })).ceilingUsd).toBeNull();
-    manifest.specialists.reviewer.pricing = null;
-    expect((await propose({ toolUseId: 'unpriced' })).ceilingUsd).toBeNull();
+  it('a local or unpriced plan shows a token estimate, never a fabricated dollar figure', async () => {
+    manifest.steps.s1.pricing = { kind: 'local' };
+    const local = await propose({ toolUseId: 'local' });
+    expect(local.estimate && 'tokens' in local.estimate).toBe(true);
+    manifest.steps.s1.pricing = null;
+    const unpriced = await propose({ toolUseId: 'unpriced' });
+    expect(unpriced.estimate && 'tokens' in unpriced.estimate).toBe(true);
   });
 
   it('the first proposal on an absent journal takes the one-shot commit latch exactly once', async () => {
     let calls = 0; let latched = false;
     const commit = () => { calls++; if (latched) return false; latched = true; return true; };
     const view = await service.propose({
-      sessionId: SID, toolUseId: 't', document: doc(), maximumAttempts: 2, ceilingTokens: 2000, maxFanOut: 2,
+      sessionId: SID, toolUseId: 't', document: doc(), maximumAttempts: 2, maxFanOut: 2,
       signal: new AbortController().signal, commit,
     });
     expect(view.status).toBe('proposed');
@@ -135,7 +147,7 @@ describe('propose', () => {
     let latched = false;
     const commit = () => { if (latched) return false; latched = true; return true; };
     const view = await service.propose({
-      sessionId: SID, toolUseId: 'second', document: doc(), maximumAttempts: 2, ceilingTokens: 2000, maxFanOut: 2,
+      sessionId: SID, toolUseId: 'second', document: doc(), maximumAttempts: 2, maxFanOut: 2,
       signal: new AbortController().signal, commit,
     });
     expect(view.toolUseId).toBe('second');
@@ -144,7 +156,7 @@ describe('propose', () => {
 
   it('writes nothing when the one-shot commit guard refuses (the turn was interrupted)', async () => {
     await expect(service.propose({
-      sessionId: SID, toolUseId: 't', document: doc(), maximumAttempts: 2, ceilingTokens: 2000, maxFanOut: 2,
+      sessionId: SID, toolUseId: 't', document: doc(), maximumAttempts: 2, maxFanOut: 2,
       signal: new AbortController().signal, commit: () => false,
     })).rejects.toThrow();
     expect(await journal.read(REF)).toEqual({ kind: 'absent' });
@@ -153,16 +165,13 @@ describe('propose', () => {
 
   it('refuses a session it cannot place', async () => {
     await expect(service.propose({
-      sessionId: 'ghost', toolUseId: 't', document: doc(), maximumAttempts: 2, ceilingTokens: 2000, maxFanOut: 2,
+      sessionId: 'ghost', toolUseId: 't', document: doc(), maximumAttempts: 2, maxFanOut: 2,
       signal: new AbortController().signal, commit: () => true,
     })).rejects.toThrow(/plans aren't available/i);
   });
 });
 
-describe('manifest drift', () => {
-  // Task 14 (decision 27): a change of MODEL or PRICE is no longer a refusal —
-  // it re-freezes and runs, silently or after one ask. Those cases moved to
-  // tests/plan-tier-change.test.ts. What a specialist can DO still refuses here.
+describe('manifest drift and silent re-freeze (Task 14, decision 27; design §5)', () => {
   it.each([
     ['definition', (m: ExecutionManifest) => { m.specialists.reviewer.definitionFingerprint = 'def-2'; }, /specialist's instructions/],
     ['permissions', (m: ExecutionManifest) => { m.permissionFingerprint = 'perm-2'; }, /permission settings/],
@@ -173,27 +182,10 @@ describe('manifest drift', () => {
     events = [];
     const r = await service.approve(SID, view.planId);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(words);
+    if (!r.ok && 'error' in r) expect(r.error).toMatch(words);
     expect((await journal.get(REF, view.planId))!.status).toBe('proposed');
     expect(executor.start).not.toHaveBeenCalled();
     expect(events).toEqual([]);
-  });
-
-  it('a price that can no longer be checked stops the first Continue on a paused or interrupted plan', async () => {
-    const view = await propose();
-    okPlan(await service.approve(SID, view.planId));
-    await journal.mutate(REF, (file) => { file.plans[0].status = 'interrupted'; delete file.plans[0].lease; });
-    // Task 14: unpriced now, so the new limit can't be proved no higher — the
-    // first press asks instead of starting (tests/plan-tier-change.test.ts).
-    manifest.specialists.reviewer.pricing = null;
-    const r = await service.resume(SID, view.planId);
-    // Review finding 7: it asks — a NOTICE, with no error anywhere in it. Under
-    // the old rule this press refused, and `{ ok: false }` alone said nothing
-    // about which of the two happened.
-    expect(r).toMatchObject({ ok: false, notice: expect.stringContaining('no published price') });
-    expect('error' in r).toBe(false);
-    expect((await journal.get(REF, view.planId))!.status).toBe('interrupted');
-    expect(executor.start).toHaveBeenCalledTimes(1); // only the original approve
   });
 
   it('a resolver refusal worded for people is reported with its real message, never as success', async () => {
@@ -212,6 +204,46 @@ describe('manifest drift', () => {
     expect(await svc.getAutoApprove()).toEqual({ ok: false, error: "Couldn't read the plan settings. Please try again.", detail: 'EIO: read' });
     vi.spyOn(home, 'mutateJson').mockRejectedValue(new Error('ENOSPC: disk full'));
     expect(await svc.setAutoApprove(10)).toEqual({ ok: false, error: "Couldn't save the plan settings. Please try again.", detail: 'ENOSPC: disk full' });
+  });
+
+  // T4 review M2: a re-freeze must never price a STARTED step at the new
+  // manifest's rate — refreeze keeps that step's frozen entry, and the
+  // estimate it recomputes must be over the MERGED steps (old s1, new s2),
+  // never blindly over `current`.
+  it('M2: the re-frozen estimate reflects the MERGED manifest, not the raw new one, when a started step\'s price changed', async () => {
+    manifest = twoStepManifest();
+    const view = await propose({ document: twoStepDoc() });
+    okPlan(await service.approve(SID, view.planId));
+    const rec = await journal.get(REF, view.planId);
+    const fence = rec!.lease!.fence;
+    // s1 "started" (design §5: ≥1 attempt), s2 still pending.
+    await journal.mutateFenced(REF, view.planId, fence, (plan) => {
+      plan.steps.find((s) => s.id === 's1')!.attempts.push({ attemptId: 'att-1', itemIndex: 0, iteration: 0, spentTokens: 0, phase: 'launched' });
+    });
+    await journal.mutate(REF, (file) => { file.plans[0].status = 'interrupted'; delete file.plans[0].lease; });
+    const frozenS1 = (await journal.get(REF, view.planId))!.manifest.steps.s1;
+
+    // Prices diverge for both steps at Continue time.
+    manifest.steps.s1.pricing = { kind: 'priced', rates: { in: 100, out: 200 } };
+    manifest.steps.s2.pricing = { kind: 'priced', rates: { in: 9, out: 27 } };
+    manifest.steps.s2.binding = { providerId: 'openai', modelId: 'other' };
+
+    okPlan(await service.resume(SID, view.planId));
+    const after = (await journal.get(REF, view.planId))!;
+    // s1 kept exactly the entry it had — never repriced out from under a
+    // specialist that already spent tokens on it.
+    expect(after.manifest.steps.s1).toEqual(frozenS1);
+    // s2, never started, takes the new manifest's entry.
+    expect(after.manifest.steps.s2).toEqual(manifest.steps.s2);
+
+    // The stored estimate is computed over exactly this merged shape — proven
+    // by recomputing it the SAME way (estimateFor's own function, T5) and
+    // checking it differs from naively using `current` (unmerged) for s1.
+    const merged = { s1: frozenS1, s2: manifest.steps.s2 };
+    const expected = estimatePlan(twoStepDoc(), merged, { entries: [] });
+    const naive = estimatePlan(twoStepDoc(), manifest.steps, { entries: [] });
+    expect(after.estimate).toEqual(expected);
+    expect(after.estimate).not.toEqual(naive);
   });
 });
 
@@ -242,7 +274,7 @@ describe('approve, resume, stop', () => {
     const view = await propose();
     okPlan(await service.approve(SID, view.planId));
     const attempt = (over: Record<string, unknown>) => ({
-      attemptId: 'x', itemIndex: 0, iteration: 0, baseTokens: 1250, addedTokens: 0, reservedTokens: 0, spentTokens: 10, phase: 'response-persisted', ...over,
+      attemptId: 'x', itemIndex: 0, iteration: 0, spentTokens: 10, phase: 'launched', ...over,
     });
     await journal.mutate(REF, (file) => {
       const p = file.plans[0];
@@ -377,39 +409,42 @@ describe('comment and the trusted revision token', () => {
   });
 });
 
-describe('auto-approve settings', () => {
+describe('auto-start settings (design §8, decision 34 Q-6)', () => {
   const settingsFile = () => path.join(root, '.youcoded', 'plans.json');
 
   it('defaults off and creates nothing on read', async () => {
-    expect(await service.getAutoApprove()).toEqual({ ok: true, underTokens: 0 });
+    expect(await service.getAutoApprove()).toEqual({ ok: true, underUsd: 0 });
     expect(fs.existsSync(path.join(root, '.youcoded'))).toBe(false);
-    const view = await propose({ ceilingTokens: 1 });
+    const view = await propose();
     expect(view.status).toBe('proposed');
     expect(executor.start).not.toHaveBeenCalled();
   });
 
-  it.each([[-1], [1.5], ['5000'], [Number.NaN], [Number.POSITIVE_INFINITY], [null], [2 ** 60]])('rejects %p without writing', async (value) => {
+  it.each([[-1], ['5000'], [Number.NaN], [Number.POSITIVE_INFINITY], [null], [1001]])('rejects %p without writing', async (value) => {
     const r = await service.setAutoApprove(value);
-    expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/whole number/) });
+    expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/dollar amount/) });
     expect(fs.existsSync(settingsFile())).toBe(false);
   });
 
-  it('persists through NativeHome, keeps unrelated keys, and can be turned back off', async () => {
+  it('persists through NativeHome, keeps unrelated keys, reads an old underTokens as off, and can be turned back off', async () => {
     fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
-    fs.writeFileSync(settingsFile(), JSON.stringify({ v: 1, future: 'keep me' }));
-    expect(await service.setAutoApprove(5000)).toEqual({ ok: true });
-    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))).toEqual({ v: 1, future: 'keep me', autoApprove: { underTokens: 5000 } });
-    expect(await makeService().getAutoApprove()).toEqual({ ok: true, underTokens: 5000 });
+    fs.writeFileSync(settingsFile(), JSON.stringify({ v: 1, future: 'keep me', autoApprove: { underTokens: 5000 } }));
+    // WHY the old field reads as off (design §8, "the safe direction"): before
+    // any write, the damaged/old shape must never silently start spending.
+    expect(await service.getAutoApprove()).toEqual({ ok: true, underUsd: 0 });
+    expect(await service.setAutoApprove(1.5)).toEqual({ ok: true });
+    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))).toEqual({ v: 1, future: 'keep me', autoStart: { underUsd: 1.5 } });
+    expect(await makeService().getAutoApprove()).toEqual({ ok: true, underUsd: 1.5 });
     expect(await service.setAutoApprove(0)).toEqual({ ok: true });
-    expect(await service.getAutoApprove()).toEqual({ ok: true, underTokens: 0 });
+    expect(await service.getAutoApprove()).toEqual({ ok: true, underUsd: 0 });
   });
 
   // Final review F3: one reply can't start plan after plan without a click.
   it('starts at most one plan per turn key (F3)', async () => {
-    await service.setAutoApprove(2500);
-    const first = await propose({ toolUseId: 'a', document: doc(500), autoStartKey: 'turn-1' });
-    const second = await propose({ toolUseId: 'b', document: doc(500), autoStartKey: 'turn-1' });
-    const nextTurn = await propose({ toolUseId: 'c', document: doc(500), autoStartKey: 'turn-2' });
+    await service.setAutoApprove(1000);
+    const first = await propose({ toolUseId: 'a', autoStartKey: 'turn-1' });
+    const second = await propose({ toolUseId: 'b', autoStartKey: 'turn-1' });
+    const nextTurn = await propose({ toolUseId: 'c', autoStartKey: 'turn-2' });
     expect([first.status, second.status, nextTurn.status]).toEqual(['running', 'proposed', 'running']);
     expect(second.autoApproved).toBeUndefined();
     expect(executor.start).toHaveBeenCalledTimes(2);
@@ -417,119 +452,236 @@ describe('auto-approve settings', () => {
 
   it('a damaged settings file reads as off', async () => {
     fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
-    fs.writeFileSync(settingsFile(), JSON.stringify({ v: 1, autoApprove: { underTokens: -4 } }));
-    expect(await service.getAutoApprove()).toEqual({ ok: true, underTokens: 0 });
+    fs.writeFileSync(settingsFile(), JSON.stringify({ v: 1, autoStart: { underUsd: -4 } }));
+    expect(await service.getAutoApprove()).toEqual({ ok: true, underUsd: 0 });
   });
 
-  it('runs only a proposal strictly under the limit, after emitting it as a proposal', async () => {
-    // Ceilings include 2 × 250 setup tokens (decision 4).
-    await service.setAutoApprove(2500);
-    const over = await propose({ toolUseId: 'over', document: doc(1500) }); // 3500
-    const equal = await propose({ toolUseId: 'equal', document: doc(1000) }); // 2500
+  it('runs only a proposal strictly under the limit (its p90/highUsd — decision 34 Q-6), after emitting it as a proposal', async () => {
+    // 1 item's highUsd ≈ $3.72, 2 items' ≈ $7.45 (plan-estimate.ts's own
+    // built-in reviewer default, priced at PRICED) — $5 sits strictly between.
+    await service.setAutoApprove(5);
+    const over = await propose({ toolUseId: 'over', document: doc(['a', 'b']) });
     expect(over.status).toBe('proposed');
-    expect(equal.status).toBe('proposed');
     expect(executor.start).not.toHaveBeenCalled();
 
     events = [];
-    const under = await propose({ toolUseId: 'under', document: doc(500) }); // 1500
+    const under = await propose({ toolUseId: 'under', document: doc(['a']) });
     expect(under).toMatchObject({ status: 'running', autoApproved: true });
     expect(events.map((e) => [e.plan.status, e.plan.autoApproved ?? false])).toEqual([['proposed', false], ['running', true]]);
     expect(executor.start).toHaveBeenCalledTimes(1);
     expect(executor.start.mock.calls[0][0].planId).toBe(under.planId);
   });
 
+  it('an unpriced plan never auto-starts, however low the setting (design §8)', async () => {
+    manifest.steps.s1.pricing = null;
+    await service.setAutoApprove(1000);
+    const view = await propose({ document: doc(['a']) });
+    expect(view.status).toBe('proposed');
+    expect(executor.start).not.toHaveBeenCalled();
+  });
+
   it('does not auto-run when no executor is wired', async () => {
-    await service.setAutoApprove(2000);
+    await service.setAutoApprove(1000);
     const svc = makeService({ executor: undefined });
-    const view = await propose({ document: doc(500), svc });
+    const view = await propose({ document: doc(['a']), svc });
     expect(view.status).toBe('proposed');
   });
 });
 
+describe('setLimit (T6, design §7)', () => {
+  it('sets a dollar limit on a priced plan (unit follows the plan\'s own pricing class)', async () => {
+    const view = await propose();
+    const res = await service.setLimit(SID, view.planId, 5);
+    expect(res).toMatchObject({ ok: true, plan: { spendLimit: { usd: 5 } } });
+    expect((await journal.get(REF, view.planId))!.spendLimit).toEqual({ usd: 5 });
+  });
+
+  it('sets a token limit on an unpriced plan', async () => {
+    manifest.steps.s1.pricing = null;
+    const view = await propose();
+    const res = await service.setLimit(SID, view.planId, 50_000);
+    expect(res).toMatchObject({ ok: true, plan: { spendLimit: { tokens: 50_000 } } });
+  });
+
+  it('null clears the limit', async () => {
+    const view = await propose();
+    okPlan(await service.setLimit(SID, view.planId, 5));
+    const res = await service.setLimit(SID, view.planId, null);
+    expect(res.ok && res.plan.spendLimit).toBeUndefined();
+    expect((await journal.get(REF, view.planId))!.spendLimit).toBeUndefined();
+  });
+
+  it('refuses a value at or below what has already been spent, in that unit, with a plain sentence', async () => {
+    const view = await propose();
+    await journal.mutate(REF, (file) => { file.plans[0].usedUsd = 3.104; });
+    expect(await service.setLimit(SID, view.planId, 3.1)).toEqual({ ok: false, error: 'Set a limit above the $3.10 already spent.' });
+    expect(await service.setLimit(SID, view.planId, 3)).toEqual({ ok: false, error: 'Set a limit above the $3.10 already spent.' });
+    expect(await service.setLimit(SID, view.planId, 3.11)).toMatchObject({ ok: true });
+  });
+
+  it('refuses a token value at or below tokens already spent, on an unpriced plan', async () => {
+    manifest.steps.s1.pricing = null;
+    const view = await propose();
+    await journal.mutate(REF, (file) => { file.plans[0].usedTokens = 1000; });
+    expect(await service.setLimit(SID, view.planId, 1000)).toEqual({ ok: false, error: 'Set a limit above the 1,000 tokens already spent.' });
+    expect(await service.setLimit(SID, view.planId, 1001)).toMatchObject({ ok: true });
+  });
+
+  it.each([[0], [-1], [Number.NaN], [Number.POSITIVE_INFINITY]])('rejects a non-positive limit %p', async (value) => {
+    const view = await propose();
+    expect(await service.setLimit(SID, view.planId, value)).toMatchObject({ ok: false, error: expect.stringMatching(/positive number/) });
+  });
+
+  it('works on any unfinished plan: proposed, running, paused, interrupted', async () => {
+    const view = await propose();
+    expect(await service.setLimit(SID, view.planId, 5)).toMatchObject({ ok: true });
+    okPlan(await service.approve(SID, view.planId));
+    expect(await service.setLimit(SID, view.planId, 6)).toMatchObject({ ok: true }); // running
+    await journal.mutate(REF, (file) => { file.plans[0].status = 'paused'; file.plans[0].paused = { stepId: 's1', reason: 'x', kind: 'unexpected-error' }; delete file.plans[0].lease; });
+    expect(await service.setLimit(SID, view.planId, 7)).toMatchObject({ ok: true }); // paused
+    await journal.mutate(REF, (file) => { file.plans[0].status = 'interrupted'; delete file.plans[0].paused; });
+    expect(await service.setLimit(SID, view.planId, 8)).toMatchObject({ ok: true }); // interrupted
+  });
+
+  it('refuses on a finished plan', async () => {
+    const view = await propose();
+    okPlan(await service.approve(SID, view.planId));
+    okPlan(await service.stop(SID, view.planId));
+    expect(await service.setLimit(SID, view.planId, 5)).toMatchObject({ ok: false, error: expect.stringMatching(/already stopped/) });
+  });
+
+  it('does not supersede a pending handoff (design §7 — resume/stop still do)', async () => {
+    const view = await propose();
+    okPlan(await service.approve(SID, view.planId));
+    await journal.mutate(REF, (file) => {
+      const p = file.plans[0];
+      p.status = 'paused'; delete p.lease;
+      p.paused = { stepId: 's1', reason: 'x', kind: 'unexpected-error', handoff: { id: 'h-1', state: 'pending', at: 1 } };
+    });
+    let superseded: unknown[] = [];
+    const svc = makeService({ handoffs: { superseded: (_ref, planId, handoffId) => { superseded.push({ planId, handoffId }); } } });
+    expect(await svc.setLimit(SID, view.planId, 5)).toMatchObject({ ok: true });
+    expect((await journal.get(REF, view.planId))!.paused!.handoff!.state).toBe('pending');
+    expect(superseded).toEqual([]);
+  });
+});
+
+describe('resume refuses at an already-reached limit, for any pause kind, and can raise it atomically (T6, design §7)', () => {
+  async function pausedWithLimit(kind: string, spendLimit: { usd: number } | { tokens: number }, usedUsd?: number, usedTokens = 0): Promise<{ planId: string }> {
+    const view = await propose();
+    okPlan(await service.approve(SID, view.planId));
+    await journal.mutate(REF, (file) => {
+      const p = file.plans[0];
+      p.status = 'paused'; delete p.lease;
+      p.spendLimit = spendLimit;
+      p.usedTokens = usedTokens;
+      if (usedUsd !== undefined) p.usedUsd = usedUsd;
+      p.paused = { stepId: 's1', reason: 'x', kind: kind as any };
+    });
+    // The approve() above already called executor.start once; tests below
+    // assert what resume itself does, not the setup.
+    executor.start.mockClear();
+    return { planId: view.planId };
+  }
+
+  it.each(['spend-limit', 'specialist-error', 'unexpected-error'])('refuses a plain Continue at the limit regardless of the pause kind (%s)', async (kind) => {
+    const { planId } = await pausedWithLimit(kind, { usd: 5 }, 5);
+    const res = await service.resume(SID, planId);
+    expect(res).toEqual({ ok: false, error: 'This plan already reached its $5.00 limit. Raise it to continue.' });
+    expect((await journal.get(REF, planId))!.status).toBe('paused');
+    expect(executor.start).not.toHaveBeenCalled();
+  });
+
+  it('refuses when used is past the limit, not only exactly at it', async () => {
+    const { planId } = await pausedWithLimit('spend-limit', { usd: 5 }, 5.2);
+    expect(await service.resume(SID, planId)).toMatchObject({ ok: false });
+  });
+
+  it('a token-unit limit refuses and words the sentence in tokens', async () => {
+    const { planId } = await pausedWithLimit('spend-limit', { tokens: 20_000 }, undefined, 20_000);
+    expect(await service.resume(SID, planId)).toEqual({ ok: false, error: 'This plan already reached its 20,000-token limit. Raise it to continue.' });
+  });
+
+  it('resumes normally under a limit not yet reached', async () => {
+    const { planId } = await pausedWithLimit('spend-limit', { usd: 5 }, 4.99);
+    expect(await service.resume(SID, planId)).toMatchObject({ ok: true, plan: { status: 'running' } });
+  });
+
+  it('an optional new limit lands in the SAME lease-taking write, lifting the refusal atomically', async () => {
+    const { planId } = await pausedWithLimit('spend-limit', { usd: 5 }, 5);
+    const seqBefore = (await journal.get(REF, planId))!.seq;
+    const res = await service.resume(SID, planId, 10);
+    expect(res).toMatchObject({ ok: true, plan: { status: 'running', spendLimit: { usd: 10 } } });
+    const rec = (await journal.get(REF, planId))!;
+    expect(rec.seq).toBe(seqBefore + 1); // one write: limit change + lease + start
+    expect(rec.spendLimit).toEqual({ usd: 10 });
+  });
+
+  it('a new limit that is still not above what was spent is refused — the whole resume, atomically', async () => {
+    const { planId } = await pausedWithLimit('spend-limit', { usd: 5 }, 5);
+    const res = await service.resume(SID, planId, 5);
+    expect(res).toMatchObject({ ok: false, error: expect.stringContaining('$5.00 already spent') });
+    expect((await journal.get(REF, planId))!.status).toBe('paused');
+    expect((await journal.get(REF, planId))!.spendLimit).toEqual({ usd: 5 }); // untouched
+  });
+
+  it('null on resume clears the limit and lifts the refusal', async () => {
+    const { planId } = await pausedWithLimit('spend-limit', { usd: 5 }, 5);
+    const res = await service.resume(SID, planId, null);
+    expect(res.ok && res.plan.status).toBe('running');
+    expect(res.ok && res.plan.spendLimit).toBeUndefined();
+  });
+
+  it('rejects a non-positive new limit before touching the journal', async () => {
+    const { planId } = await pausedWithLimit('spend-limit', { usd: 5 }, 1);
+    const seqBefore = (await journal.get(REF, planId))!.seq;
+    expect(await service.resume(SID, planId, -1)).toMatchObject({ ok: false, error: expect.stringMatching(/positive number/) });
+    expect((await journal.get(REF, planId))!.seq).toBe(seqBefore);
+    expect(executor.start).not.toHaveBeenCalled();
+  });
+});
+
+describe('M1 (T4 review): setStepModel races createAttempts\' own locked write, using the real journal', () => {
+  it('a step with a concurrently-created attempt refuses; an untouched sibling step still succeeds', async () => {
+    manifest = twoStepManifest();
+    const resolveStep = vi.fn(async ({ stepId }: { stepId: string }) => ({
+      binding: { providerId: 'openai', modelId: 'other' }, label: 'other', pricing: PRICED, source: 'user' as const,
+    }));
+    const svc = makeService({ resolveStep });
+    const view = await svc.propose({
+      sessionId: SID, toolUseId: 't', document: twoStepDoc(), maximumAttempts: 2, maxFanOut: 2,
+      signal: new AbortController().signal, commit: () => true,
+    });
+    okPlan(await svc.approve(SID, view.planId));
+    const rec = await journal.get(REF, view.planId);
+    const fence = rec!.lease!.fence;
+
+    // The exact write createAttempts makes (design §3: "one fenced append of
+    // attempt records") — s1 becomes "started" under the plan's own lock,
+    // exactly like a real executor wave would, while s2 is left alone.
+    await journal.mutateFenced(REF, view.planId, fence, (plan) => {
+      plan.steps.find((s) => s.id === 's1')!.attempts.push({ attemptId: 'att-1', itemIndex: 0, iteration: 0, spentTokens: 0, phase: 'launched' });
+    });
+
+    const onStarted = await svc.setStepModel(SID, view.planId, 's1', { providerId: 'openai', modelId: 'other' });
+    expect(onStarted).toMatchObject({ ok: false, error: expect.stringMatching(/already started/) });
+
+    const onPending = await svc.setStepModel(SID, view.planId, 's2', { providerId: 'openai', modelId: 'other' });
+    expect(onPending).toMatchObject({ ok: true });
+    const after = await journal.get(REF, view.planId);
+    expect(after!.stepModels).toEqual({ s2: { providerId: 'openai', modelId: 'other' } });
+    expect(after!.manifest.steps.s1.source).toBe('default'); // untouched — the race won
+    expect(after!.manifest.steps.s2.source).toBe('user'); // the override took
+  });
+});
+
 describe('result discriminants', () => {
-  it('reports unsupported explicitly when the host cannot run or top up plans', async () => {
-    const svc = makeService({ executor: undefined, budget: undefined });
+  it('reports unsupported explicitly when the host cannot run plans', async () => {
+    const svc = makeService({ executor: undefined });
     const view = await propose({ svc });
     const approve: PlanActionResult = await svc.approve(SID, view.planId);
     expect(approve).toEqual({ ok: false, unsupported: true, error: expect.any(String) });
     expect(await svc.resume(SID, view.planId)).toMatchObject({ ok: false, unsupported: true });
-    expect(await svc.addBudget(SID, view.planId, 1000)).toMatchObject({ ok: false, unsupported: true });
-  });
-
-  it('add budget validates its amount and state, then delegates to the budget adapter', async () => {
-    const addTokens = vi.fn(async ({ ref, planId }: { ref: PlanRef; planId: string }) => {
-      const { projectPlan } = await import('../src/main/harness/plans/plan-journal');
-      return projectPlan((await journal.get(ref, planId))!);
-    });
-    const svc = makeService({ budget: { addTokens } });
-    const view = await propose({ svc });
-    expect(await svc.addBudget(SID, view.planId, 0)).toMatchObject({ ok: false, error: expect.stringMatching(/whole number/) });
-    expect(await svc.addBudget(SID, view.planId, 1000)).toMatchObject({ ok: false, error: expect.stringMatching(/paused/) });
-    await journal.mutate(REF, (file) => { file.plans[0].status = 'paused'; file.plans[0].paused = { stepId: 's1', reason: 'limit' }; });
-    expect(await svc.addBudget(SID, view.planId, 1000)).toMatchObject({ ok: true, plan: { planId: view.planId } });
-    // Task 9b: `edit` answers a pending handoff in the same write.
-    expect(addTokens).toHaveBeenCalledWith({ ref: REF, planId: view.planId, stepId: 's1', tokens: 1000, edit: expect.any(Function) });
-  });
-
-  // Final review F1: Retry after a lost reply (or a second press) sends the
-  // SAME request id; the service answers the plan as it stands and adds nothing.
-  it('a repeated Add budget press is answered without adding again, even below a now-lowered minimum (F1)', async () => {
-    const { PlanBudget } = await import('../src/main/harness/plans/plan-budget');
-    const budget = new PlanBudget({ journal, now: () => 7, newId: () => `t${++ids}` });
-    const addTokens = vi.fn((input: Parameters<typeof budget.addTokens>[0]) => budget.addTokens(input));
-    const svc = makeService({ budget: { addTokens } });
-    const view = await propose({ svc });
-    await journal.mutate(REF, (file) => {
-      file.plans[0].status = 'paused';
-      file.plans[0].paused = { stepId: 's1', reason: 'limit', minimumAddTokens: 2_500 };
-    });
-    const first = okPlan(await svc.addBudget(SID, view.planId, 3_000, 'press-1'));
-    const again = okPlan(await svc.addBudget(SID, view.planId, 3_000, 'press-1'));
-    expect(again.ceilingTokens).toBe(first.ceilingTokens);
-    expect((await journal.get(REF, view.planId))!.tranches).toHaveLength(1);
-    // A malformed id is refused before anything is read or written.
-    expect(await svc.addBudget(SID, view.planId, 3_000, 'x'.repeat(200))).toMatchObject({ ok: false });
-  });
-
-  it('refuses an Add budget smaller than the recorded minimum, naming that minimum (Task 4)', async () => {
-    const addTokens = vi.fn(async ({ ref, planId }: { ref: PlanRef; planId: string }) => {
-      const { projectPlan } = await import('../src/main/harness/plans/plan-journal');
-      return projectPlan((await journal.get(ref, planId))!);
-    });
-    const svc = makeService({ budget: { addTokens } });
-    const view = await propose({ svc });
-    await journal.mutate(REF, (file) => {
-      file.plans[0].status = 'paused';
-      file.plans[0].paused = { stepId: 's1', reason: 'limit', attemptId: 'a1', minimumAddTokens: 2_500 };
-    });
-    expect(await svc.addBudget(SID, view.planId, 2_499)).toEqual({ ok: false, error: expect.stringContaining('2,500') });
-    expect(addTokens).not.toHaveBeenCalled();
-    expect(await svc.addBudget(SID, view.planId, 2_500)).toMatchObject({ ok: true });
-    expect(addTokens).toHaveBeenCalledTimes(1);
-  });
-
-  // Task 12 follow-up 1: a paused specialist's prompt stays cached only for a
-  // while. The warm minimum is valid until its expiry (main's own clock); after
-  // that the cold (full re-send) minimum is the one a press must meet.
-  it.each([
-    ['inside the cache window, the warm minimum is enough', 5_000, 800, true],
-    ['inside the cache window, less than the warm minimum is refused', 5_000, 799, false],
-    ['after the window, the warm amount is refused with the cold minimum', 6_001, 800, false],
-    ['after the window, the cold minimum is enough', 6_001, 2_500, true],
-  ] as const)('%s', async (_name, now, tokens, ok) => {
-    const addTokens = vi.fn(async ({ ref, planId }: { ref: PlanRef; planId: string }) => {
-      const { projectPlan } = await import('../src/main/harness/plans/plan-journal');
-      return projectPlan((await journal.get(ref, planId))!);
-    });
-    const svc = makeService({ budget: { addTokens }, now: () => now });
-    const view = await propose({ svc });
-    await journal.mutate(REF, (file) => {
-      file.plans[0].status = 'paused';
-      file.plans[0].paused = { stepId: 's1', reason: 'limit', attemptId: 'a1', minimumAddTokens: 2_500, warmMinimum: { tokens: 800, until: 6_000 } };
-    });
-    const res = await svc.addBudget(SID, view.planId, tokens);
-    if (ok) expect(res).toMatchObject({ ok: true });
-    else expect(res).toEqual({ ok: false, error: expect.stringContaining(now <= 6_000 ? '800' : '2,500') });
   });
 
   it('Stop hands the executor the stopped write, so lease release and "stopped" are one write (review item 8)', async () => {
@@ -549,22 +701,9 @@ describe('result discriminants', () => {
     expect(rec.steps.map((s) => s.status)).toEqual(['skipped']);
   });
 
-  it('Continue refuses up front when a budget route was switched off for this plan (Task 4)', async () => {
-    const view = await propose();
-    await journal.mutate(REF, (file) => {
-      const p = file.plans[0];
-      p.status = 'paused';
-      p.paused = { stepId: 's1', reason: 'over' };
-      p.disabledAdapters = [{ adapterId: 'generic:openai', detail: 'a request read 900 tokens of input, more than the 800 measured for it' }];
-    });
-    const res = await service.resume(SID, view.planId);
-    expect(res).toEqual({ ok: false, error: expect.stringContaining('more than the 800 measured for it') });
-    expect(executor.start).not.toHaveBeenCalled();
-  });
-
   it('settings results use the same three forms', () => {
     const forms: Array<PlanAutoApproveRead | PlanSettingsWriteResult> = [
-      { ok: true, underTokens: 0 }, { ok: true }, { ok: false, error: 'x' }, { ok: false, unsupported: true, error: 'y' },
+      { ok: true, underUsd: 0 }, { ok: true }, { ok: false, error: 'x' }, { ok: false, unsupported: true, error: 'y' },
     ];
     expect(forms).toHaveLength(4);
   });

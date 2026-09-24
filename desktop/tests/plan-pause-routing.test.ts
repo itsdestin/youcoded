@@ -13,7 +13,6 @@ describe('routing per kind (§1)', () => {
     ['launch-failed', {}],
     ['specialist-error', {}],
     ['invalid-report', { reportOnlyFundable: true }],
-    ['unknown-request', {}],
     ['unknown-outcome', { toolEffect: 'read' }],
     ['unknown-outcome', { toolEffect: 'local' }],
   ] as const)('%s %j recovers automatically, once', (kind, ctx) => {
@@ -38,7 +37,7 @@ describe('routing per kind (§1)', () => {
   });
 
   it('before any automatic restart, an unanswered external call sends it to the assistant', () => {
-    for (const kind of ['launch-failed', 'specialist-error', 'invalid-report', 'unknown-request'] as const) {
+    for (const kind of ['launch-failed', 'specialist-error', 'invalid-report'] as const) {
       expect(routePlanPause(kind, { unansweredExternal: true, reportOnlyFundable: true }), kind)
         .toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
     }
@@ -46,7 +45,7 @@ describe('routing per kind (§1)', () => {
   });
 
   it('a second failure after an automatic recovery goes to the assistant', () => {
-    for (const kind of ['launch-failed', 'specialist-error', 'invalid-report', 'unknown-request'] as const) {
+    for (const kind of ['launch-failed', 'specialist-error', 'invalid-report'] as const) {
       expect(routePlanPause(kind, { alreadyRecovered: true, reportOnlyFundable: true }), kind)
         .toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
     }
@@ -66,12 +65,7 @@ describe('routing per kind (§1)', () => {
   });
 
   it.each([
-    ['budget', ['add_budget', 'stop']],
-    ['ceiling-shortfall', ['add_budget', 'stop']],
-    ['plan-limit', ['stop']],
-    ['budget-refused', ['stop']],
     ['iteration-cap', ['stop']],
-    ['local-pool', ['stop']],
     ['unexpected-error', ['continue', 'stop']],
   ] as const)('%s goes to the assistant with %j', (kind, actions) => {
     expect(routePlanPause(kind, {})).toEqual({ route: 'assistant', actions });
@@ -80,6 +74,13 @@ describe('routing per kind (§1)', () => {
   it('a user-stopped specialist and an app restart stay with the user', () => {
     expect(routePlanPause('specialist-stopped', {})).toEqual({ route: 'user', actions: ['continue', 'stop'] });
     expect(routePlanPause('interrupted', {})).toEqual({ route: 'user', actions: ['continue', 'stop'] });
+  });
+
+  // Design §7, decision 37 R-4 (spending rework stage 1): the plan's own
+  // spend limit is the one spend-related pause left, and it goes STRAIGHT to
+  // the user — never to the assistant first, unlike every other pause kind.
+  it('spend-limit goes straight to the user, never the assistant', () => {
+    expect(routePlanPause('spend-limit', {})).toEqual({ route: 'user', actions: ['continue', 'stop'] });
   });
 
   it('every pause kind has a route', () => {
@@ -98,7 +99,7 @@ describe('a recorded pause (what 9b reads back)', () => {
     expect(pausedRouting({ kind: 'launch-failed', launch: 'refused' })).toEqual({ route: 'assistant', actions: ['stop'] });
     expect(pausedRouting({ kind: 'launch-failed', launch: 'drift' })).toEqual({ route: 'assistant', actions: ['stop'] });
     expect(pausedRouting({ kind: 'unknown-outcome', tool: 'Bash', toolEffect: 'external' })).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
-    expect(pausedRouting({ kind: 'budget' })).toEqual({ route: 'assistant', actions: ['add_budget', 'stop'] });
+    expect(pausedRouting({ kind: 'spend-limit' })).toEqual({ route: 'user', actions: ['continue', 'stop'] });
     expect(pausedRouting({ kind: 'specialist-stopped' })).toEqual({ route: 'user', actions: ['continue', 'stop'] });
   });
 });

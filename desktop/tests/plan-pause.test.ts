@@ -9,7 +9,6 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { classifyPause } from '../src/renderer/components/plans/plan-pause';
-import { budgetAdapterFor } from '../src/main/harness/plans/budget-adapter';
 import { commentTurnText } from '../src/main/harness/plans/plan-host-bridge';
 
 describe('classifyPause reads the executor’s pause kind (5b follow-up)', () => {
@@ -33,19 +32,19 @@ describe('classifyPause reads the executor’s pause kind (5b follow-up)', () =>
   it('a kind without the facts it needs, any other kind, or no pause is ordinary', () => {
     expect(classifyPause({ stepId: 's2', reason: 'r', kind: 'unknown-outcome' }).kind).toBe('other');
     expect(classifyPause({ stepId: 'loop', reason: 'r', kind: 'iteration-cap' }).kind).toBe('other');
-    expect(classifyPause({ stepId: 's2', reason: 'r', kind: 'unknown-request' }).kind).toBe('other');
-    expect(classifyPause({ stepId: 's1', reason: 'r', kind: 'budget' }).kind).toBe('other');
+    // spend-limit is a valid pause kind (shared/types.ts) with no special
+    // card of its own — classifyPause only special-cases unknown-outcome and
+    // iteration-cap, so it falls back to the ordinary pause exactly like an
+    // unrecognized kind would.
+    expect(classifyPause({ stepId: 's1', reason: 'r', kind: 'spend-limit' }).kind).toBe('other');
     expect(classifyPause(undefined).kind).toBe('other');
   });
 });
 
-describe('the routes whose plan limits are approximate (~)', () => {
-  it('stays true: ChatGPT is the only route whose replies cannot be capped', () => {
-    const types = ['anthropic', 'openai', 'google', 'openrouter', 'openai-compatible', 'local-engine', 'chatgpt'] as const;
-    const soft = types.filter((t) => { const r = budgetAdapterFor(t); return r.ok && !r.adapter.capsOutput; });
-    expect(soft).toEqual(['chatgpt']);
-  });
-});
+// WHY "the routes whose plan limits are approximate" is GONE (spending
+// rework stage 1, design §1, decision 34): `budget-adapter.ts` and its
+// per-route `capsOutput` distinction are deleted outright — nothing is
+// capped in advance any more, so no route's cap can be "approximate".
 
 describe('the Comment follow-up turn', () => {
   it('is the user’s words, then one short plain instruction', () => {

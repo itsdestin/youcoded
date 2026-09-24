@@ -185,6 +185,62 @@ function capDetail(detail: string): string {
   return t.length <= PLAN_NOTICE_DETAIL_MAX_CHARS ? t : `${t.slice(0, PLAN_NOTICE_DETAIL_MAX_CHARS)}…`;
 }
 
+const fmt = (n: number) => n.toLocaleString('en-US');
+
+/** Design §7 (T6): `setLimit`'s and `resume`'s optional new limit both use
+ *  the plan's OWN pricing class, never the caller's choice — dollars once any
+ *  step is priced, tokens only when none is (the same rule `estimate`
+ *  computes, design §4). `plan.estimate` already carries that classification
+ *  (always set by propose/reconcile/setStepModel, T5); reading it here keeps
+ *  ONE place that decides a plan's pricing class rather than re-deriving it
+ *  from the manifest a second time. Absent estimate (a v2 journal written
+ *  before a first propose finished its write — should not happen, but never
+ *  crash on it) falls back to tokens, the same safe direction `readUnderUsd`
+ *  and unpriced plans already take.
+ */
+function pricingUnit(plan: PlanRecord): 'usd' | 'tokens' {
+  return plan.estimate && 'highUsd' in plan.estimate ? 'usd' : 'tokens';
+}
+
+/** Design §7: apply a new spend limit (or clear it) to `plan`, inside the
+ *  caller's own locked write — shared by `setLimit` and `resume`'s optional
+ *  same-write limit change, so the two enforce the IDENTICAL rule. `null`
+ *  clears it. Otherwise `limit` must be a positive number strictly ABOVE what
+ *  this plan has already spent, in whichever unit its pricing class uses: a
+ *  limit at or below the spent figure could never be reached — it would not
+ *  be a limit, it would be an immediate pause. Throws PlanActionRefused
+ *  (caught by `act()`), which discards the whole locked write it runs inside
+ *  (plan-journal.ts's `applyMutation` — the same pattern `setStepModel`'s
+ *  "already started" check already relies on).
+ */
+function applyLimitChange(plan: PlanRecord, limit: number | null): void {
+  if (limit === null) { delete plan.spendLimit; return; }
+  const unit = pricingUnit(plan);
+  const already = unit === 'usd' ? (plan.usedUsd ?? 0) : plan.usedTokens;
+  if (limit <= already) {
+    const shown = unit === 'usd' ? `$${already.toFixed(2)}` : `${fmt(already)} tokens`;
+    throw new PlanActionRefused(`Set a limit above the ${shown} already spent.`);
+  }
+  plan.spendLimit = unit === 'usd' ? { usd: limit } : { tokens: Math.round(limit) };
+}
+
+/** Design §7 ("Reached your $5 limit."): the plain sentence `resume` refuses
+ *  with when the plan's own spend limit is already met or passed — for EVERY
+ *  pause kind, not only a `spend-limit` pause (a plan can be paused for an
+ *  unrelated reason after its limit was raised past what it had spent, then
+ *  spend elsewhere pushed it back over before Continue is pressed). */
+function limitReachedSentence(limit: NonNullable<PlanRecord['spendLimit']>): string {
+  return 'usd' in limit
+    ? `This plan already reached its $${limit.usd.toFixed(2)} limit. Raise it to continue.`
+    : `This plan already reached its ${fmt(limit.tokens)}-token limit. Raise it to continue.`;
+}
+
+/** setLimit/resume's own light validation of the number a caller sent —
+ *  never the refusal wording above, which needs the plan's spend figures. */
+function invalidLimitAmount(limit: number | null | undefined): boolean {
+  return limit !== null && limit !== undefined && !(typeof limit === 'number' && Number.isFinite(limit) && limit > 0);
+}
+
 const STATUS_WORDS: Record<JournalPlanStatus, string> = {
   proposed: 'waiting for approval',
   running: 'already running',
@@ -570,15 +626,26 @@ export class PlanService {
     });
   }
 
-  resume(sessionId: string, planId: string): Promise<PlanActionResult> {
+  /**
+   * T6 (design §7). `limit`, when passed, lands in the SAME locked write that
+   * takes the lease — so the card's "Continue with a new limit" is one atomic
+   * call, never a `setLimit` that could land and then lose a race to a
+   * sibling's spend write before Continue's own write starts (design §7: "the
+   * card calls setLimit then resume; optionally plans:resume accepts limit in
+   * the lease-taking write"). Refused when, AFTER that optional change, the
+   * plan's own spend limit is still met or passed — for every pause kind
+   * (design §7): raising the limit in this same call is exactly what lifts
+   * the refusal; leaving it alone refuses a Continue that would restart a
+   * specialist only to have it stop again at its very next reply.
+   */
+  resume(sessionId: string, planId: string, limit?: number | null): Promise<PlanActionResult> {
     return this.act('continue', async () => {
       if (!this.deps.executor) return unsupported("Running plans isn't available in this version of YouCoded.");
+      if (invalidLimitAmount(limit)) return failure('The limit must be a positive number (or none, to remove it).');
       const { ref, plan } = await this.loadPlan(sessionId, planId);
       this.requireStatus(plan, ['paused', 'interrupted']);
       // WHY no disabledAdapters refusal any more (spending rework stage 1,
       // design §1): there is no adapter left to disable.
-      // T6: design §7 — "resume also refuses when spendLimit is set and
-      // used ≥ limit, for every pause kind" — is not wired here yet.
       // Task 14 (decision 27): Destin's own case — the plan paused because a
       // specialist's provider couldn't run, he pointed his tiers at another
       // provider, and Continue is the fix. Only what a specialist can DO still
@@ -596,9 +663,38 @@ export class PlanService {
         handoffId = replaced.paused?.handoff?.id;
         resetRecoveriesForContinue(p);
         if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest, (steps) => this.estimateFor(ref, p.document, steps));
+        if (limit !== undefined) applyLimitChange(p, limit);
+        if (p.spendLimit) {
+          const used = 'usd' in p.spendLimit ? (p.usedUsd ?? 0) : p.usedTokens;
+          const cap = 'usd' in p.spendLimit ? p.spendLimit.usd : p.spendLimit.tokens;
+          if (used >= cap) throw new PlanActionRefused(limitReachedSentence(p.spendLimit));
+        }
       });
       this.notifySuperseded(ref, planId, handoffId);
       return { ok: true, plan: view };
+    });
+  }
+
+  /**
+   * T6 (design §7, decision 34 Q-3). Any unfinished plan (proposed, running,
+   * paused or interrupted) may have its spend limit set or changed, before or
+   * while it runs; `null` removes it. Does NOT supersede a pending handoff —
+   * only resume/stop do (design §7: "setLimit doesn't supersede a pending
+   * handoff"). See `applyLimitChange` for the unit and refusal rule.
+   */
+  setLimit(sessionId: string, planId: string, limit: number | null): Promise<PlanActionResult> {
+    return this.act('set the limit for', async () => {
+      if (invalidLimitAmount(limit)) return failure('The limit must be a positive number (or none, to remove it).');
+      const { ref, plan } = await this.loadPlan(sessionId, planId);
+      this.requireStatus(plan, ['proposed', 'running', 'paused', 'interrupted']);
+      const record = await this.journal.mutate(ref, (file) => {
+        const p = file.plans.find((x) => x.planId === planId);
+        if (!p) throw new PlanActionRefused('This plan no longer exists.');
+        this.requireStatus(p, ['proposed', 'running', 'paused', 'interrupted']);
+        applyLimitChange(p, limit);
+        return p;
+      });
+      return { ok: true, plan: projectPlan(record, this.now()) };
     });
   }
 
