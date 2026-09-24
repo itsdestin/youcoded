@@ -1,9 +1,10 @@
 /* Design-guide review (2026-09-24): STATUS LABELS "DOT AND WORD".
    Display-only status labels (INSTALLED on cards, Working / Inactive in the
    session menu) become a small colored dot followed by plain words, no pill. Clickable status-bar chips are buttons and keep
-   the button rules. Workbench-only: ?proposal=...,status-dot. */
+   the button rules. Session labels already carry their own colored dot, so
+   they get no second one. Workbench-only: ?proposal=...,status-dot. */
 @layer proposal {
 :is(.uppercase.rounded-full[class*="text-3xs"][class*="tracking-wide"], span.rounded-full.border[class*="text-4xs"]) { text-transform: none !important; letter-spacing: 0 !important; font-size: 11px !important; line-height: 16px !important;
   background: none !important; border: none !important; padding: 0 !important; display: inline-flex !important; align-items: center !important; gap: 5px !important; }
-:is(.uppercase.rounded-full[class*="text-3xs"][class*="tracking-wide"], span.rounded-full.border[class*="text-4xs"])::before { content: ""; width: 6px; height: 6px; border-radius: 9999px; background: currentColor; flex: none; }
+.uppercase.rounded-full[class*="text-3xs"][class*="tracking-wide"]::before { content: ""; width: 6px; height: 6px; border-radius: 9999px; background: currentColor; flex: none; }
 }
