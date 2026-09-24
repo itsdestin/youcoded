@@ -7,6 +7,7 @@
 // record shape and calls in here with whatever it read.
 import type { ProjectExtensionsRecord } from './store';
 import { isBundledPlugin } from '../../shared/bundled-plugins';
+import { skillItemKey } from '../../shared/project-extension-keys';
 
 // A project that existed before this feature shipped already gets an
 // explicit `on` for Theme Builder via seeding (design §2) — this default only
@@ -77,16 +78,11 @@ export interface ResolveAvailabilityInput {
   now: number;
 }
 
-/** itemKey for a catalog skill (design §1). `self`/`project` skills need the
- *  source folded into the key because skill-scanner.ts gives them a BARE id
- *  (no plugin qualifier) — two skills named the same in different scopes
- *  would otherwise collide in the items map. A plugin-sourced id already
- *  carries its plugin qualifier (`${pluginName}:${skillName}`, or a bare
- *  legacy id for a youcoded-core-prefixed plugin dir), so it is used as-is. */
+/** itemKey for a catalog skill (design §1). The rule itself lives in
+ *  shared/project-extension-keys.ts so the renderer's drawer uses the exact
+ *  same one. */
 export function itemKeyForSkill(entry: CatalogSkillEntry): string {
-  if (entry.source === 'self') return `self:${entry.id}`;
-  if (entry.source === 'project') return `project:${entry.id}`;
-  return entry.id;
+  return skillItemKey(entry);
 }
 
 /** itemKey for an MCP server entry (design §1). */

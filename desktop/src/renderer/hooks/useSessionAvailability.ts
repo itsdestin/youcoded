@@ -64,6 +64,9 @@ export function useSessionAvailability(sessionId: string | null, open: boolean):
         setResult({ frozenSkillIds: res.frozenSkillIds, missing: res.missing, settingsDiffer: res.settingsDiffer });
       })
       .catch(() => { if (gen === generation.current) setResult(null); });
+    // WHY: an answer that arrives after unmount or after the next request
+    // started must never land; bumping the generation retires this one.
+    return () => { generation.current++; };
   }, [sessionId, open]);
 
   return result;

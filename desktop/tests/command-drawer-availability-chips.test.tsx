@@ -109,7 +109,7 @@ describe('CommandDrawer — availability chips', () => {
     fireEvent.click(card);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(store.getState().projectViewOpen).toBe(true);
-    expect(store.getState().openSkillsTabRequest).toEqual({ projectPath: '/other-project' });
+    expect(store.getState().openSkillsTabRequest).toEqual({ projectPath: '/other-project', itemKey: 'self:writing-helper' });
   });
 
   it('a re-render with unchanged availability does not re-render the memoized SkillCard row', async () => {

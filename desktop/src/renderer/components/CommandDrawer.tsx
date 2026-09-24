@@ -78,7 +78,8 @@ export default function CommandDrawer({ open, searchMode, sessionId = null, exte
   // the one this conversation happens to be in.
   const openMissingSetup = useCallback((row: SessionAvailabilityMissingRow) => {
     onClose();
-    artifactDispatch?.({ type: 'PROJECT_VIEW_OPEN_SKILLS_TAB', projectPath: row.projectKey });
+    // WHY itemKey: land on THIS missing item's row, not just the section (R14).
+    artifactDispatch?.({ type: 'PROJECT_VIEW_OPEN_SKILLS_TAB', projectPath: row.projectKey, itemKey: row.key });
   }, [onClose, artifactDispatch]);
   const storeFilter = useDrawerFilter(filterStore);
   const externalFilter = filterStore ? storeFilter : externalFilterProp;
