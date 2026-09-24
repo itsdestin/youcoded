@@ -81,10 +81,13 @@ describe('a plan step opens onto the instructions its specialist will be sent', 
     expect(body).toHaveTextContent('Write one numbered finding per surface.');
   });
 
-  it('keeps the limit line that was already there, so nothing is traded away', () => {
+  // Decision 34: the per-step "stops at its N-token limit" line is gone
+  // (there is no per-step cap left to state) — the opened step now shows
+  // which MODEL the step runs on instead (decision 35).
+  it('shows the step\'s model line, so the opened step is never empty', () => {
     show(proposed());
     openStep();
-    expect(screen.getByText(/stops at its/)).toBeInTheDocument();
+    expect(screen.getByTestId('plan-step-model')).toBeInTheDocument();
   });
 
   it('leaves the line breaks the model wrote intact, rather than running them together', () => {
@@ -99,7 +102,7 @@ describe('a plan step opens onto the instructions its specialist will be sent', 
     show(proposed({ task: undefined }));
     openStep();
     expect(screen.queryByTestId('plan-step-task')).not.toBeInTheDocument();
-    expect(screen.getByText(/stops at its/)).toBeInTheDocument();
+    expect(screen.getByTestId('plan-step-model')).toBeInTheDocument();
   });
 
   it('still gives a running step its specialists, not the brief in their place', () => {
@@ -230,11 +233,14 @@ describe('a proposed plan step is about what will happen, a running one about pr
     expect(screen.getByTestId('plan-step-s1')).not.toHaveTextContent('up to');
   });
 
-  it('shows that figure when the step is opened, beside the per-specialist limit', () => {
+  // Decision 34: there is no per-step ceiling left to show, opened or not —
+  // replaces "shows that figure when the step is opened, beside the
+  // per-specialist limit". The opened step shows its MODEL instead (35).
+  it('opens onto the step\'s model, never a token figure', () => {
     show(proposed());
     openStep();
-    expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('Up to 14,000 tokens for this step.');
-    expect(screen.getByText(/stops at its/)).toBeInTheDocument();
+    expect(screen.getByTestId('plan-step-s1')).not.toHaveTextContent(/token/);
+    expect(within(screen.getByTestId('plan-step-s1')).getByTestId('plan-step-model')).toBeInTheDocument();
   });
 
   it('leaves a running plan\'s row saying what it says today', () => {
@@ -244,11 +250,12 @@ describe('a proposed plan step is about what will happen, a running one about pr
     expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('4,000 tokens');
   });
 
-  it('still shows a not-yet-started step\'s figure once the plan is running', () => {
-    // Only the PLAN's status decides; a pending step inside a running plan
-    // keeps the figure it has always had.
+  // Decision 34: replaces "still shows a not-yet-started step's figure once
+  // the plan is running" — a pending step inside a running plan has no
+  // per-step ceiling to show either, same as a proposed one.
+  it('still shows nothing for a not-yet-started step once the plan is running', () => {
     show({ ...proposed(), status: 'running' });
-    expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('up to 14,000 tokens');
+    expect(screen.getByTestId('plan-step-s1')).not.toHaveTextContent(/up to \d/);
   });
 });
 
@@ -265,8 +272,9 @@ describe('opening a step does not repeat the line its row already shows', () => 
     show(proposed({ task: FIRST_LINE, title: FIRST_LINE }));
     openStep();
     expect(screen.queryByTestId('plan-step-task')).not.toBeInTheDocument();
-    // The limit line is still there, so the expansion is never empty.
-    expect(screen.getByText(/stops at its/)).toBeInTheDocument();
+    // The model line is still there, so the expansion is never empty
+    // (decision 34/35 — replaces the retired "Limits" section).
+    expect(screen.getByTestId('plan-step-model')).toBeInTheDocument();
   });
 
   it('shows the brief entire when the row is showing a sentence instead of it', () => {
@@ -460,12 +468,19 @@ describe('a repeat draws as one row holding its body, not several loose rows', (
     expect(within(within(loop).getByTestId('plan-step-check')).getByText('1.2.')).toBeInTheDocument();
   });
 
-  it('prices the whole loop on its own row, never a per-specialist limit it has none of', () => {
+  // Decision 34 retired the per-step ceiling this used to pin ("Up to 7,600
+  // tokens for this step, over all its rounds."); a repeat's row has no
+  // model of its own either (decision 35 — each body step carries its own,
+  // shown once that body row is opened), so the LOOP row itself draws
+  // neither a "Limits" nor a "Model" section — only its body rows can.
+  it('draws no Limits or Model section for the repeat row itself', () => {
     show({ ...looping(), status: 'running' });
     const loop = openAndRead('loop');
-    const limits = within(loop).getAllByTestId('plan-step-limits')[0];
-    expect(limits).toHaveTextContent('Up to 7,600 tokens for this step, over all its rounds.');
-    expect(limits).not.toHaveTextContent('stops at its');
+    expect(within(loop).queryByTestId('plan-step-limits')).not.toBeInTheDocument();
+    expect(within(loop).queryByTestId('plan-step-model')).not.toBeInTheDocument();
+    // Its body row (draft) does have one, once opened.
+    fireEvent.click(within(within(loop).getByTestId('plan-step-draft')).getByTestId('plan-step-title').closest('button')!);
+    expect(within(within(loop).getByTestId('plan-step-draft')).getByTestId('plan-step-model')).toBeInTheDocument();
   });
 });
 
@@ -625,22 +640,24 @@ describe('the collapsed row carries no item preview at all', () => {
   });
 });
 
-describe('every part of an opened step is labelled, and the limits come last', () => {
-  it('labels the parts and the limits, and puts the limits after everything else', () => {
+// Decision 34/35: "Limits" (the per-step token cap) is retired — the section
+// that comes last is now "Model" (which model the step runs on).
+describe('every part of an opened step is labelled, and the model comes last', () => {
+  it('labels the parts and the model, and puts the model after everything else', () => {
     show(heavy());
     const step = openAndRead('s1');
     expect(within(step).getByText('What each one gets')).toBeInTheDocument();
-    expect(within(step).getByText('Limits')).toBeInTheDocument();
-    expect(within(step).getByTestId('plan-step-limits')).toHaveTextContent('stops at its');
-    expect(drawnBefore(step, 'plan-step-items', 'plan-step-limits')).toBe(true);
-    expect(drawnBefore(step, 'plan-step-brief', 'plan-step-limits')).toBe(true);
+    expect(within(step).getByText('Model')).toBeInTheDocument();
+    expect(within(step).getByTestId('plan-step-model')).toBeInTheDocument();
+    expect(drawnBefore(step, 'plan-step-items', 'plan-step-model')).toBe(true);
+    expect(drawnBefore(step, 'plan-step-brief', 'plan-step-model')).toBe(true);
   });
 
   it('is no longer a bare paragraph inside the brief', () => {
     show(heavy());
     const step = openAndRead('s1');
     expect(within(step).getByTestId('plan-step-brief'))
-      .not.toContainElement(within(step).getByTestId('plan-step-limits'));
+      .not.toContainElement(within(step).getByTestId('plan-step-model'));
   });
 });
 

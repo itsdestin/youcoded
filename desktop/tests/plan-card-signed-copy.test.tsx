@@ -53,6 +53,18 @@
  * The other two clauses cannot show here: these frozen inputs predate both the
  * item labels and `of`, so no step claims an input or names a consumer. Every
  * other word, and every collapsed row, is byte-for-byte as signed.
+ *
+ * Re-recorded once more, decisions 34–35 (spending rework, 2026-09-24): no
+ * more per-step budgets. Every pending step's "up to N tokens" figure is gone
+ * from both the collapsed row and the opened step (these frozen inputs predate
+ * `estimate`/`spendLimit`, so the proposed cards' "Up to …" ceiling line is
+ * gone too, with nothing to replace it — a plan with an `estimate` shows a
+ * range instead). A running card's "Spent X of Y" loses the "of Y" half
+ * (these inputs have no `spendLimit`, i.e. no limit was set). The opened
+ * step's old "Limits" section (the per-specialist token cap) is now "Model"
+ * (decision 35: which model the step runs on, changeable in Plan settings).
+ * Only the fixtures this pass changed differ; plan-completed and
+ * plan-writing are untouched.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/react';

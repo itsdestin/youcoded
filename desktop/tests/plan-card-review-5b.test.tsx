@@ -91,11 +91,14 @@ afterEach(() => { cleanup(); delete (window as any).claude; });
 
 // 1. The approximate limit: superseded by Task 8 (review 6, R6-1 — a tilde on
 // every limit figure, no extra sentence). Pinned in tests/plan-card-review-r7.test.tsx.
-describe('1. an exact limit is unchanged', () => {
-  it('reads as signed, with no tilde and no note', () => {
+// Decision 34 (2026-09-24) then retired the worst-case ceiling this described
+// entirely — a proposed card now reads its `estimate` instead; pinned in
+// plan-card-review-r7.test.tsx's "A. decision 34" block.
+describe('1. a plan with no estimate says only the specialist count', () => {
+  it('a record from before `estimate` existed reads plainly, no invented figure', () => {
     bridge();
     render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Up to 42,000 tokens · specialists run on');
+    expect(screen.getByTestId('plan-ceiling')).not.toHaveTextContent(/token/);
     expect(screen.queryByTestId('plan-approximate-note')).toBeNull();
   });
 });

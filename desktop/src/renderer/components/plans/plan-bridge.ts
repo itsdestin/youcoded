@@ -121,6 +121,20 @@ export function planAction(fn: (b: PlansBridge) => Promise<unknown>): Promise<Pl
   return call(fn, normalizePlanAction, UNREADABLE) as Promise<PlanActionResult>;
 }
 
+/** Decision 35 (Plan settings) — the plan's total spending cap; `null` turns
+ *  it off. Mock-only until the backend rework lands (mock-only.ts); routed
+ *  through `planAction` like every other button so a missing bridge or a
+ *  refusal reads exactly the same way. */
+export function setPlanLimit(sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null): Promise<PlanActionResult> {
+  return planAction((b) => b.setLimit(sessionId, planId, limit));
+}
+
+/** Decision 35 — a step's model, for a step that has not started. `null`
+ *  resets it to the specialist type's default. */
+export function setStepModel(sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null): Promise<PlanActionResult> {
+  return planAction((b) => b.setStepModel(sessionId, planId, stepId, model));
+}
+
 export function readPlanAutoApprove(): Promise<PlanAutoApproveRead> {
   return call((b) => b.getAutoApprove(), normalizePlanRead, UNREADABLE_SETTINGS) as Promise<PlanAutoApproveRead>;
 }

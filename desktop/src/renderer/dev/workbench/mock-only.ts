@@ -131,4 +131,12 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // `plans.askAssistant` (Task 11), was never listed here: it landed on all
   // five at once. The fakes in mock-shim.ts stay so the workbench can still
   // show every card state without a running plan.
+  // Specialists stage two, spending rework (decision 35, 2026-09-24): the plan
+  // settings screen — a total spending cap and each step's model — is designed
+  // here ahead of the backend. `plans.setLimit` and `plans.setStepModel` have
+  // no real channel yet; the fakes in mock-shim.ts mutate the fixture record
+  // the same way every other plan button does, so both the popup and the
+  // inline settings variants are reviewable with no running plan.
+  { channel: 'plans.setLimit', feature: 'Plan settings — total spending cap (decision 34/35)' },
+  { channel: 'plans.setStepModel', feature: "Plan settings — a step's model (decision 35)" },
 ];

@@ -94,50 +94,43 @@ const running = (over: Partial<PlanView> = {}) => plan({
 
 // ---------------------------------------------------------------------------
 
-describe('A. an approximate limit wears a tilde, and no extra sentence', () => {
-  it('proposed, no price: "Up to ~42,000 tokens", and no ChatGPT note', () => {
-    render(<ChatProvider><Card initial={plan({ approximateLimit: true })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('3 specialists · Up to ~42,000 tokens · specialists run on GPT-5.1 (ChatGPT), which has no published price');
-    expect(screen.queryByTestId('plan-approximate-note')).toBeNull();
-    expect(block()).not.toHaveTextContent('On ChatGPT');
-    expect(block()).not.toHaveTextContent('about 42,000');
+// Decision 34 retires the worst-case ceiling this block used to pin (and the
+// tilde that marked it as approximate — R6-1/R7-1): a proposed card now shows
+// an ESTIMATE (a range, or a token count + note, inherently approximate by
+// shape, so nothing needs marking); a running card shows the live SPEND,
+// which is a real count and never wore a tilde even under the old wording.
+describe('A. decision 34: the estimate/spend lines replace the ceiling, tilde and all', () => {
+  it('proposed, unpriced: "About N tokens · note", never the retired ceiling sentence', () => {
+    render(<ChatProvider><Card initial={plan({ estimate: { tokens: 42000, unpricedNote: 'runs on ChatGPT, included in your plan' } })} /></ChatProvider>);
+    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('3 specialists · About 42,000 tokens · runs on ChatGPT, included in your plan');
+    expect(block()).not.toHaveTextContent('specialists run on');
+    expect(block()).not.toHaveTextContent('which has no published price');
   });
 
-  it('proposed, priced: the dollars and the tokens both wear the tilde', () => {
-    render(<ChatProvider><Card initial={plan({ approximateLimit: true, ceilingUsd: 0.12 })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Up to ~$0.12 (~42,000 tokens) · specialists run on GPT-5.1 (ChatGPT)');
+  it('proposed, priced: a plain dollar range, no tilde needed', () => {
+    render(<ChatProvider><Card initial={plan({ estimate: { lowUsd: 0.05, highUsd: 0.12 } })} /></ChatProvider>);
+    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Usually $0.05–$0.12');
   });
 
-  it('each step\'s "up to" figure wears it too', () => {
-    render(<ChatProvider><Card initial={plan({ approximateLimit: true })} /></ChatProvider>);
-    // Decision 30 (2026-09-18): while a plan is only PROPOSED its rows are
-    // about what will happen, so each step's own figure now waits inside the
-    // opened step. The tilde it wears there is what this test guards.
+  it('each step shows no per-step figure at all, ever — decision 34 removed it entirely', () => {
+    render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
     for (const id of ['plan-step-s1', 'plan-step-s2']) {
       fireEvent.click(within(screen.getByTestId(id)).getAllByRole('button')[0]);
-      expect(screen.getByTestId(id)).toHaveTextContent('Up to ~4,000 tokens for this step.');
+      expect(screen.getByTestId(id)).not.toHaveTextContent(/token/);
     }
-    // An opened step with no specialists yet says each one's own limit too.
-    expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('Each reviewer stops at its ~2,000-token limit.');
   });
 
-  it('while spending: the limit wears it, the spent figure (a real count) does not', () => {
-    const { unmount } = render(<ChatProvider><Card initial={running({ approximateLimit: true })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Spent 1,000 tokens of the ~42,000-token limit');
-    expect(screen.queryByTestId('plan-approximate-note')).toBeNull();
-    unmount();
-    render(<ChatProvider><Card initial={running({ approximateLimit: true, ceilingUsd: 0.12, usedUsd: 0.01 })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Spent $0.01 (1,000 tokens) of the ~$0.12 limit (~42,000 tokens)');
-  });
-
-  it('an exact limit has no tilde anywhere (the signed wording)', () => {
-    const { unmount } = render(<ChatProvider><Card initial={plan({ ceilingUsd: 0.12 })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Up to about $0.12 (42,000 tokens)');
-    expect(block()).not.toHaveTextContent('~');
-    unmount();
+  it('while spending: no limit shown unless the user set one in Plan settings', () => {
     render(<ChatProvider><Card initial={running()} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Spent 1,000 tokens of the 42,000-token limit');
-    expect(block()).not.toHaveTextContent('~');
+    // This plan has no published price (ceilingUsd: null on the base fixture,
+    // no `estimate` either — an older-shape record): tokens, no "of" clause.
+    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('About 1,000 tokens used');
+    expect(screen.getByTestId('plan-ceiling')).not.toHaveTextContent(' of ');
+  });
+
+  it('a plan with a limit set shows "Spent $X of $Y"', () => {
+    render(<ChatProvider><Card initial={running({ estimate: { lowUsd: 1, highUsd: 3 }, usedUsd: 0.5, spendLimit: { usd: 5 } })} /></ChatProvider>);
+    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Spent $0.50 of $5');
   });
 });
 
@@ -188,7 +181,12 @@ function sweepMixedRows(where: string): string[] {
     const btns = within(row).queryAllByRole('button').filter((b) => !b.hasAttribute('aria-expanded'));
     if (btns.length < 2) continue;
     const kinds = btns.map((b) => (isFilled(b) ? 'filled' : 'light'));
-    const label = btns.map((b) => (b.textContent ?? '').trim()).join(' | ');
+    // Decision 35: the Plan settings gear is an icon-only ghost button
+    // (aria-label, no visible text) sharing several of these rows now — it
+    // still has to obey the light-before-filled/right-alignment rule (kept in
+    // `kinds`/`pushedRight` above), but an unlabelled button adds nothing to
+    // read, so it is left out of the row's LABEL.
+    const label = btns.filter((b) => (b.textContent ?? '').trim()).map((b) => (b.textContent ?? '').trim()).join(' | ');
     if (!kinds.includes('filled') || !kinds.includes('light')) continue;   // not a mixed row
     expect(kinds.join(' '), `${where} — ${label}: a filled button is left of a light one`).toMatch(/^(light )*(filled ?)*$/);
     expect(pushedRight(row, btns[0]), `${where} — ${label}: the row is not on the right`).toBe(true);

@@ -338,7 +338,7 @@ export default function SpecialistsSection({ cwd }: {
  */
 export function PlansSettings() {
   const [under, setUnder] = useState<number | null>(null);
-  const [draft, setDraft] = useState('20000');
+  const [draft, setDraft] = useState('5');
   // Final review F12: a failed SAVE offers Retry (and Report bug when the
   // cause isn't known); `retry` repeats exactly what failed. A failed read
   // shows no error (decision 23).
@@ -399,38 +399,44 @@ export function PlansSettings() {
   if (unsupported) return null;
   const on = (under ?? 0) > 0;
   const general = error !== null && PLAN_SETTINGS_GENERAL.has(error.text);
-  // Q-4 on the questions deck: OFF until the user turns it on — every plan
-  // asks until they decide they trust the card. The amount is the one number
-  // a plan card prints (its limit), so the row speaks in the same unit the
-  // card does. SettingRow variant="item" + Toggle: the one shape every boolean
-  // setting takes (design guide §4.6; setting-row-authority guards it).
+  // Decision 34, Q-6 (spending rework): per-step budgets are gone, so "under
+  // N tokens" stopped meaning anything — the row now reads by the plan's own
+  // ESTIMATE (decision-log.md decision 34/35's "under $X"). Q-4 still holds:
+  // OFF until the user turns it on.
+  // MOCKUP CAVEAT (renderer-only pass, no backend change): the bridge below
+  // still calls `readPlanAutoApprove`/`writePlanAutoApprove`, whose wire field
+  // is still literally named `underTokens` — this row now writes a DOLLAR
+  // figure through it. That is harmless today (a real amount like "5" reads
+  // as "5 tokens" to the current backend, i.e. effectively always off) but it
+  // is not a finished feature: the backend rework for decisions 34–35 needs
+  // to rename/reinterpret this field before this ships. Flagged in the review
+  // report; do not read this row as backend-complete.
   return (
     <div>
       <h3 className={SECTION_LABEL}>Plans</h3>
       <div className="space-y-1.5" data-testid="plans-auto-approve">
         <SettingRow
           variant="item"
-          title="Run small plans without asking"
-          // Final review F33: "limit", the card's one word for it.
-          description="A plan under the limit starts on its own; its card still shows the limit. Bigger plans always ask."
-          control={<Toggle checked={on} onChange={(next) => void save(next ? (Number(draft) || 20000) : 0, 'toggle')} disabled={under === null || saving === 'toggle'} aria-label="Run small plans without asking" />}
+          title="Start plans automatically"
+          description="When the estimate is under this amount, the plan starts without asking. Bigger plans always ask."
+          control={<Toggle checked={on} onChange={(next) => void save(next ? (Number(draft) || 5) : 0, 'toggle')} disabled={under === null || saving === 'toggle'} aria-label="Start plans automatically" />}
         />
-        {/* UX run 1, U3: the limit is visible even while the switch is off, so
-            "small" always has a number next to it; the field just cannot be
+        {/* UX run 1, U3: the amount is visible even while the switch is off,
+            so it always has a number next to it; the field just cannot be
             edited until the switch is on. */}
         <div className={`flex items-center gap-2 flex-wrap px-3 ${on ? '' : 'opacity-50'}`}>
-            <span className="text-2xs text-fg-dim">when the plan's limit is under</span>
+            <span className="text-2xs text-fg-dim">when the estimate is under</span>
+            <span className="text-2xs text-fg-dim">$</span>
             <TextInput
               size="sm"
-              inputMode="numeric"
+              inputMode="decimal"
               className="w-24"
               disabled={!on || saving !== null}
               value={draft}
-              aria-label="Token limit for plans that run without asking"
-              onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ''))}
+              aria-label="Dollar amount for plans that run without asking"
+              onChange={(e) => setDraft(e.target.value.replace(/[^0-9.]/g, ''))}
               onBlur={() => { const n = Number(draft); if (n > 0 && n !== under) void save(n, 'amount'); }}
             />
-            <span className="text-2xs text-fg-dim">tokens</span>
         </div>
         {error && (
           <div className="px-3">

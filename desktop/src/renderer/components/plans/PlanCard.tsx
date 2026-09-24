@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PLAN_QUESTION_MAX_CHARS, type PlanView, type PlanStepView, type PlanChildView, type ToolCallState } from '../../../shared/types';
 import { useChatDispatch } from '../../state/chat-context';
-import { Button, ErrorState, FieldError, StatusStrip, Textarea, TextInput } from '../ui';
-import { CheckIcon, FailIcon, StoppedIcon, ChevronIcon } from '../Icons';
+import { Button, Dialog, ErrorState, FieldError, SettingRow, StatusStrip, Textarea, TextInput, Toggle } from '../ui';
+import { CheckIcon, FailIcon, StoppedIcon, ChevronIcon, GearIcon } from '../Icons';
 import { BugReportPopup } from '../development/BugReportPopup';
 import type { ReportContext } from '../development/ReportDesign';
 import { toolActionLabel } from '../../utils/tool-group-summary';
@@ -19,10 +19,14 @@ import { AgentSections } from '../tool-views/ToolBody';
 import { asString } from '../../utils/tool-input';
 import { hasNestedAsk } from '../../utils/specialist-cards';
 import type { SubagentSegment } from '../../../shared/types';
-import { PLAN_UNREADABLE, planAction, usePlanUnsupported } from './plan-bridge';
+import { PLAN_UNREADABLE, planAction, setPlanLimit, setStepModel, usePlanUnsupported } from './plan-bridge';
 import { planChildCard, planWithActivity } from './plan-activity';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { previewSessionKey } from '../../../shared/chatsearch-refs';
+// Decision 35: the same "pick a model for one thing" picker TierRow uses in
+// Settings → Specialists (SpecialistsSection.tsx) — reused rather than a new
+// control, per the task's "reuse, don't invent".
+import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 
 /**
  * Specialists stage two — the PLAN CARD (designed 2026-09-05; since Task 5a
@@ -115,19 +119,6 @@ function limitTokens(plan: PlanView, n: number): string { return `${approx(plan)
  *  adjective — "its 9,000-token limit", never "its 9,000 tokens limit". */
 function tokenLimit(plan: PlanView, n: number): string { return `${approx(plan)}${n.toLocaleString()}-token limit`; }
 
-/** The ceiling, priced when the model has a price. */
-function ceiling(plan: PlanView): string {
-  // UX run 1, U9/U21: the dollar figure is the part a student understands, so it
-  // leads when the model has a price; the token limit always follows (spec §4).
-  // "specialists run on" says whose model this is — the chat may be on another.
-  const t = limitTokens(plan, plan.ceilingTokens);
-  if (plan.ceilingUsd == null) return `Up to ${t} · specialists run on ${plan.model.label}, which has no published price`;
-  // A priced ceiling was always "about $X" (a price is an estimate); an
-  // approximate one says it with the tilde instead, like its token figure.
-  const dollars = estimateUsd(plan.ceilingUsd, plan.approximateLimit ? '~' : 'about ');
-  return `Up to ${dollars} (${t}) · specialists run on ${plan.model.label}`;
-}
-
 function spent(plan: PlanView): string {
   const t = tokens(plan.usedTokens ?? 0);
   return plan.usedUsd == null ? t : `${usd(plan.usedUsd)} (${t})`;
@@ -141,12 +132,6 @@ function limit(plan: PlanView): string {
   // Final review F22: "the less than a cent limit" doesn't read; say it plainly.
   if (isUnderACent(plan.ceilingUsd)) return `a limit under one cent (${t})`;
   return `the ${approx(plan)}${usd(plan.ceilingUsd)} limit (${t})`;
-}
-
-/** Final review F24: what one specialist of `step` may use in all — its work
- *  budget plus its fixed setup cost — so the rows add up to the plan limit. */
-function perSpecialist(step: PlanStepView): number {
-  return step.budgetTokens + (step.setupTokens ?? 0);
 }
 
 /** Final review F1: one id per Add budget press. `crypto.randomUUID` is only
@@ -174,6 +159,103 @@ export function fallbackActions(paused: PlanView['paused']): Array<'add_budget' 
     default:
       return paused?.launch === 'drift' || (paused?.kind === 'launch-failed' && paused.launch === 'refused') ? ['stop'] : ['continue', 'stop'];
   }
+}
+
+// ---- decision 34/35: spending, not rationing ---------------------------------
+//
+// Per-step budgets are gone from what the card prints (`budgetTokens` stays on
+// the wire — main hasn't been asked to drop it — but nothing below reads it).
+// A plan runs with no limit by default; `estimate` is a guide from past runs,
+// `spendLimit` is the one number the user can set, and `usedTokens`/`usedUsd`
+// (already on the record) are the live spend. See decision-log.md decisions
+// 34–36.
+
+/** "$0.40" / "$2" — a whole dollar figure never carries ".00" (Destin's own
+ *  example: "Usually $0.40–$2"), so the range reads as an estimate, not a
+ *  precise receipt. Under a cent falls back to `usd()`'s own words (never a
+ *  false "$0.00" — error-message standard). */
+function usdShort(n: number): string {
+  if (isUnderACent(n)) return usd(n);
+  return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+}
+
+/** Decision 34, Q-4/Q-5: the proposed card's ONE estimate line, replacing the
+ *  old worst-case ceiling — a range from past runs when every specialist here
+ *  is priced, else the token figure and note main already computed (Q-5:
+ *  "About 300k tokens · included in your ChatGPT plan" / "· runs on your
+ *  computer"). Absent on a record from before this field (an old fixture, or
+ *  a plan main hasn't started pricing yet) — the row then says only the
+ *  specialist count, never a guessed number. */
+function estimateLine(plan: PlanView): string {
+  if (!plan.estimate) return '';
+  if ('unpricedNote' in plan.estimate) return `About ${tokens(plan.estimate.tokens)} · ${plan.estimate.unpricedNote}`;
+  return `Usually ${usdShort(plan.estimate.lowUsd)}–${usdShort(plan.estimate.highUsd)}`;
+}
+
+/** True when this plan's specialists have no published price — Q-5's
+ *  ChatGPT-sign-in / on-computer case. Read off `estimate` (set once, at
+ *  proposal time) so the running and paused cards ask the same question the
+ *  proposed card already answered, rather than re-deriving it from the model.
+ *  A record from before `estimate` existed falls back to the OLD price
+ *  signal (`ceilingUsd == null`) so it never prints a false "$0.00" for a
+ *  plan that was always unpriced. */
+function unpriced(plan: PlanView): boolean {
+  if (plan.estimate) return 'unpricedNote' in plan.estimate;
+  return plan.ceilingUsd == null;
+}
+
+/** Decision 34, item 2/Q-1: the running (and paused/finished) card's live
+ *  spend — dollars normally, "of $X" only when the user set a limit (Plan
+ *  settings), tokens + the same unpriced note otherwise. Replaces the old
+ *  ceiling-based `spent()`/`limit()` pair for every status this task touches;
+ *  those two stay for the states this pass didn't (paused on an old-style
+ *  budget pause, completed/stopped/failed), so an older fixture keeps reading
+ *  exactly as before. */
+function spentLine(plan: PlanView): string {
+  if (unpriced(plan)) {
+    // Q-5's own wording: "About 120k tokens used · included in your ChatGPT
+    // plan" — "About" because a running total is still rounded the same way
+    // the estimate is; "used" (not "Spent") because there is no dollar figure.
+    const base = `About ${tokens(plan.usedTokens ?? 0)} used`;
+    const note = plan.estimate && 'unpricedNote' in plan.estimate ? plan.estimate.unpricedNote : '';
+    return plan.spendLimit && 'tokens' in plan.spendLimit
+      ? `${base} of ${plan.spendLimit.tokens.toLocaleString()} tokens${note ? ` · ${note}` : ''}`
+      : (note ? `${base} · ${note}` : base);
+  }
+  const base = `Spent ${usd(plan.usedUsd ?? 0)}`;
+  if (!plan.spendLimit || !('usd' in plan.spendLimit)) return base;
+  // Final review F22's rule carried over: "of less than a cent" doesn't read
+  // as a limit; say it plainly, like the retired `limit()` did.
+  return isUnderACent(plan.spendLimit.usd) ? `${base} of a limit under a cent` : `${base} of ${usdShort(plan.spendLimit.usd)}`;
+}
+
+/** Decision 34, item 3: "Reached your $5.00 limit." / "…your 300,000-token
+ *  limit." for the new plan-limit pause row. */
+function limitReachedLine(plan: PlanView): string {
+  if (!plan.spendLimit) return 'Reached your limit.';
+  if ('usd' in plan.spendLimit) {
+    return isUnderACent(plan.spendLimit.usd) ? 'Reached your limit (under a cent).' : `Reached your ${usdShort(plan.spendLimit.usd)} limit.`;
+  }
+  return `Reached your ${plan.spendLimit.tokens.toLocaleString()}-token limit.`;
+}
+
+/** Decision 35: Destin asked for two variants of Plan settings — a popup in
+ *  the app's dialog style, and a section that expands inside the card — so he
+ *  can pick one. `?planSettings=inline` on the workbench URL swaps the second
+ *  in for review; the app defaults to the popup. Same review-time-toggle
+ *  pattern as the terminal-backing sample (`?termBacking=`, design guide
+ *  §4.2) — not a user-facing setting. */
+const PLAN_SETTINGS_VARIANT: 'popup' | 'inline' = typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).get('planSettings') === 'inline'
+  ? 'inline' : 'popup';
+
+/** Decision 35: every leaf row Plan settings can set a model for, in the
+ *  card's own order — a repeat's body steps (decision 33's only nesting)
+ *  flattened in beside their top-level siblings. */
+function settingsRows(steps: PlanStepView[]): PlanStepView[] {
+  const out: PlanStepView[] = [];
+  for (const step of steps) { out.push(step); if (step.body) out.push(...step.body); }
+  return out;
 }
 
 // ---- the block ---------------------------------------------------------------
@@ -240,6 +322,17 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
     setQuestion('');
   }, [isPaused]);
   useEffect(() => { if (plan.status !== 'proposed') setCommenting(false); }, [plan.status]);
+  // Decision 34 item 3: the "Reached your limit" pause's own Continue —
+  // separate from `adding` (the old per-step Add budget box) because the two
+  // pauses never show at once and ask for different things: a NEW total
+  // limit here, not more room for one step.
+  const [settingNewLimit, setSettingNewLimit] = useState(false);
+  const [newLimit, setNewLimit] = useState('');
+  useEffect(() => { if (!isPaused) { setSettingNewLimit(false); setNewLimit(''); } }, [isPaused]);
+  // Decision 35: Plan settings — one toggle for both variants (the gear
+  // button opens the popup; the inline SettingRow's own chevron opens the
+  // expand-in-place section — see PLAN_SETTINGS_VARIANT).
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // Task 9b: "Add budget pre-filled" — the assistant's amount, never below
   // the host's minimum (the host would refuse less).
   const recommendedTokens = plan.paused?.handoff?.recommendation?.action === 'add_budget' ? plan.paused.handoff.recommendation.addTokens : undefined;
@@ -370,6 +463,19 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   };
   const cont = () => { lastAction.current = 'continue'; return act('continue', (b) => b.resume(id, plan.planId)); };
   const stop = () => { lastAction.current = 'stop'; return act('stop', (b) => b.stop(id, plan.planId)); };
+  // Decision 34 item 3: "Reached your $5.00 limit" → Continue asks for a NEW
+  // limit, then resumes — same two-call shape as the old Add budget (set the
+  // number, then press Continue for the user), reusing `act` so busy/error
+  // states and Retry all work the same way.
+  const continueWithNewLimit = async () => {
+    if (!(Number(newLimit) > 0)) return;
+    lastAction.current = 'continue-new-limit';
+    const value = unpriced(plan) ? { tokens: Math.max(0, Math.floor(Number(newLimit) || 0)) } : { usd: Math.max(0, Number(newLimit) || 0) };
+    const landed = await act('continue', (b) => b.setLimit(id, plan.planId, value));
+    if (!landed) return;
+    if (landed.status === 'paused') await act('continue', (b) => b.resume(id, plan.planId));
+    setSettingNewLimit(false);
+  };
   // Task 11 (§6): the host checks, records and queues; the card only lands the
   // greyed record it answers. `act` ignores presses while one is in flight.
   // Decision 20: the question travels with the request.
@@ -389,6 +495,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
     // The Ask box is still open after a refused question: send what it holds now.
     ask: () => (asking ? submitAsk() : askAgain()),
     'ask-again': askAgain,
+    'continue-new-limit': continueWithNewLimit,
   };
   const retry = () => { const name = lastAction.current; if (name) void actions.current[name]?.(); };
   // Report bug / Diagnose open the app's ticket screen with the real text
@@ -443,13 +550,27 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
             {plan.status === 'proposed' || revised
               // A revised plan never ran, so it keeps its proposal line rather
               // than a meaningless "Spent 0" (UX run 1 follow-up).
-              ? <>{specialists} specialist{specialists === 1 ? '' : 's'} · {ceiling(plan)}</>
+              // Decision 34: the old worst-case ceiling is gone — one estimate
+              // line from past runs, or nothing when this record predates it.
+              ? <>{specialists} specialist{specialists === 1 ? '' : 's'}{estimateLine(plan) ? <> · {estimateLine(plan)}</> : ''}</>
+              // Decision 34 item 2: a running plan's live spend, in dollars
+              // (or tokens for an unpriced plan) — "of $5.00" only once the
+              // user has set a limit. Other statuses (paused on an old-style
+              // budget pause, completed/stopped/failed) keep the ceiling-based
+              // line — those cards are unchanged by this pass.
+              : plan.status === 'running' ? <>{spentLine(plan)}</>
               // UX run 1, U16: the header already says how long it took, so a
               // finished plan reads like any other: what it spent of its limit.
               : <>Spent {spent(plan)} of {limit(plan)}</>}
           </span>
             {plan.status === 'running' && !readOnly && (
               <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
+                {/* Decision 35: a way into Plan settings from the running
+                    card too — a limit can be set/changed while it runs, and a
+                    not-yet-started step's model can still change. */}
+                {PLAN_SETTINGS_VARIANT === 'popup' && (
+                  <Button size="icon-sm" variant="ghost" aria-label="Plan settings" title="Plan settings" onClick={() => setSettingsOpen(true)} disabled={blocked}><GearIcon className="w-3.5 h-3.5" /></Button>
+                )}
                 <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop the plan'}</Button>
               </div>
             )}
@@ -458,11 +579,37 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                 box is open — that box carries its own Cancel · Send. */}
             {plan.status === 'proposed' && !commenting && !readOnly && (
               <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
+                {/* Decision 35 item 1: a way into Plan settings sits to the
+                    left of Comment · Approve (Approve stays rightmost, G-29). */}
+                {PLAN_SETTINGS_VARIANT === 'popup' && (
+                  <Button size="icon-sm" variant="ghost" aria-label="Plan settings" title="Plan settings" onClick={() => setSettingsOpen(true)} disabled={blocked}><GearIcon className="w-3.5 h-3.5" /></Button>
+                )}
                 <Button size="sm" variant="secondary" onClick={() => setCommenting(true)} disabled={blocked}>Comment</Button>
                 <Button size="sm" variant="primary" onClick={approve} disabled={blocked}>{busy === 'approve' ? 'Approving…' : 'Approve'}</Button>
               </div>
             )}
           </div>
+          )}
+
+          {/* Decision 35: the inline variant's own entry point — an
+              expand-in-place SettingRow (G-29), right under the ceiling row,
+              only for `proposed`/`running` (the states Plan settings is
+              reachable from). The popup variant uses the gear buttons above
+              instead. */}
+          {PLAN_SETTINGS_VARIANT === 'inline' && !readOnly && (plan.status === 'proposed' || plan.status === 'running') && (
+            <SettingRow variant="item" title="Plan settings" onClick={() => setSettingsOpen((v) => !v)} expanded={settingsOpen} />
+          )}
+          {PLAN_SETTINGS_VARIANT === 'inline' && settingsOpen && !readOnly && (plan.status === 'proposed' || plan.status === 'running') && (
+            <div className="rounded-md border border-edge-dim bg-inset/25 p-2" data-testid="plan-settings-inline">
+              <PlanSettingsFields plan={plan} sessionId={sessionId} onChanged={(p) => dispatch({ type: 'PLAN_CHANGED', sessionId: id, plan: p })} />
+            </div>
+          )}
+          {PLAN_SETTINGS_VARIANT === 'popup' && settingsOpen && (
+            <Dialog open onClose={() => setSettingsOpen(false)} title="Plan settings" size="panel">
+              <div className="p-4" data-testid="plan-settings-popup">
+                <PlanSettingsFields plan={plan} sessionId={sessionId} onChanged={(p) => dispatch({ type: 'PLAN_CHANGED', sessionId: id, plan: p })} />
+              </div>
+            </Dialog>
           )}
 
           {/* Task 5b (decision 6): a failed plan says why, in the reader's own
@@ -489,12 +636,54 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
             <div className="text-2xs text-fg-muted">Ran without asking — under the limit you set in Settings.</div>
           )}
 
+          {/* Decision 34 item 3: "Paused at your limit" — one row, Stop ·
+              Continue, no Add budget anywhere. Continue asks for a new limit
+              here (or it can be raised from Plan settings instead, decision
+              35). Separate from the generic pause strip below, which keeps
+              every OTHER pause kind exactly as it was signed — and this one
+              too, whenever the pause was (or is being) handed to the
+              assistant (Task 9b/11): a plan-limit pause can still go through
+              "Ask the assistant" exactly like any other, so this simple row
+              only replaces the generic one while there is no handoff at all. */}
+          {plan.status === 'paused' && plan.paused?.kind === 'plan-limit' && !handoff && (
+            <StatusStrip
+              tone="warn"
+              surface="tinted"
+              className="!py-2"
+              wrapAction
+              action={readOnly ? undefined : !settingNewLimit ? (
+                <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-pause-actions">
+                  <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
+                  <Button size="sm" variant="primary" onClick={() => setSettingNewLimit(true)} disabled={blocked}>Continue</Button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-new-limit">
+                  {!unpriced(plan) && <span className="text-xs text-fg-dim">$</span>}
+                  <TextInput
+                    size="sm"
+                    inputMode={unpriced(plan) ? 'numeric' : 'decimal'}
+                    value={newLimit}
+                    onChange={(e) => setNewLimit(e.target.value.replace(unpriced(plan) ? /[^0-9]/g : /[^0-9.]/g, ''))}
+                    className="w-24"
+                    aria-label="New spending limit"
+                    autoFocus
+                  />
+                  {unpriced(plan) && <span className="text-xs text-fg-dim">tokens</span>}
+                  <Button size="sm" variant="ghost" onClick={() => setSettingNewLimit(false)} disabled={blocked}>Cancel</Button>
+                  <Button size="sm" variant="primary" onClick={continueWithNewLimit} disabled={blocked || !(Number(newLimit) > 0)}>{busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
+                </div>
+              )}
+            >
+              <span data-testid="plan-paused-reason">{limitReachedLine(plan)}</span>
+            </StatusStrip>
+          )}
+
           {/* Destin, round 3 (S-3/S-4/S-5): a sentence that states where the plan
               stands AND carries the buttons that answer it is the app's status
               strip — one tinted container, a status dot, the words, the action
               on the right. (`Callout` is the same shape WITHOUT an action, and
               its own doc says a block with a button is this component instead.) */}
-          {plan.status === 'paused' && plan.paused && (
+          {plan.status === 'paused' && plan.paused && (plan.paused.kind !== 'plan-limit' || !!handoff) && (
             <StatusStrip
               // Task 9b: grey while the assistant has it — waiting, not warning.
               tone={handoffPending ? 'idle' : 'warn'}
@@ -703,6 +892,123 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
 }
 
 /**
+ * Decision 35 — Plan settings: one place to set the plan's total spending cap
+ * and each step's model. The body both variants share (the popup Dialog and
+ * the inline expand-in-place section wrap this same component — PlanBlock
+ * picks the wrapper by `PLAN_SETTINGS_VARIANT`).
+ *
+ * Per-step model reuses `ModelPicker` the way Settings → Specialists' TierRow
+ * already does (SpecialistsSection.tsx) — a closed trigger ("Default ·
+ * Sonnet") that opens the app's own model list on click, `includeClaude=
+ * false` because a plan's specialists run through the native harness, never
+ * a Claude Code alias. Reused rather than invented, per the task brief.
+ */
+function PlanSettingsFields({ plan, sessionId, onChanged }: {
+  plan: PlanView;
+  sessionId?: string;
+  onChanged: (next: PlanView) => void;
+}) {
+  const id = sessionId ?? '';
+  const priced = !unpriced(plan);
+  const [limitOn, setLimitOn] = useState(!!plan.spendLimit);
+  const [amount, setAmount] = useState(() => {
+    if (!plan.spendLimit) return '';
+    return String('usd' in plan.spendLimit ? plan.spendLimit.usd : plan.spendLimit.tokens);
+  });
+  const [saving, setSaving] = useState(false);
+
+  const saveLimit = async (on: boolean, value: string) => {
+    setSaving(true);
+    const parsed = priced ? Number(value) || 0 : Math.max(0, Math.floor(Number(value) || 0));
+    const limit = on && parsed > 0 ? (priced ? { usd: parsed } : { tokens: parsed }) : null;
+    const res = await setPlanLimit(id, plan.planId, limit);
+    if (res.ok) onChanged(res.plan);
+    else setLimitOn(!on); // a refused write leaves the toggle where it was (same rule as Settings → Specialists' auto-approve row)
+    setSaving(false);
+  };
+
+  const pickModel = async (stepId: string, c: ModelChoice) => {
+    if (c.runtime !== 'native') return;
+    const res = await setStepModel(id, plan.planId, stepId, { providerId: c.providerId, modelId: c.modelId });
+    if (res.ok) onChanged(res.plan);
+  };
+  const resetModel = async (stepId: string) => {
+    const res = await setStepModel(id, plan.planId, stepId, null);
+    if (res.ok) onChanged(res.plan);
+  };
+
+  const numbers = useMemo(() => rowNumbers(plan.steps), [plan.steps]);
+  const rows = useMemo(() => settingsRows(plan.steps), [plan.steps]);
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <SettingRow
+          variant="item"
+          title="Spending limit"
+          description={priced
+            ? 'Off by default. The plan pauses once it reaches this amount.'
+            : 'Off by default. The plan pauses once it reaches this many tokens.'}
+          control={<Toggle checked={limitOn} onChange={(v) => { setLimitOn(v); void saveLimit(v, amount); }} disabled={saving} aria-label="Spending limit" />}
+        />
+        {limitOn && (
+          <div className="flex items-center gap-2 px-3 pt-1">
+            {priced && <span className="text-xs text-fg-dim">$</span>}
+            <TextInput
+              size="sm"
+              inputMode={priced ? 'decimal' : 'numeric'}
+              className="w-28"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value.replace(priced ? /[^0-9.]/g : /[^0-9]/g, ''))}
+              onBlur={() => void saveLimit(true, amount)}
+              disabled={saving}
+              aria-label="Spending limit amount"
+            />
+            {!priced && <span className="text-xs text-fg-dim">tokens</span>}
+          </div>
+        )}
+      </div>
+      <div className="space-y-2">
+        <div className="text-2xs uppercase tracking-wide text-fg-muted px-3">Step models</div>
+        <div className="space-y-3 px-3">
+          {rows.map((step) => {
+            const label = numbers.get(step.id)?.label ?? '';
+            const manual = step.stepModel && !step.stepModel.isDefault;
+            const value: ModelChoice | null = manual && step.stepModel!.providerId && step.stepModel!.modelId
+              ? { runtime: 'native', providerId: step.stepModel!.providerId, modelId: step.stepModel!.modelId }
+              : null;
+            return (
+              <div key={step.id} className="space-y-1">
+                <div className="text-xs text-fg-2 truncate">{label}. {step.summary ?? step.title}</div>
+                {step.status === 'pending' ? (
+                  <div className="flex items-center gap-1.5">
+                    <ModelPicker
+                      value={value}
+                      onSelect={(c) => void pickModel(step.id, c)}
+                      includeClaude={false}
+                      emptyLabel={`Default · ${step.stepModel?.label ?? 'automatic'}`}
+                    />
+                    {manual && (
+                      <Button size="sm" variant="ghost" onClick={() => void resetModel(step.id)} title={`Use ${step.specialist}'s default model again`}>Reset</Button>
+                    )}
+                  </div>
+                ) : (
+                  // Decision 35, running card: a step that has already started
+                  // shows the model it ran on, and it can't be changed from here.
+                  <div className="text-2xs text-fg-muted">
+                    {manual ? step.stepModel!.label : `Default · ${step.stepModel?.label ?? 'automatic'}`} — already running
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Task 12 follow-up 1: the Add budget minimum that holds right now. While the
  * paused specialist's prompt is still cached, only its new part must fit (the
  * warm minimum); `forMs` after this window received the view, the cold one
@@ -833,13 +1139,6 @@ function flowLabel(step: PlanStepView, siblings: PlanStepView[], index: number, 
   if (!source || !self || source.order >= self.order) return '';
   if (index > 0 && siblings[index - 1].id === step.of) return '';
   return `← from step ${source.label}`;
-}
-
-/** What this step may spend at worst. A repeat's body steps each carry their
- *  own budget, so its total is computed once in the projection rather than
- *  from a single pair of numbers here. */
-function stepCeiling(step: PlanStepView): number {
-  return step.ceilingTokens ?? perSpecialist(step) * step.fanOut;
 }
 
 /** The ROW a pause belongs to (a repeat's, when it paused inside the body) and
@@ -1036,15 +1335,15 @@ function StepRow({ step, index, siblings, number, numbers, plan, sessionId }: {
   // the one fact that decides whether "up to 3 rounds" is worth approving. One
   // line here, whole when the row is opened.
   const stops = step.kind === 'repeat' && step.until ? `Stops when: ${step.until}` : '';
-  // WHY the token figure leaves a PROPOSED row (decision 30): "up to 286,181
-  // tokens" was the loudest thing on every row and the least useful before
-  // approval. While a plan is only proposed the row is about WHAT will happen
-  // and the figure moves into the opened step; the moment it is running,
-  // paused or finished the row is about progress and spend, exactly as signed.
+  // WHY the token figure leaves a PROPOSED row (decision 30, extended by
+  // decision 34): the per-step figure was the loudest thing on every row and
+  // the least useful before approval — and now there is no per-step CEILING
+  // left to print at all, so a step not yet started says nothing here rather
+  // than a number nobody set. Once a step is actually running or done this is
+  // a SPENT figure (progress, not a budget), which decision 34 didn't touch.
   const proposing = plan.status === 'proposed';
   const right =
-    proposing ? ''
-    : step.status === 'pending' ? `up to ${limitTokens(plan, stepCeiling(step))}`
+    proposing || step.status === 'pending' ? ''
     // Final review F26: "0 of 1 reviewer done", not "reviewers".
     : step.status === 'running' || step.status === 'paused' ? `${step.done ?? 0} of ${step.fanOut} ${step.specialist}${step.fanOut === 1 ? '' : 's'} done · ${tokens(step.usedTokens ?? 0)}`
     : step.status === 'done' ? tokens(step.usedTokens ?? 0)
@@ -1169,19 +1468,19 @@ function StepRow({ step, index, siblings, number, numbers, plan, sessionId }: {
               <div className="text-2xs text-fg-dim break-words" data-testid="plan-step-until">{step.until}</div>
             </StepSection>
           )}
-          <StepSection label="Limits">
-            <div className="text-2xs text-fg-muted" data-testid="plan-step-limits">
-              {/* A repeat launches no specialist of its own — its body rows
-                  carry the per-specialist figures — so it states its total
-                  only, and never a per-specialist limit it does not have. */}
-              {step.body
-                ? `Up to ${limitTokens(plan, stepCeiling(step))} for this step, over all its rounds.`
-                : <>Each {step.specialist} stops at its {tokenLimit(plan, perSpecialist(step))}.
-                  {/* Decision 30: the figure the proposed row no longer carries,
-                      beside the per-specialist limit it belongs with. */}
-                  {proposing ? ` Up to ${limitTokens(plan, stepCeiling(step))} for this step.` : ''}</>}
-            </div>
-          </StepSection>
+          {/* Decision 34 replaces the old "Limits" section (per-step token
+              ceilings — gone) with decision 35's model line: which model this
+              step's specialists run on, changeable in Plan settings while the
+              step hasn't started. A repeat's own row has no model of its
+              own — its body rows each carry theirs. */}
+          {!step.body && (
+            <StepSection label="Model">
+              <div className="text-2xs text-fg-muted" data-testid="plan-step-model">
+                {step.stepModel && !step.stepModel.isDefault ? step.stepModel.label : `Default · ${step.stepModel?.label ?? 'automatic'}`}
+                {step.status !== 'pending' ? ' — already running, so its model can’t be changed now' : ' — change it in Plan settings'}
+              </div>
+            </StepSection>
+          )}
         </div>
       )}
     </li>

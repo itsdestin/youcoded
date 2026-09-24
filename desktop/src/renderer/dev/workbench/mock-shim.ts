@@ -1844,6 +1844,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   //    The fake resumes straight away (UX run 1, U7).
   //  - Transitions are never pushed here; the real host pushes every change.
   const plansAutoApprove = { underTokens: 0 };
+  // Decision 35: the same catalog lookup setDelegatedModel uses below, so a
+  // step's manually-picked model prints a real name instead of a raw id.
+  const labelForCatalogModel = (modelId: string): string =>
+    store.getState().catalog.find((c) => c.id === modelId)?.label ?? modelId;
   const nextPlan = (planId: string, mutate: (p: PlanView) => PlanView) => {
     // Task 5b: `?scenario=refused` answers every card button with a refusal
     // that carries no reason, like every other refused write here (`write`
@@ -1905,6 +1909,30 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // turns into its general "Couldn't save" line.
     getAutoApprove: async () => ({ ok: true as const, ...plansAutoApprove }),
     setAutoApprove: (underTokens: number) => write(() => { plansAutoApprove.underTokens = Math.max(0, Math.floor(underTokens)); }),
+    // Decision 35 (Plan settings) — MOCK_ONLY: no real channel yet
+    // (mock-only.ts). Mutates the fixture record like every other plan
+    // button, so the card lands its NEXT record via the same PLAN_CHANGED
+    // path — the settings popup and inline variants never invent state the
+    // rest of the card doesn't already know how to show.
+    setLimit: async (_sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null) =>
+      nextPlan(planId, (p) => ({ ...p, spendLimit: limit ?? undefined })),
+    setStepModel: async (_sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null) =>
+      nextPlan(planId, (p) => ({
+        ...p,
+        steps: p.steps.map((st) => {
+          if (st.id === stepId) {
+            return { ...st, stepModel: model ? { label: labelForCatalogModel(model.modelId), isDefault: false, providerId: model.providerId, modelId: model.modelId } : undefined };
+          }
+          // A repeat's body steps are numbered under it (decision 33's only
+          // nesting) — the settings screen addresses them by the same id.
+          if (st.body?.some((b) => b.id === stepId)) {
+            return { ...st, body: st.body.map((b) => b.id === stepId
+              ? { ...b, stepModel: model ? { label: labelForCatalogModel(model.modelId), isDefault: false, providerId: model.providerId, modelId: model.modelId } : undefined }
+              : b) };
+          }
+          return st;
+        }),
+      })),
   };
 
   const specialists = {

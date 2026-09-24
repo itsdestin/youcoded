@@ -452,6 +452,16 @@ declare global {
         /** Settings → Specialists: run plans without asking when under this many tokens (0 = off). */
         getAutoApprove: () => Promise<import('../../shared/types').PlanAutoApproveRead>;
         setAutoApprove: (underTokens: number) => Promise<import('../../shared/types').PlanSettingsWriteResult>;
+        /** Decision 35 — Plan settings. NOT yet a real channel (registered
+         *  MOCK_ONLY in mock-only.ts): designed and reviewed in the workbench
+         *  ahead of the backend, same lifecycle as every other row there. The
+         *  plan's total spending cap; null turns it off. Answers with the
+         *  card's next record, like every other plan button. */
+        setLimit: (sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null) => Promise<import('../../shared/types').PlanActionResult>;
+        /** Decision 35 — a step's model, for a step that has not started yet.
+         *  null resets it to the specialist type's default. Mock-only, same
+         *  as `setLimit` above. */
+        setStepModel: (sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null) => Promise<import('../../shared/types').PlanActionResult>;
       };
       // Local llama.cpp engine (Plan B). install() streams progress via
       // onInstallProgress; onStatusChanged pushes state transitions

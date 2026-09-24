@@ -99,11 +99,16 @@ describe('A. a proposal\'s buttons share the limit line', () => {
   it('Comment and Approve sit in the limit row, after its text, Approve rightmost', () => {
     render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
     const row = ceilingRow();
-    const names = within(row).getAllByRole('button').map((b) => b.textContent?.trim());
+    // Decision 35: the Plan settings gear (icon-only, no visible text) now
+    // shares this row too, to the left of Comment.
+    const names = within(row).getAllByRole('button').map((b) => b.textContent?.trim()).filter(Boolean);
     expect(names).toEqual(['Comment', 'Approve']);
     // Text first, then the buttons: the words read left, the actions right.
     const [text, actions] = Array.from(row.children);
-    expect(text).toHaveTextContent('3 specialists · Up to 42,000 tokens');
+    // Decision 34: no more worst-case ceiling; this fixture predates `estimate`,
+    // so the row says only the specialist count.
+    expect(text).toHaveTextContent('3 specialists');
+    expect(text).not.toHaveTextContent('Up to');
     expect(actions).toContainElement(screen.getByRole('button', { name: 'Approve' }));
     // No second row of buttons below the card's text any more.
     expect(within(block()).getAllByRole('button', { name: /^(Comment|Approve)$/ })).toHaveLength(2);
@@ -133,7 +138,8 @@ describe('A. a proposal\'s buttons share the limit line', () => {
     render(<ChatProvider><Card initial={running()} withCard /></ChatProvider>);
     const row = ceilingRow();
     const [text, actions] = Array.from(row.children);
-    expect(text).toHaveTextContent('Spent 1,000 tokens');
+    // Decision 34: a running, unpriced plan reads its live token spend.
+    expect(text).toHaveTextContent('About 1,000 tokens used');
     expect(within(actions as HTMLElement).getByRole('button', { name: 'Stop the plan' })).toBeInTheDocument();
     expect(actions).toHaveClass('shrink-0', 'ml-auto');
   });

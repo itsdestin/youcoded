@@ -797,6 +797,14 @@ export interface PlanStepView {
   /** Decision 4: each child's fixed starting cost (prompt + tool list), on TOP
    *  of budgetTokens — rows sum to the ceiling only with it. */
   setupTokens?: number;
+  /** Decision 35 (spending rework, stage 2 — Plan settings) — the model this
+   *  step's specialists run on. Absent/`isDefault: true` means the specialist
+   *  type's own default; Plan settings can change it while the step is still
+   *  `pending`. `locked` (set once it has started) means the row only shows
+   *  what it actually ran on — the running/finished model is never swapped
+   *  under it. `providerId`/`modelId` are the picker's own identity for a
+   *  manual choice, absent for the default. */
+  stepModel?: { label: string; isDefault: boolean; locked?: boolean; providerId?: string; modelId?: string };
   status: 'pending' | 'running' | 'done' | 'paused' | 'failed' | 'skipped';
   /** Children finished so far (≤ fanOut). */
   done?: number;
@@ -891,14 +899,33 @@ export interface PlanView {
   title: string;
   status: PlanStatus;
   steps: PlanStepView[];
-  /** Σ(step budget × fan-out): the worst case, honest because budgets are caps. */
+  /** Σ(step budget × fan-out): the worst case, honest because budgets are caps.
+   *  Decision 34 retires this as anything the CARD prints — no plan grammar
+   *  change happened here (that is main-process work, a later stage), so the
+   *  field stays required and every fixture still carries it; the proposed
+   *  and running cards read `estimate`/`spendLimit` below instead. */
   ceilingTokens: number;
   /** Priced per model; null when the model has no published price — the card
-   *  then shows the ceiling in tokens only (never a false $0.00). */
+   *  then shows the ceiling in tokens only (never a false $0.00). Same
+   *  retirement note as `ceilingTokens`. */
   ceilingUsd: number | null;
   /** `local` (final review F19): the plan is written by a model on this
    *  computer, which can take minutes — only then does the writing card say so. */
   model: { label: string; local?: boolean };
+  /** Decision 34 — a range estimate from past runs of these specialists, shown
+   *  on the PROPOSED card in place of the old worst-case ceiling ("Usually
+   *  $0.40–$2"; a guide, never a limit). Dollars when every specialist here is
+   *  priced; tokens plus a plain note (Q-5) when none are — a ChatGPT
+   *  sign-in or on-computer model ("About 300k tokens · included in your
+   *  ChatGPT plan" / "· runs on your computer"). Absent on an older record;
+   *  the card then falls back to the specialist count alone. */
+  estimate?: { lowUsd: number; highUsd: number } | { tokens: number; unpricedNote: string };
+  /** Decision 34/35 — the plan's own OPTIONAL spending cap: off by default,
+   *  set or changed in Plan settings before or while the plan runs. Dollars
+   *  for a priced plan, tokens for one with none (same pricing test as
+   *  `estimate`). The running and paused-at-limit cards read this instead of
+   *  the retired `ceilingTokens`/`ceilingUsd` pair. */
+  spendLimit?: { usd: number } | { tokens: number };
   usedTokens?: number;
   usedUsd?: number | null;
   /** Set when the plan ran without asking because it fell under the user's limit. */

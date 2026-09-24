@@ -211,6 +211,13 @@ describe('card actions land only what the host answered', () => {
   });
 });
 
+// Decision 34, Q-6 (spending rework, 2026-09-24): per-step budgets are gone,
+// so "under N tokens" stopped meaning anything — this row now reads by the
+// plan's own dollar ESTIMATE ("Start plans automatically … under $X"). The
+// wire call is unchanged (`readPlanAutoApprove`/`writePlanAutoApprove`,
+// still `underTokens` on the bridge — a mockup caveat noted in
+// SpecialistsSection.tsx pending the backend rework); only the row's words
+// and unit changed.
 describe('Settings → Plans reads and writes through the normalized forms', () => {
   it('shows the saved limit, and flips only after the host saved the change', async () => {
     let resolveWrite!: (v: unknown) => void;
@@ -219,11 +226,11 @@ describe('Settings → Plans reads and writes through the normalized forms', () 
       setAutoApprove: vi.fn(() => new Promise((r) => { resolveWrite = r; })),
     });
     render(<PlansSettings />);
-    const toggle = await screen.findByRole('switch', { name: 'Run small plans without asking' });
+    const toggle = await screen.findByRole('switch', { name: 'Start plans automatically' });
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(toggle).toHaveAttribute('aria-checked', 'false');
     fireEvent.click(toggle);
-    expect(plans.setAutoApprove).toHaveBeenCalledWith(20000);
+    expect(plans.setAutoApprove).toHaveBeenCalledWith(5);
     // Not optimistic: still off while the write is out.
     expect(toggle).toHaveAttribute('aria-checked', 'false');
     resolveWrite({ ok: true });
@@ -232,15 +239,15 @@ describe('Settings → Plans reads and writes through the normalized forms', () 
 
   it('a refused write shows the reason and leaves the setting as it was', async () => {
     bridge({
-      getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 5000 }),
+      getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 5 }),
       // What the host answers now (final review F11): the general line, the
       // system's text only in `detail`.
       setAutoApprove: vi.fn().mockResolvedValue({ ok: false, error: "Couldn't save the plan settings. Please try again.", detail: 'ENOSPC: disk full' }),
     });
     render(<PlansSettings />);
-    const toggle = await screen.findByRole('switch', { name: 'Run small plans without asking' });
+    const toggle = await screen.findByRole('switch', { name: 'Start plans automatically' });
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
-    expect(screen.getByLabelText('Token limit for plans that run without asking')).toHaveValue('5000');
+    expect(screen.getByLabelText('Dollar amount for plans that run without asking')).toHaveValue('5');
     fireEvent.click(toggle);
     await screen.findByText("Couldn't save the plan settings. Please try again.");
     expect(screen.queryByText(/ENOSPC/)).toBeNull();
@@ -253,7 +260,7 @@ describe('Settings → Plans reads and writes through the normalized forms', () 
   it('a failed read shows the default, off, and says nothing', async () => {
     bridge({ getAutoApprove: vi.fn().mockResolvedValue({ ok: false, error: "Couldn't read the plan settings. Please try again.", detail: 'bad file' }) });
     render(<PlansSettings />);
-    const toggle = screen.getByRole('switch', { name: 'Run small plans without asking' });
+    const toggle = screen.getByRole('switch', { name: 'Start plans automatically' });
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(toggle).toHaveAttribute('aria-checked', 'false');
     expect(screen.queryByText(/Couldn't read/)).toBeNull();
@@ -269,7 +276,7 @@ describe('Settings → Plans reads and writes through the normalized forms', () 
   it('an unsupported write hides the section rather than retrying', async () => {
     const plans = bridge({ setAutoApprove: vi.fn().mockResolvedValue({ ok: false, unsupported: true, error: 'nope' }) });
     const { container } = render(<PlansSettings />);
-    const toggle = await screen.findByRole('switch', { name: 'Run small plans without asking' });
+    const toggle = await screen.findByRole('switch', { name: 'Start plans automatically' });
     await waitFor(() => expect(toggle).toBeEnabled());
     fireEvent.click(toggle);
     await waitFor(() => expect(container).toBeEmptyDOMElement());

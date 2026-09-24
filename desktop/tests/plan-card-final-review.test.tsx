@@ -196,7 +196,7 @@ describe('F12/F13: Settings → Plans', () => {
   it('a failed read shows the default (off) and no error', async () => {
     bridge({ getAutoApprove: vi.fn().mockResolvedValue({ ok: false, error: "Couldn't read the plan settings. Please try again.", detail: 'EIO' }) });
     render(<PlansSettings />);
-    const toggle = await screen.findByRole('switch', { name: 'Run small plans without asking' });
+    const toggle = await screen.findByRole('switch', { name: 'Start plans automatically' });
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(toggle).toHaveAttribute('aria-checked', 'false');
     expect(screen.queryByRole('alert')).toBeNull();
@@ -208,16 +208,16 @@ describe('F12/F13: Settings → Plans', () => {
     const resolvers: Array<(v: unknown) => void> = [];
     const plans = bridge({ setAutoApprove: vi.fn(() => new Promise((r) => { resolvers.push(r); })) });
     render(<PlansSettings />);
-    const toggle = await screen.findByRole('switch', { name: 'Run small plans without asking' });
+    const toggle = await screen.findByRole('switch', { name: 'Start plans automatically' });
     await waitFor(() => expect(toggle).toBeEnabled());
-    fireEvent.click(toggle);                                  // on → write 20000
+    fireEvent.click(toggle);                                  // on → write 5
     expect(plans.setAutoApprove).toHaveBeenCalledTimes(1);
     expect(toggle).toBeDisabled();                            // no second write while one is out
     await act(async () => { resolvers[0]({ ok: true }); });
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
-    const field = screen.getByLabelText('Token limit for plans that run without asking');
-    fireEvent.change(field, { target: { value: '9000' } });
-    fireEvent.blur(field);                                    // write 9000
+    const field = screen.getByLabelText('Dollar amount for plans that run without asking');
+    fireEvent.change(field, { target: { value: '9' } });
+    fireEvent.blur(field);                                    // write 9
     fireEvent.click(toggle);                                  // queued: off
     expect(plans.setAutoApprove).toHaveBeenCalledTimes(2);
     await act(async () => { resolvers[1]({ ok: true }); });
@@ -227,12 +227,16 @@ describe('F12/F13: Settings → Plans', () => {
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'));
   });
 
-  it('the setting says "limit", like the card', async () => {
+  // Decision 34, Q-6: replaces the old "the setting says 'limit', like the
+  // card" pin — the row no longer talks about a limit at all; it reads by
+  // the plan's own ESTIMATE, the same word the proposed card now uses.
+  it('the setting says "estimate", not the retired "ceiling"/"budget" words', async () => {
     bridge();
     render(<PlansSettings />);
-    await screen.findByRole('switch', { name: 'Run small plans without asking' });
+    await screen.findByRole('switch', { name: 'Start plans automatically' });
     expect(screen.getByTestId('plans-auto-approve')).not.toHaveTextContent('ceiling');
-    expect(screen.getByTestId('plans-auto-approve')).toHaveTextContent('limit');
+    expect(screen.getByTestId('plans-auto-approve')).not.toHaveTextContent('budget');
+    expect(screen.getByTestId('plans-auto-approve')).toHaveTextContent('estimate');
   });
 });
 
@@ -329,23 +333,37 @@ describe('F21: a proposal stopped before it was written', () => {
   });
 });
 
-describe('F22/F23: dollar wording', () => {
-  it('a limit under a cent never reads "about less than a cent"', () => {
+// Decision 34 retires the worst-case ceiling these two used to pin
+// ("Up to …"), replacing it with the estimate line (proposed) and the spend
+// line (running) — both still route small dollar figures through the same
+// `usd()`/`usdShort()` under-a-cent rule F22/F23 were about, so the pin moves
+// to the new functions rather than disappearing.
+describe('F22/F23: dollar wording (decision 34: estimate/spend, not a ceiling)', () => {
+  it('an estimate under a cent never reads "$0.00"', () => {
     bridge();
-    render(<ChatProvider><Card initial={plan({ ceilingUsd: 0.001 })} /></ChatProvider>);
+    render(<ChatProvider><Card initial={plan({ estimate: { lowUsd: 0.001, highUsd: 0.002 } })} /></ChatProvider>);
     const line = screen.getByTestId('plan-ceiling');
-    expect(line).toHaveTextContent('Up to less than a cent (4,000 tokens)');
-    expect(line).not.toHaveTextContent(/about less|~less/);
+    expect(line).toHaveTextContent('Usually less than a cent–less than a cent');
+    expect(line).not.toHaveTextContent(/\$0\.00/);
   });
 
-  it('a running plan under a cent never reads "the less than a cent limit"', () => {
+  it('a running plan\'s limit under a cent never reads "of $0.00"', () => {
     bridge();
-    render(<ChatProvider><Card initial={plan({ status: 'running', ceilingUsd: 0.001, usedUsd: 0.0001, usedTokens: 100, approximateLimit: true })} /></ChatProvider>);
+    // ceilingUsd forces the priced branch (this fixture predates `estimate`).
+    render(<ChatProvider><Card initial={plan({ status: 'running', ceilingUsd: 0.4, spendLimit: { usd: 0.001 }, usedUsd: 0.0001, usedTokens: 100 })} /></ChatProvider>);
     const line = screen.getByTestId('plan-ceiling');
-    expect(line).not.toHaveTextContent(/less than a cent limit|~less/);
-    expect(line).toHaveTextContent('Spent less than a cent (100 tokens) of a limit under one cent (~4,000 tokens)');
+    expect(line).not.toHaveTextContent(/\$0\.00/);
+    expect(line).toHaveTextContent('Spent less than a cent of a limit under a cent');
   });
 
+  it('a whole-dollar limit reads "Reached your $5 limit", never "$5.00"', () => {
+    bridge();
+    render(<ChatProvider><Card initial={paused({ paused: { stepId: 's1', reason: 'x', kind: 'plan-limit' }, spendLimit: { usd: 5 } })} /></ChatProvider>);
+    expect(screen.getByTestId('plan-paused-reason')).toHaveTextContent('Reached your $5 limit.');
+  });
+
+  // Untouched by decision 34: the OLD per-step Add-budget flow (a `budget`
+  // pause) still prices off `ceilingUsd`/`ceilingTokens`, unchanged.
   it('the Add budget price wears a tilde on an approximate plan', () => {
     bridge();
     render(<ChatProvider><Card initial={paused({ ceilingUsd: 0.4, approximateLimit: true })} /></ChatProvider>);
@@ -354,17 +372,15 @@ describe('F22/F23: dollar wording', () => {
   });
 });
 
-describe('F24/F26: step figures', () => {
-  it('"up to" includes each specialist\'s setup cost, and the limit sentence matches', () => {
+describe('F24/F26: step figures (decision 34: no per-step ceiling left to print)', () => {
+  it('a pending step shows no figure at all — there is no per-step cap to print', () => {
     bridge();
     render(<ChatProvider><Card initial={plan({ steps: [{ ...plan().steps[0], setupTokens: 500 }], ceilingTokens: 5000 })} /></ChatProvider>);
-    // Decision 30 (2026-09-18): on a proposed plan the row is about WHAT will
-    // happen, so both figures are read inside the opened step now. What this
-    // test pins — that "up to" counts each specialist's setup cost, and that
-    // the per-specialist sentence agrees with it — is unchanged.
+    // Decision 34 removed the "Limits" section (Each … stops at its N-token
+    // limit / Up to N tokens for this step) entirely — replaced by "Model".
     fireEvent.click(within(screen.getByTestId('plan-step-s1')).getByRole('button'));
-    expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('Up to 5,000 tokens for this step.');
-    expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('Each reviewer stops at its 2,500-token limit.');
+    expect(screen.getByTestId('plan-step-s1')).not.toHaveTextContent(/token/);
+    expect(within(screen.getByTestId('plan-step-s1')).getByTestId('plan-step-model')).toBeInTheDocument();
   });
 
   it('one specialist is singular', () => {

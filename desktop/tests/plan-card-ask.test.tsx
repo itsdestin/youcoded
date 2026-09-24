@@ -344,7 +344,9 @@ describe('narrow widths (390 px): the card wraps instead of crushing its text', 
     // Decision 33: the second line is the COUNT and the ROLE, with no kind word.
     expect(second).toHaveTextContent('1 worker');
     expect(second).not.toHaveTextContent('combines the results');
-    expect(second).toHaveTextContent('up to 4,000 tokens');
+    // Decision 34: a pending step (even inside a running/paused plan) has no
+    // per-step ceiling left to print — replaces the old "up to 4,000 tokens".
+    expect(second).not.toHaveTextContent(/token/);
   });
 
   it('narrow: the usage text on the second line wraps instead of being clipped (UX tester)', () => {

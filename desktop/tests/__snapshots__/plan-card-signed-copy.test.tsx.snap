@@ -5,8 +5,8 @@ exports[`the signed plan card reads exactly as approved > a running specialist r
 step plan-step-s1: running
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: ⠋Plan: Review the auth module before the releasestep 1 of 3 | ⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokens | Wren the ReviewerFinished in 2m 15s · 6 steps | Briefing | Activity (5) | Report | ⠋Idris the ReviewerWorking in the background · 3m 15s | ⠋Mara the ReviewerWorking in the background · 3m 15s | 2.Check each review against the file it describes3 reviewersup to 9,000 tokens | 3.Combine the findings into one ranked list1 workerup to 4,000 tokens | Stop the plan
-text: ⠋Plan: Review the auth module before the releasestep 1 of 3⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokensWren the ReviewerFinished in 2m 15s · 6 stepsBriefingActivity (5)Reportauth/session.ts — the session token is still accepted after logout: revoke() clears the cookie but never the server-side record, so a copied token keeps working. Worth fixing before the release. auth/reset.ts — minor: the file's own error strings repeat the same sentence three times.⠋Idris the ReviewerWorking in the background · 3m 15s⠋Mara the ReviewerWorking in the background · 3m 15sLimitsEach reviewer stops at its 9,000-token limit.2.Check each review against the file it describes3 reviewersup to 9,000 tokens3.Combine the findings into one ranked list1 workerup to 4,000 tokensSpent $0.03 (11,200 tokens) of the $0.12 limit (40,000 tokens)Stop the plan"
+buttons: ⠋Plan: Review the auth module before the releasestep 1 of 3 | ⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokens | Wren the ReviewerFinished in 2m 15s · 6 steps | Briefing | Activity (5) | Report | ⠋Idris the ReviewerWorking in the background · 3m 15s | ⠋Mara the ReviewerWorking in the background · 3m 15s | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker | Stop the plan
+text: ⠋Plan: Review the auth module before the releasestep 1 of 3⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokensWren the ReviewerFinished in 2m 15s · 6 stepsBriefingActivity (5)Reportauth/session.ts — the session token is still accepted after logout: revoke() clears the cookie but never the server-side record, so a copied token keeps working. Worth fixing before the release. auth/reset.ts — minor: the file's own error strings repeat the same sentence three times.⠋Idris the ReviewerWorking in the background · 3m 15s⠋Mara the ReviewerWorking in the background · 3m 15sModelDefault · automatic — already running, so its model can’t be changed now2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 workerSpent $0.03Stop the plan"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-auto-approved 1`] = `
@@ -14,8 +14,8 @@ exports[`the signed plan card reads exactly as approved > plan-auto-approved 1`]
 step plan-step-s1: running
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: ⠋Plan: Review the auth module before the releasestep 1 of 3 | ⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokens | Wren the ReviewerFinished in 2m 15s · 6 steps | ⠋Idris the ReviewerWorking in the background · 3m 15s | ⠋Mara the ReviewerWorking in the background · 3m 15s | 2.Check each review against the file it describes3 reviewersup to 9,000 tokens | 3.Combine the findings into one ranked list1 workerup to 4,000 tokens | Stop the plan
-text: ⠋Plan: Review the auth module before the releasestep 1 of 3⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokensWren the ReviewerFinished in 2m 15s · 6 steps⠋Idris the ReviewerWorking in the background · 3m 15s⠋Mara the ReviewerWorking in the background · 3m 15sLimitsEach reviewer stops at its 9,000-token limit.2.Check each review against the file it describes3 reviewersup to 9,000 tokens3.Combine the findings into one ranked list1 workerup to 4,000 tokensSpent $0.03 (11,200 tokens) of the $0.05 limit (18,000 tokens)Stop the planRan without asking — under the limit you set in Settings."
+buttons: ⠋Plan: Review the auth module before the releasestep 1 of 3 | ⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokens | Wren the ReviewerFinished in 2m 15s · 6 steps | ⠋Idris the ReviewerWorking in the background · 3m 15s | ⠋Mara the ReviewerWorking in the background · 3m 15s | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker | Stop the plan
+text: ⠋Plan: Review the auth module before the releasestep 1 of 3⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokensWren the ReviewerFinished in 2m 15s · 6 steps⠋Idris the ReviewerWorking in the background · 3m 15s⠋Mara the ReviewerWorking in the background · 3m 15sModelDefault · automatic — already running, so its model can’t be changed now2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 workerSpent $0.03Stop the planRan without asking — under the limit you set in Settings."
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-completed 1`] = `
@@ -32,8 +32,8 @@ exports[`the signed plan card reads exactly as approved > plan-failed 1`] = `
 step plan-step-s1: pending
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: Plan: Review the auth module before the releasefailed | 1.Review the six files that changed in the auth module3 reviewersup to 27,000 tokens | 2.Check each review against the file it describes3 reviewersup to 9,000 tokens | 3.Combine the findings into one ranked list1 workerup to 4,000 tokens | Report bug | Diagnose with the assistant
-text: Plan: Review the auth module before the releasefailed1.Review the six files that changed in the auth module3 reviewersup to 27,000 tokens2.Check each review against the file it describes3 reviewersup to 9,000 tokens3.Combine the findings into one ranked list1 workerup to 4,000 tokensSpent 0 tokens of the $0.12 limit (40,000 tokens)The plan couldn't be created.Report bugDiagnose with the assistant"
+buttons: Plan: Review the auth module before the releasefailed | 1.Review the six files that changed in the auth module3 reviewers | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker | Report bug | Diagnose with the assistant
+text: Plan: Review the auth module before the releasefailed1.Review the six files that changed in the auth module3 reviewers2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 workerSpent 0 tokens of the $0.12 limit (40,000 tokens)The plan couldn't be created.Report bugDiagnose with the assistant"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-interrupted 1`] = `
@@ -41,8 +41,8 @@ exports[`the signed plan card reads exactly as approved > plan-interrupted 1`] =
 step plan-step-s1: done
 step plan-step-s2: done
 step plan-step-s3: pending
-buttons: Plan: Review the auth module before the releaseinterrupted — 2 of 3 steps done | 1.Review the six files that changed in the auth module3 reviewers24,600 tokens | 2.Check each review against the file it describes3 reviewers6,100 tokens | 3.Combine the findings into one ranked list1 workerup to 4,000 tokens | Stop | Continue
-text: Plan: Review the auth module before the releaseinterrupted — 2 of 3 steps done1.Review the six files that changed in the auth module3 reviewers24,600 tokens2.Check each review against the file it describes3 reviewers6,100 tokens3.Combine the findings into one ranked list1 workerup to 4,000 tokensSpent $0.09 (30,700 tokens) of the $0.12 limit (40,000 tokens)The app closed mid-plan. Steps 1–2 are saved; Continue runs the rest.StopContinue"
+buttons: Plan: Review the auth module before the releaseinterrupted — 2 of 3 steps done | 1.Review the six files that changed in the auth module3 reviewers24,600 tokens | 2.Check each review against the file it describes3 reviewers6,100 tokens | 3.Combine the findings into one ranked list1 worker | Stop | Continue
+text: Plan: Review the auth module before the releaseinterrupted — 2 of 3 steps done1.Review the six files that changed in the auth module3 reviewers24,600 tokens2.Check each review against the file it describes3 reviewers6,100 tokens3.Combine the findings into one ranked list1 workerSpent $0.09 (30,700 tokens) of the $0.12 limit (40,000 tokens)The app closed mid-plan. Steps 1–2 are saved; Continue runs the rest.StopContinue"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-paused 1`] = `
@@ -50,8 +50,8 @@ exports[`the signed plan card reads exactly as approved > plan-paused 1`] = `
 step plan-step-s1: paused
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: Plan: Review the auth module before the releasepaused — reached its limit | 1.Review the six files that changed in the auth module3 reviewers2 of 3 reviewers done · 27,000 tokens | Wren the ReviewerFinished in 2m 15s · 6 steps | Idris the ReviewerFinished in 3m 5s · 7 steps | Mara the ReviewerStopped after 3m 45s · 9 steps — the assistant can pick this back up | 2.Check each review against the file it describes3 reviewersup to 9,000 tokens | 3.Combine the findings into one ranked list1 workerup to 4,000 tokens | Ask the assistant | Stop | Add budget
-text: Plan: Review the auth module before the releasepaused — reached its limit1.Review the six files that changed in the auth module3 reviewers2 of 3 reviewers done · 27,000 tokensWren the ReviewerFinished in 2m 15s · 6 stepsIdris the ReviewerFinished in 3m 5s · 7 stepsMara the ReviewerStopped after 3m 45s · 9 steps — the assistant can pick this back upLimitsEach reviewer stops at its 9,000-token limit.2.Check each review against the file it describes3 reviewersup to 9,000 tokens3.Combine the findings into one ranked list1 workerup to 4,000 tokensSpent $0.08 (27,000 tokens) of the $0.12 limit (40,000 tokens)Paused — step 1 hit its 27,000-token limit with 2 of 3 reviewers done.Ask the assistantStopAdd budget"
+buttons: Plan: Review the auth module before the releasepaused — reached its limit | 1.Review the six files that changed in the auth module3 reviewers2 of 3 reviewers done · 27,000 tokens | Wren the ReviewerFinished in 2m 15s · 6 steps | Idris the ReviewerFinished in 3m 5s · 7 steps | Mara the ReviewerStopped after 3m 45s · 9 steps — the assistant can pick this back up | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker | Ask the assistant | Stop | Add budget
+text: Plan: Review the auth module before the releasepaused — reached its limit1.Review the six files that changed in the auth module3 reviewers2 of 3 reviewers done · 27,000 tokensWren the ReviewerFinished in 2m 15s · 6 stepsIdris the ReviewerFinished in 3m 5s · 7 stepsMara the ReviewerStopped after 3m 45s · 9 steps — the assistant can pick this back upModelDefault · automatic — already running, so its model can’t be changed now2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 workerSpent $0.08 (27,000 tokens) of the $0.12 limit (40,000 tokens)Paused — step 1 hit its 27,000-token limit with 2 of 3 reviewers done.Ask the assistantStopAdd budget"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-proposed 1`] = `
@@ -60,7 +60,7 @@ step plan-step-s1: pending
 step plan-step-s2: pending
 step plan-step-s3: pending
 buttons: Plan: Review the auth module before the releasewaiting for your approval | 1.Review the six files that changed in the auth module3 reviewers | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker | Comment | Approve
-text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 worker7 specialists · Up to about $0.12 (40,000 tokens) · specialists run on Claude Sonnet 4.6CommentApprove"
+text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 worker7 specialistsCommentApprove"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-proposed-local 1`] = `
@@ -69,7 +69,7 @@ step plan-step-s1: pending
 step plan-step-s2: pending
 step plan-step-s3: pending
 buttons: Plan: Review the auth module before the releasewaiting for your approval | 1.Review the six files that changed in the auth module3 reviewers | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker | Comment | Approve
-text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 worker7 specialists · Up to 40,000 tokens · specialists run on Qwen3.5-9B (your computer), which has no published priceCommentApprove"
+text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 worker7 specialistsCommentApprove"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-revised 1`] = `
@@ -77,8 +77,8 @@ exports[`the signed plan card reads exactly as approved > plan-revised 1`] = `
 step plan-step-s1: pending
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: Plan: Review the auth module before the releaserevised — see the new plan below | 1.Review the six files that changed in the auth module3 reviewersup to 27,000 tokens | 2.Check each review against the file it describes3 reviewersup to 9,000 tokens | 3.Combine the findings into one ranked list1 workerup to 4,000 tokens
-text: Plan: Review the auth module before the releaserevised — see the new plan below1.Review the six files that changed in the auth module3 reviewersup to 27,000 tokens2.Check each review against the file it describes3 reviewersup to 9,000 tokens3.Combine the findings into one ranked list1 workerup to 4,000 tokens7 specialists · Up to about $0.12 (40,000 tokens) · specialists run on Claude Sonnet 4.6Revised after your comment — the new plan is below."
+buttons: Plan: Review the auth module before the releaserevised — see the new plan below | 1.Review the six files that changed in the auth module3 reviewers | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker
+text: Plan: Review the auth module before the releaserevised — see the new plan below1.Review the six files that changed in the auth module3 reviewers2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 worker7 specialistsRevised after your comment — the new plan is below."
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-running 1`] = `
@@ -86,8 +86,8 @@ exports[`the signed plan card reads exactly as approved > plan-running 1`] = `
 step plan-step-s1: running
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: ⠋Plan: Review the auth module before the releasestep 1 of 3 | ⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokens | Wren the ReviewerFinished in 2m 15s · 6 steps | ⠋Idris the ReviewerWorking in the background · 3m 15s | ⠋Mara the ReviewerWorking in the background · 3m 15s | 2.Check each review against the file it describes3 reviewersup to 9,000 tokens | 3.Combine the findings into one ranked list1 workerup to 4,000 tokens | Stop the plan
-text: ⠋Plan: Review the auth module before the releasestep 1 of 3⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokensWren the ReviewerFinished in 2m 15s · 6 steps⠋Idris the ReviewerWorking in the background · 3m 15s⠋Mara the ReviewerWorking in the background · 3m 15sLimitsEach reviewer stops at its 9,000-token limit.2.Check each review against the file it describes3 reviewersup to 9,000 tokens3.Combine the findings into one ranked list1 workerup to 4,000 tokensSpent $0.03 (11,200 tokens) of the $0.12 limit (40,000 tokens)Stop the plan"
+buttons: ⠋Plan: Review the auth module before the releasestep 1 of 3 | ⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokens | Wren the ReviewerFinished in 2m 15s · 6 steps | ⠋Idris the ReviewerWorking in the background · 3m 15s | ⠋Mara the ReviewerWorking in the background · 3m 15s | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker | Stop the plan
+text: ⠋Plan: Review the auth module before the releasestep 1 of 3⠋1.Review the six files that changed in the auth module3 reviewers1 of 3 reviewers done · 11,200 tokensWren the ReviewerFinished in 2m 15s · 6 steps⠋Idris the ReviewerWorking in the background · 3m 15s⠋Mara the ReviewerWorking in the background · 3m 15sModelDefault · automatic — already running, so its model can’t be changed now2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 workerSpent $0.03Stop the plan"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-stopped 1`] = `
@@ -95,8 +95,8 @@ exports[`the signed plan card reads exactly as approved > plan-stopped 1`] = `
 step plan-step-s1: skipped
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: Plan: Review the auth module before the releasestopped — 0 of 3 steps donestopped | 1.Review the six files that changed in the auth module3 reviewers | 2.Check each review against the file it describes3 reviewersup to 9,000 tokens | 3.Combine the findings into one ranked list1 workerup to 4,000 tokens
-text: Plan: Review the auth module before the releasestopped — 0 of 3 steps donestopped1.Review the six files that changed in the auth module3 reviewers2.Check each review against the file it describes3 reviewersup to 9,000 tokens3.Combine the findings into one ranked list1 workerup to 4,000 tokensSpent $0.03 (11,200 tokens) of the $0.12 limit (40,000 tokens)"
+buttons: Plan: Review the auth module before the releasestopped — 0 of 3 steps donestopped | 1.Review the six files that changed in the auth module3 reviewers | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker
+text: Plan: Review the auth module before the releasestopped — 0 of 3 steps donestopped1.Review the six files that changed in the auth module3 reviewers2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 workerSpent $0.03 (11,200 tokens) of the $0.12 limit (40,000 tokens)"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-writing 1`] = `
@@ -110,8 +110,8 @@ exports[`the signed plan card reads exactly as approved > the paused card opens 
 step plan-step-s1: paused
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: Plan: Review the auth module before the releasepaused — reached its limit | 1.Review the six files that changed in the auth module3 reviewers2 of 3 reviewers done · 27,000 tokens | Wren the ReviewerFinished in 2m 15s · 6 steps | Idris the ReviewerFinished in 3m 5s · 7 steps | Mara the ReviewerStopped after 3m 45s · 9 steps — the assistant can pick this back up | 2.Check each review against the file it describes3 reviewersup to 9,000 tokens | 3.Combine the findings into one ranked list1 workerup to 4,000 tokens | Cancel | Continue
-text: Plan: Review the auth module before the releasepaused — reached its limit1.Review the six files that changed in the auth module3 reviewers2 of 3 reviewers done · 27,000 tokensWren the ReviewerFinished in 2m 15s · 6 stepsIdris the ReviewerFinished in 3m 5s · 7 stepsMara the ReviewerStopped after 3m 45s · 9 steps — the assistant can pick this back upLimitsEach reviewer stops at its 9,000-token limit.2.Check each review against the file it describes3 reviewersup to 9,000 tokens3.Combine the findings into one ranked list1 workerup to 4,000 tokensSpent $0.08 (27,000 tokens) of the $0.12 limit (40,000 tokens)Paused — step 1 hit its 27,000-token limit with 2 of 3 reviewers done.Allowtokens ($0.03)CancelContinue"
+buttons: Plan: Review the auth module before the releasepaused — reached its limit | 1.Review the six files that changed in the auth module3 reviewers2 of 3 reviewers done · 27,000 tokens | Wren the ReviewerFinished in 2m 15s · 6 steps | Idris the ReviewerFinished in 3m 5s · 7 steps | Mara the ReviewerStopped after 3m 45s · 9 steps — the assistant can pick this back up | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker | Cancel | Continue
+text: Plan: Review the auth module before the releasepaused — reached its limit1.Review the six files that changed in the auth module3 reviewers2 of 3 reviewers done · 27,000 tokensWren the ReviewerFinished in 2m 15s · 6 stepsIdris the ReviewerFinished in 3m 5s · 7 stepsMara the ReviewerStopped after 3m 45s · 9 steps — the assistant can pick this back upModelDefault · automatic — already running, so its model can’t be changed now2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 workerSpent $0.08 (27,000 tokens) of the $0.12 limit (40,000 tokens)Paused — step 1 hit its 27,000-token limit with 2 of 3 reviewers done.Allowtokens ($0.03)CancelContinue"
 `;
 
 exports[`the signed plan card reads exactly as approved > the proposed card opens its comment box 1`] = `
@@ -120,5 +120,5 @@ step plan-step-s1: pending
 step plan-step-s2: pending
 step plan-step-s3: pending
 buttons: Plan: Review the auth module before the releasewaiting for your approval | 1.Review the six files that changed in the auth module3 reviewers | 2.Check each review against the file it describes3 reviewers | 3.Combine the findings into one ranked list1 worker | Cancel | Send [disabled]
-text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 worker7 specialists · Up to about $0.12 (40,000 tokens) · specialists run on Claude Sonnet 4.6CancelSend"
+text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers2.Check each review against the file it describes3 reviewers3.Combine the findings into one ranked list1 worker7 specialistsCancelSend"
 `;
