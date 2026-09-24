@@ -98,6 +98,16 @@
      Sunbreak) set an 8px 12px margin that pinned the narrowed composer left. */
   margin-inline: auto !important;
 }
+/* Phone widths (the app's one 640px breakpoint): the 16px-a-side inset cost a
+   390px screen enough width that a three-line message wrapped to four and its
+   first line scrolled out of the box (phone check, 2026-09-24). Full width, so
+   the box is exactly as wide as in every other style (its own inner padding
+   already keeps it 8px off each edge). */
+@media (max-width: 639.98px) {
+  [data-chrome-style='float'] .input-bar-container {
+    width: 100%;
+  }
+}
 [data-chrome-style='float'] .input-bar-container > .relative > .flex {
   justify-content: safe center;
 }
