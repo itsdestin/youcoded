@@ -4,13 +4,12 @@ import '../styles/scroll-mask.css';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from '../state/theme-context';
 import { useMarketplace } from '../state/marketplace-context';
-import FavoriteStar from './marketplace/FavoriteStar';
 import { computeOnAccent } from '../themes/theme-validator';
 import SettingsExplainer, { type ExplainerSection } from './SettingsExplainer';
 import type { LoadedTheme } from '../themes/theme-types';
-import { themePreviewSrc } from '../themes/builtin/previews';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../themes/theme-engine';
 import { roundnessToShape, themeRoundness } from '../themes/look-overrides';
+import { ThemeCard } from './appearance/ThemeCard';
 import { LayoutSettings, LookSettings, LookSlider, SECTION_LABEL } from './appearance/LookSettings';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
@@ -106,34 +105,14 @@ interface Props {
   onEditSlug: (slug: string | null) => void;
 }
 
-// Small pencil icon used on theme cards to open the per-theme edit panel.
-// The top of a theme card: the theme's preview picture (built-ins ship theirs; community
-// and user themes serve preview.png from their folder). If the picture cannot load — no
-// preview.png, or a remote client that cannot resolve theme-asset:// — the card falls
-// back to the token gradient the cards used to show, so nothing is ever blank.
 // Only the user's own themes have an edit menu now. WHY (2026-09-24): the per-theme
 // glass tweaks that gave built-in and marketplace themes a pencil were retired in
 // favour of one global Look (appearance-panel-questions AP-3), which left their
 // pencil with nothing behind it — so it is not drawn at all, rather than greyed on
-// nearly every card.
+// nearly every card. The card itself lives in appearance/ThemeCard.tsx.
 function canCustomize(theme: LoadedTheme): boolean {
   return theme.source === 'user';
 }
-
-function ThemePreviewStrip({ theme }: { theme: LoadedTheme }) {
-  const [failed, setFailed] = useState(false);
-  const src = themePreviewSrc(theme);
-  if (!src || failed) {
-    return <div className="absolute inset-x-0 top-0 h-[72px]" style={{ background: `linear-gradient(90deg, ${theme.tokens.canvas}, ${theme.tokens.accent})` }} aria-hidden="true" />;
-  }
-  return <img src={src} alt="" className="absolute inset-x-0 top-0 h-[72px] w-full object-cover object-top" onError={() => setFailed(true)} />;
-}
-
-const PencilIcon = ({ className = 'w-3 h-3' }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-  </svg>
-);
 
 // WHY: `onShowInfo` was lifted to the Dialog owner (SettingsPanel ThemeButton)
 // in D1 — the owner renders the (i) button into the header via `headerActions`.
@@ -236,71 +215,18 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
             aria-label="Favorited themes"
           >
           <div className="grid grid-cols-2 gap-2" data-guide-anchor="theme-grid">
-            {gridThemes.map(t => {
-              const isActive = t.slug === activeSlug;
-              const isFav = themeFavSet.has(t.slug);
-              return (
-                // Fix: outer element is div+role=button (not <button>) so the
-                // nested pencil and star buttons are valid HTML (no button-in-button).
-                <div
-                  key={t.slug}
-                  data-active-theme={isActive || undefined}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setTheme(t.slug)}
-                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setTheme(t.slug); } }}
-                  // Change 22 reaches these tiles ONLY as a focus ring. They are
-                  // deliberately NOT .layer-surface: the tile paints the
-                  // *previewed* theme's own tokens inline, so painting the
-                  // active theme's panel over it would defeat the preview.
-                  // They were the only keyboard-reachable control in this file
-                  // with no focus indication at all.
-                  // Phase C P-3 #1 (Destin, 2026-08-27): every card is the same fixed
-                  // height — the height the active card used to grow to — and the
-                  // top is the theme's preview picture (the same one Marketplace and
-                  // Library cards show). Before, only the active card had a second
-                  // row ("active"), so its row-mate stretched to match and showed an
-                  // empty strip with a floating pencil. Now nothing ever grows: name,
-                  // "active" and the pencil share ONE row at the bottom.
-                  // Round 2 (2026-08-27): h-24 instead of h-16 so the preview shows a real slice of
-                  // the mock chat, not a sliver; `group` lets the star appear only on hover.
-                  className={`group relative h-24 rounded-lg overflow-hidden border text-left transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${isActive ? 'border-accent' : 'border-edge-dim hover:border-edge'}`}
-                  style={{ background: t.tokens.canvas }}
-                >
-                  <ThemePreviewStrip theme={t} />
-                  <div className="absolute inset-x-0 bottom-0 h-6 flex items-center gap-1.5 pl-2 pr-1" style={{ background: t.tokens.canvas }}>
-                    <p className="text-3xs font-medium truncate flex-1 min-w-0" style={{ color: t.tokens.fg }}>{t.name}</p>
-                    {isActive && <span className="text-4xs shrink-0" style={{ color: t.tokens.accent }}>active</span>}
-                  {/* Pencil — opens the edit menu, on the user's own themes only (see canCustomize). */}
-                  {canCustomize(t) && (
-                  <button
-                    type="button"
-                    onClick={e => { e.stopPropagation(); openEditor(t.slug); }}
-                    // Change 41: `bg-current` resolves to the inline `color` below,
-                    // i.e. the previewed theme's own fg, so the hover is legible on
-                    // a light and a dark swatch alike.
-                    className="w-5 h-5 shrink-0 rounded-sm flex items-center justify-center coarse-hit transition-colors hover:bg-current/15"
-                    style={{ color: t.tokens.fg }}
-                    title="Edit theme"
-                    aria-label={`Edit ${t.name}`}
-                  >
-                    <PencilIcon />
-                  </button>
-                  )}
-                  </div>
-                  {/* Star — toggles this theme in/out of the Appearance panel favorites.
-                      Round 2 (Destin, 2026-08-27): hidden until the card is hovered or the
-                      star itself has keyboard focus, so the preview picture stays clean. */}
-                  <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                    <FavoriteStar
-                      filled={isFav}
-                      onToggle={() => mp.favoriteTheme(t.slug, !isFav).catch(() => {})}
-                      size="sm"
-                    />
-                  </div>
-                </div>
-              );
-            })}
+            {gridThemes.map(t => (
+              <ThemeCard
+                key={t.slug}
+                theme={t}
+                active={t.slug === activeSlug}
+                favorite={themeFavSet.has(t.slug)}
+                onSelect={() => setTheme(t.slug)}
+                onToggleFavorite={() => { mp.favoriteTheme(t.slug, !themeFavSet.has(t.slug)).catch(() => {}); }}
+                // The pencil — the editor — exists only on the user's own themes (canCustomize).
+                onEdit={canCustomize(t) ? () => openEditor(t.slug) : undefined}
+              />
+            ))}
           </div>
         </div>
 
