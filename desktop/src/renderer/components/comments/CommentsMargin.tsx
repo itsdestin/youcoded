@@ -268,18 +268,18 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   // highlights, scrolling the document must not carry the list away.
   // data-comments-pane: the framing's outer edge, measured by
   // ActiveArtifactView so Comments/Edit clear it.
-  const openCount = visible.filter((c) => !c.resolved).length;
   if (variant === 'combined') {
     return (
       // w-68 + p-2: the panel itself stays column's 256px wide, inset 8px on
       // every side so its rounded corners (sheet) read as a panel.
       <div ref={marginRef} className="w-68 shrink-0 p-2">
         <div data-comments-pane className="h-full rounded-xl border border-edge bg-panel flex flex-col overflow-hidden">
-          {/* Title row (titled / Session Files) with Show resolved as the
+          {/* Title row (titled / Session Files; round 17 dropped its count —
+              Destin: "remove the number next to comments") with Show resolved as the
               Resume browser's "Show Complete" switch — same label recipe and
               the shared Toggle (ResumeBrowser.tsx). */}
           <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-edge shrink-0">
-            <span className="font-semibold text-sm">Comments <span className="font-normal text-fg-muted">{openCount}</span></span>
+            <span className="font-semibold text-sm">Comments</span>
             <div className="flex items-center gap-2">
               <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Show Resolved</label>
               <Toggle checked={showResolved} onChange={setShowResolved} aria-label="Show Resolved" />
@@ -310,7 +310,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
             "label + muted numeral". Show resolved moves up here, so only Ask
             Your Assistant floats at the bottom in this framing. */}
         <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-edge shrink-0">
-          <span className="font-semibold text-sm">Comments <span className="font-normal text-fg-muted">{openCount}</span></span>
+          <span className="font-semibold text-sm">Comments</span>
           {resolvedCount > 0 && (
             <Button variant="ghost" size="sm" aria-pressed={showResolved} onClick={() => setShowResolved(!showResolved)}>
               {showResolved ? 'Hide resolved' : 'Show resolved'} <span className="text-fg-muted">{resolvedCount}</span>
