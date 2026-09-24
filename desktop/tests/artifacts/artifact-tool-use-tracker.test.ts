@@ -116,6 +116,25 @@ describe('artifact tool-use tracker', () => {
     expect(listSession).not.toHaveBeenCalled();
   });
 
+  // App frees a closed tab's file list (SESSION_REMOVED). A refresh already in
+  // flight when the tab closed must not load it back for a tab that is gone —
+  // but a conversation resumed under the SAME id (native resume) is back in
+  // the session list, and its refresh is real and must load.
+  it('a refresh that lands after its tab closed is dropped; a resumed tab with the same id still loads', async () => {
+    let sessions = [{ id: 'sess-1', cwd: ROOT }];
+    const { tracker, listSession, onSessionArtifacts } = makeTracker({ getSessions: () => sessions });
+    tracker.handle(toolUse(1));
+    sessions = []; // the tab closes before the debounced refresh runs
+    await vi.advanceTimersByTimeAsync(300);
+    expect(listSession).toHaveBeenCalledTimes(1);
+    expect(onSessionArtifacts).not.toHaveBeenCalled();
+
+    sessions = [{ id: 'sess-1', cwd: ROOT }]; // resumed, same id
+    tracker.handle(toolUse(2));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(onSessionArtifacts).toHaveBeenCalledWith('sess-1', [{ id: 'a1' }]);
+  });
+
   describe('what is tracked (unchanged behaviour, now pinned)', () => {
     it('ignores non-tool events, untracked tools, and events for unknown sessions', () => {
       const { tracker, appendVersion } = makeTracker();

@@ -10,21 +10,22 @@ import { NARROW_VIEWPORT_QUERY } from '../src/renderer/hooks/use-narrow-viewport
 
 const mocks = vi.hoisted(() => ({ state: {} as any, dispatch: vi.fn(), listeners: new Set<() => void>(), bodyRuns: 0, rowRenders: 0 }));
 
-// WHY a subscribing fake and not a plain `() => ({ state })`: SessionDrawer is
+// WHY a subscribing fake and not a plain `() => state`: SessionDrawer is
 // React.memo'd, so re-rendering it with the same props is skipped — a changed
-// fake state would never reach it, while in the app a context change always
+// fake state would never reach it, while in the app a store change always
 // does. This fake redraws its consumers when a test changes the state, the way
-// the real ArtifactContext does.
+// the real artifact store does.
 //
-// WHY it also counts calls: useArtifact is called in the drawer's own body (and its
-// children's), so counting the calls counts the renders — if memo bails out, the
-// body never runs and the count stays put. A React Profiler is NOT usable for
-// that: it reports a commit for its own re-render as the parent updates, even
-// when the child below it bailed out.
+// WHY it also counts calls: useArtifactDispatch is called exactly once in the
+// drawer's own body, so counting the calls counts the renders — if memo bails
+// out, the body never runs and the count stays put. A React Profiler is NOT
+// usable for that: it reports a commit for its own re-render as the parent
+// updates, even when the child below it bailed out. (useArtifactSelector is
+// called several times per render, so it is not the counter.)
 vi.mock('../src/renderer/state/ArtifactContext', async () => {
   const { useReducer, useEffect } = await import('react');
   return {
-    useArtifact: () => {
+    useArtifactDispatch: () => {
       mocks.bodyRuns++;
       const [, redraw] = useReducer((n: number) => n + 1, 0);
       useEffect(() => {
@@ -32,8 +33,9 @@ vi.mock('../src/renderer/state/ArtifactContext', async () => {
         mocks.listeners.add(listener);
         return () => { mocks.listeners.delete(listener); };
       }, []);
-      return { state: mocks.state, dispatch: mocks.dispatch };
+      return mocks.dispatch;
     },
+    useArtifactSelector: (select: (s: any) => unknown) => select(mocks.state),
   };
 });
 
@@ -254,12 +256,12 @@ describe('SessionDrawer while a tapped file is being looked up', () => {
 //
 // Two halves, because either alone leaves the redraw in place:
 //   1. the drawer itself skips a parent re-render that changes none of its props
-//   2. App hands ArtifactContext a MEMOIZED value — an inline object literal is a
-//      new identity every render, which redraws every consumer of that context
-//      regardless of what memo does about props
-// This file pins half 1. WHY half 2 is not here (Plan B, 2026-09-16): it is one
-// prop at one call site in App.tsx, pinned by the ast-grep rule
-// artifact-provider-value-memoized in the workspace's scripts/ast-grep/rules/.
+//   2. App hands the artifact provider a STORE created once, and the drawer reads
+//      only its own session's slice through selectors — a changing context value
+//      redraws every consumer regardless of what memo does about props
+// This file pins half 1. Half 2 is pinned by tests/artifact-store-selectors.test.tsx
+// and, at App's one call site, by the ast-grep rule artifact-provider-stable-store
+// in the workspace's scripts/ast-grep/rules/.
 describe('the file pane and a streaming reply', () => {
   const SESSION = 's1';
   const ROOT = '/projects/alpha';

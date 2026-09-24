@@ -6,7 +6,7 @@ import type { SessionStatusColor } from './StatusDot';
 import type { SessionProvider } from '../../shared/types';
 import { isAndroid, isRemoteMode } from '../platform';
 // Artifact drawer trigger — reads session artifact count for the badge.
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import OverflowMenu from './OverflowMenu';
 import NarrowViewToggle from './NarrowViewToggle';
 import WideViewToggle from './WideViewToggle';
@@ -249,13 +249,14 @@ interface Props {
 /** Projects button — always visible (projects are persistent, not session-local).
  *  Opens ProjectView as a full-screen overlay via PROJECT_VIEW_OPENED dispatch.
  *  HeaderBar must always render inside ArtifactProvider (its only render site,
- *  App.tsx, does) — useArtifact() needs a provider ancestor regardless of which
- *  component calls it. Keeping this in its own small component is just code
- *  organization; SessionStrip now also calls useArtifact() at its top level. */
+ *  App.tsx, does) — the artifact hooks need a provider ancestor regardless of
+ *  which component calls them. Keeping this in its own small component is just
+ *  code organization; SessionStrip now also calls useArtifactDispatch() at its top level. */
 /** `active` lights it inside Project View's own band (ScreenBand), where a
  *  second press returns to chat — the same toggle the Pages button has. */
 export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
-  const { dispatch } = useArtifact();
+  // Dispatch only: this button never redraws for an artifact state change.
+  const dispatch = useArtifactDispatch();
   return (
     <Tooltip text={active ? 'Back to chat' : 'Projects'} placement="bottom">
     <button
@@ -275,16 +276,17 @@ export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
   );
 }
 
-/** Files-drawer button — isolated so it can safely call useArtifact().
+/** Files-drawer button — isolated so it can safely call the artifact hooks.
  *  Placed inside <ArtifactContext.Provider> (mounted in App.tsx), so the hook
  *  is always in-context when the main app is rendering HeaderBar.
  *  Always rendered (so the drawer is reachable before any files exist); only
  *  the count badge is conditional. (An earlier plan hid the whole button at
  *  zero — that changed; this comment used to say so and was stale.) */
 function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionId: string | null; projectRoot?: string }) {
-  const { state, dispatch } = useArtifact();
+  const dispatch = useArtifactDispatch();
   // Open/closed is per-session — reflect (and toggle) the ACTIVE session's flag.
-  const drawerOpen = activeSessionId ? (state.drawerOpenBySession[activeSessionId] ?? false) : false;
+  // A narrow selector, so another session's file activity does not redraw it.
+  const drawerOpen = useArtifactSelector((s) => (activeSessionId ? (s.drawerOpenBySession[activeSessionId] ?? false) : false));
   // Count logic shared with the narrow overflow menu's "Session Files" row.
   const artifactCount = useArtifactCount(activeSessionId, projectRoot);
 

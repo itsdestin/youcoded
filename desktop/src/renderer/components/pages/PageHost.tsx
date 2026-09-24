@@ -40,7 +40,7 @@
 // First-run refinement (2026-09-23): keep the quoted decision above for pages
 // that exist; with none, the frame carries the former Manage pages welcome card.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useArtifact } from '../../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
@@ -88,13 +88,16 @@ type Load =
   | { state: 'failed'; failure: PageLoadFailure };
 
 export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage }: PageHostProps) {
-  const { state, dispatch } = useArtifact();
-  const open = state.pageViewOpen;
-  const pageId = state.openPageId;
+  // Narrow selectors (perf, 2026-09-23): only the page flags this host shows.
+  const dispatch = useArtifactDispatch();
+  const open = useArtifactSelector((s) => s.pageViewOpen);
+  const pageId = useArtifactSelector((s) => s.openPageId);
+  const pagesViewOpen = useArtifactSelector((s) => s.pagesViewOpen);
+  const pageFocus = useArtifactSelector((s) => s.pageFocus);
   // Back to chat leaves pages altogether (the library over this view goes too).
   const backToChat = () => dispatch({ type: 'PAGE_VIEW_CLOSED' });
   const managePages = () => dispatch({ type: 'PAGES_VIEW_OPENED' });
-  useEscClose(open && !state.pagesViewOpen && !settingsOpen, backToChat);
+  useEscClose(open && !pagesViewOpen && !settingsOpen, backToChat);
   // Esc pressed INSIDE the page (the frame swallows the key) is forwarded by
   // the page's bootstrap; it dismisses whatever is on top exactly as the key
   // would — Settings or the library over the view, else the view itself.
@@ -289,7 +292,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         onToggleSettings={onToggleSettings}
         settingsBadge={settingsBadge}
         settingsDangerBadge={settingsDangerBadge}
-        active={state.pageFocus ? null : 'pages'}
+        active={pageFocus ? null : 'pages'}
         onBack={backToChat}
         title={<>
           {summary && <PageGlyph icon={summary.icon} className="w-4 h-4 text-fg-muted shrink-0" />}
@@ -306,7 +309,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
       <div className="screen-body flex-1 min-h-0 flex">
-        {!state.pageFocus && !emptyPages && (
+        {!pageFocus && !emptyPages && (
         <aside className="screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
           <div className="flex-1 overflow-y-auto p-2">
             {personal.length > 0 && (
@@ -365,7 +368,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               Q-own-pages, S-change). "Not now" leaves the page unselected — or, from
               a pinned button (no panel to fall back to), goes back to chat. */}
           {load.state === 'ready' && awaitingApproval && (
-            <PageApproval page={load.page} onNotNow={() => dispatch({ type: state.pageFocus ? 'PAGE_VIEW_CLOSED' : 'PAGE_CLOSED' })} />
+            <PageApproval page={load.page} onNotNow={() => dispatch({ type: pageFocus ? 'PAGE_VIEW_CLOSED' : 'PAGE_CLOSED' })} />
           )}
           {load.state === 'ready' && !awaitingApproval && (
             <iframe

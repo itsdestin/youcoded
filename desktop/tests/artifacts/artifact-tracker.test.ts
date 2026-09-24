@@ -178,3 +178,66 @@ describe('git review', () => {
     });
   });
 });
+
+// Perf, 2026-09-23: a closed session's entries were never freed, so a day of
+// opening and closing tabs kept every closed session's file list and drawer
+// flags in memory until restart. App dispatches SESSION_REMOVED where it drops
+// a session (session:destroyed, removeSessionLocally).
+describe('SESSION_REMOVED', () => {
+  const ref = (id: string) => ({ provider: 'claude' as const, id, title: 'T', lastActive: 'now' });
+  // Every per-session record holds an entry for the closing session 'gone', the
+  // surviving session 'kept' and Project View's own 'project-view' key.
+  const populated = () => {
+    let s = initialArtifactState;
+    for (const sid of ['gone', 'kept', 'project-view']) {
+      s = artifactReducer(s, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: sid, artifacts: [sampleArtifact] });
+      s = artifactReducer(s, { type: 'SET_SESSION_CWD', sessionId: sid, cwd: '/p' });
+      s = artifactReducer(s, { type: 'DRAWER_OPENED', sessionId: sid });
+      s = artifactReducer(s, { type: 'ACTIVE_ARTIFACT_SET', sessionId: sid, artifactId: 'art_1' });
+      s = artifactReducer(s, { type: 'GIT_REVIEW_OPENED', sessionId: sid });
+      s = artifactReducer(s, { type: 'PILL_RESOLVE_STARTED', sessionId: sid, name: 'x' });
+      s = artifactReducer(s, { type: 'PILL_RESOLVE_FAILED', sessionId: sid, message: 'no' });
+      s = artifactReducer(s, { type: 'SESSION_PREVIEW_SET', sessionId: sid, provider: 'claude', id: 'conv-gone', title: 'T' });
+      s = artifactReducer(s, { type: 'SESSION_REFERENCED', sessionId: sid, ref: ref('conv-gone') });
+    }
+    return s;
+  };
+  const PER_SESSION = [
+    'sessionArtifacts', 'sessionCwd', 'pillError', 'pillPending', 'drawerOpenBySession',
+    'activeArtifactBySession', 'gitReviewBySession', 'activeSessionPreviewBySession',
+    'referencedSessionsBySession',
+  ] as const;
+
+  it('deletes the session\'s key from all nine per-session records', () => {
+    const s = artifactReducer(populated(), { type: 'SESSION_REMOVED', sessionId: 'gone' });
+    for (const field of PER_SESSION) {
+      expect(Object.keys(s[field]), field).not.toContain('gone');
+    }
+  });
+
+  it('the nine are every per-session record the state has (a new one must be added to the case)', () => {
+    const recordFields = Object.entries(initialArtifactState)
+      .filter(([k, v]) => v && typeof v === 'object' && k !== 'projectArtifacts')
+      .map(([k]) => k)
+      .sort();
+    expect(recordFields).toEqual([...PER_SESSION].sort());
+  });
+
+  it('leaves other sessions and Project View untouched — including previews that name the same conversation', () => {
+    const before = populated();
+    const s = artifactReducer(before, { type: 'SESSION_REMOVED', sessionId: 'gone' });
+    for (const field of PER_SESSION) {
+      expect(s[field]['kept'], field).toBe(before[field]['kept']);
+      expect(s[field]['project-view'], field).toBe(before[field]['project-view']);
+    }
+    // The referenced list names CONVERSATIONS, not tabs: 'kept' can still
+    // preview the conversation even though the tab that made it closed.
+    expect(s.referencedSessionsBySession['kept'].map((r) => r.id)).toEqual(['conv-gone']);
+    expect(s.activeSessionPreviewBySession['kept']?.id).toBe('conv-gone');
+  });
+
+  it('returns the same state when the session had no entries (no reader wakes)', () => {
+    const before = populated();
+    expect(artifactReducer(before, { type: 'SESSION_REMOVED', sessionId: 'never-seen' })).toBe(before);
+  });
+});

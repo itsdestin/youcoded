@@ -4,7 +4,7 @@
 // and upsert records for whatever we find. REAL temp dirs (fs.mkdtempSync) — no
 // fs mocking — because the whole point is real transcript reads + the real store
 // (locked read-modify-write on disk). Fixture style mirrors session-browser.test.ts.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -356,5 +356,66 @@ describe('reconcile — foreign-slug symlinks (legacy machinery) are skipped', (
     expect(n).toBe(1);
     const rec = await store.get('claude', SID_A);
     expect(rec!.projectName).toBe('desti');
+  });
+});
+
+// Perf (2026-09-23): the scan runs at startup and every 30 minutes over EVERY
+// transcript ever written, on the main process. It must not block the main
+// thread with synchronous fs calls, and an unchanged transcript must not be
+// tail-read again — while the results stay exactly what they were.
+describe('reconcile — main-thread cost', () => {
+  it('makes no synchronous fs call while scanning', async () => {
+    writeTranscript(projectsDir, 'C--proj-alpha', SID_A);
+    fs.writeFileSync(path.join(topicsDir, `topic-${SID_A}`), 'A topic');
+    const knownFolder = path.join(tmp, 'alpha');
+    fs.mkdirSync(knownFolder);
+    const spies = (['readdirSync', 'lstatSync', 'statSync', 'readFileSync', 'realpathSync', 'existsSync', 'openSync', 'readSync'] as const)
+      .map((m) => vi.spyOn(fs, m));
+    const nativeSpy = vi.spyOn(fs.realpathSync, 'native');
+    try {
+      const n = await reconcile({ projectsDir, topicsDir, store, device: 'Dev1', mirror, knownFolders: [knownFolder] });
+      expect(n).toBe(1);
+      // Spy calls made by the store itself are out of scope — only the
+      // reconciler's own transcript/topic/folder reads are pinned here.
+      const ownPaths = (args: unknown[]) => typeof args[0] === 'string'
+        && (args[0].startsWith(projectsDir) || args[0].startsWith(topicsDir) || args[0] === knownFolder);
+      for (const spy of spies) expect(spy.mock.calls.filter(ownPaths)).toEqual([]);
+      expect(nativeSpy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+      nativeSpy.mockRestore();
+    }
+    expect((await store.get('claude', SID_A))!.title).toBe('A topic');
+  });
+
+  it('a second pass over unchanged transcripts skips the tail read but gives identical results', async () => {
+    writeTranscript(projectsDir, 'C--proj-alpha', SID_A);
+    writeTranscript(projectsDir, 'C--proj-beta', SID_B);
+    expect(await reconcile({ projectsDir, topicsDir, store, device: 'Dev1', mirror })).toBe(2);
+    const before = await store.list('claude');
+    mirrorCalls = [];
+
+    const openSpy = vi.spyOn(fs.promises, 'open');
+    try {
+      expect(await reconcile({ projectsDir, topicsDir, store, device: 'Dev1', mirror })).toBe(0);
+      const transcriptOpens = openSpy.mock.calls.filter(([p]) => String(p).startsWith(projectsDir));
+      expect(transcriptOpens).toEqual([]);
+    } finally {
+      openSpy.mockRestore();
+    }
+    // Same records, and every transcript still mirrored, exactly as before.
+    expect(await store.list('claude')).toEqual(before);
+    expect(mirrorCalls.map((c) => c.sid).sort()).toEqual([SID_A, SID_B].sort());
+  });
+
+  it('a transcript that GREW since the last pass is re-read and its record advanced', async () => {
+    const file = writeTranscript(projectsDir, 'C--proj-alpha', SID_A, { lastTimestamp: '2026-06-01T10:05:00Z' });
+    await reconcile({ projectsDir, topicsDir, store, device: 'Dev1', mirror });
+    fs.appendFileSync(file, jsonlLine({
+      type: 'assistant', uuid: 'a2', timestamp: '2026-06-02T09:00:00Z',
+      message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'more' }] },
+    }));
+    expect(await reconcile({ projectsDir, topicsDir, store, device: 'Dev1', mirror })).toBe(1);
+    expect((await store.get('claude', SID_A))!.lastActive).toBe('2026-06-02T09:00:00.000Z');
   });
 });
