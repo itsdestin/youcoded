@@ -33,7 +33,7 @@ import { formatVersionLine } from '../../shared/version-line';
 import type { BuddyHelperStatus } from '../../shared/types';
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
-import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError } from './ui';
+import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
 import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
@@ -1769,7 +1769,10 @@ function RemoteButton(props: RemoteButtonProps) {
                   between your devices.
                 </p>
                 <div>
-                  <h4 className="text-2xs uppercase tracking-wide text-fg-muted mb-2">What this adds</h4>
+                  {/* WHY SectionLabel, not an h4 eyebrow (fix batch 1, 2026-09-24):
+                      design guide small label — normal case, no letter-spacing;
+                      also retires the app's one non-canonical h4-as-label. */}
+                  <SectionLabel className="mb-2">What this adds</SectionLabel>
                   <p className="text-fg-2 text-xs">
                     A certificate, so your phone&apos;s browser can verify the connection. Browsers only
                     allow the microphone, copy buttons and the font picker on a connection they can
@@ -1782,7 +1785,7 @@ function RemoteButton(props: RemoteButtonProps) {
                     : 'This computer\u2019s name is added to a public list of issued certificates. The list is permanent: turning this off later does not remove it, and renaming the computer does not either. Only the name is public. Your conversations and files are not.'}
                 </Callout>
                 <div>
-                  <h4 className="text-2xs uppercase tracking-wide text-fg-muted mb-2">You will also need</h4>
+                  <SectionLabel className="mb-2">You will also need</SectionLabel>
                   <p className="text-fg-2 text-xs">
                     To turn on certificates for your Tailscale account, on their website. YouCoded cannot
                     do that part for you.
@@ -1868,112 +1871,120 @@ function RemoteButton(props: RemoteButtonProps) {
 
                     {/* Server settings */}
                     <section>
-                      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Server</h3>
+                      {/* WHY SectionLabel + space-y-1.5 (fix batch 1, 2026-09-24):
+                          design guide small label (normal case) and Settings
+                          spacing (6px between rows) — was a hand-typed uppercase
+                          eyebrow (mb-3) over rows separated by py-2 wrappers. */}
+                      <SectionLabel className="mb-2">Server</SectionLabel>
 
-                      {/* onClick keeps the whole-row hit target the <label> used
-                          to give this; SettingRow stops the toggle's own click
-                          from bubbling back into it. */}
-                      <SettingRow
-                        variant="item"
-                        title="Enabled"
-                        onClick={hostOnly ? undefined : onToggleEnabled}
-                        control={<Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} disabled={hostOnly} label="Remote access server enabled" />}
-                      />
-                      {hostOnly && (
-                        <p className="text-2xs text-fg-muted pb-2">Change these on the computer itself.</p>
-                      )}
-                      {/* The server is started from the toggle now, so it can fail
-                          (port already bound, permission denied). Show the real
-                          reason here — the toggle has already snapped back off. */}
-                      {enableError && (
-                        <FieldError as="p" size="2xs" className="pb-2">{plainReason(enableError)}</FieldError>
-                      )}
-                      {/* A bind failure was logged and nowhere else. Specific and accurate
-                          when the OS gave us a reason; never a guess. */}
-                      {!enableError && status?.state === 'failed' && (
-                        <FieldError as="p" size="2xs" className="pb-2">
-                          {status.reason ? `Not running: ${plainReason(status.reason)}` : 'Not running.'}
-                        </FieldError>
-                      )}
-
-                      <div className="py-2">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-fg-2">Password</span>
-                          {/* "Saved", not "Set": the button beside this one also says Set,
-                              so the row read as two identical controls, one of which did
-                              nothing when clicked. */}
-                          {config?.hasPassword && (
-                            <span className="text-3xs text-green-400">Saved</span>
-                          )}
-                        </div>
-                        {/* The Set button moves INSIDE the field (change 77): this is a
-                            field with a single submit action, which is exactly the
-                            InputGroup shape. The field also loses its bg-well surface,
-                            rounded-sm radius, and gray focus:border-fg-muted. */}
-                        <InputGroup size="sm">
-                          <InputGroup.Field
-                            type="password"
-                            placeholder={config?.hasPassword ? 'Change password...' : 'Set password...'}
-                            value={newPassword}
-                            onChange={(e) => onSetNewPassword(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
-                            aria-label="Remote access password"
-                            disabled={hostOnly}
-                          />
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={onSetPassword}
-                            disabled={hostOnly || !newPassword.trim() || passwordStatus === 'saving'}
-                          >
-                            {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
-                          </Button>
-                        </InputGroup>
-                        {/* Length rule + a one-tap generator + the disconnect warning
-                            (2026-09-10 security review, #5). The hint turns into the
-                            error when a too-short password is submitted. */}
-                        <div className="flex items-center justify-between mt-1.5">
-                          <span className={`text-3xs ${passwordStatus === 'too-short' ? 'text-red-400' : 'text-fg-muted'}`}>
-                            {passwordStatus === 'too-short'
-                              ? `Use at least ${MIN_REMOTE_PASSWORD_LENGTH} characters.`
-                              : `At least ${MIN_REMOTE_PASSWORD_LENGTH} characters.`}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={hostOnly}
-                            onClick={() => onSetNewPassword(generateRemotePassphrase())}
-                          >
-                            Generate
-                          </Button>
-                        </div>
-                        <p className="text-3xs text-fg-muted mt-1">
-                          Changing the password disconnects every device; each reconnects with the new one.
-                        </p>
-                        {config?.weakPassword && passwordStatus !== 'too-short' && (
-                          <p className="text-3xs text-amber-700 mt-1">
-                            Your current password is short. Consider setting a longer one.
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="py-2">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-fg-2">Keep awake</span>
-                        </div>
-                        {/* K3: four short options -> segmented. SegmentedTabs keys
-                            on string ids and keepAwakeHours is a number, so both
-                            directions convert at the boundary. */}
-                        <SegmentedTabs
-                          variant="contained"
-                          aria-label="Keep awake"
-                          value={String(config?.keepAwakeHours ?? 0)}
-                          onChange={(id) => onSetKeepAwake(Number(id))}
-                          tabs={KEEP_AWAKE_OPTIONS.map((opt) => ({
-                            id: String(opt.value),
-                            label: opt.label,
-                          }))}
+                      <div className="space-y-1.5">
+                        {/* onClick keeps the whole-row hit target the <label> used
+                            to give this; SettingRow stops the toggle's own click
+                            from bubbling back into it. */}
+                        <SettingRow
+                          variant="item"
+                          title="Enabled"
+                          onClick={hostOnly ? undefined : onToggleEnabled}
+                          control={<Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} disabled={hostOnly} label="Remote access server enabled" />}
                         />
+                        {hostOnly && (
+                          <p className="text-2xs text-fg-muted">Change these on the computer itself.</p>
+                        )}
+                        {/* The server is started from the toggle now, so it can fail
+                            (port already bound, permission denied). Show the real
+                            reason here — the toggle has already snapped back off. */}
+                        {enableError && (
+                          <FieldError as="p" size="2xs">{plainReason(enableError)}</FieldError>
+                        )}
+                        {/* A bind failure was logged and nowhere else. Specific and accurate
+                            when the OS gave us a reason; never a guess. */}
+                        {!enableError && status?.state === 'failed' && (
+                          <FieldError as="p" size="2xs">
+                            {status.reason ? `Not running: ${plainReason(status.reason)}` : 'Not running.'}
+                          </FieldError>
+                        )}
+
+                        {/* WHY FieldRow, hint above the control (fix batch 1,
+                            2026-09-24 — design guide "Settings" → wide controls
+                            go below the title+hint; decisions.md settings-screens
+                            audit named this row's old shape — hint BELOW the
+                            field — as the exact anti-pattern K2 retired
+                            everywhere else. The Set button stays INSIDE the field
+                            (rule: a text box with its own action). "Saved" and
+                            Generate move to one row under the field instead of
+                            beside the title and below-right of it. */}
+                        <FieldRow title="Password" hint={`At least ${MIN_REMOTE_PASSWORD_LENGTH} characters.`}>
+                          <InputGroup size="sm">
+                            <InputGroup.Field
+                              type="password"
+                              placeholder={config?.hasPassword ? 'Change password...' : 'Set password...'}
+                              value={newPassword}
+                              onChange={(e) => onSetNewPassword(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
+                              aria-label="Remote access password"
+                              disabled={hostOnly}
+                            />
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={onSetPassword}
+                              disabled={hostOnly || !newPassword.trim() || passwordStatus === 'saving'}
+                            >
+                              {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
+                            </Button>
+                          </InputGroup>
+                          <div className="flex items-center justify-between">
+                            {/* "Saved", not "Set": the button beside the field
+                                already says Set, so this read as two identical
+                                controls, one of which did nothing when clicked. */}
+                            <span className="text-3xs text-green-400">{config?.hasPassword ? 'Saved' : ''}</span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={hostOnly}
+                              onClick={() => onSetNewPassword(generateRemotePassphrase())}
+                            >
+                              Generate
+                            </Button>
+                          </div>
+                          {/* Too-short is a real validation error, not the passive
+                              hint above — FieldError, matching every other field. */}
+                          {passwordStatus === 'too-short' && (
+                            <FieldError as="p">Use at least {MIN_REMOTE_PASSWORD_LENGTH} characters.</FieldError>
+                          )}
+                          {/* The disconnect warning (2026-09-10 security review, #5). */}
+                          <p className="text-3xs text-fg-muted">
+                            Changing the password disconnects every device; each reconnects with the new one.
+                          </p>
+                          {config?.weakPassword && passwordStatus !== 'too-short' && (
+                            <p className="text-3xs text-amber-700">
+                              Your current password is short. Consider setting a longer one.
+                            </p>
+                          )}
+                        </FieldRow>
+
+                        {/* Keep awake — UNCHANGED (Destin: gets its own redesign
+                            later, showing time remaining; roadmap). Its 5-option
+                            segmented control and label placement stay exactly as
+                            they were before this batch. */}
+                        <div className="py-2">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs text-fg-2">Keep awake</span>
+                          </div>
+                          {/* K3: four short options -> segmented. SegmentedTabs keys
+                              on string ids and keepAwakeHours is a number, so both
+                              directions convert at the boundary. */}
+                          <SegmentedTabs
+                            variant="contained"
+                            aria-label="Keep awake"
+                            value={String(config?.keepAwakeHours ?? 0)}
+                            onChange={(id) => onSetKeepAwake(Number(id))}
+                            tabs={KEEP_AWAKE_OPTIONS.map((opt) => ({
+                              id: String(opt.value),
+                              label: opt.label,
+                            }))}
+                          />
+                        </div>
                       </div>
                     </section>
 
@@ -2005,9 +2016,9 @@ function RemoteButton(props: RemoteButtonProps) {
                     {/* Remote Clients section */}
                     {hasClients && (
                       <section>
-                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Devices</h3>
+                        <SectionLabel className="mb-2">Devices</SectionLabel>
 
-                        <div className="space-y-1">
+                        <div className="space-y-1.5">
                           {deviceRows.map(row => (
                             // K6: an item list is a K2 row with a status dot in the icon
                             // slot. One shape for the mockup and the real panel — a preview
@@ -2069,7 +2080,7 @@ function RemoteButton(props: RemoteButtonProps) {
                         an upgrade, not an unfinished step (Destin, 2026-09-10). */}
                     {previewView && preview && (previewView.stage === 'ready' || previewView.stage === 'consent') && (
                       <section>
-                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Advanced</h3>
+                        <SectionLabel className="mb-2">Advanced</SectionLabel>
                         <SettingRow
                           variant="item"
                           title="Browser encryption"
@@ -2081,13 +2092,14 @@ function RemoteButton(props: RemoteButtonProps) {
 
                     {/* Tailscale section */}
                     <section>
-                      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Tailscale</h3>
+                      <SectionLabel className="mb-2">Tailscale</SectionLabel>
 
                       {tailscale?.installed ? (
-                        // space-y-1 replaces the py-2 each bare row used to carry
-                        // its own spacing with — the rows are carded now, so the
-                        // gap belongs between them, not inside them.
-                        <div className="space-y-1">
+                        // space-y-1.5 (6px, Settings spacing rule) replaces the
+                        // py-2 each bare row used to carry its own spacing with —
+                        // the rows are carded now, so the gap belongs between
+                        // them, not inside them.
+                        <div className="space-y-1.5">
                           {/* Distinguish "installed and connected" from "installed but VPN off" —
                               previously detection conflated the two and forced the not-installed branch. */}
                           {/* K2 value rows. Status keeps its green/muted colour —
@@ -2138,8 +2150,12 @@ function RemoteButton(props: RemoteButtonProps) {
                           {/* WHY hidden in the preview: the setup banner above already offers
                               Install, and two identical actions in one dialog is the duplicate
                               this review is meant to remove, not reproduce. */}
+                          {/* WHY w-full (fix batch 1, 2026-09-24): the one action
+                              alone on its own row — design guide "a lone action
+                              is full width". */}
                           {!previewView && <Button
                             variant="secondary"
+                            className="w-full"
                             onClick={onRunSetup}
                             disabled={setupStatus === 'installing' || setupStatus === 'authenticating'}
                           >
