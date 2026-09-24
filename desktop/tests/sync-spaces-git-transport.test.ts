@@ -969,6 +969,29 @@ describe('GitTransport never-sync files and unmanaged local files', () => {
     } finally { await h.cleanup(); }
   });
 
+  it('a secret in a real two-sided conflict never becomes an uploaded "(from …)" copy', async () => {
+    const h = await makeHarness();
+    try {
+      const a = await h.makeDeviceSpace();
+      fs.writeFileSync(path.join(a.root, 'notes.md'), 'hello');
+      await h.transport.push(a, 'seed');
+      forcePublish(a, '.env', 'BASE=1\n');
+      const b = await h.makeDeviceSpace();
+      await h.transport.pull(b);
+      forcePublish(a, '.env', 'REMOTE=1\n');
+      // An older version on B committed its own value (never pushed).
+      fs.writeFileSync(path.join(b.root, '.env'), 'B_ONLY=1\n');
+      rawGit(b, ['add', '-f', '--', '.env']);
+      rawGit(b, ['commit', '-q', '-m', 'old-version local commit']);
+      const r = await h.transport.pull(b);
+      expect(r.conflictCopies).toEqual([]);
+      expect(read(b, '.env')).toBe('B_ONLY=1\n'); // this device keeps its bytes
+      await h.transport.push(b, 'after');
+      expect(remoteTree(b).some((n) => n.startsWith('.env ('))).toBe(false);
+      expect(remoteShow(b, '.env')).toBe('REMOTE=1\n');
+    } finally { await h.cleanup(); }
+  });
+
   it('a held-back secret edit does not wedge sync when an older device changes it', async () => {
     const h = await makeHarness();
     try {

@@ -112,9 +112,10 @@ const SIZE_WALK_MAX_ENTRIES = 200_000;
 const SIZE_WALK_MAX_DEPTH = 100;
 
 interface ExecResult { code: number; stdout: string; stderr: string; tokenUsed: boolean; }
-// Local files saved across a pull (holdUnmanaged). bytes null = a held-back
-// local deletion of a never-sync file.
-interface HeldFiles { dir: string; files: { rel: string; bytes: Buffer | null }[] }
+// Local files saved across a pull (holdUnmanaged), copied under `dir` at their
+// relative path — never held in memory. saved false = a held-back local
+// deletion of a never-sync file.
+interface HeldFiles { dir: string; files: { rel: string; saved: boolean; heldBack: boolean }[] }
 
 // Benign for local WRITE ops (add/commit/checkout — anything that takes a git
 // lock): a *.lock already held by a genuinely-live writer (a second app
@@ -665,6 +666,11 @@ export class GitTransport implements SyncTransport {
     const held = await this.holdUnmanaged(space, hasMain);
     let result: PullResult;
     try {
+      // Only now, with every file saved, reset held-back secret edits to their
+      // committed bytes so the merge does not refuse them.
+      for (const f of held.files) {
+        if (f.heldBack) this.assertLocalOk(space, 'checkout', await this.git(space, ['checkout', '--', f.rel]));
+      }
       result = await this.applyOrigin(space, hasMain);
     } catch (e) {
       await this.restoreUnmanaged(space, held);
@@ -709,6 +715,7 @@ export class GitTransport implements SyncTransport {
 
     // Conflicts: resolve each convergently.
     const copies: string[] = [];
+    const keepLocal: { rel: string; bytes: Buffer }[] = [];
     try {
       const list = await this.git(space, ['diff', '--name-only', '--diff-filter=U', '-z']);
       this.assertLocalOk(space, 'diff', list);
@@ -720,6 +727,21 @@ export class GitTransport implements SyncTransport {
         this.assertLocalOk(space, 'ls-files', staged);
         const sides = new Set(staged.stdout.split('\0').filter(Boolean).map((e) => e.split(/\s+/)[2]));
         if (sides.size === 0) throw new Error(`no conflict stages listed for ${rel}`);
+        if (isNeverSyncPath(rel)) {
+          // WHY: a "(from …)" copy of a secret would be a NEW file carrying
+          // this device's secret into the merge commit. The repo takes the
+          // remote side; the disk keeps this device's bytes (stageAll then
+          // holds them back), exactly like a held-back secret edit.
+          const ours = sides.has('2') ? await this.showStage(space, 2, rel) : null;
+          if (sides.has('3')) {
+            this.assertLocalOk(space, 'checkout', await this.git(space, ['checkout', '--theirs', '--', rel]));
+            this.assertLocalOk(space, 'add', await this.git(space, ['add', '-f', '--', rel]));
+          } else {
+            this.assertLocalOk(space, 'rm', await this.git(space, ['rm', '--cached', '-q', '--', rel]));
+          }
+          if (ours) keepLocal.push({ rel, bytes: ours });
+          continue;
+        }
         // Stage 2 = ours (this device), stage 3 = theirs (remote). Content is
         // read as raw bytes via showStage so binary and >1MB files survive the
         // copy intact (utf8 strings would corrupt bytes; Node's 1MB default
@@ -765,6 +787,7 @@ export class GitTransport implements SyncTransport {
       await this.git(space, ['merge', '--abort']);
       throw new Error(`Sync merge could not complete for ${space.id}: ${commit.stderr.trim() || 'git commit failed'}`);
     }
+    for (const { rel, bytes } of keepLocal) await fs.promises.writeFile(path.join(space.root, rel), bytes);
     return { updated: true, conflictCopies: copies, contacted };
   }
 
@@ -814,9 +837,10 @@ export class GitTransport implements SyncTransport {
 
   /** Save every local file the incoming remote could replace without git
    *  treating it as a local change: untracked files (ignored ones — stageAll
-   *  staged the rest) and held-back never-sync edits, which are first reset
-   *  to their committed bytes so the merge does not refuse. Copies go under
-   *  the git dir too, so a crash mid-merge cannot lose them. */
+   *  staged the rest) and held-back never-sync edits (pull resets those to
+   *  their committed bytes after this returns, so the merge does not refuse).
+   *  Copies go under the git dir, so a crash mid-merge cannot lose them, and
+   *  nothing in the tree changes here — a failed save stops the pull first. */
   private async holdUnmanaged(space: SyncSpace, hasMain: boolean): Promise<HeldFiles> {
     const names = async (args: string[]) => {
       const r = await this.git(space, args);
@@ -835,23 +859,18 @@ export class GitTransport implements SyncTransport {
       const heldBack = tracked.has(rel) && edited.has(rel) && isNeverSyncPath(rel);
       if (tracked.has(rel) && !heldBack) continue;
       const full = path.join(space.root, rel);
-      let bytes: Buffer | null = null;
+      let saved = false;
       try {
-        if ((await fs.promises.lstat(full)).isFile()) bytes = await fs.promises.readFile(full);
-        else continue; // a folder or link at that name: git refuses, nothing replaced
-      } catch {
+        if (!(await fs.promises.lstat(full)).isFile()) continue; // a folder or link: git refuses, nothing replaced
+        await fs.promises.mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+        await fs.promises.copyFile(full, path.join(dir, rel));
+        saved = true;
+      } catch (e: any) {
+        if (e?.code !== 'ENOENT') throw e; // could not save it: do not let the remote land
         if (!heldBack) continue; // absent — nothing to keep
         // A held-back local DELETION: remember it so the file stays deleted.
       }
-      if (bytes) {
-        await fs.promises.mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
-        await fs.promises.writeFile(path.join(dir, rel), bytes);
-      }
-      if (heldBack) {
-        const co = await this.git(space, ['checkout', '--', rel]);
-        this.assertLocalOk(space, 'checkout', co);
-      }
-      files.push({ rel, bytes });
+      files.push({ rel, saved, heldBack });
     }
     return { dir, files };
   }
@@ -864,9 +883,10 @@ export class GitTransport implements SyncTransport {
   private async restoreUnmanaged(space: SyncSpace, held: HeldFiles): Promise<string[]> {
     const copies: string[] = [];
     let intact = true;
-    for (const { rel, bytes } of held.files) {
+    for (const { rel, saved } of held.files) {
       const full = path.join(space.root, rel);
       try {
+        const bytes = saved ? await fs.promises.readFile(path.join(held.dir, rel)) : null;
         let now: Buffer | null = null;
         try { now = await fs.promises.readFile(full); } catch { /* absent */ }
         if (bytes === null) { if (now !== null) await fs.promises.rm(full); continue; }
