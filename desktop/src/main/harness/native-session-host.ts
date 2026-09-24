@@ -67,6 +67,9 @@ import type { McpLease } from './mcp/mcp-manager';
 // behind one bridge; this file only supplies the session mechanics.
 import { PlanHostBridge, type PlanChildStart, type PlanHostBridgeOptions, type PlanNoticeDelivery, type PlanRoute } from './plans/plan-host-bridge';
 import type { PlanChildHandle, PlanChildOutcome } from './plans/plan-executor';
+// T2 (design §3, Revision 3 F1): the per-attempt spend recorder, built here
+// (startPlanChild) and threaded into the child's HarnessSession + LiveEntry.
+import { PlanSpend } from './plans/plan-spend';
 // WHY no budget-adapter import any more (spending rework stage 1, design
 // §1): the module is deleted along with plan-child mode's request gate.
 import type { PlanActionResult, PlanAutoApproveRead, PlanSettingsWriteResult } from './plans/types';
@@ -380,6 +383,11 @@ interface LiveEntry {
   // executor, not by its parent's turn: the Stop button on the parent does not
   // reach it (the plan has its own Stop), and it has no delegation-ledger row.
   plan?: { planId: string; stepId: string; attemptId: string };
+  // T2 (design §3, Revision 3 F1): this attempt's spend recorder, set only on
+  // a plan specialist (alongside `plan` above) by wireChildLive. runPlanChild
+  // reads its running total for the parent's Cost chip and exposes
+  // `spendSettled()` on the returned PlanChildHandle.
+  planSpend?: PlanSpend;
   // The host turn id of the turn running right now (SendUnit.turnId).
   currentTurnId?: string;
   // Final review F3: a fresh key for EVERY pass of the turn drain (a user
@@ -3537,9 +3545,10 @@ export class NativeSessionHost extends EventEmitter {
     // Specialists plans (Task 4): mint a PLAN specialist — the same ordinary
     // durable specialist session, plus its route and plan tag.
     // WHY no `gate` any more (spending rework stage 1, design §1): a plan
-    // child's request gate (budget-adapter.ts) is deleted; T2 attaches the
-    // real replacement (`planSpend`) here instead.
-    plan?: { providerType: ProfileProviderType; tag: NonNullable<LiveEntry['plan']> };
+    // child's request gate (budget-adapter.ts) is deleted. T2: `planSpend` is
+    // the real replacement, built once per attempt by startPlanChild and
+    // carried through this same `plan` object (never built here).
+    plan?: { providerType: ProfileProviderType; tag: NonNullable<LiveEntry['plan']>; planSpend: PlanSpend };
   }): Promise<{ childId: string; title: string }> {
     const parent = this.live.get(parentId);
     // A child with no live parent has nobody to report to and nobody to tear it
@@ -3613,7 +3622,7 @@ export class NativeSessionHost extends EventEmitter {
     // gets the persistence half only; the display half (stamped COPIES of the
     // display-safe events per isSubagentDisplayEvent, emitted under the
     // PARENT's id) is Task 7.
-    this.wireChildLive(parentId, childId, workDir, session, binding, opts.parentToolCallId, opts.plan ? { plan: opts.plan.tag } : {});
+    this.wireChildLive(parentId, childId, workDir, session, binding, opts.parentToolCallId, opts.plan ? { plan: opts.plan.tag, planSpend: opts.plan.planSpend } : {});
     return { childId, title };
   }
 
@@ -3644,10 +3653,10 @@ export class NativeSessionHost extends EventEmitter {
     // measure a request, so it gets no background-command registry (nothing
     // may ever run in it).
     // WHY no `gate` any more (spending rework stage 1, design §1): T2
-    // attaches `planSpend` (design §3's `{beforeRequest, afterReply}` hook)
-    // to `HarnessSessionOpts` here instead of a request gate — not built in
-    // this task.
-    extra: { plan?: { providerType: ProfileProviderType; tag?: NonNullable<LiveEntry['plan']> }; probe?: boolean } = {},
+    // attaches `planSpend` (design §3's `{beforeRequest, afterReply}` hook,
+    // built once per attempt by startPlanChild — Revision 3 F1) to
+    // `HarnessSessionOpts` below instead of a request gate.
+    extra: { plan?: { providerType: ProfileProviderType; tag?: NonNullable<LiveEntry['plan']>; planSpend?: PlanSpend }; probe?: boolean } = {},
   ): HarnessSession {
     const allowed = new Set(specialist.allowedTools);
     let session: HarnessSession;
@@ -3655,6 +3664,9 @@ export class NativeSessionHost extends EventEmitter {
       {
         sessionId: childId, cwd: workDir, binding, contextLength, profile, pricing, free,
         ...(extra.plan ? { providerType: extra.plan.providerType } : {}),
+        // T2 (Revision 3 F1, point 1): the harness calls `afterReply`/
+        // `beforeRequest` on this object directly.
+        ...(extra.plan?.planSpend ? { planSpend: extra.plan.planSpend } : {}),
         commitCompaction: proposal => this.commitCompaction(childId, session, proposal),
 // WHY: specialist work is bounded by its narrow tool set, parent-managed
         // lifecycle controls, and the delegation spawn backstop—not an arbitrary
@@ -3769,12 +3781,17 @@ export class NativeSessionHost extends EventEmitter {
    *  emitted under the PARENT's id, below. */
   private wireChildLive(
     parentId: string, childId: string, workDir: string, session: HarnessSession, binding: ModelBinding, parentToolCallId: string,
-    opts: { plan?: NonNullable<LiveEntry['plan']> } = {},
+    // T2 (Revision 3 F1, point 2): `planSpend` rides alongside `plan` (never
+    // nested inside it) — this is the OTHER of the two attach points, so
+    // runPlanChild's finally can read `entry.planSpend` straight off the
+    // live map, the same way it already reads `entry.plan`.
+    opts: { plan?: NonNullable<LiveEntry['plan']>; planSpend?: PlanSpend } = {},
   ): void {
     const entry: LiveEntry = {
       session, cwd: workDir, appendChain: Promise.resolve(), compactionGeneration: this.restoredCompactionGeneration.get(session) ?? 0, queue: [], inFlight: false,
       parentSessionId: parentId,
       ...(opts.plan ? { plan: opts.plan } : {}),
+      ...(opts.planSpend ? { planSpend: opts.planSpend } : {}),
       handoffParentEntry: this.live.get(parentId),
     };
     this.live.set(childId, entry);
@@ -5260,9 +5277,22 @@ export class NativeSessionHost extends EventEmitter {
     let childId: string | undefined;
     let title: string | undefined;
     try {
-      // WHY no `gate` any more (spending rework stage 1, design §1): T2
-      // attaches `planSpend` here instead of a request gate.
-      const plan = { providerType: input.providerType, tag: input.tag };
+      // T2 (design §3, Revision 3 F1): ONE PlanSpend built HERE, before
+      // either branch, so both the resume and fresh-child paths attach the
+      // SAME object at both wiring points below (buildSpecialistSession's
+      // `extra.plan` and wireChildLive's `opts`) rather than building two.
+      // `this.plans!` is safe: `startPlanChild` is reached only through
+      // `PlanHostPort.startChild`, which `this.plans` itself wires up
+      // (buildPlanBridge) — there is no path to this method without it.
+      const planSpend = new PlanSpend({
+        journal: this.plans!.journal,
+        ref: { cwd: parent.cwd, sessionId: input.parentId },
+        planId: input.tag.planId, stepId: input.tag.stepId, attemptId: input.tag.attemptId,
+        fence: input.fence,
+        isLimitReached: input.isLimitReached, markLimitReached: input.markLimitReached,
+        isWriteFailed: input.isWriteFailed, markWriteFailed: input.markWriteFailed,
+      });
+      const plan = { providerType: input.providerType, tag: input.tag, planSpend };
       if (input.resumeChildId) {
         const resumeId = input.resumeChildId;
         if (this.live.has(resumeId)) await this.destroy(resumeId);
@@ -5278,7 +5308,7 @@ export class NativeSessionHost extends EventEmitter {
         );
         // Cold state from the specialist's OWN transcript (same as a Task resume).
         await this.seedResumedHistory(resumeId, parent.cwd, session);
-        this.wireChildLive(input.parentId, resumeId, parent.cwd, session, input.binding, input.parentToolCallId, { plan: input.tag });
+        this.wireChildLive(input.parentId, resumeId, parent.cwd, session, input.binding, input.parentToolCallId, { plan: input.tag, planSpend });
         childId = resumeId;
         title = header.title ?? input.specialist.displayName;
       } else {
@@ -5309,35 +5339,31 @@ export class NativeSessionHost extends EventEmitter {
    *  reserved, and a missing report is the executor's to judge. */
   private runPlanChild(input: PlanChildStart, childId: string, token: SpecialistReservation): PlanChildHandle {
     const entry = this.live.get(childId)!;
-    const { pricing, free } = entry.session.priceCard;
+    const { free } = entry.session.priceCard;
     const modelId = entry.session.binding.modelId;
     let report = '';
     let errorText: string | null = null;
     let interrupted = false;
-    const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
-    const addSpend = (u: TranscriptEvent['data']['usage']): void => {
-      if (!u) return;
-      usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens;
-      usage.cacheReadTokens += u.cacheReadTokens; usage.cacheCreationTokens += u.cacheCreationTokens;
-    };
-    // Merge note (master #491, "a stopped or failed specialist still reports
-    // what it spent"): the harness now carries an abandoned turn's completed-
-    // step spend on `user-interrupt` and `session-error`, and master's Task
-    // path folds it in. A plan specialist that is stopped or fails spent real
-    // tokens too, so it reports them to the conversation the same way. This
-    // is the conversation's Cost figure only — the plan's own budget is
-    // charged per request by the plan gate and is not touched here. (Plan
-    // specialists never compact, so compact-summary never carries spend.)
+    // T2 (design §3, Revision 1 D1 / Revision 3 F1): the plan's OWN spend
+    // recorder is now the ONE source for both the journal's running total and
+    // this conversation's Cost chip — `afterReply` (called from
+    // harness-session.ts's turn loop, priced with the SAME costForUsage the
+    // chip used to sum here) already saw every reply's usage, including the
+    // last one before a stop/error/interrupt (Revision 1 D1's "abandoned turn
+    // usage" case: the harness reports a stopped turn's completed-step usage
+    // through the SAME per-step path `afterReply` reads, not through
+    // turn-complete/session-error/user-interrupt separately) and compaction's
+    // own request (priceSummaryUsage). Summing those transcript events here
+    // TOO would double-count every reply. `entry.planSpend` is always set for
+    // a plan child (startPlanChild builds one for every attempt).
     const onEvent = (event: TranscriptEvent) => {
       if (event.type === 'assistant-text') report += String(event.data.text ?? '');
       else if (event.type === 'tool-use') report = '';
       else if (event.type === 'session-error') {
-        addSpend(event.data.usage);
         errorText = String(event.data.text ?? '').trim() || 'the specialist stopped with an error';
       } else if (event.type === 'user-interrupt') {
-        addSpend(event.data.usage);
         interrupted = true;
-      } else if (event.type === 'turn-complete') addSpend(event.data.usage);
+      }
     };
     entry.session.on('transcript-event', onEvent);
     let disposed = false;
@@ -5364,11 +5390,14 @@ export class NativeSessionHost extends EventEmitter {
       } finally {
         entry.session.off('transcript-event', onEvent);
         // The specialist's spend is the conversation's spend (same event a
-        // Task specialist reports; bookkeeping only, no card).
-        if (usage.inputTokens + usage.outputTokens > 0) {
+        // Task specialist reports; bookkeeping only, no card). T2: read from
+        // the plan's own spend recorder — its running total, not a re-sum of
+        // transcript events (see the onEvent comment above for why).
+        const total = entry.planSpend?.total();
+        if (total && total.usage.inputTokens + total.usage.outputTokens > 0) {
           try {
             this.live.get(input.parentId)?.session.emitSubagentUsage({
-              usage: { ...usage, costUsd: free ? null : costForUsage(usage, pricing), free },
+              usage: { ...total.usage, costUsd: total.costUsd, free },
               model: modelId, parentAgentToolUseId: input.parentToolCallId, agentId: childId,
             });
           } catch (err) {
@@ -5394,6 +5423,9 @@ export class NativeSessionHost extends EventEmitter {
           this.releaseReservation(token);
         }
       })()),
+      // Revision 3 F2: the handle exposes the SAME object's live chain —
+      // commitReport awaits this before committing this attempt's report.
+      spendSettled: () => entry.planSpend?.spendSettled() ?? Promise.resolve(),
     };
   }
 

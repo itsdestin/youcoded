@@ -425,7 +425,10 @@ describe('a pause is never handed to the assistant by itself (§6)', () => {
     async launch(input: PlanChildLaunch): Promise<PlanChildHandle> {
       await input.recordChild(`child-${input.attemptId}`);
       const outcome: PlanChildOutcome = { kind: 'stopped', stop: { kind: 'exhausted', detail: 'The specialist used its whole allowance.' } };
-      return { childId: `child-${input.attemptId}`, outcome: Promise.resolve(outcome), abort: () => {}, dispose: async () => {} };
+      return {
+        childId: `child-${input.attemptId}`, outcome: Promise.resolve(outcome), abort: () => {}, dispose: async () => {},
+        spendSettled: async () => {},
+      };
     }
   }
   const single: PlanDocumentV1 = { goal: 'One', steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a'] }] };

@@ -75,8 +75,9 @@ export interface PlanRoute {
 // WHY no `gate`/`budgetStop` any more (spending rework stage 1, design §1):
 // PlanChildRequestGate/PlanChildStop were budget-adapter.ts's own types
 // (deleted); nothing gates a plan child's requests before sending any more.
-// T2 attaches `planSpend` (the `afterReply`/`beforeRequest` hook, design §3)
-// here instead — not built in this task.
+// T2: the real replacement is `PlanSpend` (design §3's `{afterReply,
+// beforeRequest}` hook), built by the host from `fence` and the four flag
+// callbacks below.
 export interface PlanChildStart {
   parentId: string;
   specialist: SpecialistDefinition;
@@ -91,6 +92,16 @@ export interface PlanChildStart {
   brief: string;
   /** Task 9a: send `brief` with tools switched off (the report-only turn). */
   toolsDisabled?: boolean;
+  /** T2 (design §3): forwarded straight from `PlanChildLaunch.fence` — the
+   *  host builds ONE `PlanSpend` per attempt (Revision 3 F1) and it needs the
+   *  same fence every other write for this attempt uses. */
+  fence: string;
+  /** T2: this run's shared spend flags, forwarded from `PlanChildLaunch` (see
+   *  its own WHY comment) straight into the `PlanSpend` the host builds. */
+  isLimitReached(): boolean;
+  markLimitReached(): void;
+  isWriteFailed(): boolean;
+  markWriteFailed(): void;
 }
 
 /** Task 9b: one plan pause notice the host delivers as its own model turn.
@@ -781,8 +792,9 @@ export class PlanHostBridge {
     // own error type, which the executor never retries.
     const ready = await this.port.credentialReadiness(frozen.binding);
     if (!ready.ok) throw new PlanNotReadyError(ready.message);
-    // T2: `planSpend` (the afterReply/beforeRequest hook, design §3) attaches
-    // to startChild's input here — not built in this task.
+    // T2: forward the fence and the run's shared spend flags straight
+    // through — the host (native-session-host.ts's startPlanChild) builds the
+    // ONE `PlanSpend` object per attempt from exactly these (Revision 3 F1).
     return this.port.startChild({
       parentId: ref.sessionId, specialist: def, binding: frozen.binding, providerType: route.providerType,
       parentToolCallId: plan.toolUseId,
@@ -792,6 +804,9 @@ export class PlanHostBridge {
       recordChild: input.recordChild,
       brief: input.brief,
       ...(input.toolsDisabled ? { toolsDisabled: true } : {}),
+      fence: input.fence,
+      isLimitReached: input.isLimitReached, markLimitReached: input.markLimitReached,
+      isWriteFailed: input.isWriteFailed, markWriteFailed: input.markWriteFailed,
     });
   }
 

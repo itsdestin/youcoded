@@ -34,6 +34,11 @@ import { PlanFenceError, PlanJournalUnreadableError, type PlanJournal } from './
 import type { PlanPauseKind } from '../../../shared/types';
 import type { PlanExecutorHooks } from './plan-service';
 import type { PlanAttemptRecord, PlanRecord, PlanRef, PlanStepRecord } from './types';
+// T2 (design §3): the stop reason a plan specialist's turn ends with when
+// `beforeRequest` refuses its next request — renamed from the deleted
+// `PLAN_BUDGET_EXHAUSTED_STOP_REASON`, now owned by plan-spend.ts (the one
+// module both this file and harness-session.ts already depend on).
+import { PLAN_LIMIT_REACHED_STOP_REASON } from './plan-spend';
 import type { TranscriptEvent } from '../../../shared/types';
 import type { ToolEffect } from '../tools/types';
 import { routePlanPause, type PlanPauseContext, type PlanRecoveryCause } from './pause-routing';
@@ -135,6 +140,17 @@ export interface PlanChildLaunch {
   /** Must be awaited after the session exists and BEFORE anything is sent, so
    *  the journal always knows which session an attempt's spending belongs to. */
   recordChild(childId: string, info?: { title?: string }): Promise<void>;
+  /** T2 (design §3 "Concurrency" / Revision 1 D3): read/write this RUN's
+   *  shared spend flags. Every attempt in the same wave/run shares the same
+   *  `ActiveRun`, so these close over it here (`memberStart`) — the host
+   *  builds one `PlanSpend` per attempt (Revision 3 F1) and wires them
+   *  straight through to it, never touching `ActiveRun` itself. `markX` is
+   *  idempotent; T3 reads `isLimitReached` for the wave-start check and the
+   *  drain halt — not built here. */
+  isLimitReached(): boolean;
+  markLimitReached(): void;
+  isWriteFailed(): boolean;
+  markWriteFailed(): void;
 }
 
 // WHY the `stopped`/`PlanChildStop` outcome is GONE (spending rework stage 1,
@@ -155,6 +171,11 @@ export interface PlanChildHandle {
   /** Tear the specialist down and free its slot. Idempotent; bounded. After it
    *  resolves `outcome` resolves too (as interrupted if nothing else). */
   dispose(): Promise<void>;
+  /** Revision 3 F2: the attempt's `PlanSpend.spendSettled()` — the LIVE
+   *  current write chain at call time, never a value captured at launch.
+   *  `commitReport` awaits it before committing (Revision 2 E4), so a report
+   *  can never land ahead of the spend it cost. */
+  spendSettled(): Promise<void>;
 }
 
 /** What a specialist's own transcript proves about an unfinished attempt. */
@@ -204,9 +225,6 @@ export interface PlanRunner {
   onOrphaned?(ref: PlanRef, planId: string): void;
 }
 
-/** The turn-complete stopReason a plan specialist ends with when its budget
- *  runs out (harness-session.ts) — not a finished report. */
-const PLAN_BUDGET_EXHAUSTED_STOP_REASON = 'plan_budget_exhausted';
 
 /** Final review F2 + Task 12 review fix 2: why a run's final write never
  *  landed. `reason` is the card's general line; `report` is the system's own
@@ -237,7 +255,7 @@ export function classifyChildTranscript(events: readonly TranscriptEvent[], effe
   //     Continue, and the restart turn told the specialist to check it.
   const endIndex = tail.findIndex((e) => e.type === 'turn-complete' || e.type === 'session-error' || e.type === 'user-interrupt');
   const end = endIndex >= 0 ? tail[endIndex] : undefined;
-  if (end?.type === 'turn-complete' && end.data.stopReason !== PLAN_BUDGET_EXHAUSTED_STOP_REASON) {
+  if (end?.type === 'turn-complete' && end.data.stopReason !== PLAN_LIMIT_REACHED_STOP_REASON) {
     let report = '';
     for (const e of tail.slice(0, endIndex)) {
       if (e.type === 'tool-use') report = '';
@@ -378,6 +396,16 @@ interface ActiveRun {
   closed?: boolean;
   heartbeat?: unknown;
   done: Promise<void>;
+  /** T2 (design §3 "Concurrency", Revision 1 D3 / Revision 2 E4): set by ANY
+   *  attempt's `PlanSpend` once one of its writes crosses `spendLimit` (or
+   *  fails) — read by every OTHER attempt's own `beforeRequest` via the
+   *  `isLimitReached`/`isWriteFailed` closures `memberStart` hands the
+   *  runner, and by `commitReport` before committing. T3 also reads
+   *  `limitReached` for the wave-start check and the drain halt — not built
+   *  here. Never cleared: a run that crossed its limit stays crossed for the
+   *  rest of this process's life on it. */
+  limitReached?: boolean;
+  spendWriteFailed?: boolean;
 }
 
 const isCommitted = (a: PlanAttemptRecord) => a.phase === 'committed' || a.completedAt !== undefined;
@@ -813,7 +841,20 @@ export class PlanExecutor implements PlanExecutorHooks {
           attemptId, itemIndex: member.itemIndex ?? 0, iteration: member.iteration ?? 0,
           spentTokens: 0, phase: 'prepared',
         };
-        if (member.reportOnlyOf !== undefined) record.reportOnly = true;
+        if (member.reportOnlyOf !== undefined) {
+          record.reportOnly = true;
+          // T1-fix-round bug (found in review): a report-only retry must
+          // CONTINUE the failed attempt's own specialist session, not start a
+          // fresh one — that is the whole point of "tools off, ask the same
+          // session for its report again". Without copying `childId` here,
+          // `launchBrief`'s `attempt.childId` check (memberStart's caller)
+          // always saw `undefined`, so `runner.launch()` never received
+          // `resumeChildId` and every report-only retry silently spawned a
+          // brand-new specialist instead of continuing the one whose report
+          // was rejected.
+          const failed = stepRec.attempts.find((a) => a.attemptId === member.reportOnlyOf);
+          if (failed?.childId) record.childId = failed.childId;
+        }
         if (member.brief !== undefined) record.brief = member.brief;
         stepRec.attempts.push(record);
         return { stepId: member.stepId, attemptId };
@@ -1051,6 +1092,15 @@ export class PlanExecutor implements PlanExecutorHooks {
             ...(attempt.childId ? { resumeChildId: attempt.childId } : {}),
             ...(toolsDisabled ? { toolsDisabled: true } : {}),
             signal: run.launchAbort.signal,
+            // T2 (design §3 "Concurrency"): closures over THIS run's shared
+            // flags, not the flags themselves — every attempt this wave (and
+            // every later wave of the same run) launches gets the SAME `run`
+            // object, so one sibling's crossing is visible to every other's
+            // own beforeRequest check.
+            isLimitReached: () => run.limitReached === true,
+            markLimitReached: () => { run.limitReached = true; },
+            isWriteFailed: () => run.spendWriteFailed === true,
+            markWriteFailed: () => { run.spendWriteFailed = true; },
             recordChild: (childId, info) => this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
               const a = this.findAttempt(p, step.id, attemptId);
               a.childId = childId;
@@ -1148,7 +1198,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       // no commit is under way.
       child.commit = (async () => {
         try {
-          invalid = await this.commitReport(run, step, attemptId, outcome.report, finalLeaf);
+          invalid = await this.commitReport(run, step, attemptId, outcome.report, finalLeaf, child.handle);
         } catch (e) {
           if (!isJournalError(e)) {
             this.requestHalt(run, { kind: 'pause', why: 'unexpected-error', stepId: step.id, attemptId, reason: `A specialist's result couldn't be saved: ${errorText(e)}` });
@@ -1328,11 +1378,25 @@ export class PlanExecutor implements PlanExecutorHooks {
    * journals every reply's real cost as it happens. A repeat's final leaf
    * must also carry a valid decision; a malformed one is kept (as failed)
    * and pauses.
-   * // T2/T3 (Revision 2 E4 / Revision 3 F2): this is the one function all
-   * three commit paths call, and is where `await handle.spendSettled()`
-   * belongs before committing — not wired here.
+   *
+   * T2 (Revision 2 E4 / Revision 3 F2): this is the one function all three
+   * commit paths call. `handle` is absent only from the start-time recovery
+   * call (`recoverAttempt`'s `terminal` verdict) — that runs before ANY
+   * specialist of this run's process is live, so there is no in-flight write
+   * to wait for; the other two calls (a member finishing live, and settle
+   * picking up a straggler) always have one. `await handle.spendSettled()`
+   * first, so a report can never commit ahead of the spend it cost; a
+   * recorded write failure (shared across the run — design §3) pauses
+   * instead of committing, rather than freezing a report next to an
+   * uncertain total.
    */
-  private async commitReport(run: ActiveRun, step: PlanStepV1, attemptId: string, report: string, finalLeaf: boolean): Promise<HaltRequest | undefined> {
+  private async commitReport(
+    run: ActiveRun, step: PlanStepV1, attemptId: string, report: string, finalLeaf: boolean, handle?: PlanChildHandle,
+  ): Promise<HaltRequest | undefined> {
+    if (handle) await handle.spendSettled();
+    if (run.spendWriteFailed) {
+      return { kind: 'pause', why: 'unexpected-error', stepId: step.id, attemptId, reason: PLAN_PROGRESS_NOT_SAVED };
+    }
     const plan = await this.load(run);
     const attempt = this.findAttempt(plan, step.id, attemptId);
     if (isCommitted(attempt)) return undefined;
@@ -1466,7 +1530,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       for (const child of run.live) {
         if (child.outcome?.kind !== 'completed' || child.commit) continue;
         const step = allSteps((await this.load(run)).document.steps).find((s) => s.id === child.stepId)!;
-        pauseFromCommit ??= await this.commitReport(run, step, child.attemptId, child.outcome.report, child.finalLeaf);
+        pauseFromCommit ??= await this.commitReport(run, step, child.attemptId, child.outcome.report, child.finalLeaf, child.handle);
       }
       // WHY no "pessimistic settlement" pass any more (spending rework stage
       // 1, design §1/§3): there is no reservation left to charge in full or

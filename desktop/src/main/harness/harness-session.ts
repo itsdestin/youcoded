@@ -202,6 +202,9 @@ import {
   NO_SESSION_COST_TOTALS, COST_GAP_RELOG_FACTOR,
   type ModelPricing, type SessionCostTotals,
 } from './pricing';
+// T2 (design §3): the plan-spend hook attached to a plan specialist's
+// session — see HarnessSessionOpts.planSpend below.
+import { PLAN_LIMIT_REACHED_STOP_REASON, type PlanSpendHooks } from './plans/plan-spend';
 import { log } from '../logger';
 
 export interface HarnessSessionOpts {
@@ -322,9 +325,12 @@ export interface HarnessSessionOpts {
   // request path — no retry, no compaction, no images, never a park. Plan
   // children now use the SAME ordinary request path every specialist does
   // (design §3: "withRetry, stall re-run, empty-step re-run, compaction,
-  // images, reasoning"). T2 attaches the real replacement — `planSpend`, an
-  // `{beforeRequest, afterReply}` hook (design §3) — as this option; not
-  // built in this task.
+  // images, reasoning").
+  /** T2 (design §3): set ONLY by NativeSessionHost.buildSpecialistSession for
+   *  a plan specialist's session (threaded from the `PlanSpend` object
+   *  `startPlanChild` built for this attempt — Revision 3 F1). Absent for
+   *  every ordinary session, exactly the pre-T2 behavior. */
+  planSpend?: PlanSpendHooks;
 }
 // The opts second arg carries per-turn model construction hints. `serialToolCalls`
 // (Task 10 / spec §4.2) tells the local-engine factory to inject
@@ -1363,12 +1369,18 @@ export class HarnessSession extends EventEmitter {
    *  this the compact-summary event shipped raw tokens that no total could
    *  legitimately price, which is why the summarize call's spend was invisible. */
   private priceSummaryUsage(u: StepUsage): StepUsage & { costUsd: number | null; free: boolean } {
+    const costUsd = this.opts.free ? null : costForUsage(u, this.opts.pricing);
+    // T2 (design §3): "Compaction's priceSummaryUsage also feeds afterReply"
+    // — both call sites (a normal near-limit compaction and the context-
+    // overflow forced one) route through here, so one change covers both and
+    // the plan's total and the chip's total stay one source (Revision 1 D1).
+    this.opts.planSpend?.afterReply({ usage: u, costUsd });
     return {
       ...u,
       // Identical shape to the turn-complete emit: `free` WINS over any rate
       // card, so a local engine whose model id happens to carry a published
       // rate never ships a bill for a request that cost nothing to run.
-      costUsd: this.opts.free ? null : costForUsage(u, this.opts.pricing),
+      costUsd,
       free: this.opts.free ?? false,
     };
   }
@@ -2947,6 +2959,17 @@ export class HarnessSession extends EventEmitter {
       // Multi-step scripted tests verify this continuation into the next request.
       // oxlint-disable-next-line no-unreachable-loop
       turnLoop: while (true) {
+        // T2 (design §3): checked at the very top, before the steer drain and
+        // maybeCompact (which can itself send a request) — a plan specialist
+        // that crossed its spend limit on the PREVIOUS reply must send
+        // nothing further, not even a compaction summary call. "The crossing
+        // reply's tools still run; only the NEXT request is refused" holds
+        // because this check runs at the top of the NEXT iteration, after the
+        // previous step's tool calls already executed further down this loop.
+        if (this.opts.planSpend) {
+          const stopped = await this.opts.planSpend.beforeRequest();
+          if (stopped) { stopReason = stopped; break turnLoop; }
+        }
         // Reset per STEP (not per retry attempt inside withRetry): the required
         // immediate-error retry never needs this reset itself, since it emits
         // nothing before it throws. A manual Retry is the opposite case — it CAN
@@ -2991,8 +3014,17 @@ export class HarnessSession extends EventEmitter {
         // §3): "Plan children now use the ordinary request path: withRetry,
         // stall re-run, empty-step re-run, compaction, images, reasoning."
         // T2's `planSpend.beforeRequest()` attaches at the top of this loop
-        // (not wired here) and `afterReply` reads this step's usage exactly
-        // like the chip does — no separate bounded/reserved/settled driver.
+        // and `afterReply` (below, at "Accumulate this step's usage into the
+        // turn total") reads this step's usage exactly like the chip does —
+        // no separate bounded/reserved/settled driver.
+        // WHY a retried request's DISCARDED usage is a known, accepted gap
+        // (Revision 1 D9): `this.withRetry` re-enters `consumeStep` on a
+        // retryable failure (429/5xx/ECONNRESET), and a failed attempt never
+        // returns a `StepResult` — whatever the provider may have billed for
+        // it before erroring is invisible here, exactly as it is invisible to
+        // the cost chip today (costForUsage only ever sees the step that
+        // finally succeeded). `afterReply` therefore adds nothing for it
+        // either — pinned by a test naming this gap, not silently widened.
         {
           let overflowRetried = false;
           this.overflowOutputStarted = false;
@@ -3053,6 +3085,12 @@ export class HarnessSession extends EventEmitter {
         turnUsage.outputTokens += step.usage.outputTokens;
         turnUsage.cacheReadTokens += step.usage.cacheReadTokens;
         turnUsage.cacheCreationTokens += step.usage.cacheCreationTokens;
+        // T2 (design §3): the real per-step accumulation site — priced with
+        // the SAME costForUsage/pricing the chip's own per-step progress uses
+        // below, so the journal and the chip always agree (Revision 1 D1).
+        // `step.usage` exactly as reported: no usage reported means only
+        // zeros are added, never a worst-case guess.
+        this.opts.planSpend?.afterReply({ usage: step.usage, costUsd: this.opts.free ? null : costForUsage(step.usage, this.opts.pricing) });
         if (step.measuredUsage) {
           measuredTurnUsage.inputTokens += step.measuredUsage.inputTokens;
           measuredTurnUsage.outputTokens += step.measuredUsage.outputTokens;

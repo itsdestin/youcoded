@@ -96,6 +96,24 @@ export function costForUsage(usage: PricedUsage, pricing: ModelPricing | null | 
   return Math.max(0, cost);
 }
 
+/**
+ * Spending rework T2 (design §3): a rate-independent token-equivalent count —
+ * cache reads count at roughly a TENTH of an uncached token (the provider's
+ * own discount), everything else counts in full. Unlike `costForUsage` this
+ * NEVER returns null: it must still mean something for a free/local/
+ * unpublished-price specialist, because it is the unit `plan.usedTokens`,
+ * `attempt.spentTokens` and (T5) the history estimate all share.
+ *
+ * WHY this exact formula: `docs/active/investigations/2026-09-19-specialist-
+ * usage.py`'s `billed_equiv = unc + cwc + 0.1*crc + out` (decision 34's own
+ * evidence — 297 real specialist runs). Same arithmetic here, `Math.ceil` on
+ * the cache-read term in place of Python's `round` (design §3's own wording).
+ */
+export function billedEquivalentTokens(usage: PricedUsage): number {
+  const uncachedIn = Math.max(0, usage.inputTokens - usage.cacheReadTokens - usage.cacheCreationTokens);
+  return uncachedIn + usage.cacheCreationTokens + usage.outputTokens + Math.ceil(0.1 * usage.cacheReadTokens);
+}
+
 // ---------------------------------------------------------------------------
 // Checking our arithmetic against the provider's own bill (plan Task 27).
 //

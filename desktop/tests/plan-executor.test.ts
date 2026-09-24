@@ -18,6 +18,8 @@ import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
 import type { TranscriptEvent } from '../src/shared/types';
 import { nativeToolEffect } from '../src/main/harness/tools';
 import { pausedRouting } from '../src/main/harness/plans/pause-routing';
+// T2: renamed from the deleted PLAN_BUDGET_EXHAUSTED_STOP_REASON (design §3).
+import { PLAN_LIMIT_REACHED_STOP_REASON } from '../src/main/harness/plans/plan-spend';
 
 // Task 9a: the classifier reads each tool's declared effect.
 const classifyChildTranscript = (events: TranscriptEvent[]) => classifyWith(events, nativeToolEffect);
@@ -143,6 +145,9 @@ class FakeRunner implements PlanRunner {
         this.live -= 1;
         markDisposed();
       },
+      // T2: no PlanSpend behind this fake — every attempt's spend settles
+      // immediately, exactly as if nothing was ever in flight.
+      spendSettled: async () => {},
     };
   }
 }
@@ -949,9 +954,9 @@ describe('what a specialist transcript proves', () => {
     ])).toEqual({ kind: 'terminal', report: 'FINAL' });
   });
 
-  it('a budget-stopped or errored turn is not a finished report', () => {
+  it('a limit-stopped or errored turn is not a finished report', () => {
     const base = [ev('user-message', { text: 'b' }), ev('assistant-text', { text: 'partial' })];
-    expect(classifyChildTranscript([...base, ev('turn-complete', { stopReason: 'plan_budget_exhausted' })]))
+    expect(classifyChildTranscript([...base, ev('turn-complete', { stopReason: PLAN_LIMIT_REACHED_STOP_REASON })]))
       .toEqual({ kind: 'resumable', briefDelivered: true });
     expect(classifyChildTranscript([...base, ev('user-interrupt')])).toEqual({ kind: 'resumable', briefDelivered: true });
     expect(classifyChildTranscript([ev('user-message', { text: 'b' }), ev('turn-complete', { stopReason: 'end_turn' })]))
@@ -1003,7 +1008,7 @@ describe('what a specialist transcript proves', () => {
     expect(classifyChildTranscript([
       ev('user-message', { text: 'b' }),
       ev('assistant-text', { text: 'old' }),
-      ev('turn-complete', { stopReason: 'plan_budget_exhausted' }),
+      ev('turn-complete', { stopReason: PLAN_LIMIT_REACHED_STOP_REASON }),
       ev('user-message', { text: PLAN_RESTART_BRIEF }),
     ])).toEqual({ kind: 'resumable', briefDelivered: true });
   });
@@ -1625,17 +1630,14 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
       const p = await plan();
       expect(p.status).toBe('completed');
       const [a, b] = runner.launches.filter((l) => l.stepId === 's1');
-      // FINDING (2026-09-24, out of scope for R1/R2/R3/R5 — flagged, not
-      // fixed here): `createAttempts`'s `reportOnlyOf` branch never copies
-      // the failed attempt's `childId` onto the new report-only attempt, so
-      // this retry launches a NEW specialist session instead of continuing
-      // the failed one. That contradicts `PlanAttemptRecord.reportOnly`'s own
-      // doc-comment ("continues the failed attempt's specialist session")
-      // and the card's "one row per specialist" projection (plan-journal.ts
-      // `latestPerChild`, Task 4 review item 6) — this attempt now produces
-      // a SECOND row instead of updating the first. Asserted here as what T1
-      // actually does today; worth a follow-up ticket.
-      expect(b.resumeChildId).toBeUndefined();
+      // T2 fix (found in the T1 fix round): `createAttempts`'s `reportOnlyOf`
+      // branch now copies the failed attempt's `childId` onto the new
+      // report-only attempt, so this retry CONTINUES the same specialist
+      // session — matching `PlanAttemptRecord.reportOnly`'s own doc-comment
+      // ("continues the failed attempt's specialist session") and the card's
+      // "one row per specialist" projection (plan-journal.ts's per-child
+      // grouping, Task 4 review item 6).
+      expect(b.resumeChildId).toBe(a.childId);
       expect(b.toolsDisabled).toBe(true);
       expect(a.toolsDisabled).toBeUndefined();
       expect(b.attemptId).not.toBe(a.attemptId);
@@ -1644,14 +1646,13 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
       const attempts = p.steps[0].attempts;
       expect(attempts).toHaveLength(2);
       expect(attempts[0]).toMatchObject({ terminal: 'failed' });
-      expect(attempts[1]).toMatchObject({ reportOnly: true, terminal: 'completed', reportText: 'THE REPORT' });
+      expect(attempts[1]).toMatchObject({ reportOnly: true, terminal: 'completed', reportText: 'THE REPORT', childId: a.childId });
       expect(p.recoveries).toEqual([expect.objectContaining({ stepId: 's1', cause: 'invalid-report' })]);
       // The combine step read the report-only answer.
       expect(runner.launches.find((l) => l.stepId === 's2')!.brief).toContain('THE REPORT');
-      // Per the FINDING above, this is two rows today (not the intended one) —
-      // the newest (the report-only retry) is what finished.
+      // Same session continued the whole way: one row, not two.
       const rows = projectPlan(p).steps[0].children!;
-      expect(rows).toHaveLength(2);
+      expect(rows).toHaveLength(1);
       expect(rows.find((r) => r.childId === b.childId)).toMatchObject({ status: 'completed' });
     });
 
@@ -1738,13 +1739,10 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
       await exec.settled('p1');
       const resumed = runner.launches.slice(2).filter((l) => l.stepId === 's1');
       expect(resumed).toHaveLength(1);
-      // Per the FINDING above (createAttempts drops childId on a reportOnlyOf
-      // member), this Continue's own retry ALSO starts a fresh session with
-      // no resumeChildId, so it resends the full report-only message rather
-      // than the short PLAN_REPORT_ONLY_RESEND nudge — a second consequence
-      // of the same gap, not a new bug.
-      expect(resumed[0]).toMatchObject({ toolsDisabled: true, brief: reportTurn.brief });
-      expect(resumed[0].resumeChildId).toBeUndefined();
+      // T2 fix: this Continue's own report-only retry also continues the
+      // SAME specialist session (not a fresh one) — the childId chain never
+      // breaks across a second invalid report and its own Continue.
+      expect(resumed[0]).toMatchObject({ toolsDisabled: true, brief: reportTurn.brief, resumeChildId: first.childId });
       // The original task brief (the one that runs tools) is never sent again.
       expect(runner.launches.filter((l) => l.brief === first.brief)).toHaveLength(1);
       const p = await plan();
