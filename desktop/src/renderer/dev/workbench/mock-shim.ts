@@ -36,6 +36,10 @@ import { playReply, resolvePermission, parseReplyScript, isControl, splitTurns, 
 import { JAKE_ID, JAKE_USERNAME } from './fake-party';
 import { arcadeStatusFor, arcadeBoardFor, arcadeRecordsFor, arcadeVersusIsDown, type ArcadeScenario } from './arcade-fixtures';
 import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
+import type {
+  GitFileStatusResult, GitFileReviewResult, GitLogEntry, GitCommitFileDiffResult, GitOpResult,
+} from '../../../shared/git-types';
+import type { StructuredPatchHunk } from '../../../shared/types';
 // The fake splits its scripted sentence with the SAME helper the real engine's
 // worker uses, so what Destin reviews in the workbench is the shipped grey/solid
 // rule rather than a lookalike (it used to grey the last two words, full stop).
@@ -2863,6 +2867,72 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     get: async () => ({ fast: activeScenario === 'statusbar-cc', effort: 'auto' }),
     set: async () => ({ ok: true }),
   };
+
+  // Git surface (spec docs/archive/specs/2026-07-22-git-surface.md) — WHY this
+  // exists (capture repair, 2026-09-24): `git` was never in NAMESPACES or
+  // handWritten, so `window.claude.git.fileStatus()` fell through the outer
+  // bridge's catch-all TWICE (once for the unknown namespace, once for the
+  // unknown method — withCatchAll cannot tell a leaf channel from a nested
+  // namespace) and resolved `[]`. `useGitFileStatus` reads `r?.ok` off that as
+  // falsy and silently sets status to null, so the SessionDrawer footer's
+  // "Review Changes" button — the only door into GitReviewView — could never
+  // render in the workbench. Git file review had zero screenshots anywhere
+  // for exactly this reason (completeness-screens.md, 2026-09-23 audit).
+  // Deliberately GENERIC, not per-file: every file the drawer can open reads
+  // as "one uncommitted edit, two commits of history" regardless of path —
+  // real per-file git state would need a second fixture keyed to the
+  // artifacts tree, which is more than a capture needs. Mutations (stage/
+  // unstage/commit) are accepted but not modelled — GitReviewView refreshes
+  // off `onChanged`/the same fixture, so the review stays legible afterward
+  // rather than reflecting the specific action taken.
+  const GIT_HUNK: StructuredPatchHunk = {
+    oldStart: 12, oldLines: 6, newStart: 12, newLines: 7,
+    lines: [
+      ' export function useChatState(sessionId: string) {',
+      '   const store = useChatStore();',
+      '-  return store.get(sessionId);',
+      '+  // WHY: a cached selector avoids re-rendering every session on one update.',
+      '+  return useCachedSelector(store, sessionId);',
+      ' }',
+      ' ',
+    ],
+  };
+  const GIT_LOG: GitLogEntry[] = [
+    {
+      sha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e', shortSha: 'a1b2c3d',
+      subject: 'chat: cache the per-session selector', authorDate: new Date(Date.now() - 86_400_000).toISOString(),
+      counts: { added: 4, removed: 1 },
+    },
+    {
+      sha: 'f6e5d4c3b2a1098765432109876543210fedcba', shortSha: 'f6e5d4c',
+      subject: 'chat: initial session store', authorDate: new Date(Date.now() - 7 * 86_400_000).toISOString(),
+      counts: { added: 96, removed: 0 },
+    },
+  ];
+  let gitStagedCount = 0;
+  const gitSubs = new Set<() => void>();
+  const gitFireChanged = () => gitSubs.forEach((cb) => cb());
+  const git = {
+    fileStatus: async (): Promise<GitFileStatusResult> => ({
+      ok: true, isRepo: true, branch: 'session/ui-consistency-audit',
+      counts: { added: 4, removed: 1 }, hasHistory: true, staged: gitStagedCount > 0, conflicted: false,
+    }),
+    fileReview: async (): Promise<GitFileReviewResult> => ({
+      ok: true, isRepo: true, branch: 'session/ui-consistency-audit',
+      uncommitted: {
+        hunks: [GIT_HUNK], counts: { added: 4, removed: 1 }, staged: gitStagedCount > 0,
+        untracked: false, inHead: true, binary: false, conflicted: false,
+      },
+      log: GIT_LOG, hasMore: false, stagedCount: gitStagedCount,
+    }),
+    commitFileDiff: async (): Promise<GitCommitFileDiffResult> => ({ ok: true, hunks: [GIT_HUNK], binary: false }),
+    stage: async (): Promise<GitOpResult> => { gitStagedCount = 1; gitFireChanged(); return { ok: true }; },
+    unstage: async (): Promise<GitOpResult> => { gitStagedCount = 0; gitFireChanged(); return { ok: true }; },
+    commit: async (): Promise<GitOpResult> => { gitStagedCount = 0; gitFireChanged(); return { ok: true }; },
+    watch: async () => ({ ok: true }),
+    unwatch: async () => ({ ok: true }),
+    onChanged: (cb: () => void) => { gitSubs.add(cb); return () => { gitSubs.delete(cb); }; },
+  };
   // Scripted replies: the transcript/hook events a played reply fixture emits
   // (playReply in sendInput above). Same attachment pattern as specialistEvent
   // below — Ns<'on'> doesn't carry these members.
@@ -3183,7 +3253,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search,
+    skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;
