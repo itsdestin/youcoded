@@ -40,7 +40,7 @@ const BAD: PlanDocumentV1 = { ...VALID, steps: [{ ...VALID.steps[0], specialist:
 
 const proposed = (toolUseId: string): PlanView => ({
   planId: 'plan-1', toolUseId, title: VALID.goal, status: 'proposed', steps: [],
-  ceilingTokens: 1_000, ceilingUsd: null, model: { label: 'model' }, seq: 1,
+  model: { label: 'model' }, seq: 1,
 });
 
 const STALL_MS = 150;

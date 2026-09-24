@@ -38,10 +38,10 @@ function plan(over: Partial<PlanView> = {}): PlanView {
   return {
     planId: 'plan-1', toolUseId: CARD, title: 'Review two files', status: 'proposed',
     steps: [
-      { id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'pending' },
-      { id: 's2', kind: 'combine', title: 'Combine', specialist: 'worker', fanOut: 1, budgetTokens: 4000, status: 'pending' },
+      { id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'pending' },
+      { id: 's2', kind: 'combine', title: 'Combine', specialist: 'worker', fanOut: 1, status: 'pending' },
     ],
-    ceilingTokens: 42000, ceilingUsd: null, model: { label: 'GPT-5.1 (ChatGPT)' }, seq: 1,
+    model: { label: 'GPT-5.1 (ChatGPT)' }, seq: 1,
     ...over,
   };
 }
@@ -69,8 +69,8 @@ const buttons = () => within(block()).queryAllByRole('button').map((b) => (b.tex
 function bridge() {
   (window as any).claude = {
     plans: {
-      approve: vi.fn(), comment: vi.fn(), addBudget: vi.fn(), resume: vi.fn(), stop: vi.fn(),
-      getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 0 }),
+      approve: vi.fn(), comment: vi.fn(), setLimit: vi.fn(), setStepModel: vi.fn(), resume: vi.fn(), stop: vi.fn(),
+      getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underUsd: 0 }),
       setAutoApprove: vi.fn().mockResolvedValue({ ok: true }),
     },
   };
@@ -122,8 +122,7 @@ describe('A. decision 34: the estimate/spend lines replace the ceiling, tilde an
 
   it('while spending: no limit shown unless the user set one in Plan settings', () => {
     render(<ChatProvider><Card initial={running()} /></ChatProvider>);
-    // This plan has no published price (ceilingUsd: null on the base fixture,
-    // no `estimate` either — an older-shape record): tokens, no "of" clause.
+    // This plan has no `estimate` (an older-shape record): tokens, no "of" clause.
     expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('About 1,000 tokens used');
     expect(screen.getByTestId('plan-ceiling')).not.toHaveTextContent(' of ');
   });
@@ -175,10 +174,20 @@ function pushedRight(row: HTMLElement, firstBtn: HTMLElement): boolean {
   return false;
 }
 /** Check every mixed row in what is on screen; return their labels. */
+/** Decision 37: a trailing dismiss `CloseButton` — "the same small
+ *  unobtrusive close every dismissable box in the app uses" — is not a
+ *  member of the row's primary filled/light action pair (Stop/Continue,
+ *  Cancel/Send, …); it is the box's own escape hatch, always last, whatever
+ *  the action button's fill. Recognized by its icon-button shape: no visible
+ *  text and a close/cancel/dismiss-flavoured `aria-label`. */
+function isTrailingDismiss(b: HTMLElement): boolean {
+  return !(b.textContent ?? '').trim() && /close|cancel|stop setting|dismiss/i.test(b.getAttribute('aria-label') ?? '');
+}
+
 function sweepMixedRows(where: string): string[] {
   const found: string[] = [];
   for (const row of buttonRows(document.body)) {
-    const btns = within(row).queryAllByRole('button').filter((b) => !b.hasAttribute('aria-expanded'));
+    const btns = within(row).queryAllByRole('button').filter((b) => !b.hasAttribute('aria-expanded') && !isTrailingDismiss(b));
     if (btns.length < 2) continue;
     const kinds = btns.map((b) => (isFilled(b) ? 'filled' : 'light'));
     // Decision 35: the Plan settings gear is an icon-only ghost button
@@ -199,9 +208,18 @@ describe('B. filled buttons sit on the right, the light one to their left', () =
   // Final review F27 (R22, "wherever"): every row of the plan card where a
   // filled and a light button sit together, checked by their real fill.
   it('every button row on the card: light first, filled rightmost', () => {
+    // T7 (design §1/§2, decision 34): `budget`/`add_budget` are retired — the
+    // generic strip's fixture is now `specialist-error`; the ONE remaining
+    // "ask for a number, then Continue" box belongs to a `spend-limit` pause
+    // instead (its own dedicated row, never the generic strip — decision 37 R-4).
     const pausedPlan = plan({
       status: 'paused', steps: [{ ...plan().steps[0], status: 'paused' }, plan().steps[1]],
-      paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget', actions: ['add_budget', 'stop'] },
+      paused: { stepId: 's1', reason: 'a specialist ran into an error.', kind: 'specialist-error', actions: ['continue', 'stop'] },
+    });
+    const spendLimitPlan = plan({
+      status: 'paused', steps: [{ ...plan().steps[0], status: 'paused' }, plan().steps[1]],
+      estimate: { lowUsd: 0.4, highUsd: 2 },
+      paused: { stepId: 's1', reason: 'Reached your $5 limit.', kind: 'spend-limit', limit: { usd: 5 } },
     });
     const pausedWith = (over: Partial<NonNullable<PlanView['paused']>>) =>
       plan({ ...pausedPlan, paused: { ...pausedPlan.paused!, ...over } });
@@ -222,13 +240,14 @@ describe('B. filled buttons sit on the right, the light one to their left', () =
     expect(isFilled(screen.getByRole('button', { name: 'Comment' }))).toBe(false);
     unmount();
     state('the comment box', plan(), () => press('Comment'));
-    state('a budget pause', pausedPlan);
-    state('the Add budget row', pausedPlan, () => press('Add budget'));
+    state('a specialist-error pause', pausedPlan);
     state('the Ask box', pausedPlan, () => press('Ask the assistant'));
     state('a recommended Stop', pausedWith({ handoff: { state: 'answered', recommendation: { action: 'stop', message: 'Stop here.' } } }));
     state('a recommended Continue', pausedWith({ actions: ['continue', 'stop'], handoff: { state: 'answered', recommendation: { action: 'continue', message: 'Carry on.' } } }));
     // Decision 24: a pause with the system's own text behind it adds Report bug.
     state('a pause with Report bug', pausedWith({ report: 'EIO writing the journal', actions: ['continue', 'stop'] }));
+    state('a spend-limit pause', spendLimitPlan);
+    state('the new-limit box', spendLimitPlan, () => press('Continue'));
     state('an interrupted plan', plan({ status: 'interrupted' }));
     state('a failed plan', plan({ status: 'failed' }));
     state('a running plan', running());
@@ -239,8 +258,6 @@ describe('B. filled buttons sit on the right, the light one to their left', () =
     expect(new Set(seen)).toEqual(new Set([
       'Comment | Approve',
       'Cancel | Send',
-      'Cancel | Continue',
-      'Ask the assistant | Stop | Add budget',
       'Ask the assistant | Stop',
       'Ask the assistant | Stop | Continue',
       'Report bug | Ask the assistant | Stop | Continue',
@@ -263,17 +280,18 @@ describe('B. filled buttons sit on the right, the light one to their left', () =
     expect(screen.getByRole('button', { name: 'Send' }).parentElement!).toHaveClass('justify-end');
   });
 
-  it('paused and interrupted already follow the rule: Stop, then Continue / Add budget', () => {
+  it('paused and interrupted already follow the rule: Stop, then Continue', () => {
     const { unmount } = render(<ChatProvider><Card initial={plan({ status: 'interrupted' })} /></ChatProvider>);
     expect(buttons().slice(-2)).toEqual(['Stop', 'Continue']);
     unmount();
     render(<ChatProvider><Card initial={plan({
       status: 'paused', steps: [{ ...plan().steps[0], status: 'paused' }, plan().steps[1]],
-      paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget' },
+      estimate: { lowUsd: 0.4, highUsd: 2 },
+      paused: { stepId: 's1', reason: 'Reached your $5 limit.', kind: 'spend-limit', limit: { usd: 5 } },
     })} /></ChatProvider>);
-    expect(buttons().slice(-2)).toEqual(['Stop', 'Add budget']);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    expect(buttons().slice(-2)).toEqual(['Cancel', 'Continue']);
+    expect(buttons().slice(-2)).toEqual(['Stop', 'Continue']);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(buttons()).toContain('Continue');
   });
 });
 
@@ -343,7 +361,7 @@ describe('D. the Specialists chip lists a plan\'s working specialists, grouped u
   });
 
   it('a paused plan\'s row says what the card header says', () => {
-    const pausedPlan = running({ status: 'paused', paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget' } });
+    const pausedPlan = running({ status: 'paused', paused: { stepId: 's1', reason: 'Reached your $5 limit.', kind: 'spend-limit', limit: { usd: 5 } } });
     render(<ChatProvider><Card initial={pausedPlan} extra={ASKS} withCard={false} /></ChatProvider>);
     fireEvent.click(screen.getByTestId('specialists-chip'));
     expect(planToggle()).toHaveTextContent('paused — reached its limit');
@@ -405,7 +423,7 @@ describe('D. the Specialists chip lists a plan\'s working specialists, grouped u
   });
 
   it('a paused plan with nobody working is not listed', () => {
-    render(<ChatProvider><Card initial={plan({ status: 'paused', paused: { stepId: 's1', reason: 'x', kind: 'budget' } })} withCard={false} /></ChatProvider>);
+    render(<ChatProvider><Card initial={plan({ status: 'paused', paused: { stepId: 's1', reason: 'x', kind: 'spend-limit' } })} withCard={false} /></ChatProvider>);
     expect(screen.queryByTestId('specialists-chip')).toBeNull();
   });
 });

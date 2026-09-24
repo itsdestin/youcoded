@@ -24,15 +24,15 @@ const NOTICE = 'Your specialists changed. This plan could now cost up to ~$0.42,
 function plan(over: Partial<PlanView> = {}): PlanView {
   return {
     planId: 'plan-1', toolUseId: CARD, title: 'Review two files', status: 'proposed',
-    steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'pending' }],
-    ceilingTokens: 4000, ceilingUsd: null, model: { label: 'm' }, seq: 1,
+    steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'pending' }],
+    model: { label: 'm' }, seq: 1,
     ...over,
   };
 }
 
 const paused = (): PlanView => plan({
   status: 'paused', seq: 2,
-  steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'paused' }],
+  steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'paused' }],
   paused: { stepId: 's1', reason: 'the specialist could not start', kind: 'launch-failed', launch: 'not-ready', actions: ['continue', 'stop'] },
 });
 

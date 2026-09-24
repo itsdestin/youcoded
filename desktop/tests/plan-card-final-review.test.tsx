@@ -33,14 +33,17 @@ const CARD = 'call-plan';
 function plan(over: Partial<PlanView> = {}): PlanView {
   return {
     planId: 'plan-1', toolUseId: CARD, title: 'Review two files', status: 'proposed',
-    steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'pending' }],
-    ceilingTokens: 4000, ceilingUsd: null, model: { label: 'm' }, seq: 1,
+    steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'pending' }],
+    model: { label: 'm' }, seq: 1,
     ...over,
   };
 }
+// T7 (design §1/§2, decision 34): `budget` is a retired pause kind — the
+// default fixture is now `specialist-error`, which still routes to the
+// generic pause strip (same as `budget` used to).
 const paused = (over: Partial<PlanView> = {}) => plan({
   status: 'paused', steps: [{ ...plan().steps[0], status: 'paused' }],
-  paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget', actions: ['add_budget', 'stop'] }, ...over,
+  paused: { stepId: 's1', reason: 'a specialist ran into an error.', kind: 'specialist-error', actions: ['continue', 'stop'] }, ...over,
 });
 
 /** The card as the app shows it, from the chat store (a push lands through PLAN_CHANGED). */
@@ -61,8 +64,8 @@ const status = () => screen.getByTestId('plan-block').getAttribute('data-plan-st
 
 function bridge(over: Record<string, unknown> = {}) {
   const plans = {
-    approve: vi.fn(), comment: vi.fn(), addBudget: vi.fn(), resume: vi.fn(), stop: vi.fn(), askAssistant: vi.fn(),
-    getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 0 }),
+    approve: vi.fn(), comment: vi.fn(), setLimit: vi.fn(), setStepModel: vi.fn(), resume: vi.fn(), stop: vi.fn(), askAssistant: vi.fn(),
+    getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underUsd: 0 }),
     setAutoApprove: vi.fn().mockResolvedValue({ ok: true }),
     ...over,
   };
@@ -73,50 +76,13 @@ function bridge(over: Record<string, unknown> = {}) {
 beforeEach(() => resetPlanSupportForTests());
 afterEach(() => { cleanup(); delete (window as any).claude; delete (window as any).matchMedia; });
 
-describe('F1: Add budget is safe to repeat', () => {
-  it('Retry after a lost reply sends the SAME request id; a new pause gets a new one', async () => {
-    const plans = bridge({
-      addBudget: vi.fn()
-        .mockRejectedValueOnce(new Error('Request plans:add-budget timed out'))
-        .mockResolvedValue({ ok: true, plan: paused({ seq: 2, paused: undefined, status: 'paused' }) }),
-      resume: vi.fn().mockResolvedValue({ ok: true, plan: plan({ status: 'running', seq: 3 }) }),
-    });
-    render(<ChatProvider><Card initial={paused()} /></ChatProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    // A timeout is an unknown outcome: the general line, with Report bug and Retry.
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(PLAN_UNREADABLE);
-    expect(alert).not.toHaveTextContent('plans:add-budget');
-    expect(within(alert).getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(status()).toBe('running'));
-    const [first, second] = plans.addBudget.mock.calls;
-    expect(typeof first[3]).toBe('string');
-    expect(second[3]).toBe(first[3]);
-    // The next pause: a fresh id.
-    act(() => push(paused({ seq: 4 })));
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    await waitFor(() => expect(plans.addBudget).toHaveBeenCalledTimes(3));
-    expect(plans.addBudget.mock.calls[2][3]).not.toBe(first[3]);
-  });
-
-  it('a second press of Add budget on the same pause reuses the id', async () => {
-    const plans = bridge({
-      addBudget: vi.fn().mockResolvedValue({ ok: true, plan: paused({ seq: 2 }) }),
-      resume: vi.fn().mockResolvedValue({ ok: false, error: 'This plan is being run by another YouCoded window.' }),
-    });
-    render(<ChatProvider><Card initial={paused()} /></ChatProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    await screen.findByText('This plan is being run by another YouCoded window.');
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    await waitFor(() => expect(plans.addBudget).toHaveBeenCalledTimes(2));
-    expect(plans.addBudget.mock.calls[1][3]).toBe(plans.addBudget.mock.calls[0][3]);
-  });
-});
+// T7 (spending rework, design §1/§6, decision 34): F1 pinned Add budget's
+// request-id reuse — a press could be retried without adding twice. There is
+// no Add budget any more to double-add: `setLimit`/`resume(limit)` each SET
+// an absolute number, so resending the same value has the same effect with
+// no idempotency token needed. Retry safety for the plan card's OTHER calls
+// (Approve, Comment, Stop, Ask) is unaffected and stays covered elsewhere in
+// this file (F14, F15) and in plan-card-actions.test.tsx.
 
 describe('F5: a plan button pressed while the phone is reconnecting', () => {
   it('says nothing was sent, with Retry, instead of the general line', async () => {
@@ -154,7 +120,7 @@ describe('F8: step titles wrap on a narrow window', () => {
 
 describe('F9: a cached "unsupported" is forgotten when the host changes', () => {
   it('a card on screen asks again when the shim switches hosts', async () => {
-    const plans = bridge({ getAutoApprove: vi.fn().mockResolvedValueOnce({ ok: false, unsupported: true, error: "Plans aren't available on the phone yet." }).mockResolvedValue({ ok: true, underTokens: 0 }) });
+    const plans = bridge({ getAutoApprove: vi.fn().mockResolvedValueOnce({ ok: false, unsupported: true, error: "Plans aren't available on the phone yet." }).mockResolvedValue({ ok: true, underUsd: 0 }) });
     render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled());
     act(() => { window.dispatchEvent(new CustomEvent(REMOTE_HOST_CHANGED_EVENT)); });
@@ -270,17 +236,25 @@ describe('F15: an old error does not outlive the state it was about', () => {
 });
 
 describe('F16: boxes do not reopen on the next pause', () => {
-  it('an open Add budget field closes when the plan resumes elsewhere, and the next pause shows its buttons', async () => {
+  // T7 (design §1/§7, decision 34): Add budget is gone — the one remaining
+  // "ask for a number" box belongs to a `spend-limit` pause's own Continue.
+  it('an open new-limit box closes when the plan resumes elsewhere, and the next pause shows its buttons', async () => {
     bridge();
-    render(<ChatProvider><Card initial={paused()} /></ChatProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    fireEvent.change(screen.getByLabelText('Tokens to allow'), { target: { value: '777' } });
+    const spendLimitPaused = (over: Partial<PlanView> = {}) => plan({
+      status: 'paused', estimate: { lowUsd: 0.4, highUsd: 2 },
+      steps: [{ ...plan().steps[0], status: 'paused' }],
+      paused: { stepId: 's1', reason: 'Reached your $5 limit.', kind: 'spend-limit', limit: { usd: 5 } },
+      ...over,
+    });
+    render(<ChatProvider><Card initial={spendLimitPaused()} /></ChatProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.change(screen.getByLabelText('New spending limit'), { target: { value: '777' } });
     act(() => push(plan({ status: 'running', seq: 2 })));
-    act(() => push(paused({ seq: 3, paused: { stepId: 's1', reason: 'again', kind: 'budget', actions: ['add_budget', 'stop'] } })));
-    expect(screen.queryByTestId('plan-add-budget')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Add budget' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    expect(screen.getByLabelText('Tokens to allow')).not.toHaveValue('777');
+    act(() => push(spendLimitPaused({ seq: 3, paused: { stepId: 's1', reason: 'again', kind: 'spend-limit', limit: { usd: 5 } } })));
+    expect(screen.queryByTestId('plan-new-limit')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(screen.getByLabelText('New spending limit')).not.toHaveValue('777');
   });
 
   it('an open question box closes when the plan leaves the pause', async () => {
@@ -297,7 +271,7 @@ describe('F16: boxes do not reopen on the next pause', () => {
 
 const GOAL_INPUT = { goal: 'Tidy the docs' };
 describe('F18/F19/F20: the writing header', () => {
-  const writing = (over: Partial<PlanView> = {}) => plan({ status: 'writing', title: '', steps: [], ceilingTokens: 0, seq: 0, ...over });
+  const writing = (over: Partial<PlanView> = {}) => plan({ status: 'writing', title: '', steps: [], seq: 0, ...over });
 
   it('the clock counts from when writing began', () => {
     vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
@@ -324,7 +298,7 @@ describe('F18/F19/F20: the writing header', () => {
 
 describe('F21: a proposal stopped before it was written', () => {
   it('reads "stopped" with no step count, and draws no empty body', () => {
-    const stopped = plan({ status: 'stopped', steps: [], ceilingTokens: 0, title: '' });
+    const stopped = plan({ status: 'stopped', steps: [], title: '' });
     expect(planStatusPhrase(stopped)).toBe('stopped');
     bridge();
     render(<ChatProvider><Card initial={stopped} /></ChatProvider>);
@@ -349,8 +323,9 @@ describe('F22/F23: dollar wording (decision 34: estimate/spend, not a ceiling)',
 
   it('a running plan\'s limit under a cent never reads "of $0.00"', () => {
     bridge();
-    // ceilingUsd forces the priced branch (this fixture predates `estimate`).
-    render(<ChatProvider><Card initial={plan({ status: 'running', ceilingUsd: 0.4, spendLimit: { usd: 0.001 }, usedUsd: 0.0001, usedTokens: 100 })} /></ChatProvider>);
+    // `estimate` forces the priced branch (T7: `unpriced()` reads only
+    // `estimate` now — the retired `ceilingUsd` fallback is gone).
+    render(<ChatProvider><Card initial={plan({ status: 'running', estimate: { lowUsd: 0.1, highUsd: 1 }, spendLimit: { usd: 0.001 }, usedUsd: 0.0001, usedTokens: 100 })} /></ChatProvider>);
     const line = screen.getByTestId('plan-ceiling');
     expect(line).not.toHaveTextContent(/\$0\.00/);
     expect(line).toHaveTextContent('Spent less than a cent of a limit under a cent');
@@ -358,24 +333,20 @@ describe('F22/F23: dollar wording (decision 34: estimate/spend, not a ceiling)',
 
   it('a whole-dollar limit reads "Reached your $5 limit", never "$5.00"', () => {
     bridge();
-    render(<ChatProvider><Card initial={paused({ paused: { stepId: 's1', reason: 'x', kind: 'plan-limit' }, spendLimit: { usd: 5 } })} /></ChatProvider>);
+    render(<ChatProvider><Card initial={paused({ paused: { stepId: 's1', reason: 'x', kind: 'spend-limit' }, spendLimit: { usd: 5 } })} /></ChatProvider>);
     expect(screen.getByTestId('plan-paused-reason')).toHaveTextContent('Reached your $5 limit.');
   });
 
-  // Untouched by decision 34: the OLD per-step Add-budget flow (a `budget`
-  // pause) still prices off `ceilingUsd`/`ceilingTokens`, unchanged.
-  it('the Add budget price wears a tilde on an approximate plan', () => {
-    bridge();
-    render(<ChatProvider><Card initial={paused({ ceilingUsd: 0.4, approximateLimit: true })} /></ChatProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    expect(screen.getByTestId('plan-add-budget')).toHaveTextContent('tokens (~$0.20)');
-  });
+  // T7 (design §1/§2, decision 34): Add budget — and the per-step ceiling it
+  // priced off (`ceilingUsd`/`ceilingTokens`, `approximateLimit`) — is gone
+  // entirely. There is no tilde left to wear: the proposed card's estimate
+  // is inherently a range (pinned above, "an estimate under a cent…").
 });
 
 describe('F24/F26: step figures (decision 34: no per-step ceiling left to print)', () => {
   it('a pending step shows no figure at all — there is no per-step cap to print', () => {
     bridge();
-    render(<ChatProvider><Card initial={plan({ steps: [{ ...plan().steps[0], setupTokens: 500 }], ceilingTokens: 5000 })} /></ChatProvider>);
+    render(<ChatProvider><Card initial={plan({ steps: [{ ...plan().steps[0] }] })} /></ChatProvider>);
     // Decision 34 removed the "Limits" section (Each … stops at its N-token
     // limit / Up to N tokens for this step) entirely — replaced by "Model".
     fireEvent.click(within(screen.getByTestId('plan-step-s1')).getByRole('button'));
@@ -457,35 +428,10 @@ describe('review fix 2: an unsaved-progress pause keeps the system text for the 
   });
 });
 
-// Task 12 follow-up 1: the card shows the warm minimum while the specialist's
-// prompt is still cached, then the cold one. The switch is timed from when the
-// card RECEIVED the view (forMs), never from main's clock.
-describe('follow-up: the minimum Add budget switches when the cache window closes', () => {
-  afterEach(() => { vi.useRealTimers(); });
-  it('shows the warm number, then the cold number after forMs', () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
-    bridge();
-    const view = paused({ paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget', actions: ['add_budget', 'stop'], minimumAddTokens: 2_500, warmMinimum: { tokens: 800, forMs: 60_000 } } });
-    render(<ChatProvider><Card initial={view} /></ChatProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    expect(screen.getByTestId('plan-add-minimum')).toHaveTextContent('Add at least 800 tokens to continue.');
-    act(() => { vi.advanceTimersByTime(59_000); });
-    expect(screen.getByTestId('plan-add-minimum')).toHaveTextContent('Add at least 800 tokens');
-    act(() => { vi.advanceTimersByTime(1_001); });
-    expect(screen.getByTestId('plan-add-minimum')).toHaveTextContent('Add at least 2,500 tokens to continue.');
-  });
-
-  it('a warm minimum already met (0) shows no minimum until it expires', () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
-    bridge();
-    const view = paused({ paused: { stepId: 's1', reason: 'x', kind: 'budget', actions: ['add_budget', 'stop'], minimumAddTokens: 1_700, warmMinimum: { tokens: 0, forMs: 1_000 } } });
-    render(<ChatProvider><Card initial={view} /></ChatProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    expect(screen.queryByTestId('plan-add-minimum')).toBeNull();
-    act(() => { vi.advanceTimersByTime(1_001); });
-    expect(screen.getByTestId('plan-add-minimum')).toHaveTextContent('Add at least 1,700 tokens');
-  });
-});
+// T7 (spending rework, design §1/§3, decision 34): the warm/cold Add budget
+// minimum this pinned — two numbers, timed from the cache window — is gone
+// entirely with the rest of the per-request reservation system. Nothing is
+// reserved in advance any more, so there is no minimum top-up left to switch.
 
 // Decision 24: the card's fallback for a record without `actions` is main's
 // own table, kind by kind (so no non-budget pause can show Add budget again).
@@ -504,17 +450,18 @@ describe('the fallback buttons match main\'s pause routing', () => {
 // the reason reads as one sentence after "Paused —".
 describe('a pause says what kind of pause it is', () => {
   const at = (kind: NonNullable<PlanView['paused']>['kind'], reason = 'x') => paused({ paused: { stepId: 's1', reason, kind } });
+  // T7 (design §1/§2, decision 34): `budget`/`ceiling-shortfall`/`plan-limit`/
+  // `unknown-request`/`budget-refused`/`local-pool` are retired pause kinds —
+  // `spend-limit` is the one spend-related kind left (design §7, decision 37
+  // R-4); `unknown-outcome`/`iteration-cap` round out the current set.
   it.each([
-    ['budget', 'paused — reached its limit'],
-    ['ceiling-shortfall', 'paused — reached its limit'],
-    ['plan-limit', 'paused — reached its limit'],
+    ['spend-limit', 'paused — reached its limit'],
     ['unexpected-error', 'paused — something went wrong'],
     ['specialist-error', 'paused — something went wrong'],
     ['launch-failed', 'paused — something went wrong'],
     ['invalid-report', 'paused — something went wrong'],
-    ['unknown-request', 'paused — something went wrong'],
-    ['budget-refused', 'paused — needs a revised plan'],
-    ['local-pool', 'paused — needs a revised plan'],
+    ['unknown-outcome', 'paused — something went wrong'],
+    ['iteration-cap', 'paused — needs a revised plan'],
     ['specialist-stopped', 'paused — a specialist was stopped'],
   ] as const)('%s → "%s"', (kind, phrase) => {
     expect(planStatusPhrase(at(kind))).toBe(phrase);

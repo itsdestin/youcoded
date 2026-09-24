@@ -467,10 +467,12 @@ const IPC = {
   ENGINE_MODELS_CHANGED: 'engine:models-changed',
   NATIVE_MODEL_STATE: 'native:model-state',
   NATIVE_SHELL_EVENT: 'native:shell-event',
-  // Specialists plans (Task 6) — keep in sync with shared/types.ts.
+  // Specialists plans (Task 6; T7 swapped add-budget for set-limit/
+  // set-step-model, design §6) — keep in sync with shared/types.ts.
   PLANS_APPROVE: 'plans:approve',
   PLANS_COMMENT: 'plans:comment',
-  PLANS_ADD_BUDGET: 'plans:add-budget',
+  PLANS_SET_LIMIT: 'plans:set-limit',
+  PLANS_SET_STEP_MODEL: 'plans:set-step-model',
   PLANS_RESUME: 'plans:resume',
   PLANS_STOP: 'plans:stop',
   PLANS_ASK_ASSISTANT: 'plans:ask-assistant',
@@ -1657,7 +1659,7 @@ contextBridge.exposeInMainWorld('claude', {
     steer: (sessionId: string, childId: string, text: string) => ipcRenderer.invoke('specialists:steer', sessionId, childId, text),
     interrupt: (sessionId: string, childId: string) => ipcRenderer.invoke('specialists:interrupt', sessionId, childId),
   },
-  // Specialists plans (Task 6) — the card's five buttons and Settings' read and
+  // Specialists plans (Task 6) — the card's buttons and Settings' read and
   // write. WHY an object payload here, unlike the positional specialists calls
   // above: main and the remote server hand this exact object to ONE shared
   // handler (harness/plans/plan-requests.ts), so a click on the computer and the
@@ -1666,16 +1668,28 @@ contextBridge.exposeInMainWorld('claude', {
   plans: {
     approve: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_APPROVE, { sessionId, planId }),
     comment: (sessionId: string, planId: string, text: string) => ipcRenderer.invoke(IPC.PLANS_COMMENT, { sessionId, planId, text }),
-    // Final review F1: `requestId` names one press, so a Retry adds nothing twice.
-    addBudget: (sessionId: string, planId: string, tokens: number, requestId?: string) => ipcRenderer.invoke(IPC.PLANS_ADD_BUDGET, { sessionId, planId, tokens, requestId }),
-    resume: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_RESUME, { sessionId, planId }),
+    // T7 (design §6/§7, decision 34/35): the plan's own spend limit —
+    // replaces the retired `addBudget` (there is no per-step budget left to
+    // add to).
+    setLimit: (sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null) =>
+      ipcRenderer.invoke(IPC.PLANS_SET_LIMIT, { sessionId, planId, limit }),
+    // T7 (design §5): a not-yet-started step's model override; `null` resets
+    // it to the document/specialist default.
+    setStepModel: (sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null) =>
+      ipcRenderer.invoke(IPC.PLANS_SET_STEP_MODEL, { sessionId, planId, stepId, model }),
+    // T7 (design §7): an optional new limit rides the SAME lease-taking
+    // write — Continue-with-a-new-limit is one call.
+    resume: (sessionId: string, planId: string, limit?: { usd: number } | { tokens: number } | null) =>
+      ipcRenderer.invoke(IPC.PLANS_RESUME, { sessionId, planId, limit }),
     stop: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_STOP, { sessionId, planId }),
     // Task 11 (pause handoff §6): a paused card's "Ask the assistant".
     // Decision 20: with the optional question typed in the Ask box.
     askAssistant: (sessionId: string, planId: string, question?: string) => ipcRenderer.invoke(IPC.PLANS_ASK_ASSISTANT, { sessionId, planId, question }),
     // Final review F29: `{}`, exactly what the remote shim sends.
     getAutoApprove: () => ipcRenderer.invoke(IPC.PLANS_GET_AUTO_APPROVE, {}),
-    setAutoApprove: (underTokens: number) => ipcRenderer.invoke(IPC.PLANS_SET_AUTO_APPROVE, { underTokens }),
+    // WHY underUsd, not underTokens (spending rework stage 1, design §6/§8):
+    // auto-start reads a dollar figure now.
+    setAutoApprove: (underUsd: number) => ipcRenderer.invoke(IPC.PLANS_SET_AUTO_APPROVE, { underUsd }),
   },
   // Local llama.cpp engine (Plan B). Progress/status pushes return an
   // unsubscribe, matching every other on* subscription in this file.

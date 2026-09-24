@@ -40,7 +40,7 @@ function plan(over: Partial<PlanView> = {}): PlanView {
       { id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'pending' },
       { id: 's2', kind: 'combine', title: 'Combine', specialist: 'worker', fanOut: 1, status: 'pending' },
     ],
-    ceilingTokens: 42000, ceilingUsd: null, model: { label: 'Claude Sonnet 4.6' }, seq: 1,
+    model: { label: 'Claude Sonnet 4.6' }, seq: 1,
     ...over,
   };
 }

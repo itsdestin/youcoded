@@ -4170,7 +4170,8 @@ class SessionService : Service() {
                     org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
             }
 
-            // Specialists plans (Task 6; Task 11 added Ask): all eight plan requests answer a typed
+            // Specialists plans (Task 6; Task 11 added Ask; T7 swapped add-budget for
+            // set-limit/set-step-model): every plan request answers a typed
             // `unsupported` refusal — see PlansBridge for why that shape. Its OWN
             // branch, for the reason the engine branch below spells out: a `-> {`
             // inside a comma list captures every label above it.

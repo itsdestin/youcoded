@@ -916,18 +916,11 @@ export interface PlanView {
   title: string;
   status: PlanStatus;
   steps: PlanStepView[];
-  /** Σ(step budget × fan-out): the worst case, honest because budgets are caps.
-   *  WHY now OPTIONAL, not required (spending rework stage 1, design §2): the
-   *  per-step token budget this summed no longer exists in the grammar
-   *  (decision 34); the proposed and running cards read `estimate`/
-   *  `spendLimit` below instead. Kept only so an OLDER journal record — read
-   *  before it is ever re-projected — still satisfies this type; T7 deletes
-   *  the field once the renderer stops reading it. */
-  ceilingTokens?: number;
-  /** Priced per model; null when the model has no published price — the card
-   *  then shows the ceiling in tokens only (never a false $0.00). Same
-   *  retirement note as `ceilingTokens`. */
-  ceilingUsd?: number | null;
+  // WHY `ceilingTokens`/`ceilingUsd` are GONE (spending rework stage 1,
+  // design §2, T7): they summed the per-step token budget the grammar no
+  // longer has (decision 34); the proposed and running cards read
+  // `estimate`/`spendLimit` below instead, and nothing reads the old pair
+  // any more (PlanCard.tsx `unpriced()`, plan-journal.ts's salvage view).
   /** `local` (final review F19): the plan is written by a model on this
    *  computer, which can take minutes — only then does the writing card say so. */
   model: { label: string; local?: boolean };
@@ -2514,15 +2507,19 @@ export const IPC = {
   SPECIALISTS_INTERRUPT: 'specialists:interrupt',
   SPECIALISTS_EVENT: 'specialists:event',
   // ---- Specialists plans (Task 6, design §5) ----
-  // Exactly eight requests (the plan card's six buttons + Settings' read and
-  // write) and one push. Task 11 added the eighth, "Ask the assistant" (pause
-  // handoff §6, which supersedes the backend design's seven). Every surface
-  // answers all eight — Android with a typed
+  // The plan card's requests + Settings' read and write, and one push. Task 11
+  // added "Ask the assistant" (pause handoff §6, which supersedes the backend
+  // design's seven). T7 (spending rework, design §6, revision 1 D5) removed
+  // `plans:add-budget` — there is no per-step or per-plan token budget left to
+  // add to (decision 34) — and added `plans:set-limit` (the plan's own spend
+  // limit, design §7) and `plans:set-step-model` (a step's model override,
+  // design §5). Every surface answers every one — Android with a typed
   // `unsupported` — and the list is pinned by ipc-channels.test.ts. plans:event
   // is a PUSH: one per visible plan-journal change, never a request.
   PLANS_APPROVE: 'plans:approve',
   PLANS_COMMENT: 'plans:comment',
-  PLANS_ADD_BUDGET: 'plans:add-budget',
+  PLANS_SET_LIMIT: 'plans:set-limit',
+  PLANS_SET_STEP_MODEL: 'plans:set-step-model',
   PLANS_RESUME: 'plans:resume',
   PLANS_STOP: 'plans:stop',
   PLANS_ASK_ASSISTANT: 'plans:ask-assistant',

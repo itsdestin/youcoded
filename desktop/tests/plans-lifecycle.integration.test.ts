@@ -15,7 +15,6 @@ import { NativeSessionHost } from '../src/main/harness/native-session-host';
 import { nativeStoreSlug } from '../src/main/slug-encoding';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { stream, textChunks, toolCallChunk, finishChunk } from './helpers/scripted-model';
-import { PLAN_CACHE_WINDOW_MS, resetDisabledAdaptersForTests } from '../src/main/harness/plans/budget-adapter';
 import type { CatalogModel } from '../src/shared/provider-types';
 import type { PlanView } from '../src/shared/types';
 
@@ -126,10 +125,15 @@ function makeHost(): NativeSessionHost {
   const home = new NativeHome(root);
   const h = new NativeSessionHost(
     new SessionStore(home), factory as any, NO_CONTEXT,
-    // The route type decides the budget adapter: ChatGPT gets the soft one.
     async (binding: { providerId: string }) => (binding.providerId === 'chatgpt' ? 'chatgpt' : 'openrouter'),
     async () => null,
-    // ChatGPT sign-in has no per-token price, so its plans have a token limit only.
+    // ChatGPT sign-in has no per-token price, so its plans' estimate/spend
+    // stay in tokens (design §4/§7/§8, decision 34 Q-1/Q-5). $1/$2 per
+    // MILLION input/output tokens (`costForUsage`'s own convention) for
+    // everyone else — comfortably under the $1000 auto-start cap
+    // (`plan-service.ts` `setAutoApprove`) even at the built-in per-type
+    // estimate defaults (design §4), which run to a few hundred thousand
+    // tokens.
     async (binding: { providerId: string }) => (binding.providerId === 'chatgpt' ? null : { in: 1, out: 2 }), undefined, undefined,
     { modelCatalog: async () => CATALOG },
     undefined, undefined, home, undefined, undefined, {},
@@ -163,12 +167,15 @@ const waitForCard = (planId: string, status: PlanView['status']) =>
 /** Runs the plan executor is advancing (a plan can only spend through one). */
 const activeRuns = (): number => (host as any).plans.executor.activeRuns();
 const liveChildren = () => [...(host as any).live.values()].filter((e: any) => e.parentSessionId === SID);
-const heldTokens = (rec: any) => rec.steps.reduce((n: number, s: any) => n + s.attempts.reduce((m: number, a: any) => m + a.reservedTokens, 0), 0);
 
-/** Everything a settled (paused/interrupted/stopped/finished) plan must no longer own. */
+/** Everything a settled (paused/interrupted/stopped/finished) plan must no
+ *  longer own. WHY no held-tokens check any more (spending rework stage 1,
+ *  design §1/§3): `reservedTokens` named an allowance held against a request
+ *  BEFORE it was sent — the whole reservation system is gone; `afterReply`
+ *  only records what a reply actually cost, AFTER the fact, so there is
+ *  nothing left to hold or release. */
 function expectOwnsNothing(rec: any): void {
   expect(rec.lease).toBeUndefined();
-  expect(heldTokens(rec)).toBe(0);
   expect(liveChildren()).toHaveLength(0);
   expect((host as any).specialistSlots.get(SID) ?? 0).toBe(0);
   expect((host as any).activeWriterChild.has(SID)).toBe(false);
@@ -189,8 +196,8 @@ async function propose(doc: unknown, toolUseId = 'call-plan'): Promise<string> {
 const REVIEW_DOC = {
   goal: 'Review two files, then sum up',
   steps: [
-    { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 2000, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
-    { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 2000, summary: 'Plain sentence.', of: 'review' },
+    { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
+    { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', summary: 'Plain sentence.', of: 'review' },
   ],
 };
 const isCombine = (p: string) => p.includes('Combine the reviews');
@@ -202,14 +209,12 @@ beforeEach(() => {
   parent = OPENROUTER_PARENT;
   events = []; planEvents = []; childCalls = []; parentSteps = []; openStreams = [];
   childReply = reviewReply;
-  resetDisabledAdaptersForTests();
   host = makeHost();
 });
 
 afterEach(async () => {
   await host.destroyAll();
   for (const c of openStreams) { try { c.close(); } catch { /* already errored by its abort */ } }
-  resetDisabledAdaptersForTests();
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
 });
 
@@ -246,11 +251,13 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     expect(isCombine(childCalls[2].prompt)).toBe(true);
     expect(childCalls[2].prompt).toContain('REPORT for a');
     expect(childCalls[2].prompt).toContain('REPORT for b');
-    // Every request was capped by what was reserved for it.
+    // T7 (design §1/§2, decision 34): no per-STEP budget caps the reply any
+    // more — whatever cap a request carries is the ordinary per-turn default
+    // every specialist gets, never something sized from a plan's own ceiling
+    // (that ceiling is gone).
     for (const c of childCalls) expect(typeof c.maxOutputTokens).toBe('number');
     expect(done.steps.map((s: any) => s.status)).toEqual(['done', 'done']);
     expect(done.usedTokens).toBe(45);
-    expect(done.usedTokens).toBeLessThanOrEqual(done.ceilingTokens);
     // The card shows the finished steps and their specialists.
     const card = shown(planId)!;
     expect(card.steps.map((s) => s.status)).toEqual(['done', 'done']);
@@ -262,7 +269,10 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
   });
 
   it('propose → auto-approve: a plan under the limit starts on its own and completes; one over it waits for the user', async () => {
-    expect(await host.setPlanAutoApprove(1_000_000)).toEqual({ ok: true });
+    // T7 (design §6/§8, decision 34 Q-6): auto-start reads a DOLLAR estimate
+    // now ("when the estimate is under $X"), never a token ceiling — the max
+    // a limit may be set to is $1000 (`plan-service.ts` `setAutoApprove`).
+    expect(await host.setPlanAutoApprove(1000)).toEqual({ ok: true });
     const auto = await propose(REVIEW_DOC);
     // The card existed as a proposal first, then started with no click.
     const statuses = planEvents.filter((e) => e.plan.planId === auto).map((e) => e.plan.status);
@@ -272,9 +282,12 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     expect(childCalls).toHaveLength(3);
     expectOwnsNothing(plan(auto));
 
-    // A limit below this plan's ceiling: it stays a proposal.
-    const ceiling = plan(auto).ceilingTokens;
-    expect(await host.setPlanAutoApprove(ceiling)).toEqual({ ok: true });   // "under", so equal is not enough
+    // Auto-start OFF (design §8: `underUsd: 0` = off — deterministic, unlike
+    // trying to read a boundary off one particular estimate: the estimate at
+    // this point comes from empty history and the built-in per-type default
+    // (design §4), a different number than what the SAME doc's NEXT proposal
+    // computes once this run's real cost is in history).
+    expect(await host.setPlanAutoApprove(0)).toEqual({ ok: true });
     const manual = await propose(REVIEW_DOC, 'call-plan-2');
     // Auto-approve is decided inside the proposing call, which has returned.
     expect(activeRuns()).toBe(0);
@@ -288,7 +301,7 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
   // start plan after plan. Only the first under-limit proposal of a turn
   // starts by itself; the rest wait for Approve. The next turn may start one.
   it('F3: at most one plan auto-starts per assistant turn', async () => {
-    expect(await host.setPlanAutoApprove(1_000_000)).toEqual({ ok: true });
+    expect(await host.setPlanAutoApprove(1000)).toEqual({ ok: true });
     await host.create({ sessionId: SID, cwd: root, binding: parent });
     parentSteps = [
       // Different documents: identical calls would be caught as a loop instead.
@@ -312,97 +325,56 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     expect(plan(next).autoApproved).toBe(true);
   });
 
-  // Task 12 follow-up 1: a budget pause records two minimums — the WARM one
-  // (the specialist's prompt is still cached: only the new part must fit),
-  // valid until its last request + 4 minutes, and the COLD one (the whole
-  // conversation re-sent). Continue is judged by whichever is valid then.
-  const pauseTwoStep = async () => {
+  // T7 (spending rework, design §1/§3/§7, decision 34): the old WARM/COLD Add
+  // budget minimum machinery this described is gone entirely — a plan
+  // child's request is never capped or reserved in advance, so nothing can
+  // be "too big to fit". The only way a plan pauses mid-run now is a spend
+  // limit the USER set (design §7), and Continue either raises it (one call,
+  // `resumePlan(sid, planId, limit)`) or is refused while it is still at or
+  // past it.
+  it('a spend limit reached mid-run pauses the plan; Continue is refused until the SAME call raises it, then finishes without re-running the finished step', async () => {
     const doc = {
       goal: 'Two steps',
       steps: [
-        { id: 'first', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts'] },
-        { id: 'second', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 500, summary: 'Plain sentence.', of: 'first' },
+        { id: 'first', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a.ts'] },
+        { id: 'second', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', summary: 'Plain sentence.', of: 'first' },
       ],
     };
     const planId = await propose(doc);
-    const rec0 = plan(planId);
-    const allowance = 500 + rec0.manifest.specialists.reviewer.setupTokens;
-    // The combine specialist spends all but 5 tokens on a tool call, so its
-    // next request can't fit: the plan pauses on it.
-    childReply = (p, call) => {
-      if (!isCombine(p)) return report('REPORT for a');
-      return call === 2
-        ? { chunks: [toolCallChunk('read-1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 1, allowance - 6)] }
-        : report('COMBINED', 1, 1);
-    };
+    // A tiny limit: the first (map) specialist's own reply crosses it (cost
+    // convention is dollars per MILLION tokens, matching `costForUsage`).
+    expect(await host.setPlanLimit(SID, planId, { usd: 0.001 })).toMatchObject({ ok: true });
+    childReply = (p) => (isCombine(p) ? report('COMBINED') : report('REPORT for a', 2_000, 2_000));
     await host.approvePlan(SID, planId);
     await waitForCard(planId, 'paused');
-    return { planId, setup: rec0.manifest.specialists.reviewer.setupTokens as number };
-  };
-
-  it('budget pause → Add budget of exactly the WARM minimum inside the cache window → Continue finishes without re-running the finished step', async () => {
-    const { planId, setup } = await pauseTwoStep();
     const paused = plan(planId);
     expectOwnsNothing(paused);
-    expect(paused.steps.map((s: any) => s.status)).toEqual(['done', 'paused']);
-    const cold: number = paused.paused.minimumAddTokens;
-    const warm: number = paused.paused.warmMinimum.tokens;
-    const lastAt: number = paused.steps[1].attempts[0].lastRequest.at;
-    // Revision 5: right after the pause only the new part must fit — far less
-    // than re-sending the specialist's whole setup. This also proves a
-    // specialist rebuilt from its saved conversation sends byte-for-byte the
-    // prompt the live one sent (otherwise it would be cold).
-    expect(warm).toBeGreaterThan(0);
-    expect(warm).toBeLessThan(setup);
-    expect(cold).toBeGreaterThan(warm);
-    expect(paused.paused.warmMinimum.until).toBe(lastAt + PLAN_CACHE_WINDOW_MS);
-    // The card is told how long the warm number holds, relative to now.
-    expect(shown(planId)!.paused).toMatchObject({ minimumAddTokens: cold, warmMinimum: { tokens: warm, forMs: lastAt + PLAN_CACHE_WINDOW_MS - clock } });
+    expect(paused.paused.kind).toBe('spend-limit');
+    expect(paused.paused.limit).toEqual({ usd: 0.001 });
+    expect(paused.usedUsd).toBeGreaterThan(0.001);
+    // The crossing reply's own step is marked paused (it reported fine —
+    // the crossing only refuses the NEXT request); no new wave started past
+    // the limit, so combine never got an attempt.
+    expect(paused.steps[0].status).toBe('paused');
+    expect(paused.steps[0].attempts).toHaveLength(1);
+    expect(paused.steps[1].attempts).toHaveLength(0);
 
-    // Exactly the warm amount: the limit and that specialist's allowance
-    // grow by precisely that, and nothing else changes.
-    const ceilingBefore = paused.ceilingTokens;
-    const combineAttempt = paused.steps[1].attempts[0];
-    clock += 60_000;
-    expect(await host.addPlanBudget(SID, planId, warm - 1)).toMatchObject({ ok: false });
-    expect(await host.addPlanBudget(SID, planId, warm)).toMatchObject({ ok: true, plan: { status: 'paused' } });
-    const topped = plan(planId);
-    expect(topped.ceilingTokens).toBe(ceilingBefore + warm);
-    expect(topped.steps[1].attempts[0].addedTokens).toBe(combineAttempt.addedTokens + warm);
-    expect(topped.usedTokens).toBe(paused.usedTokens);
+    // Continue without raising it: still at or past the limit, refused.
+    expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: false });
+    expect(childCalls).toHaveLength(1);
 
     const callsBefore = childCalls.length;
     const pausesBefore = planEvents.filter((e) => e.plan.planId === planId && e.plan.status === 'paused').length;
-    expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true, plan: { status: 'running' } });
+    // Raising it in the SAME call (design §7) — Continue then runs.
+    expect(await host.resumePlan(SID, planId, { usd: 1 })).toMatchObject({ ok: true, plan: { status: 'running' } });
     await waitForCard(planId, 'completed');
     const after = childCalls.slice(callsBefore);
-    // One request: the combine specialist picking up where it stopped.
-    expect(after).toHaveLength(1);
-    expect(after.some((c) => c.prompt.includes('Review a.ts'))).toBe(false);
+    expect(after).toHaveLength(1);   // one request: the combine specialist, starting fresh
     expect(planEvents.filter((e) => e.plan.planId === planId && e.plan.status === 'paused').length).toBe(pausesBefore);
     const done = plan(planId);
     expect(done.steps[0].attempts).toHaveLength(1);   // the finished step was never re-run
     expect(done.steps[0].attempts[0]).toEqual(paused.steps[0].attempts[0]);
     expectOwnsNothing(done);
-  });
-
-  it('after the cache window the warm amount is refused, and the COLD minimum lets Continue finish without a second pause', async () => {
-    const { planId } = await pauseTwoStep();
-    const paused = plan(planId);
-    const cold: number = paused.paused.minimumAddTokens;
-    const warm: number = paused.paused.warmMinimum.tokens;
-    clock = paused.paused.warmMinimum.until + 1;
-    expect(await host.addPlanBudget(SID, planId, warm)).toEqual({ ok: false, error: expect.stringContaining(cold.toLocaleString('en-US')) });
-    // Views read now carry no warm number any more.
-    expect((await host.planViewsFor(SID)).find((v) => v.planId === planId)!.paused!.warmMinimum).toBeUndefined();
-    expect(await host.addPlanBudget(SID, planId, cold)).toMatchObject({ ok: true });
-    const callsBefore = childCalls.length;
-    const pausesBefore = planEvents.filter((e) => e.plan.planId === planId && e.plan.status === 'paused').length;
-    expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true });
-    await waitForCard(planId, 'completed');
-    expect(childCalls.slice(callsBefore)).toHaveLength(1);
-    expect(planEvents.filter((e) => e.plan.planId === planId && e.plan.status === 'paused').length).toBe(pausesBefore);
-    expectOwnsNothing(plan(planId));
   });
 
   it('app quit mid-plan → reopen shows interrupted and runs nothing → Continue finishes without replaying a finished step', async () => {
@@ -418,7 +390,6 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     const quit = plan(planId);
     expect(quit.status).toBe('interrupted');
     expect(quit.lease).toBeUndefined();
-    expect(heldTokens(quit)).toBe(0);
 
     // Reopen in a fresh app instance.
     host = makeHost();
@@ -432,19 +403,15 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     expect(childCalls).toHaveLength(callsAtQuit);
     expect(liveChildren()).toHaveLength(0);
 
-    // Continue. The cut-off request's outcome is unknown, so it was charged in
-    // full: Continue pauses at once on that specialist, asking for the top-up
-    // its restart needs (never silently re-sending on money it doesn't have).
+    // Continue. T7 (design §1/§3, decision 34): the cut-off request's outcome
+    // is unknown, but nothing was ever reserved against it — there is no
+    // top-up left to ask for. `recoverAttempt` charges nothing and the
+    // interrupted attempt just restarts (its transcript ends with nothing at
+    // all — no report, no tool call — so classification's "else restart"
+    // applies): Continue finishes the plan directly, with no intermediate
+    // pause.
     childReply = reviewReply;
-    expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true });
-    await waitForCard(planId, 'paused');
-    const needsTopUp = plan(planId);
-    expect(needsTopUp.paused).toMatchObject({ stepId: 'sum', attemptId: needsTopUp.steps[1].attempts[0].attemptId });
-    expect(needsTopUp.paused.minimumAddTokens).toBeGreaterThan(0);
-    expect(childCalls).toHaveLength(callsAtQuit);   // that pause sent nothing
-    expectOwnsNothing(needsTopUp);
-    expect(await host.addPlanBudget(SID, planId, needsTopUp.paused.minimumAddTokens)).toMatchObject({ ok: true });
-    expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true });
+    expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true, plan: { status: 'running' } });
     await waitForCard(planId, 'completed');
     const settled = plan(planId);
     expect(settled.status).toBe('completed');
@@ -512,8 +479,8 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     const doc = {
       goal: 'Review four files',
       steps: [
-        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a.ts', 'b.ts', 'c.ts', 'd.ts'] },
-        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 1000, summary: 'Plain sentence.', of: 'review' },
+        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a.ts', 'b.ts', 'c.ts', 'd.ts'] },
+        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', summary: 'Plain sentence.', of: 'review' },
       ],
     };
     const planId = await propose(doc);
@@ -522,7 +489,7 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     await waitFor(() => childCalls.length === 4, 'all four specialists to send');
     expect(liveChildren()).toHaveLength(4);
     expect((host as any).specialistSlots.get(SID)).toBe(4);
-    expect(heldTokens(plan(planId))).toBeGreaterThan(0);
+    expect(plan(planId).steps[0].attempts.every((a: any) => a.phase === 'launched')).toBe(true);
 
     const res = await host.stopPlan(SID, planId);
     // By the time Stop answers, the card may say stopped — and it is true.
@@ -530,10 +497,11 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     const stopped = plan(planId);
     expectOwnsNothing(stopped);
     expect(stopped.steps.map((s: any) => s.status)).toEqual(['skipped', 'skipped']);
-    // Every cut-off request was charged in full (its outcome is unknown), and
-    // the limit was never passed.
-    expect(stopped.usedTokens).toBeLessThanOrEqual(stopped.ceilingTokens);
-    expect(stopped.steps[0].attempts.every((a: any) => a.phase !== 'request-sent')).toBe(true);
+    // T7 (design §2/§3): there is no ceiling to stay under, and no
+    // `request-sent` phase any more (only prepared/launched/committed) — a
+    // cut-off request is classified from its transcript on recovery, never
+    // charged against an allowance that no longer exists.
+    expect(stopped.steps[0].attempts.every((a: any) => ['prepared', 'launched', 'committed'].includes(a.phase))).toBe(true);
     const stopSeq = shown(planId)!.seq;
     const eventsAtStop = planEvents.length;
 
@@ -557,39 +525,53 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     await waitFor(() => events.some((e) => e.type === 'assistant-text' && e.sessionId === SID && String(e.data.text).includes('Still here.')), 'the parent to answer');
   });
 
-  it('ChatGPT (soft limit): one reply may overshoot, then the plan pauses before any further request', async () => {
+  // T7 (design §4/§7/§8, decision 34 Q-1/Q-5): ChatGPT has no published
+  // price, so its estimate/spend stay in TOKENS — but there is no LIMIT at
+  // all unless the user sets one (no default any more). The old "soft limit"
+  // — an implicit plan-wide token ceiling ChatGPT's uncappable replies could
+  // only overshoot — is gone with the rest of the reservation system; the
+  // same regression (one reply may cross a limit, then the plan pauses
+  // before any further request) is proven here against a limit the user
+  // explicitly set, exactly like PlanCard.tsx's own paused-at-limit box.
+  it('ChatGPT (no published price, token limit): one reply may overshoot it, then the plan pauses before any further request', async () => {
     parent = CHATGPT_PARENT;
     const doc = {
       goal: 'Two reviews',
       steps: [
-        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts'] },
-        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 500, summary: 'Plain sentence.', of: 'review' },
+        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a.ts'] },
+        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', summary: 'Plain sentence.', of: 'review' },
       ],
     };
     const planId = await propose(doc);
     const rec0 = plan(planId);
-    expect(rec0.approximateLimit).toBe(true);
-    expect(shown(planId)).toMatchObject({ approximateLimit: true });
-    const ceiling = rec0.ceilingTokens;
+    // No published price: the estimate is tokens + a plain note, never dollars.
+    expect(rec0.estimate).toMatchObject({ unpricedNote: expect.any(String) });
+    expect(shown(planId)).toMatchObject({ estimate: { unpricedNote: expect.any(String) } });
+    const limit = 1_000;
+    expect(await host.setPlanLimit(SID, planId, { tokens: limit })).toMatchObject({ ok: true });
     // The first specialist's single reply blows past the WHOLE plan's limit.
-    childReply = (p) => (isCombine(p) ? report('COMBINED') : report('REPORT for a', 10, ceiling + 1_000));
+    childReply = (p) => (isCombine(p) ? report('COMBINED') : report('REPORT for a', 10, limit + 1_000));
     await host.approvePlan(SID, planId);
     await waitForCard(planId, 'paused');
     const paused = plan(planId);
     // It overshot once (charged what was really used)…
-    expect(paused.usedTokens).toBeGreaterThan(ceiling);
-    expect(paused.ceilingUsd).toBeNull();
-    expect(paused.paused.reason).toMatch(/budget/);
-    // ChatGPT rejects a reply cap, so the request went without one.
-    expect(childCalls[0].maxOutputTokens).toBeUndefined();
+    expect(paused.usedTokens).toBeGreaterThan(limit);
+    expect(paused.paused.kind).toBe('spend-limit');
+    expect(paused.paused.limit).toEqual({ tokens: limit });
+    // T7 (design §1): no per-step/per-plan budget sizes the reply cap any
+    // more — whatever ChatGPT's request carries is the ordinary per-turn
+    // default, same as every other provider's.
+    expect(typeof childCalls[0].maxOutputTokens).toBe('number');
     // …and nothing more was sent after that.
     expect(childCalls).toHaveLength(1);
     expect(childCalls.some((c) => isCombine(c.prompt))).toBe(false);
     expectOwnsNothing(paused);
-    // Continue without more budget sends nothing: it pauses again straight away.
-    expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true });
-    await waitFor(() => plan(planId).status === 'paused' && (shown(planId)?.seq ?? 0) > paused.seq, 'the second pause');
+    // Continue without raising the limit refuses: still at or past it.
+    expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: false });
     expect(childCalls).toHaveLength(1);
+    // Raise it, in the SAME call (design §7) — Continue then runs.
+    expect(await host.resumePlan(SID, planId, { tokens: paused.usedTokens + 10_000 })).toMatchObject({ ok: true, plan: { status: 'running' } });
+    await waitForCard(planId, 'completed');
     expectOwnsNothing(plan(planId));
   });
 
@@ -598,8 +580,8 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     // follows the one this test is about. It launches after the removal and
     // simply reports (childReply's catch-all).
     const doc = { goal: 'Tidy up', steps: [
-      { id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, summary: 'Plain sentence.', items: ['notes'] },
-      { id: 'sum', kind: 'combine', specialist: 'worker', task: 'Say what was tidied', budget_tokens: 3000, summary: 'Plain sentence.', of: 'fix' },
+      { id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', summary: 'Plain sentence.', items: ['notes'] },
+      { id: 'sum', kind: 'combine', specialist: 'worker', task: 'Say what was tidied', summary: 'Plain sentence.', of: 'fix' },
     ] };
     const planId = await propose(doc);
     // A specialist's approved envelope allows its ordinary tools; a removal is
@@ -638,8 +620,8 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     it('the conversation\'s Stop leaves a plan specialist\'s waiting ask open; answering it finishes the plan', async () => {
       // Decision 33: two specialist runs at worst, or the plan is refused.
       const doc = { goal: 'Tidy up', steps: [
-        { id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, summary: 'Plain sentence.', items: ['notes'] },
-        { id: 'sum', kind: 'combine', specialist: 'worker', task: 'Say what was tidied', budget_tokens: 3000, summary: 'Plain sentence.', of: 'fix' },
+        { id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', summary: 'Plain sentence.', items: ['notes'] },
+        { id: 'sum', kind: 'combine', specialist: 'worker', task: 'Say what was tidied', summary: 'Plain sentence.', of: 'fix' },
       ] };
       const planId = await propose(doc);
       const target = path.join(root, 'old-notes.txt');
@@ -678,8 +660,8 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
       // Decision 33: two specialist runs at worst. The plan is stopped inside
       // step 1, so the summing step never launches and the counts below stand.
       const doc = { goal: 'Read one file', steps: [
-        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 3000, summary: 'Plain sentence.', items: ['a.ts'] },
-        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Sum up', budget_tokens: 3000, summary: 'Plain sentence.', of: 'review' },
+        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a.ts'] },
+        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Sum up', summary: 'Plain sentence.', of: 'review' },
       ] };
       const planId = await propose(doc);
       fs.writeFileSync(path.join(root, 'a.ts'), 'export const a = 1;\n');

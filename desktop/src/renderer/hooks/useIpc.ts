@@ -430,12 +430,13 @@ declare global {
         steer: (sessionId: string, childId: string, text: string) => Promise<{ ok: true } | { ok: false; error: string }>;
         interrupt: (sessionId: string, childId: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       };
-      // Specialists plans (Task 5a contract). The eight request channels are
-      // plans:approve / comment / add-budget / resume / stop / ask-assistant /
-      // get-auto-approve / set-auto-approve (wired on every surface; Android answers
-      // `unsupported`). Every call answers with one of the
-      // host's normalized forms — ok, a real failure, or `unsupported` (this
-      // device can't run plans: the card disables its controls and never
+      // Specialists plans (Task 5a contract; T7 swapped add-budget for
+      // set-limit/set-step-model, design §6). The request channels are
+      // plans:approve / comment / set-limit / set-step-model / resume / stop /
+      // ask-assistant / get-auto-approve / set-auto-approve (wired on every
+      // surface; Android answers `unsupported`). Every call answers with one of
+      // the host's normalized forms — ok, a real failure, or `unsupported`
+      // (this device can't run plans: the card disables its controls and never
       // retries). An action's `plan` is the card's NEXT record, landed via
       // PLAN_CHANGED; nothing is ever shown before the host says so.
       // Still typed optional: a bridge without it is treated exactly like
@@ -443,25 +444,26 @@ declare global {
       plans?: {
         approve: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
         comment: (sessionId: string, planId: string, text: string) => Promise<import('../../shared/types').PlanActionResult>;
-        /** `requestId` (final review F1): one id per press; a repeat adds nothing. */
-        addBudget: (sessionId: string, planId: string, tokens: number, requestId?: string) => Promise<import('../../shared/types').PlanActionResult>;
-        resume: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
+        /** T7 (design §6/§7, decision 34/35): replaces the retired `addBudget`
+         *  — there is no per-step or per-plan token budget left to add to.
+         *  The plan's own spend limit; `null` turns it off. Answers with the
+         *  card's next record, like every other plan button. */
+        setLimit: (sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null) => Promise<import('../../shared/types').PlanActionResult>;
+        /** T7 (design §5) — a step's model, for a step that has not started
+         *  yet. `null` resets it to the document/specialist default. */
+        setStepModel: (sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null) => Promise<import('../../shared/types').PlanActionResult>;
+        /** T7 (design §7): an optional new limit rides the SAME lease-taking
+         *  write — Continue-with-a-new-limit is one call, never `setLimit`
+         *  then `resume` racing a sibling's spend write between them. */
+        resume: (sessionId: string, planId: string, limit?: { usd: number } | { tokens: number } | null) => Promise<import('../../shared/types').PlanActionResult>;
         stop: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
         /** Task 11 (pause handoff §6): a paused card's "Ask the assistant". */
         askAssistant: (sessionId: string, planId: string, question?: string) => Promise<import('../../shared/types').PlanActionResult>;
-        /** Settings → Specialists: run plans without asking when under this many tokens (0 = off). */
+        /** Settings → Specialists: run plans without asking when the estimate
+         *  is under this many dollars (0 = off; design §6/§8: `underUsd`, not
+         *  the retired `underTokens`). */
         getAutoApprove: () => Promise<import('../../shared/types').PlanAutoApproveRead>;
-        setAutoApprove: (underTokens: number) => Promise<import('../../shared/types').PlanSettingsWriteResult>;
-        /** Decision 35 — Plan settings. NOT yet a real channel (registered
-         *  MOCK_ONLY in mock-only.ts): designed and reviewed in the workbench
-         *  ahead of the backend, same lifecycle as every other row there. The
-         *  plan's total spending cap; null turns it off. Answers with the
-         *  card's next record, like every other plan button. */
-        setLimit: (sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null) => Promise<import('../../shared/types').PlanActionResult>;
-        /** Decision 35 — a step's model, for a step that has not started yet.
-         *  null resets it to the specialist type's default. Mock-only, same
-         *  as `setLimit` above. */
-        setStepModel: (sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null) => Promise<import('../../shared/types').PlanActionResult>;
+        setAutoApprove: (underUsd: number) => Promise<import('../../shared/types').PlanSettingsWriteResult>;
       };
       // Local llama.cpp engine (Plan B). install() streams progress via
       // onInstallProgress; onStatusChanged pushes state transitions

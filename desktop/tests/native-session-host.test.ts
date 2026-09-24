@@ -18,7 +18,6 @@ import { formatLongRunningNotice } from '../src/main/harness/shell-registry';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_NOTE_MAX_CHARS, SPECIALIST_SPAWN_BUDGET_PER_SESSION } from '../src/main/harness/specialists/limits';
 import { OWNER, DelegationLedger } from '../src/main/harness/specialists/delegation-ledger';
 import { ModelSearchTool } from '../src/main/harness/tools/model-search';
-import { PLAN_CACHE_WINDOW_MS } from '../src/main/harness/plans/budget-adapter';
 import type { CatalogModel } from '../src/shared/provider-types';
 
 /** Ceiling for this file's fire-and-forget-write polls, as a tries count at the
@@ -5726,8 +5725,8 @@ describe('specialists plans in the native host (Task 4)', () => {
   const DOC = {
     goal: 'Review two files',
     steps: [
-      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 2000, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
-      { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 2000, summary: 'Plain sentence.', of: 's1' },
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
+      { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', summary: 'Plain sentence.', of: 's1' },
     ],
   };
   type Reply = { chunks: any[] } | 'hang';
@@ -5841,12 +5840,14 @@ describe('specialists plans in the native host (Task 4)', () => {
     const planId = await proposeOne();
     const rec = journalFile().plans[0];
     expect(rec.toolUseId).toBe('call-plan');
-    const reviewer = rec.manifest.specialists.reviewer;
-    expect(reviewer.binding).toEqual({ providerId: 'openrouter', modelId: CHILD });
-    expect(reviewer.pricing).toEqual({ kind: 'priced', rates: { in: 1, out: 2 } });
-    // setupBound over the exact child prompt + tools: at least the fixed framing.
-    expect(reviewer.setupTokens).toBeGreaterThan(1024 + 64);
-    expect(rec.ceilingTokens).toBe(3 * (2000 + reviewer.setupTokens));
+    // T7 (design §2): a leaf step's frozen binding/pricing live under
+    // `manifest.steps[leafStepId]` now — `manifest.specialists[id]` is just
+    // the definition fingerprint (drift detection); there is no more
+    // `setupTokens`/`ceilingTokens` to sum into a worst-case ceiling.
+    const s1 = rec.manifest.steps.s1;
+    expect(s1.binding).toEqual({ providerId: 'openrouter', modelId: CHILD });
+    expect(s1.pricing).toEqual({ kind: 'priced', rates: { in: 1, out: 2 } });
+    expect(rec.manifest.specialists.reviewer.definitionFingerprint).toEqual(expect.any(String));
     expect(rec.manifest.modelLabel).toBe(CHILD);
     const result = events.find((e) => e.type === 'tool-result' && e.data.toolUseId === 'call-plan');
     expect(result.data.plan).toMatchObject({ planId, status: 'proposed' });
@@ -5861,7 +5862,8 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(res).toMatchObject({ ok: true, plan: { status: 'running' } });
     await waitFor(() => planStatus()[0] === 'completed', 'completion');
     expect(childCalls).toHaveLength(3);
-    // Plan-child mode: every request is capped by its reservation.
+    // T7 (design §1/§2): no per-step reservation caps the reply any more —
+    // whatever cap a request carries is the ordinary per-turn default.
     for (const c of childCalls) expect(typeof c.maxOutputTokens).toBe('number');
     const combine = childCalls.find((c) => c.prompt.includes('Combine the reviews'))!;
     expect(combine.prompt).toContain('REPORT for a');
@@ -5916,93 +5918,50 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(done[done.length - 1]).toBe('completed');
   });
 
-  it('Task 9a: an empty report is asked for again on the same specialist, tools off, and the plan completes', async () => {
+  // T2 (design §3): "plan children now use the ordinary request path" — the
+  // harness's own general empty-step re-run (spec 2026-08-21, unrelated to
+  // plans) now absorbs a truly empty reply INSIDE the same attempt, tools
+  // unchanged, before the plan executor's invalid-report handling ever sees
+  // it. The OLD plan-specific "report-only retry, tools switched off" this
+  // test used to pin is gone with the rest of the reservation system (it
+  // existed to keep a funded-but-tools-off turn inside a hard per-step cap
+  // that no longer exists) — one plain retry does the same job now.
+  it('an empty first reply from a specialist is silently retried by the harness\'s own empty-step re-run, and the plan completes', async () => {
     let emptyOnce = true;
     childReply = (prompt) => {
-      if (prompt.includes('Review a.ts') && !prompt.includes('switched off') && emptyOnce) {
+      if (prompt.includes('Review a.ts') && emptyOnce) {
         emptyOnce = false;
         return { chunks: [finishChunk('stop', 10, 5)] };
       }
       return { chunks: [...textChunks('r', prompt.includes('Combine') ? 'COMBINED' : `REPORT for ${prompt.includes('a.ts') ? 'a' : 'b'}`), finishChunk('stop', 10, 5)] };
     };
-    // Review fix 2: the report-only turn must be fundable from what the first
-    // try left — its measured request (setup + transcript) plus 2,000 — so
-    // this plan's first step has room for that.
-    const BIG = { ...DOC, steps: [{ ...DOC.steps[0], budget_tokens: 8000 }, DOC.steps[1]] };
-    await host.create({ sessionId: SID, cwd: root, binding: PARENT });
-    parentSteps = [proposeStep('call-plan', BIG), textStep('Here is the plan.')];
-    host.send(SID, 'Plan the review');
-    await waitFor(() => planStatus().includes('proposed'), 'the proposal');
-    await waitFor(() => host.isIdle(SID), 'the proposing turn to end');
-    const planId = journalFile().plans[0].planId;
+    const planId = await proposeOne();
     await host.approvePlan(SID, planId);
     await waitFor(() => planStatus()[0] === 'completed', 'completion');
-    const reportOnly = childCalls.filter((c) => c.prompt.includes('switched off'));
-    expect(reportOnly).toHaveLength(1);
-    // The same specialist session: its original brief is in the request.
-    expect(reportOnly[0].prompt).toContain('Review a.ts');
-    expect(reportOnly[0].toolChoice).toEqual({ type: 'none' });
-    expect(reportOnly[0].maxOutputTokens).toBeLessThanOrEqual(2000);
-    for (const c of childCalls.filter((x) => !x.prompt.includes('switched off'))) expect(c.toolChoice).not.toEqual({ type: 'none' });
     const rec = journalFile().plans[0];
     const s1 = rec.steps.find((s: any) => s.id === 's1');
-    const retry = s1.attempts.find((a: any) => a.reportOnly);
-    const failed = s1.attempts.find((a: any) => a.terminal === 'failed');
-    expect(retry).toMatchObject({ terminal: 'completed', reportText: 'REPORT for a', childId: failed.childId });
-    expect(rec.recoveries).toEqual([expect.objectContaining({ stepId: 's1', cause: 'invalid-report' })]);
+    // One attempt per item — the empty reply never became a separate,
+    // recorded failure; the same attempt just sent again.
+    expect(s1.attempts).toHaveLength(2);
+    expect(s1.attempts.find((a: any) => a.itemIndex === 0)).toMatchObject({ terminal: 'completed', reportText: 'REPORT for a' });
+    expect(rec.recoveries).toBeUndefined();
     const combine = childCalls.find((c) => c.prompt.includes('Combine the reviews'))!;
     expect(combine.prompt).toContain('REPORT for a');
-    // One row per specialist, and the retried one says so.
     const row = (await host.planViewsFor(SID))[0].steps.find((st) => st.id === 's1')!;
     expect(row.children).toHaveLength(2);
-    expect(row.children!.find((c) => c.childId === failed.childId)).toMatchObject({ retried: true, status: 'completed' });
+    expect(row.children!.every((c) => c.status === 'completed')).toBe(true);
     expect(planEvents.some((e) => e.plan.status === 'paused')).toBe(false);
     expect(liveChildren()).toHaveLength(0);
   });
 
-  it('review fix 2: with only the step\'s 2,000 tokens, the report-only turn cannot be funded and the pause goes to the assistant', async () => {
-    // Revision 5: a warm cache would reserve only the report turn's new part,
-    // which these 2,000 tokens CAN fund (next test). So the clock moves past
-    // the cache window the moment the failed attempt is recorded: cold, the
-    // whole re-sent conversation must fit, and it doesn't.
-    let clock = Date.now();
-    await host.destroyAll();
-    host = makeHost({ now: () => clock });
-    let moved = false;
-    host.on('plans-event', (e) => {
-      const failed = e.plan.steps.find((st) => st.id === 's1')?.children?.some((c) => c.status === 'failed');
-      if (failed && !moved) { moved = true; clock += PLAN_CACHE_WINDOW_MS + 1; }
-    });
-    childReply = (prompt) => (prompt.includes('Review a.ts')
-      ? { chunks: [finishChunk('stop', 10, 5)] }
-      : { chunks: [...textChunks('r', 'REPORT'), finishChunk('stop', 10, 5)] });
-    const planId = await proposeOne();
-    await host.approvePlan(SID, planId);
-    await waitFor(() => planStatus()[0] === 'paused', 'the pause');
-    expect(childCalls.some((c) => c.prompt.includes('switched off'))).toBe(false);
-    const rec = journalFile().plans[0];
-    expect(rec.paused).toMatchObject({ kind: 'invalid-report', stepId: 's1' });
-    expect(rec.recoveries).toBeUndefined();
-    expect(liveChildren()).toHaveLength(0);
-    expect(moved).toBe(true);
-  });
-
-  it('revision 5: right after the failed try (cache still warm), the same 2,000 tokens fund the report-only turn', async () => {
-    childReply = (prompt) => (prompt.includes('switched off')
-      ? { chunks: [...textChunks('r', 'REPORT for a'), finishChunk('stop', 10, 5)] }
-      : prompt.includes('Review a.ts')
-        ? { chunks: [finishChunk('stop', 10, 5)] }
-        : { chunks: [...textChunks('r', 'COMBINED'), finishChunk('stop', 10, 5)] });
-    const planId = await proposeOne();
-    await host.approvePlan(SID, planId);
-    await waitFor(() => ['completed', 'paused'].includes(planStatus()[0]), 'the plan to settle');
-    const reportOnly = childCalls.filter((c) => c.prompt.includes('switched off'));
-    expect(reportOnly).toHaveLength(1);
-    const rec = journalFile().plans[0];
-    expect(rec.recoveries).toEqual([expect.objectContaining({ stepId: 's1', cause: 'invalid-report' })]);
-    const retry = rec.steps.find((st: any) => st.id === 's1').attempts.find((a: any) => a.reportOnly);
-    expect(retry).toMatchObject({ terminal: 'completed', reportText: 'REPORT for a' });
-  });
+  // T7 (design §1/§3, decision 34): "review fix 2" and "revision 5" pinned
+  // whether a report-only retry could be FUNDED — from the cache-window warm
+  // minimum, or (cold) the whole re-sent conversation. There is no funding
+  // gate left: `runner interface cleanup` (design task list, T3) dropped
+  // `minimumAddTokens`/`warmMinimum` plumbing entirely, and a report-only
+  // retry (Task 9a, above) always runs, capped at the same fixed 2,000
+  // tokens regardless of what the step has "left" — there is nothing left to
+  // run out of.
 
   // Task 5a: an ORDINARY specialist's card gets its past activity back after a
   // restart (getHistory splices the child's display events in — Task 9). A plan
@@ -6067,8 +6026,8 @@ describe('specialists plans in the native host (Task 4)', () => {
     // Decision 33: a plan may not be one specialist doing one thing, so a
     // summing step follows the one this test is about.
     const doc = { goal: 'Clean up', steps: [
-      { id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, summary: 'Plain sentence.', items: ['build'] },
-      { id: 'sum', kind: 'combine', specialist: 'worker', task: 'Say what was tidied', budget_tokens: 3000, summary: 'Plain sentence.', of: 'fix' },
+      { id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', summary: 'Plain sentence.', items: ['build'] },
+      { id: 'sum', kind: 'combine', specialist: 'worker', task: 'Say what was tidied', summary: 'Plain sentence.', of: 'fix' },
     ] };
     await host.create({ sessionId: SID, cwd: root, binding: PARENT });
     parentSteps = [proposeStep('call-clean', doc), textStep('ok')];
@@ -6095,14 +6054,23 @@ describe('specialists plans in the native host (Task 4)', () => {
     await waitFor(() => planStatus()[0] === 'completed', 'completion');
   });
 
+  // T2 (design §3, Revision 3 F1): `startPlanChild` no longer takes a `gate`
+  // (adapter/reserve/settle) or a `budgetStop` — there is nothing left to
+  // reserve. It takes a `fence` and the run's four spend flags instead,
+  // which `startPlanChild` uses to build the attempt's ONE `PlanSpend`.
+  const noSpendFlags = {
+    isLimitReached: () => false, markLimitReached: () => {},
+    isWriteFailed: () => false, markWriteFailed: () => {},
+  };
+
   it('a plan that stops while a specialist is being created never lets it send', async () => {
     await host.create({ sessionId: SID, cwd: root, binding: PARENT });
     const ac = new AbortController();
-    const gate = { adapter: { id: 'g', providerType: 'openrouter', capsOutput: true, inputBound: () => ({ ok: true, tokens: 1 }) }, reserve: async () => ({ ok: true, maxOutputTokens: 10 }), settle: async () => ({ kind: 'ok', chargedTokens: 1 }) };
     await expect((host as any).startPlanChild({
       parentId: SID, specialist: resolveSpecialist('reviewer'), binding: { providerId: 'openrouter', modelId: CHILD }, providerType: 'openrouter',
-      gate, parentToolCallId: 'call-x', signal: ac.signal, tag: { planId: 'p', stepId: 's', attemptId: 'a' },
-      recordChild: async () => { ac.abort(); }, brief: 'Review a.ts', budgetStop: () => undefined,
+      parentToolCallId: 'call-x', signal: ac.signal, tag: { planId: 'p', stepId: 's', attemptId: 'a' }, fence: 'f:1',
+      ...noSpendFlags,
+      recordChild: async () => { ac.abort(); }, brief: 'Review a.ts',
     })).rejects.toThrow(/stopped before this specialist could start/);
     await new Promise((r) => setTimeout(r, 30));
     expect(childCalls).toHaveLength(0);
@@ -6111,11 +6079,11 @@ describe('specialists plans in the native host (Task 4)', () => {
 
   it('round 2: a specialist stopped before its turn starts never sends, and reads as interrupted', async () => {
     await host.create({ sessionId: SID, cwd: root, binding: PARENT });
-    const gate = { adapter: { id: 'g', providerType: 'openrouter', capsOutput: true, inputBound: () => ({ ok: true, tokens: 1 }) }, reserve: async () => ({ ok: true, maxOutputTokens: 10 }), settle: async () => ({ kind: 'ok', chargedTokens: 1 }) };
     const handle = await (host as any).startPlanChild({
       parentId: SID, specialist: resolveSpecialist('reviewer'), binding: { providerId: 'openrouter', modelId: CHILD }, providerType: 'openrouter',
-      gate, parentToolCallId: 'call-x', signal: new AbortController().signal, tag: { planId: 'p', stepId: 's', attemptId: 'a' },
-      recordChild: async () => {}, brief: 'Review a.ts', budgetStop: () => undefined,
+      parentToolCallId: 'call-x', signal: new AbortController().signal, tag: { planId: 'p', stepId: 's', attemptId: 'a' }, fence: 'f:1',
+      ...noSpendFlags,
+      recordChild: async () => {}, brief: 'Review a.ts',
     });
     handle.abort();   // same tick: the turn has not started yet
     expect(await handle.outcome).toEqual({ kind: 'interrupted' });
@@ -6153,7 +6121,8 @@ describe('specialists plans in the native host (Task 4)', () => {
     const rec = journalFile().plans[0];
     expect(rec.status).toBe('interrupted');
     expect(rec.lease).toBeUndefined();
-    expect(rec.steps[0].attempts.reduce((n: number, a: any) => n + a.reservedTokens, 0)).toBe(0);
+    // T7 (design §1/§3): `reservedTokens` is gone — nothing is held against
+    // a request before it is sent any more, so there is nothing left to sum.
     expect((host as any).live.size).toBe(0);
     expect(planEvents[planEvents.length - 1].plan.status).toBe('interrupted');
   });
@@ -6201,14 +6170,16 @@ describe('specialists plans in the native host (Task 4)', () => {
     // Expires 20 ms after the test clock's "now": short, so the recheck timer
     // comes round quickly, but it only counts as expired once the clock moves.
     p.lease = { instanceId: 'another-window', pid: deadPid, heartbeatAt: clock, expiresAt: clock + 20, epoch: 1, fence: '1:x' };
-    p.steps[0].attempts.push({ attemptId: 'a1', itemIndex: 0, iteration: 0, childId: 'gone', baseTokens: 3000, addedTokens: 0, reservedTokens: 3000, spentTokens: 0, phase: 'prepared' });
+    // T7 (design §1/§3): `baseTokens`/`addedTokens`/`reservedTokens` are gone
+    // — nothing is held against a request before it is sent any more.
+    p.steps[0].attempts.push({ attemptId: 'a1', itemIndex: 0, iteration: 0, childId: 'gone', spentTokens: 0, phase: 'prepared' });
     fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), JSON.stringify(file));
 
     host = makeHost({ now: () => clock });
-    // What the journal held at the instant the interrupted card went out.
-    const heldWhenShown: number[] = [];
+    // When the interrupted card goes out.
+    const interruptedEvents: number[] = [];
     host.on('plans-event', (e) => {
-      if (e.plan.status === 'interrupted') heldWhenShown.push(journalFile().plans[0].steps[0].attempts[0].reservedTokens);
+      if (e.plan.status === 'interrupted') interruptedEvents.push(e.plan.seq ?? 0);
     });
     expect(await host.resume(SID, root)).toBe(true);
     // Not yet expired: another window might still own it.
@@ -6217,16 +6188,13 @@ describe('specialists plans in the native host (Task 4)', () => {
     // stands still; none of them may take the plan over.
     await new Promise((r) => setTimeout(r, 120));
     expect(journalFile().plans[0].status).toBe('running');
-    expect(heldWhenShown).toEqual([]);
+    expect(interruptedEvents).toEqual([]);
 
     clock += 1_000;   // the lease has now expired, and its process is gone
-    await waitFor(() => heldWhenShown.length > 0, 'the interrupted card after the recheck at lease expiry');
-    // The card went out only once the interrupted state already held nothing.
-    expect(heldWhenShown).toEqual([0]);
+    await waitFor(() => interruptedEvents.length > 0, 'the interrupted card after the recheck at lease expiry');
     const rec = journalFile().plans[0];
     expect(rec.status).toBe('interrupted');
     expect(rec.lease).toBeUndefined();
-    expect(rec.steps[0].attempts[0].reservedTokens).toBe(0);
     expect(childCalls).toHaveLength(0);
     expect(liveChildren()).toHaveLength(0);
     expect((await host.planViewsFor(SID))[0]).toMatchObject({ planId, status: 'interrupted' });
@@ -6275,55 +6243,54 @@ describe('specialists plans in the native host (Task 4)', () => {
     await waitFor(() => liveChildren().length === 0, 'the specialists to be torn down');
   });
 
-  it('a budget pause records the smallest Add budget that lets the specialist continue, and smaller amounts are refused', async () => {
+  // T7 (spending rework, design §1/§3/§7, decision 34): Add budget — and the
+  // warm/cold minimum it required — is gone entirely. The only way a plan
+  // pauses mid-run now is a spend limit the USER set (design §7); Continue
+  // either raises it (`resumePlan(sid, planId, limit)`, one call) or is
+  // refused while it is still at or past it. Whole-lifecycle coverage of
+  // this lives in plans-lifecycle.integration.test.ts; this pins that the
+  // host wires `setPlanLimit` through to the same real service.
+  it('a spend limit reached mid-run pauses the plan; setPlanLimit then resumePlan(limit) continues it', async () => {
     // Decision 33: the split narrows to one file but the summing step stays,
     // or the whole plan would be one specialist run and be refused.
-    const small = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts'] }, DOC.steps[1]] };
+    const small = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a.ts'] }, DOC.steps[1]] };
     await host.create({ sessionId: SID, cwd: root, binding: PARENT });
     parentSteps = [proposeStep('call-small', small), textStep('ok')];
     host.send(SID, 'Plan it');
     await waitFor(() => planStatus().includes('proposed'), 'the proposal');
     const rec0 = journalFile().plans[0];
-    const allowance = 500 + rec0.manifest.specialists.reviewer.setupTokens;
-    // First request: a tool call that uses all but 5 tokens of the allowance.
-    childReply = (_prompt, call) => (call === 1
-      ? { chunks: [toolCallChunk('read-1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 1, allowance - 6)] }
-      : { chunks: [...textChunks('x', 'never'), finishChunk('stop', 1, 1)] });
+    expect(await host.setPlanLimit(SID, rec0.planId, { usd: 0.001 })).toMatchObject({ ok: true });
+    // The one specialist's own reply crosses the limit (rates {in:1,out:2}
+    // per MILLION tokens, matching `costForUsage`'s own convention).
+    childReply = () => ({ chunks: [...textChunks('x', 'REPORT a'), finishChunk('stop', 2_000, 2_000)] });
     await host.approvePlan(SID, rec0.planId);
-    await waitFor(() => planStatus()[0] === 'paused', 'the budget pause');
+    await waitFor(() => planStatus()[0] === 'paused', 'the spend-limit pause');
     const rec = journalFile().plans[0];
     expect(childCalls).toHaveLength(1);
-    expect(rec.paused.attemptId).toBe(rec.steps[0].attempts[0].attemptId);
-    // Task 12 follow-up 1: right after the pause the warm minimum (only the
-    // new part re-sent) is the one that holds; the cold one is kept beside it.
-    const minimum = rec.paused.warmMinimum.tokens;
-    expect(minimum).toBeGreaterThan(5);
-    expect(rec.paused.minimumAddTokens).toBeGreaterThan(minimum);
-    const view = (await host.planViewsFor(SID))[0];
-    expect(view.paused).toMatchObject({ minimumAddTokens: rec.paused.minimumAddTokens, warmMinimum: { tokens: minimum } });
-    expect(await host.addPlanBudget(SID, rec.planId, minimum - 1)).toMatchObject({ ok: false, error: expect.stringContaining(minimum.toLocaleString('en-US')) });
-    expect(await host.addPlanBudget(SID, rec.planId, minimum)).toMatchObject({ ok: true });
-    // …and Continue can now send the restarted specialist's request.
-    childReply = () => ({ chunks: [...textChunks('y', 'REPORT a'), finishChunk('stop', 1, 1)] });
-    expect(await host.resumePlan(SID, rec.planId)).toMatchObject({ ok: true });
-    await waitFor(() => planStatus()[0] === 'completed', 'completion after the top-up');
-    // The refused request, the restarted one, and the summing step decision 33
-    // requires this plan to have.
-    expect(childCalls).toHaveLength(3);
+    expect(rec.paused).toMatchObject({ kind: 'spend-limit', limit: { usd: 0.001 } });
+    // Continue without raising it: still at or past the limit, refused.
+    expect(await host.resumePlan(SID, rec.planId)).toMatchObject({ ok: false });
+    expect(childCalls).toHaveLength(1);
+    // Raise it, in the SAME call (design §7) — Continue then runs.
+    childReply = () => ({ chunks: [...textChunks('y', 'COMBINED'), finishChunk('stop', 1, 1)] });
+    expect(await host.resumePlan(SID, rec.planId, { usd: 1 })).toMatchObject({ ok: true, plan: { status: 'running' } });
+    await waitFor(() => planStatus()[0] === 'completed', 'completion after raising the limit');
+    expect(childCalls).toHaveLength(2);
   });
 
-  it('exposes the seven plan actions, reporting unsupported when the host has no home to keep plans in', async () => {
+  it('exposes the plan actions, reporting unsupported when the host has no home to keep plans in', async () => {
     const bare = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null);
     for (const r of [
-      await bare.approvePlan(SID, 'p'), await bare.commentOnPlan(SID, 'p', 'x'), await bare.addPlanBudget(SID, 'p', 1),
+      await bare.approvePlan(SID, 'p'), await bare.commentOnPlan(SID, 'p', 'x'), await bare.setPlanLimit(SID, 'p', { usd: 1 }),
+      await bare.setPlanStepModel(SID, 'p', 's1', null),
       await bare.resumePlan(SID, 'p'), await bare.stopPlan(SID, 'p'), await bare.getPlanAutoApprove(), await bare.setPlanAutoApprove(5),
     ]) {
       expect(r).toMatchObject({ ok: false, unsupported: true });
     }
     expect(await bare.planViewsFor(SID)).toEqual([]);
-    expect(await host.getPlanAutoApprove()).toEqual({ ok: true, underTokens: 0 });
+    expect(await host.getPlanAutoApprove()).toEqual({ ok: true, underUsd: 0 });
     expect(await host.setPlanAutoApprove(10)).toEqual({ ok: true });
-    expect(await host.getPlanAutoApprove()).toEqual({ ok: true, underTokens: 10 });
+    expect(await host.getPlanAutoApprove()).toEqual({ ok: true, underUsd: 10 });
     await bare.destroyAll();
   });
 
@@ -6336,7 +6303,7 @@ describe('specialists plans in the native host (Task 4)', () => {
   describe('Task 11: asking the assistant about a paused plan', () => {
     // Decision 33: one file, but the summing step stays — a plan may not be
     // one specialist doing one thing.
-    const SMALL = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts'] }, DOC.steps[1]] };
+    const SMALL = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a.ts'] }, DOC.steps[1]] };
     const handoff = () => journalFile().plans[0].paused?.handoff;
     const notices = () => events.filter((e) => e.type === 'user-message' && String(e.data.text).startsWith('[Plan paused]'));
     // The prompt is the whole conversation: the LATEST notice's ids count.
@@ -6352,8 +6319,15 @@ describe('specialists plans in the native host (Task 4)', () => {
     };
     const lastView = (planId: string) => planEvents.filter((e) => e.plan.planId === planId).pop()?.plan;
 
-    /** Propose a one-specialist plan and run it into a budget pause (an
-     *  assistant-routed kind). Nothing is handed over until `ask`. */
+    // T7 (spending rework, design §1/§3/§7, decision 34): the old per-step
+    // reservation shortfall this induced ("all but 5 tokens of the
+    // allowance") is gone — nothing is reserved per request any more. A
+    // `spend-limit` pause (the plan's own limit, set with `setPlanLimit`) is
+    // the equivalent ask-able pause now: design §7 keeps "Ask the assistant"
+    // technically allowed on it (the CARD hides the button — decision 37
+    // R-4 — but the host does not refuse the call).
+    /** Propose a one-specialist plan and run it into a spend-limit pause.
+     *  Nothing is handed over until `ask`. */
     async function pauseOnBudget() {
       await host.create({ sessionId: SID, cwd: root, binding: PARENT });
       parentSteps = [proposeStep('call-small', SMALL), textStep('Here is the plan.')];
@@ -6361,12 +6335,12 @@ describe('specialists plans in the native host (Task 4)', () => {
       await waitFor(() => planStatus().includes('proposed'), 'the proposal');
       await waitFor(() => host.isIdle(SID), 'the proposing turn to end');
       const rec0 = journalFile().plans[0];
-      const allowance = 500 + rec0.manifest.specialists.reviewer.setupTokens;
+      await host.setPlanLimit(SID, rec0.planId, { usd: 0.001 });
       childReply = (_prompt, call) => (call === 1
-        ? { chunks: [toolCallChunk('read-1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 1, allowance - 6)] }
+        ? { chunks: [...textChunks('x', 'REPORT a'), finishChunk('stop', 2_000, 2_000)] }
         : { chunks: [...textChunks('x', 'REPORT a'), finishChunk('stop', 1, 1)] });
       await host.approvePlan(SID, rec0.planId);
-      await waitFor(() => planStatus()[0] === 'paused' && !journalFile().plans[0].lease, 'the budget pause');
+      await waitFor(() => planStatus()[0] === 'paused' && !journalFile().plans[0].lease, 'the spend-limit pause');
       return rec0.planId as string;
     }
     /** Keep the conversation busy with a reply that waits on a gate. */
@@ -6380,7 +6354,9 @@ describe('specialists plans in the native host (Task 4)', () => {
     const ask = (planId: string) => host.askAssistantAboutPlan(SID, planId);
 
     it('a pause is not handed over by itself; Ask greys the card, the notice is its own turn, and a recommendation changes nothing else', async () => {
-      const message = 'The reviewer ran out of room; adding the minimum lets it finish.';
+      // T7 (design §1/§2, decision 34): `add_budget` is a retired
+      // recommendation — `PlanPauseAction` is `'continue' | 'stop'` only now.
+      const message = 'The plan reached its limit; raising it in Plan settings lets it finish.';
       let noticeTurnId: string | undefined;
       let revisionTurnId: string | undefined;
       // Final review F27 (R37): the notice seam itself, watched from before the
@@ -6401,11 +6377,9 @@ describe('specialists plans in the native host (Task 4)', () => {
           noticeTurnId = (host as any).live.get(SID).currentTurnId;
           revisionTurnId = journalFile().plans[0].paused.handoff.revisionTurnId;
           const ids = idsIn(prompt);
-          return stream(toolCallChunk('rec-1', 'recommend_plan_action', {
-            ...ids, action: 'add_budget', addTokens: journalFile().plans[0].paused.minimumAddTokens, message,
-          }), finishChunk('tool-calls'));
+          return stream(toolCallChunk('rec-1', 'recommend_plan_action', { ...ids, action: 'continue', message }), finishChunk('tool-calls'));
         },
-        textStep('I recommend adding the minimum.'),
+        textStep('I recommend continuing once the limit is raised.'),
       );
       const res = await ask(planId);
       // The same seam the pause never touched: the user's press does reach it,
@@ -6427,18 +6401,17 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(noticeTurnId).toBe(revisionTurnId);
       expect(rec.paused.handoff.revisionTurnId).toBeUndefined();   // the turn ended
       expect(rec.paused.handoff.problem).toBeUndefined();
-      expect(rec.paused.handoff.recommendation).toEqual({ action: 'add_budget', addTokens: rec.paused.minimumAddTokens, message });
-      // The assistant can never resume or add budget by itself.
+      expect(rec.paused.handoff.recommendation).toEqual({ action: 'continue', message });
+      // The assistant can never resume or raise the limit by itself.
       expect(rec.status).toBe('paused');
-      expect(rec.tranches).toBeUndefined();
       expect(childCalls).toHaveLength(1);
-      // The user presses the button: the recommended minimum is always enough.
-      expect(await host.addPlanBudget(SID, planId, rec.paused.handoff.recommendation.addTokens)).toMatchObject({ ok: true });
-      expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true });
-      await waitFor(() => planStatus()[0] === 'completed', 'completion after the recommended top-up');
-      // The refused request, the restarted one, and the summing step decision
-      // 33 requires this plan to have.
-      expect(childCalls).toHaveLength(3);
+      // The user presses the button: raising the limit, then Continue — the
+      // SAME lease-taking call (design §7).
+      expect(await host.resumePlan(SID, planId, { usd: 1 })).toMatchObject({ ok: true });
+      await waitFor(() => planStatus()[0] === 'completed', 'completion after raising the limit');
+      // The crossing reply already committed its report; only the summing
+      // step decision 33 requires this plan to have runs after.
+      expect(childCalls).toHaveLength(2);
       expect(notices()).toHaveLength(1);
     });
 
@@ -6480,9 +6453,19 @@ describe('specialists plans in the native host (Task 4)', () => {
 
     it('a refused recommendation tells the assistant why and to advise in chat; the handoff is answered with no recommendation when that turn ends', async () => {
       const planId = await pauseOnBudget();
+      // T7 (design §7): `spend-limit` (what `pauseOnBudget` now induces)
+      // allows 'continue' — there is no longer a spend-related pause kind
+      // that refuses it. `iteration-cap` (Stop only, unrelated to spend) is
+      // the kind that still refuses 'continue', so this test patches the
+      // journal to it directly — the same pattern other tests in this file
+      // use to set up a specific pause shape without reproducing its real
+      // trigger.
+      const file = journalFile();
+      file.plans[0].paused.kind = 'iteration-cap';
+      fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), JSON.stringify(file));
       parentSteps.push(
         (prompt: string) => stream(toolCallChunk('rec-bad', 'recommend_plan_action', { ...idsIn(prompt), action: 'continue', message: 'try again' }), finishChunk('tool-calls')),
-        textStep('Continue would not help; you could add budget.'),
+        textStep('Continue would not help; ask the assistant for a revised plan.'),
       );
       await ask(planId);
       await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the end of the notice turn');
@@ -6498,12 +6481,12 @@ describe('specialists plans in the native host (Task 4)', () => {
 
     it('"just explain": the turn that delivered THIS notice ends, and the card gets its default buttons', async () => {
       const planId = await pauseOnBudget();
-      parentSteps.push(textStep('It ran out of budget; you can add more or stop.'));
+      parentSteps.push(textStep('It reached its spend limit; you can raise it or stop.'));
       await ask(planId);
       await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the end of the notice turn');
       const view = (await host.planViewsFor(SID))[0];
       expect(view.paused!.handoff).toEqual({ state: 'answered' });
-      expect(view.paused!.actions).toEqual(['add_budget', 'stop']);
+      expect(view.paused!.actions).toEqual(['continue', 'stop']);
     });
 
     it('asked during a reply: "after its current reply" until delivery starts; only the notice turn answers it (review 4-5)', async () => {
@@ -6688,7 +6671,7 @@ describe('specialists plans in the native host (Task 4)', () => {
           await host.setPlanAutoApprove(10_000_000);
           // Decision 33: the revision keeps SMALL's summing step; a plan whose
           // whole worst case is one specialist run is refused.
-          return proposeStep('call-revised', { ...SMALL, goal: 'Review a.ts with more room', steps: [{ ...SMALL.steps[0], budget_tokens: 3000 }, SMALL.steps[1]] });
+          return proposeStep('call-revised', { ...SMALL, goal: 'Review a.ts with more room', steps: [{ ...SMALL.steps[0] }, SMALL.steps[1]] });
         },
         textStep('Here is a revised plan with more room.'),
       );
@@ -6743,8 +6726,9 @@ describe('specialists plans in the native host (Task 4)', () => {
       await waitFor(() => planStatus().filter((st: string) => st === 'proposed').length === 2, 'both proposals');
       await waitFor(() => host.isIdle(SID), 'the proposing turn to end');
       const plans = journalFile().plans;
-      const allowance = 500 + plans[0].manifest.specialists.reviewer.setupTokens;
-      childReply = () => ({ chunks: [toolCallChunk('read-1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 1, allowance - 6)] });
+      // T7 (design §7): a spend-limit pause, same as `pauseOnBudget` above.
+      for (const p of plans) await host.setPlanLimit(SID, p.planId, { usd: 0.001 });
+      childReply = () => ({ chunks: [...textChunks('x', 'REPORT a'), finishChunk('stop', 2_000, 2_000)] });
       for (const p of plans) await host.approvePlan(SID, p.planId);
       await waitFor(() => planStatus().every((st: string) => st === 'paused') && journalFile().plans.every((p: any) => !p.lease), 'both pauses');
       for (const p of plans) expect(await ask(p.planId)).toMatchObject({ ok: true });
@@ -6763,16 +6747,25 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(notices()).toHaveLength(2);
     });
 
-    it('a user Add budget while the question waits supersedes it: accepted, withdrawn, and an old-id recommendation is refused', async () => {
+    // T7 (design §7): `setLimit` alone does NOT supersede a pending handoff
+    // — only `resume`/`stop` do. The card's "Continue with a new limit" is
+    // ONE `resume(limit)` call, so that is what supersedes here now (the old
+    // `addPlanBudget` — a separate, non-superseding write — is gone).
+    it('a user Continue-with-a-new-limit while the question waits supersedes it: accepted, withdrawn, and an old-id recommendation is refused', async () => {
       const planId = await pauseOnBudget();
       const busy = await busyTurn();
       await ask(planId);
       const rec = journalFile().plans[0];
       const ids = { planId, handoffId: rec.paused.handoff.id };
-      expect(await host.addPlanBudget(SID, planId, rec.paused.minimumAddTokens)).toMatchObject({ ok: true });
-      expect(handoff()).toMatchObject({ state: 'answered' });
+      // T7 (design §7): resume DROPS the pause entirely — and with it any
+      // handoff (`plan-service.ts` resume(): "the user decided; its
+      // undelivered notice is withdrawn") — never merely marks it
+      // 'answered' the way `addPlanBudget` (a non-superseding write) used to
+      // leave it.
+      expect(await host.resumePlan(SID, planId, { usd: 1 })).toMatchObject({ ok: true, plan: { status: 'running' } });
+      expect(journalFile().plans[0].paused).toBeUndefined();
       // The busy turn now calls the tool with the old id (as a stale notice would).
-      busy.step.chunks = stream(toolCallChunk('rec-old', 'recommend_plan_action', { ...ids, action: 'add_budget', addTokens: 5000, message: 'more' }), finishChunk('tool-calls'));
+      busy.step.chunks = stream(toolCallChunk('rec-old', 'recommend_plan_action', { ...ids, action: 'continue', message: 'more' }), finishChunk('tool-calls'));
       parentSteps.push(textStep('ok'));
       busy.open();
       await waitFor(() => host.isIdle(SID) && events.some((e) => e.type === 'tool-result' && e.data.toolUseId === 'rec-old'), 'the stale recommendation');
@@ -6780,7 +6773,6 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(result.data.isError).toBe(true);
       expect(result.data.toolResult).toContain('no longer waiting');
       expect(notices()).toHaveLength(0);
-      expect(handoff().recommendation).toBeUndefined();
     });
   });
 
@@ -6794,7 +6786,6 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(liveChildren()).toHaveLength(0);
     const rec = journalFile().plans[0];
     expect(rec.lease).toBeUndefined();
-    expect(rec.steps[0].attempts.reduce((n: number, a: any) => n + a.reservedTokens, 0)).toBe(0);
     expect(rec.steps.map((s: any) => s.status)).toEqual(['skipped', 'skipped']);
   });
 });

@@ -66,12 +66,17 @@ const last = (ws: FakeWebSocket) => JSON.parse(ws.sent[ws.sent.length - 1]);
 const CALLS: Array<[string, (p: any) => Promise<unknown>, string, unknown]> = [
   ['approve', (p) => p.approve('s1', 'p1'), 'plans:approve', { sessionId: 's1', planId: 'p1' }],
   ['comment', (p) => p.comment('s1', 'p1', 'hi'), 'plans:comment', { sessionId: 's1', planId: 'p1', text: 'hi' }],
-  ['addBudget', (p) => p.addBudget('s1', 'p1', 900, 'press-9'), 'plans:add-budget', { sessionId: 's1', planId: 'p1', tokens: 900, requestId: 'press-9' }],
-  ['resume', (p) => p.resume('s1', 'p1'), 'plans:resume', { sessionId: 's1', planId: 'p1' }],
+  // T7 (design §6, revision 1 D5): replaces `addBudget` — there is no
+  // per-step or per-plan token budget left to add to (decision 34).
+  ['setLimit', (p) => p.setLimit('s1', 'p1', { usd: 5 }), 'plans:set-limit', { sessionId: 's1', planId: 'p1', limit: { usd: 5 } }],
+  ['setStepModel', (p) => p.setStepModel('s1', 'p1', 'step1', { providerId: 'openrouter', modelId: 'm' }), 'plans:set-step-model', { sessionId: 's1', planId: 'p1', stepId: 'step1', model: { providerId: 'openrouter', modelId: 'm' } }],
+  // T7 (design §7): the wire always carries `limit`, even absent.
+  ['resume', (p) => p.resume('s1', 'p1'), 'plans:resume', { sessionId: 's1', planId: 'p1', limit: undefined }],
   ['stop', (p) => p.stop('s1', 'p1'), 'plans:stop', { sessionId: 's1', planId: 'p1' }],
   ['askAssistant', (p) => p.askAssistant('s1', 'p1', 'why?'), 'plans:ask-assistant', { sessionId: 's1', planId: 'p1', question: 'why?' }],
   ['getAutoApprove', (p) => p.getAutoApprove(), 'plans:get-auto-approve', {}],
-  ['setAutoApprove', (p) => p.setAutoApprove(3000), 'plans:set-auto-approve', { underTokens: 3000 }],
+  // WHY underUsd, not underTokens (spending rework stage 1, design §6/§8).
+  ['setAutoApprove', (p) => p.setAutoApprove(3000), 'plans:set-auto-approve', { underUsd: 3000 }],
 ];
 
 describe('window.claude.plans over the shared shim', () => {
@@ -92,7 +97,7 @@ describe('window.claude.plans over the shared shim', () => {
 
   // Final review F29: the shim and the REAL preload send the same payload for
   // every call, so the desktop and phone paths reach the handler identically.
-  it('sends exactly what the real preload sends, for all eight', async () => {
+  it('sends exactly what the real preload sends, for every one', async () => {
     const { ws } = await connect('desktop');
     const plans = (window as any).claude.plans;
     for (const [name, call, type] of CALLS) {
@@ -104,7 +109,7 @@ describe('window.claude.plans over the shared shim', () => {
     }
   });
 
-  it('sends each of the eight with its object payload and resolves the host’s answer', async () => {
+  it('sends each with its object payload and resolves the host’s answer', async () => {
     const { ws } = await connect('desktop');
     const plans = (window as any).claude.plans;
     for (const [name, call, type, payload] of CALLS) {
@@ -112,14 +117,14 @@ describe('window.claude.plans over the shared shim', () => {
       const msg = last(ws);
       expect(msg.type, name).toBe(type);
       expect(msg.payload, name).toEqual(payload);
-      const answer = { ok: false, error: 'Budget can only be added to a paused plan.' };
+      const answer = { ok: false, error: 'Set a limit above what is already spent.' };
       ws.receive({ type: `${type}:response`, id: msg.id, payload: answer });
       // A refusal is data for these channels, not a thrown error.
       await expect(p, name).resolves.toEqual(answer);
     }
   });
 
-  it('the phone’s unsupported answer RESOLVES for all eight, quietly', async () => {
+  it('the phone’s unsupported answer RESOLVES for every one, quietly', async () => {
     const { ws } = await connect('phone');
     // After the boot quiet window, so a notice WOULD show if one were raised.
     vi.useFakeTimers({ toFake: ['Date'] });

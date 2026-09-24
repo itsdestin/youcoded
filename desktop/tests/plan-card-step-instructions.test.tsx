@@ -44,9 +44,9 @@ const proposed = (over: Partial<PlanView['steps'][number]> = {}): PlanView => ({
   planId: 'plan-1', toolUseId: CARD, title: 'Audit every desktop surface', status: 'proposed',
   steps: [{
     id: 's1', kind: 'map', title: FIRST_LINE, task: TASK, specialist: 'reviewer',
-    fanOut: 7, budgetTokens: 2000, status: 'pending', ...over,
+    fanOut: 7, status: 'pending', ...over,
   }],
-  ceilingTokens: 42000, ceilingUsd: null, model: { label: 'm' }, seq: 1,
+  model: { label: 'm' }, seq: 1,
 });
 
 function Card({ initial }: { initial: PlanView }) {
@@ -296,11 +296,11 @@ describe('opening a step does not repeat the line its row already shows', () => 
 type Step = PlanView['steps'][number];
 const aStep = (over: Partial<Step> & { id: string }): Step => ({
   kind: 'map', title: FIRST_LINE, task: TASK, specialist: 'reviewer',
-  fanOut: 1, budgetTokens: 2000, status: 'pending', ...over,
+  fanOut: 1, status: 'pending', ...over,
 });
 const planOf = (steps: Step[], status: PlanView['status'] = 'proposed'): PlanView => ({
   planId: 'plan-1', toolUseId: CARD, title: 'Audit every desktop surface', status,
-  steps, ceilingTokens: 42000, ceilingUsd: null, model: { label: 'm' }, seq: 1,
+  steps, model: { label: 'm' }, seq: 1,
 });
 /** Open step `id` and answer with the words inside it. */
 const openAndRead = (id: string): HTMLElement => {
@@ -437,13 +437,13 @@ describe('a step says where its input comes from only when that is not obvious',
 // ---- decision 33: a repeat is ONE row that CONTAINS its body ----------------
 describe('a repeat draws as one row holding its body, not several loose rows', () => {
   const body = () => [
-    aStep({ id: 'draft', kind: 'map', fanOut: 3, items: ['a', 'b', 'c'], specialist: 'worker', budgetTokens: 1000 }),
-    aStep({ id: 'check', kind: 'verify', of: 'draft', fanOut: 1, budgetTokens: 800 }),
+    aStep({ id: 'draft', kind: 'map', fanOut: 3, items: ['a', 'b', 'c'], specialist: 'worker' }),
+    aStep({ id: 'check', kind: 'verify', of: 'draft', fanOut: 1 }),
   ];
   const looping = () => planOf([
     aStep({
       id: 'loop', kind: 'repeat', specialist: 'worker', fanOut: 4, rounds: 2,
-      until: 'the tests pass', ceilingTokens: 2 * (3 * 1000 + 800), body: body(),
+      until: 'the tests pass', body: body(),
     }),
     aStep({ id: 'after', kind: 'combine', of: 'loop', specialist: 'worker' }),
   ]);

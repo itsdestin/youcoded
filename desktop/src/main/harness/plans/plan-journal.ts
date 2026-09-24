@@ -456,8 +456,10 @@ function salvagedFailedViews(raw: string, detail: string): PlanView[] {
       title: '',
       status: 'failed',
       steps: [],
-      ceilingTokens: 0,
-      ceilingUsd: null,
+      // T7 (design §2): `ceilingTokens`/`ceilingUsd` are retired from
+      // PlanView entirely — this salvage view carries no price signal at
+      // all now, same as any other record with no `estimate` (PlanCard.tsx
+      // `unpriced()` reads that as unpriced, never a false "$0.00").
       model: { label: 'Unknown model' },
       seq: seqMatch ? Number(seqMatch[1]) : 0,
       // Decision 6: the strict reader's own reason, verbatim — never a guess.

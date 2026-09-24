@@ -127,7 +127,7 @@ describe('chat state serialization', () => {
       steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 1, status: 'running',
         children: [{ childId: 'kid', parentToolCallId: 'call-plan', agentType: 'reviewer', title: 'Kid', background: false, status: 'running', startedAt: 1,
           planAttempt: { stepId: 's1', attemptId: 'a1', itemIndex: 0, iteration: 0 } }] }],
-      ceilingTokens: 2000, ceilingUsd: null, model: { label: 'm' }, paused: undefined,
+      model: { label: 'm' }, paused: undefined,
       ...over,
     });
     const act = (s: ChatState, ...a: any[]) => a.reduce((acc, x) => chatReducer(acc, x), s);

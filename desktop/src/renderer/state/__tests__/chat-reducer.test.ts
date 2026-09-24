@@ -912,7 +912,7 @@ describe('chatReducer TRANSCRIPT_REPLAY_COMPLETE', () => {
       toolUseId: 'plan-writing', toolName: 'propose_plan', toolInput: {},
       plan: {
         planId: 'writing:plan-writing', toolUseId: 'plan-writing', title: 'Writing plan',
-        status: 'writing', steps: [], ceilingTokens: 0, ceilingUsd: null,
+        status: 'writing', steps: [],
         model: { label: 'Model' }, seq: 0,
       },
     } as any);

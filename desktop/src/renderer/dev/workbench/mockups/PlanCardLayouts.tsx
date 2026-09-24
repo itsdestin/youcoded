@@ -263,7 +263,7 @@ export function LedgerPlanCard() {
           part the header does NOT say: the shape of the whole plan in one muted
           line, read before any step is. */}
       <div className="text-2xs text-fg-muted">
-        {STEPS.length} steps · {SPECIALISTS} specialists · up to about ${PLAN.ceilingUsd?.toFixed(2)}
+        {STEPS.length} steps · {SPECIALISTS} specialists · usually {ESTIMATE_TEXT}
       </div>
       <ol className="divide-y divide-edge-dim border-t border-edge-dim">
         {STEPS.map((step, i) => <LedgerRow key={step.id} step={step} index={i} last={i === STEPS.length - 1} />)}

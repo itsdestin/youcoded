@@ -2314,10 +2314,12 @@ export class RemoteServer {
       // a value the card reads; none of these is in the shim's REJECT_ON_NOT_OK.
       // No parallel replay: a reconnecting phone gets plan cards inside
       // chat:hydrate, and plans:event (broadcast from ipc-handlers.ts) carries
-      // only later changes.
+      // only later changes. T7 (design §6, revision 1 D5): `set-limit`/
+      // `set-step-model` replace the retired `plans:add-budget`.
       case 'plans:approve':
       case 'plans:comment':
-      case 'plans:add-budget':
+      case 'plans:set-limit':
+      case 'plans:set-step-model':
       case 'plans:resume':
       case 'plans:stop':
       case 'plans:ask-assistant':

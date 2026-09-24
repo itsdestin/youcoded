@@ -542,8 +542,18 @@ export class PlanHostBridge {
   async approve(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.approve(sessionId, planId)); }
   async comment(sessionId: string, planId: string, text: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.comment(sessionId, planId, text)); }
   // WHY no addBudget any more (spending rework stage 1, design §1/§6):
-  // deleted — T7 removes the matching `plans:add-budget` IPC channel.
-  async resume(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.resume(sessionId, planId)); }
+  // deleted — T7 removed the matching `plans:add-budget` IPC channel.
+  // T7 (design §7): an optional new limit rides the SAME lease-taking write
+  // — Continue-with-a-new-limit is one call, never `setLimit` then `resume`
+  // racing a sibling's spend write between them.
+  async resume(sessionId: string, planId: string, limit?: number | null): Promise<PlanActionResult> {
+    return this.decorated(sessionId, await this.service.resume(sessionId, planId, limit));
+  }
+  /** T7 (design §7, decision 34/35): replaces `addBudget` — the plan's own
+   *  spend limit is the one number a user sets now. */
+  async setLimit(sessionId: string, planId: string, limit: number | null): Promise<PlanActionResult> {
+    return this.decorated(sessionId, await this.service.setLimit(sessionId, planId, limit));
+  }
   /** T4 (design §5, T7 wires the IPC channel to this). */
   async setStepModel(sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null): Promise<PlanActionResult> {
     return this.decorated(sessionId, await this.service.setStepModel(sessionId, planId, stepId, model));

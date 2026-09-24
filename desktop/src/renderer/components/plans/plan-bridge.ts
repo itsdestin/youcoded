@@ -124,9 +124,9 @@ export function planAction(fn: (b: PlansBridge) => Promise<unknown>): Promise<Pl
 }
 
 /** Decision 35 (Plan settings) — the plan's total spending cap; `null` turns
- *  it off. Mock-only until the backend rework lands (mock-only.ts); routed
- *  through `planAction` like every other button so a missing bridge or a
- *  refusal reads exactly the same way. */
+ *  it off. Real as of T7 (design §6/§7); routed through `planAction` like
+ *  every other button so a missing bridge or a refusal reads exactly the
+ *  same way. */
 export function setPlanLimit(sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null): Promise<PlanActionResult> {
   return planAction((b) => b.setLimit(sessionId, planId, limit));
 }

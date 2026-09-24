@@ -16,7 +16,7 @@ import { readStripped, RENDERER } from './helpers/guard-scope';
 const S = 'sess';
 const planEvent = (seq: number): PlanView => ({
   planId: 'plan-1', toolUseId: 'call-plan', title: 'Plan', status: 'interrupted', steps: [],
-  ceilingTokens: 1, ceilingUsd: null, model: { label: 'm' }, seq,
+  model: { label: 'm' }, seq,
 });
 const pageWithPlanCard: TranscriptPageResult = {
   events: [

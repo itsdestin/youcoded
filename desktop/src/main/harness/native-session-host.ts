@@ -5177,8 +5177,8 @@ export class NativeSessionHost extends EventEmitter {
   }
 
   // ---- Specialists plans (Task 4) -----------------------------------------
-  // The eight card/settings actions Tasks 5–6 and 11 route here (desktop IPC and the
-  // remote server call the SAME methods), the journal projections for
+  // The card/settings actions Tasks 5–6, 11 and T7 route here (desktop IPC and
+  // the remote server call the SAME methods), the journal projections for
   // hydration, and the session mechanics the plan bridge borrows. Every plan
   // change is pushed as a 'plans-event' ({ sessionId, plan: PlanView }).
 
@@ -5196,17 +5196,48 @@ export class NativeSessionHost extends EventEmitter {
   commentOnPlan(sessionId: string, planId: string, text: string): Promise<PlanActionResult> {
     return this.plans?.comment(sessionId, planId, text) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
-  // WHY addPlanBudget always answers unsupported now (spending rework stage
-  // 1, design §1/§6): PlanHostBridge/PlanService no longer have an addBudget
-  // to call — there is no Add budget left. The method itself, and the
-  // `plans:add-budget` channel it answers, are removed in T7 across all five
-  // IPC surfaces; kept here, honestly refusing, so plan-requests.ts (T7's
-  // file) still compiles until then.
+  /** T7 (design §6/§7): the wire's `{usd}|{tokens}|null` into the plain
+   *  number `PlanService.setLimit`/`.resume` take — the plan's OWN pricing
+   *  class decides the unit (`plan-service.ts` `pricingUnit`), never the
+   *  caller, so only the number itself crosses this seam. A shape that is
+   *  neither `{usd}` nor `{tokens}` becomes `NaN`, which the service's own
+   *  `invalidLimitAmount` refuses with its normal sentence — never a crash. */
+  private static limitNumber(limit: { usd: number } | { tokens: number } | null | undefined): number | null | undefined {
+    if (limit === null) return null;
+    if (limit === undefined) return undefined;
+    if ('usd' in limit) return limit.usd;
+    if ('tokens' in limit) return limit.tokens;
+    return NaN;
+  }
+  // T7 (design §6, revision 1 D5): `addPlanBudget` is off every wire surface
+  // — no channel, no preload/remote-shim/remote-server entry, no
+  // `PlanRequestHost` member, nothing `plan-requests.ts` can reach. A bare
+  // method is kept here, UNCHANGED (still an unconditional refusal), only
+  // because `tests/native-session-host.test.ts`'s pre-T1 "Task 4" describe
+  // block (never migrated across T1–T6 — its own fixture docs still carry the
+  // retired `budget_tokens` field, so every test in it already fails plan
+  // proposal's schema check before this method is even reached) calls it by
+  // name; deleting it would turn that PRE-EXISTING runtime breakage into a
+  // compile error for the whole project. Migrating that block to the spend
+  // model (mirroring this task's `plans-lifecycle.integration.test.ts`
+  // rewrite) is real, scoped-out follow-up work, not something to paper over
+  // here — flagged in this task's report rather than silently expanded into.
   addPlanBudget(_sessionId: string, _planId: string, _tokens: number, _requestId?: unknown): Promise<PlanActionResult> {
     return Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
-  resumePlan(sessionId: string, planId: string): Promise<PlanActionResult> {
-    return this.plans?.resume(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  setPlanLimit(sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null): Promise<PlanActionResult> {
+    return this.plans?.setLimit(sessionId, planId, NativeSessionHost.limitNumber(limit) ?? null) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  }
+  // T7 (design §5): a step's model override, for a step that has not
+  // started — `null` clears it back to the document/specialist default.
+  setPlanStepModel(sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null): Promise<PlanActionResult> {
+    return this.plans?.setStepModel(sessionId, planId, stepId, model) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  }
+  /** T7 (design §7): an optional new limit rides the SAME lease-taking write
+   *  Continue already makes — Continue-with-a-new-limit is one call, never
+   *  `setLimit` then `resume` racing a sibling's spend write between them. */
+  resumePlan(sessionId: string, planId: string, limit?: { usd: number } | { tokens: number } | null): Promise<PlanActionResult> {
+    return this.plans?.resume(sessionId, planId, NativeSessionHost.limitNumber(limit)) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
   stopPlan(sessionId: string, planId: string): Promise<PlanActionResult> {
     return this.plans?.stop(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
@@ -5218,8 +5249,8 @@ export class NativeSessionHost extends EventEmitter {
   getPlanAutoApprove(): Promise<PlanAutoApproveRead> {
     return this.plans?.getAutoApprove() ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
-  setPlanAutoApprove(underTokens: unknown): Promise<PlanSettingsWriteResult> {
-    return this.plans?.setAutoApprove(underTokens) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  setPlanAutoApprove(underUsd: unknown): Promise<PlanSettingsWriteResult> {
+    return this.plans?.setAutoApprove(underUsd) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
 
   /** Hydration (design §5): the current card projections, read from the plan

@@ -3,8 +3,10 @@ import type {
 } from '../../../shared/types';
 
 /**
- * Specialists plans, Task 6 (design §5) — the ONE handler behind the eight
- * plan request channels (Task 11 added "Ask the assistant", pause handoff §6), shared by desktop IPC (ipc-handlers.ts) and the
+ * Specialists plans, Task 6 (design §5) — the ONE handler behind the plan
+ * request channels (Task 11 added "Ask the assistant", pause handoff §6; T7
+ * (design §6) swapped `plans:add-budget` for `plans:set-limit` and
+ * `plans:set-step-model`), shared by desktop IPC (ipc-handlers.ts) and the
  * remote WebSocket (remote-server.ts).
  *
  * WHY one shared function rather than two copies: the design promises that a
@@ -14,14 +16,18 @@ import type {
  * card then behaves differently depending on which screen you used. Both
  * transports now pass the raw payload straight here.
  *
- * Android has no native runtime and answers the same eight channels with a
+ * Android has no native runtime and answers the same channels with a
  * typed `unsupported` refusal of its own (SessionService.kt → PlansBridge.kt).
  */
 
 export const PLAN_REQUEST_CHANNELS = [
   'plans:approve',
   'plans:comment',
-  'plans:add-budget',
+  // T7 (design §6, revision 1 D5): `plans:add-budget` is GONE — there is no
+  // per-step or per-plan token budget left to add to (decision 34). Its two
+  // replacements are the plan's OWN spend limit and a step's model.
+  'plans:set-limit',
+  'plans:set-step-model',
   'plans:resume',
   'plans:stop',
   // Task 11 (pause handoff §6): the paused card's "Ask the assistant".
@@ -35,16 +41,28 @@ export type PlanRequestChannel = (typeof PLAN_REQUEST_CHANNELS)[number];
 /** The push: `{ sessionId, plan: PlanView }`, one per visible journal change. */
 export const PLANS_EVENT_CHANNEL = 'plans:event';
 
-/** The slice of NativeSessionHost these channels need (Task 4 host API). */
+/** The wire shape of a plan's spend limit (design §6/§7): dollars for a
+ *  priced plan, tokens for one with none — the SAME unit `estimate` uses.
+ *  `PlanService.setLimit`/`.resume` take the plain number in the plan's own
+ *  unit (the plan decides its unit, never the caller); `limitAmount` below
+ *  is the one place that unwraps the wire object into that number. */
+type PlanLimitWire = { usd: number } | { tokens: number };
+
+/** The slice of NativeSessionHost these channels need (Task 4 host API; T7
+ *  design §6 swapped `addPlanBudget` for `setPlanLimit`/`setPlanStepModel`
+ *  and gave `resumePlan` its own optional limit — design §7: "the card calls
+ *  setLimit then resume; optionally plans:resume accepts limit in the
+ *  lease-taking write" — one atomic call for Continue-with-a-new-limit). */
 export interface PlanRequestHost {
   approvePlan(sessionId: string, planId: string): Promise<PlanActionResult>;
   commentOnPlan(sessionId: string, planId: string, text: string): Promise<PlanActionResult>;
-  addPlanBudget(sessionId: string, planId: string, tokens: number, requestId?: unknown): Promise<PlanActionResult>;
-  resumePlan(sessionId: string, planId: string): Promise<PlanActionResult>;
+  setPlanLimit(sessionId: string, planId: string, limit: PlanLimitWire | null): Promise<PlanActionResult>;
+  setPlanStepModel(sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null): Promise<PlanActionResult>;
+  resumePlan(sessionId: string, planId: string, limit?: PlanLimitWire | null): Promise<PlanActionResult>;
   stopPlan(sessionId: string, planId: string): Promise<PlanActionResult>;
   askAssistantAboutPlan(sessionId: string, planId: string, question?: string): Promise<PlanActionResult>;
   getPlanAutoApprove(): Promise<PlanAutoApproveRead>;
-  setPlanAutoApprove(underTokens: unknown): Promise<PlanSettingsWriteResult>;
+  setPlanAutoApprove(underUsd: unknown): Promise<PlanSettingsWriteResult>;
 }
 
 export type PlanRequestAnswer = PlanActionResult | PlanAutoApproveRead | PlanSettingsWriteResult;
@@ -94,23 +112,31 @@ export async function handlePlanRequest(
         answer = await host.getPlanAutoApprove();
         break;
       case 'plans:set-auto-approve':
-        answer = await host.setPlanAutoApprove(p.underTokens);
+        // WHY underUsd, not underTokens (spending rework stage 1, design
+        // §6/§8): auto-start reads a dollar figure now.
+        answer = await host.setPlanAutoApprove(p.underUsd);
         break;
       default: {
         // A card action with no session or plan id comes from a broken caller;
         // it must never reach the journal with `undefined` as a path part.
         if (!nonEmpty(p.sessionId) || !nonEmpty(p.planId)) return fail(ACTION_FAILED);
         const { sessionId, planId } = p;
-        // `text` and `tokens` are cast, not checked: PlanService.comment and
-        // .addBudget are the validators (empty or over-long comment, a token
-        // amount that isn't a positive whole number, below the paused minimum)
-        // and answer with the exact reason the card shows. Checking here too
-        // would put a second, drifting copy of those rules in the transport.
+        // `text`, `limit`, `stepId` and `model` are cast, not checked:
+        // PlanService.comment/.setLimit/.setStepModel are the validators
+        // (empty or over-long comment, a limit that isn't a positive number
+        // above what is already spent, an unknown or already-started step,
+        // a model the resolver refuses) and answer with the exact reason
+        // the card shows. Checking here too would put a second, drifting
+        // copy of those rules in the transport.
         if (channel === 'plans:approve') answer = await host.approvePlan(sessionId, planId);
         else if (channel === 'plans:comment') answer = await host.commentOnPlan(sessionId, planId, p.text as string);
-        // Final review F1: `requestId` is passed through; PlanService checks it.
-        else if (channel === 'plans:add-budget') answer = await host.addPlanBudget(sessionId, planId, p.tokens as number, p.requestId);
-        else if (channel === 'plans:resume') answer = await host.resumePlan(sessionId, planId);
+        // T7 (design §6, revision 1 D5): replaces `plans:add-budget`.
+        else if (channel === 'plans:set-limit') answer = await host.setPlanLimit(sessionId, planId, p.limit as PlanLimitWire | null);
+        else if (channel === 'plans:set-step-model') answer = await host.setPlanStepModel(sessionId, planId, p.stepId as string, p.model as { providerId: string; modelId: string } | null);
+        // Design §7: an optional `limit` rides the SAME lease-taking write —
+        // Continue-with-a-new-limit is one call, never setLimit then resume
+        // racing a sibling's spend write between them.
+        else if (channel === 'plans:resume') answer = await host.resumePlan(sessionId, planId, p.limit as PlanLimitWire | null | undefined);
         // Decision 20: the typed question is passed through; the plan
         // service trims it and refuses one that is too long.
         else if (channel === 'plans:ask-assistant') answer = await host.askAssistantAboutPlan(sessionId, planId, p.question as string);

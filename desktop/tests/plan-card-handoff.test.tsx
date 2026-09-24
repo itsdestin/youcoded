@@ -26,15 +26,18 @@ import { toolActionLabel } from '../src/renderer/utils/tool-group-summary';
 const S = 's1';
 const CARD = 'call-plan';
 
+// T7 (design §1/§2, decision 34): `budget` is a retired pause kind — the
+// default fixture is now `specialist-error`, which still routes to the
+// generic pause strip (same as `budget` used to).
 function paused(pausedOver: Partial<NonNullable<PlanView['paused']>> = {}, over: Partial<PlanView> = {}): PlanView {
   return {
     planId: 'plan-1', toolUseId: CARD, title: 'Review two files', status: 'paused',
     steps: [
-      { id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'paused', done: 1, usedTokens: 4000 },
-      { id: 's2', kind: 'combine', title: 'Combine', specialist: 'worker', fanOut: 1, budgetTokens: 4000, status: 'pending' },
+      { id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'paused', done: 1, usedTokens: 4000 },
+      { id: 's2', kind: 'combine', title: 'Combine', specialist: 'worker', fanOut: 1, status: 'pending' },
     ],
-    ceilingTokens: 8000, ceilingUsd: null, model: { label: 'Model' }, usedTokens: 4000, seq: 4,
-    paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget', minimumAddTokens: 1200, actions: ['add_budget', 'stop'], ...pausedOver },
+    model: { label: 'Model' }, usedTokens: 4000, seq: 4,
+    paused: { stepId: 's1', reason: 'a specialist ran into an error.', kind: 'specialist-error', actions: ['continue', 'stop'], ...pausedOver },
     ...over,
   };
 }
@@ -59,9 +62,8 @@ let api: Record<string, ReturnType<typeof vi.fn>>;
 beforeEach(() => {
   resetPlanSupportForTests();
   api = {
-    approve: vi.fn(), comment: vi.fn(), resume: vi.fn(), stop: vi.fn(),
-    addBudget: vi.fn(async (_s: string, _p: string, tokens: number) => ({ ok: true, plan: paused({ minimumAddTokens: undefined }, { ceilingTokens: 8000 + tokens }) })),
-    getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 0 }),
+    approve: vi.fn(), comment: vi.fn(), resume: vi.fn(), stop: vi.fn(), setLimit: vi.fn(), setStepModel: vi.fn(),
+    getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underUsd: 0 }),
     setAutoApprove: vi.fn().mockResolvedValue({ ok: true }),
   };
   (window as any).claude = { plans: api };
@@ -74,7 +76,7 @@ describe('pending: the assistant is looking into it', () => {
     expect(block()).toHaveClass('opacity-60');
     expect(screen.getByTestId('plan-handoff-pending')).toHaveTextContent('The assistant is looking into this.');
     expect(buttons()).toEqual([]);
-    expect(screen.getByTestId('plan-paused-reason')).toHaveTextContent('Paused — step 1 hit its limit.');
+    expect(screen.getByTestId('plan-paused-reason')).toHaveTextContent('Paused — a specialist ran into an error.');
     // The header agrees (the Specialists chip's plan row reads the same phrase).
     expect(planDisplay({}, paused({ handoff: { state: 'pending' } })).detail).toBe('paused — the assistant is looking into this');
   });
@@ -89,33 +91,19 @@ describe('pending: the assistant is looking into it', () => {
 describe('recommended: the assistant\'s button, filled and on the right', () => {
   const message = 'One reviewer ran out; 3,000 more tokens lets it finish.';
 
-  it('add_budget: Stop (light) then Add budget (filled); the amount is pre-filled with the recommendation', async () => {
-    render(<ChatProvider><Card initial={paused({ handoff: { state: 'answered', recommendation: { action: 'add_budget', addTokens: 3000, message } } })} /></ChatProvider>);
+  // T7 (design §1/§2, decision 34): `add_budget` is a retired recommendation
+  // — `PlanPauseAction` is `'continue' | 'stop'` only now (nothing is
+  // rationed per step or per plan to top up).
+  it('continue: Stop (light) then Continue (filled)', async () => {
+    render(<ChatProvider><Card initial={paused({ kind: 'unexpected-error', actions: ['continue', 'stop'], handoff: { state: 'answered', recommendation: { action: 'continue', message } } })} /></ChatProvider>);
     expect(block()).not.toHaveClass('opacity-60');
     expect(screen.getByTestId('plan-recommendation')).toHaveTextContent(`The assistant suggests: ${message}`);
-    expect(buttons()).toEqual(['Ask the assistant', 'Stop', 'Add budget']);
-    const add = screen.getByRole('button', { name: 'Add budget' });
-    expect(add.className).toContain('bg-accent');
-    expect(screen.getByRole('button', { name: 'Stop' }).className).not.toContain('bg-destructive ');
-    fireEvent.click(add);
-    expect(screen.getByLabelText('Tokens to allow')).toHaveValue('3,000');
-    // Nothing is sent until the user presses Continue.
-    expect(api.addBudget).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    await waitFor(() => expect(api.addBudget).toHaveBeenCalledWith(S, 'plan-1', 3000, expect.any(String)));
-  });
-
-  it('add_budget below the host\'s minimum starts at the minimum instead', () => {
-    render(<ChatProvider><Card initial={paused({ minimumAddTokens: 5000, handoff: { state: 'answered', recommendation: { action: 'add_budget', addTokens: 3000, message } } })} /></ChatProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    expect(screen.getByLabelText('Tokens to allow')).toHaveValue('5,000');
-  });
-
-  it('continue: Stop (light) then Continue (filled)', () => {
-    render(<ChatProvider><Card initial={paused({ kind: 'unexpected-error', minimumAddTokens: undefined, actions: ['continue', 'stop'], handoff: { state: 'answered', recommendation: { action: 'continue', message: 'The provider hiccuped; trying again should work.' } } })} /></ChatProvider>);
     expect(buttons()).toEqual(['Ask the assistant', 'Stop', 'Continue']);
-    expect(screen.getByRole('button', { name: 'Continue' }).className).toContain('bg-accent');
-    expect(screen.getByTestId('plan-recommendation')).toHaveTextContent('The assistant suggests: The provider hiccuped; trying again should work.');
+    const cont = screen.getByRole('button', { name: 'Continue' });
+    expect(cont.className).toContain('bg-accent');
+    expect(screen.getByRole('button', { name: 'Stop' }).className).not.toContain('bg-destructive ');
+    fireEvent.click(cont);
+    await waitFor(() => expect(api.resume).toHaveBeenCalledWith(S, 'plan-1'));
   });
 
   it('stop: one filled Stop button, and nothing else but Ask (Task 11)', () => {
@@ -128,24 +116,25 @@ describe('recommended: the assistant\'s button, filled and on the right', () => 
   });
 
   it('the button row sits on the right (G-29)', () => {
-    render(<ChatProvider><Card initial={paused({ handoff: { state: 'answered', recommendation: { action: 'add_budget', addTokens: 3000, message } } })} /></ChatProvider>);
-    const row = screen.getByRole('button', { name: 'Add budget' }).parentElement!;
-    expect(row.lastElementChild).toBe(screen.getByRole('button', { name: 'Add budget' }));
+    render(<ChatProvider><Card initial={paused({ kind: 'unexpected-error', actions: ['continue', 'stop'], handoff: { state: 'answered', recommendation: { action: 'continue', message } } })} /></ChatProvider>);
+    const row = screen.getByRole('button', { name: 'Continue' }).parentElement!;
+    expect(row.lastElementChild).toBe(screen.getByRole('button', { name: 'Continue' }));
   });
 });
 
 describe('answered with no recommendation: the default buttons (§2 step 7)', () => {
+  // T7 (design §1/§2, decision 34): `budget`/`ceiling-shortfall`/`plan-limit`/
+  // `local-pool` are retired pause kinds — `spend-limit` (WITH a handoff,
+  // which routes it through this same generic strip: `!!handoff` in
+  // PlanCard.tsx) replaces them; `launch-failed` already covered Stop-only.
   it.each([
-    ['budget', ['add_budget', 'stop'], ['Stop', 'Add budget']],
-    ['ceiling-shortfall', ['add_budget', 'stop'], ['Stop', 'Add budget']],
-    ['plan-limit', ['stop'], ['Stop']],
-    ['local-pool', ['stop'], ['Stop']],
+    ['spend-limit', ['stop'], ['Stop']],
     ['launch-failed', ['stop'], ['Stop']],
     ['unexpected-error', ['continue', 'stop'], ['Stop', 'Continue']],
     ['specialist-error', ['continue', 'stop'], ['Stop', 'Continue']],
     ['invalid-report', ['continue', 'stop'], ['Stop', 'Continue']],
   ] as const)('%s → %j', (kind, actions, shown) => {
-    render(<ChatProvider><Card initial={paused({ kind, actions: [...actions], minimumAddTokens: undefined, handoff: { state: 'answered' } })} /></ChatProvider>);
+    render(<ChatProvider><Card initial={paused({ kind, actions: [...actions], handoff: { state: 'answered' } })} /></ChatProvider>);
     // Task 11 (decision 19): every paused card leads with Ask.
     expect(buttons()).toEqual(['Ask the assistant', ...shown]);
     expect(screen.queryByTestId('plan-recommendation')).toBeNull();
@@ -154,12 +143,12 @@ describe('answered with no recommendation: the default buttons (§2 step 7)', ()
   });
 
   it('a pause never asked about uses the same defaults', () => {
-    render(<ChatProvider><Card initial={paused({ kind: 'specialist-error', actions: ['continue', 'stop'], minimumAddTokens: undefined })} /></ChatProvider>);
+    render(<ChatProvider><Card initial={paused({ kind: 'specialist-error', actions: ['continue', 'stop'] })} /></ChatProvider>);
     expect(buttons()).toEqual(['Ask the assistant', 'Stop', 'Continue']);
   });
 
   it('a Stop-only pause shows its Stop as the light button, as the iteration cap always did', () => {
-    render(<ChatProvider><Card initial={paused({ kind: 'plan-limit', actions: ['stop'], minimumAddTokens: undefined, handoff: { state: 'answered' } })} /></ChatProvider>);
+    render(<ChatProvider><Card initial={paused({ kind: 'launch-failed', actions: ['stop'], handoff: { state: 'answered' } })} /></ChatProvider>);
     expect(screen.getByRole('button', { name: 'Stop' }).className).toContain('border-destructive');
   });
 });

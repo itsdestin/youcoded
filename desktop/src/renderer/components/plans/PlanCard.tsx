@@ -136,9 +136,9 @@ export function fallbackActions(paused: PlanView['paused']): Array<'continue' | 
 
 // ---- decision 34/35: spending, not rationing ---------------------------------
 //
-// Per-step budgets are gone from what the card prints (`budgetTokens` stays on
-// the wire — main hasn't been asked to drop it — but nothing below reads it).
-// A plan runs with no limit by default; `estimate` is a guide from past runs,
+// Per-step budgets are gone entirely — T7 dropped `budgetTokens`/
+// `ceilingTokens`/`ceilingUsd` from the wire (shared/types.ts) once nothing
+// below read them any more. A plan runs with no limit by default; `estimate` is a guide from past runs,
 // `spendLimit` is the one number the user can set, and `usedTokens`/`usedUsd`
 // (already on the record) are the live spend. See decision-log.md decisions
 // 34–36.
@@ -174,14 +174,16 @@ function estimateLine(plan: PlanView): string {
 
 /** True when this plan's specialists have no published price — Q-5's
  *  ChatGPT-sign-in / on-computer case. Read off `estimate` (set once, at
- *  proposal time) so the running and paused cards ask the same question the
- *  proposed card already answered, rather than re-deriving it from the model.
- *  A record from before `estimate` existed falls back to the OLD price
- *  signal (`ceilingUsd == null`) so it never prints a false "$0.00" for a
- *  plan that was always unpriced. */
+ *  proposal time, and on every re-freeze — design §4/§5) so the running and
+ *  paused cards ask the same question the proposed card already answered,
+ *  rather than re-deriving it from the model. T7 (design §2): `estimate` is
+ *  the ONLY price signal now — `ceilingUsd`, the field an older record's
+ *  fallback used to read, is retired with the rest of the per-step ceiling
+ *  (decision 34); a record with no `estimate` at all (should not happen post
+ *  v2, but never crash on it) reads as unpriced, the same safe direction
+ *  `readUnderUsd` and an unpriced plan's own wording already take. */
 function unpriced(plan: PlanView): boolean {
-  if (plan.estimate) return 'unpricedNote' in plan.estimate;
-  return plan.ceilingUsd == null;
+  return !plan.estimate || 'unpricedNote' in plan.estimate;
 }
 
 /** Decision 34, item 2/Q-1: the running (and paused/finished) card's live
@@ -381,17 +383,16 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const cont = () => { lastAction.current = 'continue'; return act('continue', (b) => b.resume(id, plan.planId)); };
   const stop = () => { lastAction.current = 'stop'; return act('stop', (b) => b.stop(id, plan.planId)); };
   // Decision 34 item 3: "Reached your $5.00 limit" → Continue asks for a NEW
-  // limit, then resumes — same two-call shape as the old Add budget (set the
-  // number, then press Continue for the user), reusing `act` so busy/error
-  // states and Retry all work the same way.
+  // limit, then resumes. T7 (design §7): the new limit rides the SAME
+  // lease-taking `resume` write as one atomic call — never `setLimit` then a
+  // separate `resume` that could land after a sibling's spend write crosses
+  // the very limit just raised.
   const continueWithNewLimit = async () => {
     if (!(Number(newLimit) > 0)) return;
     lastAction.current = 'continue-new-limit';
     const value = unpriced(plan) ? { tokens: Math.max(0, Math.floor(Number(newLimit) || 0)) } : { usd: Math.max(0, Number(newLimit) || 0) };
-    const landed = await act('continue', (b) => b.setLimit(id, plan.planId, value));
-    if (!landed) return;
-    if (landed.status === 'paused') await act('continue', (b) => b.resume(id, plan.planId));
-    setSettingNewLimit(false);
+    const landed = await act('continue', (b) => b.resume(id, plan.planId, value));
+    if (landed) setSettingNewLimit(false);
   };
   // Task 11 (§6): the host checks, records and queues; the card only lands the
   // greyed record it answers. `act` ignores presses while one is in flight.

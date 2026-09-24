@@ -60,11 +60,31 @@
  * `estimate`/`spendLimit`, so the proposed cards' "Up to …" ceiling line is
  * gone too, with nothing to replace it — a plan with an `estimate` shows a
  * range instead). A running card's "Spent X of Y" loses the "of Y" half
- * (these inputs have no `spendLimit`, i.e. no limit was set). The opened
+ * (these inputs have no `spendLimit`, i.e. no limit was set) — corrected by
+ * T7 below: with `ceilingUsd` gone too, an estimate-less record reads as
+ * fully unpriced now, so it is "About N tokens used", never a dollar figure.
+ * The opened
  * step's old "Limits" section (the per-specialist token cap) is now "Model"
  * (decision 35: which model the step runs on, changeable in Plan settings).
  * Only the fixtures this pass changed differ; plan-completed and
  * plan-writing are untouched.
+ *
+ * Re-recorded once more, T7 (spending rework backend, design §1/§2/§6/§7,
+ * 2026-09-24): `budgetTokens`/`ceilingTokens`/`ceilingUsd` are removed from
+ * every fixture (retired fields, no code reads them any more — PlanCard.tsx
+ * `unpriced()` now reads only `estimate`). None of these fixtures ever had
+ * `estimate` (they predate it), so every running/completed/interrupted/
+ * failed/stopped card's spend line changes from the old ceiling-priced
+ * "Spent $X (N tokens) of the $Y limit (M tokens)" to "About N tokens used"
+ * — no dollar figure is claimed for a record with no known price. `plan-
+ * paused`'s scenario — the OLD per-step `budget` pause ("step 1 hit its
+ * 27,000-token limit") — has no equivalent any more (there is no per-step
+ * limit left to hit): it is now a `spend-limit` pause (the plan's own limit,
+ * decision 34/37) WITH an explicit `spendLimit`, so it keeps its dollar
+ * wording — "Reached your $0.08 limit." in the same amber pill, Stop ·
+ * Continue, Continue opening the new-limit box in place of the retired Add
+ * budget field. Every other
+ * fixture's words are unchanged.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/react';
@@ -117,8 +137,8 @@ beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
   (window as any).claude = {
     plans: {
-      approve: vi.fn(), comment: vi.fn(), addBudget: vi.fn(), resume: vi.fn(), stop: vi.fn(),
-      getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 0 }), setAutoApprove: vi.fn(),
+      approve: vi.fn(), comment: vi.fn(), setLimit: vi.fn(), setStepModel: vi.fn(), resume: vi.fn(), stop: vi.fn(),
+      getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underUsd: 0 }), setAutoApprove: vi.fn(),
     },
   };
 });
@@ -132,16 +152,19 @@ describe('the signed plan card reads exactly as approved', () => {
     });
   }
 
-  it('the paused card opens its Add budget control in the same pill', () => {
+  // T7 (spending rework, design §1/§7, decision 34): Add budget is gone —
+  // `plan-paused`'s fixture is now a `spend-limit` pause, whose own new-limit
+  // box (opened by Continue) is the one remaining "ask for a number" control.
+  it('the paused card opens its new-limit control in the same pill', () => {
     const { container } = render(<ChatProvider><ToolCard tool={toolFor(all['plan-paused'])} sessionId="s1" /></ChatProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     expect(describeCard(container)).toMatchSnapshot();
     // Final review F27 (R17): the field is INSIDE the amber pill, and the
     // pause's reason is still readable beside it in that same pill.
     const pill = screen.getByTestId('plan-paused-reason').closest('.bg-amber-500\\/10');
     expect(pill, 'the reason is not in an amber pill').not.toBeNull();
-    expect(pill).toContainElement(screen.getByLabelText('Tokens to allow'));
-    expect(pill).toContainElement(screen.getByTestId('plan-add-budget'));
+    expect(pill).toContainElement(screen.getByLabelText('New spending limit'));
+    expect(pill).toContainElement(screen.getByTestId('plan-new-limit'));
     expect(screen.getByTestId('plan-paused-reason')).toBeVisible();
     expect(screen.getByTestId('plan-paused-reason').textContent!.length).toBeGreaterThan(10);
   });

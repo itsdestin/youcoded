@@ -143,10 +143,17 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // Specialists plans — real backend as of 2026-09-16 (Task 6: preload,
   // ipc-handlers, remote-shim, remote-server, SessionService.kt); still
   // hand-written so the workbench can show every card state with no running plan.
-  'plans.approve', 'plans.comment', 'plans.addBudget', 'plans.resume', 'plans.stop',
+  'plans.approve', 'plans.comment', 'plans.resume', 'plans.stop',
   // Task 11: the paused card's "Ask the assistant" (plans:ask-assistant).
   'plans.askAssistant',
   'plans.getAutoApprove', 'plans.setAutoApprove', 'on.planEvent',
+  // Specialists plans, spending rework (T7, 2026-09-24) — real backend as of
+  // plans:set-limit / plans:set-step-model landing on all five surfaces;
+  // `plans.addBudget` is GONE (there is no per-step or per-plan token budget
+  // left to add to). Moved out of mock-only.ts's MOCK_ONLY list into this one,
+  // same lifecycle as every row above: the fakes stay hand-written so the
+  // settings popup is reviewable with no running plan.
+  'plans.setLimit', 'plans.setStepModel',
   // Voice prompting (2026-09-05) — no real backend yet, registered in
   // mock-only.ts. Listed so the contract test covers the fake.
   'voice.status', 'voice.download', 'voice.start', 'voice.stop', 'voice.cancel', 'voice.onEvent',
@@ -1839,11 +1846,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   //    `revisedByComment`, and `revisedBy` only appears when the follow-up
   //    turn proposes (a later plans:event). The fake sets `revisedBy` at once
   //    and never posts the revision (that is the assistant's turn).
-  //  - Add budget: the real service raises the limit and leaves the plan
-  //    PAUSED (Continue starts it; tests/plans-lifecycle.integration.test.ts).
-  //    The fake resumes straight away (UX run 1, U7).
+  //  - setLimit/resume(limit): the real service (design §7) refuses a limit
+  //    at or below what the plan already spent, and re-derives the unit
+  //    (dollars/tokens) from the plan's own pricing class rather than taking
+  //    the caller's choice. The fake accepts any positive number in whatever
+  //    unit `PlanCard.tsx` sent, so the settings popup and the paused card's
+  //    new-limit box are reviewable without the real service's arithmetic.
   //  - Transitions are never pushed here; the real host pushes every change.
-  const plansAutoApprove = { underTokens: 0 };
+  const plansAutoApprove = { underUsd: 0 };
   // Decision 35: the same catalog lookup setDelegatedModel uses below, so a
   // step's manually-picked model prints a real name instead of a raw id.
   const labelForCatalogModel = (modelId: string): string =>
@@ -1875,17 +1885,17 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     comment: async (_sessionId: string, planId: string, _text: string) => nextPlan(planId, (p) => ({
       ...p, status: 'stopped', revisedBy: `${p.planId}-r2`,
     })),
-    // WHY this is now a no-op (spending rework stage 1, design §1/§6):
-    // there is no per-step or per-plan token budget left to add to — Add
-    // budget is deleted. Kept only so the mock still answers the
-    // `plans:add-budget` channel until T7 removes it from
-    // `window.claude.plans` everywhere.
-    addBudget: async (_sessionId: string, planId: string, _tokens: number) => nextPlan(planId, (p) => p),
     // UX review 1, U2: resuming keeps the step's finished count and spend —
     // the real host resumes from the journal, it never zeroes progress.
-    resume: async (_sessionId: string, planId: string) => nextPlan(planId, (p) => {
+    // T7 (design §7): an optional `limit` rides the SAME call — the paused
+    // card's "Continue with a new limit" box (PlanCard.tsx `continueWithNewLimit`).
+    resume: async (_sessionId: string, planId: string, limit?: { usd: number } | { tokens: number } | null) => nextPlan(planId, (p) => {
       const idx = p.steps.findIndex((st) => st.status !== 'done');
-      return { ...p, status: 'running', steps: p.steps.map((st, i) => i === idx ? { ...st, status: 'running' } : st) };
+      return {
+        ...p, status: 'running',
+        ...(limit !== undefined ? { spendLimit: limit ?? undefined } : {}),
+        steps: p.steps.map((st, i) => i === idx ? { ...st, status: 'running' } : st),
+      };
     }),
     stop: async (_sessionId: string, planId: string) => nextPlan(planId, (p) => ({
       ...p, status: 'stopped', endedAt: Date.now(),
@@ -1902,11 +1912,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // A refused write answers `{ ok: false }` via `write`, which the bridge
     // turns into its general "Couldn't save" line.
     getAutoApprove: async () => ({ ok: true as const, ...plansAutoApprove }),
-    setAutoApprove: (underTokens: number) => write(() => { plansAutoApprove.underTokens = Math.max(0, Math.floor(underTokens)); }),
-    // Decision 35 (Plan settings) — MOCK_ONLY: no real channel yet
-    // (mock-only.ts). Mutates the fixture record like every other plan
-    // button, so the card lands its NEXT record via the same PLAN_CHANGED
-    // path — the settings popup and inline variants never invent state the
+    // WHY underUsd, not underTokens (spending rework stage 1, design §6/§8):
+    // auto-start reads a dollar figure now.
+    setAutoApprove: (underUsd: number) => write(() => { plansAutoApprove.underUsd = Math.max(0, underUsd); }),
+    // Decision 35 (Plan settings) — real backend as of T7 (plans:set-limit /
+    // plans:set-step-model on all five surfaces). Mutates the fixture record
+    // like every other plan button, so the card lands its NEXT record via the
+    // same PLAN_CHANGED path — the settings popup never invents state the
     // rest of the card doesn't already know how to show.
     setLimit: async (_sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null) =>
       nextPlan(planId, (p) => ({ ...p, spendLimit: limit ?? undefined })),

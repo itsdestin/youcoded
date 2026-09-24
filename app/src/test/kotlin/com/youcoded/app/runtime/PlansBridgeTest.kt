@@ -15,14 +15,17 @@ import org.junit.Test
 class PlansBridgeTest {
 
     @Test
-    fun `names exactly the eight plan request channels`() {
+    fun `names exactly the plan request channels, add-budget gone`() {
         assertEquals(
             setOf(
-                "plans:approve", "plans:comment", "plans:add-budget", "plans:resume",
+                "plans:approve", "plans:comment", "plans:set-limit", "plans:set-step-model", "plans:resume",
                 "plans:stop", "plans:ask-assistant", "plans:get-auto-approve", "plans:set-auto-approve",
             ),
             PlansBridge.CHANNELS,
         )
+        // T7 (design §6, revision 1 D5): there is no per-step or per-plan
+        // token budget left to add to (decision 34).
+        assertFalse(PlansBridge.CHANNELS.contains("plans:add-budget"))
         // The push is outbound-only and never a request.
         assertFalse(PlansBridge.CHANNELS.contains("plans:event"))
     }

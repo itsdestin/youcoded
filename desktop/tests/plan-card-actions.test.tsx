@@ -24,8 +24,8 @@ const CARD = 'call-plan';
 function plan(over: Partial<PlanView> = {}): PlanView {
   return {
     planId: 'plan-1', toolUseId: CARD, title: 'Review two files', status: 'proposed',
-    steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'pending' }],
-    ceilingTokens: 4000, ceilingUsd: null, model: { label: 'm' }, seq: 1,
+    steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'pending' }],
+    model: { label: 'm' }, seq: 1,
     ...over,
   };
 }
@@ -47,8 +47,8 @@ const status = () => screen.getByTestId('plan-block').getAttribute('data-plan-st
 
 function bridge(over: Record<string, unknown> = {}) {
   const plans = {
-    approve: vi.fn(), comment: vi.fn(), addBudget: vi.fn(), resume: vi.fn(), stop: vi.fn(),
-    getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 0 }),
+    approve: vi.fn(), comment: vi.fn(), setLimit: vi.fn(), setStepModel: vi.fn(), resume: vi.fn(), stop: vi.fn(),
+    getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underUsd: 0 }),
     setAutoApprove: vi.fn().mockResolvedValue({ ok: true }),
     ...over,
   };
@@ -89,26 +89,33 @@ describe('card actions land only what the host answered', () => {
     expect(screen.queryByPlaceholderText('What should change?')).toBeNull();
   });
 
-  it('Add budget sends the typed amount and keeps the control open if refused', async () => {
-    const paused = plan({ status: 'paused', steps: [{ ...plan().steps[0], status: 'paused' }], paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget' } });
+  // T7 (design §6/§7, decision 34/37): Add budget is gone — a plan-limit
+  // pause's Continue asks for a NEW total limit, then resumes at it, as ONE
+  // call (`resume(sid, planId, limit)`), never `setLimit` then a separate
+  // `resume`.
+  it('Continue on a spend-limit pause asks for a new limit, then resumes at it in one call; a refusal keeps the box open', async () => {
+    const paused = plan({
+      status: 'paused', estimate: { lowUsd: 0.4, highUsd: 2 },
+      steps: [{ ...plan().steps[0], status: 'paused' }],
+      paused: { stepId: 's1', reason: 'Reached your $5 limit.', kind: 'spend-limit', limit: { usd: 5 } },
+    });
     const plans = bridge({
-      addBudget: vi.fn()
-        .mockResolvedValueOnce({ ok: false, error: 'Add at least 1,200 tokens so the specialist can continue.' })
+      resume: vi.fn()
+        .mockResolvedValueOnce({ ok: false, error: 'Set a limit above the $5.00 already spent.' })
         .mockResolvedValueOnce({ ok: true, plan: plan({ status: 'running', seq: 3 }) }),
     });
     render(<ChatProvider><Card initial={paused} /></ChatProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    fireEvent.change(screen.getByLabelText('Tokens to allow'), { target: { value: '1,000' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    await screen.findByText('Add at least 1,200 tokens so the specialist can continue.');
-    // Final review F1: the press's request id rides along (the same one for this pause).
-    expect(plans.addBudget).toHaveBeenLastCalledWith(S, 'plan-1', 1000, expect.any(String));
-    expect(screen.getByTestId('plan-add-budget')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('New spending limit'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByText('Set a limit above the $5.00 already spent.');
+    expect(plans.resume).toHaveBeenLastCalledWith(S, 'plan-1', { usd: 5 });
+    expect(screen.getByTestId('plan-new-limit')).toBeInTheDocument();
     expect(status()).toBe('paused');
-    fireEvent.change(screen.getByLabelText('Tokens to allow'), { target: { value: '1200' } });
+    fireEvent.change(screen.getByLabelText('New spending limit'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(status()).toBe('running'));
-    expect(plans.addBudget).toHaveBeenLastCalledWith(S, 'plan-1', 1200, plans.addBudget.mock.calls[0][3]);
+    expect(plans.resume).toHaveBeenLastCalledWith(S, 'plan-1', { usd: 10 });
   });
 
   it('Continue (interrupted) and Stop go to resume and stop', async () => {
@@ -211,18 +218,16 @@ describe('card actions land only what the host answered', () => {
   });
 });
 
-// Decision 34, Q-6 (spending rework, 2026-09-24): per-step budgets are gone,
-// so "under N tokens" stopped meaning anything — this row now reads by the
-// plan's own dollar ESTIMATE ("Start plans automatically … under $X"). The
-// wire call is unchanged (`readPlanAutoApprove`/`writePlanAutoApprove`,
-// still `underTokens` on the bridge — a mockup caveat noted in
-// SpecialistsSection.tsx pending the backend rework); only the row's words
-// and unit changed.
+// Decision 34, Q-6 (spending rework, T7 design §6/§8): per-step budgets are
+// gone, so "under N tokens" stopped meaning anything — this row now reads by
+// the plan's own dollar ESTIMATE ("Start plans automatically … under $X"),
+// and the wire carries `underUsd`, a real dollar figure, not the retired
+// `underTokens`.
 describe('Settings → Plans reads and writes through the normalized forms', () => {
   it('shows the saved limit, and flips only after the host saved the change', async () => {
     let resolveWrite!: (v: unknown) => void;
     const plans = bridge({
-      getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 0 }),
+      getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underUsd: 0 }),
       setAutoApprove: vi.fn(() => new Promise((r) => { resolveWrite = r; })),
     });
     render(<PlansSettings />);
@@ -239,7 +244,7 @@ describe('Settings → Plans reads and writes through the normalized forms', () 
 
   it('a refused write shows the reason and leaves the setting as it was', async () => {
     bridge({
-      getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 5 }),
+      getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underUsd: 5 }),
       // What the host answers now (final review F11): the general line, the
       // system's text only in `detail`.
       setAutoApprove: vi.fn().mockResolvedValue({ ok: false, error: "Couldn't save the plan settings. Please try again.", detail: 'ENOSPC: disk full' }),

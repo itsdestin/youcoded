@@ -1488,17 +1488,22 @@ describe('specialists:* channel parity', () => {
 // one push, on every surface. "Exactly" is the point — the plan card and
 // Settings call these and nothing else, so a stray extra `plans:*` string on
 // one surface is a typo that silently breaks a button there. Task 11 (pause
-// handoff §6, revision 4): the eighth, `plans:ask-assistant`, is the card's
-// "Ask the assistant" button; it supersedes the backend design's "exactly seven".
-describe('plans:* channel parity (eight requests + plans:event)', () => {
+// handoff §6, revision 4) added `plans:ask-assistant`, the card's "Ask the
+// assistant" button. T7 (spending rework, design §6, revision 1 D5) removed
+// `plans:add-budget` — there is no per-step or per-plan token budget left to
+// add to (decision 34) — and added `plans:set-limit` (the plan's own spend
+// limit, design §7) and `plans:set-step-model` (a step's model override,
+// design §5).
+describe('plans:* channel parity (requests + plans:event)', () => {
   const REQUESTS = [
-    'plans:add-budget',
     'plans:approve',
     'plans:ask-assistant',
     'plans:comment',
     'plans:get-auto-approve',
     'plans:resume',
     'plans:set-auto-approve',
+    'plans:set-limit',
+    'plans:set-step-model',
     'plans:stop',
   ];
   const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
@@ -1506,34 +1511,36 @@ describe('plans:* channel parity (eight requests + plans:event)', () => {
   /** Every distinct `plans:*` channel string quoted in a source, in either quote style. */
   const plansStrings = (src: string) => [...new Set([...src.matchAll(/['"](plans:[a-z-]+)['"]/g)].map((m) => m[1]))].sort();
 
-  it('the shared list names exactly the eight', async () => {
+  it('the shared list names exactly these, and add-budget is gone', async () => {
     const { PLAN_REQUEST_CHANNELS, PLANS_EVENT_CHANNEL } = await import('../src/main/harness/plans/plan-requests');
     expect([...PLAN_REQUEST_CHANNELS].sort()).toEqual(REQUESTS);
     expect(PLANS_EVENT_CHANNEL).toBe('plans:event');
+    expect(PLAN_REQUEST_CHANNELS).not.toContain('plans:add-budget');
   });
 
-  it('both IPC maps carry the eight plus the push, with the same strings', () => {
+  it('both IPC maps carry every request plus the push, with the same strings', () => {
     for (const src of [read('src', 'main', 'preload.ts'), read('src', 'shared', 'types.ts')]) {
       expect(plansStrings(src)).toEqual([...REQUESTS, 'plans:event'].sort());
     }
   });
 
-  it('remote-shim.ts sends exactly the eight and listens for plans:event', () => {
+  it('remote-shim.ts sends every request and listens for plans:event', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     expect(plansStrings(src)).toEqual([...REQUESTS, 'plans:event'].sort());
     for (const t of REQUESTS) expect(src, `${t} is not invoked by the shim`).toContain(`invoke('${t}'`);
   });
 
-  it('ipc-handlers.ts registers all eight and forwards the push', () => {
+  it('ipc-handlers.ts registers every request and forwards the push', () => {
     const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const c of ['PLANS_APPROVE', 'PLANS_COMMENT', 'PLANS_ADD_BUDGET', 'PLANS_RESUME', 'PLANS_STOP', 'PLANS_ASK_ASSISTANT', 'PLANS_GET_AUTO_APPROVE', 'PLANS_SET_AUTO_APPROVE']) {
+    for (const c of ['PLANS_APPROVE', 'PLANS_COMMENT', 'PLANS_SET_LIMIT', 'PLANS_SET_STEP_MODEL', 'PLANS_RESUME', 'PLANS_STOP', 'PLANS_ASK_ASSISTANT', 'PLANS_GET_AUTO_APPROVE', 'PLANS_SET_AUTO_APPROVE']) {
       expect(src, `IPC.${c} is not handled`).toMatch(new RegExp(`ipcMain\\.handle\\(IPC\\.${c},`));
     }
     expect(src).toContain('IPC.PLANS_EVENT');
     expect(src).toContain(`nativeHost.on('plans-event'`);
+    expect(src).not.toContain('PLANS_ADD_BUDGET');
   });
 
-  it('remote-server.ts has a case for each of the eight, and no other plans:* string', () => {
+  it('remote-server.ts has a case for each request, and no other plans:* string', () => {
     const src = read('src', 'main', 'remote-server.ts');
     for (const t of REQUESTS) expect(src, `${t} has no WS case`).toContain(`case '${t}':`);
     // plans:event appears ONCE: the first transcript page's records, sent to
@@ -1545,7 +1552,7 @@ describe('plans:* channel parity (eight requests + plans:event)', () => {
 
   // Final review F30: SessionService routes `in PlansBridge.CHANNELS`, so the
   // phone answers exactly the set PlansBridge.kt names (and PlansBridgeTest.kt checks).
-  it('SessionService.kt answers the eight (through PlansBridge.CHANNELS), and never names the push', () => {
+  it('SessionService.kt answers every request (through PlansBridge.CHANNELS), and never names the push', () => {
     const kt = kotlin();
     const bridgeKt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'PlansBridge.kt'), 'utf8');
     expect(kt).toMatch(/\bin PlansBridge\.CHANNELS\s*->/);

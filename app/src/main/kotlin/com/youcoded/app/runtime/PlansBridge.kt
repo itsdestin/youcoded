@@ -7,8 +7,8 @@ import org.json.JSONObject
  * Specialists plans (Task 6, design §5) on the phone.
  *
  * Plans run in YouCoded's own assistant runtime, which lives on the computer;
- * this app has none yet. So each of the eight plan requests gets a typed
- * refusal: `{ok:false, unsupported:true, error}`.
+ * this app has none yet. So each plan request gets a typed refusal:
+ * `{ok:false, unsupported:true, error}`.
  *
  * WHY a typed refusal rather than the usual not-implemented answer: the shared
  * React UI resolves this answer for plan channels (remote-shim.ts
@@ -24,7 +24,10 @@ object PlansBridge {
     val CHANNELS: Set<String> = setOf(
         "plans:approve",
         "plans:comment",
-        "plans:add-budget",
+        // T7 (design §6, revision 1 D5): replaces the retired add-budget
+        // channel — there is no per-step or per-plan token budget left to add to.
+        "plans:set-limit",
+        "plans:set-step-model",
         "plans:resume",
         "plans:stop",
         // Task 11 (pause handoff §6): the paused card's "Ask the assistant".

@@ -468,14 +468,16 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   // already saved (appearance:set); a copy queued while offline could replay an old theme over
   // a newer one chosen on the computer meanwhile, so it is never queued.
   'appearance:broadcast': 'user-action',
-  // Final review F5: a plan button is a person's decision (Approve, Add budget,
+  // Final review F5: a plan button is a person's decision (Approve, Set limit,
   // Stop …). Queued while reconnecting, it could run after its own 30 s timer
   // had already told the card it failed — so it is refused on the spot
   // instead (invoke rejects with REMOTE_NOT_SENT). Reading the setting is safe
   // to send again.
   'plans:approve': 'user-action',
   'plans:comment': 'user-action',
-  'plans:add-budget': 'user-action',
+  // T7 (design §6, revision 1 D5): replaces `plans:add-budget`.
+  'plans:set-limit': 'user-action',
+  'plans:set-step-model': 'user-action',
   'plans:resume': 'user-action',
   'plans:stop': 'user-action',
   'plans:ask-assistant': 'user-action',
@@ -781,7 +783,9 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
 export const RESOLVE_UNSUPPORTED: ReadonlySet<string> = new Set([
   'plans:approve',
   'plans:comment',
-  'plans:add-budget',
+  // T7 (design §6, revision 1 D5): replaces `plans:add-budget`.
+  'plans:set-limit',
+  'plans:set-step-model',
   'plans:resume',
   'plans:stop',
   // Task 11 (pause handoff §6): "Ask the assistant".
@@ -3146,17 +3150,25 @@ export function installShim(): void {
     // the desktop's WS case hands them to the same shared handler main uses.
     // Every answer resolves, a refusal or `unsupported` included (see
     // RESOLVE_UNSUPPORTED above): the card reads them as values. On the phone's
-    // own bridge the eight answer `unsupported` (SessionService.kt).
+    // own bridge every one answers `unsupported` (SessionService.kt).
     plans: {
       approve: (sessionId: string, planId: string) => invoke('plans:approve', { sessionId, planId }),
       comment: (sessionId: string, planId: string, text: string) => invoke('plans:comment', { sessionId, planId, text }),
-      // Final review F1: `requestId` names one press, so a Retry adds nothing twice.
-      addBudget: (sessionId: string, planId: string, tokens: number, requestId?: string) => invoke('plans:add-budget', { sessionId, planId, tokens, requestId }),
-      resume: (sessionId: string, planId: string) => invoke('plans:resume', { sessionId, planId }),
+      // T7 (design §6/§7, decision 34/35): replaces `addBudget` — the plan's
+      // own spend limit is the one number a user sets now.
+      setLimit: (sessionId: string, planId: string, limit: { usd: number } | { tokens: number } | null) =>
+        invoke('plans:set-limit', { sessionId, planId, limit }),
+      setStepModel: (sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null) =>
+        invoke('plans:set-step-model', { sessionId, planId, stepId, model }),
+      // T7 (design §7): an optional new limit rides the SAME lease-taking
+      // write — Continue-with-a-new-limit is one call.
+      resume: (sessionId: string, planId: string, limit?: { usd: number } | { tokens: number } | null) =>
+        invoke('plans:resume', { sessionId, planId, limit }),
       stop: (sessionId: string, planId: string) => invoke('plans:stop', { sessionId, planId }),
       askAssistant: (sessionId: string, planId: string, question?: string) => invoke('plans:ask-assistant', { sessionId, planId, question }),
       getAutoApprove: () => invoke('plans:get-auto-approve', {}),
-      setAutoApprove: (underTokens: number) => invoke('plans:set-auto-approve', { underTokens }),
+      // WHY underUsd, not underTokens (spending rework stage 1, design §6/§8).
+      setAutoApprove: (underUsd: number) => invoke('plans:set-auto-approve', { underUsd }),
     },
     // Local llama.cpp engine (Plan B). Server pushes engine:install-progress /
     // engine:status-changed via the WS dispatcher; subscriptions return an

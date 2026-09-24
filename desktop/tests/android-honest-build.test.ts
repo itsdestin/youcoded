@@ -53,13 +53,15 @@ describe('Android builds tell the truth about themselves', () => {
   });
 
   it('answers every plan request with a typed unsupported refusal, in its own branch', () => {
-    // Specialists plans (Task 6; Task 11 added Ask): the phone has no native runtime, so all eight
-    // plan calls answer {ok:false, unsupported:true, error} — the card reads that
-    // as "disable the controls", Settings as "hide Plans". Its OWN branch, so the
-    // `-> {` cannot capture a neighbouring comma list (see the engine:* branch).
+    // Specialists plans (Task 6; Task 11 added Ask; T7 swapped add-budget for
+    // set-limit/set-step-model, design §6): the phone has no native runtime, so
+    // every plan call answers {ok:false, unsupported:true, error} — the card
+    // reads that as "disable the controls", Settings as "hide Plans". Its OWN
+    // branch, so the `-> {` cannot capture a neighbouring comma list (see the
+    // engine:* branch).
     const service = read('app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
     const labels = [
-      'plans:approve', 'plans:comment', 'plans:add-budget', 'plans:resume',
+      'plans:approve', 'plans:comment', 'plans:set-limit', 'plans:set-step-model', 'plans:resume',
       'plans:stop', 'plans:ask-assistant', 'plans:get-auto-approve', 'plans:set-auto-approve',
     ];
     // Final review F30: the branch is routed by PlansBridge.CHANNELS itself —

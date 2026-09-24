@@ -27,15 +27,21 @@ const S = 's1';
 const CARD = 'call-plan';
 const ASK = 'Ask the assistant';
 
+// T7 (design §1/§2, decision 34): `budget` is a retired pause kind (nothing
+// is rationed per step or per plan any more) — the default fixture is now
+// `specialist-error`, a kind that still routes to the generic pause strip
+// (Ask + Stop + Continue), same as `budget` used to. `spend-limit` (the ONE
+// kind that still hard-stops a plan) deliberately does NOT: decision 37 R-4
+// hides Ask on it — see plan-card-final-review.test.tsx for that row.
 function paused(pausedOver: Partial<NonNullable<PlanView['paused']>> = {}, over: Partial<PlanView> = {}): PlanView {
   return {
     planId: 'plan-1', toolUseId: CARD, title: 'Review two files', status: 'paused',
     steps: [
-      { id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'paused', done: 1, usedTokens: 4000 },
-      { id: 's2', kind: 'combine', title: 'Combine', specialist: 'worker', fanOut: 1, budgetTokens: 4000, status: 'pending' },
+      { id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'paused', done: 1, usedTokens: 4000 },
+      { id: 's2', kind: 'combine', title: 'Combine', specialist: 'worker', fanOut: 1, status: 'pending' },
     ],
-    ceilingTokens: 8000, ceilingUsd: null, model: { label: 'Model' }, usedTokens: 4000, seq: 4,
-    paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget', minimumAddTokens: 1200, actions: ['add_budget', 'stop'], ...pausedOver },
+    model: { label: 'Model' }, usedTokens: 4000, seq: 4,
+    paused: { stepId: 's1', reason: 'a specialist ran into an error.', kind: 'specialist-error', actions: ['continue', 'stop'], ...pausedOver },
     ...over,
   };
 }
@@ -65,9 +71,9 @@ let api: Record<string, ReturnType<typeof vi.fn>>;
 beforeEach(() => {
   resetPlanSupportForTests();
   api = {
-    approve: vi.fn(), comment: vi.fn(), resume: vi.fn(), stop: vi.fn(), addBudget: vi.fn(),
+    approve: vi.fn(), comment: vi.fn(), resume: vi.fn(), stop: vi.fn(), setLimit: vi.fn(), setStepModel: vi.fn(),
     askAssistant: vi.fn(async () => ({ ok: true, plan: paused({ handoff: { state: 'pending' } }, { seq: 5 }) })),
-    getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 0 }),
+    getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underUsd: 0 }),
     setAutoApprove: vi.fn().mockResolvedValue({ ok: true }),
   };
   (window as any).claude = { plans: api };
@@ -76,12 +82,12 @@ afterEach(() => { cleanup(); delete (window as any).claude; });
 
 describe('every paused card offers Ask, as the light button on the far left (§6)', () => {
   it.each([
-    ['a budget kind', paused(), [ASK, 'Stop', 'Add budget']],
-    ['a Stop-only kind', paused({ kind: 'iteration-cap', actions: ['stop'], minimumAddTokens: undefined, repeat: { rounds: 3, until: 'tests pass' } }), [ASK, 'Stop']],
-    ['the user-stopped state', paused({ kind: 'specialist-stopped', actions: ['continue', 'stop'], minimumAddTokens: undefined }), [ASK, 'Stop', 'Continue']],
-    ['an answered question with no recommendation', paused({ handoff: { state: 'answered' } }), [ASK, 'Stop', 'Add budget']],
-    ['a recommendation (asking again replaces it)', paused({ handoff: { state: 'answered', recommendation: { action: 'add_budget', addTokens: 3000, message: 'm' } } }), [ASK, 'Stop', 'Add budget']],
-    ['a record from before `actions`', paused({ actions: undefined }), [ASK, 'Stop', 'Add budget']],
+    ['a specialist-error kind', paused(), [ASK, 'Stop', 'Continue']],
+    ['a Stop-only kind', paused({ kind: 'iteration-cap', actions: ['stop'], repeat: { rounds: 3, until: 'tests pass' } }), [ASK, 'Stop']],
+    ['the user-stopped state', paused({ kind: 'specialist-stopped', actions: ['continue', 'stop'] }), [ASK, 'Stop', 'Continue']],
+    ['an answered question with no recommendation', paused({ handoff: { state: 'answered' } }), [ASK, 'Stop', 'Continue']],
+    ['a recommendation (asking again replaces it)', paused({ handoff: { state: 'answered', recommendation: { action: 'continue', message: 'm' } } }), [ASK, 'Stop', 'Continue']],
+    ['a record from before `actions`', paused({ actions: undefined }), [ASK, 'Stop', 'Continue']],
   ])('%s', (_what, plan, shown) => {
     show(plan);
     expect(buttons()).toEqual(shown);
@@ -102,7 +108,7 @@ describe('every paused card offers Ask, as the light button on the far left (§6
   it('a pause arriving, or changing, never asks the assistant by itself', async () => {
     show(paused());
     await waitFor(() => expect(api.getAutoApprove).toHaveBeenCalled());
-    act(() => { push(paused({ reason: 'still out of room', minimumAddTokens: 9_000 }, { seq: 9 })); });
+    act(() => { push(paused({ reason: 'still out of room' }, { seq: 9 })); });
     await waitFor(() => expect(screen.getByTestId('plan-paused-reason')).toHaveTextContent('still out of room'));
     expect(api.askAssistant).not.toHaveBeenCalled();
     expect(block()).not.toHaveAttribute('data-handoff');
@@ -123,7 +129,7 @@ describe('every paused card offers Ask, as the light button on the far left (§6
 
   it('is hidden when the conversation\'s model cannot use tools (review 4-9)', () => {
     show(paused({ askUnavailable: true }));
-    expect(buttons()).toEqual(['Stop', 'Add budget']);
+    expect(buttons()).toEqual(['Stop', 'Continue']);
   });
 
   it('is not offered while a question is pending (§6)', () => {
@@ -167,7 +173,7 @@ describe('pressing Ask opens an optional question box (decision 20)', () => {
     fireEvent.change(within(box()).getByPlaceholderText(PLACEHOLDER), { target: { value: 'draft' } });
     fireEvent.click(within(box()).getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByTestId('plan-ask-box')).toBeNull();
-    expect(buttons()).toEqual([ASK, 'Stop', 'Add budget']);
+    expect(buttons()).toEqual([ASK, 'Stop', 'Continue']);
     expect(api.askAssistant).not.toHaveBeenCalled();
   });
 
@@ -192,7 +198,7 @@ describe('pressing Ask opens an optional question box (decision 20)', () => {
     rerender(<ChatProvider><Card initial={paused({ handoff: { state: 'answered', question: 'Why?' } }, { seq: 9 })} /></ChatProvider>);
     await waitFor(() => expect(screen.queryByTestId('plan-handoff-pending')).toBeNull());
     expect(screen.queryByTestId('plan-ask-box')).toBeNull();
-    expect(buttons()).toEqual([ASK, 'Stop', 'Add budget']);
+    expect(buttons()).toEqual([ASK, 'Stop', 'Continue']);
   });
 
   it('Send with a question sends it trimmed; Enter sends too, Shift+Enter does not', async () => {
@@ -266,7 +272,7 @@ describe('a question cleared without an answer shows an error line with Retry (�
     const line = screen.getByTestId('plan-ask-error');
     expect(line).toHaveTextContent("The assistant didn't get to your question within 10 minutes.");
     // Retry is the ask; the default buttons stay, Ask itself does not repeat.
-    expect(buttons()).toEqual(['Stop', 'Add budget', 'Retry']);
+    expect(buttons()).toEqual(['Stop', 'Continue', 'Retry']);
     fireEvent.click(within(line).getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(api.askAssistant).toHaveBeenCalledWith(S, 'plan-1', 'Why did it stop?'));
     await waitFor(() => expect(screen.queryByTestId('plan-ask-error')).toBeNull());

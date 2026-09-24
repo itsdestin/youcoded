@@ -89,12 +89,15 @@ vi.mock('../src/main/harness/native-session-host', async () => {
 
     planViewsFor = vi.fn(async (_id: string): Promise<any[]> => []);
 
-    // The seven plan actions (Task 4 host API).
+    // The plan actions (Task 4 host API; T7 swapped addPlanBudget for
+    // setPlanLimit/setPlanStepModel, design §6).
     approvePlan = vi.fn();
 
     commentOnPlan = vi.fn();
 
-    addPlanBudget = vi.fn();
+    setPlanLimit = vi.fn();
+
+    setPlanStepModel = vi.fn();
 
     resumePlan = vi.fn();
 
@@ -163,7 +166,8 @@ function buildDesktop() {
 const RENDERER_CALLS: Record<string, (plans: any) => unknown> = {
   'plans:approve': (p) => p.approve('s1', 'p1'),
   'plans:comment': (p) => p.comment('s1', 'p1', 'use the other folder'),
-  'plans:add-budget': (p) => p.addBudget('s1', 'p1', 1200, 'press-1'),
+  'plans:set-limit': (p) => p.setLimit('s1', 'p1', { usd: 5 }),
+  'plans:set-step-model': (p) => p.setStepModel('s1', 'p1', 'step1', { providerId: 'openrouter', modelId: 'm' }),
   'plans:resume': (p) => p.resume('s1', 'p1'),
   'plans:stop': (p) => p.stop('s1', 'p1'),
   'plans:ask-assistant': (p) => p.askAssistant('s1', 'p1', 'why did it stop?'),
@@ -188,7 +192,8 @@ const REQUEST_PAYLOADS: Record<string, any> = Object.fromEntries(Object.entries(
 const HOST_METHOD: Record<string, string> = {
   'plans:approve': 'approvePlan',
   'plans:comment': 'commentOnPlan',
-  'plans:add-budget': 'addPlanBudget',
+  'plans:set-limit': 'setPlanLimit',
+  'plans:set-step-model': 'setPlanStepModel',
   'plans:resume': 'resumePlan',
   'plans:stop': 'stopPlan',
   'plans:ask-assistant': 'askAssistantAboutPlan',
@@ -198,8 +203,11 @@ const HOST_METHOD: Record<string, string> = {
 const EXPECTED_ARGS: Record<string, unknown[]> = {
   'plans:approve': ['s1', 'p1'],
   'plans:comment': ['s1', 'p1', 'use the other folder'],
-  'plans:add-budget': ['s1', 'p1', 1200, 'press-1'],
-  'plans:resume': ['s1', 'p1'],
+  'plans:set-limit': ['s1', 'p1', { usd: 5 }],
+  'plans:set-step-model': ['s1', 'p1', 'step1', { providerId: 'openrouter', modelId: 'm' }],
+  // T7 (design §7): the wire always carries `limit`, even absent — the SAME
+  // call Continue-with-a-new-limit uses; an ordinary Continue sends `undefined`.
+  'plans:resume': ['s1', 'p1', undefined],
   'plans:stop': ['s1', 'p1'],
   'plans:ask-assistant': ['s1', 'p1', 'why did it stop?'],
   'plans:get-auto-approve': [],
@@ -208,8 +216,8 @@ const EXPECTED_ARGS: Record<string, unknown[]> = {
 
 /** Host behaviours every channel must survive the same way on both transports. */
 const SCRIPTS: Array<[string, (ch: string) => () => Promise<unknown>]> = [
-  ['ok', (ch) => async () => (ch === 'plans:get-auto-approve' ? { ok: true, underTokens: 4000 } : ch === 'plans:set-auto-approve' ? { ok: true } : { ok: true, plan: plan(3) })],
-  ['a refusal', () => async () => ({ ok: false, error: 'Budget can only be added to a paused plan.' })],
+  ['ok', (ch) => async () => (ch === 'plans:get-auto-approve' ? { ok: true, underUsd: 4000 } : ch === 'plans:set-auto-approve' ? { ok: true } : { ok: true, plan: plan(3) })],
+  ['a refusal', () => async () => ({ ok: false, error: 'The limit must be a positive number (or none, to remove it).' })],
   ['unsupported', () => async () => ({ ok: false, unsupported: true, error: "Plans aren't available in this session." })],
   ['a throw', () => async () => { throw new Error('EACCES: journal locked'); }],
   ['a malformed answer', () => async () => undefined],
@@ -229,8 +237,9 @@ beforeEach(() => {
 });
 
 describe('the shared plan request handler', () => {
-  it('names exactly the eight channels', () => {
+  it('names exactly these channels, add-budget gone', () => {
     expect([...PLAN_REQUEST_CHANNELS].sort()).toEqual(Object.keys(HOST_METHOD).sort());
+    expect(PLAN_REQUEST_CHANNELS).not.toContain('plans:add-budget');
   });
 
   it('a host that is not there yet answers a plain failure, never unsupported', async () => {
@@ -457,7 +466,7 @@ describe('a remote first page brings its plan records along', () => {
 
   it('a record the phone already holds changes nothing', () => {
     const S = 'sess';
-    const record = { ...plan(4), toolUseId: 'call-plan', title: 't', ceilingTokens: 1, ceilingUsd: null, model: { label: 'm' } } as any;
+    const record = { ...plan(4), toolUseId: 'call-plan', title: 't', model: { label: 'm' } } as any;
     const base = [
       { type: 'SESSION_INIT', sessionId: S },
       { type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'u', toolUseId: 'call-plan', toolName: 'propose_plan', toolInput: {} },

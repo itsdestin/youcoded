@@ -22,7 +22,6 @@ import { PlanService, type PlanExecutorHooks } from '../src/main/harness/plans/p
 import { BUILTIN_ROSTER, resolveSpecialist } from '../src/main/harness/specialists/registry';
 import { DelegatedModels } from '../src/main/harness/specialists/delegated-models';
 import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
-import { planCeilingTokens } from '../src/main/harness/plans/plan-budget';
 import { pausedRouting } from '../src/main/harness/plans/pause-routing';
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
 import type { ExecutionManifest, PlanRecord, PlanRef } from '../src/main/harness/plans/types';
@@ -33,8 +32,10 @@ import type { ExecutionManifest, PlanRecord, PlanRef } from '../src/main/harness
 const SIGN_IN = 'Sign in with ChatGPT in Assistant settings → Cloud providers to use this model.';
 const SID = 'root';
 const REF: PlanRef = { cwd: '/proj', sessionId: SID };
+// T7 (spending rework, design §1/§2, decision 34): `budget_tokens` is gone
+// from the grammar — a step no longer predicts its own cost.
 const DOC: PlanDocumentV1 = { goal: 'summarise the repo', steps: [
-  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a'] },
+  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a'] },
 ] };
 
 let root: string; let home: NativeHome; let registry: ProviderRegistry;
@@ -70,17 +71,10 @@ function port(): PlanHostPort {
     noticeWouldWait: () => false,
     queuePlanNotice: () => false,
     withdrawPlanNotice: () => false,
+    // WHY no probeSession any more (spending rework stage 1, design §1):
+    // resolveManifest no longer measures anything through an unwired session
+    // before freezing a step's binding — removed from PlanHostPort entirely.
     startChild: async () => { startChildCalls += 1; throw new Error('a specialist must never be minted for a provider that cannot run'); },
-    probeSession: async () => {
-      if (!signedIn) throw new Error('nothing may be measured for a specialist that cannot run');
-      return {
-        session: {
-          planSetupRequest: async () => ({ system: 'x'.repeat(500), tools: [] }),
-          planNextRequestBound: async () => ({ ok: true, tokens: 500 }),
-        } as any,
-        dispose: () => {},
-      };
-    },
   };
 }
 
@@ -98,14 +92,17 @@ function service(bridge: PlanHostBridge): PlanService {
   });
 }
 
+// T7 (design §2): `manifest.specialists[id]` is now just the definition
+// fingerprint (drift detection); a leaf step's frozen binding/label/pricing
+// live under `manifest.steps[leafStepId]` instead of the old per-specialist
+// `binding`/`pricing`/`setupTokens`/`approximateLimit`.
 const MANIFEST: ExecutionManifest = {
   modelLabel: 'gpt-5.6-terra',
   specialists: {
-    reviewer: {
-      definitionFingerprint: definitionFingerprint(resolveSpecialist('reviewer')!),
-      binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' },
-      pricing: null, setupTokens: 1000, approximateLimit: true,
-    },
+    reviewer: { definitionFingerprint: definitionFingerprint(resolveSpecialist('reviewer')!) },
+  },
+  steps: {
+    s1: { binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' }, label: 'gpt-5.6-terra', pricing: null, source: 'default' },
   },
   permissionFingerprint: 'perm',
 };
@@ -126,7 +123,7 @@ describe('a ChatGPT-bound plan while signed out (decisions 25 + 26)', () => {
     try {
       await expect(service(new PlanHostBridge(port())).propose({
         sessionId: SID, toolUseId: 'tool-1', document: DOC, maximumAttempts: 2,
-        ceilingTokens: 1000, maxFanOut: 2, signal: new AbortController().signal, commit: () => true,
+        maxFanOut: 2, signal: new AbortController().signal, commit: () => true,
       })).rejects.toThrow(`The "reviewer" specialist can't run right now: ${SIGN_IN} The plan wasn't created.`);
       expect((globalThis.fetch as any).mock.calls).toHaveLength(0);
     } finally { vi.unstubAllGlobals(); }
@@ -143,7 +140,7 @@ describe('a ChatGPT-bound plan while signed out (decisions 25 + 26)', () => {
     signedIn = true;
     const view = await svc.propose({
       sessionId: SID, toolUseId: 'tool-2', document: DOC, maximumAttempts: 2,
-      ceilingTokens: 1000, maxFanOut: 2, signal: new AbortController().signal, commit: () => true,
+      maxFanOut: 2, signal: new AbortController().signal, commit: () => true,
     });
     expect(view.status).toBe('proposed');
     signedIn = false;                                   // he signs out before pressing Approve
@@ -157,7 +154,7 @@ describe('a ChatGPT-bound plan while signed out (decisions 25 + 26)', () => {
     signedIn = true;
     const view = await svc.propose({
       sessionId: SID, toolUseId: 'tool-3', document: DOC, maximumAttempts: 2,
-      ceilingTokens: 1000, maxFanOut: 2, signal: new AbortController().signal, commit: () => true,
+      maxFanOut: 2, signal: new AbortController().signal, commit: () => true,
     });
     await bridge.journal.mutate(REF, (file) => {
       const p = file.plans.find((x) => x.planId === view.planId)!;
@@ -173,7 +170,8 @@ describe('a ChatGPT-bound plan while signed out (decisions 25 + 26)', () => {
     const bridge = new PlanHostBridge(port(), { settleDeadlineMs: 60, heartbeatMs: 10_000 });
     const rec: PlanRecord = {
       planId: 'p1', toolUseId: 'tool-p1', document: DOC, maximumAttempts: 1, maxFanOut: 1,
-      ceilingTokens: planCeilingTokens(DOC, MANIFEST), ceilingUsd: null, usedTokens: 0,
+      // T7 (design §2): no ceiling left to compute — `usedTokens` alone.
+      usedTokens: 0,
       // Approve takes its lease straight from 'proposed' (plan-service
       // startRun), so this is the plan exactly as his press left it.
       status: 'proposed', seq: 1, createdAt: 1, manifest: MANIFEST,

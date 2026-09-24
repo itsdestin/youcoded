@@ -37,8 +37,8 @@ function child(over: Partial<PlanChildView> = {}): PlanChildView {
 function plan(over: Partial<PlanView> = {}): PlanView {
   return {
     planId: 'plan-1', toolUseId: CARD, title: 'Review two files', status: 'proposed',
-    steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'pending' }],
-    ceilingTokens: 42000, ceilingUsd: null, model: { label: 'GPT-5.1 (ChatGPT)' }, seq: 1,
+    steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'pending' }],
+    model: { label: 'GPT-5.1 (ChatGPT)' }, seq: 1,
     ...over,
   };
 }
@@ -47,11 +47,15 @@ type PauseFacts = Omit<NonNullable<PlanView['paused']>, 'stepId' | 'reason'>;
 const UNKNOWN: PauseFacts = { kind: 'unknown-outcome', tool: 'Bash' };
 const CAP: PauseFacts = { kind: 'iteration-cap', repeat: { rounds: 3, until: 'every auth test passes' } };
 
-function paused(reason: string, extra: Partial<PlanView> = {}, minimumAddTokens?: number, facts: PauseFacts = { kind: 'budget' }): PlanView {
+// T7 (design §1/§2, decision 34): `minimumAddTokens` is a retired field —
+// nothing is rationed per step or per plan any more, so there is no minimum
+// top-up left to size. `budget` is a retired kind too; `specialist-error`
+// (the generic strip) is the default now.
+function paused(reason: string, extra: Partial<PlanView> = {}, facts: PauseFacts = { kind: 'specialist-error' }): PlanView {
   return plan({
     status: 'paused', usedTokens: 4000,
     steps: [{ ...plan().steps[0], status: 'paused', done: 1, usedTokens: 4000 }],
-    paused: { stepId: 's1', reason, ...facts, ...(minimumAddTokens !== undefined ? { minimumAddTokens } : {}) },
+    paused: { stepId: 's1', reason, ...facts },
     ...extra,
   });
 }
@@ -77,8 +81,8 @@ const buttons = () => within(block()).queryAllByRole('button').map((b) => (b.tex
 
 function bridge(over: Record<string, unknown> = {}) {
   const plans = {
-    approve: vi.fn(), comment: vi.fn(), addBudget: vi.fn(), resume: vi.fn(), stop: vi.fn(),
-    getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 0 }),
+    approve: vi.fn(), comment: vi.fn(), setLimit: vi.fn(), setStepModel: vi.fn(), resume: vi.fn(), stop: vi.fn(),
+    getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underUsd: 0 }),
     setAutoApprove: vi.fn().mockResolvedValue({ ok: true }),
     ...over,
   };
@@ -138,7 +142,7 @@ describe('2. a failed card explains itself', () => {
 
   it('a salvaged card with no steps does not print a meaningless 0-token limit', () => {
     bridge();
-    render(<ChatProvider><Card initial={plan({ status: 'failed', steps: [], ceilingTokens: 0, failure: { detail: 'The saved plan file is damaged.' } })} /></ChatProvider>);
+    render(<ChatProvider><Card initial={plan({ status: 'failed', steps: [], failure: { detail: 'The saved plan file is damaged.' } })} /></ChatProvider>);
     expect(screen.queryByTestId('plan-ceiling')).toBeNull();
   });
 });
@@ -146,7 +150,7 @@ describe('2. a failed card explains itself', () => {
 describe('3. an unknown-outcome pause warns before Continue', () => {
   it('names the action in plain words, warns it may repeat, and offers Stop and Continue', async () => {
     const plans = bridge({ resume: vi.fn().mockResolvedValue({ ok: true, plan: plan({ status: 'running', seq: 2 }) }) });
-    render(<ChatProvider><Card initial={paused(UNKNOWN_REASON, {}, undefined, UNKNOWN)} /></ChatProvider>);
+    render(<ChatProvider><Card initial={paused(UNKNOWN_REASON, {}, UNKNOWN)} /></ChatProvider>);
     const reason = screen.getByTestId('plan-paused-reason');
     expect(reason).toHaveTextContent('Paused — a specialist in step 1 stopped while running a command, and it isn\'t known whether that finished.');
     expect(screen.getByTestId('plan-paused-warning')).toHaveTextContent('Continue may run it again. Check first whether it already happened.');
@@ -160,12 +164,12 @@ describe('3. an unknown-outcome pause warns before Continue', () => {
   it('keeps the cut-off note the backend appended', () => {
     bridge();
     const note = '1 other specialist in step "s1" was cut off mid-request, and it isn\'t known whether that request finished; Continue lets it pick up from what it recorded.';
-    render(<ChatProvider><Card initial={paused(`${UNKNOWN_REASON} ${note}`, {}, undefined, { ...UNKNOWN, note })} /></ChatProvider>);
+    render(<ChatProvider><Card initial={paused(`${UNKNOWN_REASON} ${note}`, {}, { ...UNKNOWN, note })} /></ChatProvider>);
     expect(screen.getByTestId('plan-paused-reason')).toHaveTextContent(note);
   });
 
   it('the header says to check before continuing', () => {
-    expect(planDisplay({}, paused(UNKNOWN_REASON, {}, undefined, UNKNOWN)).detail).toBe('paused — check before continuing');
+    expect(planDisplay({}, paused(UNKNOWN_REASON, {}, UNKNOWN)).detail).toBe('paused — check before continuing');
   });
 });
 
@@ -176,103 +180,51 @@ describe('5. an iteration-cap pause offers only Stop', () => {
     expect(screen.getByTestId('plan-paused-reason')).toHaveTextContent('Paused — the repeated steps ran 3 times without meeting their goal ("every auth test passes").');
     expect(screen.getByTestId('plan-paused-warning')).toHaveTextContent('To keep going, ask the assistant for a revised plan.');
     expect(buttons().filter((b) => ['Stop', 'Add budget', 'Continue'].includes(b))).toEqual(['Stop']);
-    expect(planDisplay({}, paused(CAP_REASON, {}, undefined, CAP)).detail).toBe('paused — needs a revised plan');
+    expect(planDisplay({}, paused(CAP_REASON, {}, CAP)).detail).toBe('paused — needs a revised plan');
   });
 });
 
-describe('6. a minimum top-up', () => {
-  const budgetPause = () => paused('step 1 hit its limit.', {}, 12500);
+// T7 (spending rework, design §1/§2/§7, decision 34): Add budget — a
+// per-step top-up with a host-computed minimum — is gone entirely. A
+// `spend-limit` pause's own new-limit box (Continue asks for a new TOTAL
+// limit, then resumes at it as ONE call: `resume(sid, planId, limit)`) is
+// the one remaining "ask for a number, then Continue" flow, and it is
+// pinned in `plan-card-actions.test.tsx` ("Continue on a spend-limit pause
+// asks for a new limit..."). This section covers what that test does not:
+// the box stays open and visibly working while the single resume call is
+// slow, rather than a silent row of dead buttons (Destin, 2026-09-19:
+// "adding budget to a specialist in a plan seems to completely freeze the
+// app" — the old two-call Add budget shape was the actual cause; one call
+// removes the failure mode this test used to merely paper over).
+describe('6. a spend-limit pause’s new-limit box', () => {
+  const spendLimitPause = () => paused('Reached your $5 limit.', { estimate: { lowUsd: 0.4, highUsd: 2 } }, { kind: 'spend-limit', limit: { usd: 5 } });
 
-  it('starts the field at the minimum and says so', () => {
-    bridge();
-    render(<ChatProvider><Card initial={budgetPause()} /></ChatProvider>);
-    fireEvent.click(within(block()).getByRole('button', { name: 'Add budget' }));
-    expect(screen.getByLabelText('Tokens to allow')).toHaveValue('12,500');
-    expect(screen.getByTestId('plan-add-minimum')).toHaveTextContent('Add at least 12,500 tokens to continue.');
-  });
-
-  it('starts at the minimum even when the step’s own cap is larger', () => {
-    bridge();
-    const big = paused('step 1 hit its limit.', {}, 12500);
-    big.steps = [{ ...big.steps[0], budgetTokens: 20000 }];
-    render(<ChatProvider><Card initial={big} /></ChatProvider>);
-    fireEvent.click(within(block()).getByRole('button', { name: 'Add budget' }));
-    expect(screen.getByLabelText('Tokens to allow')).toHaveValue('12,500');
-  });
-
-  it('refuses a smaller amount before sending anything', () => {
-    const plans = bridge();
-    render(<ChatProvider><Card initial={budgetPause()} /></ChatProvider>);
-    fireEvent.click(within(block()).getByRole('button', { name: 'Add budget' }));
-    fireEvent.change(screen.getByLabelText('Tokens to allow'), { target: { value: '5,000' } });
-    const cont = within(screen.getByTestId('plan-add-budget')).getByRole('button', { name: 'Continue' });
-    expect(cont).toBeDisabled();
-    expect(within(screen.getByTestId('plan-add-minimum')).getByRole('alert')).toHaveTextContent('Add at least 12,500 tokens to continue.');
-    fireEvent.keyDown(screen.getByLabelText('Tokens to allow'), { key: 'Enter' });
-    fireEvent.click(cont);
-    expect(plans.addBudget).not.toHaveBeenCalled();
-  });
-
-  it('without a minimum the field keeps the step’s own cap and no line shows', () => {
-    bridge();
-    render(<ChatProvider><Card initial={paused('step 1 hit its limit.')} /></ChatProvider>);
-    fireEvent.click(within(block()).getByRole('button', { name: 'Add budget' }));
-    expect(screen.getByLabelText('Tokens to allow')).toHaveValue('2,000');
-    expect(screen.queryByTestId('plan-add-minimum')).toBeNull();
-  });
-
-  it('a budget the host accepted continues the plan (the host leaves it paused until Continue)', async () => {
-    const stillPaused = { ...budgetPause(), ceilingTokens: 54500, seq: 2 };
-    const plans = bridge({
-      addBudget: vi.fn().mockResolvedValue({ ok: true, plan: stillPaused }),
-      resume: vi.fn().mockResolvedValue({ ok: true, plan: plan({ status: 'running', seq: 3 }) }),
-    });
-    render(<ChatProvider><Card initial={budgetPause()} /></ChatProvider>);
-    fireEvent.click(within(block()).getByRole('button', { name: 'Add budget' }));
-    fireEvent.click(within(screen.getByTestId('plan-add-budget')).getByRole('button', { name: 'Continue' }));
-    await waitFor(() => expect(status()).toBe('running'));
-    expect(plans.addBudget).toHaveBeenCalledWith(S, 'plan-1', 12500, expect.any(String));
-    expect(plans.resume).toHaveBeenCalledWith(S, 'plan-1');
-  });
-
-  it('keeps saying it is working while the slow half of Add budget runs', async () => {
-    // Destin, 2026-09-19: "adding budget to a specialist in a plan seems to
-    // completely freeze the app". It does not freeze — Add budget is TWO host
-    // calls, and the second (Continue) re-resolves the plan's manifest, which
-    // opens a probe session per specialist and can take minutes. The card
-    // closed its Add budget box the moment the FIRST call landed, so the whole
-    // slow half was a pause strip with every button disabled and nothing
-    // saying why. Disabled and silent for minutes reads as frozen.
+  it('keeps saying it is working while the single resume call is out, then closes once the plan is running', async () => {
     let releaseResume!: (v: unknown) => void;
     const resume = vi.fn().mockReturnValue(new Promise((r) => { releaseResume = r; }));
-    const plans = bridge({
-      addBudget: vi.fn().mockResolvedValue({ ok: true, plan: { ...budgetPause(), ceilingTokens: 54500, seq: 2 } }),
-      resume,
-    });
-    render(<ChatProvider><Card initial={budgetPause()} /></ChatProvider>);
-    fireEvent.click(within(block()).getByRole('button', { name: 'Add budget' }));
-    fireEvent.click(within(screen.getByTestId('plan-add-budget')).getByRole('button', { name: 'Continue' }));
-    // The first call has landed and the second is in flight.
-    await waitFor(() => expect(plans.resume).toHaveBeenCalled());
-    // The card must still be visibly working, not a silent row of dead buttons.
-    expect(screen.getByTestId('plan-add-budget')).toBeInTheDocument();
-    expect(within(screen.getByTestId('plan-add-budget')).getByRole('button', { name: 'Continuing…' })).toBeDisabled();
+    bridge({ resume });
+    render(<ChatProvider><Card initial={spendLimitPause()} /></ChatProvider>);
+    fireEvent.click(within(block()).getByRole('button', { name: 'Continue' }));
+    fireEvent.change(screen.getByLabelText('New spending limit'), { target: { value: '10' } });
+    fireEvent.click(within(screen.getByTestId('plan-new-limit')).getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(resume).toHaveBeenCalled());
+    // Still visibly working, not a silent row of dead buttons.
+    expect(screen.getByTestId('plan-new-limit')).toBeInTheDocument();
+    expect(within(screen.getByTestId('plan-new-limit')).getByRole('button', { name: 'Continuing…' })).toBeDisabled();
     releaseResume({ ok: true, plan: plan({ status: 'running', seq: 3 }) });
     await waitFor(() => expect(status()).toBe('running'));
-    // And it stands down once the plan really is running.
-    expect(screen.queryByTestId('plan-add-budget')).toBeNull();
+    expect(screen.queryByTestId('plan-new-limit')).toBeNull();
   });
 
-  it('a budget answer that already runs the plan is not resumed twice', async () => {
-    const plans = bridge({
-      addBudget: vi.fn().mockResolvedValue({ ok: true, plan: plan({ status: 'running', seq: 2 }) }),
-      resume: vi.fn(),
-    });
-    render(<ChatProvider><Card initial={budgetPause()} /></ChatProvider>);
-    fireEvent.click(within(block()).getByRole('button', { name: 'Add budget' }));
-    fireEvent.click(within(screen.getByTestId('plan-add-budget')).getByRole('button', { name: 'Continue' }));
-    await waitFor(() => expect(status()).toBe('running'));
-    expect(plans.resume).not.toHaveBeenCalled();
+  it('the field is empty until the user types a new amount, and Continue is disabled until then', () => {
+    bridge();
+    render(<ChatProvider><Card initial={spendLimitPause()} /></ChatProvider>);
+    fireEvent.click(within(block()).getByRole('button', { name: 'Continue' }));
+    const field = screen.getByLabelText('New spending limit');
+    expect(field).toHaveValue('');
+    expect(within(screen.getByTestId('plan-new-limit')).getByRole('button', { name: 'Continue' })).toBeDisabled();
+    fireEvent.change(field, { target: { value: '10' } });
+    expect(within(screen.getByTestId('plan-new-limit')).getByRole('button', { name: 'Continue' })).toBeEnabled();
   });
 });
 
@@ -321,11 +273,16 @@ describe('9. a specialist stopped before it started', () => {
       status: 'stopped',
       steps: [{ ...plan().steps[0], status: 'skipped', children: [
         child({ childId: 'kid-a', status: 'completed', endedAt: 61_001, report: { text: 'done', status: 'completed', timestamp: 2 } }),
-        child({ childId: 'kid-b', title: 'Idris the Reviewer', status: 'interrupted', phase: 'response-persisted', endedAt: 30_001, segments: [{ type: 'text', id: 't', content: 'reading' }] }),
+        // T7 (design §2/§3): only three phases exist now (prepared/launched/
+        // committed) — `response-persisted` becomes `committed` (its reply
+        // landed and was frozen).
+        child({ childId: 'kid-b', title: 'Idris the Reviewer', status: 'interrupted', phase: 'committed', endedAt: 30_001, segments: [{ type: 'text', id: 't', content: 'reading' }] }),
         child({ childId: 'kid-c', title: 'Mara the Reviewer', status: 'interrupted', phase: 'prepared', endedAt: 1_001 }),
         // 5b follow-up: its request WAS sent, it just showed nothing yet —
-        // not "Not started" (tokens may have been spent).
-        child({ childId: 'kid-d', title: 'Tobin the Reviewer', status: 'interrupted', phase: 'request-sent', endedAt: 1_001 }),
+        // not "Not started" (tokens may have been spent). T7: `request-sent`
+        // (a settlement-window phase the deleted reservation system needed)
+        // becomes `launched` — a request is out, whether or not a reply landed.
+        child({ childId: 'kid-d', title: 'Tobin the Reviewer', status: 'interrupted', phase: 'launched', endedAt: 1_001 }),
         // No phase at all (an older journal): never guessed as not started.
         child({ childId: 'kid-e', title: 'Juno the Reviewer', status: 'interrupted', endedAt: 1_001 }),
       ] }],
