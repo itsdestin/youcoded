@@ -1,0 +1,15 @@
+/* Design-guide review (2026-09-24): HEADING LADDER X — small capitals.
+   Destin asked for "a standard large-medium-small (1st-2nd-3rd level)
+   heading" instead of six styles (ui-element-review-headers#H-3).
+   Level 1 (big groups on full screens): 18px medium.
+   Level 3 (small labels): ONE style of small grey capitals — Marketplace's
+   larger, darker capitals and the 9/11px variants all fold into it.
+   Workbench-only: ?proposal=headings-caps. */
+@layer proposal {
+.uppercase:is(.tracking-wider, .tracking-wide, [class*="tracking-"]):not([class*="rounded"], [class*="bg-"], [class*="border"]) {
+  font-size: 10px !important; line-height: 14px !important;
+  font-weight: 500 !important; letter-spacing: 0.06em !important;
+  color: var(--fg-muted) !important;
+}
+:is(h2, h3).text-lg { font-size: 18px !important; font-weight: 500 !important; }
+}

@@ -1,0 +1,28 @@
+/* Design-guide review (2026-09-24): whole-app ROUNDNESS LEVEL "Soft (today's built-in themes)".
+   Destin: controls should "take theme radius settings" and "adjust dynamically
+   with the other app elements for roundness" (ui-element-review-button-shapes
+   #P-3/#P-5). This previews one level a theme could set: container corners
+   (cards, popups) AND a control corner every button, tab, filter and search
+   box follows — nothing keeps a fixed pill. Workbench-only: ?proposal=shape-soft.
+   Layered and prepended by index.tsx so its !important rules outrank the
+   app's layered !important utilities. */
+@layer proposal {
+:root, :root[data-theme], html {
+  --radius-sm: 4px !important; --radius-md: 8px !important; --radius-lg: 12px !important;
+  --radius-xl: 16px !important; --radius-2xl: 24px !important;
+  --radius-control: 8px;
+}
+button:is(.rounded-lg, .rounded-full, .rounded-xl, .rounded-md, .rounded, .\!rounded-full):not([role=switch], [role=radio], [role=checkbox]):not(.session-strip, .session-strip *):not([aria-label="Send message"], [aria-label="Voice"], [aria-label*="Stop" i]) {
+  border-radius: var(--radius-control) !important;
+}
+[role=tablist], .layer-surface.\!rounded-full {
+  border-radius: calc(var(--radius-control) + 3px) !important;
+}
+.rounded-full:has(> input), .rounded-full:has(> div > input) {
+  border-radius: var(--radius-control) !important;
+}
+[role=dialog] button.text-fg-dim.text-sm:not([class*="border"]) {
+  border: 1px solid var(--edge-dim) !important;
+  color: var(--fg-2) !important;
+}
+}
