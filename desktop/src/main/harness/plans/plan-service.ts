@@ -16,10 +16,16 @@ import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-jou
 import { pausedRouting, resetRecoveriesForContinue, type PlanPauseAction } from './pause-routing';
 import { PLAN_NOTICE_DETAIL_MAX_CHARS, PLAN_RECOMMENDATION_MAX_CHARS, normalizePlanQuestion } from './plan-handoff';
 import type {
-  ExecutionManifest, JournalPlanStatus, PlanActionResult, PlanAutoApproveRead, PlanRecord, PlanRef,
+  ExecutionManifest, JournalPlanStatus, PlanActionResult, PlanAutoApproveRead, PlanEstimate, PlanRecord, PlanRef,
   PlanSettingsWriteResult, PlanUnsupported,
 } from './types';
 import { PlanProposalError, PlanSpecialistsNotReadyError } from './types';
+// T5 (design §4): the estimate is computed here (propose, re-freeze) rather
+// than inside resolveManifest/reconcile, because it needs the plan's own
+// specialist-usage history — a dependency plan-host-bridge.ts's
+// resolveManifest has no reason to carry.
+import { estimatePlan } from './plan-estimate';
+import type { SpecialistUsageSnapshot } from './specialist-usage-history';
 
 /** ~/.youcoded/plans.json — the auto-approve limit lives here (design §5). */
 const PLAN_SETTINGS_FILE = 'plans.json';
@@ -83,6 +89,16 @@ export interface PlanServiceDeps {
   executor?: PlanExecutorHooks;
   handoffs?: PlanHandoffHooks;
   newId?: () => string;
+  /** T5 (design §4): past-run usage `estimatePlan` prices from. Optional —
+   *  absent or empty still prices every built-in specialist type from
+   *  plan-estimate.ts's own pinned defaults, so a bare test construction of
+   *  this interface (there are ~70) keeps compiling AND keeps getting a real
+   *  estimate rather than none. */
+  history?: { snapshot(): SpecialistUsageSnapshot };
+  /** T5: only consulted for a CUSTOM specialist with no usage history of its
+   *  own, to choose plan-estimate.ts's worker-vs-reviewer default (design
+   *  §4's own fallback). Absent → that module's own conservative default. */
+  specialistCanWrite?(cwd: string, specialistId: string): boolean | undefined;
 }
 
 export interface PlanProposal {
@@ -235,12 +251,14 @@ type PlanReconcile =
 
 /**
  * Task 14: re-freeze this plan to the models that are configured NOW, in the
- * caller's own journal write.
- * // T5: "recompute the estimate" (design §5) is not wired here — `plan.
- * estimate` is left as it was until `plan-estimate.ts` exists to redo it.
+ * caller's own journal write. T5 (design §5 "recompute the estimate"):
+ * `estimate` is passed in rather than computed here, because it needs the
+ * usage-history dependency, which lives on PlanService, not on this bare
+ * function — see PlanService.estimateFor's own WHY.
  */
-function refreeze(plan: PlanRecord, current: ExecutionManifest): void {
+function refreeze(plan: PlanRecord, current: ExecutionManifest, estimate: PlanEstimate | undefined): void {
   plan.manifest = current;
+  plan.estimate = estimate;
 }
 
 /** Design §8: `autoStart.underUsd` (renamed from `autoApprove.underTokens` —
@@ -333,6 +351,24 @@ export class PlanService {
     return canonical(plan.manifest) === canonical(current) ? { kind: 'unchanged' } : { kind: 'refreshed', manifest: current };
   }
 
+  /**
+   * T5 (design §4): compute `plan.estimate` from a document and a manifest's
+   * steps, using whatever specialist-usage history this service was built
+   * with. ONE named function — called from `propose` (below), from the two
+   * re-freeze sites (Approve/Continue drift, above), and left here for T4's
+   * `setStepModel` to call after it re-resolves one step's manifest entry
+   * (design §4: "Computed at propose... on setStepModel, and on
+   * re-freeze") — so every site that changes what a plan's steps would run
+   * on updates the estimate the SAME way, and never invents its own.
+   */
+  private estimateFor(ref: PlanRef, document: PlanDocumentV1, manifestSteps: ExecutionManifest['steps']): PlanEstimate | undefined {
+    const history = this.deps.history?.snapshot() ?? { entries: [] };
+    const canWrite = this.deps.specialistCanWrite
+      ? (specialistId: string) => this.deps.specialistCanWrite!(ref.cwd, specialistId)
+      : undefined;
+    return estimatePlan(document, manifestSteps, history, canWrite);
+  }
+
   private async view(ref: PlanRef, planId: string): Promise<PlanView> {
     const plan = await this.journal.get(ref, planId);
     if (!plan) throw new PlanActionRefused('This plan no longer exists.');
@@ -396,8 +432,9 @@ export class PlanService {
       // rework stage 1, design §1/§2, decision 34): there is no per-step
       // token budget left to sum into a worst-case ceiling, and nothing is
       // capped in advance for a route's replies to overshoot.
-      // T5: `estimate` (design §4, `estimatePlan`) is not computed here yet
-      // — a proposed plan has none until plan-estimate.ts exists.
+      // T5 (design §4): the estimate is computed here, right after the
+      // manifest resolves, so a proposal's card shows it from its very
+      // first write — the same moment auto-start (below) reads it.
       const rec: PlanRecord = {
         planId,
         toolUseId: proposal.toolUseId,
@@ -409,6 +446,7 @@ export class PlanService {
         seq: 1,
         createdAt: this.now(),
         manifest,
+        estimate: this.estimateFor(ref, proposal.document, manifest.steps),
         steps: allSteps(proposal.document.steps).map((s) => ({ id: s.id, status: 'pending' as const, attempts: [] })),
         fenceEpoch: 0,
       };
@@ -456,7 +494,7 @@ export class PlanService {
       // proposals from the same turn can't both see the key as free.
       // Design §8, decision 34 Q-6: auto-start only when the estimate is in
       // dollars and its p90 (highUsd, conservative) is under the setting.
-      // Unpriced plans — and, until T5 wires `estimatePlan`, EVERY plan —
+      // Unpriced plans (T5: `estimate` has a `tokens` shape, not `highUsd`)
       // never auto-start.
       if (settings.ok && settings.underUsd > 0 && record.estimate && 'highUsd' in record.estimate && record.estimate.highUsd < settings.underUsd
         && (key === undefined || !this.autoStartedKeys.has(key))) {
@@ -491,7 +529,7 @@ export class PlanService {
       const reconciled = await this.reconcile(ref, plan);
       return { ok: true, plan: await this.startRun(ref, planId, ['proposed'], (p) => {
         p.startedAt = this.now();
-        if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest);
+        if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest, this.estimateFor(ref, p.document, reconciled.manifest.steps));
       }) };
     });
   }
@@ -521,7 +559,7 @@ export class PlanService {
       const view = await this.startRun(ref, planId, ['paused', 'interrupted'], (p, replaced) => {
         handoffId = replaced.paused?.handoff?.id;
         resetRecoveriesForContinue(p);
-        if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest);
+        if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest, this.estimateFor(ref, p.document, reconciled.manifest.steps));
       });
       this.notifySuperseded(ref, planId, handoffId);
       return { ok: true, plan: view };

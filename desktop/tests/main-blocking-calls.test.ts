@@ -150,6 +150,8 @@ const PROTECTED: Protection[] = [
     kinds: { walk: 'const-arrow' },
     requiredAwait: { text: 'fs.promises.stat(root)', what: 'the async root probe `await fs.promises.stat(root)`' },
     why: "the Glob tool's directory walk ran sync and froze every window, several times per turn" },
+  { was: 'plan-estimate-T5-review', file: 'harness/plans/specialist-usage-history.ts', noBlocking: ['*'],
+    why: "the background scan (design §4) walks every ~/.youcoded/sessions file on host start; a sync scan would freeze every window on a big history" },
 ];
 
 // ---------------------------------------------------------------------------

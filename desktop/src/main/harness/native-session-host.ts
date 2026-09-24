@@ -73,6 +73,11 @@ import { PlanSpend } from './plans/plan-spend';
 // WHY no budget-adapter import any more (spending rework stage 1, design
 // §1): the module is deleted along with plan-child mode's request gate.
 import type { PlanActionResult, PlanAutoApproveRead, PlanSettingsWriteResult } from './plans/types';
+// T5 (design §4): the estimate's raw material — every specialist run
+// (ordinary Task-tool AND plan) reports into this ONE index, which is why it
+// lives on the host (both call sites below are host methods) rather than
+// inside PlanHostBridge, which only ever sees plan children.
+import { SpecialistUsageHistory, toHistoryUsage } from './plans/specialist-usage-history';
 
 export interface CreateNativeSessionOpts {
   sessionId: string;
@@ -635,6 +640,12 @@ export class NativeSessionHost extends EventEmitter {
   // NativeHome" condition as `ledger`: every plan action then answers
   // `unsupported` rather than pretending to work.
   private plans?: PlanHostBridge;
+
+  // T5 (design §4) — the estimate's raw material. Same "undefined under no
+  // NativeHome" condition as `ledger`/`plans` above: a bare test host
+  // records nothing and `buildPlanBridge` below simply omits the port field,
+  // which plan-estimate.ts already treats as "no history yet".
+  private specialistUsageHistory?: SpecialistUsageHistory;
 
   /** Task 13 — the parent's own resolved CapabilityProfile now carries its
    *  concurrency ceiling (maxConcurrentSpecialists): the spec's flat hosted
@@ -1244,7 +1255,7 @@ export class NativeSessionHost extends EventEmitter {
       // Reported HERE, before the ledger write and before the `finally`
       // teardown, because the child must still be in `this.live` for its price
       // card to be readable.
-      this.reportSpecialistSpend(parentId, childId, opts.parentToolCallId, run.usage);
+      this.reportSpecialistSpend(parentId, childId, opts.parentToolCallId, run.usage, opts.specialist.id);
       // WHY drain HERE, not at turn start (folded Task 3 concern): pendingSteers
       // is not reset per-turn by design (harness-session.ts), so anything left
       // in the CHILD's queue at this point is a steer that arrived too late to
@@ -1315,7 +1326,7 @@ export class NativeSessionHost extends EventEmitter {
       // report; a run that threw before any step reported tokens carries
       // nothing, and nothing is what gets reported.
       const spentBeforeFailing = (err as SpecialistRunError)?.specialistUsage;
-      if (spentBeforeFailing) this.reportSpecialistSpend(parentId, childId, opts.parentToolCallId, spentBeforeFailing);
+      if (spentBeforeFailing) this.reportSpecialistSpend(parentId, childId, opts.parentToolCallId, spentBeforeFailing, opts.specialist.id);
       const missedSteers = this.live.get(childId)?.session.drainUnappliedSteers() ?? [];
       if (this.ledger && parentCwd) {
         // Fix (review round 2, Finding 4), preserved: updateIfRunning (not
@@ -1381,6 +1392,11 @@ export class NativeSessionHost extends EventEmitter {
     childId: string,
     parentToolCallId: string,
     usage: SpecialistRunResult['usage'],
+    // T5 (design §4): the ordinary (non-plan) specialist twin of
+    // runPlanChild's own `record()` call below — the caller (runDelegation)
+    // already has `opts.specialist.id` at hand, so it's threaded straight
+    // through rather than looked up again here.
+    agentType?: string,
   ): void {
     try {
       const parentSession = this.live.get(parentId)?.session;
@@ -1402,6 +1418,13 @@ export class NativeSessionHost extends EventEmitter {
           parentAgentToolUseId: parentToolCallId,
           agentId: childId,
         });
+        // T5: feeds the estimate's raw material. Skipped (rather than
+        // recorded as a zero run) when nothing was actually spent — a run
+        // that never reported usage would just widen the history with a
+        // useless zero-token sample.
+        if (agentType && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
+          this.specialistUsageHistory?.record(childId, agentType, childSession.binding.providerId, childSession.binding.modelId, toHistoryUsage(usage));
+        }
       } else {
         // Task 23 item 2. This `if` used to have no `else`, so a teardown
         // race that removed either session between the run finishing and its
@@ -2410,6 +2433,11 @@ export class NativeSessionHost extends EventEmitter {
     this.nativeHome = nativeHome;
     this.delegatedModels = nativeHome ? new DelegatedModels(nativeHome) : undefined;
     this.modeStore = nativeHome ? new PermissionModeStore(nativeHome) : undefined;
+    // T5 (design §4): constructed BEFORE buildPlanBridge, which reads it to
+    // wire PlanHostPort.specialistUsageHistory. Its own constructor starts
+    // the async cache load and schedules the deferred background scan —
+    // "at host start" IS this line, for every real build (nativeHome set).
+    this.specialistUsageHistory = nativeHome ? new SpecialistUsageHistory(nativeHome) : undefined;
     // Plans need a home for their journal, exactly like the delegation
     // ledger; a bare test host (or a build without one) answers every plan
     // action "unsupported" instead of pretending.
@@ -5244,6 +5272,9 @@ export class NativeSessionHost extends EventEmitter {
       queuePlanNotice: (sessionId, notice) => this.queuePlanNotice(sessionId, notice),
       withdrawPlanNotice: (sessionId, handoffId) => this.withdrawPlanNotice(sessionId, handoffId),
       startChild: (input) => this.startPlanChild(input),
+      // T5 (design §4): threaded straight through — PlanService reads only
+      // `.snapshot()`, so the concrete class never leaks past this port.
+      ...(this.specialistUsageHistory ? { specialistUsageHistory: this.specialistUsageHistory } : {}),
     }, this.planOptions);
   }
 
@@ -5403,6 +5434,9 @@ export class NativeSessionHost extends EventEmitter {
           } catch (err) {
             log('ERROR', 'NativeSessionHost', "failed to report a plan specialist's spend to its conversation", { childId, error: String(err) });
           }
+          // T5 (design §4): the plan-child twin of reportSpecialistSpend's own
+          // record() call — same guard (skip a zero-usage run), same total.
+          this.specialistUsageHistory?.record(childId, input.specialist.id, entry.session.binding.providerId, modelId, toHistoryUsage(total.usage));
         }
       }
     })();

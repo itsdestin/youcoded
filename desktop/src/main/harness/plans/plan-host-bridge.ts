@@ -34,6 +34,10 @@ import {
 import type {
   ExecutionManifest, PlanActionResult, PlanAutoApproveRead, PlanEvent, PlanRecord, PlanRef, PlanSettingsWriteResult,
 } from './types';
+// T5 (design §4): the snapshot type `PlanHostPort.specialistUsageHistory`
+// (below) and `PlanService.deps.history` both carry — the concrete
+// `SpecialistUsageHistory` class stays a native-session-host.ts concern.
+import type { SpecialistUsageSnapshot } from './specialist-usage-history';
 // Final review F6: refusals worded for people (the failed card shows them).
 import { PlanProposalError, PlanSpecialistsNotReadyError, type PlanNotReadySpecialist } from './types';
 
@@ -42,7 +46,13 @@ import { PlanProposalError, PlanSpecialistsNotReadyError, type PlanNotReadySpeci
 // "carries over" into T2's plan-spend.ts, per design §1's own wording; a
 // local copy keeps resolveManifest's pricing real in the meantime rather
 // than writing a placeholder null for every step).
-type PricingSnapshot = { kind: 'priced'; rates: ModelPricing } | { kind: 'free' } | { kind: 'local' };
+// T5 (design §4): exported so plan-estimate.ts can price past runs at a
+// step's FROZEN rate without duplicating this shape — `manifest.steps[id].
+// pricing` is typed `unknown` on the journal record (types.ts's own WHY:
+// "an unrecognized snapshot must not quarantine the whole journal"), so
+// plan-estimate.ts narrows it back to this exact union itself, the same
+// tolerant way plan-spend.ts would.
+export type PricingSnapshot = { kind: 'priced'; rates: ModelPricing } | { kind: 'free' } | { kind: 'local' };
 function pricingSnapshot(input: { pricing: ModelPricing | null; free: boolean; local: boolean }): PricingSnapshot | null {
   if (input.local) return { kind: 'local' };
   if (input.free || isFreePricing(input.pricing)) return { kind: 'free' };
@@ -169,6 +179,11 @@ export interface PlanHostPort {
   // existed only to measure a specialist's fixed setup cost and an Add
   // budget minimum through an unwired session — resolveManifest no longer
   // measures anything before freezing a step's binding.
+  /** T5 (design §4): the host's specialist-usage-history index, threaded
+   *  straight into PlanService's own `history` dep below. Optional — a bare
+   *  test port (most of plan-host-bridge.test.ts) gets plan-estimate.ts's
+   *  own built-in defaults instead of real past runs, same as an empty one. */
+  specialistUsageHistory?: { snapshot(): SpecialistUsageSnapshot };
 }
 
 export interface PlanHostBridgeOptions {
@@ -289,6 +304,19 @@ export class PlanHostBridge {
       // notice has nothing left to ask. A notice already being delivered
       // stays until its turn ends.
       handoffs: { superseded: (_ref, _planId, handoffId) => { void this.clearHandoff(handoffId, { force: false }); } },
+      // T5: threaded straight from the port; absent exactly when the port's
+      // own field is (a bare test host).
+      ...(port.specialistUsageHistory ? { history: port.specialistUsageHistory } : {}),
+      // T5's own fallback tier ("worker if it can write, else reviewer") —
+      // the SAME read-only/read-write charter check `runner().isWriter`
+      // (below) already makes for the executor's serialization decision, so
+      // an unresolvable specialist id answers `undefined` here exactly like
+      // isWriter's own "unknown → serialize" comment, letting plan-estimate.ts
+      // fall back to its own conservative default rather than guessing.
+      specialistCanWrite: (cwd, specialistId) => {
+        const def = port.roster(cwd).resolve(specialistId);
+        return def ? def.charter !== 'read-only' : undefined;
+      },
     });
   }
 
