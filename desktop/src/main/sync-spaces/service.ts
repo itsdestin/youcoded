@@ -277,6 +277,11 @@ function activeSpaces() {
 // pull adopts origin/main (unborn local main → checkout -B main origin/main).
 async function materializeProject(entry: { name: string; repoName: string }): Promise<void> {
   if (!engine || !roots || !manager) return;
+  // WHY: the sync identity is the lowercased name, so a local folder whose
+  // name differs only by case already syncs this very repo. A second folder
+  // would sync into it too, mixing two trees (Linux allows both folders).
+  const lower = entry.name.toLowerCase();
+  if (roots.listProjects().some((p) => p.name !== entry.name && p.name.toLowerCase() === lower)) return;
   const e = engine;
   const url = await manager.ensureRemote({ id: `project:${entry.name}`, kind: 'project', root: '' });
   const created = roots.createProject(entry.name);
@@ -652,7 +657,26 @@ function backfillRegistry(): void {
   }
 }
 
+/** WHY: a project's name IS its sync identity, lowercased (repoNameForSpace).
+ *  Refuse, before anything is created, a name that would silently join another
+ *  project's online copy: one the user stopped syncing (stopping is permanent,
+ *  and the old files would pour into the new folder), or one that differs from
+ *  an existing project only by capital letters (the two would mix files). */
+function projectNameConflict(name: string): string | null {
+  if (!roots) return null;
+  const lower = name.toLowerCase();
+  const registry = readProjectRegistry(roots.personalRoot);
+  const stopped = registry.find((e) => e.state === 'stopped' && e.name.toLowerCase() === lower);
+  if (stopped) return `A project named "${stopped.name}" was stopped from syncing earlier. Choose a different name.`;
+  const clash = [...roots.listProjects().map((p) => p.name), ...registry.map((e) => e.name)]
+    .find((n) => n !== name && n.toLowerCase() === lower);
+  if (clash) return `A project named "${clash}" already exists. Names can't differ only by capital letters.`;
+  return null;
+}
+
 export async function syncSpacesCreateProject(name: string) {
+  const conflict = projectNameConflict(name);
+  if (conflict) return { ok: false as const, error: conflict };
   const result = roots!.createProject(name);
   if (result.ok) registerProject(name, result.path);
   if (result.ok && engine) {
@@ -676,6 +700,8 @@ export async function syncSpacesCreateProject(name: string) {
  *  content — kick an immediate syncSpace instead of waiting for the poll. */
 export async function syncSpacesImportProject(sourcePath: string, name: string, liveCwds: string[]) {
   if (!roots) return { ok: false as const, error: 'Sync is still starting up — try again in a moment' };
+  const conflict = projectNameConflict(name);
+  if (conflict) return { ok: false as const, error: conflict };
   const result = await importProjectFolder({
     sourcePath, name, liveCwds,
     projectsRoot: roots.projectsRoot,

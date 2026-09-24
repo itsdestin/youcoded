@@ -15,6 +15,13 @@ export function validateSyncName(name: string): string | null {
   return null;
 }
 
+// Secrets. Unlike the rest of DEFAULT_IGNORES these are ENFORCED at staging
+// (git-transport stageAll): info/exclude alone loses to a project's own
+// .gitignore — `!.env` there re-included a real .env into the upload.
+const NEVER_SYNC: string[] = [
+  '.env', '.env.*', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*', '*.credentials.json',
+];
+
 // Spec §8 default ignore set: build junk + secrets. gitignore syntax — written
 // into each hidden repo's info/exclude (never into the user's tree).
 export const DEFAULT_IGNORES: string[] = [
@@ -37,7 +44,7 @@ export const DEFAULT_IGNORES: string[] = [
   // debris to every other device, where it is invisible in the UI yet present
   // on disk forever.
   '.youcoded-import-*.part',
-  '.env', '.env.*', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*', '*.credentials.json',
+  ...NEVER_SYNC,
 ];
 
 /** True when a relative path matches the DEFAULT_IGNORES set. Interprets the
@@ -47,9 +54,23 @@ export const DEFAULT_IGNORES: string[] = [
  *  same secrets/junk the sync layer scrubs — a narrower filter here would leak
  *  keys into backups that sync deliberately never transports. */
 export function isIgnoredPath(relPath: string): boolean {
+  return matchesAny(relPath, DEFAULT_IGNORES);
+}
+
+// "name (from Laptop, 2026-07-03).ext" → "name.ext" (see conflictCopyName).
+const CONFLICT_SUFFIX = / \(from .+, \d{4}-\d{2}-\d{2}\)/;
+
+/** True when a relative path is a secret that must never leave this device.
+ *  WHY the conflict-suffix strip: a "(from …)" copy of .env holds the same
+ *  secret, and its name no longer matches '.env'. */
+export function isNeverSyncPath(relPath: string): boolean {
+  return matchesAny(relPath, NEVER_SYNC) || matchesAny(relPath.replace(CONFLICT_SUFFIX, ''), NEVER_SYNC);
+}
+
+function matchesAny(relPath: string, patterns: string[]): boolean {
   const segments = relPath.split(/[\\/]/).filter(Boolean);
   const base = segments[segments.length - 1] ?? '';
-  for (const pattern of DEFAULT_IGNORES) {
+  for (const pattern of patterns) {
     if (pattern.endsWith('/')) {
       const dir = pattern.slice(0, -1);
       if (segments.slice(0, -1).includes(dir) || base === dir) return true;
