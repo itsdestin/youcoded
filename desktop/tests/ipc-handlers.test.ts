@@ -378,6 +378,71 @@ describe('session:create resumed admission', () => {
     expect(manager.createSession).toHaveBeenCalledOnce();
     expect(registry.assignSession).toHaveBeenCalledOnce();
   });
+
+  // WHY (combined branch, replaces a remote-server test that stubbed the
+  // create and so could not fail): a phone's reopen of a conversation the
+  // desktop already has open goes through the REAL RemoteServer into the shared
+  // create path and its already-open check — answered `reused`, no second session.
+  it('a phone reopening a conversation already open on the desktop gets that session, not a second one', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const { EventEmitter } = await import('events');
+    const ipc = { handle: vi.fn(), on: vi.fn() };
+    const info = { id: 'c3', cwd: '/tmp', provider: 'claude', status: 'active' };
+    let live: typeof info | undefined;
+    const manager = Object.assign(new EventEmitter(), {
+      createSession: vi.fn(() => { live = info; return info; }), getSession: vi.fn(() => live),
+      listSessions: vi.fn(() => (live ? [live] : [])), destroySession: vi.fn(() => true),
+      sendInput: vi.fn(), resizeSession: vi.fn(),
+    });
+    const server: any = new RemoteServer(manager as any, Object.assign(new EventEmitter(), { respond: vi.fn(() => true) }) as any,
+      { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) } as any);
+    registerIpcHandlers(ipc as any, manager as any,
+      { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
+      { configStore: { getPackages: vi.fn(() => ({})) } } as any,
+      undefined as any, undefined, undefined, server);
+    const create = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
+    expect(await create({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'c3' })).toBe(info);
+    const sent: any[] = [];
+    await server.handleMessage({ ws: { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) } },
+      JSON.stringify({ type: 'session:create', id: 'p1', payload: { name: 'x', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'c3' } }));
+    expect(sent[0].payload).toMatchObject({ id: 'c3', reused: true });
+    expect(manager.createSession).toHaveBeenCalledOnce();
+  });
+
+  // WHY (combined branch): a session a phone opened has no owning window. A
+  // desktop reopen of it used to answer `reused` with no focus request, so the
+  // desktop never switched to it (bugfix-chatfiles did; master's reuse did not).
+  it('focuses the leader window when a reopened writer has no owning window (a phone opened it)', async () => {
+    const { webContents } = await import('electron');
+    const leaderContents = { send: vi.fn() };
+    vi.mocked(webContents.fromId).mockReset();
+    vi.mocked(webContents.fromId).mockImplementation((id: number) => (id === 7 ? leaderContents : undefined) as any);
+    const ipc = { handle: vi.fn(), on: vi.fn() };
+    const info = { id: 'c2', cwd: '/tmp', provider: 'claude', status: 'active' };
+    let live: typeof info | undefined;
+    const manager = {
+      createSession: vi.fn(() => { live = info; return info; }), getSession: vi.fn(() => live),
+      listSessions: vi.fn(() => []), destroySession: vi.fn(() => true),
+      on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
+    };
+    const registry = { assignSession: vi.fn(), getOwner: vi.fn(() => undefined), getKind: vi.fn(() => 'main'), getLeaderId: vi.fn(() => 7) };
+    let fromPhone: ((opts: any) => Promise<any>) | null = null;
+    const remoteServer = {
+      broadcast: vi.fn(), setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
+      setSessionCreate: vi.fn((fn: any) => { fromPhone = fn; }),
+      getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
+    };
+    registerIpcHandlers(ipc as any, manager as any,
+      { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
+      { configStore: { getPackages: vi.fn(() => ({})) } } as any,
+      undefined as any, undefined, undefined, remoteServer as any, registry as any);
+    const create = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
+    expect(await fromPhone!({ name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'c2' })).toBe(info);
+    expect(registry.assignSession).not.toHaveBeenCalled();
+    expect(await create({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'c2' })).toMatchObject({ ...info, reused: true });
+    expect(leaderContents.send).toHaveBeenCalledWith('session:focus-request', 'c2');
+    expect(manager.createSession).toHaveBeenCalledOnce();
+  });
 });
 
 describe('session:create native resume — missing stored header', () => {

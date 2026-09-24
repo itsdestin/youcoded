@@ -299,21 +299,10 @@ describe('RemoteServer and the shell provider', () => {
     expect(shellSessionManager.createSession).toHaveBeenCalledTimes(1);
   });
 
-  // Combined branch: the already-open check now lives in the shared create
-  // (master's resume admission, pinned in ipc-handlers-create-ownership); the
-  // phone's request must reach it and relay its answer untouched.
-  it('answers a resume of a conversation already open with the open session, not a second one', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
-    const create = vi.fn(async () => ({ id: 'desk-1', name: 'My chat', cwd: '/tmp', status: 'active', reused: true }));
-    server.setSessionCreate(create);
-    const sent = await drive(server, {
-      type: 'session:create', id: 'c4', payload: { name: 'x', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'claude-A' },
-    });
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: 'claude-A' }));
-    expect(shellSessionManager.createSession).not.toHaveBeenCalled();
-    expect(sent[0].payload).toMatchObject({ id: 'desk-1', reused: true });
-  });
+  // A phone reopening a conversation already open on the desktop is pinned
+  // end to end (real RemoteServer -> shared create -> already-open check) in
+  // ipc-handlers.test.ts, 'a phone reopening a conversation already open...'.
+  // A stub here could not fail, so none is kept.
 
   // 2026-09-16 (remote-access.md): the phone's create used to reach the session
   // manager with the "No folder" sentinel untouched, so such a session opened in

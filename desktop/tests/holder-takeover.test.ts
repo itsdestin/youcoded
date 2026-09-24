@@ -493,6 +493,20 @@ describe('createHolderTakeover', () => {
     expect((deps as any).endQuiesceNative).toHaveBeenCalledWith('nat-stuck');
   });
 
+  // Pins dropQuiesced's indexOf guard: splice(-1, 1) on a Claude Code holder's
+  // id (never in the quiesced list) would silently drop the LAST native id, and
+  // that native session would then keep refusing sends after the handoff failed.
+  it('a Claude Code holder that fails to destroy first does not cost the native holder its sends', async () => {
+    const deps = makeDeps({ liveDesktopIds: ['cc-first', 'nat-second'], providers: { 'nat-second': 'native' } });
+    deps.sessionIdMap.set('cc-first', 'claude-mixed');
+    deps.sessionIdMap.set('nat-second', 'claude-mixed');
+    (deps.sessionManager.destroySession as any) = vi.fn((id: string) => id !== 'cc-first');
+    (deps as any).endQuiesceNative = vi.fn();
+    await createHolderTakeover(deps as any)('claude-mixed');
+    expect(deps.leaseClient.release).not.toHaveBeenCalled();
+    expect((deps as any).endQuiesceNative).toHaveBeenCalledWith('nat-second');
+  });
+
   it('a handoff that stops before releasing the lease gives the quiesced holder its sends back', async () => {
     const deps = makeDeps({ liveDesktopIds: ['nat-early'], providers: { 'nat-early': 'native' } });
     deps.sessionIdMap.set('nat-early', 'claude-early');

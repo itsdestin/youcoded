@@ -781,6 +781,11 @@ function statusBarFixtureFor(scenario: string): { usage: unknown; sessionStatsMa
 }
 
 /** Hand-written channel implementations, backed by the store. */
+// Main's session:focus-request, as the workbench's one window receives it.
+// session.create fires it for a reused writer (as ipc-handlers.ts createSession
+// does); buddy.onFocusSession is how App listens for it.
+const focusSessionSubs = new Set<(sessionId: string) => void>();
+
 function handWritten(store: MockStore): Record<string, Record<string, unknown>> {
   // `location` is guarded the same way latencyFromQuery() above guards it —
   // this module has no node-test importer today, but the pattern is load-
@@ -949,12 +954,17 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       const resumedRow = store.getState().past.find((p) => p.sessionId === opts.resumeSessionId)
         ?? (ref?.status === 'ok' ? { sessionId: ref.id, name: ref.title } : undefined);
       // Mirrors main's session:create: a conversation already open in a tab
-      // answers with that tab (`reused`, resume admission) instead of a second copy.
+      // answers with that tab (`reused`, resume admission) instead of a second copy,
+      // and asks the window to select it, as main's focus request does.
       if (resumedRow) {
         const openId = [...resumedFrom].find(([sid, row]) => row === resumedRow.sessionId
           && store.getState().sessions.some((x) => x.id === sid))?.[0];
         const open = openId ? store.getState().sessions.find((x) => x.id === openId) : undefined;
-        if (open) return { ...open, reused: true } as any;
+        if (open) {
+          // Main also asks the owning window to select it (session:focus-request).
+          queueMicrotask(() => focusSessionSubs.forEach((cb) => cb(open.id)));
+          return { ...open, reused: true } as any;
+        }
       }
       if (resumedRow) resumedFrom.set(id, resumedRow.sessionId);
       const created = {
@@ -3181,6 +3191,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     onStatusChanged: (cb: (s: unknown) => void) => {
       buddyStatusSubs.add(cb);
       return () => buddyStatusSubs.delete(cb);
+    },
+    onFocusSession: (cb: (sessionId: string) => void) => {
+      focusSessionSubs.add(cb);
+      return () => { focusSessionSubs.delete(cb); };
     },
     // needed = the app cannot move its own windows here, so a helper is required
     // at all; supported = a helper could work on this desktop (KDE 6 Wayland);

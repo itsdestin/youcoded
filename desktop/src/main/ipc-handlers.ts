@@ -1051,7 +1051,12 @@ export function registerIpcHandlers(
     if (result.status === 'lease-denied') return result;
     // WHY: a duplicate open belongs to its original window, even if the
     // second request came from a different window. Ask that owner to select it.
-    const owner = windowRegistry?.getOwner(result.id);
+    // WHY the leader fallback (combined branch: master's reuse vs bugfix-chatfiles'
+    // "switch to the open tab"): a session with NO owning window — started from
+    // a phone or a remote handoff — was answered `reused` with no focus request
+    // at all, so the desktop never switched to it. Its session-created forward
+    // took the ownerless main-window route, so the leader window is where it shows.
+    const owner = windowRegistry?.getOwner(result.id) ?? windowRegistry?.getLeaderId();
     if (!started && event && owner != null) {
       const target = webContents.fromId(owner);
       if (target) {
