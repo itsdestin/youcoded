@@ -49,6 +49,8 @@ const rec = vi.hoisted(() => ({
 vi.mock('electron', () => {
   const BrowserWindowMock: any = vi.fn(() => ({ loadURL: vi.fn(), on: vi.fn(), webContents: { send: vi.fn() } }));
   BrowserWindowMock.getAllWindows = vi.fn(() => []);
+  // A reused writer's focus request focuses its window (ipc-handlers createSession).
+  BrowserWindowMock.fromWebContents = vi.fn(() => ({ focus: vi.fn() }));
   return {
     // whenReady must never resolve — otherwise main.ts runs its entire init chain
     // (createWindow, RemoteServer, SyncService, etc.) which hits unmocked APIs.
@@ -394,6 +396,9 @@ describe('session:create — a conversation already open is not resumed a second
     }, 2, [open]);
     expect(createSession).not.toHaveBeenCalled();
     expect(result).toMatchObject({ id: 'native-open', reused: true });
+    // An already-open session nobody owns (as here) is still brought forward:
+    // the focus request goes to the leader window (combined-branch fix).
+    expect(sends.some((x) => x.channel === 'session:focus-request' && x.payload === 'native-open')).toBe(true);
     expect(sends.find((s) => s.channel === IPC.SESSION_CREATED)).toBeUndefined();
   });
 
