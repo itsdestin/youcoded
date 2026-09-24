@@ -195,7 +195,11 @@ describe('answering a startup dialog types exactly what real Claude Code accepte
   ];
   for (const c of cases) {
     it(`${c.file}: "${c.label}"`, async () => {
-      const fx = load(`cc-2.1.281-${c.file}.json`);
+      // By scenario key, not version, so a fresh capture from a newer Claude
+      // Code (check-startup-drift.mjs --app) is checked by the same cases.
+      const file = FILES.filter((f) => f.endsWith(`-${c.file}.json`)).pop();
+      expect(file, `no capture for ${c.file}`).toBeDefined();
+      const fx = load(file!);
       const { io, writes, mismatches, menu } = await replay(fx, c.dialog);
       const index = menu.options.indexOf(c.label);
       expect(index).toBeGreaterThanOrEqual(0);
@@ -210,7 +214,7 @@ describe('answering a startup dialog types exactly what real Claude Code accepte
   }
 
   it('a typed digit does nothing on these dialogs (why the app no longer types one)', () => {
-    const fx = load('cc-2.1.281-untrusted-digit-ignored-100x35.json');
+    const fx = load(FILES.filter((f) => f.endsWith('-untrusted-digit-ignored-100x35.json')).pop()!);
     expect(fx.outcome.steps[0]).toMatchObject({ keys: '2', stayed: true });
   });
 });
@@ -349,7 +353,9 @@ import path from 'path';
 
 const ANDROID_DIR = path.join(__dirname, '..', '..', 'app', 'src', 'test', 'resources', 'startup-dialogs');
 
-describe('Android parity screens', () => {
+// Skipped when replaying a fresh capture (STARTUP_FIXTURE_DIR): the Android
+// screens belong to the SAVED set.
+describe.skipIf(!!process.env.STARTUP_FIXTURE_DIR)('Android parity screens', () => {
   it('app/src/test/resources/startup-dialogs matches what the desktop parser reads', async () => {
     const want = new Map<string, string>();
     for (const file of FILES) {

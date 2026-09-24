@@ -1,0 +1,50 @@
+name: Claude Code startup-dialog drift
+
+# Has the LATEST published Claude Code changed the dialogs it shows before a
+# session starts (folder trust, bypass warning, MCP-server approval)?
+#
+# WHY: each time Claude Code reshaped one of these (the 2.1.2xx trust rewrite,
+# 2.1.281 dropping the option numbers), new YouCoded sessions sat on
+# "Initializing session..." until someone noticed by hand. This installs
+# npm's latest @anthropic-ai/claude-code, captures every startup dialog in a
+# throwaway home folder, compares them with the saved captures, and replays
+# them through the app's own parser (desktop/test-conpty/check-startup-drift.mjs).
+#
+# Needs NO secrets and costs nothing: every dialog it checks appears before
+# sign-in, and no scenario sends a message to a model. A failure only turns
+# this run red and writes what changed to the run's summary page; it opens no
+# issue and comments on nothing.
+on:
+  schedule:
+    # 08:41 UTC daily, off the hour on purpose (GitHub delays :00 cron under load).
+    - cron: '41 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      # Only node-pty and @xterm/headless are needed; Electron's ~100 MB
+      # runtime is not, so its download is skipped.
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Compare the latest Claude Code's startup dialogs with the saved ones
+        run: node test-conpty/check-startup-drift.mjs --latest --app

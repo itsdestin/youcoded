@@ -26,7 +26,11 @@ export interface PlanFixture {
 
 /** Startup-dialog captures (test-conpty/capture-startup-dialogs.mjs) share the
  *  plan captures' shape — raw chunks + marks — so the same terminal replays them. */
-export const STARTUP_FIXTURE_DIR = path.join(__dirname, '..', 'fixtures', 'startup-dialogs');
+// STARTUP_FIXTURE_DIR in the environment points the replay at a FRESH capture
+// instead — how test-conpty/check-startup-drift.mjs --app asks "does the app
+// still read what this Claude Code shows?" without touching the saved set.
+export const STARTUP_FIXTURE_DIR = process.env.STARTUP_FIXTURE_DIR
+  || path.join(__dirname, '..', 'fixtures', 'startup-dialogs');
 
 export function listPlanFixtures(dir = PLAN_FIXTURE_DIR): string[] {
   return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
