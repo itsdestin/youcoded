@@ -91,6 +91,7 @@ import { FriendlyMascots } from '../mockups/FriendlyMascots';
 import { RemoteSetupDemo } from '../mockups/RemoteSetup';
 import { SettingsTaperDemo } from '../mockups/SettingsTaperDemo';
 import { PopupTaperDemo } from '../mockups/PopupTaperDemo';
+import { CardAnatomyDemo, ConversationCardDemo } from '../mockups/CardAnatomyDemo';
 import { SettingsAnatomyDemo } from '../mockups/SettingsAnatomyDemo';
 import { PairDialogDemo, SingleDialogDemo, DangerDialogDemo, QuestionCardDemo, PermissionRowDemo } from '../mockups/ButtonPlacementDemo';
 import { ProjectPopupTaperDemo } from '../mockups/ProjectPopupTaperDemo';
@@ -7396,6 +7397,26 @@ export const COMPARE_SURFACES: CompareSurface[] = [
       { n: 4, basis: 'How much space between groups.', candidates: [
         { id: 'compact', label: 'Tighter', note: '16px between groups, 6px between rows.', render: () => <SettingsAnatomyDemo spacing="compact" /> },
         { id: 'roomy', label: 'Roomier', note: '24px between groups, 8px between rows.', render: () => <SettingsAnatomyDemo spacing="roomy" /> },
+      ] },
+    ],
+  },
+  // WHY (design-guide review, 2026-09-24): one text order for every "name, who
+  // made it, numbers" card, and one date position for conversation cards.
+  {
+    id: 'card-anatomy',
+    label: 'Card text order',
+    question: 'In what order does a card show its text?',
+    frame: 'canvas',
+    paneWidth: { min: 720, max: 900 },
+    rounds: [
+      { n: 1, basis: 'A plugin, a Library skill and a Page as cards.', candidates: [
+        { id: 'today', label: 'Today (Marketplace)', note: 'Capitals badge, two pills for trust and author, stats split left and right.', render: () => <CardAnatomyDemo anatomy="today" /> },
+        { id: 'quiet-footer', label: 'Details at the bottom', note: 'Title and status, the description, then one grey line: kind · who · numbers.', render: () => <CardAnatomyDemo anatomy="quiet-footer" /> },
+        { id: 'meta-under-title', label: 'Who under the title', note: 'Title with kind · who under it, the description, then the numbers at the bottom right.', render: () => <CardAnatomyDemo anatomy="meta-under-title" /> },
+      ] },
+      { n: 2, basis: 'Conversation cards (Resume, Projects, chat references): where the date goes.', candidates: [
+        { id: 'date-top', label: 'Date top right', note: 'The date on the title line, at the right.', render: () => <ConversationCardDemo anatomy="date-top" /> },
+        { id: 'date-end', label: 'Date with the details', note: 'The date at the end of the grey details line.', render: () => <ConversationCardDemo anatomy="date-end" /> },
       ] },
     ],
   },
