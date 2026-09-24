@@ -77,6 +77,7 @@ import TrustGate, { useTrustGateActive } from './components/TrustGate';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
+import { fetchReopenList, forgetReopenList, resolveNativeBinding, claudeModelFor } from './state/welcome-back';
 import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
 import PreferencesPopup from './components/PreferencesPopup';
 import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, defaultRuntime, type Runtime, type Binding } from './components/RuntimeBinding';
@@ -98,7 +99,7 @@ import { PageHost } from './components/pages/PageHost';
 import { PageCreateDialog, type PageCreateRequest } from './components/pages/PageCreateDialog';
 import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
-import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
+import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider, PastSession } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { detectPermissionMode, syncKeyedSubscriptions, clearKeyedSubscriptions } from './state/permission-mode-scan';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
@@ -3487,6 +3488,53 @@ function AppInner() {
     // edge — no manual touched reset needed here.
     setWelcomeFormOpen(true);
   }, [sessionDefaults]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ── Welcome back (design 2026-09-24) ─────────────────────────────────────
+  // Asked ONCE per launch, after the strip's first answer, and only when the
+  // strip is empty: a reload of a window that still has sessions has nothing to
+  // welcome back from. Not while a phone is catching up — same reason as the
+  // welcome form below.
+  const [welcomeBackIds, setWelcomeBackIds] = useState<string[] | null>(null);
+  const welcomeBackAsked = useRef(false);
+  useEffect(() => {
+    if (welcomeBackAsked.current || isFirstRun !== false || !sessionListLoaded || remoteCatchingUp) return;
+    welcomeBackAsked.current = true;
+    if (sessions.length > 0) return;
+    let alive = true;
+    void fetchReopenList().then((ids) => { if (alive && ids.length > 0) setWelcomeBackIds(ids); });
+    return () => { alive = false; };
+  }, [isFirstRun, sessionListLoaded, remoteCatchingUp, sessions.length]);
+  const welcomeBackDone = useCallback(() => {
+    setWelcomeBackIds((ids) => { if (ids) void forgetReopenList(ids); return null; });
+  }, []);
+  // Resume every ticked row through the same path as a Resume-browser click, one
+  // at a time so each goes through its own lease check. A native row reuses the
+  // model it last ran on (Q-model); one whose model is not set up here is left
+  // on the list for a manual Resume, which asks.
+  const welcomeBackResumeMany = useCallback(async (rows: PastSession[]): Promise<string[]> => {
+    const [providers, catalog] = await Promise.all([
+      window.claude.providers.list(),
+      window.claude.providers.catalog(),
+    ]).catch(() => [[], []] as [any[], any[]]);
+    const done: string[] = [];
+    for (const r of rows) {
+      let binding: ModelBinding | undefined;
+      if (r.provider === 'native') {
+        binding = resolveNativeBinding(r.lastUsedModel, providers as any[], catalog as any[]) ?? undefined;
+        if (!binding) continue;
+      }
+      const ok = await handleResumeSession(
+        r.sessionId, r.projectSlug, r.projectPath,
+        claudeModelFor(r.provider === 'native' ? undefined : r.lastUsedModel, sessionDefaults.model),
+        sessionDefaults.skipPermissions || false, false, r.provider, binding, r.name,
+      );
+      if (ok) done.push(r.sessionId);
+    }
+    return done;
+  }, [handleResumeSession, sessionDefaults]);
+  const welcomeBackMode = useMemo(() => (welcomeBackIds && welcomeBackIds.length > 0
+    ? { ids: welcomeBackIds, onResumeMany: welcomeBackResumeMany, onDone: welcomeBackDone }
+    : undefined), [welcomeBackIds, welcomeBackResumeMany, welcomeBackDone]);
+
   const autoOpenedWelcome = useRef(false);
   useEffect(() => {
     // Not while a phone is still catching up: the screen it would open over is about to fill
@@ -3988,7 +4036,9 @@ function AppInner() {
               />
             </div>
           <div
-            className="flex-1 flex flex-col items-center justify-center gap-3"
+            // invisible under Welcome back: that screen takes this one's place
+            // until you choose (Q-where), rather than sitting on top of it.
+            className={`flex-1 flex flex-col items-center justify-center gap-3${welcomeBackMode ? ' invisible' : ''}`}
             // The header is position:absolute over the top of this area, so
             // center the welcome content in the space BELOW it (and above the
             // bare frame's bottom strip) rather than behind it. --top-chrome-
@@ -4346,6 +4396,18 @@ function AppInner() {
       {skipWarning}
       {smallModelWarning}
       {fullAutoWarning}
+      {/* Welcome back: its own instance, so the everyday Resume browser keeps
+          its search/filter state and open/close behaviour untouched. */}
+      {welcomeBackMode && (
+        <ResumeBrowser
+          open
+          onClose={welcomeBackDone}
+          onResume={handleResumeSession}
+          defaultModel={sessionDefaults.model}
+          defaultSkipPermissions={sessionDefaults.skipPermissions}
+          welcomeBack={welcomeBackMode}
+        />
+      )}
       <ResumeBrowser
         open={resumeRequested}
         onClose={() => setResumeRequested(false)}

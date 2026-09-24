@@ -660,6 +660,9 @@ interface UntypedSessionWrites {
   setTag: (sessionId: string, tagId: string, value: boolean) => Promise<{ ok: boolean }>;
   setNote: (sessionId: string, note: string) => Promise<{ ok: boolean }>;
   getMeta: (sessionId: string) => Promise<{ tags: string[]; note: string; supported: boolean; flags: Record<string, boolean> }>;
+  // Welcome back (MOCK_ONLY — see mock-only.ts).
+  reopenList: () => Promise<string[]>;
+  forgetReopen: (ids: string[]) => Promise<{ ok: boolean }>;
 }
 
 /** Upsert one session's meta slice, seeding from a `past` row of the same id so
@@ -932,6 +935,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     handoff: handoff as any,
     list: async () => store.getState().sessions,
     browse: async () => store.getState().past,
+    // Welcome back — MOCK_ONLY until the per-install list lands in main.
+    reopenList: async () => delay(store.getState().reopen),
+    forgetReopen: async (ids: string[]) => {
+      store.setState((s) => ({ ...s, reopen: s.reopen.filter((id) => !ids.includes(id)) }));
+      return delay({ ok: true });
+    },
 
     create: async (opts) => {
       // Admission belongs to creation, just like the desktop backend. A race

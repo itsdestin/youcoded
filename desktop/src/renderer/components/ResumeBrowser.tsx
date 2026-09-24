@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
-import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, CheckboxMark, SearchFilterPill, SettingRow } from './ui';
+import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, Checkbox, CheckboxMark, SearchFilterPill, SettingRow } from './ui';
 import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
@@ -263,6 +263,25 @@ interface Props {
   onResume: ResumeHandler;
   defaultModel?: string;
   defaultSkipPermissions?: boolean;
+  /** Present = the Welcome back screen: the same browser, limited to the
+   *  conversations that were open when the app last closed. */
+  welcomeBack?: WelcomeBackMode;
+}
+
+/** The Welcome back screen (questions deck 2026-09-24, welcome-back-questions).
+ *  WHY the Resume browser and not a new screen: Destin, Q-actions — "this surface
+ *  should basically be the full resume browser for the given sessions.
+ *  tags/notes/renames/preview/etc." So it is this component with a tick box on
+ *  each row, a Resume/Start fresh footer, and no way to dismiss it by accident
+ *  (Q-where: it replaces the start screen until you choose). */
+export interface WelcomeBackMode {
+  /** Conversation ids that were open in the strip at the last shutdown. */
+  ids: readonly string[];
+  /** Resume these rows in one go; resolves to the ids that actually launched.
+   *  A row left out (e.g. its model is not on this device) stays on the list. */
+  onResumeMany: (rows: PastSession[]) => Promise<string[]>;
+  /** Leave the screen: forget whatever is left (Q-leftover: "forget them"). */
+  onDone: () => void;
 }
 
 // How many previewed conversations stay built (the one on screen, recent ones,
@@ -322,7 +341,18 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
   );
 });
 
-export default function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions }: Props) {
+export default function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions, welcomeBack }: Props) {
+  const wb = welcomeBack;
+  // Welcome back: which rows are ticked, and which already launched from this
+  // screen (they leave the list — they are open tabs now).
+  const [ticked, setTicked] = useState<Set<string>>(new Set());
+  const [launched, setLaunched] = useState<Set<string>>(new Set());
+  const [resumingMany, setResumingMany] = useState(false);
+  // How many ticked rows a Resume press could not open by itself (a native row
+  // whose last model is not set up here). Said in the footer, never silently.
+  const [leftBehind, setLeftBehind] = useState(0);
+  const [loadedOnce, setLoadedOnce] = useState(false);
+  const tickSeeded = useRef(false);
   // Live tag registry — drives the Tag Picker, chips, and custom-tag filter.
   const registry = useTagRegistry();
   // WHY on open, not mount: this browser stays mounted while closed, so the
@@ -599,7 +629,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     setLoading(true);
     setLoadError(null);
     (window as any).claude.session.browse()
-      .then((list: PastSession[]) => { setSessions(list); setLoadError(null); })
+      .then((list: PastSession[]) => { setSessions(list); setLoadError(null); setLoadedOnce(true); })
       .catch((err: any) => {
         setSessions([]);
         // The real message when there is one; never a guess about the cause.
@@ -638,8 +668,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     else if (organizeId) setOrganizeId(null);
     else if (openPill) setOpenPill(null);
     else if (expandedId) setExpandedId(null);
-    else onClose();
-  }, [tagManagerOpen, organizeId, openPill, expandedId, onClose]);
+    // Welcome back is left only through its own buttons (Q-where).
+    else if (!wb) onClose();
+  }, [tagManagerOpen, organizeId, openPill, expandedId, onClose, wb]);
   useEscClose(open && !renameSession, handleEscClose);
 
   // Close the active filter dropdown on outside click. Recognizes clicks
@@ -723,6 +754,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
 
   const filtered = useMemo(() => {
+    // Welcome back shows exactly the conversations that were open — completed
+    // ones included, since marking one complete here must not make it vanish
+    // mid-choice — minus any already resumed from this screen.
+    if (wb) return sessions.filter((s) => wb.ids.includes(s.sessionId) && !launched.has(s.sessionId));
     // Filter pipeline lives in resume-browser-filters.ts so it can be unit tested.
     // Order: Show Complete + sticky → project → tag → search.
     const state: FilterState = {
@@ -734,7 +769,43 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       tagLabelById: Object.fromEntries(registry.tags.map((t) => [t.id, t.label])),
     };
     return applyFilters(sessions, state);
-  }, [sessions, search, showComplete, stickyComplete, selectedProjects, selectedTagIds, registry.tags]);
+  }, [wb, launched, sessions, search, showComplete, stickyComplete, selectedProjects, selectedTagIds, registry.tags]);
+
+  // Every resumable row starts ticked (Q-ticks: "All ticked"), once, when the
+  // list first arrives. A row that cannot be resumed here (folder not on this
+  // device, transcript still syncing) starts unticked and cannot be ticked.
+  useEffect(() => {
+    if (!wb || tickSeeded.current || loading || !loadedOnce) return;
+    tickSeeded.current = true;
+    setTicked(new Set(filtered.filter((s) => !s.missingProject && !s.notSyncedYet && !s.flags?.complete).map((s) => s.sessionId)));
+  }, [wb, loading, loadedOnce, filtered]);
+  const tickedRows = wb ? filtered.filter((s) => ticked.has(s.sessionId)) : [];
+  // Nothing left to choose from: the screen has done its job.
+  useEffect(() => {
+    if (wb && tickSeeded.current && !loading && filtered.length === 0) wb.onDone();
+  }, [wb, loading, filtered.length]);
+  const setTick = (id: string, next: boolean) => setTicked((prev) => {
+    const ns = new Set(prev);
+    if (next) ns.add(id); else ns.delete(id);
+    return ns;
+  });
+  const resumeTicked = async () => {
+    if (!wb || tickedRows.length === 0) return;
+    setResumingMany(true);
+    try {
+      const done = await wb.onResumeMany(tickedRows);
+      setLeftBehind(tickedRows.length - done.length);
+      setLaunched((prev) => new Set([...prev, ...done]));
+      // Open the first row that could not go by itself, so its model picker is
+      // on screen — the footer line says why — instead of a button that
+      // silently does nothing when pressed again.
+      const first = tickedRows.find((r) => !done.includes(r.sessionId));
+      if (first) rowActions.current?.select(first);
+      setTicked((prev) => new Set([...prev].filter((id) => !done.includes(id))));
+    } finally {
+      setResumingMany(false);
+    }
+  };
 
   // What the sheet is currently showing — it lags the clicked row (previewId,
   // which drives the list's highlight) until that conversation has been read.
@@ -895,6 +966,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       s.sessionId === sessionId ? { ...s, flags: { ...(s.flags || {}), [flag]: val } } : s,
     ));
     apply(next);
+    // Welcome back: finished work is not work to reopen, so Complete unticks it.
+    if (wb && flag === 'complete' && next) setTick(sessionId, false);
     // Pin just-flagged-Complete rows visible for the remainder of this open.
     const pinned = flag === 'complete' && next && !showComplete;
     if (pinned) {
@@ -1041,14 +1114,18 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const renderStamp = {};
   const rowDeps = (s: PastSession, showPath: boolean): readonly unknown[] => {
     const opened = organizeId === s.sessionId || expandedId === s.sessionId;
-    return [s, showPath, previewOn, previewOn && previewId === s.sessionId, registry.byId, !!namingApi(), opened ? renderStamp : null];
+    return [s, showPath, previewOn, previewOn && previewId === s.sessionId, registry.byId, !!namingApi(), opened ? renderStamp : null, ticked.has(s.sessionId)];
   };
 
   const handleConfirmResume = async (s: PastSession) => {
     // Close ONLY when it actually launched. A create that never acked returns
     // false — keep the browser open (App has toasted the honest reason) so the
     // user can retry or pick another row (Task 6 review ack-gap).
-    if (await resumeOptions.resume(s, onResume)) onClose();
+    // Welcome back stays up for the rest of the list; the resumed row leaves it.
+    if (await resumeOptions.resume(s, onResume)) {
+      if (wb) setLaunched((prev) => new Set(prev).add(s.sessionId));
+      else onClose();
+    }
   };
 
   if (!open) return null;
@@ -1204,6 +1281,17 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           rowActions.current?.select(s);
         }}
       >
+        {/* Welcome back: the tick that says "reopen this one". Not on the
+            preview's header copy — one tick per conversation, in the list. */}
+        {wb && !clone && (
+          <Checkbox
+            checked={ticked.has(s.sessionId)}
+            disabled={!canResume}
+            onChange={(next) => setTick(s.sessionId, next)}
+            aria-label={`Reopen ${s.name}`}
+            className="mr-2"
+          />
+        )}
         {namingApi() ? <Button variant="ghost" size="sm"
           // -ml-2 cancels the button's own px-2 so the NAME's first letter lands
           // on the same left edge as the metadata line below it, while the hover
@@ -1556,7 +1644,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
       {resumeOptions.dialog}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
-      <Scrim layer={1} onClick={onClose} />
+      <Scrim layer={1} onClick={wb ? undefined : onClose} />
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
         <OverlayPanel
           layer={1}
@@ -1587,6 +1675,19 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               SessionStrip already uses for the divider between Resume and
               + New Session. */}
           <div className="px-4 pt-4 pb-3 shrink-0 relative">
+            {wb ? (
+              // Welcome back: a heading that says why this appeared, and none of
+              // the search/filter row — the list is only what was open, a handful
+              // of rows, and there is nothing to narrow.
+              <div className="select-none">
+                <h2 className="text-sm font-bold text-fg">Welcome back</h2>
+                <p className="text-xs text-fg-muted mt-1">
+                  {filtered.length === 1
+                    ? 'This session was open when YouCoded closed.'
+                    : 'These sessions were open when YouCoded closed. Pick the ones to reopen.'}
+                </p>
+              </div>
+            ) : (<>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-bold text-fg">Resume Session</h2>
               {/* Show Complete — same toggle pattern as Skip Permissions
@@ -1651,6 +1752,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               document.body,
             )}
             {!narrow && chipsRow}
+            </>)}
             {/* Inset both ends so the line stops short of the panel edge and
                 fades out rather than butting into it. */}
             <div
@@ -1718,6 +1820,28 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               )}
             </div>
           </div>
+          {/* Welcome back's two ways out. Start fresh forgets the list (the
+              sessions stay in Resume Session as always); Resume opens every
+              ticked row. The count is in the button so it says exactly what
+              one press will do. */}
+          {wb && (
+            <div className="shrink-0 relative px-4 py-3 flex flex-wrap items-center justify-end gap-2">
+              <div
+                aria-hidden
+                className="absolute inset-x-0 top-0 h-px"
+                style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
+              />
+              {leftBehind > 0 && filtered.length > 0 && (
+                <p className="w-full text-xs text-fg-muted" role="status">
+                  {leftBehind === 1 ? '1 session needs' : `${leftBehind} sessions need`} a model picked first. Choose one to resume it.
+                </p>
+              )}
+              <Button variant="ghost" size="md" onClick={wb.onDone} disabled={resumingMany}>Start fresh</Button>
+              <Button variant="primary" size="md" onClick={resumeTicked} disabled={tickedRows.length === 0 || resumingMany}>
+                {resumingMany ? 'Reopening…' : tickedRows.length === 0 ? 'Resume' : `Resume ${tickedRows.length === filtered.length && filtered.length > 1 ? 'all ' : ''}${tickedRows.length}`}
+              </Button>
+            </div>
+          )}
           </div>
         </div>
         {/* The transcript column. */}
