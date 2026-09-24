@@ -31,13 +31,18 @@ jobs:
       run:
         working-directory: desktop
     steps:
+      # No token left in .git/config: the job then runs an untrusted package
+      # (npm's latest Claude Code) and nothing it starts should find one.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
+      # No `cache: npm`: this job installs and runs an untrusted package, and
+      # the npm cache is shared with the build workflows — a poisoned cache
+      # entry must never be able to reach them.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
 
       # Only node-pty and @xterm/headless are needed; Electron's ~100 MB
       # runtime is not, so its download is skipped.
@@ -46,5 +51,11 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
+      # One retry before failing: a single slow start (network, a cold npm
+      # registry) must not send a red "something changed" email. A real change
+      # fails both runs the same way.
       - name: Compare the latest Claude Code's startup dialogs with the saved ones
-        run: node test-conpty/check-startup-drift.mjs --latest --app
+        run: |
+          node test-conpty/check-startup-drift.mjs --latest --app && exit 0
+          echo "::warning::First run reported a difference or failed — retrying once to rule out a flake."
+          node test-conpty/check-startup-drift.mjs --latest --app

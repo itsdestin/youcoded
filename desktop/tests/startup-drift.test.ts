@@ -45,3 +45,21 @@ describe('startup-dialog drift diff', () => {
     }
   });
 });
+
+// The daily job runs an UNTRUSTED package (npm's latest Claude Code), so its
+// hardening is pinned: no token left behind, no shared npm cache, read-only
+// permissions, and one retry so a flake does not send a red email.
+import fs from 'fs';
+import path from 'path';
+describe('cc-startup-drift workflow', () => {
+  const yml = fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'cc-startup-drift.yml'), 'utf8').replace(/\r/g, '');
+  it('checks out without persisting credentials', () => { expect(yml).toMatch(/persist-credentials:\s*false/); });
+  it('does not use the shared npm cache', () => { expect(yml).not.toMatch(/^\s*cache:/m); });
+  it('is read-only', () => {
+    expect(yml).toMatch(/^permissions:\n\s+contents: read\s*$/m);
+    expect(yml).not.toMatch(/:\s*write/);
+  });
+  it('retries the check once before failing', () => {
+    expect(yml.match(/check-startup-drift\.mjs --latest --app/g)?.length).toBe(2);
+  });
+});
