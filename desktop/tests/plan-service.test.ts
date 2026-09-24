@@ -287,7 +287,7 @@ describe('approve, resume, stop', () => {
       p.recoveries = [
         { stepId: 's1', iteration: 0, itemIndex: 0, cause: 'specialist-error', at: 1, relaunched: true },
         { stepId: 's1', iteration: 0, itemIndex: 1, cause: 'specialist-error', at: 2, relaunched: true },
-        { stepId: 's1', iteration: 0, itemIndex: 1, cause: 'unknown-request', at: 3 },
+        { stepId: 's1', iteration: 0, itemIndex: 1, cause: 'unknown-outcome', at: 3 },
       ];
     });
     const seqBefore = (await journal.get(REF, view.planId))!.seq;
@@ -301,7 +301,7 @@ describe('approve, resume, stop', () => {
     expect(rec.recoveries).toEqual([
       { stepId: 's1', iteration: 0, itemIndex: 0, cause: 'specialist-error', at: 1, relaunched: true },
       { stepId: 's1', iteration: 0, itemIndex: 1, cause: 'specialist-error', at: 2, relaunched: true, reset: true },
-      { stepId: 's1', iteration: 0, itemIndex: 1, cause: 'unknown-request', at: 3, reset: true },
+      { stepId: 's1', iteration: 0, itemIndex: 1, cause: 'unknown-outcome', at: 3, reset: true },
     ]);
   });
 

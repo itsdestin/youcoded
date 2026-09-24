@@ -80,7 +80,7 @@ function notReadySentence(list: readonly PlanNotReadySpecialist[]): string {
 }
 
 const TOOL_EFFECTS = ['read', 'local', 'external'] as const satisfies readonly ToolEffect[];
-const PLAN_RECOVERY_CAUSES = ['launch-failed', 'specialist-error', 'invalid-report', 'unknown-request', 'unknown-outcome'] as const satisfies readonly PlanRecoveryCause[];
+const PLAN_RECOVERY_CAUSES = ['launch-failed', 'specialist-error', 'invalid-report', 'unknown-outcome'] as const satisfies readonly PlanRecoveryCause[];
 // WHY only two actions now (spending rework stage 1, decision 34): nothing is
 // rationed per step or per plan any more, so there is no "add_budget" to
 // recommend or to press — see shared/types.ts PlanPauseAction.

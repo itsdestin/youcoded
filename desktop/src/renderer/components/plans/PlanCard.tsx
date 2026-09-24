@@ -28,27 +28,22 @@ import { previewSessionKey } from '../../../shared/chatsearch-refs';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 
 /**
- * Specialists stage two — the PLAN CARD (designed 2026-09-05; since Task 5a
- * every button goes through the typed `window.claude.plans` bridge via
- * plan-bridge.ts, and the workbench fakes answer the same forms).
+ * Specialists stage two — the PLAN CARD. Every button goes through the typed
+ * `window.claude.plans` bridge (plan-bridge.ts); the workbench fakes answer
+ * the same forms.
  *
- * What Destin decided on the 2026-09-05 questions deck, and what each answer
- * pins here:
- *  Q-2  Before approval the card is a short step list, the specialist count,
- *       ONE ceiling line, then Approve and Comment. Detail folds per step.
- *  Q-3  Comment opens a note box under the card; the assistant rewrites the
- *       plan and posts a NEW card, and this one greys out ("revised").
- *  Q-4  Auto-approve is off until the user turns it on in Settings; a plan
- *       that ran without asking says so on the card, ceiling still printed.
- *  Q-5  The plan card IS the progress surface: steps tick off, each running
- *       specialist is a line inside its step with Note / Stop.
- *  Q-6  A plan that hits its ceiling pauses IN PLACE: finished work stays,
- *       the stuck step says why, Add budget / Stop.
- *  Q-7  After a restart the card comes back "Interrupted — 3 of 5 done" with
- *       Continue; nothing runs until it is pressed.
- * Settled by the spec (§4), not up for re-derivation: budgets are hard stops,
- * the ceiling is Σ(step cap × fan-out) priced per model, dollars appear only
- * when the model has a published price — tokens always do.
+ * What the card is, per Destin's rulings (decision log 33–37):
+ *  - Before approval: a short step list, the specialist count and ONE estimate
+ *    line ("Usually $0.40–$2", or tokens + a note when unpriced), then the
+ *    Plan settings gear · Comment · Approve. No per-step budgets exist.
+ *  - Plan settings (a popup naming the plan): an optional whole-plan limit —
+ *    dollars, tokens when unpriced — and each step's model.
+ *  - Comment opens a note box; the assistant posts a revised card.
+ *  - The card IS the progress surface: steps tick off, "Spent $X" (of the
+ *    limit, if one is set) beside Stop the plan.
+ *  - A plan only pauses at its limit if the user set one: "Reached your $X
+ *    limit." with Stop · Continue (Continue asks for a new total limit).
+ *  - After a restart the card comes back Interrupted with Continue.
  */
 
 // ---- header (ToolCard's friendlyToolDisplay reads these) --------------------

@@ -27,7 +27,7 @@ type PlanPauseRoute = 'auto' | 'assistant' | 'user';
 export type { PlanPauseAction };
 /** The pause kinds that can be recovered automatically; also the `cause` of
  *  a journalled recovery (one per step, iteration, item and cause). */
-export type PlanRecoveryCause = 'launch-failed' | 'specialist-error' | 'invalid-report' | 'unknown-request' | 'unknown-outcome';
+export type PlanRecoveryCause = 'launch-failed' | 'specialist-error' | 'invalid-report' | 'unknown-outcome';
 /** A pause kind, or a plan interrupted by an app restart (not a pause kind,
  *  but it has a route: the person presses Continue — signed R9). */
 export type PlanPauseSituation = PlanPauseKind | 'interrupted';
