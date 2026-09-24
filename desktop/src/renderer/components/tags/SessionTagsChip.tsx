@@ -47,7 +47,9 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
         // the popup never accepts an edit that would be refused. See
         // META_UNSUPPORTED_FALLBACK.
         disabled={!sessionId || !meta.supported}
-        className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim enabled:hover:bg-inset transition-colors max-w-[220px] disabled:opacity-50 disabled:cursor-not-allowed"
+        // `status-chip`: float chrome styles every status chip alike; this one
+        // is nested, so `.status-bar > button` alone never reached it.
+        className="status-chip flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim enabled:hover:bg-inset transition-colors max-w-[220px] disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {hasContent ? (
           <span className="flex items-center gap-1 overflow-hidden">

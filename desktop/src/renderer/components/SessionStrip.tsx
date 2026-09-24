@@ -166,8 +166,8 @@ interface Props {
   myWindowId?: number | null;
 }
 
-/* ── Status dot color maps ───────────────────────────────── */
-
+/* Status dot colors. WHY data-status on the dot: float chrome swaps each colour
+   for one tuned to the wallpaper behind it (styles/float-chrome.css). */
 const DOT_BG: Record<SessionStatusColor, string> = {
   green: 'bg-green-400',
   red: 'bg-red-400',
@@ -196,7 +196,7 @@ function SessionDot({ color, isActive }: { color: SessionStatusColor; isActive: 
   return (
     <span className="relative inline-flex items-center justify-center w-2.5 h-2.5 shrink-0">
       <span
-        className={`relative w-2 h-2 rounded-full ${DOT_BG[color]}`}
+        data-status={color} className={`session-dot relative w-2 h-2 rounded-full ${DOT_BG[color]}`}
         // Perf: steps(8) instead of ease-in-out. This dot breathes whenever the
         // session isn't gray — i.e. for every non-idle session, in the
         // always-visible header — and on a 180Hz panel a smoothly-animating

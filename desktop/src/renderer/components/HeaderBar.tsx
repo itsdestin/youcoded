@@ -12,6 +12,7 @@ import NarrowViewToggle from './NarrowViewToggle';
 import WideViewToggle from './WideViewToggle';
 import { useArtifactCount } from '../hooks/useArtifactCount';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { useWallpaperHeaderInk } from '../hooks/use-wallpaper-header-ink';
 import { Tooltip } from './ui';
 import { ON_INSET_CONTROL, HEADER_ICON_BUTTON } from './header/control-states';
 import { FOCUS_RING } from './ui/Button';
@@ -61,7 +62,9 @@ export function CaptionButtons() {
   const btnClass = `px-2 py-1 rounded-[var(--radius-toggle)] flex items-center justify-center ${ON_INSET_CONTROL}`;
 
   return (
-    <div className="flex bg-inset rounded-md p-0.5 gap-0.5">
+    // `caption-buttons`: float chrome drops this shared pill and gives each of
+    // the three its own chip (styles/float-chrome.css).
+    <div className="caption-buttons flex bg-inset rounded-md p-0.5 gap-0.5">
       {/* Placement "bottom": these sit in the very top row of the window, where
           there is no room above them for a hint. */}
       <Tooltip text="Minimize" placement="bottom">
@@ -388,6 +391,8 @@ export default React.memo(function HeaderBar({
   windowDirectory, myWindowId,
 }: Props) {
   const headerRef = useRef<HTMLDivElement>(null);
+  // WHY: one header-owned sampler also covers late-mounting session dots via inherited CSS vars.
+  useWallpaperHeaderInk(headerRef);
   const [showToggleLabels, setShowToggleLabels] = useState(true);
 
   // Below 640px the settings cog, projects button, and gamepad collapse into a
@@ -528,7 +533,7 @@ export default React.memo(function HeaderBar({
           sides reserve equal space; when unset we fall back to flex-1. */}
       <div
         ref={leftClusterRef}
-        className={`${clusterFlexClass}flex items-center gap-1 sm:gap-2`}
+        className={`header-controls-left ${clusterFlexClass}flex items-center gap-1 sm:gap-2`}
         style={clusterStyle}
       >
         {narrow ? (
@@ -599,7 +604,7 @@ export default React.memo(function HeaderBar({
           (see clusterStyle above) keeps the session strip window-centered. */}
       <div
         ref={rightClusterRef}
-        className={`${clusterFlexClass}flex items-center justify-end gap-1 sm:gap-2`}
+        className={`header-controls-right ${clusterFlexClass}flex items-center justify-end gap-1 sm:gap-2`}
         style={clusterStyle}
       >
         {(narrow || !toggleOnLeft) && showToggle && toggleElement}
@@ -680,15 +685,16 @@ export function BareHeaderBar({ settingsOpen, onToggleSettings, settingsBadge, s
   settingsBadge?: boolean;
   settingsDangerBadge?: boolean;
 }) {
-  // MacTrafficLights measures the .header-bar element it sits in.
+  // WHY: the welcome screen has no session dots, but its controls share the wallpaper crop.
   const headerRef = useRef<HTMLDivElement>(null);
+  useWallpaperHeaderInk(headerRef);
   return (
     // select-none: the header is chrome, not highlightable or copyable (Destin,
     // 2026-09-10). A session rename box inside stays editable: globals.css
     // re-enables text fields.
     <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 shrink-0 select-none" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       <MacTrafficLights headerRef={headerRef} />
-      <div className="flex items-center gap-1 sm:gap-2">
+      <div className="header-controls-left flex items-center gap-1 sm:gap-2">
         <SettingsGearButton
           settingsOpen={settingsOpen}
           onToggleSettings={onToggleSettings}
@@ -701,7 +707,7 @@ export function BareHeaderBar({ settingsOpen, onToggleSettings, settingsBadge, s
       </div>
       {/* Empty middle — stays part of the drag region. */}
       <div className="flex-1 min-w-0" />
-      <div className="flex items-center justify-end gap-1 sm:gap-2">
+      <div className="header-controls-right flex items-center justify-end gap-1 sm:gap-2">
         {showCaptionButtons() && <CaptionButtons />}
       </div>
     </div>

@@ -1,4 +1,7 @@
-import type { ThemeTokens, ThemeShape, ThemeFont, ThemeBackground, ThemeLayout, ThemeEffects, ThemeOverlay, ThemeDefinition } from './theme-types';
+import type { ThemeTokens, ThemeShape, ThemeFont, ThemeBackground, ThemeLayout, ThemeEffects, ThemeOverlay, ThemeDefinition, ChromeStyle } from './theme-types';
+// Dev-only chrome-style override (`?chrome=float`); a no-op in production — see
+// workbench-mode.ts for why importing it here is safe.
+import { workbenchChromeStyle } from '../workbench-mode';
 
 /** True when the theme composites a real layer behind the chrome — a wallpaper
  *  image or a gradient. This is THE predicate that stamps `[data-wallpaper]` on
@@ -129,11 +132,21 @@ export function applyThemeFont(font: ThemeFont | undefined): string | null {
   return null;
 }
 
-/** Returns data-attribute key/value pairs to set on <body>. */
-export function buildLayoutAttrs(layout: ThemeLayout | undefined): Record<string, string> {
-  if (!layout) return {};
+/** Returns data-attribute key/value pairs to set on <body>.
+ *
+ *  `chromeOverride` is the UI Workbench's `?chrome=` switch (see
+ *  workbench-mode.ts) and is `null` everywhere else — including every production
+ *  build, where `isWorkbenchMode()` folds to `false` and the caller passes null.
+ *  It REPLACES the theme's own chrome-style for the duration of a review so a
+ *  chrome layout can be looked at on a theme that does not ship it yet. */
+export function buildLayoutAttrs(
+  layout: ThemeLayout | undefined,
+  chromeOverride?: ChromeStyle | null,
+): Record<string, string> {
   const result: Record<string, string> = {};
-  if (layout['chrome-style']) result['data-chrome-style'] = layout['chrome-style'];
+  const chrome = chromeOverride ?? layout?.['chrome-style'];
+  if (chrome) result['data-chrome-style'] = chrome;
+  if (!layout) return result;
   if (layout['input-style']) result['data-input-style'] = layout['input-style'];
   if (layout['bubble-style']) result['data-bubble-style'] = layout['bubble-style'];
   if (layout['header-style']) result['data-header-style'] = layout['header-style'];
@@ -644,7 +657,7 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   for (const attr of LAYOUT_ATTRS) {
     body.removeAttribute(attr);
   }
-  for (const [attr, value] of Object.entries(buildLayoutAttrs(theme.layout))) {
+  for (const [attr, value] of Object.entries(buildLayoutAttrs(theme.layout, workbenchChromeStyle()))) {
     body.setAttribute(attr, value);
   }
 
