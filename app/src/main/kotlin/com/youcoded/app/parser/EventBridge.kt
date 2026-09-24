@@ -81,6 +81,9 @@ class EventBridge(private val socketName: String, private val ownSessionId: Stri
     private val _sessionStarted = MutableStateFlow(false)
     val sessionStarted: StateFlow<Boolean> = _sessionStarted
 
+    /** Tests only: clear the started flag to watch what a LATER hook does alone. */
+    internal fun resetStartedForTest() { _sessionStarted.value = false }
+
     /** Stored scope for launching socket-closure monitor coroutines. */
     private var monitorScope: CoroutineScope? = null
 

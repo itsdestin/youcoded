@@ -51,8 +51,17 @@ class EventBridgeAdmitTest {
         assertNull(a.admit(line("SessionStart", "real", "1000")))
         assertEquals(true, a.sessionStarted.value)
 
+        // A nested `claude` whose hooks are REFUSED never starts a session: the
+        // real process sent a tool hook first (so it owns the session), then the
+        // nested one's SessionStart and tool hook are refused — on a bridge whose
+        // started flag we reset to observe them alone.
         val b = EventBridge("test-socket-name")
-        assertNull(b.admit(line("SessionStart", "real", "1000")))
+        assertNotNull(b.admit(line("PostToolUse", "real", "1000")))  // real process: owner
+        b.resetStartedForTest()
+        assertNull(b.admit(line("SessionStart", "nested", "2000")))   // refused
+        assertNull(b.admit(line("PermissionRequest", "nested", "2000"))) // refused
+        assertEquals(false, b.sessionStarted.value)
+
         val c = EventBridge("test-socket-name")
         assertNull(c.admit("not json"))
         assertEquals(false, c.sessionStarted.value)

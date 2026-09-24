@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import java.io.File
@@ -368,7 +369,7 @@ class ManagedSession(
                         detectPermissionMode(screen)
 
                         // (No "any screen output = ready" here any more — see the
-                        // sessionStarted collector below; review F1, 2026-09-24.)
+                        // sessionStarted collector above, in the hook-event coroutine; review F1.)
                     }
                 }
             } catch (_: Exception) {}
@@ -609,8 +610,9 @@ class ManagedSession(
         })
     }
 
-    /** The "session started" signal React listens for (prompt:show of
-     *  SESSION_READY_PROMPT_ID, dismissed at once — see App.tsx promptShow). */
+    /** The "session started" signal React listens for: prompt:show of
+     *  "_session_ready" (ANDROID_SESSION_READY_PROMPT_ID in the renderer's
+     *  state/startup-dialog-store.ts), dismissed at once — see App.tsx promptShow. */
     private fun broadcastSessionReady() {
         bridgeServer?.broadcast(JSONObject().apply {
             put("type", "prompt:show")
@@ -750,5 +752,11 @@ class ManagedSession(
         ptyBridge?.stop()
         directShellBridge?.stop()
         try { titleFile.delete() } catch (_: Exception) {}
+        // The scope is this session's own (SessionRegistry makes one per session,
+        // shared only with its TranscriptWatcher and EventBridge). Cancelling it
+        // ends every collector it started — the hook-event collector and the
+        // "wait for the first hook" one, which would otherwise wait forever for a
+        // session destroyed before Claude Code ran any hook (second review F10).
+        scope.cancel()
     }
 }
