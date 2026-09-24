@@ -52,6 +52,11 @@ function isCompactCommandEcho(text: string): boolean {
   return /^\/compact(\s|$)/.test(text.trim());
 }
 
+/** A message's text minus every space, tab and line break (see sameUserMessage). */
+function visibleText(s: string): string {
+  return s.replace(/\s+/g, '');
+}
+
 /**
  * Whether a transcript user line is the message a pending bubble drew: the exact text, or, for a
  * message sent with attachments, the same words once the bubble's attachment paths and Claude
@@ -61,12 +66,16 @@ function isCompactCommandEcho(text: string): boolean {
  */
 function sameUserMessage(message: { content: string; attachments?: string[] }, recorded: string): boolean {
   if (message.content === recorded) return true;
+  // WHY spacing is ignored (2026-09-23): CC can record a message with its spacing changed (a
+  // pasted tab swallowed as the Tab key), and an exact-only match drew the recorded copy at the
+  // top while the bubble stayed pinned below every reply. See docs/chat-reducer.md.
+  if (visibleText(message.content) === visibleText(recorded)) return true;
   const paths = message.attachments;
   if (!paths?.length) return false;
   const words = (s: string) => {
     let out = s;
     for (const p of paths) out = out.split(p).join(' ');
-    return out.replace(/\[Image #\d+\]/g, ' ').replace(/\s+/g, ' ').trim();
+    return visibleText(out.replace(/\[Image #\d+\]/g, ' '));
   };
   return words(message.content) === words(recorded);
 }
@@ -883,12 +892,15 @@ function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState)
   copy.timeline.forEach((e, i) => {
     if (i <= lastKnown || e.kind !== 'user' || e.pending || e.injected) return;
     if (e.uuid && seen.has(e.uuid)) return;
-    unapplied.set(e.message.content, (unapplied.get(e.message.content) ?? 0) + 1);
+    const key = visibleText(e.message.content);
+    unapplied.set(key, (unapplied.get(key) ?? 0) + 1);
   });
+  // visibleText, like sameUserMessage: the copy holds CC's RECORDED text, spacing may differ.
   const consume = (text: string) => {
-    const n = unapplied.get(text) ?? 0;
+    const key = visibleText(text);
+    const n = unapplied.get(key) ?? 0;
     if (n <= 0) return false;
-    unapplied.set(text, n - 1);
+    unapplied.set(key, n - 1);
     return true;
   };
   const carried = prev.timeline.filter((e) => e.kind === 'user' && e.pending && !consume(e.message.content));

@@ -45,6 +45,9 @@ The classifier matches `<glyph> <single- or multi-word Gerund>…` (e.g. `* Inst
 
 User timeline entries carry a `pending?: boolean` flag. `USER_PROMPT` always appends a new entry with `pending: true`. `TRANSCRIPT_USER_MESSAGE` finds the **oldest** pending entry with matching content and clears its flag — confirming the optimistic bubble rather than adding a duplicate. If no pending match exists (remote/replay client, or user typed directly in the terminal), the transcript event appends a new `pending: false` entry.
 
+"Matching content" (`sameUserMessage`) is the exact text, else the same text with every space, tab and line break removed (`visibleText`), else — for a message with attachments — the same words with the attachment paths and CC's `[Image #N]` placeholders set aside. **Spacing is ignored because CC can record a message with it changed:** a pasted tab reaches CC as the Tab KEY and is dropped ("Purpose\tPath" recorded as "PurposePath"), and an exact-only match then drew the recorded copy at the top while the bubble stayed pinned below every reply (2026-09-23, "UI Consistency Audit Review"). The phone's hydrate carry-over (`carryUnsent`) keys on the same `visibleText`. Guards: `chat-order-sender-matches-receiver.test.ts`, `hydrate-per-session.test.ts`.
+<!-- verify: {"path": "youcoded/desktop/src/renderer/state/chat-reducer.ts", "contains": "function visibleText"} -->
+
 Replaces the prior content-match-against-last-10-entries approach, which silently dropped legitimate rapid-fire duplicates (e.g. "yes" sent twice within five turns). Pending/confirmed correctly distinguishes "transcript confirms a send already shown" from "two distinct sends that happen to have identical text."
 
 ### Tool cards dedup STRUCTURALLY, never by uuid
