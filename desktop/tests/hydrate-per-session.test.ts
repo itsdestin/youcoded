@@ -88,6 +88,16 @@ describe.each([
     expect(userTexts(after, 's1')).toEqual(['hello']);
   });
 
+  // 2026-09-23: Claude Code can record a message with its spacing changed (a pasted tab was
+  // swallowed as the Tab key). The computer's copy holds the RECORDED text; the phone's
+  // bubble holds what was typed. They are still the same message.
+  it('a pending bubble echoed with different spacing is not shown twice', () => {
+    const phone = run([init('s1'), typed('s1', 'Purpose\tPath notes')]);
+    const copy = hostCopy([init('s1'), said('s1', 'u1', 'PurposePath notes')], extra);
+    const after = chatReducer(phone, { type: 'HYDRATE_CHAT_STATE', sessions: copy });
+    expect(userTexts(after, 's1')).toEqual(['PurposePath notes']);
+  });
+
   it('the same words sent twice: one already echoed earlier, the new one still pending, stays pending', () => {
     const phone = run([init('s1'), said('s1', 'u1', 'yes'), typed('s1', 'yes')]);
     const copy = hostCopy([init('s1'), said('s1', 'u1', 'yes')], extra);
