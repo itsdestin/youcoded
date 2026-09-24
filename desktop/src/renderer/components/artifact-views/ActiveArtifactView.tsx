@@ -18,7 +18,6 @@ import { isRemoteMode } from '../../platform';
 // (the review bar + margin/rail) — CommentsModeToggle is the header control
 // that switches between them; the review bar only renders IN Comments mode.
 import { CommentsModeToggle } from '../comments/CommentsModeToggle';
-import { CommentsReviewBar } from '../comments/CommentsReviewBar';
 import { CodeCommentsRail } from '../comments/CodeCommentsRail';
 import { useDocComments } from '../../state/doc-comments-store';
 import { useNarrowByRef } from '../../hooks/use-container-narrow';
@@ -91,6 +90,17 @@ export interface ActiveArtifactHandle {
    * Retries briefly — the lazy CM6 chunk may still be mounting when a search
    * result opens a file. No-op for non-code viewers. */
   revealLine(line: number): void;
+  /** Switch between Reading and Comments mode — driven by the host header's
+   *  Comments button (round 4), paired with onCommentsStateChange. */
+  toggleComments(): void;
+}
+
+/** What the host header needs to draw the Comments button. */
+export interface CommentsHeaderState {
+  /** False on viewers with no text to anchor to (images, PDFs…) and while editing. */
+  available: boolean;
+  active: boolean;
+  count: number;
 }
 
 /** Metadata from the artifacts:get response that content alone cannot carry —
@@ -155,6 +165,10 @@ export interface ActiveArtifactViewProps {
   controlsInHeader?: boolean;
   // Fires whenever editability / edit-mode changes so the host header can update.
   onEditStateChange?: (s: { isEditable: boolean; editing: boolean }) => void;
+  /** Fires when the Comments button's state changes. A host that passes this
+   *  draws the button in its own header; without it the viewer shows its own
+   *  toggle row (ProjectView). */
+  onCommentsStateChange?: (s: CommentsHeaderState) => void;
   /** Host's Ctrl+F bar is open — forwarded so a viewer can move its own floating
    *  controls out from under it. */
   findBarOpen?: boolean;
@@ -162,7 +176,7 @@ export interface ActiveArtifactViewProps {
 
 export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifactViewProps>(function ActiveArtifactView({
   artifact, content, contentInfo, contentState, onRetryRead, projectRoot, projectId, projectName, sessionId, onContentChange, onDiskRead,
-  controlsInHeader = false, onEditStateChange, findBarOpen = false,
+  controlsInHeader = false, onEditStateChange, onCommentsStateChange, findBarOpen = false,
 }, ref) {
   // Legacy default: a caller that doesn't thread contentState keeps the OLD
   // semantics (null content = missing) rather than silently losing the
@@ -502,6 +516,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       };
       tryReveal();
     },
+    toggleComments: () => setCommentsMode((m) => (m === 'comments' ? 'reading' : 'comments')),
   }), [isEditable, editing, dirty, handleStartEdit, handleSave, handleCancel]);
 
   // Desktop app-quit / window-close guard while dirty (D3). Android never
@@ -571,6 +586,12 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // it — Comments mode hides resolved by default, and jumping to a thread
   // nobody can see would look like the link did nothing.
   const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(artifact.path);
+  // Round 4 (Destin): the Comments button lives in the host's header icon
+  // row "alongside the other actions" — same imperative-handle + state
+  // callback pattern the header already uses for Edit/Save.
+  useEffect(() => {
+    onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: pathComments.length });
+  }, [showComments, commentsMode, pathComments.length, onCommentsStateChange]);
   const openComments = useCallback((commentId?: string) => {
     if (commentId) {
       if (pathComments.find((c) => c.id === commentId)?.resolved) setPathShowResolved(true);
@@ -725,25 +746,18 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           <UnifiedDiff oldStr={conflict.disk} newStr={draft} fill />
         </div>
       )}
-      {/* Doc comments header strip (round 2): the mode toggle is always here
-          on any text file; the rest of the review bar (Show resolved, Send)
-          only renders IN Comments mode — that's what makes the mode visibly
-          distinct, not just an internal flag (brief: "must be clearly a
-          different mode… the review bar only appears here"). Round 3: ONE
-          toolbar row owns the border/background/padding now — CommentsReviewBar
-          used to nest a second copy of all three inside this one, clawed
-          back with negative margins, which is what made the strip read as
-          two stacked bars instead of one tidy row. */}
-      {showComments && (
+      {/* Comments toggle row — only for hosts that don't draw the button in
+          their own header (ProjectView). SessionDrawer passes
+          onCommentsStateChange and shows it in its icon row instead (round 4).
+          "Show resolved" and "Ask Your Assistant" live in the margin's footer
+          (CommentsPaneFooter), so this row is just the mode switch. */}
+      {showComments && !onCommentsStateChange && (
         <div className="flex items-center gap-2 px-2 py-1.5 border-b border-edge bg-panel shrink-0">
           <CommentsModeToggle
             active={commentsMode === 'comments'}
             count={pathComments.length}
             onToggle={() => setCommentsMode((m) => (m === 'comments' ? 'reading' : 'comments'))}
           />
-          {commentsMode === 'comments' && (
-            <CommentsReviewBar path={artifact.path} narrow={narrowPane} />
-          )}
         </div>
       )}
       <div className="flex-1 overflow-hidden flex">

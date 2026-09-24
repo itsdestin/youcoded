@@ -16,6 +16,7 @@ import { useDocComments, type DocComment } from '../../state/doc-comments-store'
 // mode) needs the identical highlight, and the two modes are mutually
 // exclusive so sharing costs nothing (see use-quote-marks.ts's own WHY).
 import { useQuoteMarks, ACTIVE_CLASSES } from './use-quote-marks';
+import { CommentsPaneFooter } from './CommentsPaneFooter';
 
 const GAP_PX = 10;
 // Fixed estimates rather than a measure-then-reflow pass: comment counts here
@@ -101,10 +102,10 @@ interface Props {
 }
 
 export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Props) {
-  // WHY read from the shared store, not a prop: CommentsReviewBar (a
-  // different subtree — the viewer's header, not its body) owns the "Show
-  // resolved" toggle's UI, and both need the SAME boolean without threading
-  // it through ActiveArtifactView.
+  // WHY read from the shared store, not a prop: CommentsPaneFooter owns the
+  // "Show resolved" toggle's UI and the header's count reads the same store,
+  // so all of them share ONE boolean without threading it through
+  // ActiveArtifactView.
   const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path);
   const visible = useMemo(
     () => comments.filter((c) => showResolved || !c.resolved).sort((a, b) => a.createdAt - b.createdAt),
@@ -160,7 +161,10 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
     const openComment = visible.find((c) => c.id === openId) ?? null;
     return (
       <>
-        <div ref={marginRef} className="relative w-9 shrink-0 border-l border-edge" style={{ minHeight: '100%' }}>
+        {/* flex-col + a flex-1 spacer puts the footer at the column's END, so
+            `sticky bottom-0` pins it to the viewport bottom while scrolling;
+            the markers are absolutely positioned and ignore the flow. */}
+        <div ref={marginRef} className="relative w-9 shrink-0 border-l border-edge flex flex-col" style={{ minHeight: '100%' }}>
           {visible.map((c) => (
             <button
               key={c.id}
@@ -174,6 +178,8 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
               {c.resolved ? <CheckIcon className="w-3 h-3" /> : '💬'}
             </button>
           ))}
+          <div className="flex-1" />
+          <CommentsPaneFooter path={path} compact />
         </div>
         {openComment && (
           <>
@@ -200,7 +206,8 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   }
 
   return (
-    <div ref={marginRef} className="relative w-64 shrink-0 border-l border-edge px-2 py-3" style={{ minHeight: '100%' }}>
+    // Same flex-col + spacer + sticky footer shape as the marker rail above.
+    <div ref={marginRef} className="relative w-64 shrink-0 border-l border-edge flex flex-col" style={{ minHeight: '100%' }}>
       {visible.map((c) => (
         <div
           key={c.id}
@@ -221,6 +228,8 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
           />
         </div>
       ))}
+      <div className="flex-1" />
+      <CommentsPaneFooter path={path} />
     </div>
   );
 }

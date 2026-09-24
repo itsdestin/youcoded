@@ -15,7 +15,8 @@ import { useProjectWatch } from '../hooks/useProjectWatch';
 import { useGitFileStatus } from '../hooks/useGitFileStatus';
 import { useMissingArtifacts, refreshMissingArtifacts } from '../hooks/useMissingArtifacts';
 import { gitFooterState } from '../utils/git-footer';
-import { ActiveArtifactView, type ActiveArtifactHandle } from './artifact-views/ActiveArtifactView';
+import { ActiveArtifactView, type ActiveArtifactHandle, type CommentsHeaderState } from './artifact-views/ActiveArtifactView';
+import { MenuIcon } from './context-menu/menu-icons';
 import SessionPreviewPane from './SessionPreviewPane';
 // 6b: COPY was originally added ONLY for the "Referenced
 // conversations" list block below (a cut candidate — see Task 6 brief 6b).
@@ -119,6 +120,35 @@ function Ic({ name, size = 15 }: { name: keyof typeof PATHS | string; size?: num
       strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
       {PATHS[name].split('M').filter(Boolean).map((seg, i) => <path key={i} d={'M' + seg} />)}
     </svg>
+  );
+}
+
+// Comments mode button (doc comments mockup, round 4 — Destin: "the comment
+// pane button should be in the header alongside the other actions"). Same
+// shape/states as IconBtn, but wider so the count can sit beside the glyph —
+// the same inline count badge the header's Files button uses (HeaderBar.tsx),
+// flipped to on-accent while pressed so it stays legible.
+function CommentsBtn({ state, onClick }: { state: CommentsHeaderState; onClick: () => void }) {
+  const title = state.active ? 'Back to reading' : 'Comments';
+  return (
+    <Tooltip text={title}>
+    <button
+      type="button"
+      aria-pressed={state.active}
+      aria-label={state.count ? `${title} (${state.count})` : title}
+      onClick={onClick}
+      className={`h-7 px-1.5 gap-1 rounded-md inline-flex items-center justify-center shrink-0 border transition-colors ${
+        state.active ? 'text-fg bg-well border-edge' : 'text-fg-dim border-transparent hover:text-fg hover:bg-well hover:border-edge'
+      }`}
+    >
+      <MenuIcon name="comment" className="w-4 h-4" />
+      {state.count > 0 && (
+        <span className="text-3xs rounded-full px-1 min-w-[14px] inline-flex items-center justify-center leading-none py-0.5 bg-accent text-on-accent">
+          {state.count}
+        </span>
+      )}
+    </button>
+    </Tooltip>
   );
 }
 
@@ -396,6 +426,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // this ref + mirrors its state so the toolbar can swap pencil ↔ save/cancel.
   const editRef = useRef<ActiveArtifactHandle>(null);
   const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean }>({ isEditable: false, editing: false });
+  const [commentsState, setCommentsState] = useState<CommentsHeaderState>({ available: false, active: false, count: 0 });
   // D3: every navigation away from a dirty editor goes through this guard
   // (Save / Discard / Cancel dialog) instead of silently discarding the draft.
   const { guard: guardUnsaved, dialog: unsavedDialog } = useUnsavedGuard(
@@ -1112,6 +1143,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         )}
         {/* Edit/Save moved to the floating button at the bottom-right of the
             doc pane (Destin, 2026-07-22) — see the cluster below the content div. */}
+        {active && commentsState.available && <CommentsBtn state={commentsState} onClick={() => editRef.current?.toggleComments()} />}
         {active && isElectron && <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />}
         {active && isRemoteMode() && <IconBtn name="download" title="Download" onClick={handleDownload} />}
         {active && <IconBtn name={copiedPath ? 'check' : 'copypath'} title={copiedPath ? 'Copied' : 'Copy path'} onClick={handleCopyPath} />}
@@ -1235,6 +1267,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   onDiskRead={applyDiskRead}
                   controlsInHeader
                   onEditStateChange={setEditState}
+                  onCommentsStateChange={setCommentsState}
                 />
               </div>
               {/* Floating Edit ↔ Save cluster, bottom-right of the doc pane.
