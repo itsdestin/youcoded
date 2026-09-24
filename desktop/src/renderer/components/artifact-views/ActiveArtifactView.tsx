@@ -112,6 +112,10 @@ export interface CommentsHeaderState {
   actionsRight: number;
   actionsWidth: number;
   paneLeft: number;
+  /** Distance from the bottom of the host's positioning box to 8px above the
+   *  pane's bottom edge — so the floating actions keep the cards' 8px inset
+   *  from a rounded panel's bottom border too (round 16). */
+  actionsBottom: number;
 }
 
 /** Metadata from the artifacts:get response that content alone cannot carry —
@@ -604,7 +608,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // assumed. [data-comments-list] is the padded card list (cards sit 8px
   // inside it; its box already excludes the list's own scrollbar);
   // [data-comments-pane] is the pane's outer edge.
-  const [paneGeom, setPaneGeom] = useState({ actionsRight: 8, actionsWidth: 240, paneLeft: 256 });
+  const [paneGeom, setPaneGeom] = useState({ actionsRight: 8, actionsWidth: 240, paneLeft: 256, actionsBottom: 36 });
   useEffect(() => {
     if (commentsMode !== 'comments') return;
     const root = rootRef.current;
@@ -618,12 +622,18 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         const r = root.getBoundingClientRect();
         const l = list.getBoundingClientRect();
         const p = pane.getBoundingClientRect();
+        // The host's floating buttons are positioned inside root's
+        // offsetParent (the doc column, which also holds the metadata strip
+        // below this view), so the bottom is measured from THAT box.
+        const host = (root.offsetParent as HTMLElement | null)?.getBoundingClientRect() ?? r;
         const next = {
           actionsRight: Math.round(r.right - (l.right - 8)),
           actionsWidth: Math.round(l.width - 16),
           paneLeft: Math.round(r.right - p.left),
+          actionsBottom: Math.round(host.bottom - p.bottom + 8),
         };
-        setPaneGeom((cur) => (cur.actionsRight === next.actionsRight && cur.actionsWidth === next.actionsWidth && cur.paneLeft === next.paneLeft ? cur : next));
+        setPaneGeom((cur) => (cur.actionsRight === next.actionsRight && cur.actionsWidth === next.actionsWidth
+          && cur.paneLeft === next.paneLeft && cur.actionsBottom === next.actionsBottom ? cur : next));
       };
       measure();
       ro = new ResizeObserver(measure);

@@ -18,7 +18,7 @@ import { gitFooterState } from '../utils/git-footer';
 import { ActiveArtifactView, type ActiveArtifactHandle, type CommentsHeaderState } from './artifact-views/ActiveArtifactView';
 import { MenuIcon } from './context-menu/menu-icons';
 import { CommentsFloatingActions } from './comments/CommentsFloatingActions';
-import { readPaneVariant } from './comments/pane-variant';
+import { hasTitleRow, readPaneVariant } from './comments/pane-variant';
 import SessionPreviewPane from './SessionPreviewPane';
 // 6b: COPY was originally added ONLY for the "Referenced
 // conversations" list block below (a cut candidate — see Task 6 brief 6b).
@@ -425,7 +425,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // this ref + mirrors its state so the toolbar can swap pencil ↔ save/cancel.
   const editRef = useRef<ActiveArtifactHandle>(null);
   const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean }>({ isEditable: false, editing: false });
-  const [commentsState, setCommentsState] = useState<CommentsHeaderState>({ available: false, active: false, count: 0, paneVisible: false, actionsRight: 8, actionsWidth: 240, paneLeft: 256 });
+  const [commentsState, setCommentsState] = useState<CommentsHeaderState>({ available: false, active: false, count: 0, paneVisible: false, actionsRight: 8, actionsWidth: 240, paneLeft: 256, actionsBottom: 36 });
   // Entering Comments mode folds the file list away however it was entered
   // (the Comments button, clicking a highlight, a sent pill) — the floating
   // comment actions share Edit's hide-while-the-list-is-open rule, so with the
@@ -1306,8 +1306,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
               {active && commentsState.paneVisible && (
                 // Lined up with the cards' measured edges (ActiveArtifactView,
                 // rounds 11/15) — right for every pane framing and scrollbar.
-                <div className="absolute bottom-9 z-20 pointer-events-none" style={{ right: commentsState.actionsRight, width: commentsState.actionsWidth }}>
-                  <CommentsFloatingActions path={active.path} withShowResolved={readPaneVariant() !== 'titled'} />
+                <div className="absolute z-20 pointer-events-none" style={{ right: commentsState.actionsRight, width: commentsState.actionsWidth, bottom: commentsState.actionsBottom }}>
+                  <CommentsFloatingActions path={active.path} withShowResolved={!hasTitleRow(readPaneVariant())} />
                 </div>
               )}
               {active && (
@@ -1324,7 +1324,13 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       left edge (rounds 13/15). */}
                   <div
                     className="absolute bottom-0 flex items-center gap-2"
-                    style={{ right: commentsState.paneVisible ? commentsState.paneLeft + 16 : 16 }}
+                    // bottom: the wrapper sits at bottom-9 (36px); in Comments
+                    // mode this row's bottom edge matches the floating comment
+                    // actions' measured bottom, so the two rows line up.
+                    style={{
+                      right: commentsState.paneVisible ? commentsState.paneLeft + 16 : 16,
+                      bottom: commentsState.paneVisible ? commentsState.actionsBottom - 36 : 0,
+                    }}
                   >
                   {commentsState.available && !editState.editing && (
                     <CommentsBtn
