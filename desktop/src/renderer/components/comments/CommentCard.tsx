@@ -135,7 +135,18 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendReply(); } }}
             placeholder="Reply…"
           />
-          <Button size="sm" disabled={!replyText.trim()} onClick={sendReply}>Send</Button>
+          {/* Round 12 (Destin: "send button looks too big for the container.
+              doesnt look nested correctly"): the sm field is 28px tall and a
+              text sm button 22px, leaving ~3px above and below — it read as
+              filling the field, not sitting in it. icon-sm (20px) leaves an
+              even 4px on every side, matching InputGroup's own 4px right
+              inset; the glyph is the composer send button's arrow, so it
+              reads as "send" at a glance. */}
+          <Button size="icon-sm" aria-label="Send reply" disabled={!replyText.trim()} onClick={sendReply}>
+            <svg className="w-3 h-3 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </Button>
         </InputGroup>
       )}
       {isDraft && (
