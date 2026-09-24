@@ -94,6 +94,7 @@ import { PopupTaperDemo } from '../mockups/PopupTaperDemo';
 import { CardAnatomyDemo, ConversationCardDemo } from '../mockups/CardAnatomyDemo';
 import { SettingsAnatomyDemo } from '../mockups/SettingsAnatomyDemo';
 import { PairDialogDemo, SingleDialogDemo, DangerDialogDemo, QuestionCardDemo, PermissionRowDemo } from '../mockups/ButtonPlacementDemo';
+import { FoldDemo, SettingErrorDemo, FollowUpDemo, ItemStatusDemo, InboxButtonDemo, ConsentDemo, StatusCardDemo } from '../mockups/SettingsPiecesDemo';
 import { ProjectPopupTaperDemo } from '../mockups/ProjectPopupTaperDemo';
 import { MarketplaceFileTaperDemo, TagEditorTaperDemo } from '../mockups/CustomPopupTaperDemo';
 import { MarketplaceDetailHeaderDemo } from '../mockups/MarketplaceDetailHeaderDemo';
@@ -7373,6 +7374,56 @@ export const COMPARE_SURFACES: CompareSurface[] = [
   },
   // WHY (design-guide review, 2026-09-24): Settings layout questions — one
   // realistic popup (Remote Access-like), only the arrangement varies.
+  // WHY (design-guide review, 2026-09-24): Destin rejected fix batch 1 because
+  // Settings is built from pieces the guide has no rule for. One round per piece.
+  {
+    id: 'settings-pieces',
+    label: 'Settings pieces',
+    question: 'How should each Settings piece look?',
+    frame: 'canvas',
+    paneWidth: { min: 440, max: 480 },
+    rounds: [
+      { n: 1, basis: 'Fold-out sections (Sync log, Advanced, Show details).', candidates: [
+        { id: 'triangle', label: 'Today: triangle', note: 'Small grey text with a triangle (Show details).', render: () => <FoldDemo style="triangle" /> },
+        { id: 'chevron-left', label: 'Today: arrow', note: 'Small grey text with an arrow (Sync log).', render: () => <FoldDemo style="chevron-left" /> },
+        { id: 'row', label: 'Boxed row', note: 'A whole row like a setting, arrow on the right (Local models Advanced).', render: () => <FoldDemo style="row" /> },
+        { id: 'button', label: 'Outlined button', note: 'A small outlined button with an arrow.', render: () => <FoldDemo style="button" /> },
+      ] },
+      { n: 2, basis: 'An error inside a setting (Couldn\'t sync).', candidates: [
+        { id: 'today', label: 'Today', note: 'Red text inside the status card.', render: () => <SettingErrorDemo style="today" /> },
+        { id: 'box-under', label: 'Warning box under it', note: 'The setting stays a normal row; the problem goes in the tinted box, buttons at the right.', render: () => <SettingErrorDemo style="box-under" /> },
+        { id: 'whole-card', label: 'Whole card tinted', note: 'The setting itself turns into the tinted red box.', render: () => <SettingErrorDemo style="whole-card" /> },
+      ] },
+      { n: 3, basis: 'A small follow-up action under a group (Back up all now).', candidates: [
+        { id: 'link', label: 'Today: underlined text', note: 'Underlined words at the bottom left.', render: () => <FollowUpDemo style="link" /> },
+        { id: 'outlined-right', label: 'Small, on the right', note: 'A small outlined button at the right.', render: () => <FollowUpDemo style="outlined-right" /> },
+        { id: 'outlined-full', label: 'Full width', note: 'An outlined button across the whole width.', render: () => <FollowUpDemo style="outlined-full" /> },
+        { id: 'row', label: 'Its own row', note: 'A row with a title and hint, button at the right.', render: () => <FollowUpDemo style="row" /> },
+      ] },
+      { n: 4, basis: 'A problem on one item in a list (Download interrupted, Damaged).', candidates: [
+        { id: 'banner', label: 'Today: strip on top', note: 'A bright coloured strip across the top of the card.', render: () => <ItemStatusDemo style="banner" /> },
+        { id: 'pill', label: 'Pill by the name', note: 'A tinted pill beside the name, like Installed.', render: () => <ItemStatusDemo style="pill" /> },
+        { id: 'box', label: 'Warning box inside', note: 'The tinted warning box inside the card, with a short explanation.', render: () => <ItemStatusDemo style="box" /> },
+      ] },
+      { n: 5, basis: 'The button inside a text box (Set).', candidates: [
+        { id: 'outlined', label: 'Outlined', note: 'A small outlined button (today, when a password is typed).', render: () => <InboxButtonDemo style="outlined" /> },
+        { id: 'filled', label: 'Filled', note: 'A small filled button.', render: () => <InboxButtonDemo style="filled" /> },
+        { id: 'ghost', label: 'Plain word', note: 'The word only, highlighting on hover.', render: () => <InboxButtonDemo style="ghost" /> },
+        { id: 'arrow', label: 'Arrow', note: 'A filled square with an arrow, like the message box send.', render: () => <InboxButtonDemo style="arrow" /> },
+      ] },
+      { n: 6, basis: 'A consent checkbox before a risky action.', candidates: [
+        { id: 'today', label: 'Today', note: 'A small box on the left, text beside it.', render: () => <ConsentDemo style="today" /> },
+        { id: 'boxed-left', label: 'Boxed, box left', note: 'The whole line is a tappable box that lights up when ticked.', render: () => <ConsentDemo style="boxed-left" /> },
+        { id: 'boxed-right', label: 'Boxed, box right', note: 'The same, with the tick box on the right like a setting.', render: () => <ConsentDemo style="boxed-right" /> },
+        { id: 'switch', label: 'Switch', note: 'A setting row with a switch on the right.', render: () => <ConsentDemo style="switch" /> },
+      ] },
+      { n: 7, basis: 'The status at the top of a Settings popup (Remote Access).', candidates: [
+        { id: 'nested', label: 'Today: box in a box', note: 'An outer box with the intro, the status box inside it.', render: () => <StatusCardDemo style="nested" /> },
+        { id: 'plain-intro', label: 'Intro above', note: 'The intro as plain text, then the status box on its own.', render: () => <StatusCardDemo style="plain-intro" /> },
+        { id: 'strip-only', label: 'Intro inside status', note: 'One status box; the intro is its grey second line.', render: () => <StatusCardDemo style="strip-only" /> },
+      ] },
+    ],
+  },
   {
     id: 'settings-anatomy',
     label: 'Settings layout',
