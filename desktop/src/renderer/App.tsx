@@ -3536,7 +3536,10 @@ function AppInner() {
       const ok = await handleResumeSession(
         r.sessionId, r.projectSlug, r.projectPath,
         claudeModelFor(r.provider === 'native' ? undefined : r.lastUsedModel, sessionDefaults.model),
-        sessionDefaults.skipPermissions || false, false, r.provider, binding, r.name,
+        // WHY always false: this screen shows no Skip Permissions switch, so a
+        // default of "skip" would have reopened every session with approvals off,
+        // unseen. Resuming one row through its own card still shows the switch.
+        false, false, r.provider, binding, r.name,
       );
       if (ok) done.push(r.sessionId);
     }

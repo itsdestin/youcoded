@@ -61,6 +61,14 @@ export interface CloseRequestManager {
    *  (design §4 step 5). */
   answer(requestId: string, answer: CloseAnswer): void;
   /**
+   * windowId's screen reloaded or crashed while its prompt was open, so the
+   * prompt is gone and no answer will ever come. Settle it as Cancel (the
+   * window stays open) so the NEXT X press sends a fresh prompt — without
+   * this, every later press reused the dead request and the window could
+   * never be closed with its X. A no-op when nothing is pending.
+   */
+  dropFor(windowId: number): void;
+  /**
    * Whole-app quit wins over every prompt still in flight (design §4 step 5).
    * Resolves each pending request as `{close:true, reopen:true}` and calls
    * `cancelled(windowId, requestId)` for each so the caller can push
@@ -145,6 +153,10 @@ export function createCloseRequestManager(deps: CloseRequestManagerDeps): CloseR
       }
       // No matching pending entry — already settled by settleAll.
       // Ignored on purpose (design §4 step 5).
+    },
+
+    dropFor(windowId) {
+      settle(windowId, { close: false });
     },
 
     settleAll(cancelled) {

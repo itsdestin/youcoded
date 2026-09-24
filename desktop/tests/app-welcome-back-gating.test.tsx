@@ -196,4 +196,20 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     // §5's "onDone → forgetReopen(ids) with the ids shown" pins.
     await waitFor(() => expect(store.getState().reopen).toEqual([]));
   });
+
+  // The screen shows no Skip Permissions switch, so Resume all must never
+  // carry a "skip" default into every reopened session unseen.
+  it('Resume all reopens sessions with approvals on even when the default is to skip them', async () => {
+    await mountApp();
+    const store = (window as any).__workbenchStore;
+    store.setState((s: any) => ({ ...s, defaults: { ...s.defaults, skipPermissions: true } }));
+    await screen.findByText('Welcome back', {}, { timeout: 4000 });
+    const before = store.getState().sessions.length;
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+
+    await waitFor(() => expect(store.getState().sessions.length).toBeGreaterThan(before), { timeout: 8000 });
+    const opened = store.getState().sessions.slice(before);
+    expect(opened.every((s: any) => s.skipPermissions === false)).toBe(true);
+  });
 });

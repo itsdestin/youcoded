@@ -975,6 +975,16 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // renderer (window:close-request) and awaits its answer
   // (window:answer-close) instead of blocking on the OS dialog itself.
   let confirmedClose = false;
+  // The screen reloading or crashing takes an open quit prompt with it, and
+  // with no timeout nothing else would ever settle that request — every later
+  // X press would reuse it and the window could not be closed. Forget it, so
+  // the next press asks again.
+  // Main-frame, cross-document only: an embedded page (a preview iframe) or an
+  // in-page hash change must not take down a prompt someone is reading.
+  win.webContents.on('did-start-navigation', (details: { isMainFrame?: boolean; isSameDocument?: boolean }) => {
+    if (details?.isMainFrame && !details.isSameDocument) closeRequests.dropFor(wid);
+  });
+  win.webContents.on('render-process-gone', () => closeRequests.dropFor(wid));
   win.on('close', async (ev) => {
     // Buddy windows never own sessions (they only subscribe). Skip the
     // close-confirmation entirely so a floating widget never gets blocked

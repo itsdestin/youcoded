@@ -48,6 +48,22 @@ describe('createCloseRequestManager', () => {
     expect(settled).toBe(false);
   });
 
+  // The window's screen reloaded or crashed while its prompt was open: the
+  // prompt is gone, so the request must not stay pending — otherwise every
+  // later X press reuses it, sends nothing, and the window never closes.
+  it('dropFor settles a window\'s pending request as Cancel so the next press asks again', async () => {
+    const pushes: CloseRequestPush[] = [];
+    const first = manager.request(1, 2, (p) => pushes.push(p));
+    manager.dropFor(1);
+    await expect(first).resolves.toEqual({ close: false });
+    void manager.request(1, 2, (p) => pushes.push(p));
+    expect(pushes.map((p) => p.requestId)).toEqual(['req-1', 'req-2']);
+  });
+
+  it('dropFor on a window with nothing pending is a no-op', () => {
+    expect(() => manager.dropFor(7)).not.toThrow();
+  });
+
   it('a second close press for the same window reuses the pending request — no second push', async () => {
     const pushes: CloseRequestPush[] = [];
     const first = manager.request(1, 2, (p) => pushes.push(p));
