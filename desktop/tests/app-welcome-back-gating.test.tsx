@@ -94,6 +94,8 @@ async function mountApp(opts: {
   platform?: string;
   overrideSessions?: unknown[];
   overrideWindowGetId?: number;
+  /** Merged into the fake's session defaults before App mounts (App reads them once at start). */
+  overrideDefaults?: Record<string, unknown>;
 } = {}): Promise<HTMLElement> {
   installStorage();
   installBrowserStubs();
@@ -107,6 +109,10 @@ async function mountApp(opts: {
   if (opts.overrideSessions) {
     const store = (window as any).__workbenchStore;
     store.setState((s: any) => ({ ...s, sessions: opts.overrideSessions }));
+  }
+  if (opts.overrideDefaults) {
+    const store = (window as any).__workbenchStore;
+    store.setState((s: any) => ({ ...s, defaults: { ...s.defaults, ...opts.overrideDefaults } }));
   }
   if (opts.overrideWindowGetId != null) {
     const id = opts.overrideWindowGetId;
@@ -200,9 +206,8 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
   // The screen shows no Skip Permissions switch, so Resume all must never
   // carry a "skip" default into every reopened session unseen.
   it('Resume all reopens sessions with approvals on even when the default is to skip them', async () => {
-    await mountApp();
+    await mountApp({ overrideDefaults: { skipPermissions: true } });
     const store = (window as any).__workbenchStore;
-    store.setState((s: any) => ({ ...s, defaults: { ...s.defaults, skipPermissions: true } }));
     await screen.findByText('Welcome back', {}, { timeout: 4000 });
     const before = store.getState().sessions.length;
 
