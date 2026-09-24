@@ -105,7 +105,6 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
   // re-issued when an identical dialog followed an answered one (review F5).
   const shownPromptIdRef = useRef<Map<string, string>>(new Map());
   const reissueTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const reissueCountRef = useRef<Map<string, number>>(new Map());
 
   // Track when awaiting-approval was last cleared per session, so the parser
   // can suppress re-detection during the post-permission cooldown window.
@@ -204,19 +203,38 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
 
     // Review F5: a completed card whose identical dialog is still on screen
     // REISSUE_MS later gets a fresh card (new promptId, so the answered one
-    // stays in the timeline as the record of the first answer).
+    // stays in the timeline as the record of the first answer). Guarded hard
+    // (second review F5/F8):
+    //  • only a card that was ANSWERED — an unanswered one is still the live
+    //    card for that dialog;
+    //  • only a card answered by verified navigation (`pick`): its driver
+    //    confirmed Claude Code redrew after the Enter. A digit answer completes
+    //    before anything is known, and a slow-to-leave menu would otherwise earn
+    //    a "~1" card for a question already answered;
+    //  • at most once per dialog, with a deterministic id (`<menu id>~1`) — the
+    //    same on every device, since each runs this detector and completions
+    //    are broadcast by promptId;
+    //  • re-checked when the timer fires: the same menu on screen, and the card
+    //    STILL answered (it may have been re-shown meanwhile).
+    const reissueIdFor = (menuId: string) => `${menuId}~1`;
+    const answeredCard = (sid: string, promptId: string) => {
+      const e = store.getState().get(sid)?.timeline.find((x) => x.kind === 'prompt' && x.prompt.promptId === promptId);
+      return e && e.kind === 'prompt' && e.prompt.completed ? e.prompt : null;
+    };
     const checkReissue = (sid: string, menu: ParsedMenu, title: string) => {
       if (reissueTimerRef.current.has(sid)) return;
       const promptId = shownPromptIdRef.current.get(sid) ?? menu.id;
-      const entry = store.getState().get(sid)?.timeline.find((e) => e.kind === 'prompt' && e.prompt.promptId === promptId);
-      if (!entry || entry.kind !== 'prompt' || !entry.prompt.completed) return;
+      if (promptId === reissueIdFor(menu.id)) return; // already re-issued once
+      const answered = answeredCard(sid, promptId);
+      if (!answered) return;
+      if (!answered.buttons.some((b) => b.pick)) return;
       reissueTimerRef.current.set(sid, setTimeout(() => {
         reissueTimerRef.current.delete(sid);
         const nowScreen = getVisibleScreenText(sid);
         const nowMenu = nowScreen ? parseInkSelect(nowScreen) : null;
-        if (!nowMenu || nowMenu.id !== menu.id || shownPromptIdRef.current.get(sid) !== promptId) return;
-        reissueCountRef.current.set(sid, (reissueCountRef.current.get(sid) ?? 0) + 1);
-        scheduleShow(sid, nowMenu, title, `${menu.id}~${reissueCountRef.current.get(sid)}`);
+        if (!nowMenu || nowMenu.id !== menu.id) return;
+        if (!answeredCard(sid, promptId)) return;
+        scheduleShow(sid, nowMenu, title, reissueIdFor(menu.id));
       }, REISSUE_MS));
     };
 

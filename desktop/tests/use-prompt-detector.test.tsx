@@ -473,3 +473,113 @@ describe('Android startup: the multi-server MCP dialog', () => {
     expect(promptShowMeansStarted('bypass_warning')).toBe(false);
   });
 });
+
+describe('usePromptDetector — re-issuing a card for an identical follow-up, guarded', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.dispatch.mockClear();
+    mocks.callbacks.length = 0;
+    mocks.screen.text = '';
+    mocks.sessions.clear();
+  });
+  afterEach(() => { vi.useRealTimers(); });
+  const shows = () => mocks.dispatch.mock.calls.filter((c) => c[0].type === 'SHOW_PROMPT').map((c) => c[0]);
+  const dismissed = () => mocks.dispatch.mock.calls.filter((c) => c[0].type === 'DISMISS_PROMPT').map((c) => c[0].promptId);
+  const answer = (card: any, completed: string | false = 'Yes, I trust this folder') => {
+    const prev = mocks.sessions.get('s1')?.timeline ?? [];
+    mocks.sessions.set('s1', {
+      toolCalls: new Map(), activeTurnToolIds: [],
+      timeline: [...prev.filter((e: any) => e.prompt.promptId !== card.promptId), { kind: 'prompt', prompt: { ...card, completed } }],
+    });
+  };
+  const showTrust = () => {
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    return shows().at(-1);
+  };
+
+  it('never re-issues a card that is still UNANSWERED', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first, false);
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(3000); });
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(shows()).toHaveLength(1);
+  });
+
+  it('never re-issues a card answered by a DIGIT (nothing confirmed Claude Code redrew)', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = RESUME_MENU;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    answer(shows()[0], 'from summary');
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(shows()).toHaveLength(1);
+  });
+
+  it('re-issues at most once per dialog, under the same id on every device', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first);
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(1400); });
+    const second = shows().at(-1);
+    expect(second.promptId).toBe(`${first.promptId}~1`);
+    answer(second);
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(shows()).toHaveLength(2);
+  });
+
+  it('re-checks when the timer fires: a card re-shown unanswered meanwhile is not re-issued', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first);
+    fireBuffer('s1'); // arms the re-issue
+    answer(first, false); // …then the card is live again (re-shown)
+    act(() => { vi.advanceTimersByTime(1400); });
+    expect(shows()).toHaveLength(1);
+  });
+
+  it('a different menu arriving cancels the pending re-issue (answered A, then B, then A again → no duplicate A)', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first);
+    fireBuffer('s1'); // arms the re-issue for A
+    act(() => { vi.advanceTimersByTime(200); });
+    mocks.screen.text = NEW_DIALOG; // B
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(500); });
+    mocks.screen.text = TRUST_2_1_281; // A again — a NEW appearance, its own card
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(1500); });
+    expect(shows().map((s) => s.promptId).filter((id) => id.endsWith('~1'))).toEqual([]);
+  });
+
+  it('dismisses a re-issued "~1" card when its dialog leaves the screen', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first);
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(1400); });
+    mocks.screen.text = '❯ \n? for shortcuts';
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(700); });
+    expect(dismissed()).toContain(`${first.promptId}~1`);
+  });
+
+  it('dismisses a re-issued "~1" card when a different menu replaces it', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first);
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(1400); });
+    mocks.screen.text = NEW_DIALOG;
+    fireBuffer('s1');
+    expect(dismissed()).toContain(`${first.promptId}~1`);
+  });
+});
