@@ -27,6 +27,7 @@ these are its entry points:
 | Token computation, overlay/derived tokens (`--scrim`, `--destructive`, `--on-destructive`, `--code`, `--link`) | `src/renderer/themes/theme-engine.ts` |
 | Active theme, cycle list, font, persistence, `data-theme` on `<html>` | `src/renderer/state/theme-context.tsx` |
 | Manifest shape a theme pack must satisfy | `src/renderer/themes/theme-types.ts` |
+| The user's global Look (layout, glass, bubble shape, message box, roundness) laid over whichever theme is active; absent field = the theme's own. A theme ships ONE set of these; there are no per-theme user tweaks (retired 2026-09-24) | `src/renderer/themes/look-overrides.ts` (UI: `components/appearance/LookSettings.tsx`) |
 | Validation + non-fatal `custom_css` lint | `src/renderer/themes/theme-validator.ts` |
 | Built-in theme values (the four packs) | `src/renderer/themes/builtin/*.json` |
 | Anti-FOUC duplicate of those values | the `[data-theme]` blocks in `src/renderer/styles/globals.css` |

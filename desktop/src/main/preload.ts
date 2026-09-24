@@ -1010,11 +1010,11 @@ contextBridge.exposeInMainWorld('claude', {
     readLastModel: (transcriptPath: string): Promise<string | null> => ipcRenderer.invoke(IPC.MODEL_READ_LAST, transcriptPath),
   },
   appearance: {
-    get: (): Promise<{ theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; glassOverrides?: Record<string, Record<string, number>> } | null> =>
+    get: (): Promise<{ theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; lookOverrides?: Record<string, unknown> } | null> =>
       ipcRenderer.invoke(IPC.APPEARANCE_GET),
-    // Accepts arbitrary appearance prefs — glassOverrides stores per-theme
-    // glass slider overrides for community/builtin themes
-    set: (prefs: { theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; glassOverrides?: Record<string, Record<string, number>> }): Promise<boolean> =>
+    // Accepts arbitrary appearance prefs — lookOverrides holds the user's global
+    // look choices laid over every theme (renderer themes/look-overrides.ts)
+    set: (prefs: { theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; lookOverrides?: Record<string, unknown> }): Promise<boolean> =>
       ipcRenderer.invoke(IPC.APPEARANCE_SET, prefs),
     // Multi-window appearance sync: any window calling broadcast forwards its
     // change to every OTHER peer window so ThemeProvider can apply it without
