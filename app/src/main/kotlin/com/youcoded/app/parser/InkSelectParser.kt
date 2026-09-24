@@ -60,8 +60,10 @@ object InkSelectParser {
     // conversation can't contain it — a single common word is never acceptable (the old
     // "trust" key relabeled ANY menu whenever the word appeared nearby; fixed 2026-07-16
     // in lockstep with desktop's ink-select-parser.ts — keep the two maps in sync).
-    // Note: bypass permissions prompt is handled by a hardcoded handler in ManagedSession,
-    // not by the generic InkSelectParser, because it uses Enter/Esc (not arrow navigation).
+    // The bypass-permissions warning is read HERE like any other dialog (the
+    // "running in bypass permissions mode" entry below → "Skip Permissions Warning");
+    // the hardcoded ManagedSession handler that typed a blind DOWN+Enter was removed
+    // 2026-09-24, because on CC 2.1.281 the dialog is unnumbered and "No, exit" first.
     private val TITLE_OVERRIDES = mapOf(
         // Folder-trust prompt — anchored on the "Quick safety check:" opener of the
         // CC ~2.1.2xx rewrite. The previous anchor ("files you trust", from the old
