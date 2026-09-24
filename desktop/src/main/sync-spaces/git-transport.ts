@@ -768,6 +768,30 @@ export class GitTransport implements SyncTransport {
     return { updated: true, conflictCopies: copies, contacted };
   }
 
+  /** After Tier 1 pointed main at origin/main, make the disk match it without
+   *  losing anything: a tracked file that differs keeps its local bytes as a
+   *  "(from …)" copy, a missing one is restored (no deletion is inferred).
+   *  Untracked files stay as they are and sync as new files. Never-sync files
+   *  are left alone (stageAll keeps them frozen). Returns the copies made. */
+  private async adoptTreeKeepingLocal(space: SyncSpace): Promise<string[]> {
+    this.assertLocalOk(space, 'reset', await this.git(space, ['reset', '-q']));
+    const diff = await this.git(space, ['diff', '--name-only', '-z', '--no-renames']);
+    this.assertLocalOk(space, 'diff', diff);
+    const copies: string[] = [];
+    for (const rel of diff.stdout.split('\0').filter(Boolean)) {
+      if (isNeverSyncPath(rel)) continue;
+      let bytes: Buffer | null = null;
+      try { bytes = await fs.promises.readFile(path.join(space.root, rel)); } catch { /* missing — restored below */ }
+      if (bytes) {
+        const copyRel = this.freeCopyName(space, rel);
+        await fs.promises.writeFile(path.join(space.root, copyRel), bytes);
+        copies.push(copyRel);
+      }
+      this.assertLocalOk(space, 'checkout', await this.git(space, ['checkout', '--', rel]));
+    }
+    return copies;
+  }
+
   /** `add -A`, then take never-sync paths (secrets) back out of the index.
    *  WHY: info/exclude hides them only until a project's own .gitignore says
    *  `!.env`. `reset` (not `rm --cached`) returns each to its last committed
@@ -957,14 +981,25 @@ export class GitTransport implements SyncTransport {
         const commitOk = (await this.git(space, ['cat-file', 'commit', sha])).code === 0;
         const treeOk = (await this.git(space, ['cat-file', '-p', `${sha}^{tree}`])).code === 0;
         if (commitOk && treeOk) {
-          const upd = await this.git(space, ['update-ref', 'refs/heads/main', sha]);
+          // WHY (sync-safety 2026-09-23): the worktree matches THIS device's
+          // last commit, not origin/main — a crash after a fetch but before
+          // its merge leaves origin/main ahead of the disk. Resetting main to
+          // origin/main then made the next add -A push that lag as edits: a
+          // peer's new file deleted everywhere, a peer's deletion undone. Keep
+          // a readable local tip so the next pull merges normally; only an
+          // unreadable one is replaced, and then adoptTreeKeepingLocal below.
+          const local = await this.git(space, ['rev-parse', '--verify', '--quiet', 'refs/heads/main']);
+          const localSha = local.code === 0 ? local.stdout.trim() : '';
+          const localOk = !!localSha
+            && (await this.git(space, ['cat-file', 'commit', localSha])).code === 0
+            && (await this.git(space, ['cat-file', '-p', `${localSha}^{tree}`])).code === 0;
+          const upd = localOk ? local : await this.git(space, ['update-ref', 'refs/heads/main', sha]);
           // Delete the index: it may reference the just-deleted poison hashes.
-          // add -A rebuilds it from the worktree — files are the source of truth.
           try { fs.rmSync(path.join(gd, 'index'), { force: true }); } catch { /* rebuilt anyway */ }
           const probe = await this.git(space, ['rev-parse', '--verify', 'HEAD']);
           if (upd.code === 0 && probe.code === 0) {
-            // Healed — local changes re-commit on the next cycle.
-            this.log(`sync-spaces: repair(${space.id}) tier=1 healed — main reset to origin/main ${sha.slice(0, 8)}, ${zeroByteObjectsDeleted} zero-byte object(s) deleted`);
+            const copies = localOk ? [] : await this.adoptTreeKeepingLocal(space);
+            this.log(`sync-spaces: repair(${space.id}) tier=1 healed — ${localOk ? `kept local main ${localSha.slice(0, 8)}` : `main reset to origin/main ${sha.slice(0, 8)}, ${copies.length} differing file(s) kept as copies`}, ${zeroByteObjectsDeleted} zero-byte object(s) deleted`);
             return { tier: 1, zeroByteObjectsDeleted };
           }
           tier1Failure = `update-ref/HEAD probe failed (update-ref exit ${upd.code}, probe exit ${probe.code})`;
