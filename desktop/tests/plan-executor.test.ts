@@ -168,12 +168,20 @@ async function seed(rec: PlanRecord): Promise<string> {
 const plan = async (): Promise<PlanRecord> => (await journal.get(REF, 'p1'))!;
 const stepOf = async (id: string) => (await plan()).steps.find((s) => s.id === id)!;
 /** Final review F34: log 'settle-deadline' when the executor's settle
- *  deadline timer (a setTimeout of exactly `ms`) fires. */
-function markDeadline(ms: number): { fired: () => boolean } {
+ *  deadline timer (a setTimeout of exactly `ms`) fires.
+ *  `awaitFirst` (2026-09-24 flake fix): hold the fire until a real signal
+ *  resolves, instead of trusting that `ms` of wall clock is always enough —
+ *  see the WHY at this function's one caller that needs it. */
+function markDeadline(ms: number, awaitFirst?: Promise<unknown>): { fired: () => boolean } {
   const real = globalThis.setTimeout;
   let fired = false;
   vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: (...a: unknown[]) => void, delay?: number, ...rest: unknown[]) => real(
-    delay === ms ? (...a: unknown[]) => { fired = true; log.push('settle-deadline'); fn(...a); } : fn, delay, ...rest,
+    delay === ms
+      ? (...a: unknown[]) => {
+        const go = () => { fired = true; log.push('settle-deadline'); fn(...a); };
+        if (awaitFirst) void awaitFirst.then(go); else go();
+      }
+      : fn, delay, ...rest,
   )) as typeof setTimeout);
   return { fired: () => fired };
 }
@@ -604,35 +612,60 @@ describe('pausing, stopping and interruption settle before anything is visible',
   };
 
   it('one failing child aborts three siblings, waits only to the deadline, disposes stragglers, settles, then emits paused', async () => {
-    const runner = new FakeRunner(fourScripts(true));
+    // WHY (2026-09-24, replaces a widened-margin stopgap): the cooperating
+    // sibling ('Do quick') settles ITSELF with one real journal write after
+    // its abort (harness-session.ts does the same on a real interrupt), and
+    // that write races the executor's own settle-deadline write for the very
+    // same attempt (plan-executor.ts settle() step 4's chargeUnresolved).
+    // Whichever wins the journal's mkdir lock decides the attempt's recorded
+    // phase — and harness-session.ts already tolerates losing that race
+    // (catches gate.settle's error, "the executor's pause path charges it in
+    // full"), so losing is correct production behaviour, not a bug. A margin
+    // (750ms, then 2000ms) only ever narrowed the window a slow lock-retry
+    // (cas-write.ts polls every 10ms) could miss it; it never removed the
+    // race, so it kept coming back under load. Fixed properly: don't let the
+    // settle-deadline timer fire until 'Do quick's own settle has actually
+    // landed, so the two writes can no longer reorder. The stuck two still
+    // get disposed only once the (now-gated) deadline fires.
+    let quickSettled!: () => void;
+    const quickSettledP = new Promise<void>((res) => { quickSettled = res; });
+    const runner = new FakeRunner((l) => {
+      if (l.brief !== 'Do quick') return fourScripts(true)(l);
+      const script = hangs(true);
+      return async (ctx) => { try { return await script(ctx); } finally { quickSettled(); } };
+    });
     const fence = await seed(record(FOUR));
-    // WHY 2000 ms (raised from 750, 2026-09-24 merge verify): the cooperative
-    // sibling needs one journal write to settle after its abort. Under a
-    // loaded full-suite run (verify.sh, 2026-09-16) that write missed an
-    // 80 ms deadline — correct behaviour (it was then charged in full) but
-    // not what this test pins; 750 ms itself was later observed missing it
-    // too (~1 run in 5, even standalone) once master's compaction/plan-budget
-    // work landed alongside it. The stuck two still wait the whole deadline,
-    // so this is the test's cost either way.
-    const exec = executor(runner, { settleDeadlineMs: 2_000 });
-    const deadline = markDeadline(2_000);
+    const exec = executor(runner, { settleDeadlineMs: 80 });
+    const deadline = markDeadline(80, quickSettledP);
     exec.start({ ref: REF, planId: 'p1', fence });
     await exec.settled('p1');
+    // WHY brief-based lookup, not hardcoded 'child-N' (2026-09-24, same root
+    // cause as the deadline fix above): FakeRunner numbers children by real
+    // launch-completion order, not by the map's item order, so 'Do fail' can
+    // land on ANY of the four ids depending on scheduling. Under load it
+    // sometimes drew 'child-3' or 'child-4' — the ids this test used to
+    // assume meant "a straggler" — so its own retire()-dispose (immediate by
+    // design: it's what causes the halt) was wrongly checked against the
+    // settle deadline and failed. A brief names the SAME child regardless of
+    // draw order.
+    const childOf = (brief: string) => runner.launches.find((x) => x.brief === brief)!.childId;
+    const failId = childOf('Do fail'); const quickId = childOf('Do quick');
+    const stuck1Id = childOf('Do stuck1'); const stuck2Id = childOf('Do stuck2');
     // The stragglers were held for the whole deadline: they were disposed only
     // after the settle deadline fired (final review F34: an ordering the log
     // records, not a wall-clock lower bound).
     expect(deadline.fired()).toBe(true);
-    for (const c of ['child-3', 'child-4']) expect(log.indexOf(`dispose:${c}`)).toBeGreaterThan(log.indexOf('settle-deadline'));
+    for (const c of [stuck1Id, stuck2Id]) expect(log.indexOf(`dispose:${c}`)).toBeGreaterThan(log.indexOf('settle-deadline'));
     // all three siblings were aborted; every child was disposed
-    expect(runner.aborted.sort()).toEqual(expect.arrayContaining(['child-2', 'child-3', 'child-4']));
-    // child-1 ran twice (the automatic retry continues the same session).
-    expect(runner.disposed.sort()).toEqual(['child-1', 'child-1', 'child-2', 'child-3', 'child-4']);
+    expect(runner.aborted.sort()).toEqual(expect.arrayContaining([quickId, stuck1Id, stuck2Id]));
+    // the failing child ran twice (the automatic retry continues the same session).
+    expect(runner.disposed.sort()).toEqual([failId, failId, quickId, stuck1Id, stuck2Id].sort());
     expect(runner.launches.filter((x) => x.brief === 'Do fail')).toHaveLength(2);
     expect(runner.live).toBe(0);
     // paused is the last visible thing, after every disposal
     const pausedAt = log.indexOf('event:paused');
     expect(pausedAt).toBeGreaterThan(-1);
-    for (const c of ['child-1', 'child-2', 'child-3', 'child-4']) expect(log.indexOf(`dispose:${c}`)).toBeLessThan(pausedAt);
+    for (const c of [failId, quickId, stuck1Id, stuck2Id]) expect(log.indexOf(`dispose:${c}`)).toBeLessThan(pausedAt);
     expect(events.filter((e) => e.plan.status === 'paused')).toHaveLength(1);
     const p = await plan();
     expect(p.status).toBe('paused');
