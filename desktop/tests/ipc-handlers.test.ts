@@ -412,11 +412,16 @@ describe('session:create resumed admission', () => {
   // WHY (combined branch): a session a phone opened has no owning window. A
   // desktop reopen of it used to answer `reused` with no focus request, so the
   // desktop never switched to it (bugfix-chatfiles did; master's reuse did not).
-  it('focuses the leader window when a reopened writer has no owning window (a phone opened it)', async () => {
-    const { webContents } = await import('electron');
+  // Its events go to the primary mainWindow (sendForSession's ownerless route),
+  // so that window — and only while it lives — is asked to select it. The leader
+  // window (id 7 here) never lists it and must not be raised.
+  it.each([{ mainClosed: false }, { mainClosed: true }])('an ownerless reopened writer focuses the primary window only while it is open (closed: $mainClosed)', async ({ mainClosed }) => {
+    const { webContents, BrowserWindow } = await import('electron');
     const leaderContents = { send: vi.fn() };
     vi.mocked(webContents.fromId).mockReset();
     vi.mocked(webContents.fromId).mockImplementation((id: number) => (id === 7 ? leaderContents : undefined) as any);
+    const focus = vi.fn();
+    (BrowserWindow as any).fromWebContents = vi.fn(() => ({ focus }));
     const ipc = { handle: vi.fn(), on: vi.fn() };
     const info = { id: 'c2', cwd: '/tmp', provider: 'claude', status: 'active' };
     let live: typeof info | undefined;
@@ -432,15 +437,20 @@ describe('session:create resumed admission', () => {
       setSessionCreate: vi.fn((fn: any) => { fromPhone = fn; }),
       getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
     };
+    const mainSend = vi.fn();
     registerIpcHandlers(ipc as any, manager as any,
-      { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
+      { webContents: { send: mainSend }, isDestroyed: () => mainClosed } as any,
       { configStore: { getPackages: vi.fn(() => ({})) } } as any,
       undefined as any, undefined, undefined, remoteServer as any, registry as any);
     const create = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
     expect(await fromPhone!({ name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'c2' })).toBe(info);
     expect(registry.assignSession).not.toHaveBeenCalled();
+    mainSend.mockClear();
     expect(await create({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'c2' })).toMatchObject({ ...info, reused: true });
-    expect(leaderContents.send).toHaveBeenCalledWith('session:focus-request', 'c2');
+    const focused = mainSend.mock.calls.filter((c) => c[0] === 'session:focus-request');
+    expect(focused).toEqual(mainClosed ? [] : [['session:focus-request', 'c2']]);
+    expect(leaderContents.send).not.toHaveBeenCalled();
+    expect(focus).toHaveBeenCalledTimes(mainClosed ? 0 : 1);
     expect(manager.createSession).toHaveBeenCalledOnce();
   });
 });

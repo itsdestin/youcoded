@@ -139,6 +139,26 @@ describe('what the assistant was given', () => {
     await h.destroyAll();
   });
 
+  // The after-turn slot refresh (a local model's real n_ctx replacing the
+  // start-time guess) changes the window too, so it must re-push the record the
+  // same way a picker swap does — or the chip keeps the guessed window.
+  it('the after-turn slot refresh re-pushes the record with the real window', async () => {
+    let window = 4096;
+    const windowFor = async () => ({ contextLength: window, totalSlots: null });
+    const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, windowFor as any, async () => null, async () => null);
+    const pushed: any[] = [];
+    h.on('session-context', (e: any) => pushed.push(e.context));
+    await h.create({ sessionId: 's-slots', cwd: root, binding: { providerId: 'openrouter', modelId: 'local' } });
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0].contextWindowTokens).toBe(4096);
+
+    window = 32768; // the engine's real reading, once a turn has loaded the model
+    await (h as any).refreshLocalSlots('s-slots', (h as any).live.get('s-slots'));
+    expect(pushed).toHaveLength(2);
+    expect(pushed[1]).toEqual({ ...pushed[0], contextWindowTokens: 32768 });
+    await h.destroyAll();
+  });
+
   it('a session still opens when the context cannot be described', async () => {
     // The record is an explanation; a chat that will not start is a broken app.
     // Proven by making the one thing that reads the disk throw.

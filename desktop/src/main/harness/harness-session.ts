@@ -877,11 +877,13 @@ export class HarnessSession extends EventEmitter {
    *  image, and fitToContext ends by dropping every entry whose call is no
    *  longer in the window it is about to send (`reconcileShownImages`). The
    *  cache can therefore only vouch for what the model actually just saw. Two
-   *  narrower fixes were considered and rejected because fitToContext runs on
-   *  EVERY request, not just ones near budget: an unconditional clear there
-   *  defeats dedupe entirely, and a count-diff there (mirroring the prune
-   *  sites) latches permanently true the moment history outgrows the context
-   *  window, which is ordinary steady-state for a long conversation. */
+   *  narrower fixes were considered and rejected when fitToContext ran on EVERY
+   *  request: an unconditional clear there defeats dedupe entirely, and a
+   *  count-diff there (mirroring the prune sites) latches permanently true the
+   *  moment history outgrows the context window. (Since master's compaction
+   *  work, fitToContext runs only on the legacy reopen path — an old rebuilt
+   *  reopen whose summary could not fit; see runStreamOnce's legacyReopenFit
+   *  guard. Ordinary requests send the accepted history untrimmed.) */
   private shownImages = new Map<string, { mtime: number; toolCallId: string }>();
   /** Read-only view of the resolved profile. The host needs the injection budget
    *  to size a /skill-name body, and re-resolving it there would risk drifting
@@ -1698,6 +1700,8 @@ export class HarnessSession extends EventEmitter {
 
   /** Oldest-first truncation to fit the context window. Always keeps the
    *  newest user message; chars/4 is a deliberate estimate, not a tokenizer.
+   *  Runs ONLY on the legacy reopen path (legacyReopenFit, after a failed
+   *  summary) — ordinary requests send the accepted history untrimmed.
    *  WHY this matters for shownImages: this trims the OUTGOING REQUEST only —
    *  `this.history` itself is untouched — so an image can drop out of what the
    *  model actually sees while the dedupe cache still vouches for it — so the
@@ -1758,7 +1762,9 @@ export class HarnessSession extends EventEmitter {
   }
 
   /** Forget every delivered image whose carrying tool result is NOT in the
-   *  window about to be sent. WHY: fitToContext trims the outgoing request only,
+   *  window about to be sent. Matters only on the legacy reopen path, the one
+   *  place fitToContext still trims (legacyReopenFit); elsewhere the whole
+   *  history is sent and nothing drops out. WHY: fitToContext trims the outgoing request only,
    *  so on a small window an image can scroll out of the model's view while the
    *  dedupe cache still answers a re-Read with "already visible earlier" — a
    *  false claim that also withholds the picture. Only calls that are gone are
