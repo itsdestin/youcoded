@@ -567,11 +567,12 @@ export class TranscriptWatcher extends EventEmitter {
    * the reader, which would make transcript-watcher <-> transcript-page a
    * circular import (the reader needs parseTranscriptLine).
    */
-  pageSourceFor(desktopSessionId: string): { jsonlPath: string; subagentsDir: string; startOffset: number } | null {
+  pageSourceFor(desktopSessionId: string): { jsonlPath: string; subagentsDir: string; startOffset: number; cwd: string } | null {
     const session = this.sessions.get(desktopSessionId);
     if (!session) return null;
     return {
       jsonlPath: session.jsonlPath,
+      cwd: session.cwd, // hook's post-realpath cwd, paired to this exact watched file
       subagentsDir: path.join(path.dirname(session.jsonlPath), session.claudeSessionId, 'subagents'),
       startOffset: session.startOffset,
     };

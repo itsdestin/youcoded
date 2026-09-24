@@ -83,6 +83,16 @@ async function openSetup(): Promise<HTMLElement> {
 describe('Backup & Sync reports only what the backend confirmed', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
+  it('explains handoff limits without promising exclusive offline use or lossless merging', async () => {
+    stub({}, []);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: 'What is this?' }));
+    expect(await screen.findByText(/conflicting updates may be kept as separate copies/)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing is lost|runs on one device at a time/)).toBeNull();
+    expect(screen.getByText(/not in the phone app/)).toBeInTheDocument();
+    expect(screen.getByText(/Recent messages may still be syncing/)).toBeInTheDocument();
+  });
+
   it('a warning Retry whose upload failed does not say "Uploaded!"', async () => {
     const api = stub(
       { pushBackend: vi.fn(async () => ({ success: false, error: "Some files didn't upload." })) },

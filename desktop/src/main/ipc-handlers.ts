@@ -181,6 +181,8 @@ import { listConversations, repoInfo, listContextFiles, readContext } from './pr
 import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded, noteTitleChanged,
   noteFlagChanged, noteSessionNote, noteModelUsed, getConversationStore, flushSessionToSpace,
   buildLocalProjectResolver, emitConversationMetaChanged,
+  pinHandoffDestination, publishStoppedHandoff, syncPublishedHandoff,
+  importConfirmedHandoff, resolveHandoffProject, resolveSavedHandoffProject, HANDOFF_SYNC_TIMEOUT_MS,
   getNamingRecord,
   mutateNamingRecord,
   resolveSessionName,
@@ -196,6 +198,12 @@ import type { PortableModelRef } from './conversations/store-core';
 // Plan 2b Task 8: holder-side takeover — when another device requests a session
 // this device holds, cleanly interrupt/flush/release/move/destroy it.
 import { createHolderTakeover } from './conversations/takeover';
+import { createResumeAdmission } from './conversations/resume-admission';
+import { createHandoffAttempts } from './conversations/handoff-attempt';
+import { createHandoffTransport, registerHandoffIpc } from './conversations/handoff-transport';
+import { createTransferredExitGate } from './conversations/handoff-exit';
+import { hubLeaseRequest, syncSpacesSyncNowAwaited } from './sync-spaces/service';
+import type { RequesterTakeoverType } from './conversations/takeover';
 import { getTagRegistry, listTagsForHost } from './conversations/tag-registry-service';
 import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
 import { writeContextFile } from './project-context';
@@ -371,11 +379,11 @@ export function registerIpcHandlers(
   // entirely (nothing breaks — acquire/release/takeover simply don't run).
   leaseWiring?: {
     client: import('./conversations/lease-client').LeaseClient;
-    setHolderTakeover: (fn: (sessionId: string, from?: { deviceId: string; device: string }) => void) => void;
+    setHolderTakeover: (fn: (sessionId: string, from?: { deviceId: string; device: string }, transferNonce?: string) => void) => void;
     // Plan 2b Task 9: the requester-side takeover flow, built in main.ts (where
     // deviceId + hubLeaseRequest + materializeOne + syncSpacesSyncNow are all
     // reachable). The three lease IPC handlers below are thin passthroughs to it.
-    requester: import('./conversations/takeover').RequesterTakeoverType;
+    requester: RequesterTakeoverType;
     // deviceId  — per-INSTALL. Leases ONLY. Distinguishes the dev instance from
     //             the built app on one machine; never use it for the registry.
     // machineId — per-MACHINE. Device registry ONLY (self-marking). '' when this
@@ -383,6 +391,8 @@ export function registerIpcHandlers(
     //             since nothing was registered either.
     deviceId: string;
     machineId: string;
+    /** Test override; production uses the sync-space service flag. */
+    syncEnabled?: () => boolean;
   },
   // Sign in with ChatGPT (backend design 2026-09-05 §1, §6): the account object
   // main.ts built inside createWindow. Optional so the tests that call this with
@@ -808,36 +818,35 @@ export function registerIpcHandlers(
     },
   };
 
-  // Session CRUD
-  ipcMain.handle(IPC.SESSION_CREATE, async (event, rawOpts) => {
-    // Resolve "No folder" to the app-owned folder before either runtime sees the cwd.
+  const leasesEnabled = () => leaseWiring?.syncEnabled?.() ?? isSyncSpacesEnabled();
+  // Session CRUD. The same operation serves Electron and the remote socket;
+  // admission happens before createSession can spawn a writer on either path.
+  const startSession = async (event: { sender: { id: number; isDestroyed?: () => boolean } } | null, rawOpts: Parameters<SessionManager['createSession']>[0], attemptCheck?: () => void) => {
+    // "No folder" (shared/no-folder.ts): the renderer's sentinel becomes the
+    // app-owned empty folder here, before the session manager or the native
+    // host sees a cwd.
+    // The window can close while admission or native startup is awaiting I/O.
+    const checkWindow = () => { attemptCheck?.(); if (event?.sender.isDestroyed?.()) throw new Error('The window closed before this conversation opened.'); };
+    checkWindow();
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
     const info = sessionManager.createSession(opts);
     if (resumeBoundary) resumePageBoundaries.set(info.id, resumeBoundary);
-    // Assign the new session to the calling window so per-session events (transcript,
-    // pty output, permission prompts) route here once Task 1.4 migrates the emits.
-    //
-    // MUST stay here — synchronously after createSession, BEFORE the native block's
-    // awaits. createSession emits 'session-created' synchronously, and the listener
-    // above defers the SESSION_CREATED forward by one process.nextTick precisely so
-    // ownership is set first. But nextTick outranks the promise microtask queue, so
-    // it drains the moment this handler suspends at its FIRST await — and the native
-    // branch below awaits nativeHost.resume/create long before the end of the
-    // handler. With this block at the bottom (where it lived until 2026-08-06), a
-    // native session created or resumed from a SECOND main window was forwarded with
-    // no owner registered, took sendForSession's ownerless mainWindow fallback, and
-    // appeared in window 1 instead. Claude Code never hit it: that path runs straight
-    // through with no intervening await. Pinned by tests/ipc-handlers-create-ownership.test.ts.
-    //
-    // Exception: if the sender is a buddy window (the floater's compact chat),
-    // assign to the leader main window instead. Buddies don't appear in the
-    // switcher directory and shouldn't own sessions — otherwise the session
-    // would be invisible to every main window's session list. The buddy still
-    // sees the session via its subscribe() call in SessionPill.selectSession.
-    if (windowRegistry) {
+    // WHY: a holder takeover can arrive during the FIRST native await or before
+    // CC emits SessionStart. Register the resumed identity synchronously now.
+    if (opts.resumeSessionId) {
+      writerGenerations.set(info.id, (writerGenerations.get(info.id) ?? 0) + 1);
+      sessionIdMap.set(info.id, opts.resumeSessionId);
+      if (leaseWiring && leasesEnabled()) admittedResumes.add(info.id);
+      if (info.provider === 'claude') awaitingFirstResumeHook.add(info.id);
+    }
+    // WHY: assign ownership BEFORE the first native await. session-created is
+    // forwarded on nextTick; otherwise it reaches the wrong window (pinned by
+    // ipc-handlers-create-ownership.test.ts). Buddy-created sessions belong to
+    // the leader main window; the buddy subscribes instead of owning them.
+    if (windowRegistry && event) {
       let targetId = event.sender.id;
       if (windowRegistry.getKind(event.sender.id) === 'buddy') {
         const leader = windowRegistry.getLeaderId();
@@ -851,19 +860,7 @@ export function registerIpcHandlers(
     // branch of createSession uses resumeSessionId AS the id, so info.id already
     // equals the resumed id and the host rebuilds the matching session.
     if (info.provider === 'native') {
-      // Surface a native-runtime failure as a session-error transcript event on the
-      // SAME pipe the host uses (drives NATIVE_SESSION_ERROR → the error banner).
-      // Deferred via nextTick so it lands AFTER SESSION_CREATED + assignSession,
-      // matching the ordering guarantee the session-created forward relies on.
-      const emitNativeSessionError = (text: string) => {
-        const errEvent: TranscriptEvent = {
-          type: 'session-error', sessionId: info.id, uuid: randomUUID(), timestamp: Date.now(), data: { text },
-        };
-        process.nextTick(() => {
-          sendForSession(info.id, IPC.TRANSCRIPT_EVENT, errEvent);
-          remoteServer?.broadcast({ type: 'transcript:event', payload: errEvent });
-        });
-      };
+      nativeStarting.add(info.id);
       // Did a real resume of stored data actually happen? Distinct from
       // `opts.resumeSessionId` being set: a resume can REFUSE (transcript not
       // synced / project folder missing) or fall back to creating a fresh
@@ -872,21 +869,11 @@ export function registerIpcHandlers(
       let didResume = false;
       try {
         if (opts.resumeSessionId) {
-          // Task 6: the resume-time model selector's pick (opts.binding, when the
-          // renderer already made one — the ResumeBrowser/pre-resume modal ALWAYS
-          // offers the selector for native rows) overrides the persisted header
-          // binding. Passed straight into resume() so it's applied before the
-          // eager loadModel() below and noteModelUsed's resolvePortableModel() both
-          // read it — see native-session-host.ts's resume() doc comment for why a
-          // post-hoc setBinding here would race those reads.
+          // Apply the resume-time binding inside resume(), before context/model
+          // profiling, rather than changing it after initialization.
           //
-          // Task 9 — resolve the transcript's REAL cwd BEFORE resume(). session-
-          // manager silently rewrites a nonexistent cwd to $HOME (session-manager.ts
-          // cwd→homedir); handing that to resume() reads a header from the wrong
-          // (empty) slug and the session spawns blank — the native twin of the CC
-          // greedy-slug/$HOME bugs (bea0de3e/57be5e14). So NEVER pass an unvalidated
-          // cwd: probe the transcript's existence, and on a genuine miss REFUSE with
-          // an accurate, split message rather than resolve to $HOME.
+          // Resolve the transcript's actual cwd BEFORE resume(): SessionManager
+          // falls back to $HOME when cwd is absent, which can spawn a blank chat.
           let resolvedCwd: string | undefined;
           let refusal: string | undefined;
           if (opts.cwd && fs.existsSync(opts.cwd) && nativeTranscriptExists(opts.cwd, opts.resumeSessionId)) {
@@ -917,28 +904,33 @@ export function registerIpcHandlers(
           }
 
           if (refusal) {
-            emitNativeSessionError(refusal);
+            throw new Error(refusal);
           } else if (resolvedCwd) {
             info.cwd = resolvedCwd; // fix the SessionInfo so downstream (noteSessionStarted, eager model, renderer) reads the validated cwd
             didResume = await nativeHost.resume(opts.resumeSessionId, resolvedCwd, opts.binding);
+            // Existence is not readability; false means no harness was started.
+            if (!didResume) throw new Error('This conversation could not be resumed — its saved data could not be read.');
           } else {
             const resumed = await nativeHost.resume(opts.resumeSessionId, info.cwd, opts.binding);
             didResume = resumed;
             // No stored file (e.g. resuming an id that was never persisted) → start
             // a fresh session under the same id so the renderer isn't left with a
             // SessionInfo backed by no live HarnessSession.
-            if (!resumed && opts.binding) {
-              await nativeHost.create({ sessionId: info.id, cwd: info.cwd, binding: opts.binding, presetId: opts.preset });
+            const fallbackBinding = opts.binding;
+            if (!resumed && fallbackBinding) {
+              await nativeHost.create({ sessionId: info.id, cwd: info.cwd, binding: fallbackBinding, presetId: opts.preset });
             } else if (!resumed && !opts.binding) {
               // Resume asked for a session whose saved data is gone, and we have no
               // binding to start a fresh one under this id — the renderer already
               // holds a live SessionInfo with an empty chat and no way to know why.
-              emitNativeSessionError('This conversation could not be resumed — its saved data is missing.');
+              throw new Error('This conversation could not be resumed — its saved data is missing.');
             }
           }
         } else {
+          if (!opts.binding) throw new Error('A model is required to start this conversation.');
           await nativeHost.create({ sessionId: info.id, cwd: info.cwd, binding: opts.binding, presetId: opts.preset });
         }
+        checkWindow();
         // Stamp the RESOLVED preset id (post legacy-mapping — a stored 'chat'
         // header resolves to 'assistant') onto the SessionInfo so the renderer's
         // preset badge + resume rows can read it. getHarnessId is authoritative
@@ -948,18 +940,8 @@ export function registerIpcHandlers(
         // session already knows whose plan it is spending (review T6 F1).
         info.providerType = bindingToPortableModel(nativeHost.getBinding(info.id), await providerRegistry.list())?.providerType;
 
-        // Native sessions emit NO CC SessionStart hook, so the CC lease path
-        // (sessionIdMap + acquire at the SessionStart listener) never fires for
-        // them — without this they run with NO takeover protection at all: a
-        // leaseQuery always answers held:false and the resume gate never offers a
-        // handoff, so two devices could both resume the same native conversation
-        // (2026-07-18 investigation §3.5). For native, info.id IS the claude
-        // session id (createSession uses resumeSessionId as the id; fresh native
-        // sessions mint one), so the mapping is identity. The existing session-exit
-        // release + holder teardown both key off sessionIdMap, so they pick native
-        // sessions up unchanged once the entry exists. Registered here (after the
-        // host create/resume succeeded) so a FAILED start doesn't take a lease on a
-        // dead session.
+        // Native has no CC hook; this identity mapping also powers holder teardown.
+        writerGenerations.set(info.id, (writerGenerations.get(info.id) ?? 0) + 1);
         sessionIdMap.set(info.id, info.id);
         noteSessionStarted(info.id, info.cwd, 'native');
         // Fix (2026-08-06): fill the header pill in on resume. The renderer
@@ -972,11 +954,8 @@ export function registerIpcHandlers(
         // cwd resolution above only exists on the foreign-cwd branch, not on
         // the common local-resume path.
         //
-        // Gated on didResume, NOT on opts.resumeSessionId: a REFUSED resume
-        // (transcript not synced / folder missing) and the "saved data missing,
-        // start fresh under the same id" fallback both leave a session that is
-        // empty or dead. Naming either after the stored conversation would put
-        // a real name on a session that isn't it — worse than the placeholder.
+        // Only a true resume receives the stored title: a fallback creates
+        // fresh data under the old id, which is not the old conversation.
         if (didResume) {
           void reapplyStoredTitle(resumeTitleDeps, info.id);
         }
@@ -989,38 +968,38 @@ export function registerIpcHandlers(
         void resolvePortableModel(info.id)
           .then((ref) => { if (ref) noteModelUsed(info.id, ref); })
           .catch(() => { /* best-effort — the first turn-complete catches up */ });
-        // LEASE FOR NATIVE SESSIONS — re-enabled in M2 (Task 9). It was reverted on
-        // 2026-07-18 (PR #176 fallout) with an explicit condition: "Re-enable this
-        // together with the parity work, NOT before — the lease only becomes
-        // meaningful at the same moment the transcript becomes shared." That moment
-        // is now. The native transcript is SHARED: it mirrors into the native/ space
-        // lane and materializes on peers (M2 Tasks 4/8), so the lease finally
-        // coordinates a REAL cross-device resource. Concretely, leaseQuery now
-        // answers held:true for a native conversation another device owns, and the
-        // resume gate offers the handoff (holder quiesce → flush → release; requester
-        // materialize → acquire) instead of two devices silently resuming two copies.
-        //
-        // Never-block (spec §3): a failed or DENIED acquire only WARNS — it never
-        // prevents the session from running (the resume must not wait on the lease).
-        // The warn leaves a breadcrumb so a "takeover didn't respond" is diagnosable
-        // (the same gap that hid the 2026-07-18 handoff timeout). For native, info.id
-        // IS the claude session id, so the acquire keys off the identity mapping set
-        // above. Gated on sync being enabled, mirroring the CC acquire at the
-        // SessionStart listener: a lease coordinates cross-device writers, which only
-        // exist for a synced conversation — an unsynced native session has no shared
-        // resource and needs no lease.
-        if (isSyncSpacesEnabled()) {
-          void leaseWiring?.client.acquire(info.id)
-            .then((res) => {
-              if (res && res.ok === false) {
-                log('WARN', 'Lease', 'native session running without its lease (held by another device)', { claudeId: info.id, holder: res.holder });
-              }
-            })
-            .catch(() => { /* never-block */ });
+        // Resumes already acquired before creation; fresh native identities
+        // acquire here. Confirmed denial tears the failed session down instead
+        // of leaving a writable session without authority. Offline stays usable.
+        if (!opts.resumeSessionId && leaseWiring && leasesEnabled()) {
+          const acquired = await leaseWiring.client.acquire(info.id).catch(() => null);
+          if (acquired?.ok === false) {
+            throw new Error('Another device holds this conversation.');
+          }
         }
+        checkWindow();
+        if (nativeExited.has(info.id)) throw new Error('This conversation ended before startup completed.');
       } catch (e) {
+        // WHY: destroy may fail while a harness can still append. Keep its
+        // identity and renewable hold until a successful teardown; never
+        // represent a possible writer as a safely released session.
+        try {
+          await nativeHost.destroy(info.id);
+          await resumeAdmission.waitForStop(opts.resumeSessionId ?? info.id);
+          resumeAdmission.clearProtection(opts.resumeSessionId ?? info.id);
+          sessionManager.destroySession(info.id);
+        } catch (cleanupError) {
+          resumeAdmission.protect(opts.resumeSessionId ?? info.id);
+          log('ERROR', 'IPC', 'native teardown after startup failure failed', { sessionId: info.id, error: String(cleanupError) });
+          throw new Error(`Native startup failed (${String(e)}); teardown failed (${String(cleanupError)}).`);
+        } finally { nativeStarting.delete(info.id); nativeExited.delete(info.id); }
+        sessionIdMap.delete(info.id);
+        windowRegistry?.releaseSession(info.id);
         log('ERROR', 'IPC', 'native session start failed', { sessionId: info.id, error: String(e) });
+        throw e;
       }
+      nativeStarting.delete(info.id);
+      nativeExited.delete(info.id);
       // Eager-load the bound model the moment the session opens (like LM Studio),
       // so the loading bar + GB progress appear immediately rather than only after
       // the first message. Fire-and-forget; the model poll drives the UI.
@@ -1047,8 +1026,32 @@ export function registerIpcHandlers(
         }
       });
     }
+    checkWindow();
     return info;
-  });
+  };
+  const createSession = async (event: { sender: { id: number; isDestroyed?: () => boolean } } | null, opts: Parameters<SessionManager['createSession']>[0]) => {
+    if (!opts.resumeSessionId) return startSession(event, opts);
+    let started = false;
+    const result = await resumeAdmission.open(opts.resumeSessionId, () => {
+      started = true;
+      return startSession(event, opts);
+    }, !!leaseWiring && leasesEnabled());
+    if (result.status === 'lease-denied') return result;
+    // WHY: a duplicate open belongs to its original window, even if the
+    // second request came from a different window. Ask that owner to select it.
+    const owner = windowRegistry?.getOwner(result.id);
+    if (!started && event && owner != null) {
+      const target = webContents.fromId(owner);
+      if (target) {
+        target.send(IPC.SESSION_FOCUS_REQUEST, result.id);
+        BrowserWindow.fromWebContents(target)?.focus();
+      }
+    }
+    return started ? result : { ...result, reused: true as const };
+  };
+  ipcMain.handle(IPC.SESSION_CREATE, (event, opts) => createSession(event, opts));
+  // Optional for test doubles that only model the older remote interface.
+  remoteServer?.setSessionCreate?.((opts) => createSession(null, opts));
 
   // Pull-style directory snapshot — renderers call this on mount to avoid
   // racing the WINDOW_DIRECTORY_UPDATED push that fires before React subscribes.
@@ -1059,9 +1062,16 @@ export function registerIpcHandlers(
   }
 
   ipcMain.handle(IPC.SESSION_DESTROY, async (_event, sessionId: string) => {
+    // WHY: admission is keyed by CONVERSATION id; a Claude session's desktop id
+    // differs. Capture it before teardown can drop the mapping.
+    const conversationId = sessionIdMap.get(sessionId) ?? sessionId;
     // Idempotent + no-op for non-native ids: flushes/tears down the native
     // HarnessSession if this id is live, otherwise returns immediately.
     await nativeHost.destroy(sessionId);
+    await resumeAdmission.waitForStop(conversationId);
+    // WHY: an earlier direct destroy may have left this Claude writer unproven.
+    // A later IPC destroy cannot clear its protection without PTY-exit proof.
+    const recoveredWriter = handoffAttempts?.hasSession(sessionId) ? false : resumeAdmission.clearProtection(conversationId);
     // Task 7: drop the title feeder's per-session state too — a no-op for
     // non-native ids (the feeder was never fed events for them) and cheap
     // idempotent Map.delete for native ones.
@@ -1072,7 +1082,18 @@ export function registerIpcHandlers(
     // nothing can ask for its history again.
     pageSources.forget(sessionId);
     resumePageBoundaries.delete(sessionId);
-    const result = sessionManager.destroySession(sessionId);
+    // WHY: ordinary destroy emits session-exit before requesting a PTY kill.
+    // A transferred writer needs the worker's PTY-exit proof before its pin
+    // can go; an unknown stop stays fenced, even if the UI closes the tab.
+    const pinnedClaude = handoffAttempts?.hasSession(sessionId) && sessionManager.getSession(sessionId)?.provider === 'claude';
+    const stopProof = pinnedClaude ? await sessionManager.stopSessionForHandoff(sessionId) : null;
+    if (pinnedClaude && stopProof?.status !== 'stopped') resumeAdmission.protect(conversationId);
+    // WHY: a proven stop already removed the manager entry, so destroySession
+    // finds nothing; that is still a successful close, not a failure.
+    const result = sessionManager.destroySession(sessionId) || (!!pinnedClaude && stopProof?.status === 'stopped');
+    // No SessionManager entry remains to emit exit after a failed startup.
+    if (recoveredWriter && !result) resumeAdmission.end(conversationId);
+    if (result && !pinnedClaude) handoffAttempts?.ended(sessionId);
     if (result) {
       // Explicit user-initiated destroy → treat as clean exit (0). The
       // reducer no-ops clean exits unless a turn was in flight.
@@ -2454,10 +2475,78 @@ export function registerIpcHandlers(
   const topicDir = path.join(os.homedir(), '.claude', 'topics');
   // Maps desktop session ID → Claude Code session ID
   const sessionIdMap = new Map<string, string>();
+  const nativeStarting = new Set<string>();
+  const nativeExited = new Set<string>();
+  const admittedResumes = new Set<string>();
+  const awaitingFirstResumeHook = new Set<string>();
+  const resumeAdmission = createResumeAdmission<SessionInfo>({
+    acquire: (id) => leaseWiring!.client.acquire(id),
+    release: (id) => leaseWiring!.client.release(id),
+    getLive: (id) => {
+      for (const [desktopId, claudeId] of sessionIdMap) {
+        if (claudeId === id) {
+          const info = sessionManager.getSession(desktopId);
+          if (info) return info;
+        }
+      }
+      return undefined;
+    },
+  });
+  // WHY: Task 5 must attach transport routes to this SAME admission/session
+  // owner; no separate requester may turn lease release into freshness.
+  const handoffAttempts = leaseWiring ? createHandoffAttempts({
+    deviceId: leaseWiring.deviceId, admission: resumeAdmission,
+    validate: (context, opts: Parameters<SessionManager['createSession']>[0]) =>
+      opts.resumeSessionId === context.sessionId && opts.provider === context.provider &&
+      typeof opts.name === 'string' && opts.name.length <= 512 && typeof opts.skipPermissions === 'boolean' &&
+      (opts.model === undefined || typeof opts.model === 'string') &&
+      (opts.binding === undefined || (typeof opts.binding === 'object' && opts.binding !== null)),
+    query: (id) => leaseWiring.client.query(id),
+    takeover: (id, nonce) => leaseWiring.client.takeover(id, nonce),
+    // WHY: only the hub's atomic compare-and-swap may grant separate force consent.
+    forceIfHolder: (id, expected) => hubLeaseRequest('force-acquire-if-holder', id, leaseWiring.deviceId, undefined, expected),
+    releaseForced: (id) => leaseWiring.client.release(id),
+    sync: () => syncSpacesSyncNowAwaited('personal', HANDOFF_SYNC_TIMEOUT_MS),
+    confirm: importConfirmedHandoff, pin: pinHandoffDestination, project: resolveHandoffProject,
+    savedProject: resolveSavedHandoffProject,
+    delay: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    start: (owner, context, cwd, check, opts: Parameters<SessionManager['createSession']>[0]) => {
+      check();
+      if (opts.resumeSessionId !== context.sessionId || opts.provider !== context.provider)
+        throw new Error('Handoff create options do not match the verified transcript.');
+      const sender = owner.startsWith('window:') ? webContents.fromId(Number(owner.slice(7))) : null;
+      if (owner.startsWith('window:') && !sender) throw new Error('The requesting window closed.');
+      return startSession(sender ? { sender } : null, { ...opts, cwd }, check);
+    },
+    dispose: async (info: SessionInfo) => {
+      // WHY: destroySession only requests a PTY kill; cancellation must wait
+      // for the worker's proven exit before relinquishing lease authority.
+      if (info.provider === 'claude') {
+        if ((await sessionManager.stopSessionForHandoff(info.id)).status !== 'stopped')
+          throw new Error('Canceled writer stop is unproven.');
+      } else {
+        await nativeHost.destroy(info.id);
+        if (!sessionManager.destroySession(info.id)) throw new Error('Attempt writer could not be stopped.');
+      }
+      sessionIdMap.delete(info.id);
+      windowRegistry?.releaseSession(info.id);
+    },
+  }) : null;
+  const handoffRoute = createHandoffTransport(handoffAttempts);
+  registerHandoffIpc(ipcMain, handoffRoute);
+  remoteServer?.setHandoffRoute?.(handoffRoute);
+  const transferredExit = createTransferredExitGate(resumeAdmission,
+    (sessionId) => handoffAttempts?.hasSession(sessionId) ?? false,
+    (sessionId) => handoffAttempts?.ended(sessionId));
   // Where each session's transcript lives, for the paged-history handler to
   // fall back on whenever the transcript watcher cannot say — see
   // transcript-page-source.ts for the three ordinary moments when it cannot.
   const pageSources = new TranscriptPageSources();
+  const transcriptWatcher = new TranscriptWatcher();
+  // WHY: expected exit removes the map, but a /clear remap (including a
+  // round-trip) must permanently invalidate a captured writer generation.
+  const writerGenerations = new Map<string, number>();
+  const handoffExpectedExits = new Set<string>();
   const resumePageBoundaries = new Map<string, { jsonlPath: string; offset: number }>();
 
   // Holder-side takeover (Plan 2b Task 8): when another device requests this
@@ -2493,7 +2582,42 @@ export function registerIpcHandlers(
     };
     const holderTakeover = createHolderTakeover({
       sessionManager, sessionIdMap, leaseClient: leaseWiring.client,
+      markExpectedExit: (id) => handoffExpectedExits.add(id),
+      clearExpectedExit: (id) => { handoffExpectedExits.delete(id); },
       flushSessionToSpace, pushMoved,
+      withAdmissionHandoff: (id, teardown) => resumeAdmission.handoff(id, teardown),
+      senderDeviceId: leaseWiring.deviceId,
+      pinSnapshot: pinHandoffDestination,
+      protectUnsafe: (id) => resumeAdmission.protect(id),
+      publishSnapshot: publishStoppedHandoff,
+      syncPublished: syncPublishedHandoff,
+      captureWriter: (desktopId, conversationId) => {
+        const info = sessionManager.getSession(desktopId);
+        if (!info || sessionIdMap.get(desktopId) !== conversationId ||
+            (info.provider !== 'claude' && info.provider !== 'native')) return null;
+        const provider = info.provider;
+        const native = provider === 'native' ? nativeHost.captureHandoffWriter(desktopId) : null;
+        const watched = provider === 'claude' ? transcriptWatcher.pageSourceFor(desktopId) : null;
+        const source = provider === 'native' ? native?.transcriptPath : watched?.jsonlPath;
+        const projectCwd = provider === 'native' ? native?.projectCwd : watched?.cwd;
+        if (!source || !projectCwd) return null;
+        const generation = writerGenerations.get(desktopId) ?? 0;
+        return {
+          provider, sessionId: conversationId, transcriptPath: source, projectCwd,
+          persisted: () => provider === 'claude' || !!native?.persisted(),
+          current: () => {
+            if ((writerGenerations.get(desktopId) ?? 0) !== generation) return false;
+            const live = sessionManager.getSession(desktopId);
+            if (live) return live.provider === provider && sessionIdMap.get(desktopId) === conversationId &&
+              (provider === 'native' ? nativeHost.captureHandoffWriter(desktopId)?.transcriptPath === source &&
+                nativeHost.captureHandoffWriter(desktopId)?.projectCwd === projectCwd :
+                transcriptWatcher.pageSourceFor(desktopId)?.jsonlPath === source &&
+                transcriptWatcher.pageSourceFor(desktopId)?.cwd === projectCwd);
+            // Only the captured session's ordinary exit may remove its mapping.
+            return handoffExpectedExits.has(desktopId) && !sessionIdMap.has(desktopId);
+          },
+        };
+      },
       // Provider of a live desktop id — drives the holder's step-3 branch (native
       // sessions quiesce their HarnessSession; CC sessions get the ESC byte).
       getProvider: (id) => sessionManager.getSession(id)?.provider,
@@ -2507,7 +2631,7 @@ export function registerIpcHandlers(
     });
     // Fire-and-forget from a hub event — the handler never throws (each step is
     // try/caught inside createHolderTakeover), so void is safe.
-    leaseWiring.setHolderTakeover((sid, from) => { void holderTakeover(sid, from); });
+    leaseWiring.setHolderTakeover((sid, from, transferNonce) => { void holderTakeover(sid, from, transferNonce); });
   }
 
   // `lastAttentionBySession` is declared alongside the other status-value
@@ -2522,8 +2646,6 @@ export function registerIpcHandlers(
       void buildStatusDataShared().then((data) => remoteServer?.broadcastStatusData(data));
     }
   });
-
-  const transcriptWatcher = new TranscriptWatcher();
 
   // Last model id written to the store per CLAUDE session id, so a repeat is
   // never re-written. Unbounded in principle but bounded in practice by
@@ -3913,7 +4035,11 @@ export function registerIpcHandlers(
       const current = sessionIdMap.get(desktopId);
       const hookEventName = event.payload?.hook_event_name as string | undefined;
       const source = event.payload?.source as string | undefined;
-      if (resolveMappingAction(current, claudeId, hookEventName, source) !== 'adopt') {
+      // A resumed CC identity is registered before spawn. Its matching first
+      // SessionStart still must install transcript watchers, but not reacquire.
+      const firstAdmittedStart = awaitingFirstResumeHook.has(desktopId) && current === claudeId
+        && hookEventName === 'SessionStart';
+      if (!firstAdmittedStart && resolveMappingAction(current, claudeId, hookEventName, source) !== 'adopt') {
         // Log only a REFUSED remap (not the steady-state 'ignore' of matching
         // ids / tool hooks, which would spam every hook event). This is the
         // breadcrumb the 2026-07-26 wrong-transcript investigation had to do
@@ -3947,15 +4073,18 @@ export function registerIpcHandlers(
       // some OTHER source, the offset-0 replay would append into an
       // already-populated chat timeline, and the renderer would need a
       // CLEAR_TIMELINE-equivalent coupled to the remap.
-      if (current) {
+      awaitingFirstResumeHook.delete(desktopId);
+      if (current && current !== claudeId) {
+        admittedResumes.delete(desktopId);
         teardownSessionWatchers(desktopId);
         // 2b: /clear rotates the CC session id WITHOUT firing session-exit, so the
         // pre-rotation claudeId's lease + its 30s renew timer would otherwise leak
         // (renewing a dead id every 30s until app quit). Release it here.
         // Idempotent + best-effort; release() never rejects, .catch guards a future change.
-        void leaseWiring?.client.release(current).catch(() => { /* best-effort */ });
+        if (leaseWiring) resumeAdmission.end(current);
       }
 
+      writerGenerations.set(desktopId, (writerGenerations.get(desktopId) ?? 0) + 1);
       sessionIdMap.set(desktopId, claudeId);
       startWatching(desktopId, claudeId);
 
@@ -3988,29 +4117,18 @@ export function registerIpcHandlers(
         // Conversation Store (Phase 2a): tell the store this claude session's cwd
         // so its activity upserts carry projectName/originalPath (local truth).
         noteSessionStarted(claudeId, ccCwd, 'claude');
-        // 2b Task 8: this device now owns the session — take the lease.
-        // Fire-and-forget: a denied (ok:false) result would only mean another
-        // device holds it, but the sanctioned resume path already ran takeover
-        // BEFORE spawn, so we never block session start on the lease. acquire()
-        // never rejects, but the .catch keeps a future change from leaking one.
-        //
-        // Gate on sync being ENABLED: leases coordinate CROSS-DEVICE writers, which
-        // only exist for a synced conversation. Without this, every CC SessionStart
-        // (even for users who never enabled sync) took an optimistic local hold with
-        // a 30s renew timer writing Personal/Leases/*.json — wasteful and creates a
-        // Leases/ dir for no reason. Release on session-exit stays UNCONDITIONAL
-        // (idempotent — harmless if never acquired) so a session that acquired while
-        // sync was on still releases if sync later flips off.
-        // Log a denied acquire: today a session can run its whole life NOT owning
-        // its lease with zero trace, which is exactly how the 2026-07-18 handoff
-        // timeout went undiagnosed (the holder never held, so it never responded).
-        // Still never-block — the resume must not wait on the lease — but leave a
-        // breadcrumb so the next "takeover didn't respond" is diagnosable.
-        if (isSyncSpacesEnabled()) {
-          void leaseWiring?.client.acquire(claudeId)
+        // Resumed ids already acquired before spawn. New identities (including
+        // in-session /resume) acquire here; a confirmed denial must stop their
+        // writer rather than leave it running without authority. An unavailable
+        // hub still permits offline access. No lease when sync is disabled.
+        if (leaseWiring && !admittedResumes.has(desktopId) && leasesEnabled()) {
+          void leaseWiring.client.acquire(claudeId)
             .then((res) => {
               if (res && res.ok === false) {
-                log('WARN', 'Lease', 'session running without its lease (held by another device)', { claudeId, holder: res.holder });
+                log('WARN', 'Lease', 'stopping session denied its lease', { claudeId, holder: res.holder });
+                if (sessionIdMap.get(desktopId) === claudeId && sessionManager.getSession(desktopId)) {
+                  sessionManager.destroySession(desktopId);
+                }
               }
             })
             .catch(() => { /* never-block */ });
@@ -4019,20 +4137,20 @@ export function registerIpcHandlers(
     });
   }
 
+  // WHY: a PTY exit frame, not the early session-exit from destroySession,
+  // is the proof needed to release a transferred Claude writer's pin.
+  sessionManager.on('session-stopped', transferredExit.onStopped);
   // Stop watching when a session is destroyed
   sessionManager.on('session-exit', (sessionId: string) => {
+    if (nativeStarting.has(sessionId)) nativeExited.add(sessionId);
     teardownSessionWatchers(sessionId);
-    // Native teardown backstop (2026-07-18). SESSION_DESTROY already awaits
-    // nativeHost.destroy before destroySession, but session-exit ALSO fires for
-    // paths that go straight to SessionManager (a crashed worker, a takeover, an
-    // internal destroy) — and for a native session those left the HarnessSession
-    // running with its transcript-event listener still appending. Idempotent and
-    // a no-op for non-native ids, so calling it here is free on the CC path.
-    // Fire-and-forget: this listener is sync, and destroy() never rejects for an
-    // unknown id — the .catch guards a future change.
-    void nativeHost.destroy(sessionId).catch((e) => {
-      log('ERROR', 'IPC', 'native teardown on session-exit failed', { sessionId, error: String(e) });
-    });
+    // WHY: exit also occurs without SESSION_DESTROY. Coordinate the native
+    // append-chain drain with lease release; a failed stop must retain the hold.
+    const isNative = sessionManager.getSession(sessionId)?.provider === 'native';
+    const stop = nativeHost.destroy(sessionId);
+    // WHY: capture provider before the await; SessionManager deletes its entry after emit.
+    void stop.then(() => { if (isNative) handoffAttempts?.ended(sessionId); },
+      (e) => log('ERROR', 'IPC', 'native teardown on session-exit failed', { sessionId, error: String(e) }));
     // Task 7: same backstop reasoning as the destroy() call above — this
     // path also covers crashes/takeovers that never went through
     // SESSION_DESTROY, so the feeder's per-session state needs the same
@@ -4052,7 +4170,16 @@ export function registerIpcHandlers(
       requestChatsearchRefresh();
       // 2b Task 8: drop our lease so another device can acquire. Idempotent +
       // best-effort; release() never rejects, .catch guards a future change.
-      void leaseWiring?.client.release(claudeId).catch(() => { /* best-effort */ });
+      // A teardown from a previous writer must not free a successor's lease.
+      // The holder handoff releases explicitly only after the writer stops.
+      const anotherWriter = [...sessionIdMap.entries()].some(([did, cid]) =>
+        did !== sessionId && cid === claudeId && !!sessionManager.getSession(did));
+      if (!anotherWriter && !resumeAdmission.isHandingOff(claudeId)) {
+        // WHY: all destroy callers share this event. Its early emission by
+        // SessionManager must not release a transferred writer's hub lease.
+        if (!transferredExit.onExit(sessionId, claudeId, stop) && leaseWiring)
+          resumeAdmission.markExit(claudeId, stop);
+      }
       // WHY (2026-09-16, per-session-maps investigation): the last-model
       // dedupe is keyed by CLAUDE id and was never cleared, so every
       // conversation opened this run left a string behind for the life of the
@@ -4060,6 +4187,8 @@ export function registerIpcHandlers(
       lastModelSeen.delete(claudeId);
     }
     sessionIdMap.delete(sessionId);
+    admittedResumes.delete(sessionId);
+    awaitingFirstResumeHook.delete(sessionId);
     lastAttentionBySession.delete(sessionId);
     // Same investigation: the per-session model-state signature (native
     // sessions) had no removal path either.
@@ -4468,8 +4597,8 @@ export function registerIpcHandlers(
   // (spec §3 never-block).
   ipcMain.handle(IPC.SYNC_SPACES_LEASE_QUERY, (_e, p: { claudeSessionId: string }) =>
     leaseWiring?.client.query(String(p?.claudeSessionId ?? '')) ?? { held: false, source: 'none' });
-  ipcMain.handle(IPC.SYNC_SPACES_LEASE_TAKEOVER, (_e, p: { claudeSessionId: string }) =>
-    leaseWiring?.requester.takeover(String(p?.claudeSessionId ?? '')) ?? { outcome: 'error' });
+  ipcMain.handle(IPC.SYNC_SPACES_LEASE_TAKEOVER, (_e, p: { claudeSessionId: string; transferNonce?: string }) =>
+    leaseWiring?.requester.takeover(String(p?.claudeSessionId ?? ''), p?.transferNonce) ?? { outcome: 'error' });
   ipcMain.handle(IPC.SYNC_SPACES_LEASE_FORCE, (_e, p: { claudeSessionId: string }) =>
     leaseWiring?.requester.force(String(p?.claudeSessionId ?? '')) ?? { ok: false });
 
@@ -5386,5 +5515,5 @@ export function registerIpcHandlers(
     engine: { installed: () => engineManager.registryHook().installed(), install: () => engineManager.install() },
     models: modelManager,
   };
-  return { cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn };
+  return { cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn, handoffAttempts };
 }

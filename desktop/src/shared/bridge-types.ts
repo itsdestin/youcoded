@@ -26,13 +26,24 @@
 // Its own file, not shared/types.ts, so the bridge shape is found in one place
 // and types.ts stays inside its line budget (review of Plan B, 2026-09-17).
 
-import type { SessionMetaResult } from './types';
+import type { SessionMetaResult, HandoffAttemptResult, HandoffCreateParams } from './types';
 
 /** A listener handle as the bridges return it — pass it back to `off()`. */
 type BridgeHandler = (...args: any[]) => void;
 
 /** window.claude.session — every member both bridges must implement. */
 interface SessionBridge {
+  // WHY: shared UI must see the same attempt API on both bridges, including Android's honest refusal.
+  handoff: {
+    begin(conversationId: string, provider: 'claude' | 'native', create?: HandoffCreateParams): Promise<HandoffAttemptResult>;
+    status(id: string): Promise<HandoffAttemptResult>;
+    wait(id: string): Promise<HandoffAttemptResult>;
+    retry(id: string): Promise<HandoffAttemptResult>;
+    savedCopy(id: string, consent: boolean): Promise<HandoffAttemptResult>;
+    force(id: string, consent: boolean, expectedHolderId: string): Promise<HandoffAttemptResult>;
+    cancel(id: string): Promise<HandoffAttemptResult>;
+    setCreateParams(id: string, create: HandoffCreateParams): Promise<HandoffAttemptResult>;
+  };
   create(opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string; provider?: 'claude' | 'native'; model?: string }): Promise<unknown>;
   destroy(sessionId: string): Promise<unknown>;
   list(): Promise<unknown>;
