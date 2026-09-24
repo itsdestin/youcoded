@@ -133,6 +133,24 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
     // and the parent frame would otherwise fall through to Root's login path if
     // anything there ever reads the bridge.
     installMock();
+    // WHY: design-guide review (2026-09-24) compares whole screens under
+    // alternative style systems. `?proposal=<name>` (or VITE_STYLE_PROPOSAL for
+    // a whole screenshot sweep) layers dev/workbench/proposals/<name>.css over
+    // the real renderer. Workbench-only: this branch never ships in the app.
+    const __proposal = new URLSearchParams(location.search).get('proposal')
+      ?? (import.meta.env.VITE_STYLE_PROPOSAL as string | undefined);
+    if (__proposal) {
+      const sheets = import.meta.glob('./dev/workbench/proposals/*.css', { query: '?inline', import: 'default' });
+      const load = sheets[`./dev/workbench/proposals/${__proposal}.css`];
+      if (load) {
+        const style = document.createElement('style');
+        style.dataset.proposal = __proposal;
+        style.textContent = (await load()) as string;
+        // First in <head> so `@layer proposal` is the earliest layer and its
+        // !important rules outrank the app's layered !important utilities.
+        document.head.prepend(style);
+      } else console.error(`[workbench] no style proposal named ${__proposal}`);
+    }
     if (isChild) {
       // The tool gallery is a separate surface, not part of the app shell, so it
       // renders in place of <App/> rather than inside it. It DOES get a real
