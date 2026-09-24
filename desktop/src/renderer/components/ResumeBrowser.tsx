@@ -31,6 +31,7 @@ import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
 import { TagGlyph } from './tags/glyphs';
 import { NoteEditor } from './tags/NoteEditor';
 import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from './ResumeOptions';
+import { resolveNativeBinding } from '../state/welcome-back';
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
@@ -348,9 +349,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [launched, setLaunched] = useState<Set<string>>(new Set());
   const [resumingMany, setResumingMany] = useState(false);
-  // How many ticked rows a Resume press could not open by itself (a native row
-  // whose last model is not set up here). Said in the footer, never silently.
-  const [leftBehind, setLeftBehind] = useState(0);
+  // Native rows whose last model is not set up on this device, so a Resume
+  // press cannot reopen them by itself. Worked out BEFORE the press and said on
+  // the row (UX review 1, U2/U3) — not discovered afterwards.
+  const [needsModel, setNeedsModel] = useState<Set<string>>(new Set());
   const [loadedOnce, setLoadedOnce] = useState(false);
   const tickSeeded = useRef(false);
   // Live tag registry — drives the Tag Picker, chips, and custom-tag filter.
@@ -779,6 +781,22 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     tickSeeded.current = true;
     setTicked(new Set(filtered.filter((s) => !s.missingProject && !s.notSyncedYet && !s.flags?.complete).map((s) => s.sessionId)));
   }, [wb, loading, loadedOnce, filtered]);
+  useEffect(() => {
+    if (!wb || !loadedOnce) return;
+    const native = sessions.filter((s) => wb.ids.includes(s.sessionId) && s.provider === 'native');
+    if (native.length === 0) return;
+    let alive = true;
+    void Promise.all([window.claude.providers.list(), window.claude.providers.catalog()])
+      .then(([providers, catalog]: [any, any]) => {
+        if (!alive) return;
+        setNeedsModel(new Set(native
+          .filter((s) => !resolveNativeBinding(s.lastUsedModel, providers ?? [], catalog ?? []))
+          .map((s) => s.sessionId)));
+      })
+      // Unknown is not "missing": say nothing, and the row's own picker asks.
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [wb, loadedOnce, sessions]);
   const tickedRows = wb ? filtered.filter((s) => ticked.has(s.sessionId)) : [];
   // Nothing left to choose from: the screen has done its job.
   useEffect(() => {
@@ -794,7 +812,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     setResumingMany(true);
     try {
       const done = await wb.onResumeMany(tickedRows);
-      setLeftBehind(tickedRows.length - done.length);
       setLaunched((prev) => new Set([...prev, ...done]));
       // Open the first row that could not go by itself, so its model picker is
       // on screen — the footer line says why — instead of a button that
@@ -1114,7 +1131,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const renderStamp = {};
   const rowDeps = (s: PastSession, showPath: boolean): readonly unknown[] => {
     const opened = organizeId === s.sessionId || expandedId === s.sessionId;
-    return [s, showPath, previewOn, previewOn && previewId === s.sessionId, registry.byId, !!namingApi(), opened ? renderStamp : null, ticked.has(s.sessionId)];
+    return [s, showPath, previewOn, previewOn && previewId === s.sessionId, registry.byId, !!namingApi(), opened ? renderStamp : null, ticked.has(s.sessionId), needsModel.has(s.sessionId)];
   };
 
   const handleConfirmResume = async (s: PastSession) => {
@@ -1367,6 +1384,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               icon buttons own the card's top-right corner, and a third item
               crowding in beside them read as part of that control cluster. */}
           <SessionCardMeta session={s} showProject={!!showPath} />
+          {/* Welcome back: said before Resume is pressed, not after. */}
+          {wb && !clone && needsModel.has(s.sessionId) && (
+            <p className="text-2xs text-fg-muted mt-1">Its last model isn't set up here — Resume will ask you to pick one.</p>
+          )}
         </div>
       </button>
       {/* The two icon buttons, overlaid on the card's top-right corner rather
@@ -1831,11 +1852,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 className="absolute inset-x-0 top-0 h-px"
                 style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
               />
-              {leftBehind > 0 && filtered.length > 0 && (
-                <p className="w-full text-xs text-fg-muted" role="status">
-                  {leftBehind === 1 ? '1 session needs' : `${leftBehind} sessions need`} a model picked first. Choose one to resume it.
-                </p>
-              )}
+
               <Button variant="ghost" size="md" onClick={wb.onDone} disabled={resumingMany}>Start fresh</Button>
               <Button variant="primary" size="md" onClick={resumeTicked} disabled={tickedRows.length === 0 || resumingMany}>
                 {resumingMany ? 'Reopening…' : tickedRows.length === 0 ? 'Resume' : `Resume ${tickedRows.length === filtered.length && filtered.length > 1 ? 'all ' : ''}${tickedRows.length}`}
