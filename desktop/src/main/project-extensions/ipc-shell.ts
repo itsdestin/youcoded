@@ -22,7 +22,7 @@
 import { NativeHome } from '../native-home';
 import { getManagedRoots } from '../sync-spaces/service';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
-import { resolveProjectKey, type ProjectKeyCandidate } from './project-key';
+import { resolveProjectKey, resolveProjectAddedAt, type ProjectKeyCandidate } from './project-key';
 import { listProjectKeyCandidatesAsync } from './candidates';
 import {
   getProjectExtensions, mutateProjectExtensions, ensureSeeded,
@@ -103,7 +103,11 @@ export async function projectExtensionsGet(deps: ProjectExtensionsIpcDeps, path:
     const { candidates, stores } = await candidatesAndStores(deps);
     const storageKey = resolveStorageKey(path, candidates);
     const { skills, mcp, installs } = await gatherCatalog(deps, path);
-    const record = await ensureSeeded(stores, storageKey, { skills, mcp, installs });
+    // seedReferenceInstant (T6): see ensureSeeded's own header — without it,
+    // a plugin installed moments ago would seed ON in a project that has
+    // never opened this tab, defeating "starts off everywhere".
+    const seedReferenceInstant = resolveProjectAddedAt(path, candidates);
+    const record = await ensureSeeded(stores, storageKey, { skills, mcp, installs }, Date.now(), false, seedReferenceInstant);
     return { ok: true, view: buildProjectExtensionsView({ projectKey: path, record, skills, mcp, installs, now: Date.now() }) };
   } catch (err: any) {
     return { ok: false, error: err?.message || String(err) };

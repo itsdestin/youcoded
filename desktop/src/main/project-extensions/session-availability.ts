@@ -8,7 +8,7 @@
 // unconditionally (design §3's whole point: a project's settings can change
 // while a conversation is closed without moving the ground under an already
 // -open session) — never re-runs this.
-import { resolveProjectKey, type ProjectKeyCandidate } from './project-key';
+import { resolveProjectKey, resolveProjectAddedAt, type ProjectKeyCandidate } from './project-key';
 import { ensureSeeded, type ProjectExtensionsStores, type SeedCatalog } from './store';
 import {
   resolveAvailability, itemKeyForSkill, itemKeyForMcp,
@@ -126,7 +126,11 @@ export async function resolveSessionAvailability(
     // isNewProject defaults false in ensureSeeded: this is a conversation
     // being opened, not a project being freshly created (that seed call, with
     // isNewProject:true, is a later task's responsibility to wire — design §2).
-    const record = await ensureSeeded(deps.stores, projectKey, seedCatalog, now);
+    // seedReferenceInstant (T6): same fix as ipc-shell.ts's projectExtensionsGet
+    // — starting the FIRST-EVER conversation in a project is the other seed
+    // trigger design §2 names, so it needs the same "don't use now" correction.
+    const seedReferenceInstant = resolveProjectAddedAt(cwd, candidates);
+    const record = await ensureSeeded(deps.stores, projectKey, seedCatalog, now, false, seedReferenceInstant);
     const resolved = resolveAvailability({
       projectKey, record, skills: deps.skills, mcp: deps.mcp, installs: deps.installs, now,
     });

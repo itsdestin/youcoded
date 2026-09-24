@@ -24,9 +24,15 @@ function defaultFoldersFile(): string {
   return path.join(os.homedir(), '.claude', 'youcoded-folders.json');
 }
 
-/** Same shape as saved-folders.ts's SavedFolder, narrowed to the one field
- *  this module reads. */
-async function readSavedFolderPaths(foldersFile: string): Promise<string[]> {
+/** Same shape as saved-folders.ts's SavedFolder, narrowed to the two fields
+ *  this module reads: the path, and (T6, project-plugin-controls) `addedAt`
+ *  — see project-key.ts's `resolveProjectAddedAt` for why a caller wants it. */
+interface SavedFolderEntry {
+  path: string;
+  addedAt?: number;
+}
+
+async function readSavedFolderEntries(foldersFile: string): Promise<SavedFolderEntry[]> {
   let raw: unknown;
   try {
     raw = JSON.parse(await fs.promises.readFile(foldersFile, 'utf8'));
@@ -34,9 +40,12 @@ async function readSavedFolderPaths(foldersFile: string): Promise<string[]> {
     return []; // absent/corrupt file reads as "no saved folders" — same as readFolders()
   }
   if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
+  const out: SavedFolderEntry[] = [];
   for (const entry of raw) {
-    if (entry && typeof (entry as { path?: unknown }).path === 'string') out.push((entry as { path: string }).path);
+    const p = (entry as { path?: unknown } | null)?.path;
+    if (typeof p !== 'string') continue;
+    const addedAtRaw = (entry as { addedAt?: unknown }).addedAt;
+    out.push({ path: p, ...(typeof addedAtRaw === 'number' && Number.isFinite(addedAtRaw) && addedAtRaw !== 0 ? { addedAt: addedAtRaw } : {}) });
   }
   return out;
 }
@@ -60,19 +69,19 @@ export async function listProjectKeyCandidatesAsync(
   projectsRoot: string | null,
   foldersFile: string = defaultFoldersFile(),
 ): Promise<ProjectKeyCandidate[]> {
-  const savedPaths = await readSavedFolderPaths(foldersFile);
+  const savedEntries = await readSavedFolderEntries(foldersFile);
   const candidates: ProjectKeyCandidate[] = [];
   const seen = new Set<string>();
   const projectsPrefix = projectsRoot ? path.resolve(projectsRoot).toLowerCase() + path.sep : null;
 
-  for (const p of savedPaths) {
+  for (const { path: p, addedAt } of savedEntries) {
     const resolved = path.resolve(p);
     seen.add(resolved.toLowerCase());
     const managed = projectsPrefix !== null && resolved.toLowerCase().startsWith(projectsPrefix);
     // syncName is the directory's OWN basename (its cross-device identity),
     // never the saved folder's editable nickname — project-key.ts's own
     // header comment names this exact distinction.
-    candidates.push({ path: p, ...(managed ? { syncName: path.basename(resolved) } : {}) });
+    candidates.push({ path: p, ...(managed ? { syncName: path.basename(resolved) } : {}), ...(addedAt !== undefined ? { addedAt } : {}) });
   }
 
   if (projectsRoot) {

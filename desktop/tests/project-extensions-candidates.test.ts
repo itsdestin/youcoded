@@ -24,8 +24,14 @@ describe('listProjectKeyCandidatesAsync', () => {
     expect(candidates).toEqual([]);
   });
 
-  it('an ordinary (unsynced) saved folder carries no syncName', async () => {
+  it('an ordinary (unsynced) saved folder carries no syncName, and carries its addedAt', async () => {
     fs.writeFileSync(foldersFile, JSON.stringify([{ path: '/home/dest/Notes', nickname: 'Notes', addedAt: 1 }]));
+    const candidates = await listProjectKeyCandidatesAsync(null, foldersFile);
+    expect(candidates).toEqual([{ path: '/home/dest/Notes', addedAt: 1 }]);
+  });
+
+  it('an addedAt of 0 (folders-service.ts\'s "unknown age" sentinel) is dropped, not carried as a real instant', async () => {
+    fs.writeFileSync(foldersFile, JSON.stringify([{ path: '/home/dest/Notes', nickname: 'Notes', addedAt: 0 }]));
     const candidates = await listProjectKeyCandidatesAsync(null, foldersFile);
     expect(candidates).toEqual([{ path: '/home/dest/Notes' }]);
   });
@@ -35,7 +41,7 @@ describe('listProjectKeyCandidatesAsync', () => {
     fs.mkdirSync(managedPath, { recursive: true });
     fs.writeFileSync(foldersFile, JSON.stringify([{ path: managedPath, nickname: 'My Nickname', addedAt: 1 }]));
     const candidates = await listProjectKeyCandidatesAsync(projectsRoot, foldersFile);
-    expect(candidates).toEqual([{ path: managedPath, syncName: 'RealName' }]);
+    expect(candidates).toEqual([{ path: managedPath, syncName: 'RealName', addedAt: 1 }]);
   });
 
   it('a managed project not yet in saved folders is appended with its directory name as syncName', async () => {
@@ -56,7 +62,7 @@ describe('listProjectKeyCandidatesAsync', () => {
   it('projectsRoot: null skips the managed half entirely, same as no ManagedRoots wired', async () => {
     fs.writeFileSync(foldersFile, JSON.stringify([{ path: '/a', nickname: 'a', addedAt: 1 }]));
     const candidates = await listProjectKeyCandidatesAsync(null, foldersFile);
-    expect(candidates).toEqual([{ path: '/a' }]);
+    expect(candidates).toEqual([{ path: '/a', addedAt: 1 }]);
   });
 
   it('a projectsRoot that does not exist yet is treated as "no managed projects", not a throw', async () => {

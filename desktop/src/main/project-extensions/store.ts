@@ -379,6 +379,23 @@ export interface SeedCatalog {
  * starting a conversation in it (design §2) — that gate lives in the caller
  * (T2/T3), not here: this function itself is called-once-safe but not
  * called-rarely-enforcing.
+ *
+ * `seedReferenceInstant` (T6, project-plugin-controls — found verifying the
+ * Marketplace post-install panel's "starts off everywhere" contract):
+ * defaults to `now`, but a caller that knows roughly how long this project
+ * has existed (project-key.ts's `resolveProjectAddedAt`) should pass THAT
+ * instead. Reason: `now` is this very call's own timestamp, and an install
+ * already on disk can never be later than "right now" — so falling back to
+ * `now` for `seedDefaultOn`'s comparison makes rule 2 ("a marketplace plugin
+ * installed after the project's seed instant starts off") mathematically
+ * unable to fire on a project's FIRST-EVER seed, no matter how recent the
+ * install actually was. That is invisible for an old install (which is
+ * supposed to stay on either way), but it silently turns a plugin installed
+ * moments ago ON in every project that has never opened its Skills & tools
+ * tab or started a conversation — exactly the moment the Marketplace's
+ * "choose your projects" panel calls `get()` for each one. A project's own
+ * `addedAt` is (almost always) well before "just now", so it correctly keeps
+ * a genuinely old install on while still putting a brand-new one after it.
  */
 export async function ensureSeeded(
   stores: ProjectExtensionsStores,
@@ -386,6 +403,7 @@ export async function ensureSeeded(
   catalog: SeedCatalog,
   now: number = Date.now(),
   isNewProject: boolean = false,
+  seedReferenceInstant: number = now,
 ): Promise<ProjectExtensionsRecord> {
   const result = await mutateProjectExtensions(stores, projectKey, (cur) => {
     if (cur && cur.seededAt !== 0) return null; // already seeded — no-op
@@ -396,7 +414,7 @@ export async function ensureSeeded(
       const key = itemKeyForSkill(s);
       if (key in items) continue;
       const on = s.pluginName
-        ? seedDefaultOn(s.pluginName, catalog.installs[s.pluginName]?.installedAt, now, isNewProject)
+        ? seedDefaultOn(s.pluginName, catalog.installs[s.pluginName]?.installedAt, seedReferenceInstant, isNewProject)
         : true; // rule 3: a self/project skill is never plugin-scoped
       items[key] = { on, at: now };
     }
@@ -405,7 +423,7 @@ export async function ensureSeeded(
       if (key in items) continue;
       const pluginId = m.origin.kind === 'marketplace' ? m.origin.plugin : undefined;
       const on = pluginId
-        ? seedDefaultOn(pluginId, catalog.installs[pluginId]?.installedAt, now, isNewProject)
+        ? seedDefaultOn(pluginId, catalog.installs[pluginId]?.installedAt, seedReferenceInstant, isNewProject)
         : true; // rule 3: a user/adopted MCP server is never plugin-scoped
       items[key] = { on, at: now };
     }
@@ -422,7 +440,7 @@ export async function ensureSeeded(
     for (const pluginId of pluginIds) {
       if (pluginId in plugins) continue;
       plugins[pluginId] = {
-        on: seedDefaultOn(pluginId, catalog.installs[pluginId]?.installedAt, now, isNewProject),
+        on: seedDefaultOn(pluginId, catalog.installs[pluginId]?.installedAt, seedReferenceInstant, isNewProject),
         partsChosen: true,
         at: now,
       };

@@ -26,15 +26,32 @@ import FileViewerOverlay, { type FileViewerTarget } from "./FileViewerOverlay";
 // was uninstall-then-reinstall (ROADMAP:736 for themes).
 import UpdateButton from "./UpdateButton";
 import { Button, CloseButton, Callout } from "../ui";
-import { isWorkbenchMode } from '../../workbench-mode';
-import { ProjectPluginControlsDemo } from '../../dev/workbench/mockups/ProjectPluginControls';
 // Task 3: `longDescription` is markdown and used to be printed verbatim, so a
 // listing that wrote "**Heading**" showed the asterisks.
 import MarkdownContent from "../MarkdownContent";
+// T6 (project-plugin-controls): the production "choose your projects" panel,
+// replacing the workbench-only ProjectPluginControlsDemo fixture that used to
+// live here behind a hardcoded fixture id ('youcoded-inbox') and an
+// isWorkbenchMode() gate. This file is production code — no dev/ import.
+import { ProjectSetupPanel } from "./ProjectSetupPanel";
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
   | { kind: "theme"; slug: string };
+
+// T6: "has parts" (design §5 — gate the post-install panel on "a plugin that
+// has skills or tool connections", not a fixture id). `components` comes
+// straight off the catalog entry (extract-components.js, at sync time) —
+// there is no separate signal in the install call itself (`installSkill`
+// resolves void), so the catalog entry IS "the install result" here. `null`
+// (extraction failed) or `undefined` (a pre-Phase-1 cached entry) means no
+// data to gate on — keep today's plain installed view rather than guessing;
+// a prompt-only skill's own `components` is either absent or an empty
+// object, so it never qualifies either way.
+function pluginHasParts(entry: SkillEntry): boolean {
+  const c = entry.components;
+  return !!c && (c.skills.length > 0 || c.mcpServers.length > 0);
+}
 
 interface Props {
   target: DetailTarget;
@@ -54,11 +71,14 @@ export default function MarketplaceDetailOverlay({
   target, onClose, onOpenShareSheet, onOpenThemeShare, onNavigate,
 }: Props) {
   const mp = useMarketplace();
-  const [setupPreview, setSetupPreview] = useState(false);
-  // WHY: the overlay is reused across in-panel navigation (no key), so a setup
-  // preview from one install must not replay when the user comes back later.
+  // T6: which plugin just finished installing, and its id — drives the
+  // post-install ProjectSetupPanel. null everywhere else (today's view).
+  const [justInstalled, setJustInstalled] = useState<{ id: string; displayName: string } | null>(null);
+  // WHY: the overlay is reused across in-panel navigation (no key), so a
+  // post-install panel from one install must not replay when the user comes
+  // back later (design §5: "resets on target change (targetKey)").
   const targetKey = target.kind === 'theme' ? `theme:${target.slug}` : `${target.kind}:${target.id}`;
-  useEffect(() => { setSetupPreview(false); }, [targetKey]);
+  useEffect(() => { setJustInstalled(null); }, [targetKey]);
   // Needed for Apply action and isActive check in ThemeBody
   const { theme: activeThemeSlug, setTheme } = useTheme();
 
@@ -107,9 +127,10 @@ export default function MarketplaceDetailOverlay({
           onNavigate={onNavigate}
           memberId={memberId}
           onInstall={() => mp.installSkill(entry.id).then(() => {
-            // WHY: demonstrate the next step only after the workbench's fake install succeeds;
-            // the real installer and every production route remain untouched.
-            if (isWorkbenchMode() && entry.id === 'youcoded-inbox') setSetupPreview(true);
+            // R19/design §5: show the setup panel after a SUCCESSFUL install
+            // of any plugin with skills or tool connections — never a
+            // fixture id, never for a theme or a prompt-only skill.
+            if (pluginHasParts(entry)) setJustInstalled({ id: entry.id, displayName: entry.displayName });
           }).catch(() => undefined)}
           onUninstall={() => mp.uninstallSkill(entry.id).catch(() => undefined)}
           onToggleFavorite={() => mp.setFavorite(entry.id, !favorited).catch(() => undefined)}
@@ -145,13 +166,16 @@ export default function MarketplaceDetailOverlay({
     }
   }
 
-  // WHY: the flag outlives a Related-item navigation inside this overlay; tie it
-  // to the Inbox target so another plugin's page never gets the setup title.
-  const showSetupPreview = isWorkbenchMode() && setupPreview && target.kind === 'skill' && target.id === 'youcoded-inbox';
-  if (showSetupPreview) {
-    content = <div data-project-install-preview>
-      <ProjectPluginControlsDemo arrangement="fresh" titleInParent previewPlugin={{ name: 'Inbox', defaultOn: false, parts: [{ name: 'Process inbox', kind: 'Skill' }] }} previewProjects={['youcoded', 'wecoded-themes', 'recipes']} />
-      <div className="mx-auto max-w-[820px] px-4 pb-4 flex justify-end"><Button variant="primary" onClick={onClose}>Done</Button></div>
+  // WHY: `justInstalled` outlives a Related-item navigation inside this
+  // overlay (it's not tied to the currently-shown target's own id), but the
+  // targetKey reset effect above clears it the moment the shown target
+  // changes at all — so a plugin's own detail page never keeps showing a
+  // DIFFERENT plugin's setup panel after "What's inside" navigation.
+  const showProjectSetup = !!justInstalled && target.kind === 'skill' && target.id === justInstalled.id;
+  if (showProjectSetup && justInstalled) {
+    content = <div className="mx-auto max-w-[820px] space-y-4">
+      <ProjectSetupPanel pluginId={justInstalled.id} />
+      <div className="flex justify-end"><Button variant="primary" onClick={onClose}>Done</Button></div>
     </div>;
   }
 
@@ -165,7 +189,7 @@ export default function MarketplaceDetailOverlay({
         className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
       >
         <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
-          <h2 className="text-lg font-semibold text-fg">{showSetupPreview ? 'Set up Inbox' : 'Details'}</h2>
+          <h2 className="text-lg font-semibold text-fg">{showProjectSetup && justInstalled ? `Set up ${justInstalled.displayName}` : 'Details'}</h2>
           {/* Wide: Esc-text hint. Narrow: bordered close-X matching the marketplace top bar. */}
           <button
             type="button"

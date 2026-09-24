@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { resolveProjectKey, type ProjectKeyCandidate } from '../src/main/project-extensions/project-key';
+import { resolveProjectKey, resolveProjectAddedAt, type ProjectKeyCandidate } from '../src/main/project-extensions/project-key';
 
 const realPlatform = process.platform;
 const setPlatform = (p: string) => Object.defineProperty(process, 'platform', { value: p, configurable: true });
@@ -66,5 +66,18 @@ describe('resolveProjectKey', () => {
       { path: '/home/dest/A', syncName: 'ADuplicate' },
     ];
     expect(resolveProjectKey('/home/dest/A', candidates)).toBe('A');
+  });
+});
+
+describe('resolveProjectAddedAt', () => {
+  it('returns the matching candidate\'s addedAt', () => {
+    const candidates: ProjectKeyCandidate[] = [{ path: '/home/dest/Project', addedAt: 12345 }];
+    expect(resolveProjectAddedAt('/home/dest/Project', candidates)).toBe(12345);
+  });
+
+  it('returns undefined when no candidate matches, or the match has no addedAt', () => {
+    const candidates: ProjectKeyCandidate[] = [{ path: '/home/dest/Project' }];
+    expect(resolveProjectAddedAt('/home/dest/Other', candidates)).toBeUndefined();
+    expect(resolveProjectAddedAt('/home/dest/Project', candidates)).toBeUndefined();
   });
 });

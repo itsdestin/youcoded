@@ -9,21 +9,21 @@
 // `React.memo` + stable props + no own context read, so switching tabs never
 // re-fetches and the tab is instant the second time it's shown. Your
 // Assistant's locked rows are out of scope here (deferred to that project).
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+//
+// T6: the load/commit/risk engine below moved to the shared
+// `useProjectExtensionsController` hook (hooks/useProjectExtensionsController.ts)
+// so the Marketplace post-install panel (ProjectSetupPanel.tsx) gets the SAME
+// optimistic/serialized write semantics rather than a second hand-copied
+// implementation. This file keeps only what's specific to the TAB: rendering
+// every section (built-in/installed/personal/needs-setup) and the needs-setup
+// popup's "ask assistant" / "choose skill file" actions.
+import React, { useCallback, useState } from 'react';
 import { Button, ChevronDown, Dialog, ErrorState, LoadingState, EmptyState, PluginIcon, SettingRow, Toggle } from '../ui';
 import { SkillIcon, ToolIcon } from '../marketplace/type-icons';
 import type { CentralIndexProject } from '../../../shared/artifacts/types';
-import type { ProjectExtensionsChange, ProjectExtensionsGetResult } from '../../../shared/types';
-
-// The two Result types (get/set) share the same `view` shape (shared/types.ts:
-// `ProjectExtensionsSetResult = ProjectExtensionsGetResult`); its row/group
-// shapes aren't separately exported (knip flags an export nothing outside
-// view.ts names by type — see that file's own header), so derive them here
-// instead of duplicating the interfaces.
-type SkillsToolsView = Extract<ProjectExtensionsGetResult, { ok: true }>['view'];
-type PluginGroup = SkillsToolsView['builtIn'][number];
-type PartRow = PluginGroup['parts'][number];
-type NeedsSetupRowData = SkillsToolsView['needsSetup'][number];
+import {
+  useProjectExtensionsController, type PluginGroup, type PartRow, type NeedsSetupRowData,
+} from '../../hooks/useProjectExtensionsController';
 
 export interface SkillsToolsTabProps {
   hidden: boolean;
@@ -33,39 +33,6 @@ export interface SkillsToolsTabProps {
    *  with a prefilled request. initialInput is optional only so this prop's
    *  type stays assignable from ProjectHero's plain `(cwd) => void` handler. */
   onNewConversation: (cwd: string, initialInput?: string) => void;
-}
-
-type LoadState =
-  | { kind: 'loading' }
-  // Android's `SessionService.kt` (and any future non-desktop backend)
-  // answers every project-extensions:* channel `not-implemented-on-mobile`,
-  // same convention as artifacts:* — B-2 defers Android entirely. Android's
-  // Projects screen doesn't exist at all today (design's own source facts),
-  // and a remote browser always talks to a desktop backend, so this branch
-  // is unreachable in production; it exists so a future backend that DOES
-  // answer this way degrades to "nothing here" instead of an error banner.
-  | { kind: 'unavailable' }
-  | { kind: 'error'; message: string }
-  | { kind: 'ready'; view: SkillsToolsView };
-
-type PendingRisk =
-  | { kind: 'plugin'; pluginId: string; displayName: string; connections: string[] }
-  | { kind: 'item'; itemKey: string; displayName: string; connections: string[] };
-
-function withPluginOn(view: SkillsToolsView, pluginId: string, on: boolean): SkillsToolsView {
-  const patch = (g: PluginGroup): PluginGroup => (g.pluginId === pluginId ? { ...g, on, paused: !on } : g);
-  return { ...view, builtIn: view.builtIn.map(patch), installed: view.installed.map(patch) };
-}
-
-function withItemOn(view: SkillsToolsView, itemKey: string, on: boolean): SkillsToolsView {
-  const patchPart = (p: PartRow): PartRow => (p.key === itemKey ? { ...p, on } : p);
-  const patchGroup = (g: PluginGroup): PluginGroup => ({ ...g, parts: g.parts.map(patchPart) });
-  return {
-    ...view,
-    builtIn: view.builtIn.map(patchGroup),
-    installed: view.installed.map(patchGroup),
-    personal: view.personal.map(patchPart),
-  };
 }
 
 // Plain-language copy for a needs-setup row's popup — the ONLY place this
@@ -107,14 +74,25 @@ function kindLabel(kind: NeedsSetupRowData['kind']): string {
   return 'Plugin';
 }
 
-function PluginGroupRow({
-  group, onToggleMaster, onTogglePart,
+// Exported (T6): the Marketplace post-install panel (ProjectSetupPanel.tsx)
+// reuses this row verbatim for the one just-installed plugin's master switch
+// + parts inside each project — same anatomy, same copy, so the two surfaces
+// can never drift apart into two slightly different renderings of "a plugin
+// group in a project".
+export function PluginGroupRow({
+  group, onToggleMaster, onTogglePart, initiallyOpen = false,
 }: {
   group: PluginGroup;
   onToggleMaster: (next: boolean) => void;
   onTogglePart: (part: PartRow, next: boolean) => void;
+  /** ProjectSetupPanel's own approved anatomy shows the just-installed
+   *  plugin's parts immediately once its project row is expanded — no
+   *  second chevron to find (R20: "without an extra tap"). The tab's own
+   *  call sites don't pass this, keeping every plugin group collapsed by
+   *  default there (unchanged from T4). */
+  initiallyOpen?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initiallyOpen);
   const description = group.bundled
     ? `Built in · Automatic use ${group.on ? 'on' : 'off'}`
     : group.on ? 'Automatic use on in new conversations' : 'Automatic use off · Turn on to include its skills';
@@ -184,143 +162,12 @@ function NeedsSetupRow({ row, onOpen }: { row: NeedsSetupRowData; onOpen: () => 
 }
 
 function SkillsToolsTabImpl({ hidden, project, onNewConversation }: SkillsToolsTabProps) {
-  const [state, setState] = useState<LoadState>({ kind: 'loading' });
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [pendingRisk, setPendingRisk] = useState<PendingRisk | null>(null);
+  const {
+    state, saveError, pendingRisk, reload, requestPluginToggle, requestItemToggle, confirmRisk, cancelRisk, retryLastFailed,
+  } = useProjectExtensionsController(project.path, !hidden);
   const [setupFor, setSetupFor] = useState<NeedsSetupRowData | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
-
-  // Snapshot of the last known-good view, for reverting an optimistic write
-  // that the main process refused or that threw. A ref (not state) because it
-  // must be readable synchronously inside `commit` without waiting on a
-  // render, and it should never itself trigger one.
-  const viewRef = useRef<SkillsToolsView | null>(null);
-  useEffect(() => { if (state.kind === 'ready') viewRef.current = state.view; }, [state]);
-  // The last failed write, so the error's Retry button re-attempts the SAME
-  // change rather than doing nothing or re-fetching the whole tab.
-  const lastFailedRef = useRef<{ change: ProjectExtensionsChange; optimistic: (v: SkillsToolsView) => SkillsToolsView } | null>(null);
-  // Serializes writes (T4 review F3): `commit` used to read `viewRef.current`
-  // as its `prev` snapshot, but the ref was only advanced by the effect just
-  // above — which runs AFTER the render commits, not synchronously inside
-  // `commit` itself. Two toggles fired before that effect ran (same tick, or
-  // a fast double-click on different rows) both computed their optimistic
-  // view from the SAME stale `prev`, so the second silently overwrote the
-  // first's in-flight change, and a first-request FAILURE could revert past
-  // an already-applied second toggle. Chaining every write onto the tail of
-  // the last one guarantees `prev` is always the settled outcome (success OR
-  // revert) of every earlier write before the next one's snapshot is taken.
-  const writeChainRef = useRef<Promise<void>>(Promise.resolve());
-
-  const load = useCallback(async (path: string) => {
-    setState({ kind: 'loading' });
-    setSaveError(null);
-    lastFailedRef.current = null;
-    try {
-      const res: ProjectExtensionsGetResult = await (window.claude as any).projectExtensions.get(path);
-      if (res.ok) setState({ kind: 'ready', view: res.view });
-      else if (res.error === 'not-implemented-on-mobile') setState({ kind: 'unavailable' });
-      else setState({ kind: 'error', message: res.error });
-    } catch (err: any) {
-      setState({ kind: 'error', message: err?.message ? String(err.message) : String(err) });
-    }
-  }, []);
-
-  // Fetch lazily (T4 review F4): the first time this tab is actually SHOWN
-  // for a project, not the moment ProjectView mounts it (hidden, alongside
-  // FilesTab, for instant tab switches). Before this, opening Projects and
-  // never visiting Skills & tools still paid a project-extensions:get IPC
-  // round trip for every project browsed — hidden means idle (performance.md
-  // rule 2). Tracks the path already shown-for so a project switch WHILE
-  // visible still refetches (path, not object identity — `project` gets a
-  // fresh object on every projects-index refresh even for the same project),
-  // but toggling tabs back to an already-loaded project doesn't.
-  const shownForPathRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (hidden) return;
-    if (shownForPathRef.current === project.path) return;
-    shownForPathRef.current = project.path;
-    void load(project.path);
-  }, [project.path, hidden, load]);
-
-  const commit = useCallback((change: ProjectExtensionsChange, optimistic: (v: SkillsToolsView) => SkillsToolsView) => {
-    const run = async () => {
-      const prev = viewRef.current;
-      if (!prev) return;
-      const next = optimistic(prev);
-      // Synchronous — see writeChainRef's WHY above. Not just via the
-      // `state.kind === 'ready'` effect, which would hand the NEXT queued
-      // write (chained below) a stale snapshot.
-      viewRef.current = next;
-      setState({ kind: 'ready', view: next });
-      setSaveError(null);
-      try {
-        const res = await (window.claude as any).projectExtensions.set(project.path, [change]);
-        if (res.ok) {
-          viewRef.current = res.view;
-          setState({ kind: 'ready', view: res.view });
-          lastFailedRef.current = null;
-        } else {
-          viewRef.current = prev;
-          setState({ kind: 'ready', view: prev });
-          setSaveError(res.error);
-          lastFailedRef.current = { change, optimistic };
-        }
-      } catch (err: any) {
-        viewRef.current = prev;
-        setState({ kind: 'ready', view: prev });
-        setSaveError(err?.message ? String(err.message) : String(err));
-        lastFailedRef.current = { change, optimistic };
-      }
-    };
-    // Chain onto the tail regardless of the previous write's outcome — `run`
-    // never itself rejects (its own try/catch handles every failure mode),
-    // but `.then(run, run)` stays correct even if that ever changes.
-    const chained = writeChainRef.current.then(run, run);
-    writeChainRef.current = chained;
-    return chained;
-  }, [project.path]);
-
-  const retryLastFailed = useCallback(() => {
-    const f = lastFailedRef.current;
-    if (f) void commit(f.change, f.optimistic);
-  }, [commit]);
-
-  // R3/R23: turning ON a plugin whose parts include a tool connection (or
-  // turning ON a tool connection directly) always confirms first — naming
-  // every connection the change would activate. An automatically discoverable
-  // SKILL alone never does. Applies uniformly to a plugin-scoped item AND a
-  // personal/adopted one (Personal section) — both are the same "this can
-  // reach outside services" action; the contract's examples happen to be
-  // plugin-scoped, but nothing in R3/R23 restricts the rule to plugins.
-  const requestPluginToggle = useCallback((group: PluginGroup, next: boolean) => {
-    if (next) {
-      const connections = group.parts.filter((p) => p.kind === 'mcp').map((p) => p.displayName);
-      if (connections.length > 0) {
-        setPendingRisk({ kind: 'plugin', pluginId: group.pluginId, displayName: group.displayName, connections });
-        return;
-      }
-    }
-    void commit({ plugin: group.pluginId, on: next }, (v) => withPluginOn(v, group.pluginId, next));
-  }, [commit]);
-
-  const requestItemToggle = useCallback((part: PartRow, next: boolean) => {
-    if (next && part.kind === 'mcp') {
-      setPendingRisk({ kind: 'item', itemKey: part.key, displayName: part.displayName, connections: [part.displayName] });
-      return;
-    }
-    void commit({ item: part.key, on: next }, (v) => withItemOn(v, part.key, next));
-  }, [commit]);
-
-  const confirmRisk = useCallback(() => {
-    if (!pendingRisk) return;
-    if (pendingRisk.kind === 'plugin') {
-      void commit({ plugin: pendingRisk.pluginId, on: true }, (v) => withPluginOn(v, pendingRisk.pluginId, true));
-    } else {
-      void commit({ item: pendingRisk.itemKey, on: true }, (v) => withItemOn(v, pendingRisk.itemKey, true));
-    }
-    setPendingRisk(null);
-  }, [pendingRisk, commit]);
 
   // "Ask assistant to set it up": reuses App's existing new-conversation path
   // (createSession's initialInput param, threaded through
@@ -341,11 +188,11 @@ function SkillsToolsTabImpl({ hidden, project, onNewConversation }: SkillsToolsT
       const res = await (window.claude as any).projectExtensions.importSkill(paths[0]);
       if (!res.ok) { setImportError(res.error); return; }
       setSetupFor(null);
-      await load(project.path);
+      reload();
     } finally {
       setImportBusy(false);
     }
-  }, [load, project.path]);
+  }, [reload]);
 
   if (state.kind === 'unavailable') return null;
 
@@ -354,7 +201,7 @@ function SkillsToolsTabImpl({ hidden, project, onNewConversation }: SkillsToolsT
       <div className="flex-1 overflow-auto max-sm:overflow-visible flex flex-col content-start p-2 -m-2">
         {state.kind === 'loading' && <LoadingState what="Skills & tools" />}
         {state.kind === 'error' && (
-          <ErrorState mode="recoverable" message={state.message} onRetry={() => load(project.path)} />
+          <ErrorState mode="recoverable" message={state.message} onRetry={reload} />
         )}
         {state.kind === 'ready' && (
           <>
@@ -432,7 +279,7 @@ function SkillsToolsTabImpl({ hidden, project, onNewConversation }: SkillsToolsT
       {/* Risk confirmation — shown every time a change would turn on a tool
           connection (R23), whether from a plugin master or a single part. */}
       {pendingRisk && (
-        <Dialog open onClose={() => setPendingRisk(null)} layer={3} size="prompt" title={`Turn on ${pendingRisk.displayName}?`} scrollBody={false}>
+        <Dialog open onClose={cancelRisk} layer={3} size="prompt" title={`Turn on ${pendingRisk.displayName}?`} scrollBody={false}>
           <div className="p-5 space-y-3">
             <p className="text-xs text-fg-2">
               {pendingRisk.kind === 'item'
@@ -449,7 +296,7 @@ function SkillsToolsTabImpl({ hidden, project, onNewConversation }: SkillsToolsT
               services outside YouCoded without asking each time. Only turn it on if you trust where it came from.
             </p>
             <div className="flex gap-2 justify-end">
-              <Button variant="secondary" onClick={() => setPendingRisk(null)}>Cancel</Button>
+              <Button variant="secondary" onClick={cancelRisk}>Cancel</Button>
               <Button variant="primary" onClick={confirmRisk}>Turn on</Button>
             </div>
           </div>

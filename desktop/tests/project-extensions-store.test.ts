@@ -251,6 +251,34 @@ describe('ensureSeeded', () => {
     }, NOW);
     expect(rec.items['civic:report']).toEqual({ on: false, at: NOW });
   });
+
+  // T6 (project-plugin-controls): the realistic Marketplace post-install
+  // shape — the install already completed (installedAt is BEFORE `now`, not
+  // after it, since `now` is the seed call's own timestamp and a completed
+  // install can never postdate it) — and this project has NEVER been seeded
+  // before, exactly like every project the "choose your projects" panel
+  // lists right after a fresh install. Without `seedReferenceInstant`, this
+  // used to materialize `on: true` (the plugin looked "installed before the
+  // seed" purely because the seed happened to run a moment after the
+  // install), silently breaking R19 ("it starts off everywhere").
+  it('a never-seeded project does not materialize a just-installed plugin as ON (R19 start-off guarantee)', async () => {
+    const installedAt = new Date(NOW - 1_000).toISOString(); // installed 1s before this seed call
+    const rec = await ensureSeeded(stores, 'NeverOpenedProject', {
+      skills: [{ id: 'inbox:process', source: 'plugin', pluginName: 'youcoded-inbox' }],
+      mcp: [], installs: { 'youcoded-inbox': { installedAt } },
+    }, NOW, false, NOW - 60_000); // seedReferenceInstant: the project existed since well before the install
+    expect(rec.items['inbox:process']).toEqual({ on: false, at: NOW });
+    expect(rec.plugins['youcoded-inbox']).toMatchObject({ on: false, partsChosen: true });
+  });
+
+  it('without a seedReferenceInstant, the same never-seeded scenario falls back to `now` (the residual, documented gap for a project with no known addedAt)', async () => {
+    const installedAt = new Date(NOW - 1_000).toISOString();
+    const rec = await ensureSeeded(stores, 'NeverOpenedProject', {
+      skills: [{ id: 'inbox:process', source: 'plugin', pluginName: 'youcoded-inbox' }],
+      mcp: [], installs: { 'youcoded-inbox': { installedAt } },
+    }, NOW); // no seedReferenceInstant passed — defaults to `now`, same as before T6
+    expect(rec.items['inbox:process']).toEqual({ on: true, at: NOW });
+  });
 });
 
 describe('markPluginRemoved — uninstall cascade', () => {
