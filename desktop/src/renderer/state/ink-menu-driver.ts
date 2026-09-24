@@ -90,7 +90,8 @@ export async function answerInkMenu(
 
   const start = readMenu(io);
   if (!start) return fail('menu-gone', false);
-  if (start.signature !== pick.signature) return fail('menu-changed', false);
+  // (A different option set is refused by the step-0 `ours` check below,
+  // before any key — one site, so one test pins it.)
   if (start.options[pick.index] !== pick.label) return fail('menu-changed', false);
   // THIS dialog: the same options AND the same question. A dialog that follows
   // with the same options but different words is a different dialog.

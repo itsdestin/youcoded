@@ -476,7 +476,9 @@ describe('the startup-dialog driver never guesses — each check on its own', ()
   });
 
   it('without any output after Enter the same dialog is "not taken" — never assumed answered', async () => {
-    const cc = scripted(mcpScreen(0), (_k, s) => s);
+    // Even with its cursor somewhere else afterwards (say, moved in terminal
+    // view): no redraw from Claude Code after our Enter = not proof it acted.
+    const cc = scripted(mcpScreen(0), (k, s) => (k === '\r' ? mcpScreen(2) : s));
     const r = await answerInkMenu({ signature: mcpSig, index: 0, label: MCP_OPTS[0] }, { ...cc.io, outputCount: () => 0 });
     expect(r).toEqual({ ok: false, reason: 'not-taken', typed: true });
   });
