@@ -3,7 +3,7 @@
 // Must run before any TerminalView mounts (which call registerTerminal).
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
-import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { SessionTerminal } from './components/SessionTerminal';
 import ChatView from './components/ChatView';
 import PendingHandoffView from './components/PendingHandoffView';
@@ -23,6 +23,7 @@ import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } fro
 import ViewToggleHint from './components/ViewToggleHint';
 import { takeoverDialogCopy, HANDOFF_EXPLANATION } from './components/takeover-dialog-copy';
 import { runLeaseTakeoverGate } from './state/resume-lease-gate';
+import { createDrawerFilterStore } from './state/drawer-filter-store';
 import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
@@ -34,8 +35,7 @@ import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
 } from './state/remote-place';
-import { artifactReducer, initialArtifactState } from './state/artifact-tracker';
-import { ArtifactProvider } from './state/ArtifactContext';
+import { ArtifactProvider, createArtifactStore } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
@@ -100,6 +100,7 @@ import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
+import { detectPermissionMode, syncKeyedSubscriptions, clearKeyedSubscriptions } from './state/permission-mode-scan';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
 import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './state/first-page-retry';
 
@@ -326,7 +327,9 @@ function AppInner() {
   const startArgsRef = useRef<unknown[] | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerSearchMode, setDrawerSearchMode] = useState(false);
-  const [drawerFilter, setDrawerFilter] = useState<string | undefined>(undefined);
+  // WHY a store, not useState: as App state every letter typed after "/" re-rendered the whole shell; only CommandDrawer subscribes now.
+  const [drawerFilterStore] = useState(createDrawerFilterStore);
+  const setDrawerFilter = drawerFilterStore.set;
   const inputBarRef = useRef<InputBarHandle>(null);
   const [pendingTab, setPendingTab] = useState<PendingTab | null>(null);
   const pendingAdmitRef = useRef<(tabId: string, info: any, detach: boolean) => void>(() => {});
@@ -678,24 +681,19 @@ function AppInner() {
   const dispatch = useChatDispatch();
   const chatStore = useChatStore();
   // Artifact tracker — global reducer for session/project artifact state.
-  const [artifactState, dispatchArtifact] = useReducer(artifactReducer, initialArtifactState);
+  // WHY a store created once (perf, 2026-09-23): a `{ state, dispatch }` context
+  // value changed on every artifact dispatch and redrew every reader (each open
+  // chat, each tool card) for a file ANY session wrote. Readers now select their
+  // own slice. This component still reads the whole state, as with useReducer.
+  const [artifactStore] = useState(() => createArtifactStore());
+  const artifactState = useSyncExternalStore(artifactStore.subscribe, artifactStore.getState);
+  const dispatchArtifact = artifactStore.dispatch;
   // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
   // and model (Destin, 2026-09-17). Null while closed.
   const [pageCreate, setPageCreate] = useState<PageCreateRequest | null>(null);
   // Ref mirror of artifact state so the (once-registered) tool-use handler can
   // dedup Read-tracking against the session's already-known artifacts without
   // re-subscribing on every reducer tick.
-  // MEMOIZED, and it has to be: an inline `{ state, dispatch }` object literal is
-  // a new identity on every render of this component — which is every streamed
-  // token — so every consumer of ArtifactContext (the session drawer, the file
-  // pane, Project View) re-rendered on each one, whether or not any artifact
-  // state had changed. `artifactState` only changes on a dispatch and
-  // `dispatchArtifact` is stable, so this now changes exactly when the artifact
-  // state does. Renderer rule: memoize every Context value.
-  const artifactContextValue = useMemo(
-    () => ({ state: artifactState, dispatch: dispatchArtifact }),
-    [artifactState, dispatchArtifact],
-  );
   const artifactStateRef = useRef(artifactState);
   useEffect(() => { artifactStateRef.current = artifactState; }, [artifactState]);
   // Latest-value ref so transcript-shrink and turn-complete handlers see
@@ -1319,6 +1317,10 @@ function AppInner() {
         return next;
       });
       dispatch({ type: 'SESSION_REMOVE', sessionId: id });
+      // WHY: free a closed session's file-pane entries. A resumed native chat reuses
+      // its id, but its ChatView remounts and re-lists its files. (Not on ownership-
+      // lost: that session lives on in another window and may be dragged back here.)
+      dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });
       setInitializedSessions((prev) => {
         if (!prev.has(id)) return prev;
         const next = new Set(prev);
@@ -2033,40 +2035,32 @@ function AppInner() {
   // instead (handled in the big effect above), so this effect is effectively
   // desktop-only. On Android the ptyOutputForSession call is still safe but
   // will never deliver data matching the mode strings.
+  //
+  // Perf (2026-09-23): subscriptions are kept per session id in a ref and
+  // DIFFED when the list changes (only added/removed sessions touch IPC), and
+  // each chunk is ruled out by one case-insensitive regex before any
+  // lower-cased copy is made — see state/permission-mode-scan.ts.
+  const permissionModeSubsRef = useRef<Map<string, () => void>>(new Map());
   useEffect(() => {
     const claudeOn = (window.claude.on as any);
     if (typeof claudeOn.ptyOutputForSession !== 'function') return;
-    const handles: Array<{ sid: string; remove: () => void }> = [];
-    for (const s of sessions) {
-      const remove = claudeOn.ptyOutputForSession(s.id, (data: string) => {
-        const lower = data.toLowerCase();
-        let mode: PermissionMode | null = null;
-        // CC v2.1.83+ auto mode banner reads "auto mode on (shift+tab to cycle)" —
-        // checked before "accept edits on" because the substring "auto mode" doesn't
-        // overlap, but order is preserved for symmetry with the off-list below.
-        if (lower.includes('bypass permissions on')) mode = 'bypass';
-        else if (lower.includes('auto mode on')) mode = 'auto';
-        else if (lower.includes('accept edits on')) mode = 'auto-accept';
-        else if (lower.includes('plan mode on')) mode = 'plan';
-        else if (lower.includes('bypass permissions off')
-              || lower.includes('auto mode off')
-              || lower.includes('accept edits off')
-              || lower.includes('plan mode off')) mode = 'normal';
+    syncKeyedSubscriptions(permissionModeSubsRef.current, sessions.map((s) => s.id), (sid) =>
+      claudeOn.ptyOutputForSession(sid, (data: string) => {
+        const mode = detectPermissionMode(data);
         if (mode) {
           setPermissionModes((prev) => {
-            if (prev.get(s.id) === mode) return prev;
-            return new Map(prev).set(s.id, mode!);
+            if (prev.get(sid) === mode) return prev;
+            return new Map(prev).set(sid, mode);
           });
         }
-      });
-      handles.push({ sid: s.id, remove });
-    }
-    return () => {
-      for (const h of handles) {
-        try { h.remove(); } catch { /* unsubscribe API may no-op */ }
-      }
-    };
+      }));
   }, [sessions]);
+  // Unmount only: drop every remaining per-session listener. Kept separate so
+  // a session-list change never tears down the listeners of sessions that stay.
+  useEffect(() => {
+    const subs = permissionModeSubsRef.current;
+    return () => clearKeyedSubscriptions(subs);
+  }, []);
 
   // Fetch session list on mount — catches sessions that existed before event handlers were registered
   // (e.g., remote browser reconnecting after the replay buffer events already fired, or a renderer
@@ -2966,8 +2960,10 @@ function AppInner() {
     setSessionModels((prev) => { const n = new Map(prev); n.delete(id); return n; });
     setInitializedSessions((prev) => { if (!prev.has(id)) return prev; const n = new Set(prev); n.delete(id); return n; });
     dispatch({ type: 'SESSION_REMOVE', sessionId: id });
+    // WHY: drop the gone session's file-pane entries too (they were never freed).
+    dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });
     clearMoved(id);
-  }, [dispatch, clearMoved]);
+  }, [dispatch, dispatchArtifact, clearMoved]);
   useEffect(() => {
     // WHY: a remote reconnect has a NEW owner; the server already canceled
     // the old connection's attempt. Do not offer a retry with its stale ID.
@@ -3674,7 +3670,7 @@ function AppInner() {
     // ArtifactProvider: exposes artifact state + dispatch to the entire AppInner
     // subtree. Sits inside all top-level providers (ChatProvider, ThemeProvider,
     // etc.) because artifact operations may eventually consume chat/theme context.
-    <ArtifactProvider value={artifactContextValue}>
+    <ArtifactProvider store={artifactStore}>
     <div className={`app-shell flex w-screen h-full text-fg ${getPlatform() === 'android' && currentViewMode === 'terminal' ? '' : 'bg-canvas'}`}>
       {/* Mount-only: listens for chat:export-snapshot from main, serializes
           ChatState, and sends the snapshot back for remote-browser hydration. */}
@@ -3907,7 +3903,7 @@ function AppInner() {
                 <CommandDrawer
                   open={drawerOpen}
                   searchMode={drawerSearchMode}
-                  externalFilter={drawerFilter}
+                  filterStore={drawerFilterStore}
                   onSelect={handleSelectSkill}
                   onSelectCommand={handleSelectCommand}
                   onClose={handleCloseDrawer}

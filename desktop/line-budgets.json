@@ -9,13 +9,13 @@
   "budgets": {
     "main/ipc-handlers.ts": 5528,
     "main/harness/native-session-host.ts": 5122,
-    "renderer/App.tsx": 4886,
+    "renderer/App.tsx": 4882,
     "main/remote-server.ts": 4151,
     "main/harness/harness-session.ts": 4149,
     "renderer/components/SettingsPanel.tsx": 3228,
     "renderer/remote-shim.ts": 3162,
-    "renderer/state/chat-reducer.ts": 3188,
-    "renderer/styles/globals.css": 2929,
+    "renderer/state/chat-reducer.ts": 3215,
+    "renderer/styles/globals.css": 2936,
     "renderer/components/SessionStrip.tsx": 2774,
     "main/main.ts": 2494,
     "shared/types.ts": 2289,
@@ -24,6 +24,7 @@
     "renderer/components/ResumeBrowser.tsx": 1837,
     "main/preload.ts": 1914,
     "renderer/components/StatusBar.tsx": 1799,
-    "renderer/components/ToolCard.tsx": 1605
+    "renderer/components/ToolCard.tsx": 1605,
+    "renderer/components/ChatView.tsx": 1538
   }
 }

@@ -267,10 +267,19 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // banner with the disk version. `by` is deliberately ignored: a 'user' save
   // from another window needs exactly the same handling as an 'external' write.
   const dirty = editing && content !== null && draft !== content;
+  // WHY a ref: the watcher below used to list dirty/draft/content (and the host
+  // callbacks) as effect deps, so EVERY keystroke in the editor tore the IPC
+  // subscription down and built a new one. It now subscribes once per file and
+  // reads these through the ref. The handler snapshots the ref when the change
+  // event ARRIVES — the same moment the old per-render closure's values were
+  // current — so what an external change does is unchanged.
+  const watchRef = useRef({ dirty, draft, content, onContentChange, onDiskRead });
+  watchRef.current = { dirty, draft, content, onContentChange, onDiskRead };
   useEffect(() => {
     // artifacts.onChanged is optional — gracefully skip if IPC not wired yet
     const unsubFn = (window.claude as any).artifacts?.onChanged?.((evt: any) => {
       if (evt.projectRoot !== projectRoot || evt.artifactId !== artifact.id) return;
+      const { dirty, draft, content, onContentChange, onDiskRead } = watchRef.current;
       if (evt.kind === 'remove') return; // orphan handling is the host's concern
       // These files render from their own bytes, never from `content`. Asking
       // artifacts:get here would re-open the text path we just closed -- and its
@@ -295,7 +304,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       });
     });
     return typeof unsubFn === 'function' ? unsubFn : undefined;
-  }, [artifact.id, projectRoot, artifact.path, dirty, draft, content, onContentChange, onDiskRead]);
+  }, [artifact.id, projectRoot, artifact.path]);
 
   // ── Edit lifecycle callbacks (passed down to MarkdownView as controlled props) ──
   const handleStartEdit = useCallback(() => {

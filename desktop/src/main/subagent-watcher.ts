@@ -21,6 +21,12 @@ interface PerFileState {
   seenUuids: Set<string>;
   watcher: fs.FSWatcher | null;
   pollTimer: ReturnType<typeof setInterval> | null;
+  // True once the parent's tool-result for this helper has landed and its
+  // final read ran. WHY (perf, many tabs): a settled helper no longer holds its
+  // own fs.watch — every helper ever spawned used to keep one open until the
+  // whole session closed. The entry itself stays (offset + meta only) so a
+  // directory re-scan never re-tracks the file from byte 0 and replays it.
+  settled: boolean;
   // Fix 5: cache meta on first read so deliver() never re-reads from disk
   meta: { description: string; agentType: string };
 }
@@ -188,21 +194,43 @@ export class SubagentWatcher {
    * Called by TranscriptWatcher when a tool-result lands: if it completes a
    * parent Agent tool call, that subagent's transcript is done growing — do
    * one final read (bytes written between the last watch/poll tick and the
-   * result), then stop the belt-and-suspenders stat poll. fs.watch stays
-   * attached so an unexpected late write still delivers; without this settle,
-   * a session that ran 50 subagents held 50 stat-poll timers forever.
+   * result), then release the helper's own fs.watch AND its safety-net stat
+   * poll. Without this settle, a session that ran 50 subagents held 50
+   * watches (and, on Windows, 50 stat-poll timers) until it closed.
+   *
+   * WHY releasing the watch is safe: an unexpected late write still arrives.
+   * The session's DIRECTORY watch (which lives as long as the session) fires
+   * for writes to any file inside it, and onDirEvent() drains a settled
+   * helper's file when its name comes through — one stat + read per actual
+   * write, nothing while the file is quiet. When the directory watch is NOT
+   * healthy (it failed and a directory poll stands in, or Windows' safety-net
+   * poll catches a dropped notification), that poll drains settled helpers
+   * too (drainSettled). The session's own close (stop()) releases every
+   * entry, settled or not.
    */
   async settleByParent(parentToolUseId: string): Promise<void> {
     for (const state of this.perFile.values()) {
       if (this.index.lookup(state.agentId) !== parentToolUseId) continue;
       try { await this.readNewLines(state); } catch { /* file may be gone */ }
+      state.settled = true;
       if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+      if (state.watcher) { state.watcher.close(); state.watcher = null; }
     }
   }
 
   /** Test-only: whether an agent file's safety-net stat poll is running. */
   hasActivePoll(agentId: string): boolean {
     return !!this.perFile.get(agentId)?.pollTimer;
+  }
+
+  /** Test-only: whether an agent file still holds its own fs.watch. */
+  hasActiveWatch(agentId: string): boolean {
+    return !!this.perFile.get(agentId)?.watcher;
+  }
+
+  /** Test-only: how many helper entries this session is tracking. */
+  trackedCount(): number {
+    return this.perFile.size;
   }
 
   // ---- internals ----
@@ -216,6 +244,18 @@ export class SubagentWatcher {
       if (typeof obj?.description !== 'string' || typeof obj?.agentType !== 'string') return null;
       return { description: obj.description, agentType: obj.agentType };
     } catch { return null; }
+  }
+
+  /** The directory watch fired. New helper files are picked up by the scan;
+   *  a write to an already-SETTLED helper (which no longer has its own watch —
+   *  see settleByParent) is drained here so a late line is never lost. */
+  private onDirEvent(filename: string | Buffer | null): void {
+    this.scanDirectory();
+    if (!filename) return;
+    const name = filename.toString();
+    if (!name.endsWith('.jsonl') || !name.startsWith('agent-')) return;
+    const state = this.perFile.get(name.slice('agent-'.length, -'.jsonl'.length));
+    if (state?.settled) this.readNewLines(state).catch(() => undefined);
   }
 
   private scanDirectory(): void {
@@ -237,7 +277,7 @@ export class SubagentWatcher {
       return;
     }
     try {
-      this.dirWatcher = fs.watch(this.subagentsDir, () => this.scanDirectory());
+      this.dirWatcher = fs.watch(this.subagentsDir, (_evt, filename) => this.onDirEvent(filename));
       this.dirWatcher.on('error', () => {
         if (this.dirWatcher) { this.dirWatcher.close(); this.dirWatcher = null; }
         this.startDirPoll();
@@ -276,7 +316,21 @@ export class SubagentWatcher {
     this.dirPollTimer = setInterval(() => {
       if (!this.started) return;
       this.scanDirectory();
+      this.drainSettled();
     }, 5000);
+  }
+
+  /** Read any late output from helpers that already SETTLED. WHY: a settled
+   *  helper has no watch of its own (settleByParent), and scanDirectory() skips
+   *  files it already tracks — so when this directory poll is running (the
+   *  directory watch failed, or it is Windows' safety net for dropped
+   *  notifications), this is the only thing that still reads a background
+   *  helper that keeps writing after its parent's tool result. readNewLines is
+   *  one async stat per helper and returns at once when the file hasn't grown. */
+  private drainSettled(): void {
+    for (const state of this.perFile.values()) {
+      if (state.settled) this.readNewLines(state).catch(() => undefined);
+    }
   }
 
   /** Age out pending buffered events every 5 s so a lingering unbound helper
@@ -313,6 +367,7 @@ export class SubagentWatcher {
       seenUuids: new Set(),
       watcher: null,
       pollTimer: null,
+      settled: false,
       meta,
     };
     this.perFile.set(agentId, state);
@@ -333,6 +388,9 @@ export class SubagentWatcher {
       });
       state.watcher.on('error', () => {
         if (state.watcher) { state.watcher.close(); state.watcher = null; }
+        // A settled helper needs no stand-in poll — the directory watch
+        // covers its rare late write (see settleByParent).
+        if (state.settled) return;
         this.startFilePoll(state);
       });
       // Same platform rule as the directory poll (audit W8): a safety-net stat

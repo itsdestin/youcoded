@@ -1516,3 +1516,113 @@ describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
     expect(back.get(SESSION)!.toolCalls.get('perm-r1')).toMatchObject({ status: 'awaiting-approval', expired: true });
   });
 });
+
+// The chat reducer must not copy a session's
+// whole Maps (toolCalls, toolGroups, assistantTurns — none of which ever shrink)
+// before knowing whether anything will change. These pin the copy-on-write
+// contract that replaced it:
+//   • a no-op returns the SAME state object (nothing re-renders), and
+//   • a change that leaves a Map untouched keeps that Map's identity, while
+//   • the change itself still lands, and the PREVIOUS state is never mutated.
+
+const COW = 'cow-session';
+
+function cowInit(): ChatState {
+  return chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: COW });
+}
+
+const cowToolUse = (toolUseId: string, toolName = 'Bash', toolInput: Record<string, unknown> = { command: toolUseId }): ChatAction => ({
+  type: 'TRANSCRIPT_TOOL_USE', sessionId: COW, uuid: `u-${toolUseId}`, toolUseId, toolName, toolInput, timestamp: 1,
+} as ChatAction);
+
+const cowPreparing = (toolCallId: string, chars: number, cleared?: boolean): ChatAction => ({
+  type: 'NATIVE_TOOL_PREPARING', sessionId: COW, toolCallId, toolName: 'Bash', chars, ...(cleared ? { cleared } : {}),
+} as ChatAction);
+
+// Deep snapshot of the parts a copy-on-write bug would corrupt in place.
+function cowSnapshot(state: ChatState) {
+  const s = state.get(COW)!;
+  return JSON.stringify({
+    toolCalls: [...s.toolCalls.entries()],
+    toolGroups: [...s.toolGroups.entries()],
+    assistantTurns: [...s.assistantTurns.entries()],
+    timeline: s.timeline,
+    active: [...s.activeTurnToolIds],
+  });
+}
+
+describe('chat reducer copy-on-write', () => {
+  it('a second tool joining the open group keeps the assistantTurns Map (the turn did not change)', () => {
+    const one = chatReducer(cowInit(), cowToolUse('t1'));
+    const before = cowSnapshot(one);
+    const two = chatReducer(one, cowToolUse('t2'));
+    const a = one.get(COW)!;
+    const b = two.get(COW)!;
+
+    expect(b.assistantTurns).toBe(a.assistantTurns);
+    expect(b.timeline).toBe(a.timeline);
+    // The group DID change: new Map, both ids, same group.
+    expect(b.toolGroups).not.toBe(a.toolGroups);
+    expect(b.currentGroupId).toBe(a.currentGroupId);
+    expect(b.toolGroups.get(b.currentGroupId!)!.toolIds).toEqual(['t1', 't2']);
+    expect(b.toolCalls.get('t2')!.status).toBe('running');
+    // And the earlier state was not written through.
+    expect(cowSnapshot(one)).toBe(before);
+  });
+
+  it('a re-emitted tool-use keeps both the toolGroups and assistantTurns Maps', () => {
+    const one = chatReducer(chatReducer(cowInit(), cowToolUse('t1')), cowToolUse('t2'));
+    const again = chatReducer(one, cowToolUse('t1'));
+    expect(again.get(COW)!.toolGroups).toBe(one.get(COW)!.toolGroups);
+    expect(again.get(COW)!.assistantTurns).toBe(one.get(COW)!.assistantTurns);
+    expect(again.get(COW)!.toolGroups.get(again.get(COW)!.currentGroupId!)!.toolIds).toEqual(['t1', 't2']);
+  });
+
+  it('a tool opening a new group in an EXISTING turn copies assistantTurns without mutating the old one', () => {
+    let s = chatReducer(cowInit(), {
+      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: COW, uuid: 'txt-1', text: 'hi', timestamp: 1,
+    } as ChatAction);
+    const before = cowSnapshot(s);
+    const prev = s;
+    s = chatReducer(s, cowToolUse('t1'));
+    const turnId = s.get(COW)!.currentTurnId!;
+    expect(turnId).toBe(prev.get(COW)!.currentTurnId);
+    expect(s.get(COW)!.assistantTurns).not.toBe(prev.get(COW)!.assistantTurns);
+    expect(s.get(COW)!.assistantTurns.get(turnId)!.segments.map((x) => x.type)).toEqual(['text', 'tool-group']);
+    expect(cowSnapshot(prev)).toBe(before);
+  });
+
+  it('NATIVE_TOOL_PREPARING no-ops return the same state object', () => {
+    const real = chatReducer(cowInit(), cowToolUse('t1'));
+    // Progress tick for a card the real tool-use already superseded.
+    expect(chatReducer(real, cowPreparing('t1', 40))).toBe(real);
+    // Clear of a card that is not preparing, and of an unknown card.
+    expect(chatReducer(real, cowPreparing('t1', 0, true))).toBe(real);
+    expect(chatReducer(real, cowPreparing('nope', 0, true))).toBe(real);
+  });
+
+  it('NATIVE_TOOL_PREPARING still updates and clears a preparing card without touching the old state', () => {
+    const prep = chatReducer(cowInit(), cowPreparing('p1', 5));
+    const before = cowSnapshot(prep);
+    const ticked = chatReducer(prep, cowPreparing('p1', 50));
+    expect(ticked.get(COW)!.toolCalls.get('p1')!.preparingChars).toBe(50);
+    const cleared = chatReducer(ticked, cowPreparing('p1', 0, true));
+    expect(cleared.get(COW)!.toolCalls.has('p1')).toBe(false);
+    expect(cowSnapshot(prep)).toBe(before);
+  });
+
+  it('an orphan tool result keeps the toolCalls Map', () => {
+    const s = chatReducer(cowInit(), cowToolUse('t1'));
+    const out = chatReducer(s, {
+      type: 'TRANSCRIPT_TOOL_RESULT', sessionId: COW, uuid: 'r-x', timestamp: 2, toolUseId: 'never-seen', toolName: 'Bash', result: 'ok', isError: false,
+    } as ChatAction);
+    expect(out.get(COW)!.toolCalls).toBe(s.get(COW)!.toolCalls);
+  });
+
+  it('a PERMISSION_REQUEST heartbeat for an ask already awaiting is a same-object no-op', () => {
+    let s = chatReducer(cowInit(), cowToolUse('t1', 'Read', { file_path: '/a' }));
+    s = chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: COW, toolName: 'Read', input: { file_path: '/a' }, requestId: 'req-1' } as ChatAction);
+    expect(s.get(COW)!.toolCalls.get('t1')!.status).toBe('awaiting-approval');
+    expect(chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: COW, toolName: 'Read', input: { file_path: '/a' }, requestId: 'req-1' } as ChatAction)).toBe(s);
+  });
+});

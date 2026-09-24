@@ -4,7 +4,7 @@ import { useChatDispatch } from '../state/chat-context';
 import { useSpecialistDefinition, useSpecialistRunByChild } from '../hooks/useSpecialists';
 import { TaskConsentBlock } from './SpecialistEnvelope';
 import { hasNestedAsk } from '../utils/specialist-cards';
-import { useArtifactOptional } from '../state/ArtifactContext';
+import { useArtifactSelectorOptional } from '../state/ArtifactContext';
 import { Button, Radio, RadioGroup, Textarea, Tooltip } from './ui';
 // The card renders the widths this SHARED derivation produced and sends back only
 // which one was chosen — it never builds a rule pattern of its own.
@@ -1304,8 +1304,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   // Optional: the workbench tool gallery (?mode=workbench&view=tools) renders
   // ToolCard outside the ArtifactProvider. Missing cwd just drops the folder
   // name from the confirm header rather than crashing the card.
-  const artifacts = useArtifactOptional();
-  const sessionCwd = sessionId ? artifacts?.state.sessionCwd?.[sessionId] : undefined;
+  // WHY a narrow selector (perf, 2026-09-23): the whole state redrew this memoized card on any file write.
+  const sessionCwd = useArtifactSelectorOptional((s) => (sessionId ? s.sessionCwd?.[sessionId] : undefined));
   // Specialists 1c: a `task_id` call names ANOTHER card's child — look up that
   // child's run so the header can say "Note to Wren…" (a narrow selector, so
   // this memoized card does not re-render on every session update).

@@ -7,11 +7,16 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { isAndroid } from '../platform';
 import { EmptyState, ErrorState, FilterChip } from './ui';
+import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-store';
 
 interface Props {
   open: boolean;
   searchMode: boolean;
   externalFilter?: string; // Filter driven by InputBar when slash-triggered
+  // WHY: App passes the filter as a store the drawer subscribes to, instead of
+  // the string itself, so typing after "/" re-renders only this drawer and not
+  // the whole App shell (see state/drawer-filter-store.ts). Wins over externalFilter.
+  filterStore?: DrawerFilterStore;
   onSelect: (skill: SkillEntry) => void;
   onSelectCommand: (entry: CommandEntry) => void;
   onClose: () => void;
@@ -28,12 +33,14 @@ interface Props {
 const categoryChips = ['personal', 'work', 'development', 'admin', 'other'] as const;
 type CategoryChip = typeof categoryChips[number];
 
-export default function CommandDrawer({ open, searchMode, externalFilter, onSelect, onSelectCommand, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary, onOpenMarketplaceDetail }: Props) {
+export default function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, filterStore, onSelect, onSelectCommand, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary, onOpenMarketplaceDetail }: Props) {
   const { drawerSkills, drawerCommands, favorites, setFavorite, loadError, retryLoad } = useSkills();
   // Mounted under every session whether or not it is showing, so only OPENING
   // it asks the marketplace to load (audit W16); the plugin-name badges fill
   // in a beat after the first open.
   const mp = useMarketplace(open);
+  const storeFilter = useDrawerFilter(filterStore);
+  const externalFilter = filterStore ? storeFilter : externalFilterProp;
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<CategoryChip | null>(null);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
