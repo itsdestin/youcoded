@@ -77,6 +77,10 @@ export type { DialogProps, DialogSize } from './Dialog';
 export { SettingRow, SETTING_ROW_BASE, RowStatus } from './SettingRow';
 export type { SettingRowProps, SettingRowVariant } from './SettingRow';
 
+export { SectionLabel } from './SectionLabel';
+
+export { FieldRow } from './FieldRow';
+
 export { Callout } from './Callout';
 export type { CalloutProps, CalloutTone } from './Callout';
 
