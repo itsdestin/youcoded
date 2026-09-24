@@ -1851,6 +1851,19 @@ export class RemoteServer {
         this.respond(client.ws, type, id, ok);
         break;
       }
+      // U11 — same fit-checked switch as the desktop picker, so a phone can't
+      // move an overfull chat onto a model it does not fit.
+      case 'native:switch-model': {
+        try {
+          const result = this.nativeRuntime
+            ? await this.nativeRuntime.nativeHost.switchModel(payload.sessionId, payload.binding, payload.summarize === true)
+            : { status: 'failed', reason: 'not-live' };
+          this.respond(client.ws, type, id, result);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { status: 'failed', reason: 'error', detail: err?.message ?? String(err) });
+        }
+        break;
+      }
       case 'native:set-permission-mode': {
         // setPermissionMode THROWS on an unknown mode string — respond an error
         // object (same convention as the provider CRUD handlers below) so the
@@ -1905,6 +1918,20 @@ export class RemoteServer {
           this.respond(client.ws, type, id, value);
         } catch (err: any) {
           this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
+      case 'native:compact': {
+        // WHY: /compact with optional focus is shared by the desktop and remote
+        // renderer; answer from the same live host rather than silently rejecting
+        // the phone's request after it has already shown a compaction spinner.
+        try {
+          const result = this.nativeRuntime
+            ? await this.nativeRuntime.nativeHost.compact(payload.sessionId, payload.focus)
+            : { ok: false, reason: 'not-live' };
+          this.respond(client.ws, type, id, result);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, reason: 'error', detail: err?.message ?? String(err) });
         }
         break;
       }

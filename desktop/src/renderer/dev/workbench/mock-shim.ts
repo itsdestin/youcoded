@@ -92,7 +92,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'session.list', 'session.create', 'session.browse', 'session.destroy',
   'session.setFlag', 'session.setTag', 'session.setNote', 'session.getMeta',
   'session.sendInput', 'session.respondToPermission', 'session.handoff', 'on.transcriptEvent', 'on.hookEvent',
-  'native.send', 'native.setBinding',
+  'native.send', 'native.setBinding', 'native.switchModel',
   'providers.list', 'providers.catalog', 'providers.test', 'providers.setKey', 'models.memoryCheck',
   // Local Models rows + Resume (2026-08-26). WHY these must be listed: the
   // contract test only checks members named here, so a hand-written mock left
@@ -1731,6 +1731,21 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       }));
       return true;
     },
+    // U11 model-switch popup. `?switchFit=summary` makes every pick ask first
+    // (so the popup can be reviewed); `?switchFit=working` also leaves the
+    // summary running forever, `?switchFit=error` makes it fail. Default: fits.
+    switchModel: async (sessionId: string, b: { providerId: string; modelId: string }, summarize?: boolean) => {
+      const fit = new URLSearchParams(location.search).get('switchFit');
+      if (fit && !summarize) return { status: 'needs-summary' };
+      if (fit === 'working') return new Promise(() => {});
+      if (fit === 'error') return { status: 'failed', reason: 'cannot-fit' };
+      if (store.refuseWrites) return { status: 'failed', reason: 'not-live' };
+      store.setState((s) => ({
+        ...s,
+        sessions: s.sessions.map((x: any) => x.id === sessionId ? { ...x, model: b.modelId, providerId: b.providerId } : x),
+      }));
+      return { status: 'switched' };
+    },
     // G-1: the card's Stop just resolves — the gallery fixture stays in its
     // captured state rather than spawning anything real.
     killShell: async (_sessionId: string, _shellId: string) => ({ ok: true }),
@@ -2930,6 +2945,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // (playReply in sendInput above). Same attachment pattern as specialistEvent
   // below — Ns<'on'> doesn't carry these members.
   (on as any).transcriptEvent = (cb: (e: any) => void) => { subs.transcript.add(cb); return () => { subs.transcript.delete(cb); }; };
+  // Probe hook, same shape as __workbenchAppearanceSync: play one transcript
+  // event (e.g. a native compact-summary) into the renderer for a screenshot.
+  if (typeof window !== 'undefined') (window as any).__workbenchTranscript = (e: unknown) => { subs.transcript.forEach((f) => f(e)); return subs.transcript.size; };
   (on as any).hookEvent = (cb: (e: any) => void) => { subs.hook.add(cb); return () => { subs.hook.delete(cb); }; };
   // Specialists 1c: the delegation feed (run records + delivered notes). Not
   // on Ns<'on'> yet (no real channel) — attached separately so the typed

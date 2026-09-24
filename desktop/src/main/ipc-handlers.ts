@@ -3488,9 +3488,9 @@ export function registerIpcHandlers(
   // User-initiated /compact for a native session. Never throws across IPC: a
   // failure returns a coded reason so the renderer can surface a specific,
   // accurate message instead of a guessed one (docs/error-message-standards.md).
-  ipcMain.handle(IPC.NATIVE_COMPACT, async (_e, { sessionId }: { sessionId: string }) => {
+  ipcMain.handle(IPC.NATIVE_COMPACT, async (_e, { sessionId, focus }: { sessionId: string; focus?: string }) => {
     try {
-      return await nativeHost.compact(sessionId);
+      return await nativeHost.compact(sessionId, focus);
     } catch (err: any) {
       return { ok: false, reason: 'error', detail: err?.message ?? String(err) };
     }
@@ -3510,6 +3510,20 @@ export function registerIpcHandlers(
       return await nativeHost.invokeSkill(sessionId, skill, args);
     } catch (err: any) {
       return { ok: false, reason: 'error', detail: err?.message ?? String(err) };
+    }
+  });
+  // U11: the picker's switch. Same model-used write-through as set-binding
+  // below, but only once the switch actually happened.
+  ipcMain.handle(IPC.NATIVE_SWITCH_MODEL, async (_e, { sessionId, binding, summarize }: { sessionId: string; binding: any; summarize?: boolean }) => {
+    try {
+      const result = await nativeHost.switchModel(sessionId, binding, summarize === true);
+      if (result.status === 'switched') {
+        const ref = await resolvePortableModel(sessionId);
+        if (ref) noteModelUsed(sessionId, ref);
+      }
+      return result;
+    } catch (err: any) {
+      return { status: 'failed', reason: 'error', detail: err?.message ?? String(err) };
     }
   });
   ipcMain.handle(IPC.NATIVE_SET_BINDING, async (_e, sessionId: string, binding: any) => {

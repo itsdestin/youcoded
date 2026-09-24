@@ -2949,10 +2949,11 @@ export function installShim(): void {
       retry: (sessionId: string) => fire('native:retry', { sessionId }),
       // Request/response (mirrors preload.ts) — the remote UI needs the same
       // {ok, reason} so a refused compaction explains itself over remote too.
-      compact: (sessionId: string) => invoke('native:compact', { sessionId }),
+      compact: (sessionId: string, focus?: string) => invoke('native:compact', { sessionId, focus }),
       clear: (sessionId: string) => invoke('native:clear', { sessionId }),
       invokeSkill: (sessionId: string, skill: string, args?: string) => invoke('native:invoke-skill', { sessionId, skill, args }),
       setBinding: (sessionId: string, binding: unknown) => invoke('native:set-binding', { sessionId, binding }),
+      switchModel: (sessionId: string, binding: unknown, summarize?: boolean) => invoke('native:switch-model', { sessionId, binding, summarize }),
       setPermissionMode: (sessionId: string, mode: string) => invoke('native:set-permission-mode', { sessionId, mode }),
       getPermissionMode: (sessionId: string) => invoke('native:get-permission-mode', { sessionId }),
       getContextPreferences: () => invoke('native:get-context-preferences'),

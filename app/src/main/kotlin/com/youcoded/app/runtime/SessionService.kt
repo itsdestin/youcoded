@@ -4189,6 +4189,8 @@ class SessionService : Service() {
             // harness to load a skill's instructions into until M8.
             "native:invoke-skill",
             "native:set-binding",
+            // U11 fit-checked model switch: desktop-only like set-binding.
+            "native:switch-model",
             "native:set-permission-mode",
             "native:get-permission-mode",
             // Cloud context defaults belong to the desktop native runtime.

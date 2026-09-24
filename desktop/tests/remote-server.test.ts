@@ -1307,6 +1307,25 @@ describe('RemoteServer specialist run + native hook replay', () => {
     expect(frames.find((m) => m.id === 'r2')?.payload).toEqual({ ok: true });
   });
 
+  it('forwards focused native compaction over WS and reports not-live without a runtime', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    const { frames, ws } = fakeWs();
+    const send = async (id: string, focus?: string) => {
+      await server.handleMessage({ ws, authenticated: true }, JSON.stringify({
+        type: 'native:compact', id, payload: { sessionId: 's1', focus },
+      }));
+      return frames.find(m => m.id === id)?.payload;
+    };
+    expect(await send('no-runtime', 'keep corrections')).toEqual({ ok: false, reason: 'not-live' });
+    const compact = vi.fn(async () => ({ ok: true }));
+    server.setNativeRuntime({ nativeHost: { compact } });
+    expect(await send('focused', 'keep corrections')).toEqual({ ok: true });
+    expect(compact).toHaveBeenCalledWith('s1', 'keep corrections');
+    expect(await send('plain')).toEqual({ ok: true });
+    expect(compact).toHaveBeenLastCalledWith('s1', undefined);
+  });
+
   it('a reconnecting client receives an open native ask\'s PermissionRequest', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
