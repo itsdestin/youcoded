@@ -22,6 +22,12 @@ export interface ArtifactState {
   drawerOpenBySession: Record<string, boolean>;
   drawerExpanded: boolean;                            // panel fills the content region
   projectViewOpen: boolean;
+  /** T4 (project-plugin-controls): a pending "open Skills & tools" request —
+   *  see PROJECT_VIEW_OPEN_SKILLS_TAB's own comment in artifact-actions.ts.
+   *  null = nothing pending. `projectPath` is undefined when the request
+   *  names no specific project (re-home to the focused conversation's
+   *  project, matching plain Project View open). */
+  openSkillsTabRequest: { projectPath: string | undefined } | null;
   // YouCoded Pages (Phase 1 shell): the library screen, and which page (if
   // any) is open on top of it. A pinned page opens with the library closed;
   // a card opens it with the library still open underneath, so Back returns
@@ -64,6 +70,7 @@ export const initialArtifactState: ArtifactState = {
   drawerOpenBySession: {},
   drawerExpanded: false,
   projectViewOpen: false,
+  openSkillsTabRequest: null,
   pagesViewOpen: false,
   pageViewOpen: false,
   openPageId: null,
@@ -190,6 +197,13 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
       return { ...s, projectViewOpen: true, pageViewOpen: false, pagesViewOpen: false, openPageId: null, pageFocus: false };
     case 'PROJECT_VIEW_CLOSED':
       return { ...s, projectViewOpen: false };
+    case 'PROJECT_VIEW_OPEN_SKILLS_TAB':
+      return {
+        ...s, projectViewOpen: true, pageViewOpen: false, pagesViewOpen: false, openPageId: null, pageFocus: false,
+        openSkillsTabRequest: { projectPath: a.projectPath },
+      };
+    case 'PROJECT_VIEW_SKILLS_REQUEST_HANDLED':
+      return { ...s, openSkillsTabRequest: null };
     // From a focused (pinned) page, the Pages button brings the panel back
     // with that page still open — focus off, openPageId kept.
     case 'PAGE_VIEW_OPENED':

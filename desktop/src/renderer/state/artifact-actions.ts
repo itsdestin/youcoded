@@ -41,6 +41,18 @@ export type ArtifactAction =
   | { type: 'ACTIVE_ARTIFACT_CLEARED'; sessionId: string }
   | { type: 'PROJECT_VIEW_OPENED' }
   | { type: 'PROJECT_VIEW_CLOSED' }
+  // T4 (project-plugin-controls): the ONE production route to Projects →
+  // Skills & tools, scrolled to the needs-setup section for a given project —
+  // T5's red "missing" chip in the drawer/CommandDrawer dispatches this with a
+  // real projectKey; the workbench "Writing helper" preview card reuses it
+  // with no path (re-homes to the focused conversation's project, same as
+  // opening Project View normally). A fresh object each dispatch so
+  // ProjectView's effect fires even for a repeat request to the same project.
+  | { type: 'PROJECT_VIEW_OPEN_SKILLS_TAB'; projectPath?: string }
+  // ProjectView dispatches this the instant it consumes a request above, so
+  // the field goes back to null and a later identical request is still a
+  // real state transition (null -> object) instead of a no-op.
+  | { type: 'PROJECT_VIEW_SKILLS_REQUEST_HANDLED' }
   // YouCoded Pages (Phase 1 shell): the library is a full screen like
   // ProjectView; an open page sits above it. Both live here rather than in a
   // store of their own because every entry point (HeaderBar, OverflowMenu,

@@ -22,7 +22,7 @@ import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { ScreenBand } from '../ScreenBand';
 import { isWorkbenchMode, workbenchScreenFrame } from '../../workbench-mode';
-import { ProjectSkillsTabDemo } from '../../dev/workbench/mockups/ProjectPluginControls';
+import { SkillsToolsTab } from './SkillsToolsTab';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { CentralIndexProject, ArtifactRecord } from '../../../shared/artifacts/types';
 import type { PastSession } from '../../../shared/types';
@@ -95,8 +95,12 @@ interface ProjectViewProps {
   // screen). Project view re-homes to this folder's project on every open — see
   // the load effect. Not used for anything else.
   activeSessionCwd?: string;
-  // Threaded from App: starts a new conversation in the given cwd.
-  onNewConversation: (cwd: string) => void;
+  // Threaded from App: starts a new conversation in the given cwd. T4
+  // (project-plugin-controls): the Skills & tools tab's "Ask assistant to set
+  // it up" reuses this SAME path with a prefilled initialInput rather than a
+  // second one — App's own handler is a stable useCallback so this stays a
+  // valid stable prop for the kept-mounted, memoized SkillsToolsTab.
+  onNewConversation: (cwd: string, initialInput?: string) => void;
   // App's own resume entry (handleResumeSession), so the preview's model
   // picker and launch switches reach it exactly as the Resume browser's do.
   onResumeConversation: ResumeHandler;
@@ -189,25 +193,60 @@ export function ProjectView(props: ProjectViewProps) {
   const activeCwdRef = useRef(props.activeSessionCwd);
   activeCwdRef.current = props.activeSessionCwd;
   const [tab, setTab] = useState<TabId>('files');
-  const [previewNeedsSetup, setPreviewNeedsSetup] = useState(false);
+  // T4 (project-plugin-controls): the ONE production route to Skills & tools,
+  // scrolled to its needs-setup section — dispatched by T5's red "missing"
+  // chip with a real project path, and (with no path) by the workbench's
+  // "Writing helper" preview card, which used to hand-roll this same
+  // open+select-tab+scroll sequence via a bespoke window event and local
+  // state. Both paths now go through the SAME action.
+  const openSkillsTabRequest = useArtifactSelector((s) => s.openSkillsTabRequest);
+  const [scrollToNeedsSetup, setScrollToNeedsSetup] = useState(false);
+  // A request naming a specific project may arrive before the project index
+  // has loaded (or before the named project appears in it, e.g. it was just
+  // added). Held in a ref — not state — because it's consumed by the
+  // project-load effect below without needing to be a render dependency itself.
+  const pendingSkillsProjectPathRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isWorkbenchMode()) return;
-    // WHY: only the workbench's unavailable sample needs a real navigation
-    // target before project availability has storage or a route in production.
-    const openPreview = () => { dispatch({ type: 'PROJECT_VIEW_OPENED' }); setTab('skills'); setPreviewNeedsSetup(true); };
-    window.addEventListener('workbench:open-project-skills', openPreview);
-    return () => window.removeEventListener('workbench:open-project-skills', openPreview);
-  }, [dispatch]);
+    if (!openSkillsTabRequest) return;
+    // Consume immediately: a later request (even to the same project) must
+    // start from null again so this effect is guaranteed to re-fire for it.
+    dispatch({ type: 'PROJECT_VIEW_SKILLS_REQUEST_HANDLED' });
+    dispatch({ type: 'PROJECT_VIEW_OPENED' });
+    pendingSkillsProjectPathRef.current = openSkillsTabRequest.projectPath ?? null;
+    setTab('skills');
+    setScrollToNeedsSetup(true);
+  }, [openSkillsTabRequest, dispatch]);
+  // Once the project index has loaded, route a pending request's named
+  // project into the active selection. A path matching no project (stale
+  // request, or the workbench's path-less preview) leaves the normal
+  // re-home-to-focused-conversation selection from the load effect below
+  // untouched — never overwritten by a null result here.
   useEffect(() => {
-    if (!isWorkbenchMode() || !previewNeedsSetup || !projectViewOpen || !activeProject || tab !== 'skills') return;
+    if (!pendingSkillsProjectPathRef.current || !indexLoaded) return;
+    const match = matchProjectByPath(projects, pendingSkillsProjectPathRef.current);
+    if (match) setActiveProject(match);
+    pendingSkillsProjectPathRef.current = null;
+  }, [projects, indexLoaded]);
+  useEffect(() => {
+    if (!scrollToNeedsSetup || !projectViewOpen || !activeProject || tab !== 'skills') return;
     // WHY: navigation from a missing skill lands on the actionable section,
     // not just the Projects shell; wait for the selected project to render.
     const frame = requestAnimationFrame(() => {
       document.getElementById('project-tools-needing-setup')?.scrollIntoView({ block: 'center' });
-      setPreviewNeedsSetup(false);
+      setScrollToNeedsSetup(false);
     });
     return () => cancelAnimationFrame(frame);
-  }, [previewNeedsSetup, projectViewOpen, activeProject, tab]);
+  }, [scrollToNeedsSetup, projectViewOpen, activeProject, tab]);
+  // The workbench's own "Writing helper" preview card (CommandDrawer.tsx,
+  // T5's territory) still dispatches this bare window event with no project
+  // path — it now just triggers the SAME production action above, in
+  // workbench builds only, instead of its own bespoke open/scroll logic.
+  useEffect(() => {
+    if (!isWorkbenchMode()) return;
+    const openPreview = () => dispatch({ type: 'PROJECT_VIEW_OPEN_SKILLS_TAB' });
+    window.addEventListener('workbench:open-project-skills', openPreview);
+    return () => window.removeEventListener('workbench:open-project-skills', openPreview);
+  }, [dispatch]);
   // Artifacts search query (lifted out of FilesTab so it can sit on the
   // shared seg-row next to the segmented control, matching the design).
   const [artifactSearch, setArtifactSearch] = useState('');
@@ -752,9 +791,10 @@ export function ProjectView(props: ProjectViewProps) {
     // (CLAUDE.md/AGENTS.md/rules) and memories — and "instructions" is the term
     // the product uses everywhere else a non-technical user meets this concept.
     { id: 'context', label: 'Instructions & Memories', icon: <DocIcon />, count: String(heroStats.contextFiles) },
-    // WHY: show the proposal in the REAL Projects shell without a production entry point.
-    ...(isWorkbenchMode() && new URLSearchParams(location.search).get('pluginControlsBefore') !== '1'
-      ? [{ id: 'skills' as const, label: 'Skills & tools', icon: <PluginIcon />, count: '' }] : []),
+    // T4 (project-plugin-controls): a real tab for everyone now — the
+    // workbench-only gate (isWorkbenchMode() + the 'pluginControlsBefore'
+    // before/after review-deck flag) is gone.
+    { id: 'skills', label: 'Skills & tools', icon: <PluginIcon />, count: '' },
   ];
 
   // Per-active-project sync props for the hero. `dot` is null when syncStatus is
@@ -1006,6 +1046,13 @@ export function ProjectView(props: ProjectViewProps) {
             {activeProject && (
               <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={onFilesMutated} onClearSearch={onFilesClearSearch} onCurrentDirChange={setCurrentRelDir} pvActiveId={pvActiveId} artifactDispatch={dispatch} />
             )}
+            {/* T4 (project-plugin-controls): kept mounted like FilesTab, not
+                conditional like Conversations/Context — perf rule 2's
+                hidden+memo+stable-props, so switching away and back never
+                re-fetches project-extensions:get. */}
+            {activeProject && (
+              <SkillsToolsTab hidden={tab !== 'skills'} project={activeProject} onNewConversation={props.onNewConversation} />
+            )}
             {/* Keyed by project so a switch starts a fresh 50-card window at the
                 top, instead of keeping the last project's scroll depth. */}
             {activeProject && tab === 'conversations' && (
@@ -1033,9 +1080,6 @@ export function ProjectView(props: ProjectViewProps) {
                 onEditFile={setEditingContext}
                 onOpenInfo={setInfoScope}
               />
-            )}
-            {activeProject && tab === 'skills' && isWorkbenchMode() && (
-              <ProjectSkillsTabDemo key={activeProject.path} projectName={activeProject.name} />
             )}
             {/* How-context-works teaching popup. Map the clicked scope to an
                 initial tab: memory → Memory page, project/global → Overview

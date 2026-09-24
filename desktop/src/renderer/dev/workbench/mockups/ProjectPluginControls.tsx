@@ -184,9 +184,12 @@ function ProjectCard({ name, assistant = false }: { name: string; assistant?: bo
   </section>;
 }
 
-// WHY: render this design inside the real ProjectView hero, tabs and scroll model;
-// local sample data cannot install or change an actual plugin on either platform.
-export function ProjectSkillsTabDemo({ projectName }: { projectName: string }) {
+// WHY unexported (T4, project-plugin-controls): ProjectView now renders the
+// production SkillsToolsTab instead of this fixture — kept here, unexported,
+// until T7 retires the whole prototype file (knip.jsonc's own convention:
+// catching a workbench fixture's unused export is the point, not a false
+// positive to silence).
+function ProjectSkillsTabDemo({ projectName }: { projectName: string }) {
   const assistant = projectName === 'Your Assistant';
   // WHY: sibling Projects tabs fill this column and use one explainer, micro-labels
   // and full-width rows. The narrow centered settings stack read as a foreign page.
