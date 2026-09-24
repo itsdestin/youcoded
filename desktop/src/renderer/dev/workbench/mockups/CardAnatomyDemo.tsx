@@ -9,7 +9,7 @@ import { ThemeBg } from '../../../components/ThemeBg';
  *  the decided tinted status pill and no capitals. Tokens only; dev-only. */
 
 export type CardAnatomy = 'today' | 'quiet-footer' | 'meta-under-title' | 'chips';
-export type ConvAnatomy = 'date-top' | 'date-end';
+export type ConvAnatomy = 'date-top' | 'date-end' | 'icons-bottom' | 'icons-hover' | 'icons-top-date-end';
 
 const CARD = 'rounded-xl bg-panel border border-edge-dim p-3 flex flex-col gap-2';
 const SHADOW = { boxShadow: '0 4px 20px rgb(0 0 0 / .16), 0 1px 3px rgb(0 0 0 / .08)' };
@@ -35,7 +35,11 @@ function Card({ item, anatomy }: { item: Item; anatomy: CardAnatomy }) {
       <div className={CARD} style={{ boxShadow: '0 8px 32px rgb(0 0 0 / .18)' }}>
         <div className="flex items-center gap-2">
           <span className="text-base font-medium text-fg flex-1 truncate">{item.title}</span>
-          {item.status && <span className="text-3xs uppercase tracking-wide text-fg-muted">{item.status}</span>}
+          {/* WHY the exact class order (capture repair, 2026-09-24): ast-grep's
+              section-label-canonical-classes invariant spells this recipe one
+              way project-wide; found pre-existing-broken by `verify.sh` while
+              checking this session's unrelated mock-shim.ts change. */}
+          {item.status && <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">{item.status}</span>}
           <Star on={item.star} />
         </div>
         <div className="flex gap-1">
@@ -115,24 +119,41 @@ const CONVS = [
   { title: 'theme contrast pass', project: 'wecoded-themes', model: 'GPT 5.6', size: '4 KB', date: '7/28/2025', tags: [] },
 ];
 
-/** A conversation you can open, as in Resume / Projects / chat references: where the date sits. */
-export function ConversationCardDemo({ anatomy }: { anatomy: ConvAnatomy }) {
+/** A conversation you can open, as in Resume / Projects / chat references: where
+ *  the date sits, and — for Resume's cards — where the tag and "done" icon
+ *  buttons go once the date takes the top-right corner. */
+function Icons() {
   return (
-    <div className="relative p-5" style={{ height: 250 }}>
+    <span className="flex items-center gap-1 text-fg-muted shrink-0" aria-hidden>
+      <span className="inline-flex w-6 h-6 items-center justify-center rounded-md hover:bg-inset">⌂</span>
+      <span className="inline-flex w-6 h-6 items-center justify-center rounded-md hover:bg-inset">✓</span>
+    </span>
+  );
+}
+
+export function ConversationCardDemo({ anatomy }: { anatomy: ConvAnatomy }) {
+  const withIcons = anatomy.startsWith('icons');
+  return (
+    <div className="relative p-5" style={{ height: 260 }}>
       <ThemeBg />
       <div className="relative max-w-md space-y-3">
         {CONVS.map((c) => (
-          <div key={c.title} className={CARD} style={SHADOW}>
+          <div key={c.title} className={`${CARD} group`} style={SHADOW}>
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-fg flex-1 truncate">{c.title}</span>
-              {anatomy === 'date-top' && <span className="text-2xs text-fg-muted shrink-0">{c.date}</span>}
+              {anatomy === 'icons-top-date-end' && <Icons />}
+              {(anatomy === 'date-top' || anatomy === 'icons-bottom' || anatomy === 'icons-hover') && <span className="text-2xs text-fg-muted shrink-0">{c.date}</span>}
+              {anatomy === 'icons-hover' && <span className="opacity-0 group-hover:opacity-100 transition-opacity"><Icons /></span>}
             </div>
             {c.tags.length > 0 && (
               <div className="flex gap-1">{c.tags.map((t) => <span key={t} className="rounded-full border border-edge-dim bg-inset px-2 text-2xs text-fg-2">{t}</span>)}</div>
             )}
-            <p className="text-2xs text-fg-muted truncate">
-              {c.project} · {c.model} · {c.size}{anatomy === 'date-end' ? ` · ${c.date}` : ''}
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-2xs text-fg-muted truncate flex-1">
+                {c.project} · {c.model} · {c.size}{anatomy === 'date-end' || anatomy === 'icons-top-date-end' ? ` · ${c.date}` : ''}
+              </p>
+              {anatomy === 'icons-bottom' && <Icons />}
+            </div>
           </div>
         ))}
       </div>

@@ -7419,6 +7419,11 @@ export const COMPARE_SURFACES: CompareSurface[] = [
         { id: 'date-top', label: 'Date top right', note: 'The date on the title line, at the right.', render: () => <ConversationCardDemo anatomy="date-top" /> },
         { id: 'date-end', label: 'Date with the details', note: 'The date at the end of the grey details line.', render: () => <ConversationCardDemo anatomy="date-end" /> },
       ] },
+      { n: 3, basis: 'Resume cards also carry tag and done icon buttons: where they go once the date is top right.', candidates: [
+        { id: 'icons-bottom', label: 'Icons bottom right', note: 'Date top right; the icon buttons at the end of the details line.', render: () => <ConversationCardDemo anatomy="icons-bottom" /> },
+        { id: 'icons-hover', label: 'Icons on hover', note: 'Date top right; the icon buttons appear beside it only while the pointer is over the card.', render: () => <ConversationCardDemo anatomy="icons-hover" /> },
+        { id: 'icons-top-date-end', label: 'Icons keep the corner', note: 'Icon buttons top right as today; for these cards the date moves to the details line.', render: () => <ConversationCardDemo anatomy="icons-top-date-end" /> },
+      ] },
     ],
   },
   ...ALL_SURFACES.filter((s) => s.id === ACTIVE_FIRST),
