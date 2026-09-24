@@ -17,8 +17,10 @@
 // design mockup and useSessionAvailability.test.ts both used for "a personal
 // skill turned on here but missing on this device" — kept for continuity with
 // the ui-review plans and unit tests already written against that example.
-// Every other project gets just the three bundled plugins, seeded on (R19:
-// "it starts off everywhere").
+// Every other project gets just the three bundled plugins, seeded on — bundled
+// plugins are always installed and are NOT the "new download" R19's "starts
+// off everywhere" rule is about (that rule covers `inboxGroup()` and
+// `installedPluginGroup()` below, for a plugin the user actually installed).
 import type {
   ProjectExtensionsChange,
   ProjectExtensionsForSessionResult,
@@ -95,20 +97,28 @@ export function defaultView(path: string): SkillsToolsView {
 
 // Folded into a project's `installed` list the moment the Marketplace
 // fixture's "Inbox" plugin (youcoded-inbox) has been installed live in this
-// workbench session, seeded ON — same "starts off everywhere" seeding the
-// real store does the first time it scans a newly installed plugin (R19). One
-// skill, matching the catalog entry's own components (fixtures/marketplace/
-// registry.ts: skills: ['claudes-inbox']) — "Process inbox" is this fixture's
-// own display name for that skill, not a real scanned one.
+// workbench session — starts OFF/paused (R19 grading pass, 2026-09-24): a
+// live probe against the workbench caught this fixture hardcoding on: true
+// here, contradicting the product's own "a new download starts inactive
+// everywhere" rule (design spec §"Defaults") and the approved
+// combined-review-2 screenshot, which shows every project's Inbox toggle
+// off right after install. The PREVIOUS comment here claimed this matched
+// "starts off everywhere" — it did not; `installedPluginGroup` just below is
+// the one that actually followed that rule (mirroring the real store's
+// `defaultPluginOn` in main/project-extensions/resolve.ts), and this fixture
+// is now identical to it in that respect. One skill, matching the catalog
+// entry's own components (fixtures/marketplace/registry.ts: skills:
+// ['claudes-inbox']) — "Process inbox" is this fixture's own display name
+// for that skill, not a real scanned one.
 export function inboxGroup(): PluginGroup {
   return {
     pluginId: 'youcoded-inbox',
     displayName: 'Inbox',
     bundled: false,
-    on: true,
-    paused: false,
+    on: false,
+    paused: true,
     parts: [
-      { key: 'youcoded-inbox:claudes-inbox', kind: 'skill', displayName: 'Process inbox', on: true },
+      { key: 'youcoded-inbox:claudes-inbox', kind: 'skill', displayName: 'Process inbox', on: false },
     ],
   };
 }

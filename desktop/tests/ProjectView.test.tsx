@@ -300,4 +300,55 @@ describe('PROJECT_VIEW_OPEN_SKILLS_TAB', () => {
     const scrolledEl = (Element.prototype.scrollIntoView as any).mock.instances[0];
     expect(scrolledEl.id).toBe('project-tools-needing-setup');
   });
+
+  // R14 (2026-09-24 grading pass): live probe against the workbench showed
+  // the drawer's unavailable-card click opened Skills & tools but never
+  // scrolled — scrollTop stuck at 0, target row off-screen. Root cause: the
+  // scroll effect fired exactly ONE requestAnimationFrame, and — whether or
+  // not the target row existed yet — unconditionally cleared its own pending
+  // flags, so a row that hadn't rendered yet (because it depends on TWO
+  // chained async IPC round trips: the projects-index load, then
+  // SkillsToolsTab's own lazy per-project projectExtensions:get fetch) was
+  // simply never scrolled to. This reproduces that exact timing: the row's
+  // data resolves only AFTER a frame has already elapsed.
+  it('retries across frames instead of giving up after one, so a row that loads late still gets scrolled to (R14)', async () => {
+    const store = createArtifactStore();
+    let resolveGet: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => { resolveGet = resolve; });
+    // WHY delay only projectExtensions.get (not listProjectsIndex): this is
+    // specifically the SECOND chained round trip — the one that resolves
+    // AFTER the tab has already switched to 'skills' and a frame may already
+    // have elapsed.
+    (window as any).claude.projectExtensions.get = (path: string) => gate.then(() => ({
+      ok: true,
+      view: {
+        projectKey: path, builtIn: [], installed: [], personal: [],
+        needsSetup: [{ key: `mcp:${path}`, displayName: `Tool for ${path}`, kind: 'tool-connection', projectKey: path }],
+      },
+    }));
+    const view = renderProjectView(store);
+    const itemKey = `mcp:${PROJECT_B.path}`;
+
+    store.dispatch({ type: 'PROJECT_VIEW_OPEN_SKILLS_TAB', projectPath: PROJECT_B.path, itemKey });
+
+    // Wait for `activeProject` itself to resolve (the hero renders the
+    // project's NAME once it's set) — NOT just for the tab pill to read
+    // 'skills', which flips synchronously the instant the request is
+    // consumed and proves nothing about whether the scroll effect (gated on
+    // `activeProject`) has mounted yet. Only once activeProject is real does
+    // the scroll effect schedule its first rAF — BEFORE the row's own data
+    // has arrived, since that fetch is still gated behind `gate`.
+    await view.findByText('Beta');
+    act(() => { flushFrames(); });
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    expect(view.queryByText(`Tool for ${PROJECT_B.path}`)).not.toBeInTheDocument();
+
+    // NOW the row's data arrives and it renders.
+    await act(async () => { resolveGet!(); await gate; });
+    await view.findByText(`Tool for ${PROJECT_B.path}`);
+
+    await waitFor(() => { flushFrames(); expect(Element.prototype.scrollIntoView).toHaveBeenCalled(); });
+    const scrolledEl = (Element.prototype.scrollIntoView as any).mock.instances[0];
+    expect(scrolledEl.id).toBe(needsSetupRowDomId(itemKey));
+  });
 });

@@ -3164,21 +3164,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       projectExtViews.set(path, view);
     }
     // Fold a live Marketplace install of "Inbox" (youcoded-inbox) into EVERY
-    // project's own installed list, seeded ON — mirrors the real store's
-    // seed-on-first-scan behaviour (R19: "it starts off everywhere") so the
-    // post-install ProjectSetupPanel flow has a real per-project row to show.
+    // project's own installed list, seeded OFF/paused (R19 grading pass,
+    // 2026-09-24: this used to say "seeded ON" and `peInboxGroup()` matched
+    // that claim — both were wrong. "A new download starts inactive
+    // everywhere" has no grandfathered exception; fixed to mirror the real
+    // store's seed-on-first-scan behaviour) so the post-install
+    // ProjectSetupPanel flow has a real per-project row to show.
     if (installedPackages['youcoded-inbox'] && !view.installed.some((g) => g.pluginId === 'youcoded-inbox')) {
       view = { ...view, installed: [...view.installed, peInboxGroup()] };
       projectExtViews.set(path, view);
     }
     // U2 fix (beta review 2): generalizes the Inbox case above to ANY OTHER
     // plugin installed live this session (e.g. "Remember" from the review) —
-    // youcoded-inbox is excluded here because it already got its own
-    // grandfathered-ON row just above; every other session install is
-    // OFF/paused by default (installedPluginGroup's own comment explains why).
-    // Built from the same MARKETPLACE_PLUGINS catalog entry skills.install()
-    // matched, so its parts mirror the real catalog `.components` a live
-    // install would carry.
+    // youcoded-inbox is excluded here only because it already got its own
+    // row (OFF/paused, R19) just above; every other session install is
+    // likewise OFF/paused by default (installedPluginGroup's own comment
+    // explains why — no plugin is grandfathered on). Built from the same
+    // MARKETPLACE_PLUGINS catalog entry skills.install() matched, so its
+    // parts mirror the real catalog `.components` a live install would carry.
     for (const id of sessionInstalledPluginIds) {
       if (id === 'youcoded-inbox' || view.installed.some((g) => g.pluginId === id)) continue;
       const plugin = MARKETPLACE_PLUGINS.find((p) => p.id === id);

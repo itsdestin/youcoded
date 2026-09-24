@@ -250,17 +250,49 @@ export function ProjectView(props: ProjectViewProps) {
   }, [pendingSkillsProjectPath, projects, indexLoaded]);
   useEffect(() => {
     if (!scrollToNeedsSetup || !projectViewOpen || !activeProject || tab !== 'skills') return;
-    // WHY: navigation from a missing skill lands on the actionable row (or,
-    // with no itemKey / no matching row, the section) — wait for the
-    // selected project to render.
-    const frame = requestAnimationFrame(() => {
+    // WHY a RETRY LOOP, not one requestAnimationFrame (R14 fix, 2026-09-24):
+    // reaching this point only means the SKILLS tab is SELECTED — the
+    // target row still depends on two chained async IPC round trips: the
+    // projects-index load that resolves `activeProject` in the first place,
+    // then SkillsToolsTab's own lazy per-project fetch
+    // (useProjectExtensionsController's `projectExtensions:get`), which only
+    // starts once `hidden` flips false. Neither reliably lands within a
+    // single animation frame. The old code fired exactly ONE rAF, called
+    // `target?.scrollIntoView(...)` (a silent no-op when `target` was still
+    // null because the row — or even the whole needs-setup section — hadn't
+    // rendered yet) and then UNCONDITIONALLY cleared the pending flags, so a
+    // row that wasn't ready yet was simply never scrolled to. Verified live
+    // via scripts/ui-probe.mjs: scrollTop stuck at 0, row off-screen at the
+    // bottom of the panel. Poll every frame until the row (or, with no
+    // itemKey / no matching row, the section) actually EXISTS, then scroll —
+    // bounded so a request that never resolves (a failed load, or a stale
+    // itemKey the project no longer has) doesn't spin forever.
+    let cancelled = false;
+    let frame = 0;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 180; // ~3s at 60fps — generous for two chained IPC round trips
+    const tryScroll = () => {
+      if (cancelled) return;
       const target = (scrollItemKey && document.getElementById(needsSetupRowDomId(scrollItemKey)))
         || document.getElementById('project-tools-needing-setup');
-      target?.scrollIntoView({ block: 'center' });
-      setScrollToNeedsSetup(false);
-      setScrollItemKey(null);
-    });
-    return () => cancelAnimationFrame(frame);
+      if (target) {
+        target.scrollIntoView({ block: 'center' });
+        setScrollToNeedsSetup(false);
+        setScrollItemKey(null);
+        return;
+      }
+      attempts += 1;
+      if (attempts >= MAX_ATTEMPTS) {
+        // Give up quietly — Skills & tools is still open and usable, just
+        // not scrolled to a row that never appeared.
+        setScrollToNeedsSetup(false);
+        setScrollItemKey(null);
+        return;
+      }
+      frame = requestAnimationFrame(tryScroll);
+    };
+    frame = requestAnimationFrame(tryScroll);
+    return () => { cancelled = true; cancelAnimationFrame(frame); };
   }, [scrollToNeedsSetup, scrollItemKey, projectViewOpen, activeProject, tab]);
   // Artifacts search query (lifted out of FilesTab so it can sit on the
   // shared seg-row next to the segmented control, matching the design).
