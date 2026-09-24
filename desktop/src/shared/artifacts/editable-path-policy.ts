@@ -112,8 +112,12 @@ const RECORD_PRIVATE_SUBPATHS = [
 ];
 
 export function privateForRecordTrust(canonicalPath: string): boolean {
-  if (editTier(canonicalPath) !== 'free') return true;
+  // WHY lowercase BEFORE editTier too (re-review C3): editTier's names are
+  // case-sensitive (.ssh, .env, .netrc), and on a case-insensitive disk
+  // (Windows, macOS) `.SSH/id_rsa` IS the key. A trust decision must not be
+  // dodged by capital letters.
   const lower = canonicalPath.toLowerCase();
+  if (editTier(lower) !== 'free') return true;
   const base = lower.split('/').pop() ?? '';
   if (RECORD_PRIVATE_BASENAMES.has(base)) return true;
   return RECORD_PRIVATE_SUBPATHS.some((sub) => lower.includes(sub) || lower.endsWith(sub.replace(/\/$/, '')));

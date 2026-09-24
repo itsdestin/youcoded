@@ -50,7 +50,7 @@ function savedProjectRoots(): string[] {
  */
 export async function judgeRecordLocation(projectRoot: string, artifact: ArtifactRecord): Promise<
   | { ok: true; realPath: string }
-  | { ok: false; error: 'missing' | 'protected-path' | 'outside-projects' }
+  | { ok: false; error: 'missing' | 'protected-path' | 'outside-projects' | 'not-in-home-project' }
   | { ok: false; error: 'record-unreadable'; code: string }
   | null
 > {
@@ -359,7 +359,9 @@ export async function readArtifactText(
     if (e.code !== 'ENOENT') throw e;
     return { ok: true, ...trusted, artifact: artifact ?? null, content: null, orphan: true };
   }
-  if (opts?.maxBytes !== undefined && st.size > opts.maxBytes) return tooLarge(st.size, opts.maxBytes);
+  // C5: a phone offered Download for a too-large trusted `../` file needs its
+  // judged location — the record still holds a relative one.
+  if (opts?.maxBytes !== undefined && st.size > opts.maxBytes) return { ...tooLarge(st.size, opts.maxBytes), ...trusted };
 
   // Over the cap we do not refuse blind. Sniff the head first: an over-cap
   // IMAGE used to get the TEXT editor's error message. Text comes back as a

@@ -199,13 +199,31 @@ describe('judgeRelativeRecord', () => {
   // THE reviewer's scenario (2026-09-23, F1): the home folder itself is a saved
   // folder, as it is on Destin's machine. It must vouch for nothing — and every
   // credential below stays refused even so.
-  it('a saved home folder, an ancestor of home, or a filesystem root vouches for nothing', async () => {
+  it('a saved home folder, an ancestor of home, or a filesystem root vouches for nothing — and says so truthfully', async () => {
+    // Refused by design, but the file IS inside a saved folder, so "outside
+    // your project folders" would be false (re-review C1).
     const plain = await put(path.join(home, 'Documents', 'todo.md'));
     for (const saved of [home, path.dirname(home), path.parse(home).root]) {
-      expect(await judgeRelativeRecord(proj, rel(plain), [saved], home), saved).toEqual({ ok: false, reason: 'outside-projects' });
+      expect(await judgeRelativeRecord(proj, rel(plain), [saved], home), saved).toEqual({ ok: false, reason: 'not-in-home-project' });
     }
-    // and the project itself vouches for nothing when the project IS home
-    expect(await judgeRelativeRecord(home, 'Documents/../Documents/todo.md', [], home)).toEqual({ ok: false, reason: 'outside-projects' });
+    // …and the project itself vouches for nothing when the project IS home.
+    expect(await judgeRelativeRecord(home, 'Documents/../Documents/todo.md', [], home)).toEqual({ ok: false, reason: 'not-in-home-project' });
+  });
+
+  it('a project outside home (another drive, /opt, /mnt) is refused with the rule, not "outside your folders"', async () => {
+    // `elsewhere` stands in for /mnt/data: a saved folder NOT below this home.
+    const elsewhere = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-drive-')));
+    try {
+      const f = await put(path.join(elsewhere, 'work', 'notes.md'));
+      expect(await judgeRelativeRecord(proj, path.relative(proj, f), [elsewhere], home)).toEqual({ ok: false, reason: 'not-in-home-project' });
+    } finally { await fs.promises.rm(elsewhere, { recursive: true, force: true }); }
+  });
+
+  it('a saved folder admits only its own subtree — never a sibling that shares its name as a prefix', async () => {
+    // Saved `~/proj` must not admit `~/proj2/x` (the path-separator check).
+    const sibling = await put(path.join(home, 'proj2', 'x.md'));
+    expect(await judgeRelativeRecord(path.join(home, 'other'), path.relative(path.join(home, 'other'), sibling), [proj], home))
+      .toEqual({ ok: false, reason: 'outside-projects' });
   });
 
   it('keeps every PLANTED credential record refused with home saved as a folder', async () => {

@@ -54,6 +54,10 @@
     { "path": "/home/u/.config/gcloud", "private": true },
     { "path": "/home/u/.local/share/keyrings/login.keyring", "private": true },
     { "path": "/home/u/.password-store/bank.gpg", "private": true },
-    { "path": "/home/u/.cargo/credentials.toml", "private": true }
+    { "path": "/home/u/.cargo/credentials.toml", "private": true },
+    { "path": "c:/users/u/.SSH/id_rsa", "private": true },
+    { "path": "/Users/u/proj/.ENV", "private": true },
+    { "path": "c:/users/u/_NETRC", "private": true },
+    { "path": "/Users/u/proj/.Git/config", "private": true }
   ]
 }

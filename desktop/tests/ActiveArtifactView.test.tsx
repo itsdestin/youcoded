@@ -7,6 +7,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act, fireEvent, cleanup, renderHook, waitFor, within } from '@testing-library/react';
 import { ActiveArtifactView, type ActiveArtifactHandle } from '../src/renderer/components/artifact-views/ActiveArtifactView';
+import { setConnectionMode } from '../src/renderer/platform';
 import { useArtifactContent, contentPathFor } from '../src/renderer/components/artifact-views/useArtifactContent';
 
 // Pins the D4-unlock safety behavior of ActiveArtifactView (plan step 4):
@@ -389,6 +390,31 @@ describe('read lifecycle through useArtifactContent', () => {
       render(<ImgHost />);
       await settle(() => pending[0].resolve({ ok: true, content: null, orphan: false, binary: true, sizeBytes: 3, resolvedPath: '/home/u/notes/shot.png' }));
       await waitFor(() => expect(readBinary).toHaveBeenCalledWith('/home/u/notes/shot.png'));
+    });
+
+    it('offers a phone Download of a too-large ../ file at the location the host judged', async () => {
+      // Re-review C5: the Download used the record's relative location.
+      setConnectionMode('remote');
+      try {
+        const download = vi.fn().mockResolvedValue({ ok: true });
+        (window as any).claude.artifacts.download = download;
+        const big = { id: 'big', kind: 'external', path: 'report.pdf', absolutePath: '../notes/report.pdf' } as any;
+        function BigHost() {
+          const r = useArtifactContent('/proj', big.id, contentPathFor(big));
+          return <ActiveArtifactView artifact={big} content={r.content} contentInfo={r.contentInfo} contentState={r.contentState}
+            onRetryRead={r.retryRead} projectRoot="/proj" projectId="p1" projectName="Proj" sessionId="s1" onContentChange={r.setContent} />;
+        }
+        const utils = render(<BigHost />);
+        await settle(() => pending[0].resolve({ ok: false, error: 'too-large', sizeBytes: 24e6, limitBytes: 10e6, resolvedPath: '/home/u/notes/report.pdf' }));
+        await settle(() => { fireEvent.click(utils.getByText('Download')); });
+        expect(download).toHaveBeenCalledWith('/home/u/notes/report.pdf', { projectRoot: '/proj', artifactId: 'big' });
+      } finally { setConnectionMode('local'); }
+    });
+
+    it('says a file in a project outside the home folder is refused by the rule, not as "outside"', async () => {
+      const utils = render(<Host artifact={mdArtifact} />);
+      await settle(() => pending[0].resolve({ ok: false, error: 'not-in-home-project' }));
+      expect(utils.getByText('YouCoded only opens files like this when they’re inside a project folder in your home folder.')).toBeTruthy();
     });
 
     it('says the check failed, with the filesystem’s own reason', async () => {

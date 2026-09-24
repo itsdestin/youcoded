@@ -733,6 +733,21 @@ describe('repairRelativeExternals', () => {
     expect(sidecar.artifacts[0]).toEqual(input.artifacts[0]);
   });
 
+  it('re-runs the repair when the saved-folder list changes, not only once per launch', async () => {
+    // Re-review: the "repair done" memo is keyed on the saved-folder list, so a
+    // folder saved as a project mid-session makes its `../` files repairable.
+    await writeSidecar(projectRoot, null, sidecarOf(rec('a', '../notes/plan.md')));
+    let saved: string[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await runSidecarMigration(projectRoot, () => saved, parent)).toMatchObject({ migrated: false });
+      saved = [sibling];
+      expect(await runSidecarMigration(projectRoot, () => saved, parent)).toMatchObject({ migrated: true });
+    } finally { warn.mockRestore(); }
+    const after = await readSidecar(projectRoot) as ProjectSidecar;
+    expect(after.artifacts[0].absolutePath).toMatch(/\/notes\/plan\.md$/);
+  });
+
   it('never repairs a record because the HOME folder is saved as a project', async () => {
     writeFileSync(join(parent, '.git-credentials'), 'https://u:token@github.com');
     const input = sidecarOf(rec('a', '../notes/plan.md'), rec('b', '../.git-credentials'));

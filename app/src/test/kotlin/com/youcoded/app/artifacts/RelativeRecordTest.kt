@@ -40,11 +40,40 @@ class RelativeRecordTest {
     }
 
     @Test
-    fun aSavedHomeFolderOrAnAncestorOrRootVouchesForNothing() = world {
+    fun aSavedHomeFolderOrAnAncestorOrRootVouchesForNothingAndSaysSoTruthfully() = world {
+        // Refused by design; the file IS inside a saved folder, so the answer is
+        // the rule, not "outside your project folders" (re-review C1).
         val f = put("Documents/todo.md")
         for (saved in listOf(home.path, home.parentFile.path, "/")) {
-            assertEquals(RelativeRecordVerdict.OutsideProjects, judgeRelativeRecord(proj.path, relFromProj(f), listOf(saved), home.path), saved)
+            assertEquals(RelativeRecordVerdict.NotInHomeProject, judgeRelativeRecord(proj.path, relFromProj(f), listOf(saved), home.path), saved)
         }
+    }
+
+    @Test
+    fun aProjectOutsideHomeIsRefusedWithTheRule() {
+        val drive = Files.createTempDirectory("rr-drive-").toFile().canonicalFile
+        try {
+            world {
+                val f = File(drive, "work/notes.md").apply { parentFile.mkdirs(); writeText("x") }
+                assertEquals(RelativeRecordVerdict.NotInHomeProject,
+                    judgeRelativeRecord(proj.path, proj.toPath().relativize(f.toPath()).toString(), listOf(drive.path), home.path))
+            }
+        } finally { drive.deleteRecursively() }
+    }
+
+    @Test
+    fun aSavedFolderNeverAdmitsASiblingSharingItsNameAsAPrefix() = world {
+        val sib = put("proj2/x.md")
+        val other = File(home, "other").apply { mkdirs() }
+        assertEquals(RelativeRecordVerdict.OutsideProjects,
+            judgeRelativeRecord(other.path, other.toPath().relativize(sib.toPath()).toString(), listOf(proj.path), home.path))
+    }
+
+    @Test
+    fun aSymlinkLoopIsUnreadableWithACodeLikeDesktop() = world {
+        val a = File(notes, "a").toPath(); val b = File(notes, "b").toPath()
+        try { Files.createSymbolicLink(a, b); Files.createSymbolicLink(b, a) } catch (_: Exception) { return@world }
+        assertEquals(RelativeRecordVerdict.Unreadable("ELOOP"), judgeRelativeRecord(proj.path, "../notes/a", listOf(notes.path), home.path))
     }
 
     @Test

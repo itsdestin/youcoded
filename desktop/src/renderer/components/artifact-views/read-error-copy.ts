@@ -25,6 +25,12 @@ export function describeReadError(error: unknown, code?: unknown): string {
   if (error === 'outside-projects') {
     return 'YouCoded won’t open this file because it’s outside your project folders.';
   }
+  // Refused by design: the file is inside a saved folder, but not one inside
+  // the home folder (another drive, /opt, or the home folder itself). "Outside
+  // your project folders" would be false here (re-review C1).
+  if (error === 'not-in-home-project') {
+    return 'YouCoded only opens files like this when they’re inside a project folder in your home folder.';
+  }
   // The check itself failed. Only the filesystem's own error is reported.
   if (error === 'record-unreadable') {
     return `YouCoded couldn’t check this file (${describeFsCode(code)}).`;
