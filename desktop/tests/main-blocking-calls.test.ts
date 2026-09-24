@@ -150,6 +150,20 @@ const PROTECTED: Protection[] = [
     kinds: { walk: 'const-arrow' },
     requiredAwait: { text: 'fs.promises.stat(root)', what: 'the async root probe `await fs.promises.stat(root)`' },
     why: "the Glob tool's directory walk ran sync and froze every window, several times per turn" },
+  { was: 'model-poll-stays-async (new 2026-09-24)', file: 'engine/engine-supervisor.ts',
+    noBlocking: ['findModelChildRss', 'residentBytesForModel', 'emitModelsIfChanged', 'listModels'],
+    kinds: { findModelChildRss: 'function', residentBytesForModel: 'method', emitModelsIfChanged: 'method', listModels: 'method' },
+    bannedCalls: [
+      { scope: 'listModels', callee: /^(scanGgufCache|scanLocalDownloads)$/, what: 'the sync cache scan inside listModels — use scanGgufCacheAsync' },
+      { scope: 'emitModelsIfChanged', callee: /^(scanGgufCache|scanLocalDownloads)$/, what: 'the sync cache scan inside the model poll' },
+    ],
+    why: 'the local-model poll runs every 10 s, and every 400 ms while a model loads; the /proc search for the progress bar read every process on the machine synchronously each tick' },
+  { was: 'model-poll-stays-async (new 2026-09-24)', file: 'engine/cache-scan.ts',
+    noBlocking: ['scanLocalDownloadsAsync', 'readDirentsAsync', 'scanOneDirAsync', 'foldOneDir', 'scanGgufCacheAsync'],
+    kinds: { scanLocalDownloadsAsync: 'function', readDirentsAsync: 'function', scanOneDirAsync: 'function',
+      foldOneDir: 'function', scanGgufCacheAsync: 'function' },
+    bannedCalls: [{ scope: 'scanGgufCacheAsync', callee: /^scanLocalDownloads$/, what: 'the sync scan inside the async one' }],
+    why: 'the async cache scan is what the model poll runs; the sync twins stay legal for their sync callers' },
 ];
 
 // ---------------------------------------------------------------------------
