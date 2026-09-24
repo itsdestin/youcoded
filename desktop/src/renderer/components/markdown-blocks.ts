@@ -74,13 +74,13 @@ interface MdNode {
  * Only definitions and raw-HTML blocks can affect another block; everything else
  * is 'other'.
  */
-export type BlockInfo =
+type BlockInfo =
   | { kind: 'def'; text: string }
   | { kind: 'html'; opener: 'with-summary' | 'bare' | null; summary: boolean; close: boolean; nested: boolean }
   | { kind: 'other' };
 
 /** A run of top-level blocks with no blank line between them (see header). */
-export interface Piece {
+interface Piece {
   /** Offset in the message where this piece starts. */
   start: number;
   text: string;
@@ -258,7 +258,7 @@ export function splitMarkdownBlocks(content: string, prev?: MarkdownBlocks | nul
 // From pieces to what the bubble draws.
 
 /** One markdown document the bubble draws, as a sibling of the others. */
-export interface DrawnGroup {
+interface DrawnGroup {
   /** Where it starts in the message — its React key (see advanceStream). */
   key: number;
   source: string;
