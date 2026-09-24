@@ -993,3 +993,54 @@ describe('GitTransport never-sync files and unmanaged local files', () => {
     } finally { await h.cleanup(); }
   });
 });
+
+// A failed git read inside conflict resolution must stop the merge and leave
+// every file as it was — never read as "that side has no version".
+describe('GitTransport conflict resolution never guesses on a failed read', () => {
+  async function conflicted() {
+    const h = await makeHarness();
+    const a = await h.makeDeviceSpace();
+    fs.writeFileSync(path.join(a.root, 'notes.md'), 'base');
+    await h.transport.push(a, 'base');
+    const b = await h.makeDeviceSpace();
+    await h.transport.pull(b);
+    fs.writeFileSync(path.join(a.root, 'notes.md'), 'from a');
+    await h.transport.push(a, 'a');
+    fs.writeFileSync(path.join(b.root, 'notes.md'), 'from b');
+    return { h, a, b };
+  }
+  const proto = GitTransport.prototype as any;
+
+  it("a failed read of this device's version aborts, then the retry keeps it as a copy", async () => {
+    const { h, b } = await conflicted();
+    try {
+      const spy = vi.spyOn(proto, 'showStage').mockRejectedValueOnce(new Error('injected: git show timed out'));
+      await expect(h.transport.pull(b)).rejects.toThrow();
+      spy.mockRestore();
+      expect(fs.readFileSync(path.join(b.root, 'notes.md'), 'utf8')).toBe('from b');
+      const r = await h.transport.pull(b);
+      expect(fs.readFileSync(path.join(b.root, 'notes.md'), 'utf8')).toBe('from a');
+      expect(r.conflictCopies).toHaveLength(1);
+      expect(fs.readFileSync(path.join(b.root, r.conflictCopies[0]), 'utf8')).toBe('from b');
+    } finally { vi.restoreAllMocks(); await h.cleanup(); }
+  });
+
+  it('a failed stage listing never becomes a pushed deletion', async () => {
+    const { h, a, b } = await conflicted();
+    try {
+      const git = proto.git;
+      vi.spyOn(proto, 'git').mockImplementation(function (this: unknown, space: SyncSpace, args: string[]) {
+        const stageRead = (args[0] === 'ls-files' && args.includes('-u')) || (args[0] === 'cat-file' && String(args[2]).startsWith(':3:'));
+        if (stageRead) return Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: injected read failure', tokenUsed: false });
+        return git.call(this, space, args);
+      });
+      await expect(h.transport.pull(b)).rejects.toThrow();
+      vi.restoreAllMocks();
+      expect(fs.readFileSync(path.join(b.root, 'notes.md'), 'utf8')).toBe('from b');
+      await h.transport.pull(b);
+      await h.transport.push(b, 'b');
+      await h.transport.pull(a);
+      expect(fs.readFileSync(path.join(a.root, 'notes.md'), 'utf8')).toBe('from a');
+    } finally { vi.restoreAllMocks(); await h.cleanup(); }
+  });
+});

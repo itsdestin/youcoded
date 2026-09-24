@@ -313,17 +313,15 @@ export class GitTransport implements SyncTransport {
    *  checkout --theirs overwrite the file — if this buffer were smaller than
    *  the sync size cap, a big-but-legal local edit would come back null and be
    *  silently DROPPED with no conflict copy. */
-  private async showStage(space: SyncSpace, stage: 2 | 3, rel: string): Promise<Buffer | null> {
+  /** Throws on failure: the caller checked the stage exists, so a failed read
+   *  is an error, never "no version" (that dropped the conflict copy). */
+  private async showStage(space: SyncSpace, stage: 2 | 3, rel: string): Promise<Buffer> {
     const env = { ...process.env, GIT_DIR: this.gitDir(space), GIT_WORK_TREE: space.root };
-    try {
-      const { stdout } = await execFileAsync('git', ['show', `:${stage}:${rel}`], {
-        cwd: space.root, env, timeout: GIT_TIMEOUT,
-        encoding: 'buffer', maxBuffer: this.maxFileBytes + 1024 * 1024,
-      });
-      return stdout as unknown as Buffer;
-    } catch {
-      return null;
-    }
+    const { stdout } = await execFileAsync('git', ['show', `:${stage}:${rel}`], {
+      cwd: space.root, env, timeout: GIT_TIMEOUT,
+      encoding: 'buffer', maxBuffer: this.maxFileBytes + 1024 * 1024,
+    });
+    return stdout as unknown as Buffer;
   }
 
   async init(space: SyncSpace): Promise<void> {
@@ -710,31 +708,47 @@ export class GitTransport implements SyncTransport {
     if (merge.code === 0) return { updated: true, conflictCopies: [], contacted };
 
     // Conflicts: resolve each convergently.
-    const conflicted = (await this.git(space, ['diff', '--name-only', '--diff-filter=U', '-z'])).stdout
-      .split('\0').filter(Boolean);
     const copies: string[] = [];
-    for (const rel of conflicted) {
-      // Stage 2 = ours (this device), stage 3 = theirs (remote). Content is
-      // read as raw bytes via showStage so binary and >1MB files survive the
-      // copy intact (utf8 strings would corrupt bytes; Node's 1MB default
-      // buffer would reject big files and silently skip the copy).
-      const ours = await this.showStage(space, 2, rel);
-      if (ours !== null) {
-        const copyRel = this.freeCopyName(space, rel);
-        await fs.promises.mkdir(path.dirname(path.join(space.root, copyRel)), { recursive: true });
-        await fs.promises.writeFile(path.join(space.root, copyRel), ours);
-        await this.git(space, ['add', copyRel]);
-        copies.push(copyRel);
+    try {
+      const list = await this.git(space, ['diff', '--name-only', '--diff-filter=U', '-z']);
+      this.assertLocalOk(space, 'diff', list);
+      for (const rel of list.stdout.split('\0').filter(Boolean)) {
+        // WHY: which sides have a version comes from the index in one checked
+        // read. A failed probe used to mean "remote deleted it" (a deletion
+        // pushed to every device) or "nothing of ours" (our copy dropped).
+        const staged = await this.git(space, ['ls-files', '-u', '-z', '--', rel]);
+        this.assertLocalOk(space, 'ls-files', staged);
+        const sides = new Set(staged.stdout.split('\0').filter(Boolean).map((e) => e.split(/\s+/)[2]));
+        if (sides.size === 0) throw new Error(`no conflict stages listed for ${rel}`);
+        // Stage 2 = ours (this device), stage 3 = theirs (remote). Content is
+        // read as raw bytes via showStage so binary and >1MB files survive the
+        // copy intact (utf8 strings would corrupt bytes; Node's 1MB default
+        // buffer would reject big files).
+        if (sides.has('2')) {
+          const ours = await this.showStage(space, 2, rel);
+          const copyRel = this.freeCopyName(space, rel);
+          await fs.promises.mkdir(path.dirname(path.join(space.root, copyRel)), { recursive: true });
+          await fs.promises.writeFile(path.join(space.root, copyRel), ours);
+          this.assertLocalOk(space, 'add', await this.git(space, ['add', '--', copyRel]));
+          copies.push(copyRel);
+        }
+        if (sides.has('3')) {
+          // git writes theirs itself, so the canonical stays byte-faithful.
+          this.assertLocalOk(space, 'checkout', await this.git(space, ['checkout', '--theirs', '--', rel]));
+          this.assertLocalOk(space, 'add', await this.git(space, ['add', '--', rel]));
+        } else {
+          // Deleted remotely → deletion wins canonical (ours survives as the copy).
+          this.assertLocalOk(space, 'rm', await this.git(space, ['rm', '--force', '--', rel]));
+        }
       }
-      // Cheap existence probe — the canonical restore stays checkout --theirs
-      // (git writes the content itself, so it's already byte-faithful).
-      const theirs = await this.git(space, ['cat-file', '-e', `:3:${rel}`]);
-      if (theirs.code === 0) {
-        await this.git(space, ['checkout', '--theirs', '--', rel]);
-        await this.git(space, ['add', rel]);
-      } else {
-        await this.git(space, ['rm', '--force', '--', rel]); // deleted remotely → deletion wins canonical
-      }
+    } catch (e) {
+      // WHY: a half-resolved merge leaves conflict markers in the user's files.
+      // Abort restores the pre-merge tree; the next sync retries from clean.
+      // Copies written so far are removed too — the retry writes them again,
+      // and leaving them would pile up duplicates.
+      await this.git(space, ['merge', '--abort']);
+      for (const c of copies) await fs.promises.rm(path.join(space.root, c), { force: true });
+      throw e;
     }
     const commit = await this.git(space, ['commit', '--no-edit']);
     if (commit.code !== 0) {
