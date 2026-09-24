@@ -101,6 +101,10 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // both rows when main + preload + remote-shim carry the real channels.
   { channel: 'session.reopenList', feature: 'Welcome back — sessions open at last shutdown' },
   { channel: 'session.forgetReopen', feature: 'Welcome back — sessions open at last shutdown' },
+  // Welcome back's in-app quit warning (S-dialog): main asks the renderer instead
+  // of showing an OS dialog. Delete when main/preload carry the real pair.
+  { channel: 'window.onCloseRequest', feature: 'Welcome back — in-app quit warning' },
+  { channel: 'window.answerClose', feature: 'Welcome back — in-app quit warning' },
   // Pages Phase 2 (2026-09-19): the approval screen, the band's "Updated" line, a card's
   // connections and the saved keys under Connected services were designed here first, and the
   // five `pages.*` rows came off on 2026-09-20 when the real channels landed — the manifest's

@@ -77,6 +77,7 @@ import TrustGate, { useTrustGateActive } from './components/TrustGate';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
+import QuitSessionsPrompt from './components/QuitSessionsPrompt';
 import { fetchReopenList, forgetReopenList, resolveNativeBinding, claudeModelFor } from './state/welcome-back';
 import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
 import PreferencesPopup from './components/PreferencesPopup';
@@ -3535,6 +3536,19 @@ function AppInner() {
     ? { ids: welcomeBackIds, onResumeMany: welcomeBackResumeMany, onDone: welcomeBackDone }
     : undefined), [welcomeBackIds, welcomeBackResumeMany, welcomeBackDone]);
 
+  // The in-app quit warning (Welcome back S-dialog). Main asks when a window
+  // that still owns sessions is closed; the answer says whether to close and
+  // whether those sessions come back next launch.
+  const [quitPrompt, setQuitPrompt] = useState<{ sessions: number } | null>(null);
+  useEffect(() => {
+    const api = (window.claude as any).window;
+    return api?.onCloseRequest?.((req: { sessions: number }) => setQuitPrompt(req)) ?? undefined;
+  }, []);
+  const answerClose = useCallback((answer: { close: boolean; reopen?: boolean }) => {
+    setQuitPrompt(null);
+    (window.claude as any).window?.answerClose?.(answer);
+  }, []);
+
   const autoOpenedWelcome = useRef(false);
   useEffect(() => {
     // Not while a phone is still catching up: the screen it would open over is about to fill
@@ -4396,6 +4410,13 @@ function AppInner() {
       {skipWarning}
       {smallModelWarning}
       {fullAutoWarning}
+      {quitPrompt && (
+        <QuitSessionsPrompt
+          count={quitPrompt.sessions}
+          onCancel={() => answerClose({ close: false })}
+          onConfirm={(reopen) => answerClose({ close: true, reopen })}
+        />
+      )}
       {/* Welcome back: its own instance, so the everyday Resume browser keeps
           its search/filter state and open/close behaviour untouched. */}
       {welcomeBackMode && (

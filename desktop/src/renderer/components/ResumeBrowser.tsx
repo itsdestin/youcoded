@@ -296,6 +296,11 @@ const WARM_AFTER_MS = 150;
 // that touchpad jitter at rest moves nothing.
 const TUCK_MIN_PX = 6;
 
+// Review round 2 draws three footers for Destin to choose between (L-1:
+// "i don't like the styling of the start fresh/resume all buttons"). The losing
+// two are deleted once he picks.
+const WB_FOOTER = 'stacked' as 'stacked' | 'pair' | 'link';
+
 type RowActions = {
   select: (s: PastSession) => void;
   toggleFlag: (sessionId: string, flag: FlagName, next: boolean) => unknown;
@@ -798,6 +803,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     return () => { alive = false; };
   }, [wb, loadedOnce, sessions]);
   const tickedRows = wb ? filtered.filter((s) => ticked.has(s.sessionId)) : [];
+  const resumeLabel = resumingMany ? 'Reopening…'
+    : tickedRows.length === 0 ? 'Resume'
+    : tickedRows.length === filtered.length && filtered.length > 1 ? `Resume all ${tickedRows.length}`
+    : `Resume ${tickedRows.length}`;
   // Nothing left to choose from: the screen has done its job.
   useEffect(() => {
     if (wb && tickSeeded.current && !loading && filtered.length === 0) wb.onDone();
@@ -1306,7 +1315,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
             disabled={!canResume}
             onChange={(next) => setTick(s.sessionId, next)}
             aria-label={`Reopen ${s.name}`}
-            className="mr-2"
+            // 14px box + 10px = 24px, which pl-9 below adds back under the
+            // name (12px card padding + 24px = 36px), so the tags and the
+            // folder line sit under the name, not the box (review 1, L-1).
+            className="mr-2.5"
           />
         )}
         {namingApi() ? <Button variant="ghost" size="sm"
@@ -1346,7 +1358,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         // text, and R12 moved it into the rename control above. Without this the
         // resume control announces nothing but its metadata line.
         aria-label={s.name}
-        className={`w-full text-left px-3 pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+        className={`w-full text-left px-3 ${wb && !clone ? 'pl-9 ' : ''}pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
           inert ? 'text-fg-dim cursor-default' : isSelected ? 'text-fg' : 'text-fg-dim'
         }`}
       >
@@ -1846,17 +1858,24 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               ticked row. The count is in the button so it says exactly what
               one press will do. */}
           {wb && (
-            <div className="shrink-0 relative px-4 py-3 flex flex-wrap items-center justify-end gap-2">
+            <div className={`shrink-0 relative px-4 py-3 ${WB_FOOTER === 'stacked' || WB_FOOTER === 'link' ? 'flex flex-col gap-2' : 'flex items-center gap-2'}`}>
               <div
                 aria-hidden
                 className="absolute inset-x-0 top-0 h-px"
                 style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
               />
-
-              <Button variant="ghost" size="md" onClick={wb.onDone} disabled={resumingMany}>Start fresh</Button>
-              <Button variant="primary" size="md" onClick={resumeTicked} disabled={tickedRows.length === 0 || resumingMany}>
-                {resumingMany ? 'Reopening…' : tickedRows.length === 0 ? 'Resume' : `Resume ${tickedRows.length === filtered.length && filtered.length > 1 ? 'all ' : ''}${tickedRows.length}`}
-              </Button>
+              {WB_FOOTER === 'stacked' && (<>
+                <Button variant="primary" className="w-full py-2.5" onClick={resumeTicked} disabled={tickedRows.length === 0 || resumingMany}>{resumeLabel}</Button>
+                <Button variant="secondary" className="w-full py-2.5" onClick={wb.onDone} disabled={resumingMany}>Start fresh</Button>
+              </>)}
+              {WB_FOOTER === 'pair' && (<>
+                <Button variant="secondary" className="flex-1 py-2.5" onClick={wb.onDone} disabled={resumingMany}>Start fresh</Button>
+                <Button variant="primary" className="flex-1 py-2.5" onClick={resumeTicked} disabled={tickedRows.length === 0 || resumingMany}>{resumeLabel}</Button>
+              </>)}
+              {WB_FOOTER === 'link' && (<>
+                <Button variant="primary" className="w-full py-2.5" onClick={resumeTicked} disabled={tickedRows.length === 0 || resumingMany}>{resumeLabel}</Button>
+                <Button variant="ghost" size="sm" className="self-center" onClick={wb.onDone} disabled={resumingMany}>Start fresh instead</Button>
+              </>)}
             </div>
           )}
           </div>
