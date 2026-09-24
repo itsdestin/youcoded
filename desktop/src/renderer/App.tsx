@@ -3884,7 +3884,7 @@ function AppInner() {
             {/* Always mounted so draft text survives chat↔terminal switches.
                inert disables focus/keyboard/paste when hidden so keystrokes
                reach xterm instead of the buried textarea. */}
-              <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
+              <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : isTerminalTouch ? ' bottom-docked' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
                 {/* A shell session draws NONE of the bottom chrome: no composer
                     (there is nothing to send a message to), and so no Stop
                     button, no model chip and no way into the model picker — all
