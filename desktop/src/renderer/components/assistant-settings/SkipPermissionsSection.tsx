@@ -80,15 +80,21 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
             </span>
             <span className="text-fg">I understand, and I use Skip Permissions at my own risk.</span>
           </div>
-          <div className="flex gap-2 justify-end pt-1">
-            <Button variant="secondary" onClick={close}>Cancel</Button>
+          {/* WHY stacked, danger on top (fix batch 1, 2026-09-24): this is a
+              `size="prompt"` (340px) dialog — a NARROW popup, so two buttons
+              stack full width with the main action (here the destructive
+              confirm) on top, per the design guide's button-placement rule.
+              Was side by side, hugging the right edge — the wide-popup shape. */}
+          <div className="flex flex-col gap-2 pt-1">
             <Button
               variant="danger"
               disabled={!accepted}
               onClick={() => { onDefaultsChange({ skipPermissions: true }); close(); }}
+              className="w-full"
             >
               Turn it on
             </Button>
+            <Button variant="secondary" onClick={close} className="w-full">Cancel</Button>
           </div>
         </div>
       </Dialog>

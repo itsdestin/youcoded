@@ -15,7 +15,7 @@ import SkipPermissionsSection, { type PermissionOverrides } from './SkipPermissi
 import FolderSwitcher from '../FolderSwitcher';
 import SessionNaming from './SessionNaming';
 import SavedContextSettings from './SavedContextSettings';
-import { Button, FieldError, SettingRow, Toggle, TypeableSelect } from '../ui';
+import { Button, FieldError, FieldRow, SettingRow, Toggle, TypeableSelect } from '../ui';
 
 // The pages of Assistant settings. Five, in one flat list (review round 1,
 // 2026-09-05 — P-5 note: one "Cloud providers" page for the three sign-in /
@@ -111,21 +111,11 @@ export function startSummary(defaults: AssistantDefaults, labels?: Map<string, {
   return known ? `${known.provider} · ${known.model}` : c.modelId;
 }
 
-/** Title + hint + a full-width control, the shape both dropdown rows share
- *  (round 2, R2-1: "default model and default project folder should both have
- *  correctly styled dropdowns"; R2-2: the project folder gets the same hint
- *  line the model row has). */
-function FieldRow({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-inset/50 rounded-lg px-3 py-2.5 space-y-1.5">
-      <div>
-        <p className="text-xs font-medium text-fg">{title}</p>
-        <p className="text-3xs text-fg-muted">{hint}</p>
-      </div>
-      {children}
-    </div>
-  );
-}
+// WHY: FieldRow (title + hint + a full-width control, the shape both dropdown
+// rows share — round 2, R2-1/R2-2) is now the shared `components/ui/FieldRow`
+// primitive (fix batch 1, 2026-09-24, design guide settings-anatomy#SA-1) —
+// promoted rather than redefined here so every wide control across Assistant
+// settings reaches for one definition.
 
 function ProjectFolderRow({ defaults, onDefaultsChange }: PageContext) {
   // Round 3 (R3-1): "project picker should look like it does in the new session
@@ -265,8 +255,11 @@ function GeneralPage(ctx: PageContext) {
   );
 
   return (
-    <div className="space-y-5">
-      <section className="space-y-2">
+    // WHY space-y-4/space-y-1.5: design guide "Settings" → Spacing (16px
+    // between groups, 6px between rows), decisions.md SA-4 — was space-y-5/
+    // space-y-2 (20px/8px).
+    <div className="space-y-4">
+      <section className="space-y-1.5">
         {/* Q-3a: the same picker the chat uses, so any connected model can be
             the default. Title and hint are Destin's words from round 1 (P-3
             note). */}
@@ -381,15 +374,18 @@ export const PAGES: PageDef[] = [
     icon: <Icon><path d="M12 3l7 3v5.5c0 4.3-2.9 8.1-7 9.5-4.1-1.4-7-5.2-7-9.5V6l7-3z" /><path d="M9 12l2 2 4-4" /></Icon>,
     // Two blocks (questions deck Q-2 option a, chosen in round 1's P-5 note):
     // Claude Code's switch first, then the modes and Always-allow list that
-    // cover every other provider — labelled so the two systems are not
-    // mistaken for one.
+    // cover every other provider.
+    //
+    // WHY no wrapping "ChatGPT, OpenRouter and local models" label any more
+    // (fix batch 1, 2026-09-24): it sat directly above PermissionsSection's
+    // OWN "Permission modes" label with nothing between them — two eyebrows
+    // back to back read as a mistake (settings-screens.md audit, candidate
+    // rule 4: "a section never gets two eyebrows"). PermissionsSection's own
+    // label is the more specific one and stays; the wrapper's was redundant.
     render: (ctx) => (
-      <div className="space-y-5">
+      <div className="space-y-4">
         <SkipPermissionsSection defaults={ctx.defaults} onDefaultsChange={ctx.onDefaultsChange} />
-        <section>
-          <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">ChatGPT, OpenRouter and local models</h3>
-          <PermissionsSection />
-        </section>
+        <PermissionsSection />
       </div>
     ),
   },

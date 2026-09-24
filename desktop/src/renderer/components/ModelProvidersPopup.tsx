@@ -7,7 +7,7 @@ import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealt
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
-import { AnchorTip, Button, Dialog, InputGroup, TextInput } from './ui';
+import { AnchorTip, Button, Dialog, InputGroup, SectionLabel, TextInput } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
@@ -26,8 +26,11 @@ function SectionHeader({ title, info }: { title: string; info: { label: string; 
   return (
     <div className="flex items-center gap-1.5 mb-2.5">
       {/* K1: was the app's only text-sm/font-semibold section header, which read
-          as a second dialog title rather than a section label. */}
-      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">{title}</h3>
+          as a second dialog title rather than a section label.
+          WHY SectionLabel (fix batch 1, 2026-09-24): design guide "Headings" →
+          Small label — normal case, no letter-spacing, replacing the old
+          hand-typed uppercase/tracking-wider eyebrow. */}
+      <SectionLabel>{title}</SectionLabel>
       <AnchorTip label={info.label} title={title}>{info.body}</AnchorTip>
     </div>
   );
@@ -636,7 +639,7 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
           `keysHeading`: the Assistant settings page names the list, because
           there the OpenRouter card is the only thing above it. */}
       {keysHeading && (
-        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mt-4 mb-2">{keysHeading}</h3>
+        <SectionLabel className="mt-4 mb-2">{keysHeading}</SectionLabel>
       )}
       <ProvidersSection embedded="cloud" />
 
@@ -744,18 +747,20 @@ function ConnectOpenRouterModal({
             <p className={`text-3xs ${note.tone === 'ok' ? 'text-green-400' : 'text-red-500'}`}>{note.text}</p>
           )}
 
-          <div className="flex gap-2 pt-1">
-            {/* Popup footer pair — md is the footer size; only the flex-1 stretch
-                and the taller py-2 are genuine layout extras. */}
-            <Button variant="secondary" onClick={onClose} className="flex-1 py-2">
-              Cancel
-            </Button>
+          {/* WHY stacked, filled on top (fix batch 1, 2026-09-24): this is a
+              `size="prompt"` (340px) dialog — a NARROW popup by the design
+              guide's own line (≤420px stacks; decisions.md button-placement
+              rule). Was a side-by-side flex-1 pair, the wide-popup shape. */}
+          <div className="flex flex-col gap-2 pt-1">
             <Button
               onClick={() => void save()}
               disabled={busy || keyDraft.trim().length === 0}
-              className="flex-1 py-2"
+              className="w-full py-2"
             >
               {busy ? 'Connecting…' : 'Connect'}
+            </Button>
+            <Button variant="secondary" onClick={onClose} className="w-full py-2">
+              Cancel
             </Button>
           </div>
         </div>

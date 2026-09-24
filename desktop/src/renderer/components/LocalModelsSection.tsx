@@ -11,7 +11,7 @@
 // consequence-gated destructive actions.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import EngineCard from './EngineCard';
-import { Button, FieldError, InputGroup, ProgressBar, Callout, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog } from './ui';
+import { Button, FieldError, InputGroup, ProgressBar, Callout, ErrorState, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog, SectionLabel } from './ui';
 import type {
   CuratedModel, QuantOption, FitEstimate, DownloadProgress,
   InstalledLocalModel, DetectedEndpoint, HFSearchHit, ModelSettingsWrite, StoredModelSettings,
@@ -205,13 +205,14 @@ function DownloadProgressRow({ dl }: { dl: DownloadProgress }) {
         </p>
         {/* "Pause", not "Cancel": stopping keeps every downloaded byte, and the
             row below uses the same word for the same action (Destin, 2026-08-27).
-            No longer red — pausing destroys nothing. */}
-        <button
-          onClick={() => void window.claude.models.downloadCancel(dl.downloadId)}
-          className="text-3xs font-medium text-fg-muted hover:text-fg hover:underline"
-        >
+            No longer red — pausing destroys nothing.
+            WHY a real Button, not the old underlined text link (fix batch 1
+            addendum, 2026-09-24): a paused/resumed download's own action is
+            never bare text — matches LocalModelRow's installed-row Pause,
+            which already used a proper Button. */}
+        <Button variant="ghost" size="sm" onClick={() => void window.claude.models.downloadCancel(dl.downloadId)}>
           Pause
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -327,7 +328,9 @@ function ModelBrowser({
           {/* Installed (+ in-progress) */}
           {installedFiltered.length > 0 && (
             <div className="space-y-2">
-              <p className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Installed</p>
+              {/* WHY SectionLabel (fix batch 1, 2026-09-24): design guide small
+                  label — normal case, no letter-spacing. */}
+              <SectionLabel>Installed</SectionLabel>
               {installedFiltered.map((m) => (
                 <LocalModelRow key={m.id} model={m} progress={progressFor(m)} onRefresh={onRefreshInstalled} />
               ))}
@@ -337,9 +340,7 @@ function ModelBrowser({
           {/* Recommended (label changes to "matches" while filtering) */}
           {curatedFiltered.length > 0 && (
             <div className="space-y-2">
-              <p className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
-                {q ? 'Recommended matches' : 'Recommended'}
-              </p>
+              <SectionLabel>{q ? 'Recommended matches' : 'Recommended'}</SectionLabel>
               {curatedFiltered.map((m) => (
                 <RepoCard
                   key={m.id}
@@ -360,7 +361,7 @@ function ModelBrowser({
           {/* Hugging Face — only while actively searching */}
           {searching && (
             <div className="space-y-2">
-              <p className="text-3xs font-medium text-fg-muted tracking-wider uppercase">More on Hugging Face</p>
+              <SectionLabel>More on Hugging Face</SectionLabel>
               {hfState === 'loading' && <p className="text-2xs text-fg-muted px-1">Searching Hugging Face…</p>}
               {hfState === 'error' && <FieldError as="p" size="2xs" className="px-1">Couldn't reach Hugging Face.</FieldError>}
               {hfState === 'idle' && hfFiltered.length === 0 && (
@@ -513,16 +514,24 @@ export function RepoCard({
         )}
       </div>
       {dl && <DownloadProgressRow dl={dl} />}
-      {dlError && <FieldError as="p" className="mt-1">{dlError}</FieldError>}
+      {/* WHY Callout, not a bare red line (fix batch 1 addendum, 2026-09-24):
+          explanatory failure text is the shared tinted box; the Download
+          button just above is already the retry action, so no second one is
+          added here. */}
+      {dlError && <Callout tone="danger" className="mt-1.5">{dlError}</Callout>}
 
       {/* Expanded: the full quant list. */}
       {expanded && (
         <div className="mt-2 pl-5">
           {loadState === 'loading' && <p className="text-3xs text-fg-muted px-1">Loading versions…</p>}
+          {/* WHY ErrorState, not an underlined text link (fix batch 1
+              addendum, 2026-09-24): Retry is a real button, never bare text. */}
           {loadState === 'error' && (
-            <button onClick={() => void loadQuants()} className="text-3xs text-amber-700 hover:underline px-1">
-              Couldn't reach Hugging Face — tap to retry
-            </button>
+            <ErrorState
+              variant="inline"
+              message="Couldn't reach Hugging Face."
+              onRetry={() => void loadQuants()}
+            />
           )}
           {quants !== null && loadState !== 'loading' && (
             <div className="space-y-1.5">
@@ -828,7 +837,13 @@ export function LocalModelRow({
             WebkitMaskPosition: MASK.position, maskPosition: MASK.position,
             WebkitMaskRepeat: MASK.repeat, maskRepeat: MASK.repeat,
           }}
-          className={`px-3 pt-px text-4xs leading-none font-medium tracking-wider uppercase text-center ${banner.strip}`}
+          // WHY normal case (fix batch 1 addendum, 2026-09-24 — Destin: local
+          // model download labels should match the rest of the app): the
+          // solid-fill/black-text geometry above stays exactly as measured
+          // (it already puts the status colour in the tint, not the text) —
+          // only the letter-spacing/uppercase, which the design guide retires
+          // everywhere, is dropped.
+          className={`px-3 pt-px text-4xs leading-none font-medium text-center ${banner.strip}`}
         >
           {banner.text}
         </div>
@@ -946,7 +961,12 @@ export function LocalModelRow({
             </div>
           </div>
         )}
-        {error && <FieldError as="p" className="mt-1">{error}</FieldError>}
+        {/* WHY Callout, not a bare red line (fix batch 1 addendum, 2026-09-24):
+            explanatory failure text is the shared tinted box. No separate
+            Retry button is added — the Resume/Delete/Add vision control that
+            triggered this error is already visible on the row above, and is
+            the retry action. */}
+        {error && <Callout tone="danger" className="mt-1.5">{error}</Callout>}
 
         {/* Round 2 P-14 (Destin): the settings open in a small dialog on its own layer,
             not inline under the row. */}
@@ -1321,7 +1341,10 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
         )}
       </div>
       {dl && <DownloadProgressRow dl={dl} />}
-      {dlError && <FieldError as="p" className="mt-1">{dlError}</FieldError>}
+      {/* WHY Callout (fix batch 1 addendum, 2026-09-24): same reasoning as the
+          repo card's own start-download failure above — the Download button
+          right there is the retry action. */}
+      {dlError && <Callout tone="danger" className="mt-1.5">{dlError}</Callout>}
     </div>
   );
 }

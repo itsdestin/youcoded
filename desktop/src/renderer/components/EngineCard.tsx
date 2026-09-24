@@ -454,7 +454,11 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
       {busy && (progress?.kind === 'verify' || progress?.kind === 'unpack') && (
         <p className="mt-2 text-3xs text-fg-dim">{progress.kind === 'verify' ? 'Verifying download…' : 'Unpacking…'}</p>
       )}
-      {error && <FieldError as="p" className="mt-2">{error}</FieldError>}
+      {/* WHY Callout, not a bare red line (fix batch 1 addendum, 2026-09-24):
+          explanatory failure text is the shared tinted box; the Install/
+          Restart/Switch button that triggered this is already visible above
+          and is the retry action. */}
+      {error && <Callout tone="danger" className="mt-2">{error}</Callout>}
       {/* Say WHY the button is there. "A newer engine is available" alone tells a
           non-developer nothing about whether they need it. */}
       {updateAvailable && !busy && (
@@ -635,7 +639,9 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
                   go: the setting was saved and the call already answered "yes"
                   long before applying it went wrong, so without this line the
                   change silently never lands. */}
-              {status.configApplyError && <FieldError as="p">{status.configApplyError}</FieldError>}
+              {/* WHY Callout (fix batch 1 addendum, 2026-09-24): same reasoning
+                  as the card-level error above. */}
+              {status.configApplyError && <Callout tone="danger">{status.configApplyError}</Callout>}
 
               {/* The optional engine builds (ROCm). Deliberately down HERE, inside
                   a section that is shut by default, rather than in the card body

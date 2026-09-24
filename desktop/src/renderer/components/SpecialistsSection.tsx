@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { SpecialistDefinitionView, DelegatedModelsView, SpecialistsListResult } from '../../shared/types';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
-import { Button, EmptyState, ErrorState, FieldError, LoadingState } from './ui';
+import { Button, EmptyState, ErrorState, FieldError, LoadingState, SectionLabel } from './ui';
 import type { ExplainerSection } from './SettingsExplainer';
 import { refreshSpecialistRoster, useSpecialistRoster, provenanceWithinGroup, NOT_IMPLEMENTED_ON_MOBILE } from '../hooks/useSpecialists';
 import { AUTOMATIC_SPECIALIST_MODEL_COPY, SPECIALIST_DEFAULTS_CHANGED_EVENT } from './SpecialistModelUnavailable';
@@ -15,7 +15,9 @@ import { AUTOMATIC_SPECIALIST_MODEL_COPY, SPECIALIST_DEFAULTS_CHANGED_EVENT } fr
 // VISIBLE warning, never a silent edit). No editor: that is later marketplace
 // work; the folder is opened for you instead.
 
-const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
+// WHY: the local SECTION_LABEL class string is retired here in favour of the
+// shared `<SectionLabel>` primitive (fix batch 1, 2026-09-24 — design guide
+// small label: normal case, no letter-spacing).
 
 // Task 10: group labels per the approved design. A project's OWN
 // .claude/agents/ file gets the same 'claude-code' source as the user-level
@@ -200,7 +202,7 @@ export default function SpecialistsSection({ cwd }: {
       </p>
 
       <div>
-        <h3 className={SECTION_LABEL}>Specialist intelligence tiers</h3>
+        <SectionLabel className="mb-2">Specialist intelligence tiers</SectionLabel>
         {/* Destin (workbench pass): the intro paragraph is GONE, wrapper and
             all — not just emptied, or the box would keep its padding and read
             as a blank gap. The heading plus each row's own hint carry it; the
@@ -255,10 +257,10 @@ export default function SpecialistsSection({ cwd }: {
 
       {/* ── 2. The roster ─────────────────────────────────────────────────── */}
       <div>
-        <h3 className={SECTION_LABEL}>
+        <SectionLabel className="mb-2">
           Available specialists{roster.status === 'ready' ? ` · ${definitions.length}` : ''}
           {warningCount ? ` · ${warningCount} warning${warningCount === 1 ? '' : 's'}` : ''}
-        </h3>
+        </SectionLabel>
         {/* Fix (UX review 1, U27): an empty padded div sat here above the first
             group and read as a missing row; the first group's top border now
             starts the card. */}
@@ -278,13 +280,14 @@ export default function SpecialistsSection({ cwd }: {
           ) : (
             SOURCE_ORDER.filter(src => bySource.has(src) || skippedFor(src).length > 0).map(src => (
               <div key={src} className="border-t border-edge-dim">
-                {/* Fix: was "uppercase tracking-wider" — the same four classes
-                    in a non-canonical order (ast-grep rule
-                    section-label-canonical-classes, youcoded-dev/scripts/ast-grep/rules/;
-                    K1 tranche 1). Pre-existing on this branch; fixed while
-                    Task 10 already had this file open for the group-label
-                    rewrite. */}
-                <div className="px-3 pt-2 pb-1 text-3xs font-medium text-fg-muted tracking-wider uppercase">{SOURCE_LABEL[src]}</div>
+                {/* WHY SectionLabel, not the old eyebrow class (fix batch 1,
+                    2026-09-24): design guide small label — normal case, no
+                    letter-spacing. Was `text-3xs ... tracking-wider uppercase`.
+                    Padding on the wrapper: SectionLabel owns only margin
+                    (design-lint no-restyle). */}
+                <div className="px-3 pt-2 pb-1">
+                  <SectionLabel>{SOURCE_LABEL[src]}</SectionLabel>
+                </div>
                 <ul className="pb-1">
                   {(bySource.get(src) ?? []).map(d => <RosterRow key={`${d.source}-${d.id}`} d={d} folders={folders} />)}
                   {skippedFor(src).map(s => <SkippedRow key={s.path} s={s} />)}

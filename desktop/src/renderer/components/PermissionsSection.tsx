@@ -6,6 +6,7 @@ import {
   FieldError,
   FOCUS_RING,
   LoadingState,
+  SectionLabel,
   SettingRow,
   SETTING_ROW_BASE,
 } from './ui';
@@ -126,8 +127,10 @@ import type {
 // looks responsive. Long text truncates or wraps instead.
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** The one canonical section-label spelling (ast-grep rule section-label-canonical-classes, youcoded-dev/scripts/ast-grep/rules/). */
-const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
+// WHY: the local SECTION_LABEL class string (ast-grep rule
+// section-label-canonical-classes, youcoded-dev/scripts/ast-grep/rules/) is
+// retired here in favour of the shared `<SectionLabel>` primitive (fix batch
+// 1, 2026-09-24 — design guide small label: normal case, no letter-spacing).
 
 /**
  * The folder card's top band.
@@ -404,7 +407,7 @@ export default function PermissionsSection() {
             the (i) reads as the long version of what is on screen. */}
         {/* Destin's 2026-08-26/27 copy review: the label is a name, not a
             sentence — the card underneath already does the explaining. */}
-        <h3 className={SECTION_LABEL}>Permission modes</h3>
+        <SectionLabel className="mb-2">Permission modes</SectionLabel>
         <div className="rounded-lg bg-inset/50">
           <div className="px-3 py-2.5 space-y-2">
             {MODES.map((m) => (
@@ -452,7 +455,7 @@ export default function PermissionsSection() {
 
       {/* ── 2. What you already waved through ─────────────────────────────── */}
       <div>
-        <h3 className={SECTION_LABEL}>Always allowed</h3>
+        <SectionLabel className="mb-2">Always allowed</SectionLabel>
 
         {/* What "Always allow" actually buys you differs per mode, and the
             difference is not obvious — so it is stated rather than left to be
@@ -737,7 +740,13 @@ function KindGroup({
           is authored copy that classifies the rows under it, unlike the folder
           name above, which is data. px-3 puts it on the same left edge as the
           row titles beneath it. */}
-      <h3 className={`${SECTION_LABEL} px-3`}>{RULE_KIND_LABEL[kind]}</h3>
+      {/* Padding on a wrapper, not on SectionLabel — the primitive owns only
+          margin/layout (design-lint no-restyle: "SectionLabel owns its
+          spacing"), so px-3 moves here to keep this label at the same left
+          edge as the row titles beneath it. */}
+      <div className="px-3">
+        <SectionLabel className="mb-2">{RULE_KIND_LABEL[kind]}</SectionLabel>
+      </div>
       <div className="space-y-1">
         {visible.map((rule) => (
           <RuleRow key={ruleKey(rule)} slug={slug} rule={rule} onChanged={onChanged} />
