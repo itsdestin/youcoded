@@ -1,0 +1,10 @@
+[
+  { "label": "Qwen 3.6 35B A3B", "modelId": "qwen/qwen3.6-35b-a3b", "contextLength": 262144 },
+  { "label": "Qwen 3.6 27B", "modelId": "qwen/qwen3.6-27b", "contextLength": 262144 },
+  { "label": "Qwen 3.5 122B A10B", "modelId": "qwen/qwen3.5-122b-a10b", "contextLength": 262144 },
+  { "label": "Qwen 3.8 Max", "modelId": "qwen/qwen3.8-max", "contextLength": 1000000 },
+  { "label": "Deepseek v4 flash 0731", "modelId": "deepseek/deepseek-v4-flash-0731", "contextLength": 1048576 },
+  { "label": "Grok 4.5", "modelId": "x-ai/grok-4.5", "contextLength": 500000 },
+  { "label": "GPT 5.6 Luna", "modelId": "openai/gpt-5.6-luna", "contextLength": 1050000 },
+  { "label": "Claude Opus 5", "modelId": "anthropic/claude-opus-5", "contextLength": 1000000 }
+]

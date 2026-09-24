@@ -189,7 +189,7 @@ it appended each model's free-form prose review to
 2026-09-23.** It still took its key from the environment and leaked it to the models
 it ran (ROADMAP → Bugs). Its prose review is not lost: run the `harness-battery` case
 through `harness-eval.mjs` above — same battery, same model prose, captured in that
-run's own `report-<plan>.md` instead of appended to the one long-lived doc.
+run's own `report-<plan>.md` instead of appended to the one long-lived doc. (`review-roster.json`, the model list it used, stays: `harness-eval.mjs` reads it.)
 
 ## conversation-triage.mjs — failure screening over past conversations (2026-08-11)
 
