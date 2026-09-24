@@ -76,9 +76,9 @@ export function MarkdownView({
         <div className="flex min-h-full">
         <div
           ref={contentRef}
-          // pb-32 in Comments mode: room to scroll the last cards up past
+          // pb-48 in Comments mode: room to scroll the last cards up past
           // the floating Ask/Show resolved buttons (SessionDrawer's cluster).
-          className={`flex-1 min-w-0 p-4 ${inComments ? 'pb-32' : ''}`}
+          className={`flex-1 min-w-0 p-4 ${inComments ? 'pb-48' : ''}`}
           data-artifact-viewer
           data-doc-path={path}
           // Rendered markdown prose doesn't map back to source line numbers (see

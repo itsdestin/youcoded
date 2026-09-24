@@ -38,7 +38,12 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
     // Fade/collapse (Docs-style): a one-line sliver naming who resolved it,
     // with the only action being to bring it back.
     return (
-      <div className="rounded-lg border border-edge-dim bg-panel/70 opacity-70 px-2.5 py-2 text-xs">
+      // Design-guide review (round 7): a card inside a side pane is `inset`
+      // with an `edge-dim` border and no shadow (§2.1/§2.4 — the tool-card
+      // recipe). Resolved used to fade the whole card to 70% opacity, which
+      // pushed its text under the contrast floor; muted text alone says
+      // "done" without making it unreadable.
+      <div className="rounded-lg border border-edge-dim bg-inset px-3 py-2 text-xs">
         <button type="button" onClick={onJump} className="block w-full text-left mb-1 min-w-0">
           <p className="text-fg-muted italic truncate">&ldquo;{comment.quote}&rdquo;</p>
         </button>
@@ -52,7 +57,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
   }
 
   return (
-    <div className="rounded-lg border border-edge bg-panel shadow-sm p-2.5 text-xs w-full">
+    <div className="rounded-lg border border-edge-dim bg-inset p-3 text-xs w-full">
       <button type="button" onClick={onJump} className="block w-full text-left mb-2 min-w-0">
         <p className="text-fg-muted italic line-clamp-2 border-l-2 border-edge-dim pl-2">&ldquo;{comment.quote}&rdquo;</p>
       </button>
@@ -62,7 +67,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-1.5">
             <span className="font-medium text-fg">{authorName(comment.author)}</span>
-            <span className="text-3xs text-fg-muted">{formatRelativeTime(comment.createdAt)}</span>
+            <span className="text-2xs text-fg-muted">{formatRelativeTime(comment.createdAt)}</span>
           </div>
           {isDraft ? (
             <Textarea
@@ -89,7 +94,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline gap-1.5">
               <span className="font-medium text-fg">{authorName(r.author)}</span>
-              <span className="text-3xs text-fg-muted">{formatRelativeTime(r.createdAt)}</span>
+              <span className="text-2xs text-fg-muted">{formatRelativeTime(r.createdAt)}</span>
             </div>
             <p className="mt-0.5 text-fg-2 whitespace-pre-wrap">{r.text}</p>
           </div>

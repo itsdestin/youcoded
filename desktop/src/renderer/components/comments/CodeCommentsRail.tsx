@@ -21,9 +21,9 @@ export function CodeCommentsRail({ path, onJumpToLine }: Props) {
     .sort((a, b) => (a.startLine ?? 0) - (b.startLine ?? 0) || a.createdAt - b.createdAt);
 
   return (
-    // pb-32: room to scroll the last card up past the floating Ask/Show
+    // pb-48: room to scroll the last card up past the floating Ask/Show
     // resolved buttons (SessionDrawer's bottom-right cluster).
-    <div className="w-64 shrink-0 border-l border-edge overflow-y-auto p-2 pb-32 flex flex-col gap-2">
+    <div className="w-64 shrink-0 border-l border-edge bg-panel overflow-y-auto p-2 pb-48 flex flex-col gap-2">
       {visible.length === 0 && (
         <EmptyState message="No comments on this file yet." variant="inline" />
       )}

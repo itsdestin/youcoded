@@ -144,11 +144,8 @@ function CommentsBtn({ state, onClick }: { state: CommentsHeaderState; onClick: 
     >
       <MenuIcon name="comment" className="w-4 h-4" />
       Comments
-      {state.count > 0 && (
-        <span className="text-3xs rounded-full px-1 min-w-[14px] inline-flex items-center justify-center leading-none py-0.5 bg-accent text-on-accent">
-          {state.count}
-        </span>
-      )}
+      {/* G-19: label + muted numeral, never an accent badge (G-8). */}
+      {state.count > 0 && <span className="text-fg-muted">{state.count}</span>}
     </button>
   );
 }
@@ -1298,7 +1295,13 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                     editState.editing || !showList ? 'opacity-100 scale-100' : 'opacity-0 scale-90'
                   }`}
                 >
-                  {commentsState.active && <CommentsFloatingActions path={active.path} />}
+                  {/* w-60 = the margin's card width (cards sit 8px inside the
+                      256px column); -mr-2 because this cluster sits 16px from
+                      the edge but the cards end 8px from it — measured, so the
+                      buttons line up with the card edges exactly. */}
+                  {commentsState.active && (
+                    <div className="w-60 -mr-2"><CommentsFloatingActions path={active.path} /></div>
+                  )}
                   <div className="flex items-center gap-2">
                   {commentsState.available && !editState.editing && (
                     <CommentsBtn
@@ -1306,9 +1309,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       onClick={() => { if (!commentsState.active) setListOpen(false); editRef.current?.toggleComments(); }}
                     />
                   )}
-              {/* Edit is hidden in Comments mode (a review mode — going back to
-                  reading brings it back). */}
-              {(editState.editing || (editState.isEditable && !commentsState.active)) && (
+              {/* Round 7 (Destin: "the button should stay in the same spot next
+                  to edit when selected"): Edit stays visible in Comments mode —
+                  hiding it slid the Comments button sideways on every toggle. */}
+              {(editState.editing || editState.isEditable) && (
                 <div className="flex items-center gap-2 pointer-events-auto">
                   {editState.editing ? (
                     <>

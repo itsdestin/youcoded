@@ -15,7 +15,8 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { CheckIcon } from '../Icons';
 import { formatRelativeTime } from '../../utils/format-time';
-import { POPOVER_Z } from '../overlays/Overlay';
+import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
+import { Button } from '../ui/Button';
 import { placeBubble } from '../ui/anchor-position';
 import { Avatar, authorName } from './Avatar';
 import type { DocComment } from '../../state/doc-comments-store';
@@ -54,21 +55,27 @@ export function HighlightHoverCard({ comment, anchorRect, boundsEl, onOpenCommen
   }, [comment.id, anchorRect, boundsEl]);
 
   return (
+    // Round 7: the app's shared popup surface (OverlayPanel/.layer-surface —
+    // what the right-click menu uses) instead of a hand-rolled bg-panel +
+    // shadow, so glass themes render it like every other popover.
+    // The outer div carries position + pointer handlers (OverlayPanel's
+    // typed props don't take mouse events); the panel inside is the surface.
     <div
       ref={panelRef}
       role="dialog"
-      className="fixed w-64 rounded-lg border border-edge bg-panel shadow-lg p-2.5 text-xs"
+      className="fixed w-64"
       style={{ zIndex: POPOVER_Z, left: pos.left, top: pos.top }}
       onMouseDown={(e) => e.stopPropagation()}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
+    <OverlayPanel layer={4} className="p-3 text-xs" style={{ zIndex: 'auto', borderRadius: 'var(--radius-lg)' }}>
       <div className="flex items-start gap-2">
         <Avatar author={comment.author} />
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-1.5">
             <span className="font-medium text-fg">{authorName(comment.author)}</span>
-            <span className="text-3xs text-fg-muted">{formatRelativeTime(comment.createdAt)}</span>
+            <span className="text-2xs text-fg-muted">{formatRelativeTime(comment.createdAt)}</span>
           </div>
           <p className="mt-0.5 text-fg-2 whitespace-pre-wrap line-clamp-4">{comment.text}</p>
         </div>
@@ -82,14 +89,12 @@ export function HighlightHoverCard({ comment, anchorRect, boundsEl, onOpenCommen
         ) : (
           <span>{comment.replies.length > 0 ? `${comment.replies.length} ${comment.replies.length === 1 ? 'reply' : 'replies'}` : 'No replies yet'}</span>
         )}
-        {/* text-accent + link-control: the house text-link pattern
-            (SyncSetupWizard, MarketplaceDetailOverlay) — not the raw
-            `text-link` token, which reads as a plain browser-blue underline
-            here (round 3 finding). */}
-        <button type="button" onClick={onOpenComments} className="text-accent underline link-control shrink-0">
+        {/* G-1: an action is a Button — ghost sm, the in-card secondary. */}
+        <Button variant="ghost" size="sm" onClick={onOpenComments} className="shrink-0">
           Open in comments
-        </button>
+        </Button>
       </div>
+    </OverlayPanel>
     </div>
   );
 }

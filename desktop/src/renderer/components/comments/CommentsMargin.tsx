@@ -160,7 +160,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
     const openComment = visible.find((c) => c.id === openId) ?? null;
     return (
       <>
-        <div ref={marginRef} className="relative w-9 shrink-0 border-l border-edge" style={{ minHeight: '100%' }}>
+        <div ref={marginRef} className="relative w-9 shrink-0 border-l border-edge bg-panel" style={{ minHeight: '100%' }}>
           {visible.map((c) => (
             <button
               key={c.id}
@@ -200,7 +200,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   }
 
   return (
-    <div ref={marginRef} className="relative w-64 shrink-0 border-l border-edge" style={{ minHeight: '100%' }}>
+    <div ref={marginRef} className="relative w-64 shrink-0 border-l border-edge bg-panel" style={{ minHeight: '100%' }}>
       {visible.map((c) => (
         <div
           key={c.id}

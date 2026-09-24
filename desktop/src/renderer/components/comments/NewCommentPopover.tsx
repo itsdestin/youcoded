@@ -23,7 +23,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Textarea } from '../ui/Textarea';
 import { Button } from '../ui/Button';
-import { POPOVER_Z } from '../overlays/Overlay';
+import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { placeBubble } from '../ui/anchor-position';
 import type { DocComment } from '../../state/doc-comments-store';
 
@@ -100,10 +100,13 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
   }, [comment.text, onDone, onCancel]);
 
   return (
-    <div
+    // Round 7: shared popup surface, same as the right-click menu (see
+    // HighlightHoverCard); p-3 = the guide's 12px card padding.
+    <OverlayPanel
       ref={panelRef}
-      className="fixed w-64 rounded-lg border border-edge bg-panel shadow-lg p-2 text-xs"
-      style={{ zIndex: POPOVER_Z, left: pos.left, top: pos.top }}
+      layer={4}
+      className="fixed w-64 p-3 text-xs"
+      style={{ zIndex: POPOVER_Z, left: pos.left, top: pos.top, borderRadius: 'var(--radius-lg)' }}
     >
       <p className="text-fg-muted italic line-clamp-2 mb-1.5 border-l-2 border-edge-dim pl-2">
         &ldquo;{comment.quote}&rdquo;
@@ -139,6 +142,6 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
           Comment
         </Button>
       </div>
-    </div>
+    </OverlayPanel>
   );
 }
