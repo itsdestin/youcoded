@@ -107,7 +107,7 @@ import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
 import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './state/first-page-retry';
 
 import FirstRunView from './components/FirstRunView';
-import { getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
+import { getPlatform, isAndroid, isRemoteMode, onConnectionModeChange } from './platform';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
 
 /** Remote access batch 2: where a phone's copy of the conversation stands. */
@@ -3490,20 +3490,20 @@ function AppInner() {
     setWelcomeFormOpen(true);
   }, [sessionDefaults]); // eslint-disable-line react-hooks/exhaustive-deps
   // ── Welcome back (design 2026-09-24) ─────────────────────────────────────
-  // Asked ONCE per launch, after the strip's first answer, and only when the
-  // strip is empty: a reload of a window that still has sessions has nothing to
-  // welcome back from. Not while a phone is catching up — same reason as the
-  // welcome form below.
+  // Asked ONCE per launch, strip empty, not while a phone catches up, and only
+  // in the LEADER window (remote/Android never — S-phone; a non-leader WAITS).
   const [welcomeBackIds, setWelcomeBackIds] = useState<string[] | null>(null);
   const welcomeBackAsked = useRef(false);
   useEffect(() => {
     if (welcomeBackAsked.current || isFirstRun !== false || !sessionListLoaded || remoteCatchingUp) return;
+    if (!(myWindowId != null && leaderWindowId !== -1) && !isRemoteMode() && !isAndroid()) return; // leader not yet known
+    if (isRemoteMode() || isAndroid() || !isLeader) { welcomeBackAsked.current = true; return; }
     welcomeBackAsked.current = true;
     if (sessions.length > 0) return;
     let alive = true;
     void fetchReopenList().then((ids) => { if (alive && ids.length > 0) setWelcomeBackIds(ids); });
     return () => { alive = false; };
-  }, [isFirstRun, sessionListLoaded, remoteCatchingUp, sessions.length]);
+  }, [isFirstRun, sessionListLoaded, remoteCatchingUp, sessions.length, myWindowId, leaderWindowId, isLeader]);
   const welcomeBackDone = useCallback(() => {
     setWelcomeBackIds((ids) => { if (ids) void forgetReopenList(ids); return null; });
   }, []);
