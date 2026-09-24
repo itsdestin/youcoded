@@ -85,6 +85,12 @@ interface Piece {
   start: number;
   text: string;
   blocks: BlockInfo[];
+  /**
+   * Set on the LAST piece when its last block is a top-level fenced code block
+   * that is still open and whose opening line is finished: where (in `text`)
+   * the code starts. See `extendLastPiece`.
+   */
+  fenceBody?: number;
 }
 
 export interface MarkdownBlocks {
@@ -165,6 +171,91 @@ function blockInfo(text: string, block: MdNode): BlockInfo {
   };
 }
 
+// A line that could close a code fence: up to three spaces, then three or more
+// backticks or tildes, then nothing but spaces. Checked loosely (any length, any
+// fence character) so a line that might close the fence always counts.
+const FENCE_CLOSE_LINE = /(?:^|[\r\n]) {0,3}(?:`{3,}|~{3,})[ \t]*(?=[\r\n]|$)/;
+
+// The first line of a piece that could still turn into a list item marker
+// ("-", "2", "2.", "  *"). Such a piece can still JOIN the list before it:
+// "1. a\n\n2" is a list and a paragraph, "1. a\n\n2." is one list.
+const MAYBE_LIST_MARKER = /^[ \t]*(?:[-+*]|\d{1,9}[.)]?)?[ \t]*$/;
+
+/**
+ * Whether the piece starting `text` can no longer join the piece before it.
+ * WHY only the first line matters: a piece starts after a blank line, where
+ * nothing is open but a list (and indented code, which is never cut). A later
+ * line cannot pull it into that list; only its own first line, while it could
+ * still become a list item marker, can.
+ */
+function startIsFinal(text: string): boolean {
+  const end = text.search(/[\r\n]/);
+  return end !== -1 || !MAYBE_LIST_MARKER.test(text);
+}
+
+// A line starting (after any quote or list markers) with `<` or with a `[`
+// that may be a link definition's label ("[x]:", or no closing "]" yet).
+// Anything that could make a top-level raw-HTML block, a definition or a
+// footnote — the only blocks the splitter records — begins such a line.
+function mayHoldDefinitionOrHtml(text: string): boolean {
+  for (const m of text.matchAll(/(?:^|\r\n?|\n)[ \t>*+\-0-9.)]*([<[])/g)) {
+    if (m[1] === '<') return true;
+    const open = m.index! + m[0].length - 1;
+    const close = text.indexOf(']', open + 1);
+    if (close === -1 || close === text.length - 1 || text[close + 1] === ':') return true;
+    // An escaped "\]" may hide the label's real end; do not guess.
+    if (text.slice(open + 1, close).includes('\\')) return true;
+  }
+  return false;
+}
+
+/**
+ * The previous pieces with only the LAST one grown by the appended text — or
+ * null when that is not certain, and the tail must be parsed.
+ *
+ * WHY (review 2, F2): a reply that ends in one long block with no blank line in
+ * it (a 300-item list, a long table or quote, a long code block) was parsed by
+ * the splitter AND by react-markdown on every word — twice today's cost. The
+ * pieces can only change where a blank line is, or where a block the splitter
+ * records (definition, raw HTML, footnote) starts, so when neither can have
+ * happened the previous split still holds and nothing is parsed:
+ *   - an open top-level code fence swallows every line (blank or not) until a
+ *     line that could close it;
+ *   - otherwise, a last piece with no blank line and no line that could start
+ *     a definition or HTML block stays one piece of plain blocks.
+ * In both cases the piece's first line must be final (`startIsFinal`), or the
+ * piece could still merge into the list before it.
+ */
+function extendLastPiece(prev: MarkdownBlocks, content: string): MarkdownBlocks | null {
+  const last = prev.live[prev.live.length - 1];
+  if (!last) return null;
+  const text = content.slice(last.start);
+  if (!startIsFinal(text)) return null;
+  if (last.fenceBody !== undefined) {
+    // Lines of the fence before the old text's last line were already checked.
+    const from = Math.max(last.fenceBody, lineStart(text, Math.max(0, last.text.length - 1)));
+    if (FENCE_CLOSE_LINE.test(text.slice(from))) return null;
+  } else if (hasBlankLine(text) || mayHoldDefinitionOrHtml(text)) {
+    return null;
+  }
+  const live = prev.live.slice();
+  live[live.length - 1] = { ...last, text };
+  return { ...prev, source: content, live };
+}
+
+/**
+ * Where the code of an open top-level fence starts, if `block` (the tail's last
+ * block) is one — see `Piece.fenceBody`. Offsets are in `tail`.
+ */
+function openFenceBody(tail: string, block: MdNode): number | undefined {
+  if (block.type !== 'code' || isIndentedCode(tail, block)) return undefined;
+  const at = lineStart(tail, block.position?.start.offset ?? 0);
+  const eol = tail.slice(at).search(/\r\n?|\n/);
+  if (eol === -1) return undefined; // the opening line is still being typed
+  const body = at + eol + (tail.startsWith('\r\n', at + eol) ? 2 : 1);
+  return FENCE_CLOSE_LINE.test(tail.slice(body - 1)) ? undefined : body;
+}
+
 const wholeOf = (content: string): MarkdownBlocks =>
   ({ source: content, whole: true, frozen: [], frozenEnd: 0, frozenDefs: [], live: [] });
 
@@ -178,6 +269,8 @@ export function splitMarkdownBlocks(content: string, prev?: MarkdownBlocks | nul
   if (appended && content === prev!.source) return prev!;
   // Sticky: the footnote / nested definition that forced whole mode is still there.
   if (appended && prev!.whole) return wholeOf(content);
+  const extended = appended ? extendLastPiece(prev!, content) : null;
+  if (extended) return extended;
 
   const start = appended ? prev!.frozenEnd : 0;
   const tail = content.slice(start);
@@ -214,11 +307,16 @@ export function splitMarkdownBlocks(content: string, prev?: MarkdownBlocks | nul
     pieceBlocks[pieceBlocks.length - 1].push(blockInfo(tail, block));
   });
   const n = pieceStarts.length;
-  const piece = (i: number): Piece => ({
-    start: start + pieceStarts[i],
-    text: tail.slice(pieceStarts[i], i + 1 < n ? pieceStarts[i + 1] : undefined),
-    blocks: pieceBlocks[i],
-  });
+  const fenceBody = n > 0 ? openFenceBody(tail, blocks[blocks.length - 1]) : undefined;
+  const piece = (i: number): Piece => {
+    const p: Piece = {
+      start: start + pieceStarts[i],
+      text: tail.slice(pieceStarts[i], i + 1 < n ? pieceStarts[i + 1] : undefined),
+      blocks: pieceBlocks[i],
+    };
+    if (i === n - 1 && fenceBody !== undefined) p.fenceBody = fenceBody - pieceStarts[i];
+    return p;
+  };
   // WHY HTML no longer holds anything live here (review F2): which blocks a
   // <details> pairs with is a DRAWING question, answered by planStream over the
   // pieces' BlockInfo. Parsing a piece never depends on HTML elsewhere, so the

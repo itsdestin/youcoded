@@ -20,6 +20,25 @@ vi.mock('react-markdown', async (importOriginal) => {
     },
   };
 });
+// Every character the streaming splitter (markdown-blocks.ts) hands to the
+// markdown parser, so the cost pins below see ALL the work an update does, not
+// just the react-markdown passes. Only the app's own import of remark-parse is
+// wrapped (react-markdown's copy is loaded outside the mock), so this counts the
+// splitter alone; it passes through unchanged.
+const splitterParsed = vi.hoisted(() => ({ chars: 0 }));
+vi.mock('remark-parse', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('remark-parse')>();
+  return {
+    default: function countingRemarkParse(this: any, ...args: any[]) {
+      (actual.default as any).apply(this, args);
+      const parse = this.parser;
+      this.parser = (doc: string, file: unknown) => {
+        splitterParsed.chars += doc.length;
+        return parse(doc, file);
+      };
+    },
+  };
+});
 // The reference block resolves ids asynchronously; a fixed stand-in keeps the
 // streaming comparisons below about markdown, not about a network answer.
 vi.mock('./tool-views/ChatsearchRefBlock', () => ({
@@ -584,6 +603,57 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
       today.unmount();
     }
+  });
+
+  // What each streamed update costs, in characters: everything the splitter
+  // parsed plus everything handed to react-markdown. Today's whole-message
+  // render hands react-markdown the whole message once per update — and a
+  // react-markdown pass parses AND transforms, highlights and reconciles, so
+  // counting a splitter parse as a full pass over the same text overstates our
+  // side. Counts, not clock time: the suite runs under load.
+  const streamCosts = (mountAt: string, base: string, deltas: string[]) => {
+    const live = render(<Bubble md={mountAt} incremental />);
+    let md = base;
+    if (base !== mountAt) live.rerender(<Bubble md={md} incremental />);
+    const costs: { md: string; work: number; drawn: string[] }[] = [];
+    for (const d of deltas) {
+      md += d;
+      splitterParsed.chars = 0;
+      markdownRenders.length = 0;
+      live.rerender(<Bubble md={md} incremental />);
+      costs.push({ md, work: splitterParsed.chars + markdownRenders.reduce((n, x) => n + x.length, 0), drawn: markdownRenders.slice() });
+    }
+    expect(canonical(live.container)).toBe(wholeHtml(md));
+    live.unmount();
+    return costs;
+  };
+  const expectNoMoreThanToday = (costs: { md: string; work: number }[]) => {
+    for (const c of costs) expect(c.work, `work after ${JSON.stringify(c.md.slice(-40))}`).toBeLessThanOrEqual(c.md.length);
+  };
+  const lines = (n: number, line: (i: number) => string) => Array.from({ length: n }, (_, i) => line(i)).join('\n');
+
+  // A reply that ends in one big block with no blank line in it: the splitter
+  // must not parse that block again on top of drawing it.
+  it('never does more work per word than the whole message while one long list grows', () => {
+    const list = lines(150, (i) => `- item ${i} with **bold** and \`code\` and a [link](https://e.com/${i})`);
+    expectNoMoreThanToday(streamCosts('Intro', `Intro\n\n${list}\n- last`, tokenDeltas(' words that keep arriving\n- and another item\n- a third')));
+  });
+
+  it('never does more work per word than the whole message while one long table grows', () => {
+    const table = `| # | name | value |\n| - | - | - |\n${lines(150, (i) => `| ${i} | name ${i} | **v** \`${i}\` |`)}`;
+    expectNoMoreThanToday(streamCosts('Intro', `Intro\n\n${table}\n| last`, tokenDeltas(' | row | words |\n| next | row | here |')));
+  });
+
+  it('never does more work per word than the whole message while one long quote grows', () => {
+    const quote = lines(150, (i) => `> quoted line ${i} with *emphasis* and a [link](https://e.com/${i})`);
+    expectNoMoreThanToday(streamCosts('Intro', `Intro\n\n${quote}\n> last`, tokenDeltas(' words that keep arriving\n> and one more line')));
+  });
+
+  // Code usually holds blank lines, so this one has them too.
+  it('never does more work per word than the whole message while a long code block is still open', () => {
+    const code = lines(150, (i) => `  const value${i} = compute(${i}, "string ${i}") + other[${i}];`);
+    const costs = streamCosts('Here', `Here:\n\n\`\`\`ts\n${code}\n`, tokenDeltas('  more(1);\n\n  <div>[x]: y</div>\n  after_blank();\n'));
+    expectNoMoreThanToday(costs);
   });
 
   it('draws a message that never grows (history) as one document, with no split', () => {
