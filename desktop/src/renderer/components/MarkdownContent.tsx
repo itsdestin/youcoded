@@ -652,7 +652,7 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
             <React.Fragment key={g.key}>
               {newline ? '\n' : null}
               <MarkdownChunk
-                source={g.source}
+                source={g.draw}
                 defs={g.refs ? stream.defs : ''}
                 rehypePlugins={rehypePlugins}
                 components={components}

@@ -21,12 +21,12 @@
  * markdown-blocks.test.ts found the per-block version of this wrong; per piece it
  * holds.
  *
- * THE "FINISHED" RULE — every piece except the LAST TWO is frozen (never
+ * THE "FINISHED" RULE — every piece except the LAST one is frozen (never
  * re-parsed, never re-drawn). Markdown is parsed line by line and only the newest
  * block can still be open, and a blank line closes everything a later line could
- * reach into, so the last piece alone would do; two is margin. Both live pieces are
- * still drawn separately, so the second-to-last one (usually a just-finished code
- * block) re-parses but does not re-draw or re-highlight.
+ * reach into. The one exception is the last piece's own FIRST line while it
+ * could still become a list item marker ("2" → "2."): it may yet join the list
+ * in the piece before, so that piece stays live too (`startIsFinal`).
  *
  * CROSS-BLOCK EFFECTS — two things make one block's drawing depend on another:
  *   - link DEFINITIONS (`[x]: url`) turn a `[x]` in any other block into a link.
@@ -323,7 +323,12 @@ export function splitMarkdownBlocks(content: string, prev?: MarkdownBlocks | nul
   // splitter freezes by the plain two-live-pieces rule and each update parses
   // only the tail — a comment or <br> near the top used to make every update
   // parse (and draw) everything below it twice.
-  const liveFrom = Math.max(0, n - 2);
+  // WHY one live piece, not two (review 2, F3): the second-to-last piece was
+  // kept live as margin, so a long block followed by a new paragraph (typically
+  // the text already on screen when a bubble opens mid-reply) was re-parsed on
+  // every word. The only way the last piece can still reach back is its first
+  // line joining a list, which startIsFinal rules out.
+  const liveFrom = n >= 2 && startIsFinal(tail.slice(pieceStarts[n - 1])) ? n - 1 : Math.max(0, n - 2);
 
   // Copy the frozen list only when something new freezes, so an update that
   // freezes nothing does no work proportional to the reply (performance rule 4).
@@ -360,6 +365,11 @@ interface DrawnGroup {
   /** Where it starts in the message — its React key (see advanceStream). */
   key: number;
   source: string;
+  /**
+   * What is handed to react-markdown: `source`, minus trailing blank lines when
+   * another group follows (see trimTrailingBlank).
+   */
+  draw: string;
   /** Draws at least one element (a group of only link definitions draws nothing). */
   paints: boolean;
   /** Holds a `[`, so link definitions elsewhere can change how it draws. */
@@ -388,7 +398,7 @@ const oneDocument = (content: string): StreamView => ({
   settled: [],
   settledPieces: 0,
   defs: '',
-  groups: [{ key: 0, source: content, paints: true, refs: false }],
+  groups: [{ key: 0, source: content, draw: content, paints: true, refs: false }],
 });
 
 /** A message as first drawn: one document, no parsing (history messages never grow). */
@@ -418,6 +428,12 @@ export function startStream(content: string): StreamView {
 export function advanceStream(view: StreamView, content: string): StreamView {
   if (content === view.drawn) return view;
   if (!content.startsWith(view.drawn)) return oneDocument(content);
+  // WHY (review 2, F3): a message drawn as one document (a bubble opened
+  // mid-reply, or any reply before its first blank line) stays ONE document —
+  // exactly today's render, no parse — until new text could start a piece of
+  // its own. Splitting earlier parsed the whole message and then redrew all of
+  // it anyway as group 0, on top of today's cost, every word.
+  if (!view.blocks && !mayStartPiece(content, view.drawn.length)) return oneDocument(content);
   const floor = view.blocks ? view.floor : view.drawn.length;
   const blocks = splitMarkdownBlocks(content, view.blocks);
   if (blocks.whole) {
@@ -440,11 +456,38 @@ export function advanceStream(view: StreamView, content: string): StreamView {
   };
 }
 
-const groupOf = (pieces: Piece[]): DrawnGroup => {
+/**
+ * Whether a piece could start at or after `floor` in `content`: pieces start
+ * only on the line after a blank line, so with no blank line ending at or after
+ * the drawn text, everything still belongs to what was drawn. Looks back over
+ * whitespace so a blank line straddling `floor` (drawn "a\n", then "\nb") counts.
+ */
+function mayStartPiece(content: string, floor: number): boolean {
+  let from = Math.max(0, floor - 2);
+  while (from > 0 && /[ \t\r\n]/.test(content[from - 1])) from--;
+  return hasBlankLine(content.slice(from));
+}
+
+/**
+ * `text` without its trailing blank lines. WHY (review 2, F3): a group that is
+ * followed by another ends at a blank line, and those blank lines draw nothing —
+ * every block in it is closed by the piece after it. Drawing it without them
+ * keeps its string the same as when it was still the last group ("para" then
+ * "para\n\n" once the next paragraph starts), so the memoised drawing is
+ * reused instead of being redone once per finished block. Never applied to the
+ * LAST group: an open code fence keeps its trailing blank lines as code.
+ */
+function trimTrailingBlank(text: string): string {
+  const m = /(?:\r\n|\r|\n)[ \t\r\n]*$/.exec(text);
+  return m ? text.slice(0, m.index) : text;
+}
+
+const groupOf = (pieces: Piece[], last: boolean): DrawnGroup => {
   const source = pieces.length === 1 ? pieces[0].text : pieces.map((p) => p.text).join('');
   return {
     key: pieces[0].start,
     source,
+    draw: last ? source : trimTrailingBlank(source),
     paints: pieces.some((p) => p.blocks.some((b) => b.kind !== 'def')),
     refs: source.includes('['),
   };
@@ -506,13 +549,13 @@ function planStream(blocks: MarkdownBlocks, floor: number, settledIn: DrawnGroup
   let run: Piece[] = [];
   pieces.forEach((p, pi) => {
     if (run.length && !joinBefore[pi] && p.start >= floor) {
-      groups.push(groupOf(run));
+      groups.push(groupOf(run, false));
       groupPieces.push(pi - 1);
       run = [];
     }
     run.push(p);
   });
-  if (run.length) { groups.push(groupOf(run)); groupPieces.push(pieces.length - 1); }
+  if (run.length) { groups.push(groupOf(run, true)); groupPieces.push(pieces.length - 1); }
 
   // Settle leading groups whose pieces are all frozen and whose closing cut is final.
   let s = 0;

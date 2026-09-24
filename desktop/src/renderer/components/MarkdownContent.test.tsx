@@ -656,6 +656,23 @@ describe('MarkdownContent while a reply streams in', () => {
     expectNoMoreThanToday(costs);
   });
 
+  // Switching back to a session mid-reply mounts the bubble on a long prefix
+  // drawn as one document. That document is re-drawn as today until its last
+  // block is finished, and never parsed again on top of that.
+  it('never does more work per word than the whole message after opening mid-reply', () => {
+    const long = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
+    const base = `${long}\n\n${long}\n\nA paragraph still being`;
+    const costs = streamCosts(base, base, tokenDeltas(' typed with more words\n\nThen a new paragraph that keeps going word by word\n\nAnd another'));
+    // The update that first starts a new block splits the message once — a
+    // parse, never a re-draw of what was already on screen.
+    const split = costs.findIndex((c) => c.drawn.length > 0 && !c.drawn.some((x) => x.startsWith('## Plan')));
+    expect(split).toBeGreaterThan(0);
+    expect(costs[split].drawn.join('')).not.toContain('Plan');
+    expect(costs[split].work - costs[split].drawn.join('').length).toBeLessThanOrEqual(costs[split].md.length);
+    expectNoMoreThanToday(costs.slice(0, split));
+    expectNoMoreThanToday(costs.slice(split + 1));
+  });
+
   it('draws a message that never grows (history) as one document, with no split', () => {
     const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
     markdownRenders.length = 0;

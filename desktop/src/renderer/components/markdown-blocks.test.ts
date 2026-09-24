@@ -192,7 +192,8 @@ describe('advanceStream: the groups a growing message is drawn as', () => {
     expect(keysAndText(v1)).toEqual([[0, drawn + ' word']]);
     expect(keysAndText(v2)).toEqual([[0, drawn + ' word\n\n'], [drawn.length + 7, 'New']]);
     expect(v3.groups[0]).toEqual(v2.groups[0]);
-    expect(v3.settled.length).toBe(1);
+    // Only the last piece stays live: group 0 and "New para" are both final.
+    expect(v3.settled.length).toBe(2);
   });
 
   it('draws a closed <details> run as one group and freezes it; a comment is just its own group', () => {
@@ -201,7 +202,7 @@ describe('advanceStream: the groups a growing message is drawn as', () => {
     expect(v.groups.map((g) => g.source)).toEqual([
       '<!-- note -->\n\n', 'A\n\n', '<details>\n<summary>S</summary>\n\nin one\n\nin two\n\n</details>\n\n', 'B\n\n', 'C\n\n', 'D',
     ]);
-    expect(v.settled.length).toBe(4);
+    expect(v.settled.length).toBe(5);
   });
 
   it('keeps an open <details> run unsettled, drawing each piece on its own until it closes', () => {
