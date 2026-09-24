@@ -773,7 +773,9 @@ export class SyncService extends EventEmitter {
     // Backup/, decide which to delete via the pure retention core, then purge
     // each by its EXACT dated path — NEVER a wildcard — so a bad name can't wipe
     // sibling data (unparseable names are never returned for deletion anyway).
-    try {
+    // Only after today's snapshot fully landed: pruning after a failed copy
+    // shrinks the recovery set with nothing new to replace it.
+    if (errors === 0) try {
       const lsf = await this.rclone(['lsf', '--dirs-only', `${backupRoot}/`]);
       if (lsf.code === 0) {
         const names = lsf.stdout.split('\n').map(s => s.replace(/\/$/, '').trim()).filter(Boolean);
@@ -952,7 +954,8 @@ export class SyncService extends EventEmitter {
     // <YouCoded>/Backup/, decide which to delete via the pure retention core,
     // then fs.rm each by its EXACT dated path — NEVER a glob/wildcard — so a bad
     // name can't remove sibling data (unparseable names are never returned).
-    try {
+    // Only after today's snapshot fully landed (same reason as Drive).
+    if (errors === 0) try {
       const backupDir = path.join(icloudPath, 'Backup');
       const names = await fs.promises.readdir(backupDir);
       for (const name of snapshotsToDelete(names, snapshot.now)) {
@@ -1052,11 +1055,10 @@ export class SyncService extends EventEmitter {
           dated: datedFolderName(snapshotNow),
           now: snapshotNow,
         };
-        // Why: track whether at least one snapshot backend (Drive/iCloud) actually
-        // SUCCEEDED this cycle (0 errors). We only stamp the daily marker on success
-        // (see below) so a total-failure cycle — or a github-only cycle — leaves the
-        // marker unwritten and a later hourly-poll push retries the same day.
-        let anySnapshotSucceeded = false;
+        // Why: one outcome per snapshot backend (Drive/iCloud) this cycle. The
+        // daily marker closes the day only when every one succeeded — see
+        // shouldStampDailyMarker.
+        const snapshotOutcomes: boolean[] = [];
 
         let totalErrors = 0;
         const pushedIds: string[] = [];
@@ -1071,8 +1073,8 @@ export class SyncService extends EventEmitter {
               // via this path — the GitHub *space sync* is a separate subsystem.
               case 'icloud': backendErrors = await this.pushiCloud(instance, snapshot); break;
             }
-            if ((instance.type === 'drive' || instance.type === 'icloud') && backendErrors === 0) {
-              anySnapshotSucceeded = true;
+            if (instance.type === 'drive' || instance.type === 'icloud') {
+              snapshotOutcomes.push(backendErrors === 0);
             }
             totalErrors += backendErrors;
             pushedIds.push(instance.id);
@@ -1087,6 +1089,7 @@ export class SyncService extends EventEmitter {
             // String(e) includes 'ENOENT' for spawn failures, letting the classifier
             // catch RCLONE_MISSING via its stderr substring match.
             await this.recordBackendFailure(instance, String(e));
+            if (instance.type === 'drive' || instance.type === 'icloud') snapshotOutcomes.push(false);
             totalErrors++;
           }
         }
@@ -1100,7 +1103,7 @@ export class SyncService extends EventEmitter {
         // copy/copyto skip unchanged files, so a retry after partial success is cheap.
         // Best-effort write like daily-backup's marker — a read-only ~/.claude must
         // not fail the whole push.
-        if (shouldStampDailyMarker(snapshot.due, anySnapshotSucceeded)) {
+        if (shouldStampDailyMarker(snapshot.due, !opts?.backendId, snapshotOutcomes)) {
           try { fs.writeFileSync(this.snapshotMarkerPath, snapshot.dated); }
           catch (e) { this.logBackup('WARN', `Could not write snapshot marker: ${String(e)}`, 'sync.push'); }
         }

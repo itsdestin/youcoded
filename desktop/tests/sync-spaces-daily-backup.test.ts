@@ -111,3 +111,79 @@ describe('DailyBackup.runIfDue (icloud end-to-end)', () => {
     expect(fs.existsSync(path.join(dest, 'later.md'))).toBe(false);
   });
 });
+
+describe('DailyBackup.runIfDue failure handling', () => {
+  let tmp: string;
+  afterEach(() => { if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const mkSpace = (name: string): SyncSpace => {
+    const root = path.join(tmp, name);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'notes.md'), name);
+    return { id: `project:${name}`, kind: 'project', root };
+  };
+  const today = () => datedFolderName(new Date());
+
+  it('a failed copy keeps old snapshots and the day open, then retries only what failed', async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'spaces-backup-'));
+    const base = path.join(tmp, 'icloud');
+    const old = path.join(base, 'Backup', 'spaces', '2020-01-01', 'project-a');
+    fs.mkdirSync(old, { recursive: true });
+    const good = mkSpace('good');
+    const bad: SyncSpace = { id: 'project:bad', kind: 'project', root: path.join(tmp, 'not-yet') };
+    const markerPath = path.join(tmp, 'marker');
+    const job = new DailyBackup({ markerPath });
+    const logs: string[] = [];
+    await job.runIfDue([good, bad], [{ type: 'icloud', base }], m => logs.push(m));
+    // WHY: with no fresh snapshot, pruning would only shrink the recovery set.
+    expect(fs.existsSync(old)).toBe(true);
+    expect(fs.existsSync(markerPath)).toBe(false);
+    expect(logs.some(m => m.includes('spaces-backup completed'))).toBe(false);
+
+    fs.mkdirSync(bad.root);
+    fs.writeFileSync(path.join(bad.root, 'notes.md'), 'bad');
+    fs.writeFileSync(path.join(good.root, 'later.md'), 'x');
+    await job.runIfDue([good, bad], [{ type: 'icloud', base }], m => logs.push(m));
+    const day = path.join(base, 'Backup', 'spaces', today());
+    expect(fs.readFileSync(path.join(day, 'project-bad', 'notes.md'), 'utf8')).toBe('bad');
+    expect(fs.existsSync(path.join(day, 'project-good', 'later.md'))).toBe(false); // not redone
+    expect(fs.readFileSync(markerPath, 'utf8')).toBe(today());
+    expect(fs.existsSync(old)).toBe(false); // pruned once today's snapshot landed
+  });
+
+  it("one destination's success does not end another destination's retries", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'spaces-backup-'));
+    const space = mkSpace('s');
+    const a = path.join(tmp, 'a');
+    const b = path.join(tmp, 'b');
+    fs.writeFileSync(b, 'a file where the folder should be');
+    const markerPath = path.join(tmp, 'marker');
+    const job = new DailyBackup({ markerPath });
+    const targets = [{ type: 'icloud' as const, base: a }, { type: 'icloud' as const, base: b }];
+    await job.runIfDue([space], targets, () => {});
+    expect(fs.existsSync(markerPath)).toBe(false);
+    fs.rmSync(b);
+    await job.runIfDue([space], targets, () => {});
+    expect(fs.readFileSync(path.join(b, 'Backup', 'spaces', today(), 'project-s', 'notes.md'), 'utf8')).toBe('s');
+    expect(fs.readFileSync(markerPath, 'utf8')).toBe(today());
+  });
+
+  it("an older device's copy never replaces a newer file in the shared dated folder", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'spaces-backup-'));
+    const base = path.join(tmp, 'icloud');
+    const newer = mkSpace('laptop/s');
+    const older = mkSpace('desktop/s');
+    fs.writeFileSync(path.join(older.root, 'notes.md'), 'stale');
+    const past = new Date(Date.now() - 3_600_000);
+    fs.utimesSync(path.join(older.root, 'notes.md'), past, past);
+    newer.id = older.id = 'project:s';
+    await new DailyBackup({ markerPath: path.join(tmp, 'm1') }).runIfDue([newer], [{ type: 'icloud', base }], () => {});
+    await new DailyBackup({ markerPath: path.join(tmp, 'm2') }).runIfDue([older], [{ type: 'icloud', base }], () => {});
+    expect(fs.readFileSync(path.join(base, 'Backup', 'spaces', today(), 'project-s', 'notes.md'), 'utf8')).toBe('laptop/s');
+  });
+});
+
+describe('foldersToPrune keeps the newest snapshot', () => {
+  it('never returns the newest dated folder, however old', () => {
+    expect(foldersToPrune(['2020-01-01', '2020-02-01'], new Date('2026-07-03T00:00:00Z'), 30)).toEqual(['2020-01-01']);
+  });
+});

@@ -21,7 +21,10 @@ export function isBackupDue(markerContent: string | null, now: Date): boolean {
 
 export function foldersToPrune(names: string[], now: Date, keepDays: number): string[] {
   const cutoff = now.getTime() - keepDays * 24 * 60 * 60 * 1000;
-  return names.filter(n => /^\d{4}-\d{2}-\d{2}$/.test(n) && new Date(`${n}T00:00:00Z`).getTime() < cutoff);
+  const dated = names.filter(n => /^\d{4}-\d{2}-\d{2}$/.test(n));
+  // WHY: the newest snapshot is the last known-good copy — kept past any age.
+  const newest = dated.reduce((a, b) => (a > b ? a : b), '');
+  return dated.filter(n => n !== newest && new Date(`${n}T00:00:00Z`).getTime() < cutoff);
 }
 
 // ---- job ----
@@ -33,6 +36,12 @@ export interface BackupTarget {
 
 export class DailyBackup {
   private markerPath: string;
+  // Today's finished work: `copy|<type>|<base>|<space id>` and `prune|<type>|<base>`.
+  // WHY in memory: a failed copy retries next hour without redoing the copies
+  // that worked; a restart mid-day only costs a re-copy. The marker file still
+  // closes the day, and only once every copy landed.
+  private done = new Set<string>();
+  private doneDate = '';
 
   constructor(opts?: { markerPath?: string }) {
     this.markerPath = opts?.markerPath ?? path.join(os.homedir(), '.claude', '.spaces-backup-marker');
@@ -41,20 +50,36 @@ export class DailyBackup {
   /** Call from an hourly timer; no-ops until a new UTC day. Never throws. */
   async runIfDue(spaces: SyncSpace[], targets: BackupTarget[], log: (msg: string) => void): Promise<void> {
     let marker: string | null = null;
-    try { marker = fs.readFileSync(this.markerPath, 'utf8').trim(); } catch { /* first run */ }
+    try { marker = (await fs.promises.readFile(this.markerPath, 'utf8')).trim(); } catch { /* first run */ }
     const now = new Date();
     if (!isBackupDue(marker, now) || targets.length === 0) return;
     const dated = datedFolderName(now);
+    if (this.doneDate !== dated) { this.done.clear(); this.doneDate = dated; }
+    let complete = true;
     for (const target of targets) {
+      const where = `${target.type}|${target.base}`;
+      let landed = true;
       for (const space of spaces) {
-        try { await this.copySpace(space, target, dated); }
-        catch (e: any) { log(`spaces-backup failed for ${space.id} → ${target.type}: ${String(e?.message ?? e)}`); }
+        const key = `copy|${where}|${space.id}`;
+        if (this.done.has(key)) continue;
+        try { await this.copySpace(space, target, dated); this.done.add(key); }
+        catch (e: any) { landed = false; log(`spaces-backup failed for ${space.id} → ${target.type}: ${String(e?.message ?? e)}`); }
       }
-      try { await this.prune(target, now, log); } catch { /* prune is best-effort */ }
+      if (!landed) { complete = false; continue; }
+      // WHY: pruning used to run after FAILED copies too — a month of failures
+      // (an expired Drive sign-in) would delete every snapshot and add none.
+      // Prune a destination only once today's snapshot fully landed there.
+      if (!this.done.has(`prune|${where}`)) {
+        try { await this.prune(target, now, log); this.done.add(`prune|${where}`); } catch { /* best-effort; retried next run */ }
+      }
+    }
+    if (!complete) {
+      log(`spaces-backup incomplete for ${dated}; failed copies retry next hour`);
+      return;
     }
     // Guarded so runIfDue honors its "never throws" contract — a missing or
     // read-only ~/.claude must not become an unhandled rejection in the timer.
-    try { fs.writeFileSync(this.markerPath, dated); }
+    try { await fs.promises.writeFile(this.markerPath, dated); }
     catch (e: any) { log(`spaces-backup: could not write marker: ${String(e?.message ?? e)}`); }
     log(`spaces-backup completed for ${dated} (${spaces.length} spaces, ${targets.length} targets)`);
   }
@@ -63,7 +88,8 @@ export class DailyBackup {
     if (target.type === 'drive') {
       const dest = `${target.base}/Backup/spaces/${dated}/${space.id.replace(':', '-')}`;
       const excludes = DEFAULT_IGNORES.flatMap(p => ['--exclude', p.endsWith('/') ? `${p}**` : p]);
-      await execFileAsync('rclone', ['copy', space.root, dest, ...excludes], { timeout: RCLONE_TIMEOUT });
+      // --update: devices share today's folder; an older copy never replaces a newer one.
+      await execFileAsync('rclone', ['copy', '--update', space.root, dest, ...excludes], { timeout: RCLONE_TIMEOUT });
     } else {
       const dest = path.join(target.base, 'Backup', 'spaces', dated, space.id.replace(':', '-'));
       // Why async fs: this runs in the Electron main process — a synchronous
@@ -72,9 +98,18 @@ export class DailyBackup {
       await fs.promises.mkdir(dest, { recursive: true });
       await fs.promises.cp(space.root, dest, {
         recursive: true,
+        // Kept so the newer-wins check below compares edit times, not copy times.
+        preserveTimestamps: true,
         // Backups scrub exactly what sync scrubs (DEFAULT_IGNORES) — secrets
         // like *.pem / id_rsa* must not land in iCloud any more than in a repo.
-        filter: (src) => !isIgnoredPath(path.relative(space.root, src)),
+        filter: async (src, dst) => {
+          if (isIgnoredPath(path.relative(space.root, src))) return false;
+          // Same rule as Drive's --update: devices share today's folder.
+          try {
+            const [from, to] = await Promise.all([fs.promises.stat(src), fs.promises.stat(dst)]);
+            return !(from.isFile() && to.isFile() && to.mtimeMs > from.mtimeMs);
+          } catch { return true; }
+        },
       });
     }
   }

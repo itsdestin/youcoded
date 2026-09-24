@@ -612,8 +612,6 @@
     {"file": "sync-service.ts", "fn": "SyncService.stop", "call": "fs.unlinkSync", "count": 1},
     {"file": "sync-service.ts", "fn": "SyncService.writeBackupMeta", "call": "fs.readFileSync", "count": 1},
     {"file": "sync-setup-handlers.ts", "fn": "checkSyncPrereqs", "call": "fs.statSync", "count": 1},
-    {"file": "sync-spaces/daily-backup.ts", "fn": "DailyBackup.runIfDue", "call": "fs.readFileSync", "count": 1},
-    {"file": "sync-spaces/daily-backup.ts", "fn": "DailyBackup.runIfDue", "call": "fs.writeFileSync", "count": 1},
     {"file": "sync-spaces/device-registry.ts", "fn": "mutateCanonical", "call": "fs.mkdirSync", "count": 1},
     {"file": "sync-spaces/device-registry.ts", "fn": "readDevices", "call": "fs.lstatSync", "count": 1},
     {"file": "sync-spaces/device-registry.ts", "fn": "readDevices", "call": "fs.readFileSync", "count": 1},
