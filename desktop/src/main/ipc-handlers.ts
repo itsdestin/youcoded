@@ -783,7 +783,7 @@ export function registerIpcHandlers(
   sessionManager.on('session-created', (info) => {
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
-  attachStartupDialogLog(sessionManager, hookRelay, log); // desktop.log: Claude Code's startup dialogs
+  attachStartupDialogLog(sessionManager, hookRelay, log, (id) => sessionManager.markStarted(id)); // desktop.log + SessionInfo.awaitingStart
 
   // window.claude.terminal.getScreenText — reads the visible xterm buffer
   // for the given session. The actual read happens in the renderer (xterm

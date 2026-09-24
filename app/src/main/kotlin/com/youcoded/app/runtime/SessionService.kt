@@ -1020,7 +1020,8 @@ class SessionService : Service() {
                         status = if (session.status.value == SessionStatus.Dead) "destroyed" else "active",
                         permissionMode = session.permissionMode,
                         skipPermissions = session.dangerousMode,
-                        createdAt = session.createdAt
+                        createdAt = session.createdAt,
+                        awaitingStart = session.awaitingStart,
                     )
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray(sessions)) }

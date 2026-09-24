@@ -86,3 +86,26 @@ describe('StartupDialogLog on real Claude Code 2.1.281 output', () => {
     });
   }
 });
+
+import { EventEmitter } from 'events';
+import { attachStartupDialogLog } from '../src/main/startup-dialog-log';
+import { SessionManager } from '../src/main/session-manager';
+describe('the first hook marks a session started for every client', () => {
+  it('calls onStarted with the session id on its first hook event', () => {
+    const sessions = new EventEmitter();
+    const hooks = new EventEmitter();
+    const started: string[] = [];
+    attachStartupDialogLog(sessions as never, hooks as never, () => {}, (id) => started.push(id));
+    hooks.emit('hook-event', { sessionId: 's1' });
+    expect(started).toEqual(['s1']);
+  });
+
+  it('SessionManager.markStarted clears awaitingStart on the listed info', () => {
+    const sm = new SessionManager();
+    const info = { id: 's1', awaitingStart: true } as any;
+    (sm as any).sessions.set('s1', { info });
+    expect(sm.listSessions()[0].awaitingStart).toBe(true);
+    sm.markStarted('s1');
+    expect(sm.listSessions()[0].awaitingStart).toBeUndefined();
+  });
+});

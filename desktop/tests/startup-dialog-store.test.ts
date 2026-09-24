@@ -24,3 +24,14 @@ describe('composerDisabled', () => {
     expect(promptShowMeansStarted('menu_x')).toBe(false);
   });
 });
+
+import { startedIds } from '../src/renderer/state/startup-dialog-store';
+describe('startedIds (a window or phone connecting mid-startup)', () => {
+  it('leaves out sessions the host says are still on their startup dialogs', () => {
+    expect(startedIds([
+      { id: 'running' },
+      { id: 'on-trust-dialog', awaitingStart: true },
+      { id: 'explicitly-started', awaitingStart: false },
+    ])).toEqual(['running', 'explicitly-started']);
+  });
+});

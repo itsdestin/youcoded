@@ -18,7 +18,7 @@
     "renderer/styles/globals.css": 2936,
     "renderer/components/SessionStrip.tsx": 2774,
     "main/main.ts": 2494,
-    "shared/types.ts": 2290,
+    "shared/types.ts": 2296,
     "renderer/components/SyncPanel.tsx": 2041,
     "main/engine/engine-manager.ts": 2035,
     "renderer/components/ResumeBrowser.tsx": 1837,

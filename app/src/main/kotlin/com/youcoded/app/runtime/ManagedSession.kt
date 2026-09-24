@@ -85,6 +85,11 @@ class ManagedSession(
     /** Callback when session leaves AwaitingApproval (for notification clearing). */
     var onApprovalCleared: ((sessionId: String) -> Unit)? = null,
 ) {
+    /** Still on its startup dialogs: Claude Code has not run a hook yet
+     *  (SessionInfo.awaitingStart on desktop). Shell sessions never wait. */
+    val awaitingStart: Boolean
+        get() = !shellMode && ptyBridge?.getEventBridge()?.sessionStarted?.value != true
+
     /** Bridge server for forwarding events to React UI. Set by SessionRegistry. */
     var bridgeServer: LocalBridgeServer? = null
 

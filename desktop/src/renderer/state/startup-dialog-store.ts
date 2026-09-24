@@ -79,3 +79,11 @@ export function promptShowMeansStarted(promptId: string): boolean {
 export function composerDisabled(s: { trustGate: boolean; moved: boolean; started: boolean; terminalTouch: boolean }): boolean {
   return s.trustGate || s.moved || (!s.started && !s.terminalTouch);
 }
+
+/** The ids of listed sessions that have STARTED (host says so, or is too old
+ *  to say). A window or phone that connects — or reloads — while a session is
+ *  still on its startup dialogs must keep that session's chat gated and its
+ *  safety net on; "it was already running" is only true once it has started. */
+export function startedIds(list: ReadonlyArray<{ id: string; awaitingStart?: boolean }>): string[] {
+  return list.filter((s) => !s.awaitingStart).map((s) => s.id);
+}

@@ -75,7 +75,7 @@ import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
 import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
 import { InitializingCover } from './components/InitializingCover';
-import { promptShowMeansStarted, composerDisabled } from './state/startup-dialog-store';
+import { promptShowMeansStarted, composerDisabled, startedIds } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
@@ -2178,11 +2178,11 @@ function AppInner() {
         return [...prev, ...newSessions];
       });
       setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
-      // Mark all existing sessions as initialized — they're already running,
-      // so skip the "Initializing" overlay (which waits for first hook event)
+      // Existing sessions that have STARTED skip the "Initializing" cover; one
+      // still on its startup dialogs does not (SessionInfo.awaitingStart).
       setInitializedSessions((prev) => {
         const next = new Set(prev);
-        for (const s of list) next.add(s.id);
+        for (const id of startedIds(list)) next.add(id);
         return next;
       });
 
@@ -2271,10 +2271,7 @@ function AppInner() {
       setSessionModels((prev) => prev.has(sid) ? prev : new Map(prev).set(sid, matchModelAlias(sessionInfo.model)));
       // Transferred sessions were already initialized on the source — skip the
       // "Initializing" overlay, it would flash briefly before replay completes.
-      setInitializedSessions((prev) => {
-        if (prev.has(sid)) return prev;
-        const next = new Set(prev); next.add(sid); return next;
-      });
+      if (!sessionInfo.awaitingStart) setInitializedSessions((prev) => (prev.has(sid) ? prev : new Set(prev).add(sid)));
       if (freshWindow) setSessionId(sid);
       // Hydrate from ONE page, not a whole-transcript replay. Main knows this
       // window INHERITED the session and serves its first page read to EOF
@@ -2376,8 +2373,8 @@ function AppInner() {
         // Never over a place already on screen: this reply can land after the hydrate chose
         // one (T4 review, 7).
         setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
-        // Mark existing sessions as initialized (already running)
-        setInitializedSessions(new Set(list.map((s) => s.id)));
+        // Existing sessions that have started (not those still on startup dialogs)
+        setInitializedSessions(new Set(startedIds(list)));
       }).catch(() => {});
     });
     return unsub;
