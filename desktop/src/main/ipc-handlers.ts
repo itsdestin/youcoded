@@ -61,6 +61,7 @@ import { detectEndpoints } from './models/endpoint-detectors';
 import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
+import { listProjectKeyCandidatesAsync } from './project-extensions/candidates';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
@@ -2966,6 +2967,28 @@ export function registerIpcHandlers(
     // up can never disagree. It throws when ChatGPT is signed out; the host
     // treats that as a fallback to ordinary reconstruction.
     { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
+    // skillConfigStore (16th param, T2 project-plugin-controls): marketplace
+    // installedAt tracking, the last input the host's per-project
+    // availability resolution needs. Reuses skillProvider's OWN store rather
+    // than constructing a second one — same ~/.claude/youcoded-skills.json,
+    // never two writers.
+    skillProvider.configStore,
+    // resolveProjectAvailabilityInputs (17th param, T2 project-plugin-controls)
+    // — the ONLY production construction site, deliberately explicit rather
+    // than a constructor default (see that param's own comment on why: a
+    // default reading real global state would make every bare TEST
+    // construction of the host quietly depend on it too). ManagedRoots may
+    // not exist yet (sync spaces disabled/not started) — `stores` is then
+    // null, which resolveSessionAvailability treats as "don't know" (fail
+    // open), same as no NativeHome being wired.
+    async () => {
+      const roots = getManagedRoots();
+      const candidates = await listProjectKeyCandidatesAsync(roots?.projectsRoot ?? null);
+      return {
+        candidates,
+        stores: roots?.personalRoot ? { personalRoot: roots.personalRoot, home: nativeHome } : null,
+      };
+    },
   );
 
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref

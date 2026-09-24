@@ -55,6 +55,15 @@ describe('parseProjectExtensionsRecord', () => {
     }));
     expect((rec?.plugins.p as any).futureField).toBe('x');
   });
+
+  // T1 review F2: a top-level field this build doesn't know about must
+  // round-trip, same as a per-entry unknown field just above.
+  it('preserves an unknown TOP-LEVEL field instead of stripping it', () => {
+    const rec = parseProjectExtensionsRecord(JSON.stringify({
+      schemaVersion: 1, seededAt: 0, plugins: {}, items: {}, futureTopLevelField: 'x',
+    }));
+    expect((rec as any)?.futureTopLevelField).toBe('x');
+  });
 });
 
 describe('mergeProjectExtensionsRecords', () => {
@@ -94,6 +103,15 @@ describe('mergeProjectExtensionsRecords', () => {
     const b = emptyRecord();
     expect(mergeProjectExtensionsRecords(a, b).items['future:thing']).toEqual({ on: true, at: 1 });
   });
+
+  // T1 review F2, merge half: the parse-level fix alone isn't enough — a
+  // synced read folds copies through mergeProjectExtensionsRecords too, so
+  // the merge itself must not drop an unknown top-level field either.
+  it('preserves an unknown TOP-LEVEL field through a merge', () => {
+    const a = { ...emptyRecord(), futureTopLevelField: 'x' } as ProjectExtensionsRecord;
+    const b = emptyRecord();
+    expect((mergeProjectExtensionsRecords(a, b) as any).futureTopLevelField).toBe('x');
+  });
 });
 
 describe('getProjectExtensions / mutateProjectExtensions — synced store', () => {
@@ -103,7 +121,10 @@ describe('getProjectExtensions / mutateProjectExtensions — synced store', () =
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-proj-ext-'));
     stores = { personalRoot: path.join(root, 'Personal'), home: new NativeHome(root) };
   });
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Fix (T1 review F3): maxRetries/retryDelay per test-suite-hygiene.md — a
+  // late write into the temp dir (the lock file, a just-finished async write)
+  // throws ENOTEMPTY out of a bare rmSync into a PASSING test.
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it('reads null for a project with no record yet', async () => {
     expect(await getProjectExtensions(stores, 'MyProject')).toBeNull();
@@ -156,7 +177,10 @@ describe('getProjectExtensions / mutateProjectExtensions — unsynced (local) st
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-proj-ext-local-'));
     stores = { personalRoot: path.join(root, 'Personal'), home: new NativeHome(root) };
   });
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Fix (T1 review F3): maxRetries/retryDelay per test-suite-hygiene.md — a
+  // late write into the temp dir (the lock file, a just-finished async write)
+  // throws ENOTEMPTY out of a bare rmSync into a PASSING test.
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it('writes then reads back a local record keyed by canonical path, never touching Personal/', async () => {
     const key = '/home/dest/UnsyncedProject';
@@ -184,7 +208,10 @@ describe('ensureSeeded', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-proj-ext-seed-'));
     stores = { personalRoot: path.join(root, 'Personal'), home: new NativeHome(root) };
   });
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Fix (T1 review F3): maxRetries/retryDelay per test-suite-hygiene.md — a
+  // late write into the temp dir (the lock file, a just-finished async write)
+  // throws ENOTEMPTY out of a bare rmSync into a PASSING test.
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   const skills: CatalogSkillEntry[] = [
     { id: 'youcoded-chatsearch', source: 'plugin', pluginName: 'youcoded-chatsearch' },
@@ -233,7 +260,10 @@ describe('markPluginRemoved — uninstall cascade', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-proj-ext-cascade-'));
     stores = { personalRoot: path.join(root, 'Personal'), home: new NativeHome(root) };
   });
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Fix (T1 review F3): maxRetries/retryDelay per test-suite-hygiene.md — a
+  // late write into the temp dir (the lock file, a just-finished async write)
+  // throws ENOTEMPTY out of a bare rmSync into a PASSING test.
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it('tombstones the plugin in a synced project that has it, leaves an untouched project alone', async () => {
     await mutateProjectExtensions(stores, 'HasPlugin', () => ({
@@ -272,5 +302,27 @@ describe('markPluginRemoved — uninstall cascade', () => {
   it('never creates a project record that did not already exist', async () => {
     await markPluginRemoved(stores, 'civic', NOW);
     expect(fs.existsSync(path.join(stores.personalRoot, 'ProjectExtensions'))).toBe(false);
+  });
+
+  // T1 review F1: the canonical file has no entry for the plugin at all — it
+  // exists only in an unfolded conflict copy. The gate (readSyncedRecord)
+  // sees it via the fold, so this must still tombstone it on the canonical
+  // file, not silently no-op.
+  it('tombstones a plugin whose only record lives in an unfolded conflict copy', async () => {
+    const dir = path.join(stores.personalRoot, 'ProjectExtensions');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'HasPlugin.json'), JSON.stringify(emptyRecord(NOW)));
+    fs.writeFileSync(path.join(dir, 'HasPlugin (from other-device, 2026-09-24).json'), JSON.stringify({
+      ...emptyRecord(NOW), plugins: { civic: { on: true, partsChosen: true, at: NOW } },
+    }));
+
+    await markPluginRemoved(stores, 'civic', NOW + 1000);
+
+    const read = await getProjectExtensions(stores, 'HasPlugin');
+    expect(read?.plugins.civic).toEqual({ on: false, partsChosen: true, removed: true, at: NOW + 1000 });
+    // And it actually landed on the CANONICAL file — not just observable
+    // through the fold — so future folds keep preferring it via `at`.
+    const canonicalOnDisk = JSON.parse(fs.readFileSync(path.join(dir, 'HasPlugin.json'), 'utf8'));
+    expect(canonicalOnDisk.plugins.civic).toMatchObject({ on: false, removed: true, at: NOW + 1000 });
   });
 });

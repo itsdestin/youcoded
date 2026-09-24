@@ -14,12 +14,16 @@ const catalog: SkillCatalog = {
 };
 const emptyCatalog: SkillCatalog = { list: () => [], load: () => { throw new Error('none'); } };
 
-function sessionWith(profileOver: Partial<typeof CLOUD_DEFAULT>, skillCatalog: SkillCatalog = catalog, harnessOver: any = {}) {
+function sessionWith(
+  profileOver: Partial<typeof CLOUD_DEFAULT>, skillCatalog: SkillCatalog = catalog, harnessOver: any = {},
+  projectSkillAllowlist?: Set<string>,
+) {
   return new HarnessSession(
     makeOpts({
       profile: { ...CLOUD_DEFAULT, ...profileOver },
       skillCatalog,
       harness: { schema: 1, id: 'agent', name: 'Agent', systemPrompt: 'sys', tools: [], permissionPolicy: 'ask', ...harnessOver },
+      ...(projectSkillAllowlist ? { projectSkillAllowlist } : {}),
     }),
     async () => ({} as any),
   );
@@ -80,6 +84,41 @@ describe('the manifest skills allowlist scopes the catalog', () => {
     const d = (sessionWith({ exposeSkillCatalog: true }) as any).buildAiTools().Skill.description as string;
     expect(d).toContain('journal');
     expect(d).toContain('theme-builder');
+  });
+});
+
+// T2 (project-plugin-controls, design §3): a SECOND, independent allowlist —
+// the project's currently-switched-on set, frozen per session — narrows the
+// same list() the preset allowlist narrows above. The two combine as an
+// intersection, and neither ever reaches load().
+describe('project availability narrows the catalog alongside the preset allowlist', () => {
+  it('list() is the intersection — a project-off skill is dropped even with no preset allowlist', () => {
+    const names = (s: HarnessSession) => (s as any).buildAiTools().Skill.description as string;
+    const scoped = sessionWith({ exposeSkillCatalog: true }, catalog, {}, new Set(['journal']));
+    expect(names(scoped)).toContain('journal');
+    expect(names(scoped)).not.toContain('theme-builder');
+  });
+
+  it('a skill must pass BOTH the preset allowlist and the project set', () => {
+    const names = (s: HarnessSession) => (s as any).buildAiTools().Skill.description as string;
+    // Preset allows both; project allows only 'journal' — intersection is just 'journal'.
+    const scoped = sessionWith({ exposeSkillCatalog: true }, catalog, { skills: ['journal', 'theme-builder'] }, new Set(['journal']));
+    expect(names(scoped)).toContain('journal');
+    expect(names(scoped)).not.toContain('theme-builder');
+  });
+
+  it('an empty project set (B-1: outside any project) offers nothing, attaching no tool', () => {
+    const scoped = sessionWith({ exposeSkillCatalog: true }, catalog, {}, new Set());
+    expect(toolNames(scoped)).not.toContain('Skill');
+  });
+
+  it('load() stays UNSCOPED by the project set — manual /skill keeps working for an excluded skill', () => {
+    const scoped = sessionWith({ exposeSkillCatalog: true }, catalog, {}, new Set(['journal']));
+    // 'theme-builder' is excluded from list() (previous test) but load() must
+    // still resolve it — this is what keeps the host's invokeSkill/manual
+    // /skill-name path (which never even touches this allowlist) consistent
+    // with what scopedSkillCatalog() itself would do if asked to load it.
+    expect((scoped as any).scopedSkillCatalog().load('theme-builder').id).toBe('theme-builder');
   });
 });
 

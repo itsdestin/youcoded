@@ -17,6 +17,24 @@ import { nativeStoreSlug } from '../slug-encoding';
 import { NativeHome } from '../native-home';
 import { shortenPathTokens } from '../conversations/naming-core';
 
+/**
+ * Frozen availability set (project-plugin-controls, 2026-09-24 T2, design §3
+ * "Frozen per conversation"): resolved ONCE at create() from that moment's
+ * project-extensions settings (project-extensions/session-availability.ts),
+ * then reused verbatim by resume() — a project's settings can change while a
+ * conversation is closed, but the SESSION's own capability set must not
+ * silently move under an already-open conversation.
+ */
+export interface NativeSessionAvailability {
+  projectKey: string | null;
+  /** skill-catalog.ts SkillCatalog.list() `id` shape — NOT resolve.ts's
+   *  itemKey (a self/project skill keys differently there). */
+  skillCatalogIds: string[];
+  /** Raw MCP registry server ids (McpServerEntry.id) — NOT resolve.ts's
+   *  `mcp:`-prefixed itemKey. */
+  mcpServerIds: string[];
+}
+
 export interface NativeSessionHeader {
   v: 1;
   sessionId: string;
@@ -32,6 +50,15 @@ export interface NativeSessionHeader {
   parentSessionId?: string;
   sessionKind?: 'root' | 'specialist';
   agentType?: string;
+  /** Absent on any header written before this field existed: resume() must
+   *  then fall back to "everything on" — today's pre-feature behaviour — NOT
+   *  to B-1's empty set. An older conversation never had exclusion applied
+   *  when it was created, so retroactively narrowing it now would silently
+   *  break a tool it already relied on (design §3, "Sessions with no stored
+   *  set ... resolve as today"). Arrays, not Sets, for JSON round-tripping;
+   *  validated tolerantly on read like every other additive header field
+   *  (see validateHeader below) — a malformed value is dropped, not thrown. */
+  availability?: NativeSessionAvailability;
 }
 
 export interface NativeSessionListEntry extends NativeSessionHeader {
@@ -479,17 +506,35 @@ export class SessionStore {
     };
   }
 
+  /** True only when `raw` is a well-formed NativeSessionAvailability — every
+   *  field present and correctly typed. Used by validateHeader below to drop
+   *  (never throw on) a torn or hand-edited `availability` field. */
+  private isWellFormedAvailability(raw: unknown): raw is NativeSessionAvailability {
+    if (!raw || typeof raw !== 'object') return false;
+    const a = raw as Record<string, unknown>;
+    const stringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+    return (a.projectKey === null || typeof a.projectKey === 'string')
+      && stringArray(a.skillCatalogIds) && stringArray(a.mcpServerIds);
+  }
+
   /** A line only counts as a header if it's v1 AND names this exact session. */
   private validateHeader(line: unknown, sessionId: string): NativeSessionHeader | null {
     if (!line || typeof line !== 'object') return null;
     const h = line as NativeSessionHeader;
     if (h.v !== 1 || h.sessionId !== sessionId) return null;
     // WHY normalize additive fields at the persistence boundary: a malformed
-    // hand-edited header must resume as the legacy no-guard behavior.
-    if (h.stepGuard !== undefined && !(Number.isSafeInteger(h.stepGuard) && h.stepGuard > 0)) {
-      const { stepGuard: _invalid, ...safe } = h;
-      return safe;
+    // hand-edited header must resume as the legacy no-guard behavior. Both
+    // checks run independently (a header can have a bad stepGuard AND a good
+    // availability, or vice versa) rather than short-circuiting on the first.
+    let safe = h;
+    if (safe.stepGuard !== undefined && !(Number.isSafeInteger(safe.stepGuard) && safe.stepGuard > 0)) {
+      const { stepGuard: _invalidStepGuard, ...rest } = safe;
+      safe = rest;
     }
-    return h;
+    if (safe.availability !== undefined && !this.isWellFormedAvailability(safe.availability)) {
+      const { availability: _invalidAvailability, ...rest } = safe;
+      safe = rest;
+    }
+    return safe;
   }
 }

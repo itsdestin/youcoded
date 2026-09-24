@@ -332,4 +332,71 @@ describe('McpManager', () => {
     expect(lease.servers.map(r => r.id)).toEqual(['good']);
     expect(mgr.status().find(s => s.id === 'bad')?.error).toContain('ENOENT');
   });
+
+  // T2 (project-plugin-controls, design §3 "Enforcement"): acquire()'s new
+  // optional allowIds must filter BEFORE any connect/spawn — a turned-off
+  // server must never even reach connectionFactory, not merely be dropped
+  // from the returned list the way a broken server is.
+  describe('acquire(sessionId, allowIds)', () => {
+    function twoServerDeps(connectSpy: (id: string) => void) {
+      const registry = {
+        resolveAllEnabled: async () => ([
+          { id: 'on', label: 'On', enabled: true, transport: { type: 'stdio', command: 'x' }, origin: { kind: 'user' }, missingSecrets: [] },
+          { id: 'off', label: 'Off', enabled: true, transport: { type: 'stdio', command: 'y' }, origin: { kind: 'user' }, missingSecrets: [] },
+        ] as any),
+      };
+      const connectionFactory = (s: any) => ({
+        state: 'ready' as const, lastError: null,
+        connect: async () => { connectSpy(s.id); },
+        listTools: () => [{ name: 't', inputSchema: { type: 'object' } }],
+        callTool: async () => ({ text: 'ok', isError: false }),
+        close: async () => {},
+      });
+      return { registry: registry as any, connectionFactory: connectionFactory as any };
+    }
+
+    it('a server left out of allowIds is never connected and never appears in the lease', async () => {
+      const connected: string[] = [];
+      const mgr = new McpManager(twoServerDeps((id) => connected.push(id)));
+      const lease = await mgr.acquire('s1', new Set(['on']));
+      expect(lease.servers.map((s) => s.id)).toEqual(['on']);
+      expect(connected).toEqual(['on']); // 'off' was never even handed to connectionFactory
+      expect(mgr.status().map((s) => s.id)).toEqual(['on']); // and never pooled either
+    });
+
+    it('an empty allowIds Set (B-1: outside any project) connects nothing', async () => {
+      const connected: string[] = [];
+      const mgr = new McpManager(twoServerDeps((id) => connected.push(id)));
+      const lease = await mgr.acquire('s1', new Set());
+      expect(lease.servers).toEqual([]);
+      expect(connected).toEqual([]);
+    });
+
+    it('undefined allowIds keeps today\'s behaviour exactly — every enabled server is eligible', async () => {
+      const connected: string[] = [];
+      const mgr = new McpManager(twoServerDeps((id) => connected.push(id)));
+      const lease = await mgr.acquire('s1');
+      expect(lease.servers.map((s) => s.id).sort()).toEqual(['off', 'on']);
+      expect(connected.sort()).toEqual(['off', 'on']);
+    });
+  });
+
+  it('listEnabled reads the registry\'s raw enabled list without connecting anything', async () => {
+    const connect = vi.fn();
+    const registry = {
+      resolveAllEnabled: async () => ([
+        { id: 'demo', label: 'Demo', enabled: true, transport: { type: 'stdio', command: 'node' },
+          origin: { kind: 'user' }, missingSecrets: [] },
+      ] as any),
+    };
+    const connectionFactory = () => ({
+      state: 'ready' as const, lastError: null, connect: async () => { connect(); },
+      listTools: () => [], callTool: async () => ({ text: '', isError: false }), close: async () => {},
+    });
+    const mgr = new McpManager({ registry: registry as any, connectionFactory: connectionFactory as any });
+    const rows = await mgr.listEnabled();
+    expect(rows.map((r) => r.id)).toEqual(['demo']);
+    expect(connect).not.toHaveBeenCalled();
+    expect(mgr.status()).toEqual([]); // nothing pooled
+  });
 });

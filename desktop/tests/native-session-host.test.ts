@@ -18,6 +18,7 @@ import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_NOTE_MAX_CHARS, SPECIALIS
 import { OWNER, DelegationLedger } from '../src/main/harness/specialists/delegation-ledger';
 import { ModelSearchTool } from '../src/main/harness/tools/model-search';
 import type { CatalogModel } from '../src/shared/provider-types';
+import { mutateProjectExtensions, PROJECT_EXTENSIONS_SCHEMA, type ProjectExtensionsStores } from '../src/main/project-extensions/store';
 
 /** Ceiling for this file's fire-and-forget-write polls, as a tries count at the
  *  10ms interval each loop already uses (1,500 x 10ms = 15s, matching the
@@ -894,6 +895,125 @@ describe('NativeSessionHost', () => {
       await expect(h.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } })).resolves.toBeUndefined();
       const session = (h as any).live.get('s-1').session;
       expect(session.opts.mcpServers).toBeUndefined();
+    });
+  });
+
+  // ---- T2 (project-plugin-controls, design §3/§6 "Host" bullet) — per-project
+  // skill/MCP availability, resolved at create() and frozen into the header. ----
+  describe('project availability enforcement (T2 project-plugin-controls)', () => {
+    // A REAL project-scoped skill (scanProjectSkills reads <cwd>/.claude/skills/,
+    // not the sandboxed HOME) — deterministic regardless of the machine, unlike
+    // the global ~/.claude scan (see skill-tool-gating.test.ts's own comment on
+    // that exact hazard).
+    function writeProjectSkill(name: string): void {
+      const dir = path.join(root, '.claude', 'skills', name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name} skill\n---\nDo the ${name} thing.`);
+    }
+
+    // Bundles a REAL ProjectExtensionsStores (backed by this test's own root)
+    // with a candidate list that resolves `root` to the synced project key
+    // 'TestProj' — injected via resolveProjectAvailabilityInputs (the LAST
+    // constructor param) so this never touches the shared HOME sandbox other
+    // test files' youcoded-folders.json fixtures also use.
+    function hostWithProject(mcpManager?: any) {
+      const stores: ProjectExtensionsStores = { personalRoot: path.join(root, 'Personal'), home: new NativeHome(root) };
+      const candidates = [{ path: root, syncName: 'TestProj' }];
+      const h = new NativeSessionHost(
+        new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined,
+        mcpManager, undefined, undefined, undefined, undefined, undefined,
+        async () => ({ candidates, stores }),
+      );
+      return { h, stores };
+    }
+
+    it('a project-off skill is absent from the Skill tool list, but manual /skill still loads it', async () => {
+      writeProjectSkill('alpha');
+      writeProjectSkill('beta');
+      const { h, stores } = hostWithProject();
+      // Explicit entry BEFORE create() — ensureSeeded only materializes items
+      // it has never seen, so this is what "the project turned beta off" means
+      // on disk; 'alpha' gets no entry and seeds ON (today's default).
+      await mutateProjectExtensions(stores, 'TestProj', () => ({
+        schemaVersion: PROJECT_EXTENSIONS_SCHEMA, seededAt: Date.now(),
+        plugins: {}, items: { 'project:beta': { on: false, at: Date.now() } },
+      }));
+
+      await h.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const session = (h as any).live.get('s-1').session;
+      const ids = session.contextInventory().skills.map((s: { id: string }) => s.id);
+      expect(ids).toContain('alpha');
+      expect(ids).not.toContain('beta');
+
+      // Manual /skill (invokeSkill) never consults the project allowlist at
+      // all — the host's own separate, always-unfiltered path.
+      await expect(h.invokeSkill('s-1', 'beta')).resolves.toEqual({ ok: true });
+      await h.destroyAll();
+    });
+
+    it('a project-off MCP server gets no tools attached and is never acquired', async () => {
+      const listEnabled = vi.fn(async () => ([
+        { id: 'on-server', origin: { kind: 'user' as const } },
+        { id: 'off-server', origin: { kind: 'user' as const } },
+      ]));
+      const acquired: (Set<string> | undefined)[] = [];
+      const acquire = vi.fn(async (_sessionId: string, allowIds?: Set<string>) => {
+        acquired.push(allowIds);
+        const servers = allowIds ? [{ id: 'on-server', label: 'on-server', tools: [], call: async () => ({ text: '', isError: false }) }] : [];
+        return { servers, release: async () => {} };
+      });
+      const { h, stores } = hostWithProject({ destroyAll: async () => {}, acquire, listEnabled });
+      await mutateProjectExtensions(stores, 'TestProj', () => ({
+        schemaVersion: PROJECT_EXTENSIONS_SCHEMA, seededAt: Date.now(),
+        plugins: {}, items: { 'mcp:off-server': { on: false, at: Date.now() } },
+      }));
+
+      await h.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      // acquire() was called with an allowIds Set containing ONLY 'on-server' —
+      // the off server is filtered out BEFORE acquire() ever runs, not merely
+      // dropped from the result.
+      expect(acquired).toEqual([new Set(['on-server'])]);
+      const session = (h as any).live.get('s-1').session;
+      expect(session.opts.mcpServers.map((s: { id: string }) => s.id)).toEqual(['on-server']);
+      await h.destroyAll();
+    });
+
+    it('resume() reuses the FROZEN set from create() — a later project settings change does not reach an already-open conversation', async () => {
+      writeProjectSkill('alpha');
+      const { h, stores } = hostWithProject();
+      await mutateProjectExtensions(stores, 'TestProj', () => ({
+        schemaVersion: PROJECT_EXTENSIONS_SCHEMA, seededAt: Date.now(),
+        plugins: {}, items: { 'project:alpha': { on: true, at: Date.now() } },
+      }));
+      await h.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      expect((h as any).live.get('s-1').session.contextInventory().skills.map((s: { id: string }) => s.id)).toContain('alpha');
+      await h.destroy('s-1');
+
+      // The project's setting flips OFF after create() — a device sync, or the
+      // user editing Skills & tools while the conversation sat closed.
+      await mutateProjectExtensions(stores, 'TestProj', (cur) => ({
+        ...cur!, items: { ...cur!.items, 'project:alpha': { on: false, at: Date.now() + 1000 } },
+      }));
+
+      const { h: h2 } = hostWithProject();
+      const resumed = await h2.resume('s-1', root);
+      expect(resumed).toBe(true);
+      // Still ON — resume() reads the HEADER's stored set, never recomputes.
+      expect((h2 as any).live.get('s-1').session.contextInventory().skills.map((s: { id: string }) => s.id)).toContain('alpha');
+      await h2.destroyAll();
+    });
+
+    it('a header with no stored availability set (an older conversation) resolves as today — no narrowing at all', async () => {
+      writeProjectSkill('alpha');
+      const store = new SessionStore(new NativeHome(root));
+      // A pre-T2 header — no `availability` field at all.
+      await store.create({ v: 1, sessionId: 's-1', harnessId: 'coder', binding: { providerId: 'openrouter', modelId: 'm' }, cwd: root, createdAt: Date.now() });
+      const h = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+      const resumed = await h.resume('s-1', root);
+      expect(resumed).toBe(true);
+      expect((h as any).live.get('s-1').session.contextInventory().skills.map((s: { id: string }) => s.id)).toContain('alpha');
+      await h.destroyAll();
     });
   });
 

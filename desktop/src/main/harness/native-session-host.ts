@@ -16,7 +16,7 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
-import type { TranscriptEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
+import type { TranscriptEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText, SkillEntry } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
@@ -35,7 +35,7 @@ import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstruction
 import { resolveProfile, effectiveContextForModel, type CapabilityProfile, type ProfileProviderType } from './capability-profile';
 import { CORE_TOOLS } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
-import { createSkillCatalog, SkillNotFound, type SkillCatalog } from './skills/skill-catalog';
+import { createSkillCatalog, discoverSkillEntries, SkillNotFound, type SkillCatalog } from './skills/skill-catalog';
 import { canonicalize, resolveP } from './tools/guards';
 import { isUnderRoot } from '../artifacts/read-binary-access';
 import type { SpecialistDefinition } from './specialists/registry';
@@ -63,6 +63,13 @@ import { log } from '../logger';
 // mirror — see slug-encoding.ts.
 import { nativeStoreSlug } from '../slug-encoding';
 import type { McpLease } from './mcp/mcp-manager';
+// T2 (project-plugin-controls, design §3 "Enforcement") — per-project skill
+// & tool-connection availability, resolved once at create() and frozen into
+// the session header (see NativeSessionAvailability's own header comment).
+import { resolveSessionAvailability } from '../project-extensions/session-availability';
+import type { CatalogMcpEntry, PluginInstallInfo } from '../project-extensions/resolve';
+import type { ProjectExtensionsStores } from '../project-extensions/store';
+import type { ProjectKeyCandidate } from '../project-extensions/project-key';
 
 export interface CreateNativeSessionOpts {
   sessionId: string;
@@ -2227,7 +2234,16 @@ export class NativeSessionHost extends EventEmitter {
     // given back through the object acquire() returns, which is what keeps two
     // generations of one RESUMED session (same id, different lease) from
     // releasing each other's connections. See McpLease in mcp-manager.ts.
-    private mcpManager?: { destroyAll(): Promise<void>; acquire(sessionId: string): Promise<McpLease> },
+    // T2: acquire() gained an optional per-session allowIds (design §3);
+    // listEnabled() is the new raw-list read availability resolution uses
+    // BEFORE acquire() ever runs (see resolveAvailabilityForCreate below).
+    // Both additive/optional so every pre-T2 construction (fakes included)
+    // keeps compiling unchanged.
+    private mcpManager?: {
+      destroyAll(): Promise<void>;
+      acquire(sessionId: string, allowIds?: Set<string>): Promise<McpLease>;
+      listEnabled?(): Promise<CatalogMcpEntry[]>;
+    },
     // Task 2 (plan 1b) — backs the DelegationLedger this constructor builds
     // below. Takes a NativeHome rather than a pre-built DelegationLedger so
     // this file doesn't need to know delegation-ledger.ts's own construction
@@ -2265,6 +2281,37 @@ export class NativeSessionHost extends EventEmitter {
       acceptedHistory?: AcceptedHistoryStore;
       continuationIdentityFor?: (binding: ModelBinding) => string;
     } = {},
+    // T2 (project-plugin-controls) — marketplace-install tracking
+    // (skill-config-store.ts's installedAt), the one remaining input
+    // resolveSessionAvailability needs besides the skill/mcp catalogs it
+    // already gets from discoverSkillEntries()/mcpManager.listEnabled().
+    // Structural + optional + LAST, same convention as every other seam
+    // above: undefined (every pre-T2 construction) means "no marketplace
+    // install records" — resolve.ts's own default-rule already treats a
+    // missing installedAt as "before the seed", i.e. stays on, so this never
+    // turns anything off by simply being absent.
+    private skillConfigStore?: { getPackages(): Record<string, PluginInstallInfo> },
+    // T2 (project-plugin-controls) — the project-key candidate list PLUS the
+    // ProjectExtensionsStores to seed/read, bundled behind ONE injected async
+    // closure. NO DEFAULT (deliberately, unlike most other optional seams
+    // above): a default that reads real fs / the process-wide ManagedRoots
+    // singleton would make EVERY bare test construction of this class quietly
+    // depend on that global, mutable, RUN-WIDE state (the HOME sandbox is
+    // shared across every test FILE, not reset per file — several other test
+    // files write real entries into the very `youcoded-folders.json` this
+    // would read) — exactly the cross-test leakage class test-suite-hygiene.md
+    // warns about, and it broke pre-existing MCP/specialist tests that never
+    // asked to exercise this feature (caught while building this task).
+    // Absent (undefined) is therefore its own explicit case in
+    // resolveAvailabilityForCreate below, answering null — the SAME "don't
+    // know" fail-open resolveSessionAvailability already returns for a wired-
+    // but-storeless host. Production wiring (ipc-handlers.ts) always supplies
+    // the real implementation, reading ManagedRoots (personalRoot/projectsRoot)
+    // and this.nativeHome, same shape a test's own override uses.
+    private resolveProjectAvailabilityInputs?: () => Promise<{
+      candidates: ProjectKeyCandidate[];
+      stores: ProjectExtensionsStores | null;
+    }>,
   ) {
     super();
     // Re-emit broker asks/expirations so ipc-handlers can forward them to the
@@ -2598,7 +2645,20 @@ export class NativeSessionHost extends EventEmitter {
    *  `profile` is accepted here so Task 6 can add a prompt variant without another
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
-  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
+  private toolWiring(
+    sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string,
+    // T2 (project-plugin-controls): skillEntries is the ALREADY-SCANNED
+    // discoverSkillEntries(cwd) result — passed in rather than re-scanned
+    // here, since create()/resume() need the same entries for availability
+    // resolution too (create() only) and must not scan twice. Absent (no
+    // pre-T2 caller exists, but keeps this an additive change) falls back to
+    // createSkillCatalog's own internal scan, exactly like before this task.
+    skillEntries?: SkillEntry[],
+    // The frozen per-session set (create()'s fresh resolve, or resume()'s
+    // stored header value) — undefined means no project-based narrowing at
+    // all (design §3: an old session with no stored set resolves as today).
+    projectSkillAllowlist?: Set<string>,
+  ): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'projectSkillAllowlist' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
     return {
       // G-1: this session's background-command registry, host-owned.
       shells: this.shellsFor(sessionId),
@@ -2638,7 +2698,8 @@ export class NativeSessionHost extends EventEmitter {
       // and the session agree on one source, and a test can inject a fake.
       // Fix: project .claude/skills are session-scoped. Build their catalog from
       // this session's cwd so one workspace's workflows never appear in another.
-      skillCatalog: this.skillCatalog ?? createSkillCatalog(undefined, cwd),
+      skillCatalog: this.skillCatalog ?? createSkillCatalog(skillEntries, cwd),
+      ...(projectSkillAllowlist ? { projectSkillAllowlist } : {}),
       decide: this.buildDecide(sessionId, cwd, preset.presetRules),
       // Stamp the CURRENT mode on every ask (read at call time, not wiring
       // time — a mid-session mode flip must show on the next ask). The
@@ -2743,14 +2804,59 @@ export class NativeSessionHost extends EventEmitter {
    *  already handled inside McpManager itself (excluded from the returned
    *  list, never a rejection) — this only guards the rarer whole-registry
    *  failure. */
-  private async acquireMcp(sessionId: string): Promise<McpLease | undefined> {
+  private async acquireMcp(sessionId: string, allowIds?: Set<string>): Promise<McpLease | undefined> {
     if (!this.mcpManager) return undefined;
     try {
-      return await this.mcpManager.acquire(sessionId);
+      // `allowIds` omitted entirely (not passed as an explicit `undefined`)
+      // when there is no restriction — keeps the exact one-arg call shape
+      // every pre-T2 caller/test already asserts on, and matches
+      // McpManager.acquire's own "undefined keeps today's behaviour" contract
+      // to the letter rather than merely to the same runtime effect.
+      return allowIds !== undefined
+        ? await this.mcpManager.acquire(sessionId, allowIds)
+        : await this.mcpManager.acquire(sessionId);
     } catch (err) {
       log('ERROR', 'NativeSessionHost', 'mcp acquire failed — session opens with no MCP servers', { sessionId, error: String(err) });
       return undefined;
     }
+  }
+
+  /**
+   * T2 (project-plugin-controls, design §3) — resolve the availability set a
+   * NEW session's create() should freeze into its header. ONLY called from
+   * create(): resume() reuses the header's stored set instead (design §3's
+   * whole point — see NativeSessionAvailability's own doc in session-store.ts).
+   *
+   * Builds every input resolveSessionAvailability needs from the REAL
+   * sources, each already-existing elsewhere in this file/class:
+   *  - skills: discoverSkillEntries(cwd) — the SAME scan toolWiring() would
+   *    otherwise trigger a SECOND time via createSkillCatalog(undefined, cwd);
+   *    the result is reused for both (see toolWiring's own skillCatalog line).
+   *  - mcp: mcpManager.listEnabled() — a raw, pre-connect read; acquireMcp()
+   *    (called separately, after this) re-resolves the registry itself
+   *    inside McpManager.acquire — an accepted double-resolve, see
+   *    listEnabled's own comment.
+   *  - installs: skillConfigStore.getPackages() — marketplace installedAt.
+   * Never throws (resolveSessionAvailability's own contract) — a resolution
+   * failure fails OPEN (returns null), logged inside that function already.
+   */
+  private async resolveAvailabilityForCreate(cwd: string, skillEntries: ReturnType<typeof discoverSkillEntries>) {
+    // Not wired (no test override, and this is not the real ipc-handlers.ts
+    // construction) — "don't know", same fail-open answer as every other
+    // failure path in this pipeline. See this seam's own constructor comment
+    // for why there is no default that reads real global state instead.
+    if (!this.resolveProjectAvailabilityInputs) return null;
+    const { candidates, stores } = await this.resolveProjectAvailabilityInputs();
+    const mcp = (await this.mcpManager?.listEnabled?.()) ?? [];
+    const installs = this.skillConfigStore?.getPackages() ?? {};
+    return resolveSessionAvailability(cwd, {
+      projectsRoot: null, // unused — `candidates` below is already resolved
+      candidates,
+      stores,
+      skills: skillEntries,
+      mcp,
+      installs,
+    });
   }
 
   /** Task 5 (plan 1b): one line per NON-DELIVERED delegation for `sessionId`
@@ -3314,6 +3420,13 @@ export class NativeSessionHost extends EventEmitter {
       ? preset.manifest
       : { ...preset.manifest, limits: { ...preset.manifest.limits, maxSteps: stepGuard } };
     const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(opts.binding);
+    // T2 (project-plugin-controls, design §3): resolve THIS session's frozen
+    // availability set before the header is ever written, so it lands in the
+    // SAME create() write as everything else — never a separate mutation.
+    // skillEntries is scanned ONCE here and reused by toolWiring() below
+    // (see resolveAvailabilityForCreate's own comment on why).
+    const skillEntries = discoverSkillEntries(opts.cwd);
+    const availability = await this.resolveAvailabilityForCreate(opts.cwd, skillEntries);
     await this.store.create({
       v: 1,
       sessionId: opts.sessionId,
@@ -3322,6 +3435,14 @@ export class NativeSessionHost extends EventEmitter {
       cwd: opts.cwd,
       createdAt: Date.now(),
       ...(stepGuard === null ? {} : { stepGuard }),
+      // Fail-open (availability === null) writes NOTHING here, so resume()'s
+      // "no stored set" branch — today's unrestricted behaviour — is exactly
+      // what an availability-resolution failure at create time also gets.
+      ...(availability ? { availability: {
+        projectKey: availability.projectKey,
+        skillCatalogIds: [...availability.skillCatalogIds],
+        mcpServerIds: [...availability.mcpServerIds],
+      } } : {}),
     });
     // The preset seeds the STARTING mode; an explicit setPermissionMode always
     // wins — modeFor is never overwritten here (plan decision 3).
@@ -3338,7 +3459,12 @@ export class NativeSessionHost extends EventEmitter {
     const gitSnapshot = await gitSnapshotAsync(opts.cwd);
     // Acquire this session's MCP servers (Task 6) BEFORE constructing the
     // session, so mcpServers is available for the very first buildAiTools().
-    const mcpLease = await this.acquireMcp(opts.sessionId);
+    // T2: availability.mcpServerIds narrows this to the project's frozen set
+    // (an EMPTY Set for B-1, outside any project — that still filters out
+    // everything). `availability` itself being null (resolution failed open)
+    // passes `undefined` here, which keeps today's behaviour exactly — see
+    // acquire()'s own allowIds doc.
+    const mcpLease = await this.acquireMcp(opts.sessionId, availability?.mcpServerIds);
     const mcpServers = mcpLease?.servers;
     let session: HarnessSession;
     try {
@@ -3354,7 +3480,7 @@ export class NativeSessionHost extends EventEmitter {
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
           commitCompaction: proposal => this.commitCompaction(opts.sessionId, session, proposal),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot) },
+          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot, skillEntries, availability?.skillCatalogIds) },
         this.modelFactory,
       );
     } catch (err) {
@@ -3826,7 +3952,20 @@ export class NativeSessionHost extends EventEmitter {
     // McpLease in mcp-manager.ts.
     // The <env> git line, off the main thread, before the session is built (C3).
     const gitSnapshot = await gitSnapshotAsync(cwd);
-    const mcpLease = await this.acquireMcp(sessionId);
+    // T2 (project-plugin-controls, design §3): REUSE the header's frozen set —
+    // never recompute it. `header.availability` absent (an older conversation,
+    // or a create() that fail-opened) means today's behaviour: both
+    // allowlists stay undefined, so acquireMcp/toolWiring apply no narrowing
+    // at all, exactly like a pre-T2 resume().
+    const skillAllow = header.availability ? new Set(header.availability.skillCatalogIds) : undefined;
+    const mcpAllow = header.availability ? new Set(header.availability.mcpServerIds) : undefined;
+    // skillEntries is scanned fresh on every resume (same cost toolWiring's
+    // old createSkillCatalog(undefined, cwd) already paid) — only the
+    // ALLOWLIST is frozen, not the catalog's own contents, so a skill
+    // installed since this conversation was created is still discoverable
+    // (just filtered the same way every other item already on the list is).
+    const skillEntries = discoverSkillEntries(cwd);
+    const mcpLease = await this.acquireMcp(sessionId, mcpAllow);
     const mcpServers = mcpLease?.servers;
     const harness = header.stepGuard === undefined
       ? preset.manifest
@@ -3845,7 +3984,7 @@ export class NativeSessionHost extends EventEmitter {
         { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
           commitCompaction: proposal => this.commitCompaction(sessionId, session, proposal),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot) },
+          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot, skillEntries, skillAllow) },
         this.modelFactory,
       );
       // Full history rebuild (spec §2.5): rebuildHistory reconstructs the assistant

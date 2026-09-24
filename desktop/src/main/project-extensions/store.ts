@@ -116,11 +116,19 @@ export function parseProjectExtensionsRecordValue(raw: unknown): ProjectExtensio
     }
   }
   return {
+    // Fix (T1 review F2): spread the RAW object FIRST, then overwrite the
+    // fields this build validates — same "spread first" convention
+    // parsePluginState/parseItemState already use for a per-entry unknown
+    // field. Without this, a top-level field a NEWER build adds (this record
+    // has none today, but the sibling ProjectSync/<name>.json record already
+    // hit this exact bug once — see this file's own header comment) would be
+    // silently dropped on the next read-modify-write from an older build.
+    ...r,
     schemaVersion: PROJECT_EXTENSIONS_SCHEMA,
     seededAt: typeof r.seededAt === 'number' && Number.isFinite(r.seededAt) ? r.seededAt : 0,
     plugins,
     items,
-  };
+  } as ProjectExtensionsRecord;
 }
 
 /** Parse a raw JSON string (the synced side reads raw file text). */
@@ -167,6 +175,12 @@ export function mergeProjectExtensionsRecords(
   a: ProjectExtensionsRecord, b: ProjectExtensionsRecord,
 ): ProjectExtensionsRecord {
   return {
+    // Fix (T1 review F2): carry over any top-level field neither `a` nor `b`
+    // is typed to know about (same reasoning as parseProjectExtensionsRecordValue's
+    // own spread-first fix) — b's copy of a shared unknown key wins, which is
+    // no worse than dropping it outright, and every field this build DOES
+    // know about is overwritten immediately below regardless.
+    ...a, ...b,
     schemaVersion: PROJECT_EXTENSIONS_SCHEMA,
     seededAt: pickEarliestNonZero(a.seededAt, b.seededAt),
     plugins: mergeStateMaps(a.plugins, b.plugins),
@@ -422,16 +436,36 @@ export async function ensureSeeded(
   return result as ProjectExtensionsRecord;
 }
 
+/**
+ * `foldedExisting` (T1 review F1 fix): the plugin's entry as FOLDED across
+ * every conflict copy, read once by the caller (markPluginRemoved) BEFORE the
+ * locked write — never re-derived in here, since this runs inside
+ * mutateFileUnderLock's callback and must stay synchronous/pure. Without it,
+ * a plugin entry that exists ONLY in an unfolded conflict copy (the canonical
+ * file's own `cur.plugins[pluginId]` is absent) made this function return
+ * null — a silent no-op — so the tombstone never reached the canonical file
+ * and the next fold-on-read kept resurrecting the old, non-removed conflict-
+ * copy entry forever. Seeding `existing` from the fold (when the canonical
+ * copy itself has nothing) guarantees a write happens, and that write's fresh
+ * `at: now` is what makes the read-side lattice-join (mergeStateMaps) prefer
+ * it over the stale conflict copy from then on.
+ */
 function applyPluginRemoved(
   cur: ProjectExtensionsRecord | null, pluginId: string, now: number,
+  foldedExisting?: ProjectPluginState,
 ): ProjectExtensionsRecord | null {
-  if (!cur) return null; // nothing to remove from a record that doesn't exist at write time
-  const existing = cur.plugins[pluginId];
-  if (!existing) return null; // this project never touched the plugin — never create a phantom entry
-  if (existing.removed && existing.on === false) return null; // already tombstoned — no-op, avoids clock churn on repeat calls
+  const base = cur ?? emptyRecord();
+  const canonicalExisting = base.plugins[pluginId];
+  // Already tombstoned on the FILE WE'RE ABOUT TO WRITE — no-op, avoids clock
+  // churn on repeat calls. Checked against the canonical entry specifically
+  // (not the folded one): if the canonical copy hasn't been tombstoned yet,
+  // this must still write, even when some conflict copy already shows removed.
+  if (canonicalExisting?.removed && canonicalExisting.on === false) return null;
+  const existing = canonicalExisting ?? foldedExisting;
+  if (!existing) return null; // this project never touched the plugin anywhere — never create a phantom entry
   return {
-    ...cur,
-    plugins: { ...cur.plugins, [pluginId]: { ...existing, on: false, removed: true, at: now } },
+    ...base,
+    plugins: { ...base.plugins, [pluginId]: { ...existing, on: false, removed: true, at: now } },
   };
 }
 
@@ -454,7 +488,12 @@ export async function markPluginRemoved(
   for (const name of syncedNames) {
     const folded = await readSyncedRecord(stores.personalRoot, name);
     if (!folded || !(pluginId in folded.plugins)) continue;
-    await mutateSyncedRecord(stores.personalRoot, name, (cur) => applyPluginRemoved(cur, pluginId, now));
+    // Fix (T1 review F1): thread the FOLDED entry through so the locked write
+    // (which only ever re-reads the raw canonical file) can still seed and
+    // tombstone a plugin whose only on-disk record lives in a conflict copy —
+    // see applyPluginRemoved's own comment.
+    const foldedExisting = folded.plugins[pluginId];
+    await mutateSyncedRecord(stores.personalRoot, name, (cur) => applyPluginRemoved(cur, pluginId, now, foldedExisting));
   }
 
   const localKeys = await listLocalProjectKeys(stores.home);

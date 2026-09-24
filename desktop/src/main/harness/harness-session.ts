@@ -254,6 +254,15 @@ export interface HarnessSessionOpts {
    *  no skills is an expressible state rather than an environment accident.
    *  Absent → the real filesystem catalog. */
   skillCatalog?: SkillCatalog;
+  /** Per-project availability narrowing (T2, project-plugin-controls, design
+   *  §3): catalog ids (skill-catalog.ts's `id` shape) this session's project
+   *  currently has switched on. Absent → no project-based narrowing at all
+   *  (an old session with no stored header set, a specialist child, or any
+   *  test construction that predates this field) — `scopedSkillCatalog()`
+   *  intersects this with the preset's own `harness.skills` allowlist; NEVER
+   *  narrows `load()`, matching the preset allowlist's own precedent (manual
+   *  `/skill` keeps working through the host's separate unfiltered path). */
+  projectSkillAllowlist?: Set<string>;
   /** Project rules + nested project instructions, indexed by path (M3 item 3).
    *  Absent → no path-triggered injection, which is exactly the pre-M3 behavior
    *  every existing caller and test relies on. */
@@ -1413,13 +1422,22 @@ export class HarnessSession extends EventEmitter {
   private scopedSkillCatalog(): SkillCatalog {
     const catalog = this.opts.skillCatalog ?? createSkillCatalog();
     const allow = this.opts.harness.skills;
-    // Per-preset allowlist (the manifest's `skills` field, dead until now):
-    // Assistant may offer fewer skills than Coder. load() stays unscoped — an
-    // allowlist decides what the model is TOLD about, and a request for anything
-    // outside it can't arrive because it was never advertised.
-    return allow
-      ? { list: () => catalog.list().filter((s) => allow.includes(s.id)), load: (id) => catalog.load(id) }
-      : catalog;
+    // Project narrowing (T2, project-plugin-controls, design §3): a SECOND,
+    // independent allowlist alongside the preset's own. list() is the
+    // INTERSECTION of both — a skill must be both preset-permitted AND
+    // switched on for this project's frozen set to be offered.
+    const projectAllow = this.opts.projectSkillAllowlist;
+    if (!allow && !projectAllow) return catalog;
+    // load() stays UNSCOPED by both allowlists — an allowlist decides what the
+    // model is TOLD about (list()); a request for anything outside it can't
+    // normally arrive because it was never advertised, and the host's own
+    // separate unfiltered path (invokeSkill, manual /skill-name) is what keeps
+    // manual use working regardless of either allowlist.
+    return {
+      list: () => catalog.list().filter((s) =>
+        (!allow || allow.includes(s.id)) && (!projectAllow || projectAllow.has(s.id))),
+      load: (id) => catalog.load(id),
+    };
   }
 
   /** What this session actually has, for the "What the assistant was given"
