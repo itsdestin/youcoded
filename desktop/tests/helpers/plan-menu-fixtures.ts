@@ -24,12 +24,20 @@ export interface PlanFixture {
   outcome: Record<string, unknown>;
 }
 
-export function listPlanFixtures(): string[] {
-  return fs.readdirSync(PLAN_FIXTURE_DIR).filter((f) => f.endsWith('.json')).sort();
+/** Startup-dialog captures (test-conpty/capture-startup-dialogs.mjs) share the
+ *  plan captures' shape — raw chunks + marks — so the same terminal replays them. */
+// STARTUP_FIXTURE_DIR in the environment points the replay at a FRESH capture
+// instead — how test-conpty/check-startup-drift.mjs --app asks "does the app
+// still read what this Claude Code shows?" without touching the saved set.
+export const STARTUP_FIXTURE_DIR = process.env.STARTUP_FIXTURE_DIR
+  || path.join(__dirname, '..', 'fixtures', 'startup-dialogs');
+
+export function listPlanFixtures(dir = PLAN_FIXTURE_DIR): string[] {
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
 }
 
-export function loadPlanFixture(file: string): PlanFixture {
-  return JSON.parse(fs.readFileSync(path.join(PLAN_FIXTURE_DIR, file), 'utf8'));
+export function loadPlanFixture(file: string, dir = PLAN_FIXTURE_DIR): PlanFixture {
+  return JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
 }
 
 export function markIndex(fx: PlanFixture, label: string): number {
@@ -74,6 +82,17 @@ export class FixtureTerminal {
 
   screen(): string {
     return getVisibleScreenText(this.id) ?? '';
+  }
+
+  /** The visible rows padded to the terminal width — the shape Android's
+   *  PtyBridge.readScreenText hands its parser (every cell, one row per line). */
+  androidScreen(): string {
+    const b = this.term.buffer.active;
+    const out: string[] = [];
+    for (let i = b.viewportY; i < b.viewportY + this.term.rows; i++) {
+      out.push((b.getLine(i)?.translateToString(true) ?? '').padEnd(this.term.cols, ' '));
+    }
+    return out.join('\n') + '\n';
   }
 
   dispose(): void {

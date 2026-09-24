@@ -6,6 +6,7 @@ import { Button, ButtonVariant } from './ui/Button';
 import { isAndroid } from '../platform';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useCardKeysLive } from '../state/card-keys-context';
+import { PROMPT_FAILURE_COPY, PROMPT_UNKNOWN_FAILURE, type PromptAnswerResult } from '../state/prompt-input';
 
 export type PromptCardButton = InteractivePrompt['buttons'][number];
 
@@ -13,8 +14,11 @@ interface Props {
   prompt: InteractivePrompt;
   sessionId: string;
   /** Receives the whole button, not just its `input` — a button may carry a
-   *  second `submitInput` write (see state/prompt-input.ts). */
-  onSelect: (button: PromptCardButton, label: string) => void;
+   *  second `submitInput` write (see state/prompt-input.ts). May return the
+   *  answer's outcome: a menu with no printed numbers is answered by verified
+   *  navigation, which can refuse (the menu changed) — the card then says so
+   *  instead of pretending it was answered. */
+  onSelect: (button: PromptCardButton, label: string) => void | Promise<PromptAnswerResult>;
   /** Window-level Arrow/Enter/1–9 handling. Off for feeds that mount several
    *  cards at once (the buddy overlay), where a global listener per card would
    *  race. */
@@ -29,7 +33,9 @@ interface Props {
  *  These get a confirm step — the same treatment ToolCard gives a deny-listed
  *  "Always allow". */
 function isSticky(label: string): boolean {
-  return /don'?t ask (me )?again|never ask|stop asking/i.test(label);
+  // "Use this and all future MCP servers in this project" (CC 2.1.281) is the
+  // same kind of choice: it turns on every MCP server the folder ever adds.
+  return /don'?t ask (me )?again|never ask|stop asking|all future/i.test(label);
 }
 
 /** A choice that backs out of or ends the session rather than continuing. */
@@ -44,7 +50,12 @@ function isExit(label: string): boolean {
  * the CLI menu does — three identically-blue buttons was a big part of why this
  * card felt unparsed next to the permission prompt.
  */
-function defaultIndex(buttons: PromptCardButton[]): number {
+function defaultIndex(buttons: PromptCardButton[], cliDefault?: number): number {
+  // A dialog read with its cursor (CC 2.1.281's startup dialogs) starts where
+  // Claude Code's own cursor is — "No, exit" / "Continue without using this MCP
+  // server" — so an Enter on the card can never do more than an Enter in the
+  // terminal would.
+  if (cliDefault !== undefined && cliDefault >= 0 && cliDefault < buttons.length) return cliDefault;
   const recommended = buttons.findIndex((b) => /\brecommended\b/i.test(b.label));
   return recommended >= 0 ? recommended : 0;
 }
@@ -77,11 +88,22 @@ function shortcutOf(button: PromptCardButton): string | null {
  */
 export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortcuts = true }: Props) {
   const buttons = prompt.buttons;
-  const defIdx = useMemo(() => defaultIndex(buttons), [buttons]);
+  const defIdx = useMemo(() => defaultIndex(buttons, prompt.defaultIndex), [buttons, prompt.defaultIndex]);
   const [focusIdx, setFocusIdx] = useState(defIdx);
   // Index of a sticky button awaiting its second click, or -1.
   const [confirmIdx, setConfirmIdx] = useState(-1);
   const buttonsRef = useRef<(HTMLButtonElement | null)[]>([]);
+  // A verified answer in flight (keys are being typed one at a time) and, if it
+  // was refused, why. While sending, every button is disabled: a second click
+  // would start a second, interleaved cursor walk.
+  const [sending, setSending] = useState(false);
+  // The guard itself is a ref, not the state: two activations in one frame
+  // (a click and an Enter, or a double click) both run before React re-renders
+  // with `sending` true, and each would start its own cursor walk.
+  const sendingRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
 
   const activate = useCallback(
     (index: number) => {
@@ -92,7 +114,26 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
         return;
       }
       setConfirmIdx(-1);
-      onSelect(button, button.label);
+      if (sendingRef.current) return;
+      const outcome = onSelect(button, button.label);
+      if (outcome && typeof (outcome as Promise<PromptAnswerResult>).then === 'function') {
+        sendingRef.current = true;
+        setSending(true);
+        setError(null);
+        // A rejection must still release the card (second review F1): a
+        // thrown answer used to leave every button dead for good.
+        void (outcome as Promise<PromptAnswerResult>).then((r) => {
+          sendingRef.current = false;
+          if (!mounted.current) return;
+          setSending(false);
+          if (!r.ok) setError(PROMPT_FAILURE_COPY[r.reason]);
+        }, () => {
+          sendingRef.current = false;
+          if (!mounted.current) return;
+          setSending(false);
+          setError(PROMPT_UNKNOWN_FAILURE);
+        });
+      }
     },
     [buttons, confirmIdx, onSelect],
   );
@@ -197,6 +238,7 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
                   // py-2 on Android for a touch-sized target, same as ToolCard's
                   // permission buttons (`pad`).
                   className={[isAndroid() ? 'py-2' : '', selected].filter(Boolean).join(' ')}
+                  disabled={sending}
                   onClick={() => activate(index)}
                   onMouseEnter={() => setFocusIdx(index)}
                   title={confirming ? 'Sets a Claude Code preference for every future session' : undefined}
@@ -211,6 +253,11 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
               );
             })}
           </div>
+          {error && (
+            <div role="alert" className="px-3 py-1.5 text-xs text-fg-dim leading-relaxed border-t border-edge">
+              {error}
+            </div>
+          )}
         </div>
       </div>
     </div>

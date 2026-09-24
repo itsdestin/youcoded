@@ -7,7 +7,7 @@ import QueuedMessagesStrip from './QueuedMessagesStrip';
 import AssistantTurnBubble from './AssistantTurnBubble';
 import ToolCard from './ToolCard';
 import PromptCard, { PromptCardButton } from './PromptCard';
-import { sendPromptInput } from '../state/prompt-input';
+import { answerPrompt } from '../state/prompt-input';
 import UsageCard from './UsageCard';
 import SystemMarker from './SystemMarker';
 import SkillInvocationCard from './SkillInvocationCard';
@@ -885,16 +885,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
           beforeContextTokens: null, // Resume doesn't have pre-compaction stats
         });
       }
-      // Send the keystroke(s) that pick this option in the live Ink menu — a bare
-      // option digit, or (fallback only) arrows plus a separately-written \r.
-      sendPromptInput(sessionId, button);
-      // Mark the prompt as completed in the UI
-      dispatch({
-        type: 'COMPLETE_PROMPT',
-        sessionId,
-        promptId,
-        selection: label,
-      });
+      // Pick this option in the live Ink menu (a digit, or verified navigation),
+      // then mark the card answered — only once Claude Code took it (answerPrompt).
+      return answerPrompt(sessionId, button, () => dispatch({ type: 'COMPLETE_PROMPT', sessionId, promptId, selection: label }));
     },
     [sessionId, dispatch],
   );

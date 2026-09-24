@@ -1,0 +1,112 @@
+{
+ "ccVersion": "2.1.281",
+ "scenario": "untrusted-answer-no",
+ "key": "untrusted-answer-no-100x35",
+ "folder": "plain",
+ "trusted": false,
+ "args": [],
+ "files": [],
+ "auth": false,
+ "cols": 100,
+ "rows": 35,
+ "capturedAt": "2026-09-24T04:47:38.198Z",
+ "chunks": [
+  {
+   "t": 204,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 215,
+   "b64": "G1s/MjVs"
+  },
+  {
+   "t": 215,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 221,
+   "b64": "DQ0KG1szODsyOzI1NTsxOTM7N23ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAbWzM5bQ0NChtbMkcbWzM4OzI7MjU1OzE5Mzs3bRtbMW1BY2Nlc3NpbmcbWzEyR3dvcmtzcGFjZTobWzIybRtbMzltDQ0KDQ0KG1syRxtbMW0vdG1wL3N0YXJ0dXAtdW50cnVzdGVkLWFuc3dlci1uby1FdVJWU0YvcHJvamVjdBtbMjJtDQ0KDQ0KG1syR1F1aWNrG1s4R3NhZmV0eRtbMTVHY2hlY2s6G1syMkdJcxtbMjVHdGhpcxtbMzBHYRtbMzJHcHJvamVjdBtbNDBHeW91G1s0NEdjcmVhdGVkG1s1MkdvchtbNTVHb25lG1s1OUd5b3UbWzYzR3RydXN0PxtbNzBHKExpa2UbWzc2R3lvdXIbWzgxR293bhtbODVHY29kZSwbWzkxR2ENDQobWzJHd2VsbC1rbm93bhtbMTNHb3BlbhtbMThHc291cmNlG1syNUdwcm9qZWN0LBtbMzRHb3IbWzM3R3dvcmsbWzQyR2Zyb20bWzQ3R3lvdXIbWzUyR3RlYW0pLhtbNTlHSWYbWzYyR25vdCwbWzY3R3Rha2UbWzcyR2EbWzc0R21vbWVudBtbODFHdG8bWzg0R3JldmlldxtbOTFHd2hhdCdzG1s5OEdpbg0NChtbMkd0aGlzG1s3R2ZvbGRlchtbMTRHZmlyc3QuDQ0KDQ0KG1syR0NsYXVkZRtbOUdDb2RlJ2xsG1sxN0diZRtbMjBHYWJsZRtbMjVHdG8bWzI4R3JlYWQsG1szNEdlZGl0LBtbNDBHYW5kG1s0NEdleGVjdXRlG1s1MkdmaWxlcxtbNThHaGVyZS4NDQoNDQobWzJHG1szODsyOzE1MzsxNTM7MTUzbVNlY3VyaXR5G1sxMUdndWlkZRtbMzltDQ0KDQ0KG1syRxtbMzg7MjsxNzc7MTg1OzI0OW3ina8bWzRHTm8sG1s4R2V4aXQbWzM5bQ0NChtbNEdZZXMsG1s5R0kbWzExR3RydXN0G1sxN0d0aGlzG1syMkdmb2xkZXINDQoNDQobWzJHG1szODsyOzE1MzsxNTM7MTUzbUVudGVyG1s4R3RvG1sxMUdjb25maXJtG1sxOUfCtxtbMjFHRXNjG1syNUd0bxtbMjhHY2FuY2VsG1szOW0NDQobWzFDG1s0QQ=="
+  },
+  {
+   "t": 223,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 972,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 1224,
+   "b64": "G1sxRBtbNEI="
+  },
+  {
+   "t": 1225,
+   "b64": "G1s/MTAwNGwbWz40bRtbPHUbWz8yMDMxbBtbPzIwMDRsGyhCDxtbPzEwMTZsG1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGwbWz8yNWgbNxtbchs4G10wOwc="
+  }
+ ],
+ "marks": [
+  {
+   "t": 968,
+   "label": "dialog-1-visible",
+   "chunkIndex": 5
+  },
+  {
+   "t": 968,
+   "label": "send",
+   "chunkIndex": 5,
+   "data": "\r"
+  },
+  {
+   "t": 1613,
+   "label": "dialog-1-stuck",
+   "chunkIndex": 8
+  },
+  {
+   "t": 1613,
+   "label": "exited",
+   "chunkIndex": 8
+  }
+ ],
+ "dialogs": [
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "Accessing workspace:",
+   "options": [
+    "No, exit",
+    "Yes, I trust this folder"
+   ],
+   "numbers": [
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "<tmp-path>",
+    "Quick safety check: Is this a project you created or one you trust? (Like your own code, a",
+    "well-known open source project, or work from your team). If not, take a moment to review what's in",
+    "this folder first.",
+    "Claude Code'll be able to read, edit, and execute files here.",
+    "Security guide"
+   ]
+  }
+ ],
+ "outcome": {
+  "steps": [
+   {
+    "dialog": 1,
+    "answered": "No, exit",
+    "gone": false
+   }
+  ],
+  "exitCode": 1,
+  "folderTrusted": false,
+  "bypassAccepted": false,
+  "userSettingsKeys": [
+   "hooks"
+  ],
+  "sessionStartHookAt": []
+ }
+}

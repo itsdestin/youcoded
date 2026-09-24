@@ -87,6 +87,7 @@ import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import { getField, setField } from './claude-settings';
 import { resolveStaticFile } from './remote-static-path';
+import { menuAnswerLock } from './menu-answer-lock';
 
 // 4M UTF-16 units per session — enough for full conversation replay. Named for what it
 // counts (batch 2): JavaScript string length, not bytes.
@@ -1814,6 +1815,8 @@ export class RemoteServer {
         }
         break;
       }
+      // The SAME lock the desktop window uses (menu-answer-lock.ts, review F4).
+      case 'session:menu-lock': this.respond(client.ws, type, id, menuAnswerLock.handle(payload.sessionId, payload.holder, payload.action)); break;
       case 'session:list': {
         const sessions = this.sessionManager.listSessions();
         this.respond(client.ws, type, id, sessions);
