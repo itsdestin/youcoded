@@ -49,7 +49,7 @@ export type SyncHubEvent =
   | { type: 'disconnected' }
   | { type: 'signal'; kind: string; spaceKey: string; at?: number; deviceId?: string }
   | { type: 'sync-map'; map: Record<string, number> }
-  | { type: 'lease-event'; kind: 'released' | 'taken' | 'takeover-request'; sessionId: string; device?: string; from?: { deviceId: string; device: string } };
+  | { type: 'lease-event'; kind: 'released' | 'taken' | 'takeover-request'; sessionId: string; device?: string; from?: { deviceId: string; device: string }; transferNonce?: string; senderDeviceId?: string | null };
 
 export interface SyncHubSocketOpts {
   getToken: () => string | null;
@@ -69,7 +69,7 @@ export interface SyncHubSocket {
   // Request/response lease op (acquire/release/takeover). Resolves the matching
   // server `lease-result` by reqId; resolves null on timeout, when not connected,
   // or when the socket goes down mid-flight — NEVER blocks the caller.
-  request(op: string, sessionId: string, deviceId: string): Promise<LeaseResult | null>;
+  request(op: string, sessionId: string, deviceId: string, transferNonce?: string, expectedHolderId?: string): Promise<LeaseResult | null>;
   isConnected(): boolean;
   destroy(): void;
 }
@@ -146,7 +146,11 @@ export function createSyncHubSocket(opts: SyncHubSocketOpts): SyncHubSocket {
           // Unsolicited server push (not tied to a reqId) — forward to the
           // consumer. Per-field guard mirrors the signal branch: no kind/sessionId
           // means we never hand the consumer undefined fields.
-          opts.onEvent({ type: 'lease-event', kind: msg.kind, sessionId: msg.sessionId, device: msg.device, from: msg.from });
+          opts.onEvent({ type: 'lease-event', kind: msg.kind, sessionId: msg.sessionId, device: msg.device, from: msg.from,
+            ...(typeof msg.transferNonce === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(msg.transferNonce) &&
+              typeof msg.senderDeviceId === 'string' && msg.senderDeviceId.length <= 100
+              ? { transferNonce: msg.transferNonce, senderDeviceId: msg.senderDeviceId } : {}),
+          });
         }
         // pong (or any other frame): ignore — pings are fire-and-forget liveness.
       } catch { /* non-JSON frame: ignore */ }
@@ -166,14 +170,25 @@ export function createSyncHubSocket(opts: SyncHubSocketOpts): SyncHubSocket {
     // NEVER blocks the caller: resolves null immediately when not connected, on a
     // 5s timeout, if the send throws, or if the socket goes down mid-flight
     // (failAllPending). The consumer treats null as "no answer / fall back".
-    request(op, sessionId, deviceId) {
+    request(op, sessionId, deviceId, transferNonce, expectedHolderId) {
+      // WHY: a malformed conditional force cannot fall back to legacy unguarded force.
+      if (op === 'force-acquire-if-holder' && (transferNonce !== undefined ||
+          typeof expectedHolderId !== 'string' || !/^[A-Za-z0-9._-]{1,100}$/.test(expectedHolderId) ||
+          expectedHolderId === '.' || expectedHolderId === '..' || expectedHolderId === deviceId)) return Promise.resolve(null);
+      if (expectedHolderId !== undefined && op !== 'force-acquire-if-holder') return Promise.resolve(null);
+      // WHY: never silently degrade a malformed correlated transfer into a
+      // legacy takeover; the caller must know that this request was not sent.
+      if (transferNonce !== undefined && (op !== 'takeover' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(transferNonce))) return Promise.resolve(null);
       if (!engine.isOpen()) return Promise.resolve(null); // never-block
       const reqId = `r${++reqCounter}`;
       return new Promise<LeaseResult | null>((resolve) => {
         const timer = setTimeout(() => { pending.delete(reqId); resolve(null); }, 5_000);
         timer.unref?.(); // don't keep the Electron main process alive just for a lease timeout
         pending.set(reqId, { resolve, timer });
-        if (!engine.send(JSON.stringify({ type: 'lease', op, sessionId, deviceId, reqId }))) {
+        if (!engine.send(JSON.stringify({ type: 'lease', op, sessionId, deviceId, reqId,
+          ...(transferNonce === undefined ? {} : { transferNonce }),
+          ...(expectedHolderId === undefined ? {} : { expectedHolderId }) }))) {
           pending.delete(reqId); clearTimeout(timer); resolve(null);
         }
       });

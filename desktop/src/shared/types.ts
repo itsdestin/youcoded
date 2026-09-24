@@ -100,6 +100,9 @@ export interface SessionInfo {
   harnessId?: string;
   /** Model alias the session was started with (e.g. 'claude-sonnet-4-6') */
   model?: string;
+  /** The saved conversation this session resumed, when it resumed one. Lets a
+   *  pending handoff tab recognise its own session's creation push exactly. */
+  resumeSessionId?: string;
   /** Native runtime only: which KIND of provider the bound model runs on
    *  ('chatgpt' | 'openrouter' | 'local-engine' | …), as main already resolves
    *  it in conversations/portable-model.ts.
@@ -118,6 +121,17 @@ export interface SessionInfo {
    *  a consumed-set ref so it never re-fires on re-renders. */
   initialInput?: string;
 }
+
+// A refused resume creates no session. Keep it distinct from both startup
+// errors and offline access (which may still produce a real SessionInfo).
+export type SessionCreateResult = (SessionInfo & { reused?: true }) | { status: 'lease-denied'; device?: string };
+
+// WHY: only admitted attempts carry a real session; saved-copy is explicit consent, not confirmation.
+export type HandoffAttemptResult =
+  | { id: string; status: 'waiting' | 'incomplete' | 'cancelled' | 'failed'; cause?: string;
+      holder?: { deviceId: string; device: string } }
+  | { id: string; status: 'admitted'; source: 'confirmed' | 'saved-copy'; session: SessionInfo };
+export type HandoffCreateParams = { name: string; cwd: string; skipPermissions: boolean; resumeSessionId: string; provider: 'claude' | 'native'; model?: string; binding?: { providerId: string; modelId: string }; cols?: number; rows?: number; preset?: string };
 
 export interface HookEvent {
   type: string;
@@ -1444,8 +1458,8 @@ export interface BuddyApi {
   // preload, remote-shim, and renderer callers all agree on one contract.
   /** Fire-and-forget: mascot renderer signals drag release (edge-snap check). */
   dragEnded(): void;
-  /** Restore + focus the main window, switching to the buddy's viewed session. */
-  openMain(): Promise<void>;
+  /** Restore + focus main; a buddy resume is re-resolved through main's admission flow. */
+  openMain(request?: { resume: string }): Promise<void>;
   /** Hide the buddy for this app run only (preference stays enabled). */
   dismiss(): Promise<void>;
   getStatus(): Promise<{ dismissed: boolean; visible: boolean }>;
@@ -1610,6 +1624,15 @@ export interface IntegrationInfo {
 export const IPC = {
   // Renderer -> Main
   SESSION_CREATE: 'session:create',
+  // WHY: pending handoff is not a started session; keep its actions off session:create.
+  HANDOFF_BEGIN: 'handoff:begin',
+  HANDOFF_STATUS: 'handoff:status',
+  HANDOFF_WAIT: 'handoff:wait',
+  HANDOFF_RETRY: 'handoff:retry',
+  HANDOFF_SAVED_COPY: 'handoff:saved-copy',
+  HANDOFF_FORCE: 'handoff:force',
+  HANDOFF_CANCEL: 'handoff:cancel',
+  HANDOFF_CREATE_PARAMS: 'handoff:create-params',
   SESSION_DESTROY: 'session:destroy',
   SESSION_INPUT: 'session:input',
   SESSION_RESIZE: 'session:resize',

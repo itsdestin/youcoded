@@ -1,9 +1,9 @@
 // Plan 2b Task 8 — pins the holder-side takeover sequence (createHolderTakeover).
 // When another device requests a session THIS device holds, the holder must:
-//   interrupt (ESC to PTY) -> flush local->space -> release lease -> pushMoved -> destroy
+//   interrupt (ESC to PTY) -> flush local->space -> pushMoved -> destroy -> release
 // The ORDER is load-bearing: MIRROR-BEFORE-RELEASE (the requester pulls on seeing
 // the release, so the final turn must already be in the space) and
-// RELEASE-BEFORE-DESTROY (release must land before the local session ends). All
+// STOP-BEFORE-RELEASE (no writer survives handoff). All
 // collaborators are injected fakes — this tests ONLY the sequence, not the IO.
 import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
@@ -88,6 +88,82 @@ function makeDeps(opts?: { liveDesktopIds?: string[]; flushRejects?: boolean; pr
 }
 
 describe('createHolderTakeover', () => {
+  it('holds a source pin until proven PTY exit and publishes only matching nonce-bound evidence', async () => {
+    const d = makeDeps({ liveDesktopIds: ['cc'] }); d.sessionIdMap.set('cc', 'c1');
+    let exit!: (result: { status: 'stopped' | 'unknown' }) => void;
+    const stop = new Promise<{ status: 'stopped' | 'unknown' }>((resolve) => { exit = resolve; });
+    let pinned = true; let ended = false;
+    const publish = vi.fn(async (_context, _writer, stopped: () => boolean, current: () => boolean) => {
+      expect(stopped()).toBe(true); expect(current()).toBe(true); expect(pinned).toBe(true);
+      d.order.push('publish'); return { status: 'published' as const, receipt: {} as any };
+    });
+    const deps = { ...d, senderDeviceId: 'sender', pinSnapshot: () => ({ active: () => pinned, release: () => { pinned = false; } }),
+      captureWriter: () => ({ provider: 'claude' as const, sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', persisted: () => ended, current: () => true }),
+      publishSnapshot: publish, syncPublished: vi.fn(async () => {}),
+      sessionManager: { ...d.sessionManager, getSession: (id: string) => ended ? undefined : d.sessionManager.getSession(id),
+        stopSessionForHandoff: vi.fn(async () => { const result = await stop; ended = true; return result; }) } };
+    const transfer = createHolderTakeover(deps as any)('c1', { deviceId: 'requester', device: 'Other' }, '88e7c065-15db-43d5-8576-00d13b145c8a');
+    await vi.waitFor(() => expect(deps.sessionManager.stopSessionForHandoff).toHaveBeenCalled());
+    expect(publish).not.toHaveBeenCalled(); expect(d.leaseClient.release).not.toHaveBeenCalled();
+    exit({ status: 'stopped' }); await transfer;
+    expect(publish).toHaveBeenCalledTimes(1); expect(pinned).toBe(false);
+    expect(d.order.indexOf('publish')).toBeLessThan(d.order.indexOf('release:c1'));
+  });
+
+  it('treats a failing Personal push as delivery unknown, not as a failed stop', async () => {
+    const d = makeDeps({ liveDesktopIds: ['native'], providers: { native: 'native' } }); d.sessionIdMap.set('native', 'c1');
+    let stopped = false;
+    const sync = vi.fn(async () => { throw new Error('offline'); });
+    const publish = vi.fn(async () => ({ status: 'published' as const, receipt: {} as any }));
+    await createHolderTakeover({ ...d, senderDeviceId: 'sender',
+      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+      captureWriter: () => ({ provider: 'native', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl',
+        persisted: () => stopped, current: () => true }),
+      destroyNative: async () => { stopped = true; },
+      sessionManager: { ...d.sessionManager, getSession: () => stopped ? undefined : { id: 'native' } },
+      publishSnapshot: publish, syncPublished: sync,
+    } as any)('c1', { deviceId: 'requester', device: 'Other' }, '88e7c065-15db-43d5-8576-00d13b145c8a');
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(d.leaseClient.release).toHaveBeenCalledWith('c1');
+  });
+
+  it('refuses receipt when a mapped writer rotates or a competing writer opens during stop', async () => {
+    for (const change of ['rotate', 'competitor']) {
+      const d = makeDeps({ liveDesktopIds: ['cc'] }); d.sessionIdMap.set('cc', 'c1');
+      let stop!: () => void;
+      const held = new Promise<void>((resolve) => { stop = resolve; });
+      let rotated = false;
+      const publish = vi.fn();
+      const deps = { ...d, senderDeviceId: 'sender', pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+        captureWriter: () => ({ provider: 'claude', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl',
+          persisted: () => true, current: () => change === 'competitor' || !rotated }), publishSnapshot: publish,
+        sessionManager: { ...d.sessionManager, getSession: (id: string) => {
+          if (id === 'cc' && rotated) return undefined;
+          if (id === 'new' && change === 'competitor' && rotated) return { id: 'new' };
+          return d.sessionManager.getSession(id);
+        }, stopSessionForHandoff: async () => { await held; return { status: 'stopped' as const }; } } };
+      const task = createHolderTakeover(deps as any)('c1', { deviceId: 'requester', device: 'Other' }, '88e7c065-15db-43d5-8576-00d13b145c8a');
+      await vi.waitFor(() => expect(d.pushMoved).toHaveBeenCalled());
+      if (change === 'competitor') d.sessionIdMap.set('new', 'c1');
+      else d.sessionIdMap.delete('cc');
+      rotated = true; stop(); await task;
+      expect(publish).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps unsafe authority and emits no receipt for unknown PTY exit', async () => {
+    const d = makeDeps({ liveDesktopIds: ['cc'] }); d.sessionIdMap.set('cc', 'c1');
+    const protect = vi.fn(); const publish = vi.fn();
+    await createHolderTakeover({ ...d, senderDeviceId: 'sender', protectUnsafe: protect,
+      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+      captureWriter: () => ({ provider: 'claude', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', persisted: () => false, current: () => true }),
+      publishSnapshot: publish,
+      sessionManager: { ...d.sessionManager, stopSessionForHandoff: async () => ({ status: 'unknown' as const }) },
+    } as any)('c1', { deviceId: 'requester', device: 'Other' }, '88e7c065-15db-43d5-8576-00d13b145c8a');
+    expect(protect).toHaveBeenCalledWith('c1'); expect(publish).not.toHaveBeenCalled();
+    expect(d.leaseClient.release).not.toHaveBeenCalled();
+  });
   it('runs interrupt -> flush -> release -> pushMoved -> destroy for a live held session', async () => {
     const deps = makeDeps({ liveDesktopIds: ['desktop-1'] });
     // desktop-1 holds claude-abc; a stray other mapping must be ignored.
@@ -100,10 +176,10 @@ describe('createHolderTakeover', () => {
     expect(deps.order).toEqual([
       'interrupt:desktop-1:"\\u001b"', // single ESC byte to the PTY
       'flush:claude-abc',
-      'release:claude-abc',
       'push:desktop-1:Laptop-B',       // desktopId reverse-mapped, from.device forwarded
       'destroyNative:desktop-1',       // native teardown BEFORE destroySession...
       'destroy:desktop-1',             // ...matching the sanctioned SESSION_DESTROY order
+      'release:claude-abc',            // after the writer has stopped
     ]);
     // The reverse-map picked the correct desktop id, not desktop-2.
     expect(deps.sessionManager.sendInput).toHaveBeenCalledWith('desktop-1', '\x1b');
@@ -125,10 +201,10 @@ describe('createHolderTakeover', () => {
     expect(deps.order).toEqual([
       'quiesce:native-1',        // native quiesce replaces the ESC byte
       'flush:claude-nat',        // ...and lands BEFORE the flush (turn already settled)
-      'release:claude-nat',
       'push:native-1:Laptop-B',
       'destroyNative:native-1',
       'destroy:native-1',
+      'release:claude-nat',
     ]);
     expect(deps.quiesceNative).toHaveBeenCalledWith('native-1');
     // No ESC byte was written to a PTY-less native session.
@@ -159,9 +235,10 @@ describe('createHolderTakeover', () => {
     (deps.quiesceNative as any) = vi.fn(async () => { throw new Error('quiesce blew up'); });
     const handler = createHolderTakeover(deps as any);
     await expect(handler('claude-nat', { deviceId: 'x', device: 'X' })).resolves.toBeUndefined();
-    // A failed quiesce must not abort the handoff — flush/release/destroy still run.
-    expect(deps.flushSessionToSpace).toHaveBeenCalledWith('claude-nat');
-    expect(deps.sessionManager.destroySession).toHaveBeenCalledWith('native-1');
+    // A live writer cannot hand away authority when quiesce fails.
+    expect(deps.flushSessionToSpace).not.toHaveBeenCalled();
+    expect(deps.leaseClient.release).not.toHaveBeenCalled();
+    expect(deps.sessionManager.destroySession).not.toHaveBeenCalled();
   });
 
   it('mirror-before-release AND release-before-destroy hold', async () => {
@@ -174,7 +251,7 @@ describe('createHolderTakeover', () => {
     const iDestroy = deps.order.indexOf('destroy:d1');
     expect(iFlush).toBeGreaterThanOrEqual(0);
     expect(iRelease).toBeGreaterThan(iFlush);   // MIRROR (flush) before RELEASE
-    expect(iDestroy).toBeGreaterThan(iRelease); // RELEASE before DESTROY
+    expect(iRelease).toBeGreaterThan(iDestroy); // stop writer BEFORE RELEASE
   });
 
   it('with NO mapping for the claude id, only releases the lease (no interrupt/flush/push/destroy)', async () => {
@@ -186,6 +263,16 @@ describe('createHolderTakeover', () => {
     expect(deps.flushSessionToSpace).not.toHaveBeenCalled();
     expect(deps.pushMoved).not.toHaveBeenCalled();
     expect(deps.sessionManager.destroySession).not.toHaveBeenCalled();
+  });
+
+  it('does not mint a receipt from peer bytes on a repeated request without a live writer', async () => {
+    const d = makeDeps({ liveDesktopIds: [] });
+    const publish = vi.fn();
+    await createHolderTakeover({ ...d, senderDeviceId: 'sender', publishSnapshot: publish,
+      pinSnapshot: vi.fn(), captureWriter: vi.fn() } as any)('c1',
+      { deviceId: 'requester', device: 'Other' }, '88e7c065-15db-43d5-8576-00d13b145c8a');
+    expect(publish).not.toHaveBeenCalled();
+    expect(d.leaseClient.release).toHaveBeenCalledWith('c1');
   });
 
   it('with a mapping but the session no longer live (getSession undefined), only releases', async () => {
@@ -205,14 +292,8 @@ describe('createHolderTakeover', () => {
     await expect(handler('c1', { deviceId: 'x', device: 'X' })).resolves.toBeUndefined();
     // Each step is independently try/caught, so a flush reject does NOT abort the
     // rest — release/push/destroy still run.
-    expect(deps.order).toEqual([
-      'interrupt:d1:"\\u001b"',
-      'flush:c1',
-      'release:c1',
-      'push:d1:X',     // from.device still forwarded despite the flush reject
-      'destroyNative:d1',
-      'destroy:d1',
-    ]);
+    expect(deps.order).toEqual(['interrupt:d1:"\\u001b"', 'flush:c1']);
+    expect(deps.leaseClient.release).not.toHaveBeenCalled();
   });
 
   it('never throws when pushMoved throws AND still runs destroy (step 8)', async () => {
@@ -225,7 +306,7 @@ describe('createHolderTakeover', () => {
     await expect(handler('c1', { deviceId: 'x', device: 'X' })).resolves.toBeUndefined();
     // Step 8 still runs after the guarded push throw — no half-done handoff.
     expect(deps.sessionManager.destroySession).toHaveBeenCalledWith('d1');
-    expect(deps.order).toEqual(['interrupt:d1:"\\u001b"', 'flush:c1', 'release:c1', 'push:d1', 'destroyNative:d1', 'destroy:d1']);
+    expect(deps.order).toEqual(['interrupt:d1:"\\u001b"', 'flush:c1', 'push:d1', 'destroyNative:d1', 'destroy:d1', 'release:c1']);
   });
 
   // 2026-07-18 (investigation Break 4). destroySession alone tears down the PTY
@@ -263,8 +344,9 @@ describe('createHolderTakeover', () => {
     (deps.destroyNative as any) = vi.fn(async () => { throw new Error('harness teardown blew up'); });
     const handler = createHolderTakeover(deps as any);
     await expect(handler('c1', { deviceId: 'x', device: 'X' })).resolves.toBeUndefined();
-    // A failed native teardown must not strand a live SessionManager entry.
-    expect(deps.sessionManager.destroySession).toHaveBeenCalledWith('d1');
+    // If the harness may still append, keep authority and refuse the handoff.
+    expect(deps.sessionManager.destroySession).not.toHaveBeenCalled();
+    expect(deps.leaseClient.release).not.toHaveBeenCalled();
   });
 
   it('never throws even when the lease release rejects', async () => {

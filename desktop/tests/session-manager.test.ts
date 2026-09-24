@@ -3,6 +3,8 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import { SessionManager, resolveShellCommand, shellDisplayName, prepareRunInTerminal } from '../src/main/session-manager';
+import { createTransferredExitGate } from '../src/main/conversations/handoff-exit';
+import { createResumeAdmission } from '../src/main/conversations/resume-admission';
 
 const tmpDir = os.tmpdir();
 
@@ -47,6 +49,202 @@ describe('SessionManager', () => {
   afterEach(() => {
     manager.destroyAll();
   });
+
+  it.each(['window close', 'remote destroy'])('fences a transferred lease on direct manager destroy (%s)', async () => {
+    const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
+    const release = vi.fn(async () => {});
+    const admission = createResumeAdmission({ acquire: vi.fn(async () => ({ ok: true })), release, getLive: () => undefined });
+    const pinRelease = vi.fn();
+    let pinned = true;
+    const gate = createTransferredExitGate(admission, (id: string) => id === info.id && pinned, () => {
+      pinned = false; pinRelease();
+    });
+    manager.on('session-stopped', gate.onStopped);
+    manager.on('session-exit', (id: string) => {
+      if (!gate.onExit(id, 'conversation', Promise.resolve())) admission.markExit('conversation');
+    });
+    // Both routes call SessionManager directly, bypassing SESSION_DESTROY.
+    manager.destroySession(info.id);
+    await Promise.resolve();
+    expect(release).not.toHaveBeenCalled();
+    expect(pinRelease).not.toHaveBeenCalled();
+    expect(admission.isUnsafe('conversation')).toBe(true);
+    handlers.disconnect();
+    handlers.message({ type: 'exit', exitCode: 0 });
+    expect(release).not.toHaveBeenCalled();
+    expect(pinRelease).not.toHaveBeenCalled();
+  });
+
+  it('releases a direct destroy only if its worker reports PTY exit before disconnect', async () => {
+    const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
+    const release = vi.fn(async () => {});
+    const admission = createResumeAdmission({ acquire: vi.fn(async () => ({ ok: true })), release, getLive: () => undefined });
+    const pinRelease = vi.fn();
+    let pinned = true;
+    const gate = createTransferredExitGate(admission, () => pinned, () => { pinned = false; pinRelease(); });
+    manager.on('session-stopped', gate.onStopped);
+    manager.on('session-exit', (id: string) => {
+      if (!gate.onExit(id, 'conversation', Promise.resolve())) admission.markExit('conversation');
+    });
+    manager.destroySession(info.id);
+    expect(release).not.toHaveBeenCalled();
+    handlers.message({ type: 'exit', exitCode: 0 });
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    expect(pinRelease).toHaveBeenCalledTimes(1);
+    handlers.exit(0);
+    gate.onStopped(info.id);
+    gate.onExit(info.id, 'conversation', Promise.resolve());
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(pinRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains a transferred lease when PTY proof arrives but teardown fails', async () => {
+    const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
+    const release = vi.fn(async () => {});
+    const admission = createResumeAdmission({ acquire: vi.fn(async () => ({ ok: true })), release, getLive: () => undefined });
+    let pinned = true;
+    const gate = createTransferredExitGate(admission, () => pinned, () => { pinned = false; });
+    manager.on('session-stopped', gate.onStopped);
+    manager.on('session-exit', (id: string) => {
+      if (!gate.onExit(id, 'conversation', Promise.reject(new Error('native teardown failed'))))
+        admission.markExit('conversation');
+    });
+    manager.destroySession(info.id);
+    handlers.message({ type: 'exit', exitCode: 0 });
+    await vi.waitFor(() => expect(admission.isUnsafe('conversation')).toBe(true));
+    expect(release).not.toHaveBeenCalled();
+    expect(pinned).toBe(true);
+  });
+
+  it.each(['resolves', 'rejects'])('spontaneous PTY exit keeps the pin until teardown %s', async (outcome) => {
+    const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
+    const release = vi.fn(async () => {});
+    const admission = createResumeAdmission({ acquire: vi.fn(async () => ({ ok: true })), release, getLive: () => undefined });
+    const pinRelease = vi.fn();
+    let pinned = true;
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    const teardown = new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; });
+    const gate = createTransferredExitGate(admission, () => pinned, () => { pinned = false; pinRelease(); });
+    manager.on('session-stopped', gate.onStopped);
+    manager.on('session-exit', (id: string) => {
+      if (!gate.onExit(id, 'conversation', teardown)) admission.markExit('conversation', teardown);
+    });
+    handlers.message({ type: 'exit', exitCode: 0 });
+    expect(pinRelease).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+    expect(admission.isUnsafe('conversation')).toBe(true);
+    gate.onStopped(info.id); // duplicate proof cannot settle twice
+    gate.onExit(info.id, 'conversation', teardown); // duplicate exit cannot settle twice
+    if (outcome === 'rejects') {
+      fail(new Error('append chain failed'));
+      await Promise.resolve(); await Promise.resolve();
+      expect(pinRelease).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
+      expect(admission.isUnsafe('conversation')).toBe(true);
+    } else {
+      finish();
+      await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+      expect(pinRelease).toHaveBeenCalledTimes(1);
+      gate.onStopped(info.id);
+      gate.onExit(info.id, 'conversation', teardown);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(pinRelease).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('releases transferred lease and pin exactly once on the PTY exit frame', async () => {
+    const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
+    const release = vi.fn(async () => {});
+    const admission = createResumeAdmission({ acquire: vi.fn(async () => ({ ok: true })), release, getLive: () => undefined });
+    const pinRelease = vi.fn();
+    let pinned = true;
+    const gate = createTransferredExitGate(admission, (id: string) => id === info.id && pinned, () => {
+      pinned = false; pinRelease();
+    });
+    manager.on('session-stopped', gate.onStopped);
+    manager.on('session-exit', (id: string) => {
+      if (!gate.onExit(id, 'conversation', Promise.resolve())) admission.markExit('conversation');
+    });
+    expect(release).not.toHaveBeenCalled();
+    handlers.message({ type: 'exit', exitCode: 0 });
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    expect(pinRelease).toHaveBeenCalledTimes(1);
+    handlers.exit(0);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not report a transferred writer stopped on early destroy exit', () => {
+    const info = manager.createSession({ name: 'transferred', cwd: tmpDir, skipPermissions: false });
+    const events: string[] = [];
+    manager.on('session-exit', () => events.push('exit'));
+    manager.on('session-stopped', () => events.push('stopped'));
+    manager.destroySession(info.id);
+    expect(events).toEqual(['exit']);
+    handlers.disconnect();
+    handlers.message({ type: 'exit', exitCode: 0 });
+    expect(events).toEqual(['exit']);
+  });
+
+  it('confirms handoff only from captured PTY exit, sharing concurrent requests and blocking input', async () => {
+    const info = manager.createSession({ name: 'handoff', cwd: tmpDir, skipPermissions: false });
+    const exits = vi.fn();
+    const stopped = vi.fn();
+    manager.on('session-stopped', stopped);
+    manager.on('session-exit', exits);
+    const first = manager.stopSessionForHandoff(info.id);
+    const second = manager.stopSessionForHandoff(info.id);
+    expect(second).toBe(first);
+    expect(mockWorker.send).toHaveBeenCalledWith({ type: 'stop-for-handoff' }, expect.any(Function));
+    expect(mockWorker.disconnect).not.toHaveBeenCalled();
+    expect(manager.sendInput(info.id, 'late turn\r')).toBe(false);
+    expect(manager.listSessions()).toHaveLength(1);
+    // A killed PTY reports a signal code; a deliberate handoff stop is still a clean exit.
+    handlers.message({ type: 'exit', exitCode: 129 });
+    expect(exits).toHaveBeenCalledWith(info.id, 0);
+    expect(mockWorker.send).toHaveBeenCalledWith({ type: 'handoff-exit-received' });
+    expect(await first).toEqual({ status: 'stopped' });
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(exits).toHaveBeenCalledTimes(1);
+    handlers.exit(0);
+    expect(exits).toHaveBeenCalledTimes(1);
+    expect(await manager.stopSessionForHandoff(info.id)).toEqual({ status: 'unknown' });
+  });
+
+  it('does not infer handoff proof from a natural exit before the stop request or a native record', async () => {
+    const info = manager.createSession({ name: 'natural', cwd: tmpDir, skipPermissions: false });
+    handlers.message({ type: 'exit', exitCode: 0 });
+    expect(await manager.stopSessionForHandoff(info.id)).toEqual({ status: 'unknown' });
+    const native = manager.createSession({ name: 'native', cwd: tmpDir, skipPermissions: false,
+      provider: 'native', binding: { providerId: 'openrouter', modelId: 'test' } });
+    expect(await manager.stopSessionForHandoff(native.id)).toEqual({ status: 'unknown' });
+  });
+
+  it.each(['exit', 'disconnect', 'error', 'send-error', 'kill-error', 'destroy', 'timeout'])(
+    'does not certify handoff from %s without PTY exit', async (failure) => {
+      vi.useFakeTimers();
+      try {
+        const info = manager.createSession({ name: 'handoff', cwd: tmpDir, skipPermissions: false });
+        if (failure === 'kill-error') mockWorker.send.mockImplementationOnce(() => { throw new Error('send failed'); });
+        const stop = manager.stopSessionForHandoff(info.id);
+        if (failure === 'exit') handlers.exit(0);
+        if (failure === 'disconnect') handlers.disconnect();
+        if (failure === 'error') handlers.error(new Error('crash'));
+        if (failure === 'send-error') mockWorker.send.mock.lastCall?.[1](new Error('send failed'));
+        if (failure === 'destroy') manager.destroySession(info.id);
+        if (failure === 'timeout') await vi.runAllTimersAsync();
+        expect(await stop).toEqual({ status: 'unknown' });
+        if (failure === 'timeout' || failure === 'send-error' || failure === 'kill-error') {
+          expect(manager.sendInput(info.id, 'late turn\r')).toBe(false);
+          expect(await manager.stopSessionForHandoff(info.id)).toEqual({ status: 'unknown' });
+        }
+        handlers.message({ type: 'exit', exitCode: 0 });
+        // A queued exit frame delivered after worker death cannot resurrect proof.
+        if (failure === 'exit') expect(mockWorker.send).not.toHaveBeenCalledWith({ type: 'handoff-exit-received' });
+        expect(await stop).toEqual({ status: 'unknown' });
+      } finally { vi.useRealTimers(); }
+    },
+  );
 
   it('creates a session and returns session info', () => {
     const info = manager.createSession({

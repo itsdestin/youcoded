@@ -32,12 +32,14 @@ import { randomUUID } from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isAllowedWsOrigin } from './remote-origin';
 import type { SessionManager } from './session-manager';
+import { handleRemoteHandoff, type createHandoffTransport } from './conversations/handoff-transport';
 // Value import (not type-only): the "Run in terminal" case below runs the SAME
 // validation the desktop handler runs — a remote client's payload is the least
 // trusted input either of them sees.
 import { prepareRunInTerminal, shellDisplayName } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
+import type { RequesterTakeoverType } from './conversations/takeover';
 import { RemoteConfig as RemoteConfigStatics } from './remote-config';
 import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
@@ -351,7 +353,7 @@ export class RemoteServer {
   // way the desktop handlers do (free/error) so a remote resume never hard-blocks.
   private leaseWiring: {
     client: import('./conversations/lease-client').LeaseClient;
-    requester: import('./conversations/takeover').RequesterTakeoverType;
+    requester: RequesterTakeoverType;
     deviceId: string;  // per-INSTALL — leases only
     machineId: string; // per-MACHINE — device-registry self-marking only
   } | null = null;
@@ -396,6 +398,15 @@ export class RemoteServer {
   private listCommands: (() => Promise<unknown[]>) | null;
   private prepareCreate: <T extends { cwd?: string }>(payload: T) => T;
   private listThemes: () => string[];
+  private sessionCreate?: (opts: Parameters<SessionManager['createSession']>[0]) => Promise<import('../shared/types').SessionCreateResult>;
+  private handoffRoute?: ReturnType<typeof createHandoffTransport>;
+  /** WHY: remote requests share the exact Electron backend; no connection may supply another owner's identity. */
+  setHandoffRoute(route: ReturnType<typeof createHandoffTransport>): void { this.handoffRoute = route; }
+
+  /** WHY: a phone must go through the same admission and native startup as IPC. */
+  setSessionCreate(create: (opts: Parameters<SessionManager['createSession']>[0]) => Promise<import('../shared/types').SessionCreateResult>): void {
+    this.sessionCreate = create;
+  }
 
   /** One line per connection event in the host's log. WHY (2026-09-11 phone pass): an empty
    *  project list and a flashing password screen could not be traced, because the host recorded
@@ -467,7 +478,7 @@ export class RemoteServer {
    *  deviceId is the per-INSTALL lease id and must NOT be used for that. */
   setLeaseWiring(w: {
     client: import('./conversations/lease-client').LeaseClient;
-    requester: import('./conversations/takeover').RequesterTakeoverType;
+    requester: RequesterTakeoverType;
     deviceId: string;
     machineId: string;
   }): void {
@@ -759,6 +770,8 @@ export class RemoteServer {
     this.sessionManager.off('session-created', this.onSessionCreated);
 
     for (const client of this.clients) {
+      // WHY: stop clears clients before close events run; invalidate pending starts now.
+      this.handoffRoute?.cancelOwner(`remote:${client.id}`);
       client.ws.close(1001, 'Server shutting down');
     }
     this.clients.clear();
@@ -842,6 +855,8 @@ export class RemoteServer {
    *  can stand down when the last one leaves (simplification audit W14). */
   private removeClient(client: AuthenticatedClient): void {
     if (!this.clients.delete(client)) return;
+    // WHY: close/error/liveness drops must invalidate in-flight starts for this connection only.
+    this.handoffRoute?.cancelOwner(`remote:${client.id}`);
     if (this.clients.size === 0 && this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
     this.emitStatus(); // clientCount changed — see RemoteStatus.clientCount
   }
@@ -1749,6 +1764,13 @@ export class RemoteServer {
         // and gets no answer, as a push never does.
         break;
       // --- Request/response ---
+      case 'handoff:begin': case 'handoff:status': case 'handoff:wait':
+      case 'handoff:retry': case 'handoff:saved-copy': case 'handoff:force': case 'handoff:cancel':
+      case 'handoff:create-params': {
+        await handleRemoteHandoff(this.handoffRoute, `remote:${client.id}`, type, payload,
+          () => this.clients.has(client), result => this.respond(client.ws, type, id, result));
+        break;
+      }
       case 'session:create': {
         // This payload is passed to createSession unfiltered, so without this
         // guard a remote browser could ask for `{provider:'shell', cwd:'/'}`.
@@ -1767,9 +1789,14 @@ export class RemoteServer {
           this.respond(client.ws, type, id, { ok: false, error: 'A terminal session can only be opened from the app itself.' });
           break;
         }
-        const info = this.sessionManager.createSession(this.prepareCreate(payload));
-        this.respond(client.ws, type, id, info);
-        // session:created broadcast is handled by the onSessionCreated event listener
+        // WHY: every remote opening must pass admission, and every startup
+        // failure must answer the request (not become an unhandled rejection).
+        try {
+          if (!this.sessionCreate) throw new Error('Session opening is not ready. Try again.');
+          this.respond(client.ws, type, id, await this.sessionCreate(this.prepareCreate(payload)));
+        } catch (error) {
+          this.respond(client.ws, type, id, { ok: false, error: error instanceof Error ? error.message : 'Could not open this conversation.' });
+        }
         break;
       }
       case 'session:destroy': {
