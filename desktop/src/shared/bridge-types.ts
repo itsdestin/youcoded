@@ -62,6 +62,13 @@ interface SessionBridge {
   setTag(sessionId: string, tagId: string, value: boolean): Promise<unknown>;
   setNote(sessionId: string, note: string): Promise<unknown>;
   getMeta(sessionId: string): Promise<SessionMetaResult>;
+  // Welcome back (design 2026-09-24 §3): conversation ids open at the last
+  // shutdown. Desktop-only feature (Android answers []/{ok:true} instead of
+  // exposing this at all), but the SHARED bridge still carries it — a remote
+  // browser's preload-equivalent (remote-shim) implements it too; the
+  // renderer is what skips calling it off-desktop (App.tsx, T4).
+  reopenList(): Promise<string[]>;
+  forgetReopen(ids: string[]): Promise<{ ok: boolean }>;
 }
 
 /** window.claude.on — the push subscriptions both bridges must implement.

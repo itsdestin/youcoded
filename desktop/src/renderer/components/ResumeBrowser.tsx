@@ -275,7 +275,7 @@ interface Props {
  *  tags/notes/renames/preview/etc." So it is this component with a tick box on
  *  each row, a Resume/Start fresh footer, and no way to dismiss it by accident
  *  (Q-where: it replaces the start screen until you choose). */
-export interface WelcomeBackMode {
+interface WelcomeBackMode { // not exported: only this file's own prop type uses it (knip)
   /** Conversation ids that were open in the strip at the last shutdown. */
   ids: readonly string[];
   /** Resume these rows in one go; resolves to the ids that actually launched.

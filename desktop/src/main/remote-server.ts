@@ -1814,6 +1814,18 @@ export class RemoteServer {
         }
         break;
       }
+      // Welcome back (design 2026-09-24 §3, S-phone): the per-install "open at
+      // last shutdown" screen is desktop-only — a phone or remote browser
+      // never shows it — so this host always answers as if nothing is
+      // offered, with no dependency on the desktop-only welcome-back-store.
+      case 'session:reopen-list': {
+        this.respond(client.ws, type, id, []);
+        break;
+      }
+      case 'session:forget-reopen': {
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
       case 'session:list': {
         const sessions = this.sessionManager.listSessions();
         this.respond(client.ws, type, id, sessions);

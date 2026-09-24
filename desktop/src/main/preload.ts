@@ -46,6 +46,10 @@ const IPC = {
   SESSION_LIST: 'session:list',
   SESSION_CREATED: 'session:created',
   SESSION_DESTROYED: 'session:destroyed',
+  // Welcome back (design 2026-09-24 §3): the per-install "open at last
+  // shutdown" list.
+  SESSION_REOPEN_LIST: 'session:reopen-list',
+  SESSION_FORGET_REOPEN: 'session:forget-reopen',
   PTY_OUTPUT: 'pty:output',
   PTY_RAW_BYTES: 'pty:raw-bytes',
   HOOK_EVENT: 'hook:event',
@@ -583,6 +587,11 @@ contextBridge.exposeInMainWorld('claude', {
     // Read a session's applied tag ids + note (used by the in-session Tag chip).
     getMeta: (sessionId: string): Promise<SessionMetaResult> =>
       ipcRenderer.invoke(IPC.SESSION_GET_META, sessionId),
+    // Welcome back (design §3): conversation ids open at the last shutdown.
+    reopenList: (): Promise<string[]> =>
+      ipcRenderer.invoke(IPC.SESSION_REOPEN_LIST),
+    forgetReopen: (ids: string[]): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke(IPC.SESSION_FORGET_REOPEN, ids),
   },
   // Tag registry CRUD (custom user-defined tags shared across sessions).
   tags: {

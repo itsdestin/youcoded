@@ -17,7 +17,11 @@ import type { SessionProvider } from '../shared/types';
  *  conversation id to remember, so they never appear in `open` or `offer`. */
 export type WelcomeBackProvider = Exclude<SessionProvider, 'shell'>;
 
-export interface WelcomeBackEntry {
+// WHY not exported: used only inside this file (knip flags an exported type
+// with no outside importer as dead) — T2 wired the STORE's public API
+// (WelcomeBackStore/WelcomeBackProvider) into main.ts/ipc-handlers.ts, but no
+// caller needs this shape directly.
+interface WelcomeBackEntry {
   conversationId: string;
   provider: WelcomeBackProvider;
 }
@@ -142,7 +146,12 @@ export interface WelcomeBackStore {
 
 export function createWelcomeBackStore(filePath: string, fs: WelcomeBackFs): WelcomeBackStore {
   let state: WelcomeBackState = emptyState();
-  const tmpPath = `${filePath}.tmp`;
+  // WHY per-process, not a fixed name (ast-grep atomic-tmp-name-per-process):
+  // the dev instance and the built app CAN share this same userData path in
+  // some setups, and even a single install's main process could in principle
+  // run two writes concurrently — a fixed `.tmp` name lets the second rename
+  // throw ENOENT on the first's already-consumed temp file.
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
 
   // `loaded` is false until the on-disk file has been read and parsed.
   // track/remap/untrack/forget called before that point must NOT touch

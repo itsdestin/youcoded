@@ -9,12 +9,9 @@ import type { ModelBinding } from '../../shared/provider-types';
 import type { PortableModelRef } from '../../shared/types';
 import { claudeAliasForModelId } from '../../shared/model-ids';
 
-// WHY `as any`: the two channels are designed ahead of their backend and are
-// registered MOCK_ONLY in the workbench until main/preload/remote-shim land.
-const sessionApi = () => (window as any).claude?.session as {
-  reopenList?: () => Promise<string[]>;
-  forgetReopen?: (ids: string[]) => Promise<unknown>;
-} | undefined;
+// main/preload/remote-shim all carry the two channels now (design §3), so
+// window.claude.session is fully typed — no `as any` needed.
+const sessionApi = () => window.claude?.session;
 
 /** Ids that were open at the last shutdown. Empty when there is nothing to
  *  offer, or on a build/platform with no such list (Android, today). */

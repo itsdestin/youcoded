@@ -1810,6 +1810,10 @@ export const IPC = {
   SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
   SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
   SESSION_GET_META: 'session:get-meta', // (sessionId) → { tags, note, supported }
+  // Welcome back (design 2026-09-24 §3): the per-install "open at last
+  // shutdown" list. Desktop-only — Android always answers []/{ok:true}.
+  SESSION_REOPEN_LIST: 'session:reopen-list',     // () → string[] (conversation ids)
+  SESSION_FORGET_REOPEN: 'session:forget-reopen', // (ids: string[]) → { ok: true }
   TAGS_LIST: 'tags:list',
   TAGS_CREATE: 'tags:create',           // (label, color)
   TAGS_UPDATE: 'tags:update',           // (id, { label?, color?, archived? })

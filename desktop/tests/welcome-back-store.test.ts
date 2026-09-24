@@ -6,7 +6,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createWelcomeBackStore, type WelcomeBackFs } from '../src/main/welcome-back-store';
 
 const FILE = '/fake/userData/welcome-back.json';
-const TMP = `${FILE}.tmp`;
+// Per-process temp name (ast-grep atomic-tmp-name-per-process) — matches
+// welcome-back-store.ts's actual `${filePath}.${process.pid}.tmp`.
+const TMP = `${FILE}.${process.pid}.tmp`;
 
 /** Records every write in order and lets a test gate when `writeFile`
  *  resolves, so races between two queued writes can be exercised on purpose. */
@@ -108,7 +110,7 @@ describe('createWelcomeBackStore', () => {
       expect(fake.parsedNow().open).toEqual({ 'desktop-1': { conversationId: 'conv-2', provider: 'claude' } });
     });
 
-    it('remap is a no-op for a session that was never tracked (design §2)', async () => {
+    it('remap is a no-op for a session that was never tracked', async () => {
       store.remap('never-tracked', 'conv-9');
       await store.flush();
       // No write should even have been queued — remap on an untracked id does nothing.
@@ -335,7 +337,7 @@ describe('createWelcomeBackStore', () => {
             calls.push(`write:${path}`); // the attempt happened; it just failed
             throw new Error('disk full');
           }
-          return fs.writeFile(path, data);
+          return fs.writeFile(path, data, 'utf8');
         },
       };
       const store = createWelcomeBackStore(FILE, flaky);

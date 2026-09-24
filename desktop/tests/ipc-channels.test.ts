@@ -1079,6 +1079,57 @@ describe('custom tags + notes channel parity', () => {
   }
 });
 
+// Welcome back (design 2026-09-24 §3, plan T2): the per-install "sessions open
+// at last shutdown" list. HAND-WRITTEN parity block (design §6) — the
+// automatic check only diffs preload.ts against shared/types.ts (review 2 D7),
+// so it can't see remote-shim.ts, remote-server.ts or SessionService.kt drift.
+// Desktop-only (S-phone): remote-server.ts and SessionService.kt must always
+// answer as if nothing is offered, never carry the real store.
+describe('session:reopen-list / session:forget-reopen channel parity (Welcome back)', () => {
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+  const preload = read('src', 'main', 'preload.ts');
+  const remoteShim = read('src', 'renderer', 'remote-shim.ts');
+  const remoteServer = read('src', 'main', 'remote-server.ts');
+  const ipcHandlers = read('src', 'main', 'ipc-handlers.ts');
+  const kotlin = read('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+
+  it('preload.ts declares both channel strings and exposes both methods', () => {
+    expect(preload).toContain("'session:reopen-list'");
+    expect(preload).toContain("'session:forget-reopen'");
+    expect(preload).toMatch(/reopenList:.*ipcRenderer\.invoke\(IPC\.SESSION_REOPEN_LIST\)/s);
+    expect(preload).toMatch(/forgetReopen:.*ipcRenderer\.invoke\(IPC\.SESSION_FORGET_REOPEN/s);
+  });
+
+  it('remote-shim.ts invokes both channels', () => {
+    expect(remoteShim).toContain("invoke('session:reopen-list')");
+    expect(remoteShim).toContain("invoke('session:forget-reopen'");
+  });
+
+  it('ipc-handlers.ts awaits the store\'s ready promise for both handlers', () => {
+    expect(ipcHandlers).toMatch(/ipcMain\.handle\(IPC\.SESSION_REOPEN_LIST,/);
+    expect(ipcHandlers).toMatch(/ipcMain\.handle\(IPC\.SESSION_FORGET_REOPEN,/);
+    expect(ipcHandlers).toContain('await welcomeBackStore.ready');
+  });
+
+  it('remote-server.ts (a phone never shows this screen) answers []/{ok:true}', () => {
+    expect(remoteServer).toContain("case 'session:reopen-list'");
+    expect(remoteServer).toContain("case 'session:forget-reopen'");
+    // Scoped to the case body, not the whole file — a bare "id, []" match
+    // elsewhere would pass vacuously.
+    const reopenBlock = remoteServer.slice(remoteServer.indexOf("case 'session:reopen-list'"), remoteServer.indexOf("case 'session:forget-reopen'"));
+    expect(reopenBlock).toContain('this.respond(client.ws, type, id, []);');
+    const forgetBlock = remoteServer.slice(remoteServer.indexOf("case 'session:forget-reopen'"), remoteServer.indexOf("case 'session:forget-reopen'") + 300);
+    expect(forgetBlock).toContain('this.respond(client.ws, type, id, { ok: true });');
+  });
+
+  it('SessionService.kt (Android never shows this screen) answers []/{ok:true}', () => {
+    expect(kotlin).toContain('"session:reopen-list" ->');
+    expect(kotlin).toContain('"session:forget-reopen" ->');
+    expect(kotlin).toMatch(/"session:reopen-list" ->[\s\S]{0,200}?org\.json\.JSONArray\(\)/);
+    expect(kotlin).toMatch(/"session:forget-reopen" ->[\s\S]{0,200}?JSONObject\(\)\.put\("ok", true\)/);
+  });
+});
+
 // Local llama.cpp engine (Plan B, Task 9). The engine:* IPC surface must carry
 // identical channel strings across all four parity files. ipc-handlers.ts
 // references the IPC.ENGINE_* CONSTANTS (not literal strings), so its assertion

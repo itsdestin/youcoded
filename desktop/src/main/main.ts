@@ -80,6 +80,9 @@ import { stopProjectWatchers } from './artifacts/project-watcher';
 // One-time cleanup of the legacy sync-service's slug-symlink aggregation (Plan 2c).
 import { sweepProjectSymlinks } from './conversations/symlink-sweep';
 import { startTagRegistry } from './conversations/tag-registry-service';
+// Welcome back (design 2026-09-24 §1): the per-install "sessions open at last
+// shutdown" list. Its own file (userData, never synced) — see T1's WHY there.
+import { createWelcomeBackStore, type WelcomeBackStore } from './welcome-back-store';
 import { createAuthStore } from './marketplace-auth-store';
 import { registerMarketplaceApiHandlers } from './marketplace-api-handlers';
 import { reconcileInstalls } from './install-reconcile';
@@ -192,6 +195,10 @@ let cancelWindowHandoffs: (webContentsId: number) => void = () => {};
 // Sign in with ChatGPT: module scope only so runShutdown can dispose it (stops
 // the usage poll, closes a lingering sign-in listener). Assigned in createWindow.
 let chatgptAuth: ChatGptAuth | null = null;
+// Welcome back (design §1): constructed in app.whenReady() (below), before
+// createWindow() — module scope so registerIpcHandlers (called INSIDE
+// createWindow) and runShutdown's flush (below) can both reach it.
+let welcomeBackStore: WelcomeBackStore | undefined;
 // Plan 2b Task 8: the conversation-lease client + this install's device identity.
 // Constructed inside createWindow (before registerIpcHandlers) but referenced
 // again in the app-ready sync block, so they live at module scope. The holder
@@ -1075,7 +1082,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
   const ipcWiring = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, commandProvider, hookRelay, remoteConfig, remoteServer, windowRegistry,
     { client: leaseClient, setHolderTakeover: (fn) => { holderTakeoverRef.fn = fn; }, requester,
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
-    chatgptAuth);
+    chatgptAuth, welcomeBackStore);
   cleanupIpcHandlers = ipcWiring.cleanup;
   cancelWindowHandoffs = (id) => ipcWiring.handoffAttempts?.cancelOwner(`window:${id}`);
   const hasUsableProvider = ipcWiring.hasUsableProvider;
@@ -1885,6 +1892,16 @@ void app.whenReady().then(async () => {
   // registerSocialHandlers and registerArcadeHandlers — not just the store.
   perfMark('main:chore:accounts:done');
 
+  // Welcome back (design §1): construct the store and begin the startup
+  // union-and-reset (this run's `open` folds into `offer`) before the window
+  // exists, so the answer is ready well before the renderer can ask for it.
+  // NOT awaited — `startup()`'s own `ready` promise is what every handler
+  // awaits (design §1, review 1 D5), so createWindow() below still runs
+  // synchronously with no dependency on this having finished
+  // (performance rule 1: the main process never blocks on a click or a boot step).
+  welcomeBackStore = createWelcomeBackStore(path.join(app.getPath('userData'), 'welcome-back.json'), fs.promises);
+  void welcomeBackStore.startup();
+
   perfMark('main:create-window:start');
   createWindow(isFirstRun ? firstRunManager : undefined);
   perfMark('main:create-window:done');
@@ -2411,6 +2428,18 @@ function shutdownApp(): Promise<void> {
 }
 
 async function runShutdown(): Promise<void> {
+  // Welcome back (design §1): flush the in-flight write BEFORE any other
+  // teardown starts. runShutdown is the ONE function every exit route passes
+  // through — including SIGTERM/SIGINT, which skip before-quit entirely — so
+  // this is the only place that can guarantee a first-message track() or a
+  // last-second untrack() actually reaches disk before the process ends.
+  // Bounded to 1s (design §1): a wedged disk write must never hang quit, and
+  // an unflushed write just means that one session's offer is a run stale,
+  // not lost (the desktop-lifecycle `open` entry it came from is harmless).
+  await Promise.race([
+    welcomeBackStore?.flush() ?? Promise.resolve(),
+    new Promise<void>((r) => setTimeout(r, 1_000)),
+  ]).catch(() => {});
   // Capture the engine-stop promise: cleanup() starts llama-server teardown and we
   // must let it finish before app.quit(), else the engine outlives the app and keeps
   // the fixed port bound for the next instance to wrongly adopt (2026-07-20 fix).
