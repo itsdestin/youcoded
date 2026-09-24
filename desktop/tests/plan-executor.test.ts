@@ -769,9 +769,15 @@ describe('pausing, stopping and interruption settle before anything is visible',
     expect(applied).toBe(true);
     expect(releases).toHaveLength(0); // the lease goes in the same write as "stopped"
     log.push('stop-returned');
+    // WHY brief-based lookup, not hardcoded 'child-4' (2026-09-24, same class
+    // as the settle-deadline fix above): FakeRunner numbers children by real
+    // launch-completion order, not by item order, so 'Do stuck2' — the one
+    // whose script never honours the abort and so MUST be force-disposed
+    // only once the deadline fires — can draw any of the four ids.
+    const stuck2Id = runner.launches.find((l) => l.brief === 'Do stuck2')!.childId;
     // F34: the stuck ones were torn down only once the deadline had passed.
     expect(deadline.fired()).toBe(true);
-    expect(log.indexOf('settle-deadline')).toBeLessThan(log.indexOf('dispose:child-4'));
+    expect(log.indexOf('settle-deadline')).toBeLessThan(log.indexOf(`dispose:${stuck2Id}`));
     expect(runner.aborted.sort()).toEqual(['child-1', 'child-2', 'child-3', 'child-4']);
     expect(runner.live).toBe(0);
     const p = await plan();
@@ -781,8 +787,8 @@ describe('pausing, stopping and interruption settle before anything is visible',
     // PlanService's own "stopped" edit rode in the executor's final write.
     expect(p.status).toBe('stopped');
     expect(log.filter((l) => l === 'event:stopped')).toHaveLength(1);
-    expect(log.indexOf('dispose:child-4')).toBeLessThan(log.indexOf('event:stopped'));
-    expect(log.indexOf('dispose:child-4')).toBeLessThan(log.indexOf('stop-returned'));
+    expect(log.indexOf(`dispose:${stuck2Id}`)).toBeLessThan(log.indexOf('event:stopped'));
+    expect(log.indexOf(`dispose:${stuck2Id}`)).toBeLessThan(log.indexOf('stop-returned'));
     expect(exec.activeRuns()).toBe(0);
   });
 
@@ -1262,9 +1268,13 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     expect(events.some((e) => e.plan.status === 'paused')).toBe(false);
     // Nobody was stopped; the flaky one ran twice on the same session.
     expect(runner.aborted).toEqual([]);
-    const flaky = runner.launches.filter((l) => l.brief === 'Do flaky' || l.resumeChildId === 'child-1');
+    // WHY brief-based lookup, not hardcoded 'child-1' (2026-09-24, same class
+    // as the settle-deadline fix above): FakeRunner numbers children by real
+    // launch-completion order, not by item order, so 'Do flaky' can draw any
+    // of the three ids depending on scheduling.
+    const flaky = runner.launches.filter((l) => l.brief === 'Do flaky');
     expect(flaky).toHaveLength(2);
-    expect(flaky[1]).toMatchObject({ resumeChildId: 'child-1', attemptId: flaky[0].attemptId });
+    expect(flaky[1]).toMatchObject({ resumeChildId: flaky[0].childId, attemptId: flaky[0].attemptId });
     expect(runner.launches.filter((l) => l.brief === 'Do b')).toHaveLength(1);
     expect(runner.launches.filter((l) => l.brief === 'Do c')).toHaveLength(1);
     // The siblings were still running when the retry launched.
@@ -1280,7 +1290,7 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     // The card: one row per specialist, the retried one says so.
     const rows = projectPlan(p).steps[0].children!;
     expect(rows).toHaveLength(3);
-    expect(rows.find((r) => r.childId === 'child-1')!.retried).toBe(true);
+    expect(rows.find((r) => r.childId === flaky[0].childId)!.retried).toBe(true);
     expect(rows.filter((r) => r.retried)).toHaveLength(1);
   });
 
@@ -1381,18 +1391,28 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
 
   it('a specialist error that left a Bash call unanswered goes to the assistant; Continue then restarts it with the check-first turn', async () => {
     const runner = new FakeRunner((l) => (l.brief === 'Do flaky' ? failsWith('lost the connection') : slowCompletes(5)));
-    runner.verdicts.set('child-1', { kind: 'dangling-effect', tool: 'Bash', effect: 'external' });
+    // WHY inspectTranscript keyed by brief, not `verdicts.set('child-1', …)`
+    // (2026-09-24, same class as the settle-deadline fix above): FakeRunner
+    // numbers children by real launch-completion order, not by item order,
+    // so 'Do flaky' can draw any of the three ids and a fixed 'child-1'
+    // verdict would silently land on the wrong (or no) child.
+    runner.inspectTranscript = (_ref, childId) => {
+      const l = runner.launches.find((x) => x.childId === childId);
+      if (l?.brief === 'Do flaky') return { kind: 'dangling-effect', tool: 'Bash', effect: 'external' };
+      return { kind: 'resumable', briefDelivered: false };
+    };
     const fence = await seed(record(THREE));
     const exec = executor(runner);
     exec.start({ ref: REF, planId: 'p1', fence });
     await exec.settled('p1');
     let p = await plan();
     expect(runner.launches.filter((l) => l.brief === 'Do flaky')).toHaveLength(1);
+    const flakyId = runner.launches.find((l) => l.brief === 'Do flaky')!.childId;
     expect(p.paused).toMatchObject({ kind: 'unknown-outcome', tool: 'Bash', toolEffect: 'external' });
     expect(p.paused!.reason).toContain('lost the connection');
     expect(p.paused!.retried).toBeUndefined();
     expect(p.recoveries).toBeUndefined();
-    const flakyAttempt = p.steps[0].attempts.find((a) => a.childId === 'child-1')!;
+    const flakyAttempt = p.steps[0].attempts.find((a) => a.childId === flakyId)!;
     expect(flakyAttempt).toMatchObject({ phase: 'ambiguous', ambiguityReported: true });
 
     runner.script = () => completes('checked and done');
@@ -1402,22 +1422,28 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     exec.start({ ref: REF, planId: 'p1', fence: again.fence });
     await exec.settled('p1');
     p = await plan();
-    const restart = runner.launches.slice(before).find((l) => l.resumeChildId === 'child-1');
-    expect(restart).toMatchObject({ resumeChildId: 'child-1', brief: planRestartBrief({ kind: 'dangling-effect', tool: 'Bash', effect: 'external' }) });
+    const restart = runner.launches.slice(before).find((l) => l.resumeChildId === flakyId);
+    expect(restart).toMatchObject({ resumeChildId: flakyId, brief: planRestartBrief({ kind: 'dangling-effect', tool: 'Bash', effect: 'external' }) });
     expect(p.status).toBe('completed');
   });
 
   it.each(['BashOutput', 'WebSearch'])('a specialist error that left a %s call unanswered is still retried by itself', async (tool) => {
     const runner = new FakeRunner(failsOnce());
-    runner.verdicts.set('child-1', { kind: 'dangling-effect', tool, effect: nativeToolEffect(tool) });
+    // WHY inspectTranscript keyed by brief — see the WHY two tests above.
+    runner.inspectTranscript = (_ref, childId) => {
+      const l = runner.launches.find((x) => x.childId === childId);
+      if (l?.brief === 'Do flaky') return { kind: 'dangling-effect', tool, effect: nativeToolEffect(tool) };
+      return { kind: 'resumable', briefDelivered: false };
+    };
     const fence = await seed(record(THREE));
     const exec = executor(runner);
     exec.start({ ref: REF, planId: 'p1', fence });
     await exec.settled('p1');
     const p = await plan();
     expect(p.status).toBe('completed');
+    const flakyId = runner.launches.find((l) => l.brief === 'Do flaky')!.childId;
     // A cut-off read is simply re-run: the plain continue turn.
-    expect(runner.launches.find((l) => l.resumeChildId === 'child-1')!.brief).toBe(PLAN_RESTART_BRIEF);
+    expect(runner.launches.find((l) => l.resumeChildId === flakyId)!.brief).toBe(PLAN_RESTART_BRIEF);
   });
 
   const resumeWith = (tool: string) => resumeWithTool(tool);
@@ -1601,7 +1627,10 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
       await exec.settled('p1');
       expect((await plan()).status).toBe('completed');
       expect(runner.notReadyAsked).toEqual(['reviewer']);
-      expect(runner.launches.filter((l) => l.brief === 'Do flaky' || l.resumeChildId === 'child-1')).toHaveLength(2);
+      // Both the original launch and the retry keep brief 'Do flaky' (the
+      // verdict stays the default resumable/not-yet-delivered), so a brief
+      // filter alone finds both regardless of which id either one drew.
+      expect(runner.launches.filter((l) => l.brief === 'Do flaky')).toHaveLength(2);
     });
   });
 
@@ -1657,13 +1686,20 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     const p = await plan();
     expect(p.status).toBe('paused');
     expect(p.paused).toMatchObject({ kind: 'budget-refused' });
+    // WHY brief-based lookup, not hardcoded 'child-N' (2026-09-24, same class
+    // as the settle-deadline fix): FakeRunner numbers children by real
+    // launch-completion order, not by item order, so 'c' (the one that
+    // honours the abort and is the last live sibling disposed) can draw any
+    // of the three ids depending on scheduling.
+    const cId = runner.launches.find((l) => l.brief === 'Do c')!.childId;
+    const flakyId = runner.launches.find((l) => l.brief === 'Do flaky')!.childId;
     // The retry's write landed before settle tore anything down …
     expect(log.indexOf('retry-reserved')).toBeGreaterThan(-1);
-    expect(log.indexOf('retry-reserved')).toBeLessThan(log.indexOf('dispose:child-3'));
+    expect(log.indexOf('retry-reserved')).toBeLessThan(log.indexOf(`dispose:${cId}`));
     // … so the paused plan holds nothing, nothing was relaunched after the
     // pause, and no specialist is left alive.
     expect(reservedTotal(p)).toBe(0);
-    expect(runner.launches.filter((l) => l.resumeChildId === 'child-1')).toHaveLength(0);
+    expect(runner.launches.filter((l) => l.resumeChildId === flakyId)).toHaveLength(0);
     expect(runner.live).toBe(0);
     expect(exec.activeRuns()).toBe(0);
   });
