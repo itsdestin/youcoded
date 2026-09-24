@@ -2855,7 +2855,6 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // here, but the subscription must exist so App's effect has something to
     // call.
     onCloseRequestCancelled: (_cb: (payload: { requestId: string }) => void) => () => {},
-    closeRequestShown: (_requestId: string) => {},
   };
   const detach: Ns<'detach'> & { openDetached: (payload: { sessionId: string }) => void } = {
     // Present so `detachAvailable` is true and the "Launch in New Window"

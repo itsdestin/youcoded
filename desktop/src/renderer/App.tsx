@@ -3560,12 +3560,6 @@ function AppInner() {
       setQuitPrompt((cur) => (cur && cur.requestId === payload.requestId ? null : cur));
     }) ?? undefined;
   }, []);
-  // Tell main the prompt is on screen once React has drawn it — an effect runs
-  // after the commit — so main drops its frozen-app timeout and waits for the
-  // answer (the window used to close on someone still reading, 2026-09-24).
-  useEffect(() => {
-    if (quitPrompt) (window.claude as any).window?.closeRequestShown?.(quitPrompt.requestId);
-  }, [quitPrompt?.requestId]); // eslint-disable-line react-hooks/exhaustive-deps
   const answerClose = useCallback((answer: { close: boolean; reopen?: boolean }) => {
     setQuitPrompt((cur) => {
       if (cur) (window.claude as any).window?.answerClose?.({ requestId: cur.requestId, ...answer });
