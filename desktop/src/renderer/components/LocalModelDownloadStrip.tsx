@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSecondsTick } from '../hooks/useSecondsTick';
+import { useOnScreen } from '../state/on-screen-context';
 import { Button } from './ui';
 import { ProgressBar } from './ui/ProgressBar';
 import { StatusStrip } from './ui/StatusStrip';
@@ -26,25 +27,71 @@ export interface SetupDownloadStatus {
   minutesLeft: number | null;
 }
 
+/** Seconds a showing band keeps polling through null answers before hiding. */
+const NULL_GRACE_READS = 3;
+
 export function LocalModelDownloadStrip({ sessionId }: { sessionId: string | null }) {
   const [status, setStatus] = useState<SetupDownloadStatus | null>(null);
 
-  // One read per second while mounted, as before — but on the shared seconds
-  // clock (audit W19), so the reads stop while the window is hidden and resume
-  // the moment it is back. Every tick re-runs the effect; a read that lands
-  // after the next tick began is dropped in favour of the newer one.
-  const tick = useSecondsTick(true);
+  // WHY polling is gated (perf B11, 2026-09-24): this strip sits in EVERY
+  // chat's message box for the life of the app, and each read makes main do a
+  // blocking file read — yet the answer is null for everyone past setup. So:
+  // read once on mount (and per session), then keep the once-a-second read
+  // (shared seconds clock, audit W19: stops while hidden or off screen) only
+  // while a setup download is still showing (downloading or stopped). Main
+  // never brings the band back once it answers null (it clears the record), so
+  // a null or "done" answer stops the clock. Coming back on screen re-reads
+  // once, so a read that failed transiently is not final.
+  const [polling, setPolling] = useState(true);
+  const shownRef = useRef(false);
+  const nullsRef = useRef(0);
+  const [wake, setWake] = useState(0);
+  const onScreen = useOnScreen();
+  const tick = useSecondsTick(polling);
+  // WHY frozen while not polling: an inactive useSecondsTick still returns the
+  // shared clock's latest reading whenever this component re-renders (every
+  // keystroke in the message box), which would otherwise re-run the read below.
+  const pollTick = useRef(tick);
+  if (polling) pollTick.current = tick;
+  const readKey = pollTick.current;
+  const wasOnScreen = useRef(onScreen);
+  useEffect(() => {
+    // Re-arm the clock in the same render as the wake, so arming it does not
+    // cause a second read on top of the wake's own.
+    if (onScreen && !wasOnScreen.current) { setPolling(true); setWake((w) => w + 1); }
+    wasOnScreen.current = onScreen;
+  }, [onScreen]);
+  // A read that lands after the next one began is dropped in favour of the newer one.
   useEffect(() => {
     const read = (window as any).claude?.firstRun?.localDownload;
     // WHY a missing channel renders nothing: until the backend exists, no install
     // has a setup download to report, and a strip must never claim one.
-    if (typeof read !== 'function') return;
+    if (typeof read !== 'function') { setPolling(false); return; }
     let alive = true;
     Promise.resolve(read(sessionId))
-      .then((s: SetupDownloadStatus | null) => { if (alive) setStatus(s ?? null); })
+      .then((s: SetupDownloadStatus | null) => {
+        if (!alive) return;
+        // WHY keep polling briefly after a null that follows a showing band
+        // (review F4, 2026-09-24): main also answers null when its read throws,
+        // without clearing the record, so one transient error used to hide a
+        // live download until the chat scrolled off and back. The band hides at
+        // once either way (a finished download disappears exactly as before);
+        // only the polling continues NULL_GRACE_READS more seconds, so a
+        // transient null recovers on its own. A null on the first read
+        // (everyone past setup) still stops at once.
+        if (!s && shownRef.current && nullsRef.current < NULL_GRACE_READS) {
+          nullsRef.current += 1;
+          setStatus(null);
+          return;
+        }
+        nullsRef.current = 0;
+        shownRef.current = !!s && s.state !== 'done';
+        setStatus(s ?? null);
+        setPolling(!!s && s.state !== 'done');
+      })
       .catch(() => { /* a failed read keeps the last answer rather than flashing */ });
     return () => { alive = false; };
-  }, [sessionId, tick]);
+  }, [sessionId, readKey, wake]);
 
   const resume = useCallback(() => {
     void (window as any).claude?.firstRun?.resumeLocalDownload?.(sessionId);

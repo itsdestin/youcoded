@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useSyncExternalStore,
 } from 'react';
@@ -157,12 +158,17 @@ export function useEscClose(
 ): void {
   const store = useContext(EscStoreContext);
   const ref = useRef(onClose);
-  useEffect(() => { ref.current = onClose; }, [onClose]);
+  useLayoutEffect(() => { ref.current = onClose; }, [onClose]);
   const layeredRef = useRef(opts?.layeredWhile);
   useEffect(() => { layeredRef.current = opts?.layeredWhile; });
   const isPanel = !!opts?.layeredWhile;
 
-  useEffect(() => {
+  // WHY useLayoutEffect (2026-09-24): registered in a passive effect, a popup
+  // was on screen for a moment before it joined the Esc stack, so an Esc in
+  // that gap closed the layer UNDER it (seen as a load-only failure of
+  // ModelSwitchPrompt.test "Esc closes only the question"). Registering in the
+  // same commit that shows it closes the gap.
+  useLayoutEffect(() => {
     if (!store || !open) return;
     const id = nextId++;
     store.push({ id, ref, ...(isPanel ? { layeredWhile: layeredRef } : {}) });

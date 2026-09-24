@@ -611,55 +611,11 @@ export class TranscriptWatcher extends EventEmitter {
     }
   }
 
-  /**
-   * Return every TranscriptEvent parsed from disk for a currently-watched
-   * session. Used during ownership transfer: when a new window acquires a
-   * session via detach/re-dock, it calls this once through IPC to rebuild its
-   * reducer state from the JSONL (disk is the source of truth). Does not
-   * mutate watcher state — safe to call alongside live watching.
-   */
-  getHistory(desktopSessionId: string): TranscriptEvent[] {
-    const session = this.sessions.get(desktopSessionId);
-    if (!session) return [];
-    const events: TranscriptEvent[] = [];
-    // Fresh, throwaway index so replay doesn't corrupt live correlation.
-    const replayIndex = new SubagentIndex();
-    // Replay-side uuid dedup, mirroring the live path's semantics exactly:
-    // CC rewrites the same-uuid line as an assistant message grows, so
-    // repeated uuids skip assistant-text (first write wins) while tool-use /
-    // tool-result / turn-complete still emit (reducer Map.set absorbs them).
-    // Without this, every re-dock/replay rendered duplicate text segments.
-    const seenUuids = new Set<string>();
-    // A tally of its own: a replay walks the file from the top, so sharing the
-    // live tailer's in-flight tally would both double-count and reset it.
-    const replayUsage = emptyTurnUsageTally();
-    if (fs.existsSync(session.jsonlPath)) {
-      let raw: string;
-      try { raw = fs.readFileSync(session.jsonlPath, 'utf8'); }
-      catch { raw = ''; }
-      for (const line of raw.split('\n')) {
-        if (!line.trim()) continue;
-        const parsed = parseTranscriptLine(line, desktopSessionId, replayUsage);
-        if (parsed.length === 0) continue;
-        const lineUuid = parsed[0].uuid;
-        const isRepeat = !!lineUuid && seenUuids.has(lineUuid);
-        if (lineUuid) seenUuids.add(lineUuid);
-        for (const ev of parsed) {
-          if (isRepeat && ev.type === 'assistant-text') continue;
-          if (ev.type === 'tool-use' && ev.data.toolName === 'Agent') {
-            replayIndex.recordParentAgentToolUse(
-              ev.data.toolUseId!,
-              (ev.data.toolInput?.description as string) || '',
-              (ev.data.toolInput?.subagent_type as string) || '',
-            );
-          }
-          events.push(ev);
-        }
-      }
-    }
-    for (const ev of session.subagentWatcher.getHistory(replayIndex)) events.push(ev);
-    return events;
-  }
+  // (getHistory — a whole-transcript sync read + replay — was removed
+  // 2026-09-24, blocking-call batch B1. Its only caller was the
+  // TRANSCRIPT_REPLAY handler, which no renderer or Android build sends any
+  // more: history is paged by readTranscriptPage, and an ownership handoff uses
+  // SESSION_REPLAY_LIVE_STATE + TRANSCRIPT_PAGE.)
 
   // -------------------------------------------------------------------------
   // Internal

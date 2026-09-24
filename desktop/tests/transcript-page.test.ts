@@ -1,5 +1,9 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
+// The module object itself (not the frozen ESM namespace), so vi.spyOn can
+// replace a method and catch a blocking call made from the page reader.
+import fsModule from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { readTranscriptPage, PAGE_TURNS, PAGE_MAX_BYTES } from '../src/main/transcript-page';
@@ -177,5 +181,81 @@ describe('readTranscriptPage — CC transcript', () => {
     expect(page.events.filter((e) => e.type === 'tool-use')).toHaveLength(PAGE_TURNS);
     expect(page.events.filter((e) => e.type === 'tool-result')).toHaveLength(PAGE_TURNS);
     expect(page.events[0].type).toBe('user-message');
+  });
+
+  // ---- Blocking-call batch B1 (2026-09-24): the page read is truly async ----
+
+  it('reads a page without a single blocking fs call (it was async in name only)', async () => {
+    jsonlPath = writeTranscript(PAGE_TURNS + 20);
+    const sync = ['openSync', 'readSync', 'fstatSync', 'closeSync', 'readFileSync', 'existsSync', 'readdirSync']
+      .map((name) => vi.spyOn(fsModule, name as any));
+    // transcript-page imports `* as fs` — a snapshot of the builtin's exports.
+    // Push the spies into it, or the check below would pass vacuously.
+    syncBuiltinESMExports();
+    try {
+      const page = await readTranscriptPage({ jsonlPath, sessionId: 's1', endOffset: null, subagentsDir: path.join(path.dirname(jsonlPath), 'subagents') });
+      expect(page.events.filter((e) => e.type === 'user-message')).toHaveLength(PAGE_TURNS);
+      for (const spy of sync) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of sync) spy.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('a large file (> 5 x PAGE_MAX_BYTES) pages back to byte 0: every turn exactly once, in order, never split', async () => {
+    // Mixed turn sizes so page edges land on both the turn cap and the byte cap,
+    // and multi-byte text so a range edge can fall inside a UTF-8 character.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tp-test-'));
+    jsonlPath = path.join(dir, 'session.jsonl');
+    const TURNS = 400;
+    const chunks: string[] = [];
+    for (let i = 0; i < TURNS; i++) {
+      const pad = i % 7 === 0 ? 'é✓'.repeat(60 * 1024) : `reply ${i}`;
+      chunks.push(JSON.stringify({ type: 'user', uuid: `u-${i}`, promptId: `p-${i}`, isMeta: false, timestamp: new Date(1_700_000_000_000 + i).toISOString(), message: { role: 'user', content: `prompt ${i}` } }) + '\n');
+      chunks.push(JSON.stringify({ type: 'assistant', uuid: `a-${i}`, timestamp: new Date(1_700_000_000_001 + i).toISOString(), message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: pad }] } }) + '\n');
+    }
+    fs.writeFileSync(jsonlPath, chunks.join(''));
+    expect(fs.statSync(jsonlPath).size).toBeGreaterThan(5 * PAGE_MAX_BYTES);
+
+    const pages: { prompts: string[]; replies: number; first: string }[] = [];
+    let endOffset: number | null = null;
+    for (let guard = 0; guard < 200; guard++) {
+      const page = await readTranscriptPage({ jsonlPath, sessionId: 's1', endOffset });
+      pages.unshift({
+        prompts: page.events.filter((e) => e.type === 'user-message').map((e) => e.data.text as string),
+        replies: page.events.filter((e) => e.type === 'assistant-text').length,
+        first: page.events[0]?.type,
+      });
+      if (!page.hasMore) break;
+      endOffset = page.cursor!.offset;
+    }
+    expect(pages.length).toBeGreaterThan(5);
+    const all = pages.flatMap((p) => p.prompts);
+    expect(all).toEqual(Array.from({ length: TURNS }, (_, i) => `prompt ${i}`));
+    for (const p of pages) {
+      expect(p.first).toBe('user-message');          // never starts mid-turn
+      expect(p.replies).toBe(p.prompts.length);      // every turn whole
+      expect(p.prompts.length).toBeLessThanOrEqual(PAGE_TURNS);
+    }
+    // The multi-byte replies survive intact (no U+FFFD from a torn character).
+    const last = await readTranscriptPage({ jsonlPath, sessionId: 's1', endOffset: null });
+    expect(last.events.some((e) => String(e.data.text ?? '').includes('\uFFFD'))).toBe(false);
+  });
+
+  // Moved from transcript-watcher.test.ts when TranscriptWatcher.getHistory
+  // (the whole-transcript replay) was removed as dead — the page reader is now
+  // the only replay, so it owns this rule.
+  it('skips a repeated assistant-text for the same uuid (first write wins, mirrors live dedup)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tp-test-'));
+    jsonlPath = path.join(dir, 'session.jsonl');
+    const assistantLine = (text: string) => JSON.stringify({
+      type: 'assistant', uuid: 'uuid-replay-dup',
+      message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: null },
+    });
+    fs.writeFileSync(jsonlPath, assistantLine('grow') + '\n' + assistantLine('grow more') + '\n');
+    const page = await readTranscriptPage({ jsonlPath, sessionId: 's1', endOffset: null });
+    const texts = page.events.filter((e) => e.type === 'assistant-text');
+    expect(texts).toHaveLength(1);
+    expect(texts[0].data.text).toBe('grow');
   });
 });
