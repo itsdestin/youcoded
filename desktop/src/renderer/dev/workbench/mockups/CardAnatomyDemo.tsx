@@ -8,7 +8,7 @@ import { ThemeBg } from '../../../components/ThemeBg';
  *  (panel, thin edge-dim border, medium shadow, theme radius, 12px gap), with
  *  the decided tinted status pill and no capitals. Tokens only; dev-only. */
 
-export type CardAnatomy = 'today' | 'quiet-footer' | 'meta-under-title';
+export type CardAnatomy = 'today' | 'quiet-footer' | 'meta-under-title' | 'chips';
 export type ConvAnatomy = 'date-top' | 'date-end';
 
 const CARD = 'rounded-xl bg-panel border border-edge-dim p-3 flex flex-col gap-2';
@@ -44,6 +44,29 @@ function Card({ item, anatomy }: { item: Item; anatomy: CardAnatomy }) {
         </div>
         <p className="text-xs text-fg-2 line-clamp-2">{item.desc}</p>
         <div className="flex justify-between text-3xs text-fg-muted font-semibold"><span>{item.stats.split(' · ')[0]}</span><span>{item.kind}</span></div>
+      </div>
+    );
+  }
+  if (anatomy === 'chips') {
+    // Destin's CA-1 answer: today's chip-ish trust/author badges kept, and the
+    // footer details turned into chips of the same style.
+    const chip = 'rounded border border-edge-dim bg-inset px-1.5 text-3xs text-fg-2';
+    return (
+      <div className={CARD} style={SHADOW}>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-fg flex-1 truncate">{item.title}</span>
+          {item.status && <Pill>{item.status}</Pill>}
+          <Star on={item.star} />
+        </div>
+        <div className="flex gap-1">
+          <span className={chip}>Likely safe</span>
+          <span className={chip}>{item.by}</span>
+        </div>
+        <p className="text-xs text-fg-2 line-clamp-2">{item.desc}</p>
+        <div className="mt-auto flex flex-wrap gap-1">
+          <span className={chip}>{item.kind}</span>
+          {item.stats.split(' · ').map((x) => <span key={x} className={chip}>{x}</span>)}
+        </div>
       </div>
     );
   }

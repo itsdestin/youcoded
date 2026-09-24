@@ -7412,6 +7412,7 @@ export const COMPARE_SURFACES: CompareSurface[] = [
       { n: 1, basis: 'A plugin, a Library skill and a Page as cards.', candidates: [
         { id: 'today', label: 'Today (Marketplace)', note: 'Capitals badge, two pills for trust and author, stats split left and right.', render: () => <CardAnatomyDemo anatomy="today" /> },
         { id: 'quiet-footer', label: 'Details at the bottom', note: 'Title and status, the description, then one grey line: kind · who · numbers.', render: () => <CardAnatomyDemo anatomy="quiet-footer" /> },
+        { id: 'chips', label: 'Chips (your pick)', note: 'Today\'s trust and author chips kept; the footer details as chips too; name and tinted status on top.', render: () => <CardAnatomyDemo anatomy="chips" /> },
         { id: 'meta-under-title', label: 'Who under the title', note: 'Title with kind · who under it, the description, then the numbers at the bottom right.', render: () => <CardAnatomyDemo anatomy="meta-under-title" /> },
       ] },
       { n: 2, basis: 'Conversation cards (Resume, Projects, chat references): where the date goes.', candidates: [
