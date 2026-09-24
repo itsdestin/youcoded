@@ -124,6 +124,37 @@ const ProjectSetupRow = React.memo(function ProjectSetupRow({
     ? [...state.view.builtIn, ...state.view.installed].find((g) => g.pluginId === pluginId)
     : undefined;
 
+  // F4 (T6 review): the controller's per-path "shown for" gate is
+  // deliberately once-only (performance.md rule 2 — collapsing and
+  // re-expanding an already-LOADED row must cost nothing), but that gate
+  // also swallowed a retry for the two cases where re-expanding should DO
+  // something: a fetch that failed outright (`state.kind === 'error'`), and
+  // the documented "install finished a moment before this row's own catalog
+  // scan ran" race (`state.kind === 'ready'` but the just-installed plugin's
+  // group hasn't shown up yet — the "Not available here yet" text above).
+  // `reload()` bypasses the gate unconditionally, so this effect fires it
+  // ONLY on an actual collapse->expand transition (never on the initial
+  // mount, and never again while `expanded` stays true) and only when the
+  // last fetch left the row in one of those two states — an ordinary
+  // successful fetch with the group present must stay lazy-once, exactly
+  // like SkillsToolsTab's own use of this same hook.
+  const wasExpandedRef = useRef(expanded);
+  useEffect(() => {
+    const wasExpanded = wasExpandedRef.current;
+    wasExpandedRef.current = expanded;
+    if (!expanded || wasExpanded) return; // only a real collapse->expand edge
+    if (state.kind === 'error' || (state.kind === 'ready' && !group)) reload();
+  }, [expanded, state, group, reload]);
+
+  // Coordinator fix: a COLLAPSED row that has never been expanded never
+  // fetches at all (the controller's `active` gate — see
+  // useProjectExtensionsController's own "fetch lazily" comment), so its
+  // `state` sits at the hook's initial `{kind:'loading'}` forever, not
+  // because anything is actually in flight. Showing "Loading…" there was
+  // simply wrong — nothing is loading until the row is expanded. Only the
+  // FIRST row starts expanded (R20); every other row must show no
+  // description (never a guess at on/off before its own fetch has run) until
+  // `expanded` is true and a real fetch can be in flight.
   const description = state.kind === 'ready' && group
     ? `Automatic use ${group.on ? 'on' : 'off'} in new conversations`
     : state.kind === 'ready'
@@ -131,7 +162,9 @@ const ProjectSetupRow = React.memo(function ProjectSetupRow({
       // rare (a race between install finishing and this row's own fetch);
       // reopening the row re-fetches and self-heals.
       ? 'Not available here yet'
-      : 'Loading…';
+      : expanded
+        ? 'Loading…'
+        : undefined;
 
   return (
     <section className="overflow-hidden rounded-lg border border-edge bg-panel">
@@ -146,7 +179,13 @@ const ProjectSetupRow = React.memo(function ProjectSetupRow({
         expanded={expanded} onClick={() => setExpanded((v) => !v)}
       />
       <div className={expanded ? 'px-2 pb-2' : 'hidden'}>
-        {state.kind === 'loading' && <p className="px-2 py-3 text-xs text-fg-muted">Loading…</p>}
+        {/* `expanded` guard (not just `state.kind`): a collapsed, never-
+            fetched row sits at the controller's initial `loading` state
+            forever (nothing is actually in flight) — this content is CSS-
+            hidden while collapsed either way, but rendering "Loading…" into
+            it for a fetch that was never started is still the same wrong
+            claim the row's own description above was making. */}
+        {state.kind === 'loading' && expanded && <p className="px-2 py-3 text-xs text-fg-muted">Loading…</p>}
         {state.kind === 'error' && (
           <div className="p-2"><ErrorState mode="recoverable" message={state.message} onRetry={reload} /></div>
         )}

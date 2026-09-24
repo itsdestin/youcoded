@@ -22,8 +22,9 @@
 import { NativeHome } from '../native-home';
 import { getManagedRoots } from '../sync-spaces/service';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
-import { resolveProjectKey, resolveProjectAddedAt, type ProjectKeyCandidate } from './project-key';
+import { resolveProjectKey, type ProjectKeyCandidate } from './project-key';
 import { listProjectKeyCandidatesAsync } from './candidates';
+import { readFeatureFirstRunAt } from './feature-first-run';
 import {
   getProjectExtensions, mutateProjectExtensions, ensureSeeded,
   type ProjectExtensionsStores,
@@ -50,9 +51,15 @@ export interface ProjectExtensionsIpcDeps {
   nativeSessions?: { listAsync(): Promise<(NativeSessionListEntry & { provider: 'native' })[]> };
 }
 
-async function candidatesAndStores(deps: ProjectExtensionsIpcDeps): Promise<{ candidates: ProjectKeyCandidate[]; stores: ProjectExtensionsStores }> {
+async function candidatesAndStores(deps: ProjectExtensionsIpcDeps): Promise<{ candidates: ProjectKeyCandidate[]; stores: ProjectExtensionsStores; featureFirstRunAt: number | undefined }> {
   const roots = getManagedRoots();
   const candidates = await listProjectKeyCandidatesAsync(roots?.projectsRoot ?? null);
+  // F1 review fix (T6): the seeding/availability rule's ONLY lower bound is
+  // this per-device instant (feature-first-run.ts) — never a folder's
+  // addedAt (deleted, see resolve.ts's own header) or a project's seededAt.
+  // Read fresh on every call: cheap (one small JSON file), and this module
+  // has no long-lived instance to cache it on.
+  const featureFirstRunAt = await readFeatureFirstRunAt(deps.nativeHome);
   // WHY personalRoot is never used to null out `stores` here (unlike T2's own
   // resolveProjectAvailabilityInputs in ipc-handlers.ts, which nulls the WHOLE
   // stores object when ManagedRoots/personalRoot is absent, fail-open for
@@ -65,7 +72,7 @@ async function candidatesAndStores(deps: ProjectExtensionsIpcDeps): Promise<{ ca
   // branch. Sync spaces being disabled/uninitialized must not disable the
   // WHOLE Skills & tools tab for a purely local project.
   const stores: ProjectExtensionsStores = { personalRoot: roots?.personalRoot ?? '', home: deps.nativeHome };
-  return { candidates, stores };
+  return { candidates, stores, featureFirstRunAt };
 }
 
 /** Resolve a renderer-supplied canonical path to store.ts's internal storage
@@ -100,15 +107,14 @@ export type ProjectExtensionsGetResult = { ok: true; view: ProjectExtensionsView
  *  that project's Skills & tools tab" is one of exactly two seed moments). */
 export async function projectExtensionsGet(deps: ProjectExtensionsIpcDeps, path: string): Promise<ProjectExtensionsGetResult> {
   try {
-    const { candidates, stores } = await candidatesAndStores(deps);
+    const { candidates, stores, featureFirstRunAt } = await candidatesAndStores(deps);
     const storageKey = resolveStorageKey(path, candidates);
     const { skills, mcp, installs } = await gatherCatalog(deps, path);
-    // seedReferenceInstant (T6): see ensureSeeded's own header — without it,
-    // a plugin installed moments ago would seed ON in a project that has
-    // never opened this tab, defeating "starts off everywhere".
-    const seedReferenceInstant = resolveProjectAddedAt(path, candidates);
-    const record = await ensureSeeded(stores, storageKey, { skills, mcp, installs }, Date.now(), false, seedReferenceInstant);
-    return { ok: true, view: buildProjectExtensionsView({ projectKey: path, record, skills, mcp, installs, now: Date.now() }) };
+    // featureFirstRunAt (T6, F1 review fix): see ensureSeeded's own header —
+    // without it, a plugin installed moments ago would seed ON in a project
+    // that has never opened this tab, defeating "starts off everywhere".
+    const record = await ensureSeeded(stores, storageKey, { skills, mcp, installs }, Date.now(), false, featureFirstRunAt);
+    return { ok: true, view: buildProjectExtensionsView({ projectKey: path, record, skills, mcp, installs, featureFirstRunAt, now: Date.now() }) };
   } catch (err: any) {
     return { ok: false, error: err?.message || String(err) };
   }
@@ -122,7 +128,7 @@ export async function projectExtensionsSet(
   deps: ProjectExtensionsIpcDeps, path: string, changes: ProjectExtensionsChange[],
 ): Promise<ProjectExtensionsSetResult> {
   try {
-    const { candidates, stores } = await candidatesAndStores(deps);
+    const { candidates, stores, featureFirstRunAt } = await candidatesAndStores(deps);
     const storageKey = resolveStorageKey(path, candidates);
     const { skills, mcp, installs } = await gatherCatalog(deps, path);
 
@@ -150,7 +156,7 @@ export async function projectExtensionsSet(
       return result.record;
     });
     if (applyError) return { ok: false, error: applyError };
-    return { ok: true, view: buildProjectExtensionsView({ projectKey: path, record, skills, mcp, installs, now }) };
+    return { ok: true, view: buildProjectExtensionsView({ projectKey: path, record, skills, mcp, installs, featureFirstRunAt, now }) };
   } catch (err: any) {
     return { ok: false, error: err?.message || String(err) };
   }
@@ -221,15 +227,15 @@ export async function projectExtensionsForSession(deps: ProjectExtensionsIpcDeps
     const cwd = entry.cwd;
     const frozen = entry.availability ?? null;
 
-    const { candidates, stores } = await candidatesAndStores(deps);
+    const { candidates, stores, featureFirstRunAt } = await candidatesAndStores(deps);
     const { skills, mcp, installs } = await gatherCatalog(deps, cwd);
     const now = Date.now();
 
     const storageKey = resolveStorageKey(cwd, candidates);
     const record = await getProjectExtensions(stores, storageKey); // read-only — no seed here
-    const missing = buildProjectExtensionsView({ projectKey: cwd, record, skills, mcp, installs, now }).needsSetup;
+    const missing = buildProjectExtensionsView({ projectKey: cwd, record, skills, mcp, installs, featureFirstRunAt, now }).needsSetup;
 
-    const current = await resolveSessionAvailability(cwd, { projectsRoot: null, candidates, stores, skills, mcp, installs, now });
+    const current = await resolveSessionAvailability(cwd, { projectsRoot: null, candidates, stores, skills, mcp, installs, featureFirstRunAt, now });
     const settingsDiffer = computeSettingsDiffer(
       frozen, current ? { skillCatalogIds: current.skillCatalogIds, mcpServerIds: current.mcpServerIds } : null,
       skills.length, mcp.length,

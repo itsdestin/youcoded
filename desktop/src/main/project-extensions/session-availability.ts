@@ -8,7 +8,7 @@
 // unconditionally (design §3's whole point: a project's settings can change
 // while a conversation is closed without moving the ground under an already
 // -open session) — never re-runs this.
-import { resolveProjectKey, resolveProjectAddedAt, type ProjectKeyCandidate } from './project-key';
+import { resolveProjectKey, type ProjectKeyCandidate } from './project-key';
 import { ensureSeeded, type ProjectExtensionsStores, type SeedCatalog } from './store';
 import {
   resolveAvailability, itemKeyForSkill, itemKeyForMcp,
@@ -42,6 +42,12 @@ export interface SessionAvailabilityDeps {
   skills: CatalogSkillEntry[];
   mcp: CatalogMcpEntry[];
   installs: Record<string, PluginInstallInfo>;
+  /** Per-device instant this feature's build first ran (feature-first-run.ts)
+   *  — F1 review fix: the ONLY lower bound the seeding/availability rule
+   *  compares an install against, replacing the deleted folder-`addedAt`
+   *  reference. Absent/`undefined` -> unknown -> everything stays on (same
+   *  optional-defaults-to-unknown convention as every other seam here). */
+  featureFirstRunAt?: number;
   now?: number;
   /** Test seam — overrides candidates.ts's default `~/.claude/youcoded-folders.json`. */
   foldersFile?: string;
@@ -110,7 +116,8 @@ export async function resolveSessionAvailability(
       // returns the empty-set answer for "outside any project" — nothing to
       // seed (there is no project to seed).
       const resolved = resolveAvailability({
-        projectKey: null, record: null, skills: deps.skills, mcp: deps.mcp, installs: deps.installs, now,
+        projectKey: null, record: null, skills: deps.skills, mcp: deps.mcp, installs: deps.installs,
+        featureFirstRunAt: deps.featureFirstRunAt, now,
       });
       return toSessionAvailability(projectKey, resolved, deps.skills, deps.mcp);
     }
@@ -126,13 +133,14 @@ export async function resolveSessionAvailability(
     // isNewProject defaults false in ensureSeeded: this is a conversation
     // being opened, not a project being freshly created (that seed call, with
     // isNewProject:true, is a later task's responsibility to wire — design §2).
-    // seedReferenceInstant (T6): same fix as ipc-shell.ts's projectExtensionsGet
-    // — starting the FIRST-EVER conversation in a project is the other seed
-    // trigger design §2 names, so it needs the same "don't use now" correction.
-    const seedReferenceInstant = resolveProjectAddedAt(cwd, candidates);
-    const record = await ensureSeeded(deps.stores, projectKey, seedCatalog, now, false, seedReferenceInstant);
+    // featureFirstRunAt (T6, F1 review fix): starting the FIRST-EVER
+    // conversation in a project is the other seed trigger design §2 names, so
+    // it needs the SAME per-device instant ipc-shell.ts's projectExtensionsGet
+    // uses — never a folder's addedAt (deleted).
+    const record = await ensureSeeded(deps.stores, projectKey, seedCatalog, now, false, deps.featureFirstRunAt);
     const resolved = resolveAvailability({
-      projectKey, record, skills: deps.skills, mcp: deps.mcp, installs: deps.installs, now,
+      projectKey, record, skills: deps.skills, mcp: deps.mcp, installs: deps.installs,
+      featureFirstRunAt: deps.featureFirstRunAt, now,
     });
     return toSessionAvailability(projectKey, resolved, deps.skills, deps.mcp);
   } catch (err) {

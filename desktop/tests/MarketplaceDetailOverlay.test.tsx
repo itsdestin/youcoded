@@ -149,6 +149,58 @@ describe('MarketplaceDetailOverlay — post-install project setup panel', () => 
     expect(screen.queryByText(/Choose where the assistant can use it/)).toBeNull();
   });
 
+  // F3 (T6 review): the design's own claim ("resets on target change") had
+  // no test navigating away and back — this pins it against a real
+  // navigation, not just the effect's dependency array.
+  it('resets the setup panel when navigating to another item and back (targetKey)', async () => {
+    setupWindowClaude();
+    const other = pluginWithParts({
+      id: 'other-plugin', displayName: 'Other',
+      components: { skills: [], hooks: [], commands: [], agents: [], mcpServers: [], hasHooksManifest: false, hasMcpConfig: false },
+    });
+    (window as any).claude.skills.listMarketplace.mockResolvedValue([pluginWithParts(), other]);
+
+    const inboxTarget = { kind: 'skill' as const, id: 'youcoded-inbox' };
+    const otherTarget = { kind: 'skill' as const, id: 'other-plugin' };
+    const wrap = (target: typeof inboxTarget) => (
+      <AccountProvider pollIntervalMs={10}>
+        <SkillProvider>
+          <MarketplaceProvider>
+            <MarketplaceStatsProvider>
+              <MarketplaceDetailOverlay target={target} onClose={() => {}} />
+            </MarketplaceStatsProvider>
+          </MarketplaceProvider>
+        </SkillProvider>
+      </AccountProvider>
+    );
+
+    let rerender!: (ui: React.ReactElement) => void;
+    await act(async () => {
+      const result = render(wrap(inboxTarget));
+      rerender = result.rerender;
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+      await Promise.resolve();
+    });
+    expect(await screen.findByText('Set up Inbox')).toBeInTheDocument();
+    expect(screen.getByText(/Installed on this device\. Choose where the assistant/)).toBeInTheDocument();
+
+    // Navigate to a DIFFERENT item — the setup panel must disappear.
+    await act(async () => { rerender(wrap(otherTarget)); });
+    expect(screen.queryByText('Set up Inbox')).toBeNull();
+    expect(screen.queryByText(/Installed on this device\. Choose where the assistant/)).toBeNull();
+
+    // Navigate BACK to the just-installed plugin — merely viewing it again is
+    // not a new install, so the setup panel must stay gone (ordinary Details
+    // view instead), not silently reappear because its id matches justInstalled.
+    await act(async () => { rerender(wrap(inboxTarget)); });
+    expect(screen.queryByText('Set up Inbox')).toBeNull();
+    expect(screen.queryByText(/Installed on this device\. Choose where the assistant/)).toBeNull();
+    expect(screen.getByText('Details')).toBeInTheDocument();
+  });
+
   it('Done closes the overlay without uninstalling', async () => {
     setupWindowClaude();
     (window as any).claude.skills.listMarketplace.mockResolvedValue([pluginWithParts()]);

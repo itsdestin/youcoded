@@ -105,6 +105,12 @@ export interface BuildViewInput {
   skills: ViewSkillEntry[];
   mcp: ViewMcpEntry[];
   installs: Record<string, PluginInstallInfo>;
+  /** Per-device instant this feature's build first ran (feature-first-run.ts)
+   *  — the ONLY lower bound a group with no stored plugin state compares its
+   *  install against (F1 fix: never the project's own `seededAt`, which has
+   *  no relationship to when a plugin was installed). `undefined` -> unknown
+   *  -> defaultPluginOn's rule 2 never fires (design §2). */
+  featureFirstRunAt: number | undefined;
   now: number;
 }
 
@@ -147,9 +153,9 @@ function pluginDisplayName(pluginId: string, parts: ProjectExtensionsPartRow[]):
  * BY ITERATING the catalog — see resolveAvailability's own loop).
  */
 export function buildProjectExtensionsView(input: BuildViewInput): ProjectExtensionsView {
-  const { projectKey, record, skills, mcp, installs, now } = input;
+  const { projectKey, record, skills, mcp, installs, featureFirstRunAt, now } = input;
 
-  const resolved = resolveAvailability({ projectKey, record, skills, mcp, installs, now });
+  const resolved = resolveAvailability({ projectKey, record, skills, mcp, installs, featureFirstRunAt, now });
 
   const skillById = new Map(skills.map((s) => [itemKeyForSkill(s), s]));
   const mcpById = new Map(mcp.map((m) => [itemKeyForMcp(m), m]));
@@ -180,12 +186,11 @@ export function buildProjectExtensionsView(input: BuildViewInput): ProjectExtens
     }
   }
 
-  const seedInstant = record && record.seededAt ? record.seededAt : now;
   const builtIn: ProjectExtensionsPluginGroup[] = [];
   const installed: ProjectExtensionsPluginGroup[] = [];
   for (const [pluginId, parts] of groups) {
     const stored = record?.plugins[pluginId];
-    const on = stored ? stored.on : defaultPluginOn(pluginId, installs[pluginId]?.installedAt, seedInstant);
+    const on = stored ? stored.on : defaultPluginOn(pluginId, installs[pluginId]?.installedAt, featureFirstRunAt);
     const group: ProjectExtensionsPluginGroup = {
       pluginId, displayName: pluginDisplayName(pluginId, parts), bundled: isBundledPlugin(pluginId), on, paused: !on, parts,
     };

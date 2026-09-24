@@ -2323,6 +2323,12 @@ export class NativeSessionHost extends EventEmitter {
     private resolveProjectAvailabilityInputs?: () => Promise<{
       candidates: ProjectKeyCandidate[];
       stores: ProjectExtensionsStores | null;
+      /** F1 review fix (T6): the per-device instant this feature's build
+       *  first ran (feature-first-run.ts) — the ONLY lower bound the seeding
+       *  rule compares an install against. Absent/`undefined` -> unknown ->
+       *  on (optional so a bare test construction that doesn't care about
+       *  this feature's start-off rule need not supply it). */
+      featureFirstRunAt?: number;
     }>,
   ) {
     super();
@@ -2906,7 +2912,7 @@ export class NativeSessionHost extends EventEmitter {
     if (!this.resolveProjectAvailabilityInputs) return this.resolveAvailabilityForCreateUnknown();
     let mcpEntries: CatalogMcpEntry[] | undefined;
     try {
-      const { candidates, stores } = await this.resolveProjectAvailabilityInputs();
+      const { candidates, stores, featureFirstRunAt } = await this.resolveProjectAvailabilityInputs();
       mcpEntries = (await this.mcpManager?.listEnabled?.()) ?? [];
       const installs = this.skillConfigStore?.getPackages() ?? {};
       const resolved = await resolveSessionAvailability(cwd, {
@@ -2916,6 +2922,7 @@ export class NativeSessionHost extends EventEmitter {
         skills: skillEntries,
         mcp: mcpEntries,
         installs,
+        featureFirstRunAt,
       });
       if (resolved === null) return this.resolveAvailabilityForCreateUnknown(mcpEntries);
       return { kind: 'resolved', projectKey: resolved.projectKey, skillCatalogIds: resolved.skillCatalogIds, mcpServerIds: resolved.mcpServerIds, mcpEntries };

@@ -84,6 +84,26 @@ describe('resolveSessionAvailability', () => {
     expect(result?.mcpServerIds.has('gmail')).toBe(false);
   });
 
+  // F1 review fix (T6): featureFirstRunAt reaches ensureSeeded/resolveAvailability
+  // through this seam — a plugin installed after it starts OFF on this
+  // project's very first (session-create-triggered) seed, exactly like the
+  // ipc-shell.ts get()/set() path.
+  it('threads featureFirstRunAt through to the seed call — an install after it starts off on a never-seeded project', async () => {
+    const featureFirstRunAt = NOW - 60_000;
+    const installedAt = new Date(featureFirstRunAt + 1_000).toISOString();
+    const civicSkills: CatalogSkillEntry[] = [{ id: 'civic:report', source: 'plugin', pluginName: 'civic' }];
+    const result = await resolveSessionAvailability('/home/dest/MyProject', {
+      projectsRoot: null, stores, skills: civicSkills, mcp: [], installs: { civic: { installedAt } }, now: NOW,
+      candidates: [{ path: '/home/dest/MyProject', syncName: 'MyProject' }],
+      featureFirstRunAt,
+    });
+    const file = path.join(stores.personalRoot, 'ProjectExtensions', 'MyProject.json');
+    const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(rec.plugins.civic).toMatchObject({ on: false });
+    expect(result?.skillCatalogIds.has('civic:report')).toBe(false);
+    expect(result?.projectKey).toBe('MyProject');
+  });
+
   it('no stores wired (bare test host) answers null — "don\'t know", never B-1\'s empty set', async () => {
     const result = await resolveSessionAvailability('/p', {
       projectsRoot: null, stores: null, skills, mcp, installs: {}, now: NOW,

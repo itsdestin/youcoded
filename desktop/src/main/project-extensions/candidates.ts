@@ -24,12 +24,14 @@ function defaultFoldersFile(): string {
   return path.join(os.homedir(), '.claude', 'youcoded-folders.json');
 }
 
-/** Same shape as saved-folders.ts's SavedFolder, narrowed to the two fields
- *  this module reads: the path, and (T6, project-plugin-controls) `addedAt`
- *  — see project-key.ts's `resolveProjectAddedAt` for why a caller wants it. */
+/** Same shape as saved-folders.ts's SavedFolder, narrowed to the one field
+ *  this module reads: the path. (T6, project-plugin-controls, F1 review fix:
+ *  this used to also carry `addedAt` for a "since when has this project
+ *  existed" seeding signal — deleted. A folder's age has no relationship to
+ *  when a plugin was installed into it; see resolve.ts's own header for the
+ *  bug that signal caused and feature-first-run.ts for its replacement.) */
 interface SavedFolderEntry {
   path: string;
-  addedAt?: number;
 }
 
 async function readSavedFolderEntries(foldersFile: string): Promise<SavedFolderEntry[]> {
@@ -44,8 +46,7 @@ async function readSavedFolderEntries(foldersFile: string): Promise<SavedFolderE
   for (const entry of raw) {
     const p = (entry as { path?: unknown } | null)?.path;
     if (typeof p !== 'string') continue;
-    const addedAtRaw = (entry as { addedAt?: unknown }).addedAt;
-    out.push({ path: p, ...(typeof addedAtRaw === 'number' && Number.isFinite(addedAtRaw) && addedAtRaw !== 0 ? { addedAt: addedAtRaw } : {}) });
+    out.push({ path: p });
   }
   return out;
 }
@@ -74,14 +75,14 @@ export async function listProjectKeyCandidatesAsync(
   const seen = new Set<string>();
   const projectsPrefix = projectsRoot ? path.resolve(projectsRoot).toLowerCase() + path.sep : null;
 
-  for (const { path: p, addedAt } of savedEntries) {
+  for (const { path: p } of savedEntries) {
     const resolved = path.resolve(p);
     seen.add(resolved.toLowerCase());
     const managed = projectsPrefix !== null && resolved.toLowerCase().startsWith(projectsPrefix);
     // syncName is the directory's OWN basename (its cross-device identity),
     // never the saved folder's editable nickname — project-key.ts's own
     // header comment names this exact distinction.
-    candidates.push({ path: p, ...(managed ? { syncName: path.basename(resolved) } : {}), ...(addedAt !== undefined ? { addedAt } : {}) });
+    candidates.push({ path: p, ...(managed ? { syncName: path.basename(resolved) } : {}) });
   }
 
   if (projectsRoot) {

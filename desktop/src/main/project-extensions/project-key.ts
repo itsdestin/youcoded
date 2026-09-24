@@ -34,14 +34,6 @@ export interface ProjectKeyCandidate {
    *  folder is an ordinary (unsynced) saved folder, whose project key is its
    *  own canonical path. */
   syncName?: string;
-  /** ms epoch this folder was ADDED to the picker (folders-service.ts's
-   *  `SavedFolder.addedAt`) — absent for a managed sync project discovered
-   *  straight from `projectsRoot` rather than an explicit "add folder" click
-   *  (folders-service.ts badges those `addedAt:0` for its own sort order;
-   *  this module leaves the field OFF instead, since `0` would read as a real,
-   *  very-early instant to a caller doing arithmetic on it — see
-   *  `resolveProjectAddedAt`'s own header for why a caller wants this at all). */
-  addedAt?: number;
 }
 
 function findCandidate(
@@ -84,28 +76,4 @@ export function resolveProjectKey(
   if (!candidate) return null;
   if (candidate.syncName) return candidate.syncName;
   return canonicalize(candidate.path, null);
-}
-
-/**
- * The matching candidate's `addedAt`, when known (T6, project-plugin-
- * controls). WHY this exists: `store.ts`'s `ensureSeeded` needs a "this
- * project's settings have effectively existed since ~here" instant for its
- * first-ever seed of a project — falling back to "now" (the seed call's own
- * timestamp) makes ANY already-completed install compare as "before the
- * seed" (an install can't happen in the future), which silently defeats
- * design §2 rule 2 ("a marketplace plugin installed after the project's
- * seededAt starts off") for the exact case the Marketplace post-install
- * panel exercises: installing a plugin, then immediately opening a project
- * that has NEVER been seeded before. The folder's own `addedAt` — almost
- * always well before "just now" — is a much better proxy for "since when has
- * this project existed" than the instant of this particular IPC call.
- * Undefined (no match, or a managed project with no recorded `addedAt`)
- * leaves the caller to fall back to "now", matching prior behaviour for that
- * narrower, harder-to-fix case.
- */
-export function resolveProjectAddedAt(
-  cwd: string | null | undefined,
-  candidates: ProjectKeyCandidate[],
-): number | undefined {
-  return findCandidate(cwd, candidates)?.addedAt;
 }

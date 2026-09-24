@@ -14,6 +14,19 @@ import { skillItemKey } from '../../shared/project-extension-keys';
 // ever fires for a BRAND NEW project's first (unseeded) resolve.
 const THEME_BUILDER_PLUGIN_ID = 'wecoded-themes-plugin';
 
+// F1 review fix (T6, project-plugin-controls, 2026-09-24): this module used
+// to be fed a per-project "seed reference instant" derived from the
+// project's folder `addedAt` (resolveProjectAddedAt, now deleted) or the
+// record's own `seededAt`. Both are the WRONG signal — a folder's age (or a
+// project's own seed time) has no relationship to when a plugin was
+// installed into it, so comparing `installedAt` against either one punishes
+// an ordinary, long-settled install that simply happened after the folder
+// existed. The only question the "installed after seed, starts off" rule
+// (design §2 rule 2) actually means to ask is "did this install arrive AFTER
+// this feature itself existed on this device" — so every comparison in this
+// file now uses `featureFirstRunAt` (feature-first-run.ts), a single
+// per-device instant, never a per-project one.
+
 /** Minimal shape resolve.ts needs from a catalog skill entry (shared/types.ts
  *  SkillEntry has many more fields the availability rule never looks at). */
 export interface CatalogSkillEntry {
@@ -73,6 +86,13 @@ export interface ResolveAvailabilityInput {
    *  getPackages()). A plugin absent here is treated as "not a marketplace
    *  install" (bundled, adopted, or too old to have a record) — rule 3. */
   installs: Record<string, PluginInstallInfo>;
+  /** Per-device instant: the first time a build with this feature ran here
+   *  (feature-first-run.ts). `undefined` means "couldn't be read/written yet"
+   *  — rule 2 then never fires (design §2: "if it can't be written, treat as
+   *  unknown -> everything on"). This is the ONLY lower bound rule 2 compares
+   *  `installedAt` against — never a project's own `addedAt` or `seededAt`
+   *  (see this file's own header, F1). */
+  featureFirstRunAt: number | undefined;
   /** Injectable clock (ms epoch) — every test in the unit table pins a fixed
    *  `now` rather than racing the real clock. */
   now: number;
@@ -93,14 +113,17 @@ export function itemKeyForMcp(entry: CatalogMcpEntry): string {
 /**
  * §2 default rule for a plugin with NO explicit `plugins[id]` entry:
  *   1. Bundled, non-Theme-Builder -> on. Theme Builder -> off.
- *   2. A marketplace install whose installedAt parses AFTER `seedInstant` -> off.
+ *   2. A marketplace install whose installedAt parses AFTER `featureFirstRunAt` -> off.
  *   3. Everything else -> on.
  *
  * `installedAt` missing or unparseable counts as "before" (rule 2's own
  * wording) — `Date.parse` returns NaN for either, and NaN compares false
- * against anything, so the `> seedInstant` check naturally falls through to
- * "on". A damaged or absent record can only ever keep something ON, never
- * turn it off.
+ * against anything, so the `> featureFirstRunAt` check naturally falls
+ * through to "on". A damaged or absent record can only ever keep something
+ * ON, never turn it off. Same for `featureFirstRunAt` itself being
+ * `undefined` (couldn't be written/read on this device yet) — the check is
+ * skipped entirely, so an unknown rollout instant can also only ever keep
+ * something ON.
  *
  * Exported (not just used internally) so store.ts's ensureSeeded can
  * materialize the SAME plugin-level default it is about to freeze into the
@@ -109,12 +132,12 @@ export function itemKeyForMcp(entry: CatalogMcpEntry): string {
 export function defaultPluginOn(
   pluginId: string,
   installedAt: string | undefined,
-  seedInstant: number,
+  featureFirstRunAt: number | undefined,
 ): boolean {
   if (isBundledPlugin(pluginId)) return pluginId !== THEME_BUILDER_PLUGIN_ID;
-  if (installedAt !== undefined) {
+  if (featureFirstRunAt !== undefined && installedAt !== undefined) {
     const installedMs = Date.parse(installedAt);
-    if (!Number.isNaN(installedMs) && installedMs > seedInstant) return false;
+    if (!Number.isNaN(installedMs) && installedMs > featureFirstRunAt) return false;
   }
   return true;
 }
@@ -136,11 +159,11 @@ export function defaultPluginOn(
 export function seedDefaultOn(
   pluginId: string,
   installedAt: string | undefined,
-  seedInstant: number,
+  featureFirstRunAt: number | undefined,
   isNewProject: boolean,
 ): boolean {
   if (!isNewProject && isBundledPlugin(pluginId)) return true;
-  return defaultPluginOn(pluginId, installedAt, seedInstant);
+  return defaultPluginOn(pluginId, installedAt, featureFirstRunAt);
 }
 
 /**
@@ -148,7 +171,7 @@ export function seedDefaultOn(
  * automatically use (design §3). Pure — never mutates `record`.
  */
 export function resolveAvailability(input: ResolveAvailabilityInput): ResolvedAvailability {
-  const { projectKey, record, skills, mcp, installs, now } = input;
+  const { projectKey, record, skills, mcp, installs, featureFirstRunAt, now } = input;
 
   // B-1 (Resolved by Destin #1): a conversation whose cwd matched no saved
   // folder at all gets NO automatic skills and NO tool connections — not
@@ -159,14 +182,6 @@ export function resolveAvailability(input: ResolveAvailabilityInput): ResolvedAv
     return { skillIds: new Set(), mcpIds: new Set(), rows: [] };
   }
 
-  // The instant "no explicit seed yet" compares installedAt against. Every
-  // install already on disk necessarily happened at or before RIGHT NOW, so
-  // treating an absent/zero seededAt as "seeded this instant" can never
-  // mislabel an existing install as "installed after seed" — see §2's
-  // "don't turn off what works today". Once a record has a real seededAt,
-  // THAT instant is authoritative instead.
-  const seedInstant = record && record.seededAt ? record.seededAt : now;
-
   // Private memo — NOT exposed on the return value. store.ts's ensureSeeded
   // needs the SAME per-plugin default even for a plugin whose every item
   // already has an explicit itemState (so this loop never calls the
@@ -176,7 +191,7 @@ export function resolveAvailability(input: ResolveAvailabilityInput): ResolvedAv
   const pluginDefaultOnCached = (pluginId: string): boolean => {
     const cached = pluginDefaultCache.get(pluginId);
     if (cached !== undefined) return cached;
-    const val = defaultPluginOn(pluginId, installs[pluginId]?.installedAt, seedInstant);
+    const val = defaultPluginOn(pluginId, installs[pluginId]?.installedAt, featureFirstRunAt);
     pluginDefaultCache.set(pluginId, val);
     return val;
   };

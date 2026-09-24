@@ -13,7 +13,7 @@ function emptyRecord(seededAt = 0): ProjectExtensionsRecord {
 }
 
 function baseViewInput(overrides: Partial<BuildViewInput> = {}): BuildViewInput {
-  return { projectKey: PROJECT_KEY, record: null, skills: [], mcp: [], installs: {}, now: NOW, ...overrides };
+  return { projectKey: PROJECT_KEY, record: null, skills: [], mcp: [], installs: {}, featureFirstRunAt: NOW, now: NOW, ...overrides };
 }
 
 const researchFindSkill: ViewSkillEntry = { id: 'research-kit:find-sources', source: 'plugin', pluginName: 'research-kit', displayName: 'Find sources' };

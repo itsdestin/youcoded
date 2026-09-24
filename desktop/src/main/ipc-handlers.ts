@@ -62,6 +62,7 @@ import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
 import { listProjectKeyCandidatesAsync } from './project-extensions/candidates';
+import { readFeatureFirstRunAt } from './project-extensions/feature-first-run';
 // T3 (project-plugin-controls): the Skills & tools IPC surface. Shared with
 // remote-server.ts via ipc-shell.ts (same extraction convention as
 // artifacts/projects-index.ts) so the two transports cannot drift.
@@ -2993,8 +2994,13 @@ export function registerIpcHandlers(
     async () => {
       const roots = getManagedRoots();
       const candidates = await listProjectKeyCandidatesAsync(roots?.projectsRoot ?? null);
+      // featureFirstRunAt (F1 review fix, T6): the SAME per-device instant
+      // main.ts's startup chore writes once (feature-first-run.ts) — never
+      // recomputed or defaulted to `now` here.
+      const featureFirstRunAt = await readFeatureFirstRunAt(nativeHome);
       return {
         candidates,
+        featureFirstRunAt,
         stores: roots?.personalRoot ? { personalRoot: roots.personalRoot, home: nativeHome } : null,
       };
     },

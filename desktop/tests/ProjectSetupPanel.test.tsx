@@ -57,6 +57,113 @@ describe('ProjectSetupPanel', () => {
     expect(get).not.toHaveBeenCalledWith('/b');
   });
 
+  // Coordinator fix: a row that has NEVER been expanded never fetches at all
+  // (previous assertion above), so it must never show "Loading…" either —
+  // that text used to come from the controller's own initial state, not from
+  // an actual in-flight request, and stayed stuck forever on a collapsed row.
+  it('a collapsed row that has never been expanded shows no description, never a stale "Loading…"', async () => {
+    const projects = [
+      { id: 'p1', path: '/a', name: 'Alpha' },
+      { id: 'p2', path: '/b', name: 'Beta' },
+    ];
+    const group = {
+      pluginId: 'youcoded-inbox', displayName: 'Inbox', bundled: false, on: false, paused: true,
+      parts: [{ key: 'youcoded-inbox:process', kind: 'skill', displayName: 'Process inbox', on: false }],
+    };
+    const get = vi.fn().mockResolvedValue({ ok: true, view: baseView({ installed: [group] }) });
+    installClaude({ listProjectsIndex: vi.fn().mockResolvedValue({ ok: true, projects }), get });
+    render(<ProjectSetupPanel pluginId="youcoded-inbox" />);
+
+    // Alpha (auto-expanded, R20) finishes its own real fetch.
+    expect(await screen.findByText('Inbox')).toBeInTheDocument();
+    // Beta never fetched (previous test's own assertion) — its row must show
+    // no description at all, never "Loading…".
+    expect(screen.queryByText('Loading…')).toBeNull();
+    expect(get).toHaveBeenCalledTimes(1);
+
+    // Expanding Beta now starts a REAL fetch — "Loading…" is legitimate here.
+    fireEvent.click(screen.getByText('Beta'));
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/b'));
+  });
+
+  // F4 (T6 review): the controller's per-path once-only fetch gate must not
+  // block a RETRY after a failed fetch — collapsing and re-expanding the row
+  // is the only in-panel way to retry without leaving the whole overlay.
+  it('collapsing and re-expanding a row retries after a failed fetch', async () => {
+    const projects = [{ id: 'p1', path: '/a', name: 'Alpha' }];
+    const group = {
+      pluginId: 'youcoded-inbox', displayName: 'Inbox', bundled: false, on: false, paused: true,
+      parts: [{ key: 'youcoded-inbox:process', kind: 'skill', displayName: 'Process inbox', on: false }],
+    };
+    const get = vi.fn()
+      .mockRejectedValueOnce(new Error('network blip'))
+      .mockResolvedValueOnce({ ok: true, view: baseView({ installed: [group] }) });
+    installClaude({ listProjectsIndex: vi.fn().mockResolvedValue({ ok: true, projects }), get });
+    render(<ProjectSetupPanel pluginId="youcoded-inbox" />);
+
+    await screen.findByText('network blip');
+    expect(get).toHaveBeenCalledTimes(1);
+
+    // Collapse, then re-expand the SAME row — no unmount involved.
+    fireEvent.click(screen.getByText('Alpha'));
+    fireEvent.click(screen.getByText('Alpha'));
+
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Inbox')).toBeInTheDocument();
+    expect(screen.queryByText('network blip')).toBeNull();
+  });
+
+  // F4: the OTHER shape review found — a successful fetch that ran before
+  // this project's own catalog scan caught up with the just-completed
+  // install ("Not available here yet"). Re-expanding must retry this too,
+  // even though the FIRST fetch technically "succeeded".
+  it('collapsing and re-expanding a row retries a pre-install race and self-heals', async () => {
+    const projects = [{ id: 'p1', path: '/a', name: 'Alpha' }];
+    const group = {
+      pluginId: 'youcoded-inbox', displayName: 'Inbox', bundled: false, on: false, paused: true,
+      parts: [{ key: 'youcoded-inbox:process', kind: 'skill', displayName: 'Process inbox', on: false }],
+    };
+    const get = vi.fn()
+      .mockResolvedValueOnce({ ok: true, view: baseView() }) // plugin not in the catalog yet
+      .mockResolvedValueOnce({ ok: true, view: baseView({ installed: [group] }) });
+    installClaude({ listProjectsIndex: vi.fn().mockResolvedValue({ ok: true, projects }), get });
+    render(<ProjectSetupPanel pluginId="youcoded-inbox" />);
+
+    await screen.findByText('Not available here yet');
+    expect(get).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText('Alpha'));
+    fireEvent.click(screen.getByText('Alpha'));
+
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Inbox')).toBeInTheDocument();
+    expect(screen.queryByText('Not available here yet')).toBeNull();
+  });
+
+  // Keeps SkillsToolsTab's shared lazy-once contract intact: an ORDINARY
+  // successful fetch must NOT refetch just because the row was collapsed and
+  // re-expanded — only the two failure/race shapes above should.
+  it('collapsing and re-expanding a row after an ordinary successful fetch does not refetch', async () => {
+    const projects = [{ id: 'p1', path: '/a', name: 'Alpha' }];
+    const group = {
+      pluginId: 'youcoded-inbox', displayName: 'Inbox', bundled: false, on: false, paused: true,
+      parts: [{ key: 'youcoded-inbox:process', kind: 'skill', displayName: 'Process inbox', on: false }],
+    };
+    const get = vi.fn().mockResolvedValue({ ok: true, view: baseView({ installed: [group] }) });
+    installClaude({ listProjectsIndex: vi.fn().mockResolvedValue({ ok: true, projects }), get });
+    render(<ProjectSetupPanel pluginId="youcoded-inbox" />);
+
+    expect(await screen.findByText('Inbox')).toBeInTheDocument();
+    expect(get).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText('Alpha'));
+    fireEvent.click(screen.getByText('Alpha'));
+
+    // Give any errant effect a tick to (not) fire, then assert it didn't.
+    await Promise.resolve();
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it('toggling the plugin master (no tool connection) writes straight through project-extensions:set', async () => {
     const projects = [{ id: 'p1', path: '/a', name: 'Alpha' }];
     const group = { pluginId: 'youcoded-inbox', displayName: 'Inbox', bundled: false, on: false, paused: true, parts: [] };

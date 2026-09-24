@@ -6,6 +6,7 @@ import {
 import { PROJECT_EXTENSIONS_SCHEMA, type ProjectExtensionsRecord } from '../src/main/project-extensions/store';
 
 const NOW = 1_800_000_000_000; // fixed clock — never race the real one
+const DAY = 24 * 60 * 60 * 1000;
 
 function emptyRecord(seededAt = 0): ProjectExtensionsRecord {
   return { schemaVersion: PROJECT_EXTENSIONS_SCHEMA, seededAt, plugins: {}, items: {} };
@@ -18,6 +19,7 @@ function baseInput(overrides: Partial<ResolveAvailabilityInput> = {}): ResolveAv
     skills: [],
     mcp: [],
     installs: {},
+    featureFirstRunAt: NOW,
     now: NOW,
     ...overrides,
   };
@@ -74,6 +76,65 @@ describe('defaultPluginOn — bundled, marketplace-installed-after-seed, and eve
 
   it('everything else (no bundled/marketplace signal at all) defaults on', () => {
     expect(defaultPluginOn('some-random-plugin-id', undefined, NOW)).toBe(true);
+  });
+});
+
+// F1 review fix (T6, 2026-09-24): the ORIGINAL rule compared installedAt
+// against the project's folder addedAt (deleted) or its own seededAt —
+// almost every folder is added long before most of what gets installed into
+// it, so that rule turned OFF an ordinary, working install on a project's
+// first seed. This is the exact regression the review caught ("installed
+// months ago, after folder added"). The correct — and now only — lower
+// bound is featureFirstRunAt, a per-device instant with no relationship to
+// any one project's age at all.
+describe('defaultPluginOn — the installed-after-seed rule keys off featureFirstRunAt, never a project\'s age (F1 fix)', () => {
+  it('an ordinary install from months ago, long after any project could plausibly have been "added", stays ON', () => {
+    const featureFirstRunAt = NOW; // the feature rolled out today
+    const installedAt = new Date(NOW - 90 * DAY).toISOString(); // 3 months ago — an ordinary, working install
+    expect(defaultPluginOn('civic-report', installedAt, featureFirstRunAt)).toBe(true);
+  });
+
+  it('(i) a plugin installed a year before the feature is ON — a project\'s own age is irrelevant, since it no longer exists as a signal at all', () => {
+    const featureFirstRunAt = NOW;
+    const installedAt = new Date(NOW - 365 * DAY).toISOString();
+    expect(defaultPluginOn('civic-report', installedAt, featureFirstRunAt)).toBe(true);
+  });
+
+  it('(ii) a plugin installed a minute after featureFirstRunAt is OFF', () => {
+    const featureFirstRunAt = NOW;
+    const installedAt = new Date(NOW + 60_000).toISOString();
+    expect(defaultPluginOn('civic-report', installedAt, featureFirstRunAt)).toBe(false);
+  });
+
+  it('(iii) featureFirstRunAt absent (could not be written yet) -> unknown -> ON, even for a brand-new install', () => {
+    const installedAt = new Date(NOW + 60_000).toISOString();
+    expect(defaultPluginOn('civic-report', installedAt, undefined)).toBe(true);
+  });
+});
+
+describe('resolveAvailability — an item with no explicit entry uses featureFirstRunAt, never the project\'s own (possibly much later) seededAt (F1 fix)', () => {
+  it('(ii, "already-seeded project -> OFF"): a plugin installed after featureFirstRunAt resolves OFF even when this project\'s record was seeded well AFTER that install — seededAt is never the comparison', () => {
+    const skills: CatalogSkillEntry[] = [{ id: 'civic:report', source: 'plugin', pluginName: 'civic' }];
+    const featureFirstRunAt = NOW;
+    const installedAt = new Date(NOW + 30 * DAY).toISOString(); // installed after the feature shipped
+    const record = emptyRecord(NOW + 60 * DAY); // this project's OWN seed happened even later still
+    const result = resolveAvailability({
+      projectKey: 'MyProject', record, skills, mcp: [], installs: { civic: { installedAt } },
+      featureFirstRunAt, now: NOW + 90 * DAY,
+    });
+    expect(result.skillIds.has('civic:report')).toBe(false);
+  });
+
+  it('a plugin installed before featureFirstRunAt resolves ON even in a project seeded long, long after that install', () => {
+    const skills: CatalogSkillEntry[] = [{ id: 'civic:report', source: 'plugin', pluginName: 'civic' }];
+    const featureFirstRunAt = NOW;
+    const installedAt = new Date(NOW - 365 * DAY).toISOString();
+    const record = emptyRecord(NOW + 60 * DAY);
+    const result = resolveAvailability({
+      projectKey: 'MyProject', record, skills, mcp: [], installs: { civic: { installedAt } },
+      featureFirstRunAt, now: NOW + 90 * DAY,
+    });
+    expect(result.skillIds.has('civic:report')).toBe(true);
   });
 });
 

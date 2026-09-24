@@ -243,41 +243,72 @@ describe('ensureSeeded', () => {
     expect(rec.plugins['wecoded-themes-plugin']).toMatchObject({ on: false, partsChosen: true });
   });
 
-  it('a marketplace plugin installed after this exact seed instant still starts off, even for a pre-existing project', async () => {
+  it('a marketplace plugin installed after featureFirstRunAt still starts off, even for a pre-existing project', async () => {
+    const featureFirstRunAt = NOW - 1000;
     const installedAt = new Date(NOW + 1).toISOString();
     const rec = await ensureSeeded(stores, 'MyProject', {
       skills: [{ id: 'civic:report', source: 'plugin', pluginName: 'civic' }],
       mcp: [], installs: { civic: { installedAt } },
-    }, NOW);
+    }, NOW, false, featureFirstRunAt);
     expect(rec.items['civic:report']).toEqual({ on: false, at: NOW });
   });
 
-  // T6 (project-plugin-controls): the realistic Marketplace post-install
-  // shape — the install already completed (installedAt is BEFORE `now`, not
-  // after it, since `now` is the seed call's own timestamp and a completed
-  // install can never postdate it) — and this project has NEVER been seeded
-  // before, exactly like every project the "choose your projects" panel
-  // lists right after a fresh install. Without `seedReferenceInstant`, this
-  // used to materialize `on: true` (the plugin looked "installed before the
-  // seed" purely because the seed happened to run a moment after the
-  // install), silently breaking R19 ("it starts off everywhere").
-  it('a never-seeded project does not materialize a just-installed plugin as ON (R19 start-off guarantee)', async () => {
-    const installedAt = new Date(NOW - 1_000).toISOString(); // installed 1s before this seed call
+  // F1 review fix (T6, project-plugin-controls, 2026-09-24): this is the
+  // EXACT regression the review caught — an ordinary install from months ago
+  // ("installed months ago, after folder added" — the folder-addedAt
+  // reference is deleted entirely; there is no longer any concept of a
+  // folder's age here at all). The correct — and now only — lower bound is
+  // featureFirstRunAt, the per-device instant this feature's build first
+  // ran. An install from long before that instant must seed ON, on a
+  // project's very first seed, no matter how "new" or "old" the project
+  // itself is.
+  it('a plugin installed months ago (long before featureFirstRunAt) seeds ON on a never-seeded project — the exact regression the addedAt-based rule let through', async () => {
+    const featureFirstRunAt = NOW; // the feature rolled out today
+    const installedAt = new Date(NOW - 90 * 24 * 60 * 60 * 1000).toISOString(); // 3 months ago — an ordinary, working install
     const rec = await ensureSeeded(stores, 'NeverOpenedProject', {
+      skills: [{ id: 'civic:report', source: 'plugin', pluginName: 'civic' }],
+      mcp: [], installs: { civic: { installedAt } },
+    }, NOW, false, featureFirstRunAt);
+    expect(rec.items['civic:report']).toEqual({ on: true, at: NOW });
+    expect(rec.plugins['civic']).toMatchObject({ on: true, partsChosen: true });
+  });
+
+  // (i) from the F1 brief: installed a year before the feature, in a project
+  // added two years ago -> ON. There is no way to even express "project
+  // added two years ago" any more (the addedAt reference is gone) — that IS
+  // the fix: a project's age has no bearing on this rule.
+  it('a plugin installed a year before the feature shipped seeds ON, regardless of how old the project is', async () => {
+    const featureFirstRunAt = NOW;
+    const installedAt = new Date(NOW - 365 * 24 * 60 * 60 * 1000).toISOString();
+    const rec = await ensureSeeded(stores, 'AncientProject', {
+      skills: [{ id: 'civic:report', source: 'plugin', pluginName: 'civic' }],
+      mcp: [], installs: { civic: { installedAt } },
+    }, NOW, false, featureFirstRunAt);
+    expect(rec.items['civic:report']).toEqual({ on: true, at: NOW });
+  });
+
+  // (ii) a plugin installed a minute after featureFirstRunAt, on a
+  // never-seeded project -> OFF.
+  it('a plugin installed a minute after featureFirstRunAt seeds OFF on a never-seeded project', async () => {
+    const featureFirstRunAt = NOW - 5 * 60_000;
+    const installedAt = new Date(featureFirstRunAt + 60_000).toISOString();
+    const rec = await ensureSeeded(stores, 'NeverOpenedProject2', {
       skills: [{ id: 'inbox:process', source: 'plugin', pluginName: 'youcoded-inbox' }],
       mcp: [], installs: { 'youcoded-inbox': { installedAt } },
-    }, NOW, false, NOW - 60_000); // seedReferenceInstant: the project existed since well before the install
+    }, NOW, false, featureFirstRunAt);
     expect(rec.items['inbox:process']).toEqual({ on: false, at: NOW });
     expect(rec.plugins['youcoded-inbox']).toMatchObject({ on: false, partsChosen: true });
   });
 
-  it('without a seedReferenceInstant, the same never-seeded scenario falls back to `now` (the residual, documented gap for a project with no known addedAt)', async () => {
-    const installedAt = new Date(NOW - 1_000).toISOString();
-    const rec = await ensureSeeded(stores, 'NeverOpenedProject', {
-      skills: [{ id: 'inbox:process', source: 'plugin', pluginName: 'youcoded-inbox' }],
-      mcp: [], installs: { 'youcoded-inbox': { installedAt } },
-    }, NOW); // no seedReferenceInstant passed — defaults to `now`, same as before T6
-    expect(rec.items['inbox:process']).toEqual({ on: true, at: NOW });
+  // (iii) featureFirstRunAt absent (couldn't be written) -> unknown -> ON,
+  // never off — design §2's fail-safe direction.
+  it('featureFirstRunAt absent -> unknown -> seeds ON, even for an install that postdates `now`', async () => {
+    const installedAt = new Date(NOW + 60_000).toISOString();
+    const rec = await ensureSeeded(stores, 'UnknownFeatureInstant', {
+      skills: [{ id: 'civic:report', source: 'plugin', pluginName: 'civic' }],
+      mcp: [], installs: { civic: { installedAt } },
+    }, NOW); // no featureFirstRunAt passed -> undefined default
+    expect(rec.items['civic:report']).toEqual({ on: true, at: NOW });
   });
 });
 
