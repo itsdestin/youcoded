@@ -186,6 +186,13 @@ function usdShort(n: number): string {
  *  computer"). Absent on a record from before this field (an old fixture, or
  *  a plan main hasn't started pricing yet) — the row then says only the
  *  specialist count, never a guessed number. */
+/** The estimate's high end in the limit's own unit (dollars, or tokens for an
+ *  unpriced plan) — U5's placeholder and U6's "below usual cost" hint. */
+function estimateHigh(plan: PlanView): number | null {
+  if (!plan.estimate) return null;
+  return 'unpricedNote' in plan.estimate ? plan.estimate.tokens : plan.estimate.highUsd;
+}
+
 function estimateLine(plan: PlanView): string {
   if (!plan.estimate) return '';
   if ('unpricedNote' in plan.estimate) return `About ${tokens(plan.estimate.tokens)} · ${plan.estimate.unpricedNote}`;
@@ -661,7 +668,8 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-new-limit">
-                  {!unpriced(plan) && <span className="text-xs text-fg-dim">$</span>}
+                  {/* UX review 1, U3: the number is the new TOTAL, not an amount added on top. */}
+                  <span className="text-xs text-fg-dim">New limit{unpriced(plan) ? '' : ' $'}</span>
                   <TextInput
                     size="sm"
                     inputMode={unpriced(plan) ? 'numeric' : 'decimal'}
@@ -966,8 +974,18 @@ function PlanSettingsFields({ plan, sessionId, onChanged }: {
               onBlur={() => void saveLimit(true, amount)}
               disabled={saving}
               aria-label="Spending limit amount"
+              // UX review 1, U5: an example taken from this plan's own estimate
+              // (its high end), so the empty box suggests a sensible number.
+              placeholder={estimateHigh(plan) != null ? String(estimateHigh(plan)) : undefined}
             />
             {!priced && <span className="text-xs text-fg-dim">tokens</span>}
+          </div>
+        )}
+        {/* UX review 1, U6: a limit below what the plan usually costs will
+            likely pause it partway — say so before Approve, not after. */}
+        {limitOn && estimateHigh(plan) != null && Number(amount) > 0 && Number(amount) < estimateHigh(plan)! && (
+          <div className="text-2xs text-fg-muted px-3 pt-1" data-testid="plan-limit-low">
+            Below what this plan usually costs, so it may pause before it finishes.
           </div>
         )}
       </div>

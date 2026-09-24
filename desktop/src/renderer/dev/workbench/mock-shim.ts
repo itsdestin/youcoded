@@ -1889,9 +1889,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         ? { ...st, budgetTokens: st.budgetTokens + Math.ceil(tokens / Math.max(1, st.fanOut)) }
         : st),
     })),
+    // UX review 1, U2: resuming keeps the step's finished count and spend —
+    // the real host resumes from the journal, it never zeroes progress.
     resume: async (_sessionId: string, planId: string) => nextPlan(planId, (p) => {
       const idx = p.steps.findIndex((st) => st.status !== 'done');
-      return { ...p, status: 'running', steps: p.steps.map((st, i) => i === idx ? { ...st, status: 'running', done: 0, usedTokens: 0 } : st) };
+      return { ...p, status: 'running', steps: p.steps.map((st, i) => i === idx ? { ...st, status: 'running' } : st) };
     }),
     stop: async (_sessionId: string, planId: string) => nextPlan(planId, (p) => ({
       ...p, status: 'stopped', endedAt: Date.now(),
