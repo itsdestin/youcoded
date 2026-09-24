@@ -9,9 +9,9 @@
 // already carries the LIVE state (no stale frame to catch up from); and the
 // store itself kept every event the whole time.
 import React from 'react';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, act, cleanup } from '@testing-library/react';
-import { ChatProvider, useChatStore, useChatState, type ChatStore } from '../src/renderer/state/chat-context';
+import { ChatProvider, useChatStore, useChatState, PAUSED_REFRESH_MS, type ChatStore } from '../src/renderer/state/chat-context';
 import type { ChatAction, SessionChatState } from '../src/renderer/state/chat-types';
 
 const SID = 's1';
@@ -44,9 +44,26 @@ function mount(paused: boolean) {
 
 const text = (i: number): ChatAction => ({ type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SID, uuid: `u${i}`, text: 'word ', timestamp: i } as ChatAction);
 
-afterEach(() => { cleanup(); seen = []; });
+afterEach(() => { cleanup(); seen = []; vi.useRealTimers(); });
 
 describe('useChatState while paused', () => {
+  // WHY (2026-09-23): never catching up moved a whole background reply's drawing
+  // into the tab-switch click (rig: ~150 -> ~360 ms p95 into a streaming tab).
+  it('a paused reader catches up at most once per refresh interval, not per word', () => {
+    vi.useFakeTimers();
+    const { store, rerender } = mount(false);
+    rerender(true);
+    const before = seen.length;
+    act(() => { for (let i = 0; i < 40; i++) store().dispatch(text(i)); });
+    expect(seen.length - before).toBe(0);
+    act(() => { vi.advanceTimersByTime(PAUSED_REFRESH_MS); });
+    expect(seen.length - before).toBe(1);
+    expect(seen[seen.length - 1]).toBe(store().getSession(SID));
+    // Quiet store: no further catch-up renders.
+    act(() => { vi.advanceTimersByTime(PAUSED_REFRESH_MS * 5); });
+    expect(seen.length - before).toBe(1);
+  });
+
   it('a streamed reply does not re-render a paused reader', () => {
     const { store, rerender } = mount(false);
     rerender(true);
