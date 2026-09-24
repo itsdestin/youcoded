@@ -1213,10 +1213,17 @@ function AppInner() {
       // Exact conversation match only: another conversation opened meanwhile must appear at once.
       if (waiting?.phase === 'waiting' && (info.resumeSessionId ?? info.id) === waiting.conversationId)
         deferredCreatedRef.current.set(info.id, info);
-      else setSessions((prev) => {
+      else {
+        // WHY here, not inside the updater below: updaters run at the next
+        // render and must be pure, so a dispatch in there landed AFTER a
+        // resume's first page (which then had no chat state to land in) and
+        // tripped React's "Cannot update a component while rendering" error.
+        // SESSION_INIT is has()-guarded, so a replayed announcement for a
+        // session that already exists changes nothing.
+        dispatch({ type: 'SESSION_INIT', sessionId: info.id });
+        setSessions((prev) => {
         // Deduplicate — replay buffers resend session:created for existing sessions
         if (prev.some((s) => s.id === info.id)) return prev;
-        dispatch({ type: 'SESSION_INIT', sessionId: info.id });
         // Only auto-focus genuinely new sessions (not replayed ones) — and on a remote
         // client not before its place is decided: the restore sends every session as
         // session:created ahead of the hydrate.
@@ -1224,6 +1231,7 @@ function AppInner() {
         if (mayAutoSelect() && !pendingRef.current?.active) setSessionId(info.id);
         return [...prev, info];
       });
+      }
       // Native harness sessions (roadmap Phase 1+) are chat-first — they have
       // no PTY, so 'terminal' would be an empty pane. Claude sessions also
       // default to chat. (Gemini, the old terminal-only provider, is gone.)

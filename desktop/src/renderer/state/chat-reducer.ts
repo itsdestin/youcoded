@@ -2935,8 +2935,15 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'HISTORY_PAGE_LOADED': {
-      const session = next.get(action.sessionId);
-      if (!session) return state;
+      // WHY create rather than drop: a resumed session's first page can land
+      // BEFORE its SESSION_INIT. App applies SESSION_INIT from the
+      // session:created announcement at the next render, while the resume
+      // fetches the page at once — and returning `state` here threw the page
+      // away with no retry, so resumed sessions opened empty depending on which
+      // won (2026-09-24: 2 of 3 in one dev run). A page is only ever requested
+      // for a session this window is opening, so its state belongs here;
+      // SESSION_INIT is has()-guarded and leaves it intact when it follows.
+      const session = next.get(action.sessionId) ?? createSessionChatState();
 
       // Build this page's own timeline on a SCRATCH state by replaying its
       // events through the very same per-event cases the live path uses, then
