@@ -152,7 +152,19 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
                 // torn down (design §2), independent of that proof.
                 deps.untrackWelcomeBack?.(id);
                 if (!destroyed || !evidence!.persisted()) proven = false;
-              } else if ((await deps.sessionManager.stopSessionForHandoff?.(id))?.status !== 'stopped') proven = false;
+              } else {
+                const stopped = (await deps.sessionManager.stopSessionForHandoff?.(id))?.status === 'stopped';
+                // WHY (F1, code review 2026-09-24): only the native branch above
+                // untracked — a Claude Code handoff through this verified-receipt
+                // path never called untrackWelcomeBack at all, so it stayed
+                // "open" here forever and got wrongly re-offered by Welcome back.
+                // Untrack unconditionally, matching the native branch: calling
+                // stopSessionForHandoff is this device giving up the writer,
+                // independent of whether the stop is later provable (that only
+                // gates `proven`/publish below).
+                deps.untrackWelcomeBack?.(id);
+                if (!stopped) proven = false;
+              }
             } catch { proven = false; }
           }
           if (!proven) { deps.protectUnsafe?.(claudeId); return; }

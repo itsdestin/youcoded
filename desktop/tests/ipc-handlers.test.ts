@@ -482,12 +482,27 @@ describe('session:create native resume — missing stored header', () => {
       ensureBundledPluginsInstalled: vi.fn(),
       ensureMigrated: vi.fn(),
     };
+    // F2 (code review 2026-09-24): a resumed session is optimistically tracked
+    // as "open" the instant it's created (S-sent — it already has messages),
+    // but every failure branch of a native resume tore the session down via a
+    // bare destroySession and never untracked it — so an unresumable
+    // conversation (saved data gone, project folder missing, lease held
+    // elsewhere) stayed a phantom "open" entry and got wrongly re-offered by
+    // the next Welcome back screen. A resume that failed is not "open".
+    const welcomeBackStore = {
+      ready: Promise.resolve(),
+      track: vi.fn(), untrack: vi.fn(), remap: vi.fn(),
+      offerIds: vi.fn(() => []), forget: vi.fn(),
+      flush: vi.fn(async () => {}), startup: vi.fn(async () => {}),
+    };
 
     registerIpcHandlers(
       mockIpcMain as any,
       mockSessionManager as any,
       mockWindow as any,
       mockSkillProvider as any,
+      undefined as any, undefined, undefined, undefined, undefined, undefined, undefined,
+      welcomeBackStore as any,
     );
 
     const handler = (mockIpcMain.handle as any).mock.calls.find(
@@ -500,6 +515,8 @@ describe('session:create native resume — missing stored header', () => {
       { provider: 'native', resumeSessionId: 'ghost-native-1', cwd: '/tmp', name: 'Resuming…', skipPermissions: false },
     )).rejects.toThrow('saved data is missing');
     expect(mockSessionManager.destroySession).toHaveBeenCalledWith('ghost-native-1');
+    expect(welcomeBackStore.track).toHaveBeenCalledWith('ghost-native-1', 'ghost-native-1', 'native');
+    expect(welcomeBackStore.untrack).toHaveBeenCalledWith('ghost-native-1');
   });
 
   // Combined branch: bugfix-remote's session creator became master's

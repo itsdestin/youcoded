@@ -1014,6 +1014,17 @@ export function registerIpcHandlers(
           await resumeAdmission.waitForStop(opts.resumeSessionId ?? info.id);
           resumeAdmission.clearProtection(opts.resumeSessionId ?? info.id);
           sessionManager.destroySession(info.id);
+          // WHY (F2, code review 2026-09-24): a resumed session is tracked as
+          // "open" at creation, above, before this native resume attempt ever
+          // runs (S-sent — it already has messages). Every failure here
+          // (refused sync, missing project folder, missing saved data,
+          // another device holding the lease, the window closing mid-start)
+          // reaches this successful-teardown branch, and a resume that failed
+          // for a real reason is not "open" — it must not be re-offered by
+          // the next Welcome back screen. Only reached once teardown itself
+          // succeeded (the cleanupError branch below keeps the session's
+          // renewable hold, so it stays tracked, matching the WHY above it).
+          if (opts.resumeSessionId) untrackWelcomeBack(info.id);
         } catch (cleanupError) {
           resumeAdmission.protect(opts.resumeSessionId ?? info.id);
           log('ERROR', 'IPC', 'native teardown after startup failure failed', { sessionId: info.id, error: String(cleanupError) });

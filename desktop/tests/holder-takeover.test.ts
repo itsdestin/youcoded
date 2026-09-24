@@ -593,4 +593,39 @@ describe('createHolderTakeover', () => {
     } as any)('c1', { deviceId: 'requester', device: 'Other' });
     expect(d.untrackWelcomeBack).toHaveBeenCalledWith('nat');
   });
+
+  // F1 (code review 2026-09-24): the pinned-snapshot path's 'claude' branch
+  // (stopSessionForHandoff, the `else` beside the native destroy above) fell
+  // through with NO untrackWelcomeBack call at all — only the native sibling
+  // had one. A Claude Code session handed off through this verified-receipt
+  // path stayed marked "open" on this device forever and got wrongly
+  // re-offered by the next Welcome back screen. Proven stopped AND merely
+  // attempted-but-unproven ('unknown') both must untrack: like the native
+  // branch's destroySession() call above, calling stopSessionForHandoff is
+  // this device's own act of giving up the writer — independent of whether
+  // the stop is later provable (which only gates `proven`/publish, not
+  // whether this device still holds the conversation).
+  it("pinned-snapshot path: untracks Welcome back for a Claude Code writer once stop is proven", async () => {
+    const d = makeDeps({ liveDesktopIds: ['cc'], providers: { cc: 'claude' } }); d.sessionIdMap.set('cc', 'c1');
+    await createHolderTakeover({ ...d, senderDeviceId: 'sender',
+      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+      captureWriter: () => ({ provider: 'claude', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
+        persisted: () => true, current: () => true }),
+      sessionManager: { ...d.sessionManager, stopSessionForHandoff: vi.fn(async () => ({ status: 'stopped' as const })) },
+    } as any)('c1', { deviceId: 'requester', device: 'Other' });
+    expect(d.untrackWelcomeBack).toHaveBeenCalledWith('cc');
+  });
+
+  it("pinned-snapshot path: untracks Welcome back for a Claude Code writer even when the stop is unproven", async () => {
+    const d = makeDeps({ liveDesktopIds: ['cc'], providers: { cc: 'claude' } }); d.sessionIdMap.set('cc', 'c1');
+    const protectUnsafe = vi.fn();
+    await createHolderTakeover({ ...d, senderDeviceId: 'sender', protectUnsafe,
+      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+      captureWriter: () => ({ provider: 'claude', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
+        persisted: () => true, current: () => true }),
+      sessionManager: { ...d.sessionManager, stopSessionForHandoff: vi.fn(async () => ({ status: 'unknown' as const })) },
+    } as any)('c1', { deviceId: 'requester', device: 'Other' });
+    expect(protectUnsafe).toHaveBeenCalledWith('c1'); // unproven still refuses the handoff...
+    expect(d.untrackWelcomeBack).toHaveBeenCalledWith('cc'); // ...but this device already gave up the writer
+  });
 });
