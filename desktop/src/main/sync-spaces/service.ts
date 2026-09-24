@@ -277,6 +277,11 @@ function activeSpaces() {
 // pull adopts origin/main (unborn local main → checkout -B main origin/main).
 async function materializeProject(entry: { name: string; repoName: string }): Promise<void> {
   if (!engine || !roots || !manager) return;
+  // WHY: the sync identity is the lowercased name, so a local folder whose
+  // name differs only by case already syncs this very repo. A second folder
+  // would sync into it too, mixing two trees (Linux allows both folders).
+  const lower = entry.name.toLowerCase();
+  if (roots.listProjects().some((p) => p.name !== entry.name && p.name.toLowerCase() === lower)) return;
   const e = engine;
   const url = await manager.ensureRemote({ id: `project:${entry.name}`, kind: 'project', root: '' });
   const created = roots.createProject(entry.name);

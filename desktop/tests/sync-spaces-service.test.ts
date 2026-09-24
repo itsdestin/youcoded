@@ -585,6 +585,18 @@ describe('sync-spaces service transition serialization', () => {
     void svc;
   });
 
+  it("discovery never adds a second folder for a name that differs only by capital letters", async () => {
+    const svc = await enabledSvc();
+    await svc.syncSpacesCreateProject('gamma');
+    h.registry = [
+      { schemaVersion: 1, name: 'Gamma', repoName: 'r-G', displayName: 'Gamma', state: 'active', updatedAt: 1 },
+      { schemaVersion: 1, name: 'delta', repoName: 'r-d', displayName: 'delta', state: 'active', updatedAt: 1 },
+    ];
+    h.hub.opts.onEvent({ type: 'connected' });
+    await vi.waitFor(() => expect(h.projects).toContain('delta')); // discovery ran
+    expect(h.projects).not.toContain('Gamma');
+  });
+
   it('discovery skips an already-local project', async () => {
     h.autoAddSpace = true;
     h.projects = ['alpha'];
