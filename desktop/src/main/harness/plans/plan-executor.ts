@@ -28,7 +28,7 @@
 // Host-agnostic on purpose: the host (native-session-host.ts) supplies a
 // PlanRunner that turns "launch this attempt" into a real specialist session.
 import { z } from 'zod';
-import type { PlanStepV1 } from './schema';
+import { ofIds, type PlanStepV1 } from './schema';
 import { randomUUID } from 'crypto';
 import { PlanFenceError, PlanJournalUnreadableError, type PlanJournal } from './plan-journal';
 import type { PlanPauseKind } from '../../../shared/types';
@@ -552,6 +552,19 @@ function dependencyReports(plan: PlanRecord, ofId: string, iteration: number): A
       if (parsed.ok) text = parsed.report;
     }
     out.push({ text, ...(def.kind === 'map' ? { label: `item: ${def.items![i]}` } : {}) });
+  }
+  return out;
+}
+
+/** Decision 39: `of` may name SEVERAL earlier steps — three independent
+ *  researcher steps feeding one combine used to wire it to only ONE of them.
+ *  Gathers every named step's reports, tagged with the step id each came
+ *  from, in one flat list — so the per-report char budget below (computed
+ *  from `reports.length`) divides across ALL of them, not per source step. */
+function multiDependencyReports(plan: PlanRecord, ids: string[], iteration: number): Array<{ text: string; label?: string; fromStep: string }> {
+  const out: Array<{ text: string; label?: string; fromStep: string }> = [];
+  for (const id of ids) {
+    for (const r of dependencyReports(plan, id, iteration)) out.push({ ...r, fromStep: id });
   }
   return out;
 }
@@ -1674,13 +1687,14 @@ export class PlanExecutor implements PlanExecutorHooks {
   }
 
   /** The brief for one item: the declared task, plus — for verify/combine
-   *  only — the bounded, labelled reports of the step it reads. */
+   *  only — the bounded, labelled reports of EVERY step it reads (decision
+   *  39: `of` may name more than one). */
   private briefFor(plan: PlanRecord, step: PlanStepV1, iteration: number, finalLeaf: boolean): (itemIndex: number) => string {
     let dependencies = '';
     if (step.of !== undefined) {
-      const reports = dependencyReports(plan, step.of, iteration);
+      const reports = multiDependencyReports(plan, ofIds(step.of), iteration);
       const perReport = Math.min(PLAN_DEPENDENCY_REPORT_MAX_CHARS, Math.floor(PLAN_DEPENDENCY_TOTAL_MAX_CHARS / Math.max(1, reports.length)));
-      const blocks = reports.map((r, i) => `--- Result ${fmtItem(i, reports.length)} from step "${step.of}"${r.label ? ` (${r.label})` : ''} ---\n${shorten(r.text, perReport)}`);
+      const blocks = reports.map((r, i) => `--- Result ${fmtItem(i, reports.length)} from step "${r.fromStep}"${r.label ? ` (${r.label})` : ''} ---\n${shorten(r.text, perReport)}`);
       dependencies = `\n\nResults to work from (${reports.length}):\n\n${blocks.join('\n\n')}`;
     }
     const repeat = plan.document.steps.find((s) => s.kind === 'repeat' && s.steps!.some((b) => b.id === step.id));

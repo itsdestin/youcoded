@@ -435,4 +435,94 @@ describe('plan schema and semantic validator', () => {
     laterTopLevel.steps.push({ ...mapVerifyCombine.steps[0], id: 'after-repeat' });
     expect(validatePlanDocument(laterTopLevel, BUILTIN_ROSTER).ok).toBe(false);
   });
+
+  // Decision 39 (the owner's live test, 2026-09-24): a verify/combine step
+  // used to name exactly ONE earlier step. Three independent researcher steps
+  // followed by a combine step that could only reference the first meant the
+  // other two results silently never reached it — the combine specialist
+  // reported "I only received Result 1". `of` now also accepts an array of
+  // up to 6 distinct earlier step ids; a single string stays valid.
+  describe('a verify/combine step may name several earlier steps in `of` (decision 39)', () => {
+    const threeUp: LooseDocument = {
+      goal: 'Research three categories and combine them.',
+      steps: [
+        { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Research {item}', summary: 'One helper researches keyboards.', items: ['keyboards'] },
+        { id: 's2', kind: 'map', specialist: 'reviewer', task: 'Research {item}', summary: 'One helper researches mice.', items: ['mice'] },
+        { id: 's3', kind: 'map', specialist: 'reviewer', task: 'Research {item}', summary: 'One helper researches monitors.', items: ['monitors'] },
+        { id: 's4', kind: 'combine', specialist: 'worker', task: 'Combine all three', summary: 'One helper writes one combined report.', of: ['s1', 's2', 's3'] },
+      ],
+    };
+
+    it('the advertised schema offers a single id or an array of up to 6, alongside the plain string', () => {
+      for (const kind of ['verify', 'combine']) {
+        const of = branch(kind).properties.of;
+        expect(of.anyOf[0]).toMatchObject({ type: 'string' });
+        expect(of.anyOf[1]).toMatchObject({ type: 'array', minItems: 1, maxItems: 6, uniqueItems: true });
+      }
+    });
+
+    it('accepts the array form on both halves, and every named step arrives', () => {
+      const ajv = new Ajv({ strict: false });
+      expect(ajv.compile(PLAN_DOCUMENT_JSON_SCHEMA)(threeUp)).toBe(true);
+      expect(PlanDocumentSchema.safeParse(threeUp).success).toBe(true);
+      const result = validatePlanDocument(threeUp, BUILTIN_ROSTER);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.maximumAttempts).toBe(4);
+    });
+
+    it('keeps a single string valid — the array is additive, not a replacement', () => {
+      const single = { ...threeUp, steps: [threeUp.steps[0], { ...threeUp.steps[3], of: 's1' }] };
+      expect(PlanDocumentSchema.safeParse(single).success).toBe(true);
+      expect(validatePlanDocument(single, BUILTIN_ROSTER).ok).toBe(true);
+    });
+
+    it('checks EVERY id in the array is an earlier step, not only the first', () => {
+      const oneMissing = structuredClone(threeUp);
+      oneMissing.steps[3].of = ['s1', 'nowhere', 's3'];
+      const result = validatePlanDocument(oneMissing, BUILTIN_ROSTER);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const message = result.issues.join('\n');
+        expect(message).toContain('reference "nowhere" must name an earlier step');
+        expect(message).not.toContain('reference "s1"');
+        expect(message).not.toContain('reference "s3"');
+      }
+    });
+
+    it('checks EVERY id is actually earlier, not merely present somewhere in the plan', () => {
+      const selfRef = structuredClone(threeUp);
+      // s4 naming itself is present in the plan, but is not an EARLIER step.
+      selfRef.steps[3].of = ['s1', 's4'];
+      const result = validatePlanDocument(selfRef, BUILTIN_ROSTER);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.issues.join('\n')).toContain('reference "s4" must name an earlier step');
+    });
+
+    it('rejects a duplicate id inside the array, on both halves', () => {
+      const dup = structuredClone(threeUp);
+      dup.steps[3].of = ['s1', 's1'];
+      expect(PlanDocumentSchema.safeParse(dup).success).toBe(false);
+      const ajv = new Ajv({ strict: false });
+      expect(ajv.compile(PLAN_DOCUMENT_JSON_SCHEMA)(dup)).toBe(false);
+    });
+
+    it('rejects more than 6 ids in the array, on both halves', () => {
+      // A structural check only — the ids don't need to name real steps for
+      // this bound, and the document must stay under the unrelated 6
+      // TOP-LEVEL step cap to isolate the one being tested.
+      const many: LooseDocument = {
+        goal: 'g',
+        steps: [threeUp.steps[0], { ...threeUp.steps[3], of: Array.from({ length: 7 }, (_, i) => `s${i}`) }],
+      };
+      expect(PlanDocumentSchema.safeParse(many).success).toBe(false);
+      const ajv = new Ajv({ strict: false });
+      expect(ajv.compile(PLAN_DOCUMENT_JSON_SCHEMA)(many)).toBe(false);
+    });
+
+    it('rejects an empty array', () => {
+      const empty = structuredClone(threeUp);
+      empty.steps[3].of = [];
+      expect(PlanDocumentSchema.safeParse(empty).success).toBe(false);
+    });
+  });
 });

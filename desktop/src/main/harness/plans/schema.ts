@@ -15,6 +15,14 @@ const PLAN_MAX_SUMMARY_CHARS = 200;
 const PLAN_MAX_REPEAT_BODY_STEPS = 4;
 const PLAN_MAX_TOP_LEVEL_STEPS = 6;
 const PLAN_MAX_MAP_ITEMS = 8;
+// WHY 6 (decision 39, the owner's live test 2026-09-24): a verify/combine step
+// used to name exactly ONE earlier step, so a plan that ran several
+// independent researchers side by side (rather than as one `map` step) could
+// never combine all of their results — only the last-named one reached the
+// combine step, and it reported back that it "only received Result 1". The
+// bound matches `PLAN_MAX_TOP_LEVEL_STEPS`: naming every other step is the
+// most a combine step could ever need.
+const PLAN_MAX_OF_STEPS = 6;
 // WHY 128 (spending rework stage 1, design §2 / decision 35.4): a model id
 // like "anthropic/claude-opus-4-7-20260901" is well under this; the field
 // only ever holds "budget", "frontier" or one exact model id.
@@ -111,7 +119,19 @@ const JSON_FIELD = {
   // prohibition, not a condition.
   model: { type: 'string', maxLength: PLAN_MAX_MODEL_CHARS, description: 'Leave unset. Do NOT set this yourself for any reason (a step seeming hard, slow, cheap, or important is not a reason) — that is the user\'s decision alone, never yours. Set it ONLY when the user has explicitly named a model or provider for this exact step, earlier in this conversation: "budget", "frontier", or an exact model id.' },
   items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: PLAN_MAX_ITEM_CHARS }, minItems: 1, maxItems: PLAN_MAX_MAP_ITEMS, description: 'map only: one child per item.' },
-  of: { type: 'string', minLength: 1, maxLength: PLAN_MAX_ID_CHARS, description: 'verify/combine: the id of the step whose results this consumes.' },
+  // WHY a single id OR an array (decision 39, 2026-09-24): a combine/verify
+  // step must be able to name EVERY earlier step whose results it needs, not
+  // only one — three independent researcher steps followed by a combine that
+  // could name only the first is exactly the shape that shipped a
+  // keyboards-only "combined" report when the plan asked for keyboards, mice
+  // AND monitors. A single string stays valid: most steps still consume one.
+  of: {
+    description: 'verify/combine: the id(s) of the earlier step(s) whose results this consumes. Name a single id, or an array of every step you need (up to 6) — never drop one.',
+    anyOf: [
+      { type: 'string', minLength: 1, maxLength: PLAN_MAX_ID_CHARS },
+      { type: 'array', items: { type: 'string', minLength: 1, maxLength: PLAN_MAX_ID_CHARS }, minItems: 1, maxItems: PLAN_MAX_OF_STEPS, uniqueItems: true },
+    ],
+  },
   max_iterations: { type: 'integer', minimum: 1, maximum: PLAN_MAX_REPEAT_ITERATIONS, description: 'repeat only: hard cap.' },
   until: { type: 'string', minLength: 1, maxLength: PLAN_MAX_UNTIL_CHARS, description: 'repeat only: plain-words stop condition.' },
   // WHY a repeat body is LEAF steps and nothing deeper: `steps` used to point
@@ -180,11 +200,26 @@ const nonEmptyBounded = (maximum: number) => z.string().min(1).max(maximum).refi
 type PlanStep = {
   id: string; kind: StepKind; specialist: string; task: string;
   summary: string;
-  items?: string[]; of?: string; max_iterations?: number; until?: string; steps?: PlanStep[];
+  items?: string[];
+  /** Decision 39: verify/combine's input — a single earlier step id, or (since
+   *  the owner's live test) an array of up to `PLAN_MAX_OF_STEPS` distinct
+   *  ids, when a step must read more than one earlier step's results.
+   *  `ofIds()` below is the one place that normalizes either form. */
+  of?: string | string[];
+  max_iterations?: number; until?: string; steps?: PlanStep[];
   /** Design §2/§9: a per-step model override, resolved by plan-host-bridge.ts
    *  `resolveManifest` (T4) — "budget"/"frontier" or an exact model id. */
   model?: string;
 };
+
+/** The one place `of` (a single id, or an array of them) is normalized to a
+ *  list — every reader (validator.ts, plan-executor.ts, plan-journal.ts,
+ *  PlanCard.tsx) goes through this rather than re-deriving the `Array.isArray`
+ *  check, so the two forms can never drift apart (decision 39). */
+export function ofIds(of: string | string[] | undefined): string[] {
+  if (of === undefined) return [];
+  return Array.isArray(of) ? of : [of];
+}
 
 /**
  * Name the kind and the fields it accepts, rather than listing unknown keys.
@@ -238,7 +273,15 @@ function stepSchema(kinds: readonly StepKind[]): z.ZodType<PlanStep> {
     // every step defaults to its specialist's own model.
     model: z.string().min(1).max(PLAN_MAX_MODEL_CHARS).optional(),
     items: z.array(nonEmptyBounded(PLAN_MAX_ITEM_CHARS)).min(1).max(PLAN_MAX_MAP_ITEMS).optional(),
-    of: nonEmptyBounded(PLAN_MAX_ID_CHARS).optional(),
+    // Decision 39: a single id (unchanged) or an array of up to
+    // PLAN_MAX_OF_STEPS distinct ids — "must name an earlier step" is still
+    // validator.ts's job (it alone knows step order); this only enforces the
+    // array's own shape, including that it names each step once.
+    of: z.union([
+      nonEmptyBounded(PLAN_MAX_ID_CHARS),
+      z.array(nonEmptyBounded(PLAN_MAX_ID_CHARS)).min(1).max(PLAN_MAX_OF_STEPS)
+        .refine((ids) => new Set(ids).size === ids.length, 'must not repeat the same step id'),
+    ]).optional(),
     max_iterations: z.number().int().min(1).max(PLAN_MAX_REPEAT_ITERATIONS).optional(),
     until: nonEmptyBounded(PLAN_MAX_UNTIL_CHARS).optional(),
     // A repeat body holds leaves only — the depth bound, mirroring the grammar.

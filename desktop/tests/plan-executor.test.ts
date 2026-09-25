@@ -310,6 +310,42 @@ describe('waves', () => {
     // map briefs carry no dependencies at all
     expect(runner.launches.filter((l) => l.stepId === 's1').map((l) => l.brief).sort()).toEqual(['Review a.ts', 'Review b.ts']);
   });
+
+  // Decision 39 (the owner's live test, 2026-09-24): three separate
+  // single-researcher steps, then a combine step whose `of` could name only
+  // ONE earlier step — the combine specialist reported "I only received
+  // Result 1 (Mechanical keyboards); the other two research reports aren't
+  // included" and the plan "succeeded" with a keyboards-only answer. `of` may
+  // now list several earlier steps; this proves every one of them arrives,
+  // labelled by its own step id, and that the character budget divides across
+  // ALL of them together rather than each source step keeping its own full
+  // share (which would let the true total balloon unbounded).
+  it('a combine step naming several steps in `of` receives every one of their reports, fairly truncated across all of them', async () => {
+    const long = (tag: string) => `${tag}-`.repeat(2_000); // far past PLAN_DEPENDENCY_REPORT_MAX_CHARS
+    const doc: PlanDocumentV1 = { goal: 'combine three categories', steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Research {item}', summary: 'Plain sentence.', items: ['keyboards-a', 'keyboards-b'] },
+      { id: 's2', kind: 'map', specialist: 'reviewer', task: 'Research {item}', summary: 'Plain sentence.', items: ['mice-a', 'mice-b'] },
+      { id: 's3', kind: 'map', specialist: 'reviewer', task: 'Research {item}', summary: 'Plain sentence.', items: ['monitors-a', 'monitors-b'] },
+      { id: 's4', kind: 'combine', specialist: 'worker', task: 'Write one report covering all three categories', summary: 'Plain sentence.', of: ['s1', 's2', 's3'] },
+    ] };
+    const runner = new FakeRunner((l) => (l.stepId === 's4' ? completes('combined') : completes(long(l.stepId))));
+    const fence = await seed(record(doc));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const brief = runner.launches.find((l) => l.stepId === 's4')!.brief;
+    // All three steps reached the combine step, not just the first-named one.
+    for (const id of ['s1', 's2', 's3']) expect(brief).toContain(`from step "${id}"`);
+    // 6 reports total (2 items × 3 steps) — none silently dropped.
+    expect(brief).toContain('Result 1 of 6');
+    expect(brief).toContain('Result 6 of 6');
+    // Fair division: 24,000 total ÷ 6 reports = 4,000 each, below the normal
+    // 6,000 per-report cap — proving the budget is computed over every named
+    // step's reports together, not per source step.
+    const bodies = [...brief.matchAll(/---\n([\s\S]*?)\n\[… shortened/g)].map((m) => m[1]);
+    expect(bodies).toHaveLength(6);
+    for (const body of bodies) expect(body.length).toBe(4_000);
+  });
 });
 
 const TWO_STEP: PlanDocumentV1 = { goal: 'two', steps: [
@@ -1598,9 +1634,23 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     let lateStart!: () => void;
     const stuck = new Promise<void>((r) => { lateStart = r; });
     let lateHandle: PlanChildHandle | undefined;
+    // WHY 'Do b' waits for 'Do flaky' to have actually entered its launch
+    // (found flaky, 2026-09-24, while verifying an unrelated change — fixed
+    // per the "a flaky test is fixed when found" rule): both members' own
+    // `memberStart` calls read the journal (real fs) independently before
+    // either reaches `runner.launch`, so which one's read resolves first is
+    // not guaranteed. If 'b's rejection (and the halt it requests) lands
+    // before 'flaky' calls `runner.launch`, the `if (run.halt) return
+    // undefined` guard at the top of `memberStart`'s loop makes 'flaky' bail
+    // WITHOUT ever calling launch — so it never actually gets stuck, and the
+    // "still busy" assertion below flakes under load. This signal makes the
+    // ordering the test needs explicit instead of incidental.
+    let flakyEntered!: () => void;
+    const flakyEntered$ = new Promise<void>((r) => { flakyEntered = r; });
     runner.launch = async (input) => {
-      if (input.brief === 'Do b') throw new PlanLaunchRefusedError('nothing was sent');
+      if (input.brief === 'Do b') { await flakyEntered$; throw new PlanLaunchRefusedError('nothing was sent'); }
       if (input.brief === 'Do flaky') {
+        flakyEntered();
         await stuck;   // ignores the abort — a start that never comes back in time
         // (A real host's own fenced journal write would already refuse here,
         // since the lease is gone; skipping it exercises the executor's own

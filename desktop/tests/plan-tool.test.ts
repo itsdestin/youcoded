@@ -68,6 +68,19 @@ describe('propose_plan tool', () => {
     expect(description).toMatch(/only when the user explicitly named a model or provider/i);
   });
 
+  // Decision 39 (the owner's live test, 2026-09-24): three independent
+  // single-researcher steps ran one after another instead of at the same
+  // time, and the combine step at the end could only name ONE of them — its
+  // specialist reported back "I only received Result 1", and the plan
+  // "succeeded" with a keyboards-only answer. Both mistakes get their own flat
+  // instruction rather than one the model has to infer from the schema alone.
+  it('tells the model to put independent work in one split step, and to name every step a combine needs (decision 39)', () => {
+    const description = createProposePlanTool(BUILTIN_ROSTER).description ?? '';
+    expect(description).toMatch(/independent work.*same time.*one `map` step/i);
+    expect(description).toMatch(/never separate consecutive top-level steps/i);
+    expect(description).toMatch(/must list, in `of`, every earlier step whose results it needs/i);
+  });
+
   it('refuses a plan that is one specialist doing one thing, and says what to do instead', async () => {
     const propose = vi.fn();
     const oneRun: PlanDocumentV1 = {

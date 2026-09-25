@@ -82,6 +82,14 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
       // otherwise it reaches for a plan it cannot have and burns its one repair
       // on a shape no repair can fix.
       + 'A plan must be more than one specialist doing one thing: if the whole job is a single specialist run, hire a specialist directly instead of proposing a plan. '
+      // Decision 39 (the owner's live test, 2026-09-24): three separate
+      // single-researcher steps followed by a combine step that could only
+      // name ONE of them ran one after another and reported back with only
+      // one result — the model had put independent work in consecutive
+      // top-level steps instead of one `map` step, and never told the combine
+      // step about the other two. Both mistakes get one flat instruction each.
+      + 'Independent work that can run at the same time is ONE `map` step with one item per piece of work — never separate consecutive top-level steps; those run one after another. '
+      + 'A verify or combine step must list, in `of`, EVERY earlier step whose results it needs — naming only one when it needs several silently drops the rest. '
       // Design §9/§5, decision 35.4: model choice is opt-out-by-default —
       // the assistant only overrides it when the user actually asked.
       // Issue 3 fix (owner's live test): strengthened from "Set `model` on a

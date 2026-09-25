@@ -1,4 +1,4 @@
-import { PlanDocumentSchema, type PlanDocumentV1, type PlanStepV1 } from './schema';
+import { PlanDocumentSchema, ofIds, type PlanDocumentV1, type PlanStepV1 } from './schema';
 import type { SpecialistRoster } from '../specialists/registry';
 
 // WHY `ceilingTokens` is gone (spending rework stage 1, decision 34): the
@@ -30,7 +30,11 @@ export function validatePlanDocument(input: unknown, roster: SpecialistRoster): 
       maximumAttempts += attempts;
       maxFanOut = Math.max(maxFanOut, step.items!.length);
     } else if (step.kind === 'verify' || step.kind === 'combine') {
-      if (!priorIds.has(step.of!)) issues.push(`${step.id}: reference "${step.of}" must name an earlier step`);
+      // Decision 39: `of` may name several earlier steps — every one of them
+      // must actually be earlier, not just the first.
+      for (const ref of ofIds(step.of)) {
+        if (!priorIds.has(ref)) issues.push(`${step.id}: reference "${ref}" must name an earlier step`);
+      }
       maximumAttempts += multiplier;
       maxFanOut = Math.max(maxFanOut, 1);
     } else {

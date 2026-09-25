@@ -18,7 +18,7 @@
     "renderer/styles/globals.css": 2936,
     "renderer/components/SessionStrip.tsx": 2774,
     "main/main.ts": 2494,
-    "shared/types.ts": 2657,
+    "shared/types.ts": 2666,
     "renderer/components/SyncPanel.tsx": 2041,
     "main/engine/engine-manager.ts": 2035,
     "main/preload.ts": 1967,
@@ -26,7 +26,7 @@
     "renderer/components/StatusBar.tsx": 1799,
     "renderer/components/plans/PlanCard.tsx": 1626,
     "renderer/components/ToolCard.tsx": 1631,
-    "main/harness/plans/plan-executor.ts": 1850,
+    "main/harness/plans/plan-executor.ts": 1921,
     "renderer/components/ChatView.tsx": 1553
   }
 }

@@ -432,6 +432,65 @@ describe('a step says where its input comes from only when that is not obvious',
     ]));
     expect(detailOf('s1')).not.toContain('from step');
   });
+
+  // Decision 39 (the owner's live test, 2026-09-24): three separate
+  // single-researcher steps, then a combine step whose `of` could only name
+  // ONE of them — the combine specialist reported it never received the
+  // other two. `of` may now list several earlier steps, and the card must say
+  // so in plain English.
+  it('names every source, joined in plain English, when a step needs several (decision 39)', () => {
+    show(planOf([
+      aStep({ id: 's1', kind: 'map', fanOut: 1, items: ['keyboards'] }),
+      aStep({ id: 's2', kind: 'map', fanOut: 1, items: ['mice'] }),
+      aStep({ id: 's3', kind: 'map', fanOut: 1, items: ['monitors'] }),
+      aStep({ id: 's4', kind: 'combine', of: ['s1', 's2', 's3'], specialist: 'worker' }),
+    ]));
+    expect(detailOf('s4')).toContain('← from steps 1, 2 and 3');
+  });
+
+  it('joins exactly two sources with "and", not a comma', () => {
+    show(planOf([
+      aStep({ id: 's1', kind: 'map', fanOut: 1, items: ['keyboards'] }),
+      aStep({ id: 's2', kind: 'map', fanOut: 1, items: ['mice'] }),
+      aStep({ id: 's3', kind: 'combine', of: ['s1', 's2'], specialist: 'worker' }),
+    ]));
+    expect(detailOf('s3')).toContain('← from steps 1 and 2');
+  });
+
+  it('sorts several sources by row order, whatever order the plan named them in', () => {
+    show(planOf([
+      aStep({ id: 's1', kind: 'map', fanOut: 1, items: ['keyboards'] }),
+      aStep({ id: 's2', kind: 'map', fanOut: 1, items: ['mice'] }),
+      aStep({ id: 's3', kind: 'combine', of: ['s2', 's1'], specialist: 'worker' }),
+    ]));
+    expect(detailOf('s3')).toContain('← from steps 1 and 2');
+  });
+
+  it('always shows the label for several sources, even when one of them is the row directly above', () => {
+    // Decision 33's "omit when it's the row right above" rule only ever
+    // applied to a SINGLE source, where that row was the obvious answer —
+    // with several named sources there is no single obvious row any more.
+    show(planOf([
+      aStep({ id: 's1', kind: 'map', fanOut: 1, items: ['keyboards'] }),
+      aStep({ id: 's2', kind: 'map', fanOut: 1, items: ['mice'] }),
+      aStep({ id: 's3', kind: 'combine', of: ['s1', 's2'], specialist: 'worker' }),
+    ]));
+    // s2 is the row directly above s3, but s1 is also named, so the label shows.
+    expect(detailOf('s3')).toContain('← from steps 1 and 2');
+  });
+
+  it('drops an unresolved id from the list rather than showing a wrong number', () => {
+    show(planOf([
+      aStep({ id: 's1', kind: 'map', fanOut: 1, items: ['keyboards'] }),
+      aStep({ id: 's2', kind: 'map', fanOut: 1, items: ['mice'] }),
+      // s2 is directly above, but is NOT named — only s1 and a dangling id
+      // are, so the surviving label ("step 1") is not the omit-as-obvious
+      // case and must show.
+      aStep({ id: 's3', kind: 'combine', of: ['s1', 'not-on-this-card'], specialist: 'worker' }),
+    ]));
+    expect(detailOf('s3')).toContain('← from step 1');
+    expect(detailOf('s3')).not.toContain('not-on-this-card');
+  });
 });
 
 // ---- decision 33: a repeat is ONE row that CONTAINS its body ----------------

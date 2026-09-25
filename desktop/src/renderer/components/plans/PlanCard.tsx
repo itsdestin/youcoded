@@ -1039,29 +1039,54 @@ function rowNumbers(steps: PlanStepView[]): Map<string, RowNumber> {
   return map;
 }
 
+/** "1, 2 and 3" / "1 and 2" / "1" — plain English, never a bare comma list. */
+function englishList(labels: string[]): string {
+  if (labels.length <= 1) return labels.join('');
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
 /**
- * "← from step 1", and only when the row directly above is NOT where this
+ * "← from step 1", or "← from steps 1, 2 and 3" when a combine/verify step
+ * names several — and only when the row(s) directly above are NOT where this
  * step's input comes from.
  *
  * WHY the label is backward-only and usually absent (decision 33; it reverses
- * part of decision 31): every link names exactly one earlier step, so the plan
- * is always a tree, and in the ordinary chain each step simply consumes the one
+ * part of decision 31): in the ordinary chain each step simply consumes the one
  * above it — saying so on every row is noise the reader has to filter. The
  * forward clause decision 31 added ("produces 3 reports → step 2 combines
  * them") is gone with it: now that every row carries a required plain sentence,
  * it restated that sentence and doubled the row's text.
  *
+ * WHY `of` can now be several ids (decision 39, the owner's live test
+ * 2026-09-24): a combine step that reads three earlier steps used to be able
+ * to name only one, and the other two results silently never reached it. With
+ * several named sources the label ALWAYS shows — decision 33's "omit when it's
+ * the row right above" rule only ever applied to the single-source case, where
+ * that row was the obvious answer; several sources are never obvious from
+ * position alone.
+ *
  * A reference that names no EARLIER row — a hand-edited file, a forward
- * reference — produces no label at all: a wrong step number is worse than a
- * missing one.
+ * reference — is dropped from the label rather than shown wrong: a wrong step
+ * number is worse than a missing one, and the other, valid sources still show.
  */
 function flowLabel(step: PlanStepView, siblings: PlanStepView[], index: number, numbers: Map<string, RowNumber>): string {
-  if (!step.of) return '';
-  const source = numbers.get(step.of);
+  const refs = step.of === undefined ? [] : Array.isArray(step.of) ? step.of : [step.of];
+  if (refs.length === 0) return '';
   const self = numbers.get(step.id);
-  if (!source || !self || source.order >= self.order) return '';
-  if (index > 0 && siblings[index - 1].id === step.of) return '';
-  return `← from step ${source.label}`;
+  if (!self) return '';
+  // Keep the id beside its row number — dropping unresolved/forward refs
+  // without losing which valid id is which. Sorted by row order so the
+  // reader always sees "1, 2 and 3", never the order the model happened to
+  // list them in.
+  const sources = refs
+    .map((id) => ({ id, num: numbers.get(id) }))
+    .filter((s): s is { id: string; num: RowNumber } => !!s.num && s.num.order < self.order)
+    .sort((a, b) => a.num.order - b.num.order);
+  if (sources.length === 0) return '';
+  if (sources.length === 1 && index > 0 && siblings[index - 1].id === sources[0].id) return '';
+  const labels = sources.map((s) => s.num.label);
+  return `← from step${labels.length > 1 ? 's' : ''} ${englishList(labels)}`;
 }
 
 /** The ROW a pause belongs to (a repeat's, when it paused inside the body) and

@@ -80,6 +80,15 @@ let TRIALS;
 // differently — the probe was NOT re-run, same reasoning as every change
 // above it. Kept byte-identical to plans/schema.ts's copy (plan-schema.test.ts
 // pins the two equal).
+// 2026-09-24 (decision 39, ANOTHER owner's live test): `of` becomes a single
+// id OR an array of up to 6 distinct ids — a verify/combine step must be able
+// to name every earlier step it needs, not only one (three independent
+// researcher steps followed by a combine that could only name the first
+// produced a "keyboards-only" report when the plan covered three categories).
+// This is still a LEAF value, not new recursion, and the union is exactly the
+// `anyOf`-of-scalars shape every kind branch already is — the probe was NOT
+// re-run, same reasoning as every change above it. Kept byte-identical to
+// plans/schema.ts's copy (plan-schema.test.ts pins the two equal).
 const FIELD = {
   id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
   specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
@@ -87,7 +96,13 @@ const FIELD = {
   summary: { type: 'string', minLength: 1, maxLength: 200, description: 'One plain sentence for the user who approves this plan, in everyday words: what this step does. Not a restatement of task, no jargon, no file paths or tool names.' },
   model: { type: 'string', maxLength: 128, description: 'Leave unset. Do NOT set this yourself for any reason (a step seeming hard, slow, cheap, or important is not a reason) — that is the user\'s decision alone, never yours. Set it ONLY when the user has explicitly named a model or provider for this exact step, earlier in this conversation: "budget", "frontier", or an exact model id.' },
   items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
-  of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
+  of: {
+    description: 'verify/combine: the id(s) of the earlier step(s) whose results this consumes. Name a single id, or an array of every step you need (up to 6) — never drop one.',
+    anyOf: [
+      { type: 'string', minLength: 1, maxLength: 64 },
+      { type: 'array', items: { type: 'string', minLength: 1, maxLength: 64 }, minItems: 1, maxItems: 6, uniqueItems: true },
+    ],
+  },
   max_iterations: { type: 'integer', minimum: 1, maximum: 5, description: 'repeat only: hard cap.' },
   until: { type: 'string', minLength: 1, maxLength: 2000, description: 'repeat only: plain-words stop condition.' },
   steps: { type: 'array', items: { $ref: '#/$defs/leafStep' }, minItems: 1, maxItems: 4, description: 'repeat only: the steps to repeat. These may not repeat again.' },

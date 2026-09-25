@@ -785,10 +785,10 @@ export interface PlanStepView {
    *  its first line, which left the user approving spending on text he could
    *  not finish reading (Destin, 2026-09-18). Read-only. */
   task?: string;
-  /** Decision 31: the id of the EARLIER step whose reports this one consumes
-   *  (`of` in the document, fed in as its input by the executor). verify/combine
-   *  only; the card names it by STEP NUMBER, or says nothing (PlanCard.tsx). */
-  of?: string;
+  /** Decision 31: the id(s) of the EARLIER step(s) whose reports this one
+   *  consumes. verify/combine only; the card names them by STEP NUMBER — "step
+   *  2", or "steps 1, 2 and 3" for several (decision 39) — or nothing. */
+  of?: string | string[];
   /** Definition id of the specialist each child runs as (explorer / reviewer / …). */
   specialist: string;
   /** How many children this step fans out to. */
