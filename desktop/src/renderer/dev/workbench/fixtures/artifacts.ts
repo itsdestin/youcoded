@@ -126,9 +126,10 @@ const BY_PROJECT: Record<string, ArtifactRecord[]> = {
     },
     {
       // Doc comments mockup: cell comments on the promo's sales workbook
-      // (same bytes as the site scenario's Q3-sales.xlsx).
+      // (same bytes as the site scenario's Q3-sales.xlsx — its own name here,
+      // since mock-shim.test.ts pins that name as the site scenario's alone).
       id: 'a-q3-sales-comments',
-      path: 'Q3-sales.xlsx',
+      path: 'reports/q3-sales-by-rep.xlsx',
       kind: 'internal',
       absolutePath: null,
       lastModified: T,

@@ -18,13 +18,15 @@ interface Props {
 export function CommentsModeToggle({ active, count, onToggle }: Props) {
   return (
     <Button
-      variant="secondary"
+      // Design lint: <Button> owns its spacing and shape, so the pressed
+      // state is a variant swap rather than a hand-added ring.
+      variant={active ? 'raised' : 'secondary'}
       size="sm"
       aria-pressed={active}
       aria-label={active ? 'Exit comments mode' : 'Open comments mode'}
       title={active ? 'Back to reading' : 'Open comments mode'}
       onClick={onToggle}
-      className={`gap-1.5 shrink-0 ${active ? 'ring-1 ring-accent' : ''}`}
+      className="shrink-0"
     >
       <ChatIcon className="w-3.5 h-3.5" />
       {/* Round 3: was icon+count only — read as an unlabelled bubble with a

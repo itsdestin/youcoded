@@ -413,7 +413,9 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   // the composer, and the artifact viewer's edit-mode textarea. Electron ships no
   // default context menu, so without this branch right-click in the artifact
   // editor does nothing at all — no cut/copy/paste of any kind.
-  const editable = target.closest('.input-bar-textarea, .artifact-edit-textarea');
+  // [data-edit-menu]: the comment boxes (CommentCard, NewCommentPopover) are
+  // <Textarea> primitives, which may not carry a bare marker class.
+  const editable = target.closest('.input-bar-textarea, .artifact-edit-textarea, [data-edit-menu]');
   if (editable instanceof HTMLTextAreaElement || editable instanceof HTMLInputElement) {
     return finalize(editableMenu(editable, editable.classList.contains('input-bar-textarea')));
   }

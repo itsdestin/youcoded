@@ -119,9 +119,10 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
         rows={3}
         value={comment.text}
         placeholder="Add a comment…"
-        // artifact-edit-textarea: right-click here gets real cut/copy/paste
+        // data-edit-menu (was the artifact-edit-textarea class, which design lint rejects on <Textarea>): right-click here gets real cut/copy/paste
         // (build-menu.ts) — Electron ships no default context menu.
-        className="artifact-edit-textarea w-full"
+        className="w-full"
+        data-edit-menu
         onChange={(e) => onTextChange(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {

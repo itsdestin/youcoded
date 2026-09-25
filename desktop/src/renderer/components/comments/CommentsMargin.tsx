@@ -223,7 +223,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
         {openComment && createPortal(
           <>
             <Scrim layer={2} onClick={() => setOpenId(null)} />
-            <OverlayPanel layer={2} className="fixed inset-x-3 bottom-3 max-h-[70vh] overflow-auto p-2 rounded-lg">
+            <OverlayPanel layer={2} className="fixed inset-x-3 bottom-3 max-h-3/4 overflow-auto p-2 rounded-lg">
               <div className="flex justify-end mb-1">
                 <CloseButton onClick={() => setOpenId(null)} label="Close comment" />
               </div>

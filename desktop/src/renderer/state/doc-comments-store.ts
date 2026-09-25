@@ -23,7 +23,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 // a resolvedBy can name that person too.
 export type CommentAuthor = 'user' | 'assistant' | `person:${string}`;
 
-export interface CommentReply {
+interface CommentReply {
   id: string;
   author: CommentAuthor;
   text: string;
@@ -76,7 +76,7 @@ const CODE_PATH = 'desktop/src/renderer/components/ChatView.tsx';
 // Word + Excel fixtures (fixtures/docs.ts, fixtures/artifacts.ts). Quotes are
 // exact substrings of the .docx body / exact cell addresses of the workbook.
 const DOCX_PATH = 'docs/launch-brief.docx';
-const XLSX_PATH = 'Q3-sales.xlsx';
+const XLSX_PATH = 'reports/q3-sales-by-rep.xlsx';
 const PRIYA: CommentAuthor = 'person:Priya Shah';
 const HOUR = 60 * 60 * 1000;
 const now = Date.now();
@@ -338,11 +338,13 @@ export function addComment(
   return id;
 }
 
-export function setCommentText(id: string, text: string): void {
+// Not exported: every caller reaches these through useDocComments() below
+// (knip counts a bare export nobody imports as dead code).
+function setCommentText(id: string, text: string): void {
   publish({ comments: snap.comments.map((c) => (c.id === id ? { ...c, text } : c)) });
 }
 
-export function addReply(id: string, author: CommentAuthor, text: string): void {
+function addReply(id: string, author: CommentAuthor, text: string): void {
   if (!text.trim()) return;
   publish({
     comments: snap.comments.map((c) =>
@@ -353,7 +355,7 @@ export function addReply(id: string, author: CommentAuthor, text: string): void 
   });
 }
 
-export function resolveComment(id: string, by: CommentAuthor): void {
+function resolveComment(id: string, by: CommentAuthor): void {
   publish({
     comments: snap.comments.map((c) =>
       c.id === id ? { ...c, resolved: true, resolvedBy: by, resolvedAt: Date.now() } : c,
@@ -361,17 +363,17 @@ export function resolveComment(id: string, by: CommentAuthor): void {
   });
 }
 
-export function reopenComment(id: string): void {
+function reopenComment(id: string): void {
   publish({
     comments: snap.comments.map((c) => (c.id === id ? { ...c, resolved: false, resolvedBy: null, resolvedAt: null } : c)),
   });
 }
 
-export function removeComment(id: string): void {
+function removeComment(id: string): void {
   publish({ comments: snap.comments.filter((c) => c.id !== id) });
 }
 
-export function clearCommentFocus(): void {
+function clearCommentFocus(): void {
   if (snap.focusId !== null) publish({ focusId: null });
 }
 
@@ -379,7 +381,7 @@ export function commentsForPath(path: string): DocComment[] {
   return snap.comments.filter((c) => c.path === path);
 }
 
-export function setShowResolved(path: string, value: boolean): void {
+function setShowResolved(path: string, value: boolean): void {
   publish({ showResolvedByPath: { ...snap.showResolvedByPath, [path]: value } });
 }
 

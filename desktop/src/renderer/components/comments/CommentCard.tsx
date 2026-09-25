@@ -105,10 +105,11 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
               value={comment.text}
               onChange={(e) => onTextChange(e.target.value)}
               placeholder="Add a comment…"
-              // artifact-edit-textarea: reuses the artifact editor's right-click
+              // data-edit-menu (was the artifact-edit-textarea class, which design lint rejects on <Textarea>): reuses the artifact editor's right-click
               // routing (build-menu.ts) — Electron ships no default context menu,
               // so without this marker cut/copy/paste here would do nothing.
-              className="artifact-edit-textarea mt-1 w-full"
+              className="mt-1 w-full"
+              data-edit-menu
             />
           ) : (
             <p className="mt-0.5 text-fg-2 whitespace-pre-wrap">{comment.text}</p>

@@ -42,6 +42,10 @@ export function useNarrowByRef<T extends HTMLElement>(ref: RefObject<T | null>, 
         raf = requestAnimationFrame(tryAttach);
         return;
       }
+      // disconnect-before-replace: tryAttach runs once per mount today, but a
+      // second run must never leave an earlier observer holding the element
+      // (observer-ref-returns-cleanup.yml's leak).
+      if (ro) ro.disconnect();
       ro = new ResizeObserver((entries) => {
         const width = entries[0]?.contentRect.width ?? 0;
         if (width > 0) setNarrow(width < thresholdPx);
@@ -51,7 +55,8 @@ export function useNarrowByRef<T extends HTMLElement>(ref: RefObject<T | null>, 
     tryAttach();
     return () => {
       if (raf) cancelAnimationFrame(raf);
-      ro?.disconnect();
+      // Plain call, not `ro?.`: the observer-ref rule reads only this form.
+      if (ro) ro.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ref identity is stable
   }, [thresholdPx]);
