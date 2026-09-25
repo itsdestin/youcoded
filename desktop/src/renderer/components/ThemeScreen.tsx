@@ -125,6 +125,12 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
   // MarketplaceContext supplies favorites and the toggle action.
   const mp = useMarketplace();
   const themeFavSet = useMemo(() => new Set(mp.themeFavorites), [mp.themeFavorites]);
+  // slug → the theme library's preview URL, for cards whose theme has no local
+  // preview.png (installs never download one — see ThemeCard's Preview).
+  const libraryPreviews = useMemo(
+    () => new Map(mp.themeEntries.filter(e => e.preview).map(e => [e.slug, e.preview as string])),
+    [mp.themeEntries],
+  );
 
   // Appearance panel shows favorites only, plus the active theme as a fallback
   // so there's always at least one card even when the user has unstarred their
@@ -225,6 +231,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
                 onToggleFavorite={() => { mp.favoriteTheme(t.slug, !themeFavSet.has(t.slug)).catch(() => {}); }}
                 // The pencil — the editor — exists only on the user's own themes (canCustomize).
                 onEdit={canCustomize(t) ? () => openEditor(t.slug) : undefined}
+                fallbackPreview={libraryPreviews.get(t.slug)}
               />
             ))}
           </div>

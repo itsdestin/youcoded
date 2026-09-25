@@ -20,6 +20,9 @@ type Props = {
   onToggleFavorite: () => void;
   /** Present only on the user's own themes — the pencil that opens the editor. */
   onEdit?: () => void;
+  /** The theme library's copy of the preview (registry `preview` URL). Used when the
+   *  theme has no preview.png of its own on this device. */
+  fallbackPreview?: string;
 };
 
 const StarGlyph = ({ filled }: { filled: boolean }) => (
@@ -63,17 +66,24 @@ function CardIcons({ favorite, onToggleFavorite, onEdit, name }: {
   );
 }
 
-/** The theme's preview picture, falling back to its colours when there is none. */
-function Preview({ theme, className }: { theme: LoadedTheme; className: string }) {
-  const [failed, setFailed] = useState(false);
-  const src = themePreviewSrc(theme);
-  if (!src || failed) {
+/** The theme's preview picture: its own preview.png, else the theme library's copy,
+ *  else its colours. WHY the library's copy (2026-09-24): installing a community theme
+ *  downloads its manifest and assets but NOT preview.png, so on a real install every
+ *  community card fell through to the colour gradient — only built-ins ever showed a
+ *  picture. The registry already carries the preview's URL (the Marketplace cards use
+ *  it), so the card borrows it. */
+function Preview({ theme, fallback, className }: { theme: LoadedTheme; fallback?: string; className: string }) {
+  const own = themePreviewSrc(theme);
+  const sources = [own, fallback].filter((x): x is string => !!x);
+  const [attempt, setAttempt] = useState(0);
+  const src = sources[attempt];
+  if (!src) {
     return <div className={className} style={{ background: `linear-gradient(135deg, ${theme.tokens.canvas}, ${theme.tokens.accent})` }} aria-hidden="true" />;
   }
-  return <img src={src} alt="" className={`${className} object-cover object-top`} onError={() => setFailed(true)} />;
+  return <img src={src} alt="" className={`${className} object-cover object-top`} onError={() => setAttempt((n) => n + 1)} />;
 }
 
-export function ThemeCard({ theme, active, favorite, onSelect, onToggleFavorite, onEdit }: Props) {
+export function ThemeCard({ theme, active, favorite, onSelect, onToggleFavorite, onEdit, fallbackPreview }: Props) {
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); }
@@ -99,7 +109,7 @@ export function ThemeCard({ theme, active, favorite, onSelect, onToggleFavorite,
       {/* The picture takes nearly all of the card: 16:9, the preview's own shape less a
           sliver, so almost the whole window shows rather than its top strip. */}
       <div className="aspect-video rounded-md overflow-hidden border border-edge-dim">
-        <Preview theme={theme} className="w-full h-full" />
+        <Preview theme={theme} fallback={fallbackPreview} className="w-full h-full" />
       </div>
       {/* The slim strip: one small line — name, Active, then the icons. */}
       <div className="flex items-center gap-1 pl-1 h-5">
