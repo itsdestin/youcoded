@@ -13,7 +13,8 @@
 // header row or the window) instead of a hand-rolled clamp; ReadingHighlights
 // now also gives it an open delay + a close grace period, and its own
 // onMouseEnter/onMouseLeave keep it open while the pointer travels onto it.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { CompleteToggle } from '../SessionCardDetails';
 import { formatRelativeTime } from '../../utils/format-time';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { placeBubble } from '../ui/anchor-position';
@@ -38,9 +39,11 @@ interface Props {
    *  keeps the card open even if the pointer drifts away. */
   onEngagedChange: (engaged: boolean) => void;
   onReply: (text: string) => void;
+  onResolve: () => void;
+  onReopen: () => void;
 }
 
-export function HighlightHoverCard({ comment, anchorRect, boundsEl, onPointerEnter, onPointerLeave, onEngagedChange, onReply }: Props) {
+export function HighlightHoverCard({ comment, anchorRect, boundsEl, onPointerEnter, onPointerLeave, onEngagedChange, onReply, onResolve, onReopen }: Props) {
   // Engaged = the reply box is focused OR has text. Either one alone must
   // keep the card open: focus covers "clicked in, not typed yet", text covers
   // "typed, then clicked elsewhere on the card".
@@ -86,7 +89,23 @@ export function HighlightHoverCard({ comment, anchorRect, boundsEl, onPointerEnt
       onMouseLeave={onPointerLeave}
     >
     <OverlayPanel layer={4} className="p-3 text-xs" style={{ zIndex: 'auto', borderRadius: 'var(--radius-lg)' }}>
-      <Entry author={comment.author} createdAt={comment.createdAt} text={comment.text} clamp />
+      {/* Destin, 2026-09-24: resolve from the preview too — the same
+          circle-check, in the same top-right spot, as a Comments-mode card. */}
+      <Entry
+        author={comment.author}
+        createdAt={comment.createdAt}
+        text={comment.text}
+        clamp
+        trailing={
+          <CompleteToggle
+            done={comment.resolved}
+            name="this comment"
+            onToggle={(next) => (next ? onResolve() : onReopen())}
+            titles={{ set: 'Resolved. Click to reopen.', unset: 'Resolve this comment?' }}
+            className="shrink-0"
+          />
+        }
+      />
       {/* Replies scroll inside the card past a few, so a long thread never
           pushes the reply box off screen. */}
       {comment.replies.length > 0 && (
@@ -105,7 +124,7 @@ export function HighlightHoverCard({ comment, anchorRect, boundsEl, onPointerEnt
 }
 
 /** One author · time · text row — the same header shape CommentCard uses. */
-function Entry({ author, createdAt, text, clamp }: { author: DocComment['author']; createdAt: number; text: string; clamp?: boolean }) {
+function Entry({ author, createdAt, text, clamp, trailing }: { author: DocComment['author']; createdAt: number; text: string; clamp?: boolean; trailing?: ReactNode }) {
   return (
     <div className="flex items-start gap-2">
       <Avatar author={author} />
@@ -116,6 +135,7 @@ function Entry({ author, createdAt, text, clamp }: { author: DocComment['author'
         </div>
         <p className={`mt-0.5 text-fg-2 whitespace-pre-wrap${clamp ? ' line-clamp-4' : ''}`}>{text}</p>
       </div>
+      {trailing}
     </div>
   );
 }

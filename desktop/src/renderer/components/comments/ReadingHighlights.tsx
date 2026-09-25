@@ -73,7 +73,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
   // buildContextMenu's "Add comment" entry (selection-release menu OR the
   // real right-click menu), which writes straight to the store itself — see
   // build-menu.ts's own WHY. This component only reads/positions the result.
-  const { comments, focusId, showResolved, setCommentText, addReply, removeComment, clearFocus } = useDocComments(path);
+  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment, clearFocus } = useDocComments(path);
   const visible = useMemo(() => comments.filter((c) => showResolved || !c.resolved), [comments, showResolved]);
   const marks = useQuoteMarks(containerRef, visible);
 
@@ -294,6 +294,11 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
           onPointerLeave={scheduleClose}
           onEngagedChange={onEngagedChange}
           onReply={(t) => addReply(activeComment.id, 'user', t)}
+          // Resolving hides the comment (unless Show Resolved is on), which
+          // unmounts the card without a blur — so release the "typing a
+          // reply" hold here, or later hovers would stay blocked.
+          onResolve={() => { resolveComment(activeComment.id, 'user'); onEngagedChange(false); setHoveredId(null); }}
+          onReopen={() => reopenComment(activeComment.id)}
         />
       )}
       {draftComment && draftAnchor && (
