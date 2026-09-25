@@ -7,9 +7,10 @@
 //   - select text, release it → the SAME right-click menu build-menu.ts
 //     builds for this viewer (Add comment / Ask about this / Copy / Select
 //     all), anchored at the selection's end → NewCommentPopover
-// "Open in comments" and the header toggle (ActiveArtifactView) are the only
-// way into the rich margin (Comments mode) — reply/resolve/edit/delete never
-// happen here, on purpose (brief: "kinda be a distinct mode").
+// Clicking a highlight or the floating Comments button opens the rich pane
+// (Comments mode). Replying is the one action also offered here, inside the
+// hover card (Destin, 2026-09-24); resolve/edit/delete stay in Comments mode
+// (brief: "kinda be a distinct mode").
 //
 // Round 3 (polish pass): the old separate floating "Comment" button
 // (SelectionCommentButton, now deleted) looked nothing like the right-click
@@ -17,7 +18,7 @@
 // OWN entries in the SAME <ContextMenu>, so the two paths can never drift
 // apart again. This is scoped to the FILE VIEWER only — chat messages keep
 // right-click only (auto-popping a menu while reading chat would be noisy).
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HighlightHoverCard } from './HighlightHoverCard';
 import { NewCommentPopover } from './NewCommentPopover';
 import { ContextMenu } from '../context-menu/ContextMenu';
@@ -30,7 +31,10 @@ import { useDocComments } from '../../state/doc-comments-store';
 // the close delay only bridges the gap between the segments of a highlight
 // that wraps across lines, so the card doesn't blink moving along it.
 const HOVER_OPEN_MS = 300;
-const HOVER_CLOSE_MS = 120;
+// 250ms (was 120): the card is now something you move ONTO to reply
+// (Destin, 2026-09-24), so the close delay must also cover the trip across
+// the 8px gap between the highlight and the card.
+const HOVER_CLOSE_MS = 250;
 // A selection under this length isn't worth popping a menu over (item 1).
 const MIN_SELECTION_CHARS = 2;
 
@@ -69,7 +73,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
   // buildContextMenu's "Add comment" entry (selection-release menu OR the
   // real right-click menu), which writes straight to the store itself — see
   // build-menu.ts's own WHY. This component only reads/positions the result.
-  const { comments, focusId, showResolved, setCommentText, removeComment, clearFocus } = useDocComments(path);
+  const { comments, focusId, showResolved, setCommentText, addReply, removeComment, clearFocus } = useDocComments(path);
   const visible = useMemo(() => comments.filter((c) => showResolved || !c.resolved), [comments, showResolved]);
   const marks = useQuoteMarks(containerRef, visible);
 
@@ -85,9 +89,17 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
   const closeTimerRef = useRef<number | null>(null);
   const clearOpenTimer = () => { if (openTimerRef.current) { window.clearTimeout(openTimerRef.current); openTimerRef.current = null; } };
   const clearCloseTimer = () => { if (closeTimerRef.current) { window.clearTimeout(closeTimerRef.current); closeTimerRef.current = null; } };
+  // While a reply is being typed in the hover card, drifting the pointer
+  // away must not throw the half-written reply away — the card then closes
+  // only on Esc or a click outside it (effect below).
+  const engagedRef = useRef(false);
+  const [engaged, setEngaged] = useState(false);
+  const onEngagedChange = useCallback((v: boolean) => { engagedRef.current = v; setEngaged(v); }, []);
   const scheduleClose = () => {
     clearCloseTimer();
-    closeTimerRef.current = window.setTimeout(() => setHoveredId(null), HOVER_CLOSE_MS);
+    closeTimerRef.current = window.setTimeout(() => {
+      if (!engagedRef.current) setHoveredId(null);
+    }, HOVER_CLOSE_MS);
   };
 
   // Hover/click wiring on marks — mirrors CommentsMargin's own linking so
@@ -100,6 +112,9 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
     for (const [id, segs] of marks) for (const mark of segs) {
       const enter = () => {
         if (lastPointerWasTouch) return; // no hover card on touch (see above)
+        // Mid-reply, hovering another highlight must not swap the card out
+        // from under the half-written text.
+        if (engagedRef.current) return;
         clearCloseTimer();
         clearOpenTimer();
         openTimerRef.current = window.setTimeout(() => {
@@ -136,6 +151,23 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onOpenComments is the host's stable callback; marks is the real trigger
   }, [marks]);
+
+  // An engaged card (reply being typed) closes on Esc or a click outside it,
+  // like every other popover — never on pointer drift.
+  useEffect(() => {
+    if (!engaged) return;
+    const close = () => { onEngagedChange(false); setHoveredId(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as Element | null)?.closest?.('[data-hover-card]')) close();
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown);
+    };
+  }, [engaged, onEngagedChange]);
 
   useEffect(() => {
     for (const [id, segs] of marks) for (const mark of segs) {
@@ -258,6 +290,10 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
           comment={activeComment}
           anchorRect={cardRect}
           boundsEl={containerRef.current}
+          onPointerEnter={clearCloseTimer}
+          onPointerLeave={scheduleClose}
+          onEngagedChange={onEngagedChange}
+          onReply={(t) => addReply(activeComment.id, 'user', t)}
         />
       )}
       {draftComment && draftAnchor && (
