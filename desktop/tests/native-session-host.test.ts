@@ -6010,6 +6010,40 @@ describe('specialists plans in the native host (Task 4)', () => {
     const planId = await proposeOne();
     await host.approvePlan(SID, planId);
     await waitFor(() => planStatus()[0] === 'completed', 'completion');
+    // WHY (flake fix — three real gaps stacked, each needed its own signal;
+    // verified with 40 consecutive green runs, alone and inside the full
+    // file, after all three): `p.status = 'completed'` lands durably in
+    // settle()'s finalWrite BEFORE onCompleted fires the plan's completion
+    // notice (plan-executor.ts) — and that notice is queued fire-and-forget
+    // (`void this.queueLifecycleNotice(...)`, plan-host-bridge.ts) via an
+    // async function that itself `await`s a journal read before it ever
+    // calls queuePlanNotice/kickIdleDeliveryPass. So right after `planStatus
+    // === 'completed'`, `host.isIdle(SID)` can already read true — the PRIOR
+    // turn already ended and the notice's own turn hasn't been scheduled
+    // yet — making an isIdle-only wait resolve trivially without ever
+    // observing the notice turn at all.
+    //
+    // `completionNotified` (plan-host-bridge.ts's `markLifecycleNotified`) is
+    // set only inside the notice's `onEnd`, which drainDeliveries calls only
+    // AFTER `await this.deliverNotice(...)` (the whole notice turn) already
+    // resolved — so waiting for it on disk is the one signal that can't fire
+    // early. Once it's true, `host.isIdle(SID)` (same real-idle signal
+    // `proposeOne()` waits on after the proposal turn) confirms runTurns'
+    // own `finally` has run too.
+    //
+    // Even then: `wire()`'s transcript-event listener forwards each event to
+    // the renderer immediately and ONLY THEN chains its disk write onto
+    // `entry.appendChain` ("(1) Forward NOW — not gated on the disk write" —
+    // native-session-host.ts). Nothing above proves that queued append has
+    // actually reached disk — `getHistory`/`getHistoryAsync` both read
+    // straight off disk, so a page requested in the gap can legitimately
+    // come up short. Reaching into the live entry to await its OWN append
+    // chain (the same mechanism destroy() already awaits before disposal —
+    // see native-runtime.md) is the deterministic signal that the write
+    // really landed.
+    await waitFor(() => journalFile().plans[0]?.completionNotified === true, 'the completion notice to be delivered');
+    await waitFor(() => host.isIdle(SID), 'the completion notice turn to end');
+    await (host as any).live.get(SID).appendChain;
     const attempts = journalFile().plans[0].steps.flatMap((st: any) => st.attempts);
     const ofPlanChild = (list: TranscriptEvent[]) =>
       list.filter((e) => attempts.some((a: any) => a.childId === (e.data as any)?.agentId));
