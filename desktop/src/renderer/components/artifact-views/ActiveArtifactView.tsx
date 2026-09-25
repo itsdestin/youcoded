@@ -2,7 +2,7 @@
 // Extracted from SessionDrawer.tsx (Task 7.2) so both SessionDrawer and ProjectView
 // can use it identically without duplicating the edit state + conflict-detection logic.
 import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
-import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer, isCodeEditorViewer } from './RendererRegistry';
+import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer, isCodeEditorViewer, isCommentableBinaryViewer } from './RendererRegistry';
 import { PartialFileBanner } from './PartialFileBanner';
 import { canEditArtifact } from './edit-permission';
 import { ViewerErrorBoundary } from './ViewerErrorBoundary';
@@ -582,7 +582,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // a binary preview (image/pdf/csv grid) has nothing a selection or a line
   // number could anchor to. Comments mode/Reading mode is a distinct toggle
   // now, not always-on: "kinda be a distinct 'mode' entered by the user".
-  const showComments = !editing && isTextContentViewer(ViewerComponent);
+  // Word and Excel files joined on 2026-09-24 (isCommentableBinaryViewer).
+  const showComments = !editing && (isTextContentViewer(ViewerComponent) || isCommentableBinaryViewer(ViewerComponent));
   const showCodeRail = showComments && isCodeEditorViewer(ViewerComponent);
   // SessionDrawer's pane is a fixed ~480px regardless of window width, so the
   // review bar needs the PANE's own width, same reasoning as MarkdownView's

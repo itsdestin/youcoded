@@ -16,7 +16,12 @@
 // demonstrated by the seed data below, never fabricated live.
 import { useMemo, useSyncExternalStore } from 'react';
 
-export type CommentAuthor = 'user' | 'assistant';
+// `person:<name>` — someone other than you or the assistant, e.g. a colleague
+// whose comment came from a Word or Excel file (Destin, questions deck Q-4:
+// "show comments left in Word/Google Docs"). A string rather than an object
+// so every existing `=== 'user'` / `=== 'assistant'` check keeps working and
+// a resolvedBy can name that person too.
+export type CommentAuthor = 'user' | 'assistant' | `person:${string}`;
 
 export interface CommentReply {
   id: string;
@@ -36,6 +41,11 @@ export interface DocComment {
   sourceLabel: string;
   startLine?: number;
   endLine?: number;
+  /** Spreadsheet comments anchor to a CELL ("B4"), not a text span — Excel's
+   *  own model (Destin, chat follow-up: Excel comments same as Word). When
+   *  set, the highlight is the cell itself (use-quote-marks.ts) and `quote`
+   *  just records the cell's value for the assistant. */
+  cell?: string;
   text: string;
   author: CommentAuthor;
   createdAt: number;
@@ -63,6 +73,11 @@ export function basenameOf(path: string): string {
 // comment states without clicking anything.
 const PLAN_PATH = 'docs/active/plans/2026-09-24-onboarding-redesign.md';
 const CODE_PATH = 'desktop/src/renderer/components/ChatView.tsx';
+// Word + Excel fixtures (fixtures/docs.ts, fixtures/artifacts.ts). Quotes are
+// exact substrings of the .docx body / exact cell addresses of the workbook.
+const DOCX_PATH = 'docs/launch-brief.docx';
+const XLSX_PATH = 'Q3-sales.xlsx';
+const PRIYA: CommentAuthor = 'person:Priya Shah';
 const HOUR = 60 * 60 * 1000;
 const now = Date.now();
 
@@ -155,6 +170,114 @@ function seedComments(): DocComment[] {
       resolvedBy: null,
       resolvedAt: null,
     },
+    // 6–9. Word document. The two Priya comments are ALSO in the fixture's
+    // own comments.xml (fixtures/docs/make.mjs) — they stand for comments
+    // someone left in Word before the file reached you, and look like any
+    // other thread (repliable, resolvable) on purpose.
+    {
+      id: 'seed-docx-priya-goal',
+      path: DOCX_PATH,
+      quote: 'Move 30% of weekly active users to the new app within six weeks of launch.',
+      sourceLabel: basenameOf(DOCX_PATH),
+      text: 'Is 30% realistic? The last launch reached 18% in the same window.',
+      author: PRIYA,
+      createdAt: now - 26 * HOUR,
+      replies: [
+        { id: 'seed-docx-priya-goal-r1', author: 'user', text: 'Fair — the in-app prompt should help, but let’s say 25%.', createdAt: now - 6 * HOUR },
+      ],
+      resolved: false,
+      resolvedBy: null,
+      resolvedAt: null,
+    },
+    {
+      id: 'seed-docx-priya-legal',
+      path: DOCX_PATH,
+      quote: 'Beta opens to 500 customers on March 10',
+      sourceLabel: basenameOf(DOCX_PATH),
+      text: 'Legal needs the beta terms by March 3 at the latest.',
+      author: PRIYA,
+      createdAt: now - 25 * HOUR,
+      replies: [],
+      resolved: false,
+      resolvedBy: null,
+      resolvedAt: null,
+    },
+    {
+      id: 'seed-docx-emails',
+      path: DOCX_PATH,
+      quote: 'Marketing emails go out the same morning as the public launch.',
+      sourceLabel: basenameOf(DOCX_PATH),
+      text: 'Should we stagger these so support isn’t flooded on day one?',
+      author: 'user',
+      createdAt: now - 3 * HOUR,
+      replies: [
+        { id: 'seed-docx-emails-r1', author: 'assistant', text: 'Staggering over three days keeps tickets near today’s weekly level. Want me to add that to the timeline?', createdAt: now - 2.5 * HOUR },
+      ],
+      resolved: false,
+      resolvedBy: null,
+      resolvedAt: null,
+    },
+    {
+      id: 'seed-docx-android',
+      path: DOCX_PATH,
+      quote: 'The payment screen has not been tested on older Android phones.',
+      sourceLabel: basenameOf(DOCX_PATH),
+      text: 'Which Android versions count as “older” here?',
+      author: 'user',
+      createdAt: now - 5 * HOUR,
+      replies: [
+        { id: 'seed-docx-android-r1', author: 'assistant', text: 'Changed it to “Android 11 and earlier”, which is what the test plan covers.', createdAt: now - 4.5 * HOUR },
+      ],
+      resolved: true,
+      resolvedBy: 'assistant',
+      resolvedAt: now - 4.5 * HOUR,
+    },
+    // 10–12. Spreadsheet — cell comments (Excel's model), in the workbook's
+    // own cells (fixtures/sheets/make.mjs: header row 1, data from row 2).
+    {
+      id: 'seed-xlsx-north',
+      path: XLSX_PATH,
+      cell: 'C4',
+      quote: '41',
+      sourceLabel: `C4 · ${basenameOf(XLSX_PATH)}`,
+      text: 'North looks low for July — was the Denver account left out?',
+      author: PRIYA,
+      createdAt: now - 20 * HOUR,
+      replies: [],
+      resolved: false,
+      resolvedBy: null,
+      resolvedAt: null,
+    },
+    {
+      id: 'seed-xlsx-south',
+      path: XLSX_PATH,
+      cell: 'C15',
+      quote: '167',
+      sourceLabel: `C15 · ${basenameOf(XLSX_PATH)}`,
+      text: 'Can you check this against the invoice total? It seems high.',
+      author: 'user',
+      createdAt: now - 2 * HOUR,
+      replies: [
+        { id: 'seed-xlsx-south-r1', author: 'assistant', text: 'It matches: two invoices of 84 and 83 were booked on Sep 29.', createdAt: now - 1.8 * HOUR },
+      ],
+      resolved: false,
+      resolvedBy: null,
+      resolvedAt: null,
+    },
+    {
+      id: 'seed-xlsx-header',
+      path: XLSX_PATH,
+      cell: 'C1',
+      quote: 'Amount',
+      sourceLabel: `C1 · ${basenameOf(XLSX_PATH)}`,
+      text: 'Say what unit this is in (thousands?).',
+      author: 'user',
+      createdAt: now - 7 * HOUR,
+      replies: [],
+      resolved: true,
+      resolvedBy: 'user',
+      resolvedAt: now - 6 * HOUR,
+    },
   ];
 }
 
@@ -189,7 +312,7 @@ export function addComment(
   path: string,
   quote: string,
   sourceLabel: string,
-  opts?: { startLine?: number; endLine?: number; author?: CommentAuthor },
+  opts?: { startLine?: number; endLine?: number; cell?: string; author?: CommentAuthor },
 ): string {
   const id = nextId('c');
   const comment: DocComment = {
@@ -199,6 +322,7 @@ export function addComment(
     sourceLabel,
     startLine: opts?.startLine,
     endLine: opts?.endLine,
+    cell: opts?.cell,
     text: '',
     author: opts?.author ?? 'user',
     createdAt: Date.now(),
@@ -264,7 +388,7 @@ export interface DocCommentsApi {
   focusId: string | null;
   showResolved: boolean;
   setShowResolved: (value: boolean) => void;
-  addComment: (quote: string, sourceLabel: string, opts?: { startLine?: number; endLine?: number }) => string;
+  addComment: (quote: string, sourceLabel: string, opts?: { startLine?: number; endLine?: number; cell?: string }) => string;
   setCommentText: typeof setCommentText;
   addReply: typeof addReply;
   resolveComment: typeof resolveComment;

@@ -10,7 +10,22 @@
 import type { CommentAuthor } from '../../state/doc-comments-store';
 
 export function authorName(author: CommentAuthor): string {
-  return author === 'assistant' ? 'Claude' : 'You';
+  if (author === 'assistant') return 'Claude';
+  if (author === 'user') return 'You';
+  // A colleague's comment from a Word/Excel file: their own name, as Word
+  // shows it (doc-comments-store.ts CommentAuthor's WHY).
+  return author.slice('person:'.length);
+}
+
+/** Lower-case form for the middle of a sentence ("Resolved by you"). */
+export function authorNameInline(author: CommentAuthor): string {
+  return author === 'user' ? 'you' : authorName(author);
+}
+
+function initialOf(author: CommentAuthor): string {
+  if (author === 'assistant') return '✳';
+  if (author === 'user') return 'Y';
+  return authorName(author).trim().charAt(0).toUpperCase() || '?';
 }
 
 export function Avatar({ author }: { author: CommentAuthor }) {
@@ -19,7 +34,7 @@ export function Avatar({ author }: { author: CommentAuthor }) {
       aria-hidden
       className="inline-flex items-center justify-center shrink-0 w-5 h-5 rounded-full border border-edge-dim bg-inset text-3xs font-medium text-fg-2"
     >
-      {author === 'assistant' ? '✳' : 'Y'}
+      {initialOf(author)}
     </span>
   );
 }

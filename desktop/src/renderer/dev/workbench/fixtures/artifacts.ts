@@ -111,6 +111,33 @@ const BY_PROJECT: Record<string, ArtifactRecord[]> = {
       tags: [],
     },
     {
+      // Doc comments mockup: a Word document carrying two comments a
+      // colleague left in Word (fixtures/docs/make.mjs), plus YouCoded-made
+      // ones — all seeded in state/doc-comments-store.ts.
+      id: 'a-launch-brief',
+      path: 'docs/launch-brief.docx',
+      kind: 'internal',
+      absolutePath: null,
+      lastModified: T,
+      status: 'active',
+      versions: [version('wb-1', 'read', T)],
+      comments: [],
+      tags: [],
+    },
+    {
+      // Doc comments mockup: cell comments on the promo's sales workbook
+      // (same bytes as the site scenario's Q3-sales.xlsx).
+      id: 'a-q3-sales-comments',
+      path: 'Q3-sales.xlsx',
+      kind: 'internal',
+      absolutePath: null,
+      lastModified: T,
+      status: 'active',
+      versions: [version('wb-1', 'read', T)],
+      comments: [],
+      tags: [],
+    },
+    {
       // Over-cap TEXT, under FULL_READ_MAX_BYTES -> partial banner + "Load the
       // whole file". mock-shim's OVERSIZE_FIXTURES supplies the pretend size.
       id: 'a-big-log',

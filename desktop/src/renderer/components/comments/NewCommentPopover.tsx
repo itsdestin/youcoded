@@ -108,8 +108,10 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
       className="fixed w-64 p-3 text-xs"
       style={{ zIndex: POPOVER_Z, left: pos.left, top: pos.top, borderRadius: 'var(--radius-lg)' }}
     >
+      {/* A cell comment names its cell ("Cell C6"): the value alone ("88")
+          would not say which of many identical-looking numbers it is. */}
       <p className="text-fg-muted italic line-clamp-2 mb-1.5 border-l-2 border-edge-dim pl-2">
-        &ldquo;{comment.quote}&rdquo;
+        {comment.cell ? `Cell ${comment.cell}` : <>&ldquo;{comment.quote}&rdquo;</>}
       </p>
       <Textarea
         ref={textRef}

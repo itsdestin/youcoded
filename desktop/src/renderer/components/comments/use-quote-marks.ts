@@ -39,6 +39,16 @@ const MARK_RESOLVED = 'bg-fg-muted/10 text-fg-muted rounded-sm cursor-pointer un
 // cheaper fix here since this is one property, not a whole conflict table).
 export const ACTIVE_CLASSES = ['!bg-accent/30'];
 
+// Spreadsheet cells (Excel's model: a comment belongs to a CELL). The cell
+// itself becomes the "mark" — same data-comment-id, same hover/click/active
+// wiring in ReadingHighlights and CommentsMargin — but it is never wrapped or
+// replaced (React owns the <td>): classes and attributes are added, then
+// removed on the next pass. `.comment-cell-mark` (globals.css) draws Excel's
+// familiar corner triangle in the accent colour.
+const CELL_ATTR = 'data-comment-cell';
+const CELL_OPEN = 'comment-cell-mark';
+const CELL_RESOLVED = 'comment-cell-mark comment-cell-mark--resolved';
+
 /** One point in the document text: a text node and a character offset in it. */
 interface TextPoint { node: Text; offset: number }
 
@@ -129,28 +139,59 @@ export function useQuoteMarks(
       setMarks(new Map());
       return;
     }
-    // Undo the previous pass's marks first so re-highlighting never nests
-    // <mark>s inside <mark>s as comments/content change.
-    root.querySelectorAll(`[${MARK_ATTR}]`).forEach((el) => {
-      el.replaceWith(document.createTextNode(el.textContent ?? ''));
-    });
-    root.normalize();
-    const found = new Map<string, HTMLElement[]>();
-    for (const c of comments) {
-      const hit = findQuote(root, c.quote);
-      if (!hit) continue;
-      const segs = wrapSegments(root, hit.start, hit.end, () => {
-        const mark = document.createElement('mark');
-        mark.setAttribute(MARK_ATTR, '');
-        mark.setAttribute('data-comment-id', c.id);
-        mark.className = c.resolved ? MARK_RESOLVED : MARK_OPEN;
-        return mark;
-      });
-      if (segs.length) found.set(c.id, segs);
-    }
-    setMarks(found);
+    // WHY a MutationObserver: Word and Excel files render ASYNCHRONOUSLY
+    // (mammoth / exceljs parse after mount), and switching sheet tabs swaps
+    // every cell — a pass that only ran when `comments` changed would find
+    // no text and no cells, and never look again. The observer is paused
+    // during our own pass, so our <mark> wrapping never re-triggers it.
+    const observer = new MutationObserver(() => pass());
+    const pass = () => {
+      observer.disconnect();
+      setMarks(markAll(root, comments));
+      observer.takeRecords();
+      observer.observe(root, { childList: true, subtree: true });
+    };
+    pass();
+    return () => observer.disconnect();
   }, [containerRef, comments]);
   return marks;
+}
+
+function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLElement[]> {
+  // Undo the previous pass's marks first so re-highlighting never nests
+  // <mark>s inside <mark>s as comments/content change.
+  root.querySelectorAll(`[${MARK_ATTR}]`).forEach((el) => {
+    el.replaceWith(document.createTextNode(el.textContent ?? ''));
+  });
+  root.querySelectorAll<HTMLElement>(`[${CELL_ATTR}]`).forEach((el) => {
+    el.removeAttribute(CELL_ATTR);
+    el.removeAttribute('data-comment-id');
+    el.classList.remove(...CELL_RESOLVED.split(' '), ...ACTIVE_CLASSES);
+  });
+  root.normalize();
+  const found = new Map<string, HTMLElement[]>();
+  for (const c of comments) {
+    if (c.cell) {
+      const td = root.querySelector<HTMLElement>(`[data-cell="${c.cell}"]`);
+      if (!td) continue;
+      td.setAttribute(CELL_ATTR, '');
+      td.setAttribute('data-comment-id', c.id);
+      td.classList.add(...(c.resolved ? CELL_RESOLVED : CELL_OPEN).split(' '));
+      found.set(c.id, [td]);
+      continue;
+    }
+    const hit = findQuote(root, c.quote);
+    if (!hit) continue;
+    const segs = wrapSegments(root, hit.start, hit.end, () => {
+      const mark = document.createElement('mark');
+      mark.setAttribute(MARK_ATTR, '');
+      mark.setAttribute('data-comment-id', c.id);
+      mark.className = c.resolved ? MARK_RESOLVED : MARK_OPEN;
+      return mark;
+    });
+    if (segs.length) found.set(c.id, segs);
+  }
+  return found;
 }
 
 /** One rect spanning every segment — anchors hover cards below the WHOLE

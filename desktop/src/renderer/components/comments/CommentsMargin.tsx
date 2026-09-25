@@ -58,7 +58,11 @@ function useAnchorTops(
       const colTop = col.getBoundingClientRect().top;
       const next = new Map<string, number>();
       for (const [id, segs] of marks) {
-        next.set(id, Math.max(0, segs[0].getBoundingClientRect().top - colTop));
+        // Not clamped at 0: a spreadsheet's grid scrolls INSIDE the content
+        // (CommentableDocument `fill`), so a commented cell scrolled above
+        // the view has a negative top — the rail's overflow-hidden clips its
+        // marker instead of piling it at the top of the rail.
+        next.set(id, segs[0].getBoundingClientRect().top - colTop);
       }
       setTops(next);
     };
@@ -77,7 +81,13 @@ function useAnchorTops(
     const target = containerRef.current ?? col;
     const ro = new ResizeObserver(measure);
     ro.observe(target);
-    return () => ro.disconnect();
+    // A scroller INSIDE the content (the spreadsheet grid) moves cells without
+    // resizing anything; scroll doesn't bubble, so listen in the capture phase.
+    target.addEventListener('scroll', measure, { capture: true, passive: true });
+    return () => {
+      ro.disconnect();
+      target.removeEventListener('scroll', measure, { capture: true });
+    };
   }, [marks, marginRef, containerRef]);
   return tops;
 }
@@ -85,9 +95,9 @@ function useAnchorTops(
 function stackedTops(order: DocComment[], rawTop: Map<string, number>, narrow: boolean): Map<string, number> {
   const sorted = order.slice().sort((a, b) => (rawTop.get(a.id) ?? 0) - (rawTop.get(b.id) ?? 0));
   const out = new Map<string, number>();
-  let cursor = 0;
+  let cursor = -Infinity; // negative tops allowed — see useAnchorTops
   for (const c of sorted) {
-    const top = Math.max(rawTop.get(c.id) ?? cursor, cursor);
+    const top = Math.max(rawTop.get(c.id) ?? Math.max(cursor, 0), cursor);
     out.set(c.id, top);
     cursor = top + estimateHeight(c, narrow) + GAP_PX;
   }
@@ -189,13 +199,13 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
     const openComment = visible.find((c) => c.id === openId) ?? null;
     return (
       <>
-        <div ref={marginRef} className="relative w-9 shrink-0 border-l border-edge bg-panel" style={{ minHeight: '100%' }}>
+        <div ref={marginRef} className="relative w-9 shrink-0 overflow-hidden border-l border-edge bg-panel" style={{ minHeight: '100%' }}>
           {visible.map((c) => (
             <button
               key={c.id}
               type="button"
               onClick={() => setOpenId(c.id)}
-              aria-label={c.resolved ? `Resolved comment: ${c.quote}` : `Comment: ${c.quote}`}
+              aria-label={`${c.resolved ? 'Resolved comment' : 'Comment'}: ${c.cell ?? c.quote}`}
               className={`absolute left-1.5 coarse-hit w-6 h-6 rounded-full border flex items-center justify-center text-2xs
                 ${c.resolved ? 'bg-inset border-edge-dim text-fg-muted' : 'bg-panel border-edge text-fg-2'}`}
               style={{ top: tops.get(c.id) ?? 0 }}
@@ -281,7 +291,10 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
           <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-edge shrink-0">
             <span className="font-semibold text-sm">Comments</span>
             <div className="flex items-center gap-2">
-              <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Show Resolved</label>
+              {/* text-2xs, not Show Complete's text-3xs: G-5's 11px floor —
+                  the label carries information; the rest of the recipe
+                  (weight, case, tracking, muted) stays identical. */}
+              <label className="text-2xs font-medium text-fg-muted tracking-wider uppercase">Show Resolved</label>
               <Toggle checked={showResolved} onChange={setShowResolved} aria-label="Show Resolved" />
             </div>
           </div>

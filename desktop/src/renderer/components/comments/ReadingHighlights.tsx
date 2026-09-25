@@ -47,9 +47,24 @@ interface Props {
   containerRef: React.RefObject<HTMLElement | null>;
   path: string;
   onOpenComments: (commentId?: string) => void;
+  /** Pop the right-click menu when a text selection is released. Off for
+   *  spreadsheets, whose cells are commented by right-clicking the cell. */
+  selectionMenu?: boolean;
 }
 
-export function ReadingHighlights({ containerRef, path, onOpenComments }: Props) {
+// Touch (Destin, questions deck Q-3: phone support now, "tap opens the
+// list"): a phone has no hover, so the hover card never opens from a touch —
+// a tap goes straight to the comment, like a click. Tracked per pointerdown
+// because one device can have both (a touchscreen laptop).
+let lastPointerWasTouch = false;
+if (typeof document !== 'undefined') {
+  document.addEventListener('pointerdown', (e) => { lastPointerWasTouch = e.pointerType === 'touch'; }, true);
+}
+// After a long-press selection settles on a touchscreen there is no mouseup
+// to act on — the menu opens once the selection has stopped changing.
+const TOUCH_SELECTION_SETTLE_MS = 500;
+
+export function ReadingHighlights({ containerRef, path, onOpenComments, selectionMenu: selectionMenuOn = true }: Props) {
   // WHY no `addComment` here: a new comment now always comes from
   // buildContextMenu's "Add comment" entry (selection-release menu OR the
   // real right-click menu), which writes straight to the store itself — see
@@ -84,6 +99,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
     // every one of them must open the same card (see use-quote-marks.ts).
     for (const [id, segs] of marks) for (const mark of segs) {
       const enter = () => {
+        if (lastPointerWasTouch) return; // no hover card on touch (see above)
         clearCloseTimer();
         clearOpenTimer();
         openTimerRef.current = window.setTimeout(() => {
@@ -151,7 +167,25 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
 
   useEffect(() => {
     const root = containerRef.current;
-    if (!root) return;
+    if (!root || !selectionMenuOn) return;
+    const openForSelection = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !root.contains(sel.anchorNode)) return;
+      if (sel.toString().trim().length < MIN_SELECTION_CHARS) return; // trivially small
+      const entries = buildContextMenu(root);
+      if (!entries) return;
+      const rect = lastRectOf(sel.getRangeAt(0));
+      setSelectionMenu({ x: rect.right, y: rect.bottom + 4, entries });
+    };
+    // Touch: wait for the long-press selection (and any handle drags) to
+    // settle, then open the same menu.
+    let settleTimer: number | null = null;
+    const onSelectionChange = () => {
+      if (!lastPointerWasTouch) return;
+      if (settleTimer) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(openForSelection, TOUCH_SELECTION_SETTLE_MS);
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
     // Only act on a mouseup that STARTED inside this viewer — never open
     // over a drag that began elsewhere and happened to end here.
     let downInside = false;
@@ -163,29 +197,25 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
       // engine has finished collapsing/extending the selection yet (a
       // double-click's word-select in particular) — reading one tick later
       // is what every native selection UI does before acting on it.
-      queueMicrotask(() => {
-        const sel = window.getSelection();
-        if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !root.contains(sel.anchorNode)) return;
-        if (sel.toString().trim().length < MIN_SELECTION_CHARS) return; // trivially small
-        const entries = buildContextMenu(root);
-        if (!entries) return;
-        const rect = lastRectOf(sel.getRangeAt(0));
-        setSelectionMenu({ x: rect.right, y: rect.bottom + 4, entries });
-      });
+      queueMicrotask(openForSelection);
     };
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('mouseup', onMouseUp);
     return () => {
+      if (settleTimer) window.clearTimeout(settleTimer);
+      document.removeEventListener('selectionchange', onSelectionChange);
       document.removeEventListener('mousedown', onMouseDown);
       document.removeEventListener('mouseup', onMouseUp);
     };
-  }, [containerRef]);
+  }, [containerRef, selectionMenuOn]);
 
   // Extending/collapsing the selection (shift+arrow, or a plain click that
   // clears it) answers a selection that no longer exists — close it, same
   // as ContextMenu's own Esc/click-away/scroll dismissal.
   useEffect(() => {
     if (!selectionMenu) return;
+    // On touch the selection keeps changing while handles are dragged; the
+    // settle timer above reopens the menu for the final selection.
     const onSelChange = () => setSelectionMenu(null);
     document.addEventListener('selectionchange', onSelChange);
     return () => document.removeEventListener('selectionchange', onSelChange);
@@ -195,11 +225,17 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
   // when a fresh draft (focusId) appears, whichever menu made it.
   useEffect(() => {
     if (!focusId) return;
+    // A cell comment (spreadsheets) anchors to its cell — there is no text
+    // selection behind it, the cell was right-clicked.
+    const cell = comments.find((c) => c.id === focusId)?.cell;
+    const cellEl = cell ? containerRef.current?.querySelector(`[data-cell="${cell}"]`) : null;
+    if (cellEl) { setDraftAnchor(cellEl.getBoundingClientRect()); return; }
     const sel = window.getSelection();
     const rect = sel && sel.rangeCount > 0 && !sel.isCollapsed
       ? lastRectOf(sel.getRangeAt(0))
       : containerRef.current?.getBoundingClientRect() ?? null;
     setDraftAnchor(rect);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read once per new draft (focusId); comments is looked up, not a trigger
   }, [focusId, containerRef]);
 
   return (

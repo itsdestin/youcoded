@@ -331,13 +331,34 @@ function describeArtifactSelection(sel: string, container: HTMLElement): string 
   return `"${sel}"`;
 }
 
-function artifactMenu(container: HTMLElement): MenuEntry[] {
+/** Spreadsheet cell under a right-click with no text selected: "Ask about
+ *  this" / "Add comment" name the CELL (Excel's comment model — Destin's Excel
+ *  follow-up, 2026-09-24), with its shown value as the quote. */
+function cellEntries(td: HTMLElement, path: string): MenuEntry[] {
+  const cell = td.getAttribute('data-cell') || '';
+  const value = (td.textContent ?? '').trim();
+  const label = `${cell} · ${baseName(path)}`;
+  return [
+    {
+      type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true,
+      run: () => addReference({ id: genRefId(), kind: 'doc', path, fileName: baseName(path), label }),
+    },
+    {
+      type: 'item', id: 'comment', label: 'Add comment', icon: 'comment',
+      run: () => { addDocComment(path, value, label, { cell }); },
+    },
+  ];
+}
+
+function artifactMenu(container: HTMLElement, target?: HTMLElement): MenuEntry[] {
   // data-doc-path, not data-artifact-path: the latter is reserved by the deferred
   // image sub-menu roadmap item for an ABSOLUTE path on <img> elements. This one
   // is the project-relative artifact path, which is what reads well in a prompt.
   const path = container.getAttribute('data-doc-path') || '';
   const sel = selectionText().trim();
   const entries: MenuEntry[] = [];
+  const cell = !sel && path ? target?.closest<HTMLElement>('[data-cell]') : null;
+  if (cell && container.contains(cell)) entries.push(...cellEntries(cell, path));
   if (sel && path) {
     const ref = describeArtifactSelection(sel, container);
     const sourceLabel = sourceLabelFor(ref, path);
@@ -412,7 +433,7 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   // Checked after the editable surfaces above, which are never chrome.
   const onChrome = isChrome(target);
   const artifactViewer = target.closest('[data-artifact-viewer]');
-  if (artifactViewer instanceof HTMLElement) return onChrome ? null : finalize(artifactMenu(artifactViewer));
+  if (artifactViewer instanceof HTMLElement) return onChrome ? null : finalize(artifactMenu(artifactViewer, target));
 
   // Everything else is scoped to chat content — never hijack the terminal, the
   // settings panels, or other chrome. A previewed past conversation

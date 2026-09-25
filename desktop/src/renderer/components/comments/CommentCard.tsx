@@ -8,7 +8,7 @@ import { InputGroup } from '../ui/InputGroup';
 import { CompleteToggle } from '../SessionCardDetails';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { DocComment } from '../../state/doc-comments-store';
-import { Avatar, authorName } from './Avatar';
+import { Avatar, authorName, authorNameInline } from './Avatar';
 
 interface Props {
   comment: DocComment;
@@ -51,10 +51,15 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
   // comment"): in Comments mode each card already sits beside its highlight
   // and lights it up on hover, so repeating the quoted words was noise. The
   // resolve toggle moves onto the author row, top right.
-  const header = (c: { author: DocComment['author']; createdAt: number }) => (
+  // `cell`: a spreadsheet comment names its cell ("B4") after the time, muted
+  // — the pane lists cells in sheet order, and with no quoted text on the
+  // card the reference is the only way to tell which cell a card is about
+  // without clicking it. Only the thread's own header gets it, not replies.
+  const header = (c: { author: DocComment['author']; createdAt: number }, cell?: string) => (
     <div className="flex items-baseline gap-1.5 min-w-0">
-      <span className="font-medium text-fg">{authorName(c.author)}</span>
-      <span className="text-2xs text-fg-muted">{formatRelativeTime(c.createdAt)}</span>
+      <span className="font-medium text-fg truncate">{authorName(c.author)}</span>
+      <span className="text-2xs text-fg-muted shrink-0">{formatRelativeTime(c.createdAt)}</span>
+      {cell && <span className="text-2xs text-fg-muted shrink-0">· {cell}</span>}
     </div>
   );
 
@@ -70,12 +75,12 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
         <div className="flex items-start gap-2">
           <Avatar author={comment.author} />
           <div className="flex-1 min-w-0">
-            {header(comment)}
+            {header(comment, comment.cell)}
             <p className="mt-0.5 text-fg-muted truncate">{comment.text}</p>
           </div>
           {resolveToggle}
         </div>
-        <p className="mt-1.5 text-fg-muted">Resolved by {comment.resolvedBy === 'assistant' ? 'Claude' : 'you'}</p>
+        <p className="mt-1.5 text-fg-muted">Resolved by {authorNameInline(comment.resolvedBy ?? 'user')}</p>
       </div>
     );
   }
@@ -91,7 +96,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
       <div className="flex items-start gap-2">
         <Avatar author={comment.author} />
         <div className="flex-1 min-w-0">
-          {header(comment)}
+          {header(comment, comment.cell)}
           {isDraft ? (
             <Textarea
               ref={textRef}

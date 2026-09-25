@@ -24,6 +24,7 @@ import {
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { resolveFixture, CS_ERR_READ } from './fixtures/chatsearch';
 import { SHEET_BEFORE, SHEET_AFTER } from './fixtures/sheets';
+import { DOC_LAUNCH_BRIEF } from './fixtures/docs';
 import type { MockState, MockSessionMeta } from './scenarios';
 import { stressRowCount } from './scenarios';
 import { specialistRoster, delegatedModels as seedDelegatedModels } from './fixtures/specialists';
@@ -2717,6 +2718,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         const after = (globalThis as any).__workbenchSheet === 'after';
         return { ok: true, base64: after ? SHEET_AFTER : SHEET_BEFORE,
                  mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+      }
+      // Doc comments mockup: a real Word document with real Word comments
+      // (fixtures/docs/make.mjs), for DocxView's highlights and comment pane.
+      if (ext === 'docx') {
+        return { ok: true, base64: DOC_LAUNCH_BRIEF,
+                 mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
       }
       if (ext === 'pdf') {
         const pdf = makeSamplePdfBase64();
