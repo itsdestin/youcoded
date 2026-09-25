@@ -7,6 +7,7 @@
 // markers that open a popover instead (narrow-viewport.md: "collapse into a
 // menu/popover, never just hide a control").
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CommentCard } from './CommentCard';
 import { CheckIcon } from '../Icons';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
@@ -214,7 +215,12 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
             </button>
           ))}
         </div>
-        {openComment && (
+        {/* Portaled to <body> (phone check, 2026-09-24): rendered in place, the
+            sheet lived inside the file drawer's stacking context, so the
+            composer, quick chips and status bar painted OVER it and hid the
+            reply box. Same createPortal + Scrim + OverlayPanel recipe Dialog.tsx
+            uses. */}
+        {openComment && createPortal(
           <>
             <Scrim layer={2} onClick={() => setOpenId(null)} />
             <OverlayPanel layer={2} className="fixed inset-x-3 bottom-3 max-h-[70vh] overflow-auto p-2 rounded-lg">
@@ -231,7 +237,8 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
                 onDelete={() => { removeComment(openComment.id); setOpenId(null); }}
               />
             </OverlayPanel>
-          </>
+          </>,
+          document.body,
         )}
       </>
     );

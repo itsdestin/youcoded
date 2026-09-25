@@ -183,7 +183,12 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
     const onSelectionChange = () => {
       if (!lastPointerWasTouch) return;
       if (settleTimer) window.clearTimeout(settleTimer);
-      settleTimer = window.setTimeout(openForSelection, TOUCH_SELECTION_SETTLE_MS);
+      settleTimer = window.setTimeout(() => {
+        // A long-press can ALSO fire `contextmenu`, which ContextMenuHost
+        // answers with this same menu — never stack a second copy on it.
+        if (document.querySelector('[role="menu"]')) return;
+        openForSelection();
+      }, TOUCH_SELECTION_SETTLE_MS);
     };
     document.addEventListener('selectionchange', onSelectionChange);
     // Only act on a mouseup that STARTED inside this viewer — never open
