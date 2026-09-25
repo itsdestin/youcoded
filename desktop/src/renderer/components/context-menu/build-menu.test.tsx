@@ -155,7 +155,7 @@ describe('artifact viewer context menu', () => {
   it('falls back to a paragraph mark + quote for rendered markdown (no reliable source mapping)', () => {
     const { container, pre } = mountViewer({ path: 'README.md', source: 'rendered', body: FILE });
     selectWithin(pre, 6, 11);
-    expect(referenceFor(container)).toMatchObject({ kind: 'doc', path: 'README.md', label: '¶ "bravo"', lineRange: undefined });
+    expect(referenceFor(container)).toMatchObject({ kind: 'doc', path: 'README.md', label: '“bravo”', lineRange: undefined });
   });
 
   it('"Add comment" writes straight into the shared doc-comments store, anchored to the same selection', async () => {

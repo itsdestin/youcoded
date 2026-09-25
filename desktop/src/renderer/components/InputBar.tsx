@@ -8,8 +8,7 @@ import { AttachmentChip } from './AttachmentChip';
 // markers, with a real pill drawn over each by the mirror layer below — see
 // compose-ref.ts's own header comment for the full WHY. Ported from the
 // "inline & conversational" mockup (session/comments-mock-c).
-import { encodeRefMarker, splitComposeRefs, markerEndingAt, markerStartingAt, dispatchJumpToRef, type ComposeRef } from './context-menu/compose-ref';
-import { TokenPill } from './comments/TokenPill';
+import { makeDraftToken, splitDraftTokens, draftTokenRanges, expandDraftTokens, type ComposeRef } from './context-menu/compose-ref';
 import { AttachIcon, CompassIcon } from './Icons';
 import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { StatusStrip } from './ui/StatusStrip';
@@ -574,7 +573,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // the END of the current draft — never prepended — so typing before/after
   // a right-click builds the sentence in the order the user actually did it.
   const insertRefs = useCallback((refs: ComposeRef[]) => {
-    const markers = refs.map(encodeRefMarker).join(' ');
+    // Display-sized tokens, not full markers — see compose-ref.ts "Draft tokens".
+    const markers = refs.map(makeDraftToken).join(' ');
     setText((prev) => {
       const sep = prev.length > 0 && !/\s$/.test(prev) ? ' ' : '';
       return `${prev}${sep}${markers} `;
@@ -585,6 +585,34 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       el.focus();
       el.setSelectionRange(el.value.length, el.value.length);
     });
+  }, []);
+
+  // A chip is one object: a click (or any caret move) that lands inside one
+  // snaps to its nearer edge, and a selection that cuts through one grows to
+  // take it whole — so typing can never split a chip into stray invisible
+  // characters. `selectionchange` rather than React's onSelect: the latter
+  // missed programmatic and some pointer-driven caret moves. Cheap when idle:
+  // it returns at once unless this textarea is focused AND holds a chip.
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const ta = inputRef.current;
+      if (!ta || document.activeElement !== ta || !ta.value.includes('⦃')) return;
+      const s0 = ta.selectionStart ?? 0;
+      const e0 = ta.selectionEnd ?? 0;
+      let s1 = s0;
+      let e1 = e0;
+      for (const r of draftTokenRanges(ta.value)) {
+        if (s0 === e0) {
+          if (s0 > r.start && s0 < r.end) s1 = e1 = (s0 - r.start < r.end - s0 ? r.start : r.end);
+        } else {
+          if (s1 > r.start && s1 < r.end) s1 = r.start;
+          if (e1 > r.start && e1 < r.end) e1 = r.end;
+        }
+      }
+      if (s1 !== s0 || e1 !== e0) ta.setSelectionRange(s1, e1);
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
   }, []);
 
   useEffect(() => {
@@ -605,7 +633,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     const listener = (e: Event) => {
       const detail = (e as CustomEvent<{ lead?: string; refs?: ComposeRef[] }>).detail;
       if (!detail?.refs?.length) return;
-      const markers = detail.refs.map(encodeRefMarker).join(' ');
+      const markers = detail.refs.map(makeDraftToken).join(' ');
       setText(`${detail.lead ?? ''} ${markers}`.trim());
       // A React state update isn't visible to the DOM textarea until the next
       // paint — send() deliberately reads inputRef.current.value (see its own
@@ -620,18 +648,6 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     setAttachments((prev) => prev.filter((a) => a.path !== path));
   }, []);
 
-  /** Removes one ref token's marker whole (the mirror pill's × button) —
-   *  finds the exact encoded marker by its raw text rather than an index, so
-   *  this stays correct even if the draft changed between render and click. */
-  const removeRefMarker = useCallback((raw: string) => {
-    setText((prev) => {
-      const idx = prev.indexOf(raw);
-      if (idx === -1) return prev;
-      let end = idx + raw.length;
-      if (prev[end] === ' ') end += 1; // swallow the space inserted after it
-      return prev.slice(0, idx) + prev.slice(end);
-    });
-  }, []);
 
   // Returns true when the message was consumed (input can clear), false when
   // the send was refused and the draft should stay in the input bar.
@@ -732,7 +748,11 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // the bubble kept newlines the send stripped, a multiline message could
       // never be confirmed — `pending` stayed set forever and
       // useSubmitConfirmation fired a stray recovery \r. See outgoing-message.ts.
-      const outgoing = buildOutgoingMessage(effectiveMessage, files.map((f) => f.path));
+      // Draft tokens become full reference markers only now, at send — the
+      // composer holds display-sized tokens so its caret lines up (see
+      // compose-ref.ts "Draft tokens"). A refused send restores
+      // effectiveMessage, which still holds the display tokens.
+      const outgoing = buildOutgoingMessage(expandDraftTokens(effectiveMessage), files.map((f) => f.path));
       if (!outgoing) return true; // nothing to send — treat as consumed
       if (disabled) return false;
 
@@ -1094,16 +1114,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
                     in their place; plain-text runs keep the existing keyword
                     treatment. Pills opt back into pointer events individually
                     (their × and jump-click) despite this layer's pointer-events-none. */}
-                {splitComposeRefs(text).map((seg, i) => (
-                  seg.type === 'ref'
-                    ? (
-                      <TokenPill
-                        key={`ref-${seg.ref.id}-${i}`}
-                        ref_={seg.ref}
-                        onRemove={() => removeRefMarker(seg.raw)}
-                        onJump={dispatchJumpToRef}
-                      />
-                    )
+                {splitDraftTokens(text).map((seg, i) => (
+                  seg.type === 'token'
+                    ? <DraftChip key={`tok-${i}`} tokenKey={seg.key} label={seg.label} />
                     : <FlowingKeywordsText key={`t-${i}`} text={seg.value} />
                 ))}
                 {voiceTail && <span className="text-fg-muted">{voiceTail}</span>}
@@ -1159,14 +1172,29 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               // marker in one keystroke, not nibble it into a corrupt
               // fragment one invisible character at a time.
               const ta = e.currentTarget;
-              if ((e.key === 'Backspace' || e.key === 'Delete') && ta.selectionStart === ta.selectionEnd) {
+              if (ta.selectionStart === ta.selectionEnd) {
                 const pos = ta.selectionStart ?? 0;
-                const hit = e.key === 'Backspace' ? markerEndingAt(text, pos) : markerStartingAt(text, pos);
-                if (hit) {
-                  e.preventDefault();
-                  setText(text.slice(0, hit.start) + text.slice(hit.end));
-                  requestAnimationFrame(() => ta.setSelectionRange(hit.start, hit.start));
-                  return;
+                const ranges = draftTokenRanges(text);
+                if (e.key === 'Backspace' || e.key === 'Delete') {
+                  const hit = ranges.find((r) => (e.key === 'Backspace' ? r.end === pos : r.start === pos));
+                  if (hit) {
+                    e.preventDefault();
+                    setText(text.slice(0, hit.start) + text.slice(hit.end));
+                    requestAnimationFrame(() => ta.setSelectionRange(hit.start, hit.start));
+                    return;
+                  }
+                }
+                // Arrow keys step over a chip in one press — it is one
+                // object, and stepping into it would only be snapped back out
+                // by onSelect, leaving the caret stuck at its edge.
+                if (!e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+                  const hit = ranges.find((r) => (e.key === 'ArrowLeft' ? r.end === pos : r.start === pos));
+                  if (hit) {
+                    e.preventDefault();
+                    const to = e.key === 'ArrowLeft' ? hit.start : hit.end;
+                    ta.setSelectionRange(to, to);
+                    return;
+                  }
                 }
               }
               // Hold Space anywhere in the box = walkie-talkie (see spaceHoldTimer).
@@ -1345,3 +1373,30 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
 });
 
 export default InputBar;
+
+/** A reference chip in the composer's mirror layer. It draws EXACTLY the
+ *  token's characters — brackets and key transparent, the label on a chip
+ *  fill — so it takes the same width as the (transparent) textarea text
+ *  above it and the caret lines up (compose-ref.ts "Draft tokens"). Colour
+ *  and vertical padding only: horizontal padding or a border would change
+ *  the width and bring the drift back, so the edge is an inset box-shadow and
+ *  the invisible brackets act as the side padding. Styled after TagChip (the
+ *  app's chip: a tinted fill, a stronger tinted edge, the text in the theme's
+ *  own colour), in the accent. */
+function DraftChip({ tokenKey, label }: { tokenKey: string; label: string }) {
+  return (
+    <span
+      className="rounded-sm py-0.5 text-fg"
+      style={{
+        backgroundColor: 'color-mix(in srgb, var(--accent) 22%, transparent)',
+        boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent)',
+        boxDecorationBreak: 'clone',
+        WebkitBoxDecorationBreak: 'clone',
+      }}
+    >
+      <span className="text-transparent">{'⦃'}{tokenKey}</span>
+      {label}
+      <span className="text-transparent">{'⦄'}</span>
+    </span>
+  );
+}

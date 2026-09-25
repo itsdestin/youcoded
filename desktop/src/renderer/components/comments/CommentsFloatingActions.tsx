@@ -29,7 +29,7 @@ function useSendOpenComments(path: string) {
       path,
       fileName: basenameOf(path),
       commentId: c.id,
-      label: `¶ "${truncateQuote(c.text.trim() || c.quote)}"`,
+      label: `“${truncateQuote(c.text.trim() || c.quote)}”`,
     }));
     const lead = `Please go through ${open.length === 1 ? 'this comment' : `these ${open.length} comments`} on ${basenameOf(path)}:`;
     // WHY a window event, not a prop: these buttons live in the file viewer,

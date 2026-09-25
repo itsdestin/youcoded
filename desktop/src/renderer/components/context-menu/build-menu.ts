@@ -144,7 +144,7 @@ function buildDocRef(quote: string, ref: string, path: string): ComposeRef {
     kind: 'doc',
     path,
     fileName,
-    label: line ? `${ref} · ${fileName}` : `¶ "${truncateQuote(quote)}"`,
+    label: line ? `${ref} · ${fileName}` : `“${truncateQuote(quote)}”`,
     lineRange: line ? [line.startLine, line.endLine] : undefined,
   };
 }

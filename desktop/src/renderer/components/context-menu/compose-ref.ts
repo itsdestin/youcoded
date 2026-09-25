@@ -19,7 +19,7 @@
 // reference reads identically before and after sending).
 export interface ComposeRef {
   id: string;
-  /** Pill text, e.g. '¶ "the sync step…"' or 'line 2 · notes.txt'. */
+  /** Pill text, e.g. '“the sync step…”' or 'line 2 · notes.txt'. */
   label: string;
   kind: 'doc' | 'chat';
   /** doc kind only — project-relative path, for jump-to-span; never shown. */
@@ -49,7 +49,7 @@ export function genRefId(): string {
 /** Encodes a ComposeRef as an inert plain-text marker. Kept short-ish (no full
  *  quote, no full path) — a longer marker widens the gap between the
  *  invisible textarea text and the pill the mirror draws over it. */
-export function encodeRefMarker(ref: ComposeRef): string {
+function encodeRefMarker(ref: ComposeRef): string {
   return `${OPEN}${encodeURIComponent(JSON.stringify(ref))}${CLOSE}`;
 }
 
@@ -81,27 +81,6 @@ export function splitComposeRefs(text: string): ComposeSegment[] {
   return parts;
 }
 
-/** True when `text[pos]` sits exactly at the end of one complete marker — used
- *  by InputBar's Backspace handler so deleting a pill removes it whole rather
- *  than nibbling one invisible character at a time. */
-export function markerEndingAt(text: string, pos: number): { start: number; end: number } | null {
-  for (const m of text.matchAll(MARKER_RE)) {
-    const end = (m.index ?? 0) + m[0].length;
-    if (end === pos) return { start: m.index ?? 0, end };
-  }
-  return null;
-}
-
-/** True when `text[pos]` sits exactly at the start of one complete marker —
- *  the forward-Delete mirror of markerEndingAt. */
-export function markerStartingAt(text: string, pos: number): { start: number; end: number } | null {
-  for (const m of text.matchAll(MARKER_RE)) {
-    const start = m.index ?? 0;
-    if (start === pos) return { start, end: start + m[0].length };
-  }
-  return null;
-}
-
 /** Click-a-pill "jump to the span" — a no-op unless the SAME document happens
  *  to be open right now; there is no cross-file navigation here, only a
  *  scroll+flash of an already-open match (DocHighlights/CommentsMargin listen
@@ -117,4 +96,73 @@ export function dispatchJumpToRef(ref: ComposeRef): void {
 export function truncateQuote(quote: string, max = 28): string {
   const oneLine = quote.replace(/\s+/g, ' ').trim();
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+}
+
+// ── Draft tokens: what the COMPOSER holds while you type ─────────────────
+//
+// WHY a second, display-sized form (Destin, 2026-09-24: "if I ask about text
+// my cursor ends up in the completely wrong position. I can't really tell
+// where I'm typing in relation to the chip"): the textarea used to hold the
+// full encoded marker (the URL-encoded JSON above, often 150+ invisible
+// characters) while the mirror layer drew a short pill in its place — so the
+// textarea's caret was measured against text the user could not see, and
+// drifted far to the right of the pill. A draft token holds EXACTLY the
+// characters the mirror draws: "⦃" + a zero-width key + the label + "⦄". The
+// mirror renders the same string (brackets and key transparent, the label on
+// a chip fill), so both layers lay out identically and the caret always sits
+// where it looks like it does. The full marker is only produced on send
+// (expandDraftTokens), which is what the sent bubble and transcript keep.
+//
+// The key is the ref's slot in a module-level registry, written in binary
+// with two zero-width characters and ended by a word joiner. Module-level so a
+// draft that survives a session switch or remount still resolves.
+const ZW0 = '​';
+const ZW1 = '‌';
+const ZW_END = '⁠';
+const draftRegistry = new Map<string, ComposeRef>();
+let draftCounter = 0;
+
+/** Registers `ref` and returns the display token to put in the composer. */
+export function makeDraftToken(ref: ComposeRef): string {
+  draftCounter += 1;
+  const key = draftCounter.toString(2).replace(/0/g, ZW0).replace(/1/g, ZW1) + ZW_END;
+  draftRegistry.set(key, ref);
+  // Non-breaking spaces: a chip never wraps across two lines, in either layer.
+  return `${OPEN}${key}${ref.label.replace(/ /g, ' ')}${CLOSE}`;
+}
+
+const DRAFT_RE = /⦃([​‌]+⁠)([^⦃⦄]*)⦄/g;
+
+export type DraftSegment =
+  | { type: 'text'; value: string }
+  | { type: 'token'; key: string; label: string; ref: ComposeRef | null };
+
+/** Splits composer text into plain runs and draft tokens, for the mirror. */
+export function splitDraftTokens(text: string): DraftSegment[] {
+  const out: DraftSegment[] = [];
+  let last = 0;
+  for (const m of text.matchAll(DRAFT_RE)) {
+    const start = m.index ?? 0;
+    if (start > last) out.push({ type: 'text', value: text.slice(last, start) });
+    out.push({ type: 'token', key: m[1], label: m[2], ref: draftRegistry.get(m[1]) ?? null });
+    last = start + m[0].length;
+  }
+  if (last < text.length) out.push({ type: 'text', value: text.slice(last) });
+  return out;
+}
+
+/** Every token's [start, end) range in `text` — for keeping the caret out of
+ *  tokens and deleting them whole. */
+export function draftTokenRanges(text: string): Array<{ start: number; end: number }> {
+  return [...text.matchAll(DRAFT_RE)].map((m) => ({ start: m.index ?? 0, end: (m.index ?? 0) + m[0].length }));
+}
+
+/** Turns draft tokens into the full markers the sent bubble decodes. A token
+ *  whose ref is unknown (e.g. pasted from another app run) degrades to its
+ *  label as plain text rather than sending invisible characters. */
+export function expandDraftTokens(text: string): string {
+  return text.replace(DRAFT_RE, (_m, key: string, label: string) => {
+    const ref = draftRegistry.get(key);
+    return ref ? encodeRefMarker(ref) : label.replace(/ /g, ' ');
+  });
 }
