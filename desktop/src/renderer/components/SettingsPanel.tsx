@@ -27,6 +27,7 @@ import PerformanceButton from './PerformanceButton';
 import AccountSection from './AccountSection';
 import { DonateConfirm } from './DonateConfirm';
 import AssistantSettingsRow from './assistant-settings/AssistantSettings';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import type { AssistantDefaults } from './assistant-settings/pages';
 import { formatVersionLine } from '../../shared/version-line';
 // The Linux/KDE buddy helper's three-state answer. Typed centrally so the popup
@@ -244,7 +245,7 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
           header + scrolling body (scrollBody defaults true) fixes the reachability;
           "panel" (420px) stops the wrapping. The grid keeps the key chips in their
           own column so a long label can never push one out of line. */}
-      <Dialog open onClose={onClose} size="panel" title="Keyboard Shortcuts">
+      <Dialog screen="settings/shortcuts" open onClose={onClose} size="panel" title="Keyboard Shortcuts">
         <div className="grid grid-cols-[1fr_auto] gap-x-4 items-center">
           {SHORTCUTS.map(({ keys, description }) => (
             <React.Fragment key={keys}>
@@ -349,6 +350,7 @@ export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand
               style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             />
           </div>
+          <ScreenMark name="settings" />
 
           <div ref={outerScrollRef} className="scroll-fade flex-1 min-h-0">
             {isAndroid() ? (
@@ -601,6 +603,7 @@ const SOUND_CATEGORY_META: Record<SoundCategory, { label: string; description: s
 /** Sound settings — compact row that opens a popout modal (matches ThemeButton pattern) */
 function SoundButton() {
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/sound', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   const popupRef = useRef<HTMLDivElement>(null);
   // Which notification the shared sound list is currently editing.
   const [soundCategory, setSoundCategory] = useState<SoundCategory>('attention');
@@ -668,7 +671,7 @@ function SoundButton() {
         onClick={() => setOpen(true)}
       />
 
-      <Dialog
+      <Dialog screen="settings/sound"
         open={open}
         onClose={() => setOpen(false)}
         title="Sound & Notifications"
@@ -747,6 +750,7 @@ function SoundButton() {
 function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTheme }: { onSendInput?: (text: string) => void; onRunCommand?: (command: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void }) {
   const { activeTheme, allThemes } = useTheme();
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/appearance', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   // The first-run tour moving on closes this dialog (guide-events.ts).
   useGuideReset(useCallback(() => setOpen(false), []));
   // ThemeScreen fills this Dialog but does not own it, so it cannot reach the
@@ -790,7 +794,7 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
       </div>
 
       {/* D1: one header for all three of ThemeScreen's views. */}
-      <Dialog
+      <Dialog screen="settings/appearance"
         open={open}
         onClose={() => setOpen(false)}
         title={
@@ -880,6 +884,7 @@ export function BuddyButton() {
   // recovery (show() clears the dismissed flag main-side).
   const [dismissed, setDismissed] = useState(false);
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/buddy', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   const popupRef = useRef<HTMLDivElement>(null);
   // Gates the KDE helper lookup below. The real OS platform, not the app-shell
   // 'electron'/'android'/'browser' axis in ../platform, because it must not fire
@@ -1163,7 +1168,7 @@ export function BuddyButton() {
           taller states instead of letting it grow. (Written for the Linux
           keep-above row, which review B-2 deleted; the consent card and the
           Remove helper action are what make this popup tall now.) */}
-      <Dialog
+      <Dialog screen="settings/buddy"
         open={open}
         onClose={() => setOpen(false)}
         title="Buddy Floater"
@@ -1571,6 +1576,7 @@ function RemoteButton(props: RemoteButtonProps) {
   onSetShowSetupQR, onSetShowAddDevice, onReportIssue,
   } = props;
   const [open, setOpen] = useState(!!props.mockView);
+  useScreenOpen('settings/remote', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   const [mockPassword, setMockPassword] = useState('');
   const [mockSaved, setMockSaved] = useState(false);
   const [mockAwake, setMockAwake] = useState(4); // WHY 4: matches the Before capture's fixture, so the deck shows only the changes under review
@@ -1750,7 +1756,7 @@ function RemoteButton(props: RemoteButtonProps) {
           exists to own, and the exact set two of SettingsPopup's seven callers
           got wrong. `space-y-6` rather than Dialog's default `space-y-5`, so
           the section rhythm here is unchanged. */}
-      <Dialog
+      <Dialog screen="settings/remote"
         open={open}
         onClose={() => setOpen(false)}
         title={showInfo ? 'About Remote Access' : showEncryption ? 'Browser encryption' : 'Remote Access'}
@@ -2846,6 +2852,16 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   // (is it open / what is it about) drift; one cannot.
   const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   const [showContribute, setShowContribute] = useState(false);
+  // Photo-only build: `shoot` opens these by name (shoot-mode.tsx). The two
+  // development sub-screens open the way their menu rows do — the menu closes
+  // and the popup takes its place.
+  useScreenOpen('settings/help', () => setShowHelp(true));
+  useScreenOpen('settings/development', () => setShowDevMenu(true));
+  useScreenOpen('settings/development/bug-report', () => { setShowDevMenu(false); setReportContext({}); });
+  useScreenOpen('settings/development/contribute', () => { setShowDevMenu(false); setShowContribute(true); });
+  useScreenOpen('settings/shortcuts', () => setShowShortcuts(true));
+  useScreenOpen('settings/donate', () => setShowDonateConfirm(true));
+  useScreenOpen('settings/about', () => setShowAbout(true));
 
   useEffect(() => {
     if (!open) return;

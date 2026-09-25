@@ -4,6 +4,10 @@ import { useScrollFade } from '../../hooks/useScrollFade';
 import SettingsExplainer, { InfoIconButton } from '../SettingsExplainer';
 import { AnchorTip, Dialog, SettingRow } from '../ui';
 import { PAGES, type AssistantDefaults, type DefaultsUpdate, type PageDef, type PageId } from './pages';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+
+// Every page id, for `shoot` (see useScreenOpen below).
+const PAGE_IDS: readonly PageId[] = PAGES.map((p) => p.id);
 
 // Settings → Assistant settings. ONE row that replaces four popups — Model
 // Providers, Session Defaults, Permissions, Specialists — with one wide window:
@@ -143,6 +147,15 @@ export default function AssistantSettingsRow({
   const [narrowPage, setNarrowPage] = useState<PageId | null>(null);
   const [showInfo, setShowInfo] = useState(false);
   const narrow = usePanelFold();
+  // Photo-only build: `shoot` opens the panel, or one of its pages, by name
+  // (`settings/assistant/cloud`). Every page id is registered; a page this
+  // platform hides (provider pages without the native runtime) simply never
+  // shows its mark, so the shot fails with a reason instead of photographing
+  // General.
+  useScreenOpen('settings/assistant', (sub) => {
+    if (sub) { setPage(sub as PageId); setNarrowPage(sub as PageId); }
+    setOpen(true);
+  }, PAGE_IDS);
 
   // The same gate the Model Providers row had: provider pages exist only where
   // the native runtime does (false over remote access, false on Android).
@@ -207,6 +220,7 @@ export default function AssistantSettingsRow({
       />
 
       <Dialog
+        screen="settings/assistant"
         open={open}
         onClose={() => setOpen(false)}
         title={title}
@@ -229,10 +243,14 @@ export default function AssistantSettingsRow({
           showingList ? (
             <PageList pages={pages} attention={attention} onPick={(id) => setNarrowPage(id)} />
           ) : (
-            <PageBody page={current} ctx={ctx} attention={attention} narrow />
+            <>
+              <ScreenMark name={`settings/assistant/${current.id}`} />
+              <PageBody page={current} ctx={ctx} attention={attention} narrow />
+            </>
           )
         ) : (
           <div className="flex flex-1 min-h-0">
+            <ScreenMark name={`settings/assistant/${current.id}`} />
             <PageRail pages={pages} current={page} attention={attention} onPick={goTo} />
             <PageBody page={current} ctx={ctx} attention={attention} onInfo={current.explainer ? () => setShowInfo(true) : undefined} />
           </div>

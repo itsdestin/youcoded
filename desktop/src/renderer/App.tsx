@@ -17,6 +17,7 @@ import FolderSwitcher from './components/FolderSwitcher';
 import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { useChatViewHandlers } from './hooks/use-chatview-handlers';
+import { useScreenOpen } from './shoot-mode';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
@@ -3725,6 +3726,8 @@ function AppInner() {
   }, []);
   const toggleGamePanel = useCallback(() => gameDispatch({ type: 'TOGGLE_PANEL' }), [gameDispatch]);
   const toggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
+  // Photo-only build: `shoot` opens the Settings drawer by name (shoot-mode.tsx).
+  useScreenOpen('settings', () => setSettingsOpen(true));
   const openResumeBrowser = useCallback(() => setResumeRequested(true), []);
 
   // Still loading first-run check

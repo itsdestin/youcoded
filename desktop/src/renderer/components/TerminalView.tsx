@@ -15,6 +15,9 @@ import { isAndroid, isRemoteMode, isTouchDevice } from '../platform';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
 
+// Photo-only build flag (vite.config.ts `define`); see shoot-mode.tsx.
+declare const __SHOOT__: boolean;
+
 /** Terminal always uses Cascadia Code — user font selection applies to the
  *  chat UI only. Proportional or display fonts break xterm's character grid. */
 const TERMINAL_FONT = "'Cascadia Code', 'Cascadia Mono', Consolas, monospace";
@@ -312,13 +315,16 @@ function TerminalView({ sessionId, visible }: Props) {
     // container collapsed to 0×0 (measured 2026-08-27), so that timer's fit is
     // skipped and a write there lands at xterm's default 80 columns — a prompt
     // box half the pane wide, the same shape as ledger P-20.1. The dynamic
-    // import behind `import.meta.env.DEV` keeps the fixture out of the
-    // production bundle entirely (same pattern as index.tsx's workbench boot).
+    // import behind `import.meta.env.DEV || __SHOOT__` keeps the fixture out of
+    // the production bundle entirely (same pattern as index.tsx's workbench
+    // boot). The literal check has to sit HERE, at the import site: the
+    // bundler folds a literal, not a call into another module. `__SHOOT__` is
+    // the photo-only build `shoot` photographs, where this screen was blank.
     let wroteWorkbenchScreen = false;
     let disposed = false;
     const writeWorkbenchScreenOnce = () => {
       // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
-      if (wroteWorkbenchScreen || !(import.meta.env.DEV && isWorkbenchMode())) return;
+      if (wroteWorkbenchScreen || !((import.meta.env.DEV || (typeof __SHOOT__ !== 'undefined' && __SHOOT__)) && isWorkbenchMode())) return;
       wroteWorkbenchScreen = true;
       import('../dev/workbench/fixtures/terminal-screen').then(({ renderTerminalScreen }) => {
         // The import resolves asynchronously — bail if this terminal was

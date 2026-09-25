@@ -95,7 +95,7 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
 
   return createPortal(
     <>
-      <Dialog open onClose={onClose} title="About" subtitle={versionLine} size="panel">
+      <Dialog screen="settings/about" open onClose={onClose} title="About" subtitle={versionLine} size="panel">
           {/* Disclaimer — identical on both platforms */}
           <section className="space-y-1.5">
             <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Disclaimer</h3>

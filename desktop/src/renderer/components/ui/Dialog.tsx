@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z, type OverlayLayer } from '../overlays/Overlay';
 import { CloseButton } from './CloseButton';
 import { useScrollFade } from '../../hooks/useScrollFade';
+import { ScreenMark } from '../../shoot-mode';
 
 /**
  * D1 — the one dialog shell.
@@ -172,6 +173,12 @@ export type DialogProps = {
   scrollBody?: boolean;
   /** Accessible name when there is no visible title. */
   'aria-label'?: string;
+  /**
+   * The `shoot` screen name this dialog shows (dev/workbench/screens). Marks the
+   * panel so the photo-only build can prove the screen opened; renders nothing
+   * in any other build (shoot-mode.tsx).
+   */
+  screen?: string;
   children: React.ReactNode;
 };
 
@@ -189,6 +196,7 @@ export function Dialog({
   panelRef,
   className = '',
   scrollBody = true,
+  screen,
   children,
   ...aria
 }: DialogProps) {
@@ -226,6 +234,7 @@ export function Dialog({
             ...(fill ? { height: DIALOG_MAX_HEIGHTS[size] } : {}),
           }}
         >
+          {screen && <ScreenMark name={screen} />}
           {title && (
             // h2, matching SettingsPopup. Section labels inside the body are h3
             // (K1), so an h3 title would announce them as its siblings rather

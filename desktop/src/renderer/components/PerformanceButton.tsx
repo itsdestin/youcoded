@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { usePerformanceConfig } from '../hooks/usePerformanceConfig';
 import PerformancePopup from './PerformancePopup';
 import { SettingRow } from './ui';
+import { useScreenOpen } from '../shoot-mode';
 
 // Performance settings entry. Mirrors the chip+popup pattern used by Sound,
 // Appearance, and Sync — a small row in the settings list that opens a popup
@@ -17,6 +18,7 @@ import { SettingRow } from './ui';
 export default function PerformanceButton() {
   const cfg = usePerformanceConfig();
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/performance', () => setOpen(true)); // photo-only build: `shoot` opens it by name
 
   if (!cfg.loaded || !cfg.multiGpuDetected) return null;
 

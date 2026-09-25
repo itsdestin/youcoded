@@ -6,6 +6,7 @@ import type { MarketplaceUser } from '../../main/marketplace-auth-store';
 import type { BlockRow } from '../state/marketplace-api-client';
 import { Button, Dialog, FieldError, InputGroup, SettingRow, Callout } from './ui';
 import { ConnectedAccountsBody } from './ConnectedAccounts';
+import { useScreenOpen } from '../shoot-mode';
 
 // Settings → Account section. One self-contained row-button + popup, mounted in
 // both the Desktop and Android settings stacks. Auth-token state and mutations
@@ -108,6 +109,7 @@ function AccountAvatar({ url, size }: { url?: string | null; size: 'row' | 'larg
 export default function AccountSection() {
   const { signedIn, user } = useAccount();
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/account', () => setOpen(true)); // photo-only build: `shoot` opens it by name
 
   const rowLabel = 'Account';
   const rowDesc = signedIn
@@ -172,6 +174,7 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
   return createPortal(
     <>
       <Dialog
+        screen="settings/account"
         open
         onClose={onClose}
         size="panel"

@@ -29,6 +29,7 @@ import { deviceActivityLabel, relativeMs } from './device-activity-label';
 import { summarizeSpaceSyncError } from './sync-space-error-summary';
 import { plainMessage } from '../utils/ipc-error';
 import { HANDOFF_EXPLANATION } from './takeover-dialog-copy';
+import { useScreenOpen } from '../shoot-mode';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -284,6 +285,7 @@ interface SyncSectionProps {
 
 export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSectionProps) {
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/sync', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const popupRef = useRef<HTMLDivElement>(null);
@@ -965,7 +967,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           affordance and scroll body are all derived from the same state that
           picks the body below, so they cannot disagree about which view you are
           on — which is what four separately-maintained headers could. */}
+      {/* The loading view above carries no screen mark on purpose: `shoot`
+          waits for this one, so a picture never shows the spinner. */}
       <Dialog
+        screen="settings/sync"
         open
         onClose={onClose}
         panelRef={popupRef}

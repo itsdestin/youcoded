@@ -127,6 +127,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // Web search keys — real channels (search:* in main); listed so the
   // contract test checks them like every other hand-written fake.
   'search.list', 'search.test', 'search.setKey', 'search.removeKey',
+  // Settings → Performance (`?gpus=2` shows it) — real channels, a fixture machine here.
+  'performance.get', 'performance.set',
   // G-1 — real backend as of 2026-08-28; hand-written so the gallery's Bash
   // cards keep their fixture state instead of talking to a real process.
   'native.killShell', 'on.shellEvent',
@@ -1204,6 +1206,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     test: async (_id: string, key: string) => ({ ok: key.trim().length > 8, message: key.trim().length > 8 ? 'Connected.' : 'That key is too short to be valid.' }),
     setKey: async (id: string) => { if (store.refuseWrites) throw new Error('refused'); searchKeys.add(id); return true; },
     removeKey: async (id: string) => { if (store.refuseWrites) throw new Error('refused'); searchKeys.delete(id); return true; },
+  };
+
+  // Settings → Performance only appears on a computer with two graphics chips.
+  // `?gpus=2` pretends to be one, so the row and its popup can be opened and
+  // photographed (`shoot settings/performance`); without it the row stays
+  // hidden, exactly as on a one-chip machine.
+  const twoGpus = typeof location !== 'undefined' && new URLSearchParams(location.search).get('gpus') === '2';
+  let preferPowerSaving = false;
+  // Named perfMock: a local `performance` would shadow the browser's own for
+  // everything else in this function.
+  const perfMock = {
+    get: async () => ({
+      preferPowerSaving,
+      appliedAtLaunch: false,
+      multiGpuDetected: twoGpus,
+      gpuList: twoGpus ? ['AMD Radeon 8060S (built in)', 'NVIDIA GeForce RTX 4070 Laptop GPU'] : ['AMD Radeon 8060S (built in)'],
+    }),
+    set: async (value: boolean) => { if (store.refuseWrites) throw new Error('refused'); preferPowerSaving = value; return { ok: true as const }; },
   };
 
   // A key saved through the fake Connect dialog, so the card re-reads as
@@ -3306,7 +3326,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search,
+    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;

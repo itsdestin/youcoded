@@ -89,7 +89,7 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
     }
   };
 
-  return <Dialog open={open} onClose={onClose} size="panel" title="Contribute to YouCoded">
+  return <Dialog screen="settings/development/contribute" open={open} onClose={onClose} size="panel" title="Contribute to YouCoded">
     <div className="p-4 space-y-4">
 
       {phase === 'idle' && <>
