@@ -226,9 +226,13 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
     // Only act on a mouseup that STARTED inside this viewer — never open
     // over a drag that began elsewhere and happened to end here.
     let downInside = false;
-    const onMouseDown = (e: MouseEvent) => { downInside = root.contains(e.target as Node); };
+    // Left button only: a right-click's mouseup would otherwise pop this
+    // menu AND the real right-click menu at once (Destin, 2026-09-24:
+    // "we should not allow the right click menu to open a second version of
+    // the same menu").
+    const onMouseDown = (e: MouseEvent) => { downInside = e.button === 0 && root.contains(e.target as Node); };
     const onMouseUp = (e: MouseEvent) => {
-      if (!downInside) return;
+      if (e.button !== 0 || !downInside) return;
       downInside = false;
       // A microtask, not a synchronous read: mouseup does not guarantee the
       // engine has finished collapsing/extending the selection yet (a
@@ -249,6 +253,16 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
   // Extending/collapsing the selection (shift+arrow, or a plain click that
   // clears it) answers a selection that no longer exists — close it, same
   // as ContextMenu's own Esc/click-away/scroll dismissal.
+  // A right-click while the auto menu is up REPLACES it: the right-click
+  // menu (ContextMenuHost) opens at the pointer with the same entries, so the
+  // auto copy closes — only one menu is ever on screen.
+  useEffect(() => {
+    if (!selectionMenu) return;
+    const onContextMenu = () => setSelectionMenu(null);
+    document.addEventListener('contextmenu', onContextMenu, true);
+    return () => document.removeEventListener('contextmenu', onContextMenu, true);
+  }, [selectionMenu]);
+
   useEffect(() => {
     if (!selectionMenu) return;
     // On touch the selection keeps changing while handles are dragged; the
