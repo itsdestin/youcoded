@@ -10,7 +10,7 @@
 // those two builds. Guard: tests/shoot-build-guard.test.ts builds both and
 // fails on any trace of this module's globals.
 //
-// Spec: docs/active/specs/2026-09-24-shoot-and-explore.md (workspace repo).
+// Spec: docs/archive/specs/2026-09-24-shoot-and-explore.md (workspace repo).
 import { useEffect, useRef } from 'react';
 
 declare const __SHOOT__: boolean;
