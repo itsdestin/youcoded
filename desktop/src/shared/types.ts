@@ -80,7 +80,23 @@ export interface PortableModelRef {
  *    'secret-maybe': it could (a glob, a find with no usable filter).
  *  The card's wording comes from this, so it never claims more than the check
  *  knows (review N11). */
-export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe';
+export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe' | 'admin';
+
+/** A running Bash call whose `sudo` is waiting for the computer password
+ *  (admin-password design, 2026-09-25). The card asks for it; the password
+ *  itself never enters this state, a transcript or the model's view. */
+export interface PasswordAsk {
+  requestId: string;
+  /** The exact admin step sudo will run, read from the sudo process itself —
+   *  never the prompt text the command supplied (a command can choose its own
+   *  prompt, e.g. "Enter your Google password"). */
+  command: string;
+  /** Set when the admin step is inside another command (an install script):
+   *  that command's name, so the card can say who is asking. */
+  via?: string;
+  /** Set after a wrong password: how many tries sudo has left. */
+  triesLeft?: number;
+}
 
 export type NativeSendResult =
   | { status: 'sent' }
@@ -863,6 +879,9 @@ export interface ToolCallState {
    *  → the "Always allow" button is HIDDEN (for the same reason as `external`)
    *  and Full auto's stop band names which floor. See FloorStop. */
   floorStop?: FloorStop;
+  /** Native runtime only: this running command's sudo is waiting for the
+   *  computer password. Set on a 'running' card, not a new status. */
+  passwordAsk?: PasswordAsk;
   /** Native broker only: the session's permission mode when the ask fired.
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */

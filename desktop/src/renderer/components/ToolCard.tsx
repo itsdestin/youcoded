@@ -20,6 +20,7 @@ import { asString } from '../utils/tool-input';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
 import { fullAutoStopCopy, floorAskNote } from './permissions/deny-list-copy';
+import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
 import { PERMISSION_DISPLAY } from './StatusBar';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
@@ -1604,6 +1605,12 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
           />
         );
       })()}
+
+      {/* The admin password card: this running command's sudo is waiting for
+          the computer password (design 2026-09-25). */}
+      {tool.status === 'running' && tool.passwordAsk && (
+        <AdminPasswordPrompt ask={tool.passwordAsk} />
+      )}
 
       {/* Expanded details — per-tool parsed views, raw fallback otherwise.
           Skill cards never render a body (the only response is the redundant

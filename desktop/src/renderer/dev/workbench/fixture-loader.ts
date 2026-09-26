@@ -109,6 +109,7 @@ export function loadFixture(
   try {
     let state = makeInitialState(sessionId);
     const blocks: FixtureBlock[] = [];
+    const passwordAsks = new Map<string, import('../../../shared/types').PasswordAsk>();
     const actions: ChatAction[] = [];
 
     for (const line of lines) {
@@ -303,6 +304,10 @@ export function loadFixture(
           // denyListed:true → the destructive-deny-list rule won; ToolCard
           // gates the "Always allow" strip behind a consequence warning.
           denyListed: parsed.denyListed === true,
+          // Carried so a floor's card (no Always Allow, its own note) and the
+          // Full-auto stop band can be shown from a fixture.
+          ...(parsed.floorStop ? { floorStop: parsed.floorStop } : {}),
+          ...(parsed.permissionMode ? { permissionMode: parsed.permissionMode } : {}),
         };
         state = chatReducer(state, action);
         actions.push(action);
@@ -354,6 +359,11 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'password_ask') {
+        // The admin password card (design 2026-09-25): a RUNNING Bash call whose
+        // sudo waits for the computer password. No reducer action exists for it
+        // yet, so it is laid onto the tool's final block below.
+        passwordAsks.set(parsed.tool_use_id, parsed.ask);
       } else if (parsed.type === 'permission_expired') {
         // WHY: the KEPT card (PERMISSION_EXPIRED 'hook-closed') — the hook socket
         // died but Claude Code's own menu may still be live, so the card stays
@@ -474,7 +484,12 @@ export function loadFixture(
       }
     }
 
-    return { blocks: [...refreshed, ...stillRunning], actions };
+    const withAsks = [...refreshed, ...stillRunning].map((b) =>
+      b.kind === 'tool' && passwordAsks.has(b.tool.toolUseId)
+        ? { kind: 'tool' as const, tool: { ...b.tool, passwordAsk: passwordAsks.get(b.tool.toolUseId) } }
+        : b,
+    );
+    return { blocks: withAsks, actions };
   } catch (err) {
     return {
       blocks: [],

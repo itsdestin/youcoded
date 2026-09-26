@@ -56,6 +56,14 @@ const CATALOG: CatalogSection[] = [
     names: ['bash-awaiting-approval', 'bash-awaiting-approval-denylisted', 'bash-background-running', 'bash-background-finished', 'bash-background-failed', 'bash-background-stopped', 'bash-background-detached', 'bash-failed'],
   },
   {
+    // Admin password design (2026-09-25): the approval card for a sudo command,
+    // then the password card on the running command.
+    title: 'Admin password',
+    description: 'An admin (sudo) command: approval, the password card, wrong tries, and a script asking partway through.',
+    kind: 'tools',
+    names: ['bash-sudo-awaiting-approval', 'bash-sudo-awaiting-approval-fullauto', 'bash-sudo-password', 'bash-sudo-password-wrong', 'bash-sudo-password-last-try', 'bash-script-password-midway'],
+  },
+  {
     title: 'Chatsearch cards',
     description: 'Conversation find and preview cards rendered through their Bash calls.',
     kind: 'tools',

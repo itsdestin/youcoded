@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01SudoAsk","name":"Bash","input":{"command":"sudo pacman -S --needed rocm-hip-runtime hipblas rocblas","description":"Install the AMD graphics libraries local models need"}}
+{"type":"permission_request","tool_use_id":"toolu_01SudoAsk","requestId":"native-fixture-sudo-1","denyListed":true,"floorStop":"admin","permissionMode":"ask"}
