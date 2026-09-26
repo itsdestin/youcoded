@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Badge, Button, Callout, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
+import { Badge, Button, Callout, Dialog, ErrorState, FieldError, FoldRow, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
@@ -460,6 +460,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const [loading, setLoading] = useState(!initialStatus);
   const [syncing, setSyncing] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  // "Show details" on the sync error box (fix batch 2): a button inside the
+  // box now, not a native <details>, so its open state lives here.
+  const [showSyncDetails, setShowSyncDetails] = useState(false);
+  // Same for a warning's raw error output, keyed by warning code.
+  const [openWarningDetails, setOpenWarningDetails] = useState<Record<string, boolean>>({});
   const [showInfo, setShowInfo] = useState(false);
   // View stack: 'main' | 'add-type' | 'add-config' | 'edit'
   const [view, setView] = useState<'main' | 'add-type' | 'add-config' | 'edit'>('main');
@@ -1122,23 +1127,29 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 hk === 'setup' ? 'Creating your private repositories — a few seconds.' :
                 hk === 'off' ? 'Turn on to back up and sync across your devices' :
                 hk === 'waiting-github' ? 'Connect your account to start syncing' :
-                hk === 'error' ? (errorSummary?.summary ?? 'Sync hit an unexpected problem.') :
+                // WHY the account line, not the error (fix batch 2, 2026-09-26 —
+                // decisions.md P-2): the header stays an ordinary setting row;
+                // the problem itself moves into the danger box below, in normal
+                // grey text. It used to be this sub-line, painted red.
+                hk === 'error' ? syncingSub :
                 // First sync: repos exist but this device hasn't finished its
                 // first pull. Named honestly — "Setting up… a few seconds" over
                 // a multi-minute download read as a stall (2026-07-20 report).
                 hk === 'hydrating' ? 'This can take a few minutes on first sync.' :
                 hk === 'syncing' ? syncingSub :
                 syncedSub;
-              const subWarn = hk === 'error';
 
               // Not-enabled + error + GitHub-authed collapses to the plain 'off'
               // header (only error + UNauthed gets 'waiting-github'), which used to
               // hide the failure entirely — e.g. an enable attempt that failed for a
-              // non-GitHub reason looked like nothing happened. Surface the error as
-              // its own red line under the off sub, mirroring how the enabled+error
-              // state shows the failure in red — using the same plain-language
-              // summary (raw text stays in the "Show details" disclosure below).
+              // non-GitHub reason looked like nothing happened. Surface the error in
+              // the same danger box the enabled+error state uses — the same
+              // plain-language summary, raw text behind "Show details".
               const offError = hk === 'off' && errorSummary ? errorSummary.summary : null;
+              // The one problem sentence the danger box shows, if any.
+              const problem = hk === 'error'
+                ? (errorSummary?.summary ?? 'Sync hit an unexpected problem.')
+                : offError;
 
               // Toggle reflects the pending direction when a toggle is in flight
               // (so a disable click flips it off immediately instead of holding
@@ -1156,31 +1167,49 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 { key: 'conv' as const, count: convCount, word: convCount === 1 ? 'Conversation' : 'Conversations' },
               ];
 
-              // CTA row — tucked directly under the sub (aligned past the dot, no divider).
+              // CTA row — tucked directly under the sub (aligned past the dot, no
+              // divider). Only the not-yet-connected state has one now: the error
+              // state's buttons live INSIDE its danger box (errorActions below).
               const cta =
                 hk === 'waiting-github' ? (
                   <Button size="sm" onClick={() => setShowConnectGithub(true)}>
                     Connect GitHub…
                   </Button>
-                ) : hk === 'error' ? (
-                  <>
-                    {/* Offered only when the failure IS a GitHub sign-in problem (the
-                        coded 'github-auth' error). "GitHub reads signed out" alone was
-                        not proof — sync can run on the system's own gh login — so the
-                        button appeared beside unrelated failures (Destin, 2026-09-16).
-                        Secondary (outline) and to the LEFT of the primary action. */}
-                    {authError && (
-                      <Button variant="secondary" size="sm" onClick={() => setShowConnectGithub(true)}>
-                        Connect GitHub…
-                      </Button>
-                    )}
-                    {/* Try again reuses syncNow() with the existing .catch error routing;
-                        the primary action sits at the far right. */}
+                ) : null;
+
+              // WHY inside the box, at the right (fix batch 2, 2026-09-26 —
+              // decisions.md "Errors and warnings in a setting", settings-
+              // pieces#P-2): Show details, Connect GitHub and Try again are the
+              // problem's own actions, so they sit in the problem's box. Order is
+              // outlined first, the one filled main action (Try again) last, so it
+              // lands at the far right like every button pair in the app.
+              const errorActions = problem ? (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    aria-expanded={showSyncDetails}
+                    onClick={() => setShowSyncDetails((v) => !v)}
+                  >
+                    {showSyncDetails ? 'Hide details' : 'Show details'}
+                  </Button>
+                  {/* Offered only when the failure IS a GitHub sign-in problem (the
+                      coded 'github-auth' error). "GitHub reads signed out" alone was
+                      not proof — sync can run on the system's own gh login — so the
+                      button appeared beside unrelated failures (Destin, 2026-09-16). */}
+                  {hk === 'error' && authError && (
+                    <Button variant="secondary" size="sm" onClick={() => setShowConnectGithub(true)}>
+                      Connect GitHub…
+                    </Button>
+                  )}
+                  {/* Try again reuses syncNow() with the existing .catch error routing. */}
+                  {hk === 'error' && (
                     <Button size="sm" onClick={runSpacesSyncNow}>
                       Try again
                     </Button>
-                  </>
-                ) : null;
+                  )}
+                </>
+              ) : null;
 
               const conflict = enabled && visibleSpaceEvents.some((e: any) => e.type === 'conflict');
               const notice = enabled ? [...visibleSpaceEvents].reverse().find((e: any) => e.type === 'notice') : null;
@@ -1203,9 +1232,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${dot}`} />
                         <div className="min-w-0">
                           <div className="text-sm font-semibold text-fg">{title}</div>
-                          <div className={`text-2xs mt-0.5 leading-relaxed ${subWarn ? 'text-destructive-fg' : 'text-fg-muted'}`}>{sub}</div>
-                          {/* Off-but-errored: keep the normal off sub AND show why the last attempt failed. */}
-                          {offError && <div className="text-2xs mt-0.5 leading-relaxed text-destructive-fg">{offError}</div>}
+                          <div className="text-2xs mt-0.5 leading-relaxed text-fg-muted">{sub}</div>
                         </div>
                       </div>
                       {/* Enable toggle — migrated to the shared Toggle (spec changes
@@ -1225,20 +1252,28 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       />
                     </div>
                     {/* Action tucked under the reason — same box, no divider. */}
-                    {/* Raw git error stays behind "Show details" (error-message-standards.md).
-                        One row under the message (Destin, 2026-09-16): "Show details" on
-                        the left, the actions on the right. The details text opens below
-                        the row's left side, so the buttons never move. */}
-                    {(cta || (errorMsg && (hk === 'error' || offError))) && (
-                      <div className="mt-2 pl-[18px] flex items-start justify-between gap-2">
-                        {errorMsg && (hk === 'error' || offError) ? (
-                          <details className="min-w-0 flex-1 pt-1">
-                            <summary className="text-2xs text-fg-muted cursor-pointer hover:text-fg-2 select-none">Show details</summary>
-                            <pre className="mt-1 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{errorMsg as string}</pre>
-                          </details>
-                        ) : <div />}
-                        {cta && <div className="flex items-center gap-2 shrink-0">{cta}</div>}
-                      </div>
+                    {cta && (
+                      <div className="mt-2 flex items-center justify-end gap-2">{cta}</div>
+                    )}
+                    {/* WHY a danger Callout SUB-BOX here (fix batch 2, 2026-09-26 —
+                        decisions.md P-2): the problem is the same tinted box as every
+                        warning in the app (the "too big to sync" box below is the
+                        reference), sitting inside the sync setting's own container,
+                        text in normal grey, its buttons inside it at the right.
+                        Before: a red sub-line under the title, a bare "▸ Show
+                        details" on the left and Try again floating on the right —
+                        Destin: "sync errors and show details dropdown are not
+                        styled properly" (fix batch 1, B1-6).
+                        The raw git text stays behind Show details
+                        (error-message-standards.md); it opens under the sentence, so
+                        the buttons never move. */}
+                    {problem && (
+                      <Callout tone="danger" className="mt-2.5" actions={errorActions}>
+                        {problem}
+                        {showSyncDetails && errorMsg && (
+                          <pre className="mt-1.5 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{errorMsg as string}</pre>
+                        )}
+                      </Callout>
                     )}
                   </div>
 
@@ -1320,11 +1355,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   {/* Conflict / large-history notice / Sync now — only when enabled & not errored. */}
                   {enabled && !errorMsg && (
                     <div className="border-t border-edge-dim px-3 py-2.5 space-y-2">
+                      {/* WHY a warning Callout, not amber text (fix batch 2 — design
+                          guide "Status and notices": never coloured body text; every
+                          warning is the one tinted box). Same words. */}
                       {conflict && (
-                        <p className="text-xs text-amber-700">
+                        <Callout tone="warning">
                           Some files had conflicting edits — the other device's copy was kept alongside yours
                           (look for "(from …)" files).
-                        </p>
+                        </Callout>
                       )}
                       {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
                       {/* The app's warning card, collapsed to one informative line
@@ -1337,8 +1375,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           </ul>
                         </Callout>
                       )}
-                      {/* .catch (inside runSpacesSyncNow) routes a failed invoke into the red note slot. */}
-                      <button onClick={runSpacesSyncNow} className="text-xs underline text-fg-muted hover:text-fg-2">Sync now</button>
+                      {/* .catch (inside runSpacesSyncNow) routes a failed invoke into the error box.
+                          WHY a full-width outlined Button (fix batch 2 — decisions.md
+                          "Follow-up actions", settings-pieces#P-3): an action under a
+                          group is never underlined text. */}
+                      <Button variant="secondary" onClick={runSpacesSyncNow} className="w-full">Sync now</Button>
                     </div>
                   )}
                 </div>
@@ -1396,8 +1437,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 
                   {/* Backend rows — shown whenever any exist (kept visible even when paused,
                       so turning the master off doesn't hide/lose destinations). */}
+                  {/* space-y-1.5: the guide's 6px between rows (fix batch 2; was 8px). */}
                   {list.length > 0 && (
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       {list.map(b => {
                         // Pending = sync-enabled backend that can't currently push (offline or errored).
                         const isPending = b.syncEnabled && (b.lastError != null || isOffline);
@@ -1511,7 +1553,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   {/* Add-a-backup + compact "Back up all now" (replaces the standalone Back
                       up now row; keeps handleForceSync's syncing state + label behavior). */}
                   {list.length > 0 && (
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       {/* WHY a plain outlined button, not dashed (fix batch 1,
                           2026-09-24): design guide "Groups are flat … no
                           dashed 'add' boxes — use a normal outlined full-width
@@ -1520,18 +1562,24 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       <Button
                         variant="secondary"
                         onClick={() => setView('add-type')}
-                        className="w-full py-2.5"
+                        // w-full only (fix batch 2): the same height as "Back up all
+                        // now" under it — two stacked follow-up buttons, one size.
+                        className="w-full"
                       >
                         ＋ Add a backup
                       </Button>
+                      {/* WHY a full-width outlined Button (fix batch 2 — decisions.md
+                          "Follow-up actions", settings-pieces#P-3; Destin named "back up
+                          all now button" in B1-6): never underlined text. */}
                       {anyActive && (
-                        <button
+                        <Button
+                          variant="secondary"
                           onClick={handleForceSync}
                           disabled={syncing}
-                          className="text-2xs underline text-fg-muted hover:text-fg-2 disabled:opacity-50 disabled:cursor-wait"
+                          className="w-full"
                         >
                           {syncing || status?.syncInProgress ? 'Backing up…' : 'Back up all now'}
-                        </button>
+                        </Button>
                       )}
                     </div>
                   )}
@@ -1543,33 +1591,27 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             {status?.warnings && status.warnings.length > 0 && (
               <div>
                 <SectionLabel className="mb-2">Warnings</SectionLabel>
-                <div className="space-y-2">
-                  {status.warnings.map((w) => (
-                    <div
-                      key={`${w.code}:${w.backendId ?? ''}`}
-                      className={`rounded-lg border px-3 py-2 ${
-                        w.level === 'danger'
-                          ? 'border-red-500/30 bg-red-500/5'
-                          : 'border-amber-700/30 bg-amber-700/5'
-                      }`}
-                    >
-                      <div className="text-xs font-medium text-fg">{w.title}</div>
-                      <div className="text-2xs text-fg-muted mt-0.5">{w.body}</div>
-                      {/* Collapsible stderr for UNKNOWN-code warnings where raw output helps diagnose */}
-                      {w.code === 'UNKNOWN' && w.stderr && (
-                        <details className="mt-1">
-                          <summary className="text-3xs text-fg-muted cursor-pointer">
-                            Show error details
-                          </summary>
-                          <pre className="mt-1 p-2 bg-inset rounded text-3xs whitespace-pre-wrap font-mono">
-                            {w.stderr}
-                          </pre>
-                        </details>
-                      )}
-                      <div className="flex gap-2 mt-2">
-                        {w.fixAction && (
-                          <Button size="sm" onClick={() => handleFixAction(w)}>
-                            {w.fixAction.label}
+                {/* WHY Callout with actions (fix batch 2, 2026-09-26 — design guide
+                    "Status and notices", decisions.md P-2): each warning is the one
+                    tinted notice box, title in its colour, text grey, and its buttons
+                    INSIDE it at the right. It was a hand-rolled tinted card with a
+                    bare "Show error details" triangle and Fix/Dismiss at the LEFT.
+                    Order: outlined buttons first, the filled fix last (far right). */}
+                <div className="space-y-1.5">
+                  {status.warnings.map((w) => {
+                    const detailsKey = `${w.code}:${w.backendId ?? ''}`;
+                    const detailsOpen = !!openWarningDetails[detailsKey];
+                    const hasDetails = w.code === 'UNKNOWN' && !!w.stderr;
+                    const actions = (hasDetails || w.dismissible || w.fixAction) ? (
+                      <>
+                        {hasDetails && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            aria-expanded={detailsOpen}
+                            onClick={() => setOpenWarningDetails((m) => ({ ...m, [detailsKey]: !detailsOpen }))}
+                          >
+                            {detailsOpen ? 'Hide details' : 'Show details'}
                           </Button>
                         )}
                         {w.dismissible && (
@@ -1577,9 +1619,30 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                             Dismiss
                           </Button>
                         )}
-                      </div>
-                    </div>
-                  ))}
+                        {w.fixAction && (
+                          <Button size="sm" onClick={() => handleFixAction(w)}>
+                            {w.fixAction.label}
+                          </Button>
+                        )}
+                      </>
+                    ) : undefined;
+                    return (
+                      <Callout
+                        key={detailsKey}
+                        tone={w.level === 'danger' ? 'danger' : 'warning'}
+                        title={w.title}
+                        actions={actions}
+                      >
+                        {w.body}
+                        {/* Raw stderr for UNKNOWN-code warnings, where it helps diagnose. */}
+                        {hasDetails && detailsOpen && (
+                          <pre className="mt-1.5 p-2 bg-inset rounded text-3xs whitespace-pre-wrap font-mono text-fg-dim">
+                            {w.stderr}
+                          </pre>
+                        )}
+                      </Callout>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1611,25 +1674,22 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               </div>
             )}
 
-            {/* 5. Sync Log (collapsible) */}
-            <div>
-              <button
-                onClick={async () => {
-                  setShowLog(!showLog);
-                  if (!showLog) {
-                    try { const log = await claude.sync.getLog(30); setLogLines(log); } catch {}
-                  }
-                }}
-                className="flex items-center gap-1.5 text-3xs font-medium text-fg-muted hover:text-fg-2 transition-colors"
-              >
-                <svg className={`w-3 h-3 transition-transform ${showLog ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                </svg>
-                Sync log
-              </button>
-
-              {showLog && (
-                <div className="mt-2">
+            {/* 5. Sync Log — WHY a FoldRow (fix batch 2, 2026-09-26 — decisions.md
+                "Fold-out sections", settings-pieces#P-1): a boxed row like a
+                setting, arrow on the right. It was a bare "› Sync log" text toggle
+                with the arrow on the left (Destin, B1-6: "sync log dropdown …
+                all wrong"). The lines are fetched when it opens, as before. */}
+            <FoldRow
+              title="Sync log"
+              open={showLog}
+              onToggle={async (next) => {
+                setShowLog(next);
+                if (next) {
+                  try { const log = await claude.sync.getLog(30); setLogLines(log); } catch {}
+                }
+              }}
+            >
+                <div>
                   {logLines.length === 0 ? (
                     <div className="text-2xs text-fg-muted px-2 py-3">No sync log entries yet.</div>
                   ) : (
@@ -1655,15 +1715,17 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       </pre>
                     </div>
                   )}
-                  <button
+                  {/* Outlined, full width (fix batch 2): a follow-up action under a
+                      group is never bare text. */}
+                  <Button
+                    variant="secondary"
                     onClick={async () => { try { setLogLines(await claude.sync.getLog(30)); } catch {} }}
-                    className="mt-1.5 text-3xs text-fg-muted hover:text-fg-2 transition-colors"
+                    className="w-full mt-1.5"
                   >
                     Refresh
-                  </button>
+                  </Button>
                 </div>
-              )}
-            </div>
+            </FoldRow>
 
             {/* Empty state before the first sync status arrives. Copy fix: this
                 used to say "Install the YouCoded toolkit" — the toolkit is
