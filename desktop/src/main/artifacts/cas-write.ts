@@ -129,7 +129,6 @@ export async function sweepStaleTmp(dir: string, targetBase: string): Promise<vo
   } catch { /* dir unreadable — skip the sweep entirely */ }
 }
 
-/** Atomic tmp-write + fsync + rename onto `target`. */
 // WHY: on Windows, renaming over a file fails with EPERM/EACCES/EBUSY while
 // anything else has it open for that instant — a reader of the same file (the
 // app polls several of these), antivirus scanning the new temp file, a sync
@@ -154,6 +153,7 @@ export async function renameReplacing(tmp: string, target: string, platform: Nod
   }
 }
 
+/** Atomic tmp-write + fsync + rename onto `target`. */
 async function atomicWrite(target: string, content: string): Promise<void> {
   await sweepStaleTmp(dirname(target), basename(target));
   // pid+time-suffixed temp name: two processes (dev + built app) writing the
