@@ -93,24 +93,8 @@ interface RemoteConfig {
 // from main). 2026-09-10 security review, #5.
 const MIN_REMOTE_PASSWORD_LENGTH = 8;
 
-// Make a memorable, easy-to-type passphrase like `abcd-efgh-jkmn`: three groups
-// of four letters, drawn from an alphabet with the visually ambiguous characters
-// (i, l, o) removed. Uses the browser CSPRNG. Well over the 8-char minimum.
-function generateRemotePassphrase(): string {
-  const alphabet = 'abcdefghjkmnpqrstuvwxyz'; // 23 chars, no i/l/o
-  // Rejection sampling (draw fresh bytes, discard those in the biased tail) so
-  // every letter is equally likely — a plain `byte % 23` slightly favours the
-  // first few letters. The bias is tiny here, but a password generator should
-  // not have one at all.
-  const max = 256 - (256 % alphabet.length); // 253 → bytes 253..255 discarded
-  const chars: string[] = [];
-  const buf = new Uint8Array(1);
-  while (chars.length < 12) {
-    crypto.getRandomValues(buf);
-    if (buf[0] < max) chars.push(alphabet[buf[0] % alphabet.length]);
-  }
-  return `${chars.slice(0, 4).join('')}-${chars.slice(4, 8).join('')}-${chars.slice(8, 12).join('')}`;
-}
+// generateRemotePassphrase() was deleted with the Generate button it served
+// (Destin, fix batch 1 B1-5: "the generate button should just be removed").
 
 const KEEP_AWAKE_OPTIONS = [
   { label: 'Off', value: 0 },
@@ -676,7 +660,8 @@ function SoundButton() {
       >
                 {/* Master volume */}
                 <section>
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Volume</h3>
+                  {/* WHY SectionLabel (fix batch 2): the guide's small label — normal case, no spaced-out capitals. */}
+                  <SectionLabel className="mb-2">Volume</SectionLabel>
                   <div className="flex items-center gap-3">
                     {/* Mute toggle */}
                     <button onClick={handleToggleMute} className="text-fg-muted hover:text-fg shrink-0">
@@ -713,7 +698,8 @@ function SoundButton() {
                     of each other. `key` remounts the section on switch so its
                     useState initializers re-read that category's saved values. */}
                 <section>
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Notification</h3>
+                  {/* WHY SectionLabel (fix batch 2): the guide's small label — normal case, no spaced-out capitals. */}
+                  <SectionLabel className="mb-2">Notification</SectionLabel>
                   <SegmentedTabs
                     variant="contained"
                     aria-label="Notification type"
@@ -1822,11 +1808,16 @@ function RemoteButton(props: RemoteButtonProps) {
                   <>
                     {/* Setup banner — shown when no clients connected */}
                     {(previewView ? previewView.stage !== 'ready' && previewView.stage !== 'consent' : !hasClients) && (
-                      // Info callouts are accent-tinted, warnings are amber. The
-                      // amber "setup required" boxes below stay amber — they're a
-                      // true warning status, not information.
-                      <div className="bg-accent/10 border border-accent/25 rounded-lg p-3">
-                        <p className="text-xs text-fg-2 mb-2">
+                      // WHY no outer box (fix batch 2, 2026-09-26 — PROVISIONAL): this
+                      // was an accent-tinted box holding the intro AND a second box
+                      // (the status strip / warnings) — a box inside a box, the guide's
+                      // "no nesting" rule. Now: the intro as plain text, then the status
+                      // strip on its own. Destin has NOT decided this block's final look
+                      // (decisions.md "Status at the top of a popup", settings-pieces#P-7:
+                      // re-ask on the real screen), so this is the flattest honest
+                      // version for him to judge, not a ruling.
+                      <div className="space-y-2">
+                        <p className="text-xs text-fg-2">
                           Remote access lets you use YouCoded from any device — phone, tablet, or another computer.
                         </p>
 
@@ -1924,8 +1915,13 @@ function RemoteButton(props: RemoteButtonProps) {
                               aria-label="Remote access password"
                               disabled={hostOnly}
                             />
+                            {/* WHY a small FILLED button (fix batch 2, 2026-09-26 —
+                                decisions.md "Button inside a text box", settings-
+                                pieces#P-5): a text box's own action is a small filled
+                                button inside the box at the right, like the message
+                                box. It was an outlined button — Destin: "that 'set'
+                                button doesn't match any existing style" (B1-5). */}
                             <Button
-                              variant="secondary"
                               size="sm"
                               onClick={onSetPassword}
                               disabled={hostOnly || !newPassword.trim() || passwordStatus === 'saving'}
@@ -1933,20 +1929,14 @@ function RemoteButton(props: RemoteButtonProps) {
                               {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
                             </Button>
                           </InputGroup>
-                          <div className="flex items-center justify-between">
-                            {/* "Saved", not "Set": the button beside the field
-                                already says Set, so this read as two identical
-                                controls, one of which did nothing when clicked. */}
-                            <span className="text-3xs text-green-400">{config?.hasPassword ? 'Saved' : ''}</span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={hostOnly}
-                              onClick={() => onSetNewPassword(generateRemotePassphrase())}
-                            >
-                              Generate
-                            </Button>
-                          </div>
+                          {/* Generate is GONE (Destin, fix batch 1 B1-5: "the generate
+                              button should just be removed").
+                              "Saved", not "Set": the button inside the field already
+                              says Set. Grey, not green (fix batch 2): the guide keeps
+                              status colours out of text. */}
+                          {config?.hasPassword && (
+                            <p className="text-3xs text-fg-muted">Saved</p>
+                          )}
                           {/* Too-short is a real validation error, not the passive
                               hint above — FieldError, matching every other field. */}
                           {passwordStatus === 'too-short' && (
@@ -1956,10 +1946,12 @@ function RemoteButton(props: RemoteButtonProps) {
                           <p className="text-3xs text-fg-muted">
                             Changing the password disconnects every device; each reconnects with the new one.
                           </p>
+                          {/* A warning is the tinted notice box, not amber text (fix
+                              batch 2 — design guide "Status and notices"). Same words. */}
                           {config?.weakPassword && passwordStatus !== 'too-short' && (
-                            <p className="text-3xs text-amber-700">
+                            <Callout tone="warning">
                               Your current password is short. Consider setting a longer one.
-                            </p>
+                            </Callout>
                           )}
                         </FieldRow>
 

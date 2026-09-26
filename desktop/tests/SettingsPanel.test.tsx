@@ -68,13 +68,12 @@ describe('SettingsPanel — remote access panel', () => {
     return onAction;
   }
 
-  it('password field offers Generate, the length hint and the disconnect warning', () => {
+  it('password field states the length hint and the disconnect warning, with no Generate button', () => {
     mount('ready');
-    const password = screen.getByLabelText('Remote access password') as HTMLInputElement;
-    // Generate fills a memorable passphrase over the minimum length.
-    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
-    expect(password.value).toMatch(/^[a-z]{4}-[a-z]{4}-[a-z]{4}$/);
-    expect(password.value.replace(/-/g, '').length).toBeGreaterThanOrEqual(8);
+    // Destin removed Generate (fix batch 1, B1-5: "the generate button should just be removed").
+    expect(screen.queryByRole('button', { name: 'Generate' })).toBeNull();
+    // Set is the small FILLED button inside the field (decisions.md P-5), not outlined.
+    expect(screen.getByRole('button', { name: 'Set' }).className).toContain('bg-accent');
     // The guidance and the consequence are both stated.
     expect(screen.getByText('At least 8 characters.')).toBeTruthy();
     expect(screen.getByText(/disconnects every device/)).toBeTruthy();
