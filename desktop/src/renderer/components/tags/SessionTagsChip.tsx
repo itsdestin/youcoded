@@ -22,6 +22,7 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
   // the route to it from the in-session chip. Layer 3 because this popup is
   // itself layer 2.
   const [manageOpen, setManageOpen] = useState(false);
+  useScreenOpen('chat/tags/manage', () => setManageOpen(true)); // photo-only build
   const registry = useTagRegistry();
   const meta = useSessionMeta(sessionId);
   useEscClose(open, () => setOpen(false));

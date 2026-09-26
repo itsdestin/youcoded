@@ -65,4 +65,16 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/games/chess/lobby', 'pane', 'games'), params: { signedIn: '1', autoplay: '0' } },
   { ...chat('chat/games/connect-four', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/connect-four/lobby', 'pane', 'games'), params: { signedIn: '1', autoplay: '0' } },
+  // Another computer holds this conversation: each phase of "open it here instead?".
+  ...['confirm', 'force', 'undeliverable', 'claim-denied'].map((ph) => chat(`chat/takeover/${ph}`, 'dialog', 'handoff')),
+  chat('chat/resume/preview', 'dialog'),
+  { ...chat('chat/resume/preview#stress', 'dialog'), scenario: 'stress' },
+  { ...chat('chat/specialists', 'dialog'), session: 'wb-11' },
+  chat('chat/tags/manage', 'dialog'),
+  { ...chat('chat/tags/manage#load-failed', 'dialog', 'error-state'), params: { fail: 'tags.list' } },
+  { ...chat('chat/update', 'dialog'), params: { update: 'available' } },
+  // Files in the viewer: a chart image, a diagram, a PDF (fixture files).
+  chat('chat/files/open/a-sent-chart', 'pane', 'viewer'),
+  chat('chat/files/open/a-sent-diagram', 'pane', 'viewer'),
+  chat('chat/files/open/a-sent-pdf', 'pane', 'viewer'),
 ];

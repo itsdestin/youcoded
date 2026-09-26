@@ -32,7 +32,7 @@ import { TagGlyph } from './tags/glyphs';
 import { NoteEditor } from './tags/NoteEditor';
 import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from './ResumeOptions';
 import { resolveNativeBinding } from '../state/welcome-back';
-import { ScreenMark } from '../shoot-mode';
+import { ScreenMark, useScreenOpen } from '../shoot-mode';
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
@@ -344,6 +344,7 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
     // data-preview-id: lets the header card's scroll handler tell the layer on
     // screen from the hidden ones (see onPreviewScroll).
     <div className="absolute inset-0 flex flex-col" data-preview-id={id} style={{ visibility: visible ? 'visible' : 'hidden' }}>
+      {visible && <ScreenMark name="chat/resume/preview" />}
       <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} backdrop={false} />
     </div>
   );
@@ -418,6 +419,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // The row whose transcript the right panel is showing. Distinct
   // from expandedId because in variants b/c nothing expands in the list at all.
   const [previewId, setPreviewId] = useState<string | null>(null);
+  // Photo-only build: `shoot` previews the first conversation (the everyday browser only).
+  useScreenOpen('chat/resume/preview', () => { const first = filteredRef.current[0]; if (first) handleSelectRef.current?.(first); }, undefined, !welcomeBack);
+  const filteredRef = useRef<PastSession[]>([]);
+  const handleSelectRef = useRef<((s: PastSession) => void) | null>(null);
   const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // the Resume options sheet
   // The header clone's own tags/note sheet (see renderSessionRow).
   const [cloneOrganizeId, setCloneOrganizeId] = useState<string | null>(null);
@@ -818,6 +823,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     tickSeeded.current = true;
     setTicked(new Set(filtered.filter((s) => !s.missingProject && !s.notSyncedYet && !s.flags?.complete).map((s) => s.sessionId)));
   }, [wb, loading, loadedOnce, filtered]);
+  filteredRef.current = filtered;   // photo-only build: the preview opener picks the first row
   useEffect(() => {
     if (!wb || !loadedOnce) return;
     const native = sessions.filter((s) => wb.ids.includes(s.sessionId) && s.provider === 'native');
@@ -1164,6 +1170,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       resumeOptions.resetFor(s);
     }
   };
+  handleSelectRef.current = handleSelectSession;   // photo-only build: the preview opener's route in
 
   const clearWarmTimer = () => {
     if (warmTimer.current !== null) { clearTimeout(warmTimer.current); warmTimer.current = null; }

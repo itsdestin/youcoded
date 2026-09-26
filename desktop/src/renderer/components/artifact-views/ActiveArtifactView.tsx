@@ -24,6 +24,7 @@ function absoluteArtifactPath(projectRoot: string, a: ArtifactRecord): string {
 }
 import { openEditorSearch, revealLineIn } from './cm/editor-registry';
 import { draftKey, stashDraft, takeDraft, clearDraft } from './draft-store';
+import { ScreenMark } from '../../shoot-mode';
 
 // Confirm-tier wording (D5): name the actual consequence, per path family.
 // Never a vague "are you sure" — the user should know what the file DOES.
@@ -641,6 +642,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
             artifact so switching files retries with a clean slate. */}
         <ViewerErrorBoundary key={artifact.id} path={artifact.path}>
         <Suspense fallback={<div className="flex items-center justify-center h-full text-fg-muted text-sm">Loading viewer…</div>}>
+          {/* Photo-only build: inside Suspense, so `shoot` marks the file only once its viewer loaded. */}
+          <ScreenMark name={`chat/files/open/${artifact.id}`} />
           <ViewerComponent
             path={artifact.path}
             content={content}

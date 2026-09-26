@@ -13,4 +13,6 @@ export const PROJECTS: readonly ScreenEntry[] = [
   pr('projects/context/how', 'dialog'),
   pr('projects/switcher', 'dialog'),
   pr('projects/add', 'dialog'),
+  pr('projects/files/folder/docs', 'view'),
+  { ...pr('projects/files/folder/Locked', 'view', 'error-state'), params: { filesLocked: '1' } },
 ];

@@ -1004,6 +1004,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   useScreenOpen('chat/status-bar', () => setPopupOpen(true)); // photo-only build: `shoot` opens it by name
   // Version pill now opens the in-app UpdatePanel (changelog + update action) instead of firing external URLs.
   const [updatePanelOpen, setUpdatePanelOpen] = useState(false);
+  useScreenOpen('chat/update', () => setUpdatePanelOpen(true)); // photo-only build
   const [contextPopupOpen, setContextPopupOpen] = useState(false);
   // Full-text view of the announcement chip — the chip itself truncates at 280px,
   // so longer messages are read here.

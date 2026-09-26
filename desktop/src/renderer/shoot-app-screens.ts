@@ -9,6 +9,8 @@ import { useScreenOpen } from './shoot-mode';
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
 
+const TAKEOVER_PHASES = ['confirm', 'force', 'undeliverable', 'claim-denied'] as const;
+
 export type AppScreenSetters = {
   sessionId: string | null;
   setSettingsOpen: Setter<boolean>;
@@ -28,6 +30,7 @@ export type AppScreenSetters = {
   openPagesView: () => void;
   openPagesLibrary: () => void;
   createPage: () => void;
+  showTakeover: (phase: 'confirm' | 'force' | 'undeliverable' | 'claim-denied') => void;
 };
 
 export function useAppScreens(s: AppScreenSetters): void {
@@ -54,6 +57,9 @@ export function useAppScreens(s: AppScreenSetters): void {
   useScreenOpen('pages', s.openPagesView);
   useScreenOpen('pages/library', s.openPagesLibrary);
   useScreenOpen('pages/create', s.createPage);
+  // "Open here instead?" when another computer holds a conversation, in each of its phases
+  // (a fixture device name; no real handoff is waiting behind it).
+  useScreenOpen('chat/takeover', (phase) => { if (phase) s.showTakeover(phase as 'confirm'); }, TAKEOVER_PHASES);
   useScreenOpen('marketplace', () => s.setActiveView('marketplace'));
   useScreenOpen('library', () => s.setActiveView('library'));
 }

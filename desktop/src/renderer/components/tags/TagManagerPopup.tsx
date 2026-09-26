@@ -60,7 +60,7 @@ export function TagManagerPopup({ open, onClose, registry, layer = 2 }: {
   if (!open) return null;
 
   return (
-    <Dialog open onClose={onClose} title="Manage Tags" size="panel" layer={layer}>
+    <Dialog screen="chat/tags/manage" open onClose={onClose} title="Manage Tags" size="panel" layer={layer}>
       <p className="text-2xs text-fg-dim leading-relaxed">
         Tags are labels you put on conversations so you can find them again. Renaming or recoloring
         one here updates it everywhere it's applied.

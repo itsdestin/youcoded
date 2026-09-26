@@ -3728,7 +3728,7 @@ function AppInner() {
   const toggleGamePanel = useCallback(() => gameDispatch({ type: 'TOGGLE_PANEL' }), [gameDispatch]);
   const toggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
   // Photo-only build: `shoot` opens these screens by name (shoot-app-screens.ts).
-  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }) });
+  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => setTakeoverPrompt({ device: 'Devins laptop', phase }) });
   const openResumeBrowser = useCallback(() => setResumeRequested(true), []);
 
   // Still loading first-run check
@@ -4647,6 +4647,7 @@ function AppInner() {
         return (
           <>
             <Dialog
+              screen={`chat/takeover/${takeoverPrompt.phase}`}
               open
               onClose={() => resolveTakeover(false)}
               size="panel"

@@ -48,7 +48,7 @@ import { useResumeOptions, ResumeOptionsForm } from './ResumeOptions';
 import type { PastSession } from '../../shared/types';
 import { triggerTip } from './guide/tips';
 import { TagNoteEditor } from './tags/TagNoteEditor';
-import { ScreenMark } from '../shoot-mode';
+import { ScreenMark, useScreenOpen } from '../shoot-mode';
 
 // 'type' removed 2026-07-23 — the Type FILTER supersedes sorting by type.
 type SortKey = 'recent' | 'name';
@@ -372,6 +372,9 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // "Show deleted" while viewing a now-filtered-out file must not blank the
   // content pane (the file is still open; only the LIST hides it).
   const active = allArtifacts.find((a) => a.id === activeArtifactId);
+  // Photo-only build: `shoot` opens a file in the viewer by id (fixture files a-sent-chart,
+  // a-sent-diagram, a-sent-pdf).
+  useScreenOpen('chat/files/open', (id) => { if (id) dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: id }); }, allArtifacts.map((a) => a.id));
   // Read lifecycle (fetch + null-gate on switch + loading/missing/error
   // phases) lives in the shared useArtifactContent hook — this drawer and
   // FilesTab used to carry duplicate effects that conflated "loading" with

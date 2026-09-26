@@ -6,10 +6,12 @@ const settings = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags
 export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings', 'drawer'),
   settings('settings/account', 'dialog'),
+  settings('settings/account/connections', 'dialog'),
   { ...settings('settings/assistant', 'dialog'), sameAs: { name: 'settings/assistant/general', why: 'the panel opens on its General page' } },
   settings('settings/assistant/general', 'dialog'),
   settings('settings/assistant/cloud', 'dialog'),
   settings('settings/assistant/local', 'dialog'),
+  settings('settings/assistant/local/engine-advanced', 'dialog'),
   settings('settings/assistant/permissions', 'dialog'),
   settings('settings/assistant/specialists', 'dialog'),
   settings('settings/appearance', 'dialog'),

@@ -9,7 +9,7 @@
   "budgets": {
     "main/ipc-handlers.ts": 5635,
     "main/harness/native-session-host.ts": 5122,
-    "renderer/App.tsx": 4983,
+    "renderer/App.tsx": 4984,
     "main/remote-server.ts": 4181,
     "main/harness/harness-session.ts": 4155,
     "renderer/components/SettingsPanel.tsx": 3248,
@@ -21,9 +21,9 @@
     "shared/types.ts": 2349,
     "renderer/components/SyncPanel.tsx": 2046,
     "main/engine/engine-manager.ts": 2035,
-    "renderer/components/ResumeBrowser.tsx": 2032,
+    "renderer/components/ResumeBrowser.tsx": 2039,
     "main/preload.ts": 1954,
-    "renderer/components/StatusBar.tsx": 1803,
+    "renderer/components/StatusBar.tsx": 1804,
     "renderer/components/ToolCard.tsx": 1618,
     "renderer/components/ChatView.tsx": 1538
   }

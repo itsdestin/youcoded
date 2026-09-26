@@ -6,7 +6,7 @@ import type { MarketplaceUser } from '../../main/marketplace-auth-store';
 import type { BlockRow } from '../state/marketplace-api-client';
 import { Button, Dialog, FieldError, InputGroup, SettingRow, Callout } from './ui';
 import { ConnectedAccountsBody } from './ConnectedAccounts';
-import { useScreenOpen } from '../shoot-mode';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // Settings → Account section. One self-contained row-button + popup, mounted in
 // both the Desktop and Android settings stacks. Auth-token state and mutations
@@ -146,6 +146,7 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
   // "Connected as @…") because the WeCoded account also authenticates via
   // GitHub — two different jobs wearing the same octocat.
   const [page, setPage] = useState<'main' | 'connections'>('main');
+  useScreenOpen('settings/account/connections', () => setPage('connections')); // photo-only build
 
   // Combined github:status for the row summary + the connections page.
   // 'unavailable' (handler missing / rejected — the Android stub) hides the
@@ -181,6 +182,7 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
         title={page === 'connections' ? 'Connected services' : 'Account'}
         onBack={page === 'connections' ? () => setPage('main') : undefined}
       >
+        {page === 'connections' && <ScreenMark name="settings/account/connections" />}
             {page === 'connections' ? (
               <ConnectedAccountsBody
                 status={ghStatus === 'unavailable' ? null : ghStatus}

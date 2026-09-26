@@ -24,6 +24,7 @@ import type { BackendOption, EnginePrereqs, EngineSpeedSettings } from '../../sh
 // rejected bridge call reaches the user — the model settings dialog and “Add
 // vision” show one too, and each copy is a call site that can forget to strip.
 import { plainMessage } from '../utils/ipc-error';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 interface EngineStatusView {
   installed: boolean;
@@ -111,6 +112,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
 
   // Advanced — collapsed by default (Q-2 note: non-developers first).
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  useScreenOpen('settings/assistant/local/engine-advanced', () => setAdvancedOpen(true)); // photo-only build
 
   // The faster-engine option that needs system software first (Linux ROCm):
   // whether its set-up box is open, and what main says is missing.
@@ -531,6 +533,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
 
           {advancedOpen && (
             <div className="space-y-1.5 pl-3" data-testid="engine-advanced">
+              <ScreenMark name="settings/assistant/local/engine-advanced" />
               {/* Both default ON — the best defaults ship; the switch is for ruling a
                   feature out when a model misbehaves (Destin, Q-4 note). Short hints;
                   the (i) carries the explanation. */}

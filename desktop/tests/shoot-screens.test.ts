@@ -34,9 +34,9 @@ for (const f of files(SRC)) {
   const text = readFileSync(f, 'utf8');
   for (const m of text.matchAll(CALL)) {
     // The call runs to the next registration (or 800 characters): a sub-page list
-    // is an identifier after the opener's closing brace, `}, PAGE_IDS);`.
+    // follows the opener's closing brace — `}, PAGE_IDS)`, `}, ['docs'])`, `}, list.map(…))`.
     const rest = text.slice(m.index!, m.index! + 800).split(/\buseScreenOpen\(/)[1];
-    registered.set(m[1], { file: f.slice(SRC.length + 1), subpages: /\}\s*,\s*[A-Za-z_][\w.]*\s*\)\s*;/.test(rest) });
+    registered.set(m[1], { file: f.slice(SRC.length + 1), subpages: /\}\s*,\s*(?!undefined\b)[\w.[]/.test(rest) });
   }
 }
 // A `#state` entry opens as its plain name, so it is registered under that.
