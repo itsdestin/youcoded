@@ -7,6 +7,21 @@
 // run byte-for-byte as shipped, from a real file outside app.asar (review 3,
 // F1), under a Node runtime with no bundler in front of it.
 //
+// PROTOCOL v2 — verify, THEN harden, THEN release the password. Connects
+// and sends `{"v":2}\n` as an ORDINARY (still dumpable) process, because
+// the app's own verification needs to read this process's real
+// `/proc/<pid>/exe`/argv/environ from the OUTSIDE while it can still do
+// so — reading `/proc/<pid>/environ` of another same-uid process turns out
+// to be gated by the exact same ptrace_may_access() check that
+// PR_SET_DUMPABLE=0 exists to enforce (verified empirically: once
+// hardenSelf() succeeds, this process's own /proc/<pid>/environ becomes
+// EACCES to everything but itself). Only after the app replies
+// `{"harden":true}` — meaning it already finished reading what it needed
+// to — does this process call hardenSelf() (E1's fix, still required: the
+// password must never exist in a dumpable process) and reply
+// `{"hardened":true}`; only THEN does the app send the password. See the
+// longer WHY on `main()` below for the full ordering argument.
+//
 // Deliberately requires NOTHING beyond core Node modules and koffi. Every
 // other app module (logger.ts, etc.) runs inside the main process's own
 // event loop and its own module graph; pulling any of that in here would
@@ -46,14 +61,17 @@ function requireKoffi() {
 }
 
 /**
- * Make this process unreadable to other same-uid processes BEFORE it ever
- * touches the socket (design §3, review 2 E1). `env -i` and `ulimit -c 0`
- * in the wrapper only cover environment variables and core dumps; sudo's
- * own fork chain (setuid(0) -> setuid(uid) -> exec) leaves this process
- * with real uid == effective uid, i.e. an ORDINARY same-uid process,
- * subject to same-uid ptrace and signal delivery like anything else the
- * model's command runs. PR_SET_DUMPABLE=0 (Linux) / PT_DENY_ATTACH (macOS)
- * closes that regardless of what happened upstream.
+ * Make this process unreadable to other same-uid processes. Called from
+ * main() only after the app has replied `{"harden":true}` over the socket
+ * (protocol v2 — see the file-level comment for why verification has to
+ * happen BEFORE this, not after) and strictly before the password can
+ * arrive (design §3, review 2 E1). `env -i` and `ulimit -c 0` in the
+ * wrapper only cover environment variables and core dumps; sudo's own fork
+ * chain (setuid(0) -> setuid(uid) -> exec) leaves this process with real
+ * uid == effective uid, i.e. an ORDINARY same-uid process, subject to
+ * same-uid ptrace and signal delivery like anything else the model's
+ * command runs. PR_SET_DUMPABLE=0 (Linux) / PT_DENY_ATTACH (macOS) closes
+ * that regardless of what happened upstream.
  *
  * Returns false (never throws) on any failure, so the caller can fail
  * closed uniformly.
@@ -142,20 +160,24 @@ function isTraced(readStatus = () => fs.readFileSync('/proc/self/status', 'utf8'
   }
 }
 
+// WHY the handshake is verify-THEN-harden, not harden-then-connect
+// (protocol v2, superseding the harden-first v1 shape): the app's own
+// verification (design §3 item 1) has to read THIS process's real
+// `/proc/<pid>/exe`, argv and — critically — `/proc/<pid>/environ` from
+// OUTSIDE it, while it is still an ordinary process. Verified empirically:
+// once `hardenSelf()` has run, `/proc/<pid>/environ` (and `/proc/<pid>/mem`)
+// become EACCES to everything but this process itself — the exact same
+// ptrace_may_access() check that PR_SET_DUMPABLE=0 exists to enforce. A
+// helper that hardened itself before ever touching the socket would be
+// UNVERIFIABLE the instant it connected: the app could never confirm its
+// environment was the exact two-variable allowlist, because it could no
+// longer read that environment at all. So the protocol now has the app
+// verify this process first (while it is still plain and readable), THEN
+// explicitly tell it to harden, and only THEN release the password — the
+// harden step is exactly what E1 needs (non-dumpable BEFORE the password
+// exists in this process), it just has to happen strictly after
+// verification succeeds rather than strictly before the socket connects.
 function main() {
-  if (!hardenSelf()) {
-    // WHY exit here, before requiring net at all: nothing about the socket
-    // handshake is trustworthy to run from a process that failed to make
-    // itself non-dumpable — better to never hold the password than to hold
-    // it in a dumpable process.
-    process.exit(1);
-    return;
-  }
-  if (isTraced()) {
-    process.exit(1);
-    return;
-  }
-
   const socketPath = process.env.YOUCODED_ASKPASS_SOCKET;
   if (!socketPath) {
     // No socket to connect to means there is nothing this helper can do —
@@ -165,19 +187,27 @@ function main() {
     return;
   }
 
-  // WHY one fixed-size buffer, filled in place, rather than the previous
+  // WHY one fixed-size buffer, filled in place, rather than
   // `received = Buffer.concat([received, chunk])` per `data` event
   // (task-2 review, T2-7): `Buffer.concat` allocates a NEW buffer and
   // copies into it every time, silently abandoning the previous
   // `received` value (which may hold a prefix of the password) without
-  // ever zeroing it — only the FINAL buffer got `.fill(0)`'d. A single
-  // pre-allocated buffer, copied into with `chunk.copy(...)`, means there
-  // is at most one buffer holding wire bytes at any time, so `finish`'s
-  // `.fill(0)` actually covers everything this variable ever held.
+  // ever zeroing it. A single pre-allocated buffer, copied into with
+  // `chunk.copy(...)`, means there is at most one buffer holding wire
+  // bytes at any time, so `finish`'s `.fill(0)` actually covers everything
+  // this variable ever held. It is reused across BOTH lines this protocol
+  // now reads (the harden instruction, then the password), shifting any
+  // leftover bytes after a consumed line to the front rather than
+  // allocating a second buffer.
   const received = Buffer.alloc(MAX_LINE_BYTES);
   let receivedLen = 0;
   let finished = false;
   let socket = null;
+  // WHY a stage flag: the same socket now carries two sequential
+  // server->client lines with different meanings (`{"harden":true}` then
+  // `{"ok":true,"password":...}`) — this says which one the next complete
+  // line read off the wire should be interpreted as.
+  let stage = 'awaiting-harden';
 
   // WHY a single `finish`: every exit path (ok, refused, garbage, socket
   // error, socket close, oversize line) goes through here so the received
@@ -186,10 +216,9 @@ function main() {
   const finish = (code) => {
     if (finished) return;
     finished = true;
-    // Best-effort scrub, NOT a complete one (task-2 review, T2-7 — this
-    // comment previously overstated coverage): `received` is the one
-    // buffer THIS code keeps around across `data` events, and zeroing it
-    // covers that. It does NOT cover every place a password byte briefly
+    // Best-effort scrub, NOT a complete one (task-2 review, T2-7): zeroing
+    // `received` covers the one buffer this code keeps around across
+    // `data` events. It does NOT cover every place a password byte briefly
     // existed — each incoming `chunk` is a Buffer Node allocates per
     // `data` event and we only copy out of it, never zero it once copied;
     // and, once parsed, `reply.password` and everything derived from it
@@ -213,13 +242,94 @@ function main() {
   };
 
   socket = net.createConnection({ path: socketPath }, () => {
-    // WHY exactly this line, nothing else: AskpassServer takes the peer pid
-    // from the KERNEL (SO_PEERCRED/LOCAL_PEERPID), not from anything the
-    // helper claims (design §2.2, review 1 D3) — so this helper sends no
-    // pid, no argv, nothing that could be spoofed by a different process
-    // dialing the same socket.
-    socket.write('{"v":1}\n');
+    // WHY exactly this line, nothing else, and WHY it is sent before any
+    // hardening: AskpassServer takes the peer pid from the KERNEL
+    // (SO_PEERCRED/LOCAL_PEERPID), not from anything the helper claims
+    // (design §2.2, review 1 D3) — so this helper sends no pid, no argv,
+    // nothing that could be spoofed by a different process dialing the
+    // same socket. `v:2` marks the verify-then-harden protocol (see the
+    // function-level comment above for why the order flipped from v1).
+    socket.write('{"v":2}\n');
   });
+
+  // Handle every complete line currently sitting in `received`, in order,
+  // shifting any leftover bytes (an extra line front-loaded into the same
+  // TCP/unix-socket read) to the front so the next `data` event — or this
+  // same call, via its own loop — can find it. Returns once no complete
+  // line remains.
+  const drainLines = () => {
+    for (;;) {
+      if (finished) return;
+      const newline = received.subarray(0, receivedLen).indexOf(0x0a); // '\n'
+      if (newline === -1) return; // no complete line yet — wait for more data
+
+      const lineBuf = received.subarray(0, newline);
+      let reply;
+      try {
+        reply = JSON.parse(lineBuf.toString('utf8'));
+      } catch {
+        finish(1);
+        return;
+      }
+
+      if (stage === 'awaiting-harden') {
+        if (!reply || reply.harden !== true) {
+          // Anything other than exactly {"harden":true} refuses silently —
+          // this line arrives BEFORE the password exists anywhere, so
+          // there is nothing sensitive to protect yet, just a protocol
+          // mismatch to refuse.
+          finish(1);
+          return;
+        }
+        // WHY hardenSelf() + isTraced() run HERE, not at process start: the
+        // app's verification (design §3) needs this process to still be
+        // plain/readable (see the function-level comment) until it has
+        // finished checking it — this instruction is the app's signal
+        // that verification succeeded and it is now safe (and necessary,
+        // per E1) to become non-dumpable before the password arrives.
+        if (!hardenSelf() || isTraced()) {
+          finish(1);
+          return;
+        }
+        // Shift any leftover bytes (the password line, if it somehow
+        // arrived already) to the front before writing our reply, so
+        // drainLines()'s next loop iteration sees them.
+        received.copy(received, 0, newline + 1, receivedLen);
+        receivedLen -= newline + 1;
+        stage = 'awaiting-password';
+        socket.write('{"hardened":true}\n');
+        continue;
+      }
+
+      // stage === 'awaiting-password'
+      if (reply && reply.ok === true && typeof reply.password === 'string') {
+        // WHY fs.writeSync(1, ...) and not console.log: this is stdout as
+        // sudo's own pipe (never the model), and writeSync avoids Node's
+        // stream buffering putting any of the password where an async
+        // flush could still be pending when we exit.
+        const passwordBuf = Buffer.from(reply.password, 'utf8');
+        const out = Buffer.concat([passwordBuf, Buffer.from('\n', 'utf8')]);
+        try {
+          fs.writeSync(1, out);
+        } finally {
+          // Overwrite every buffer/string reference we control. JS strings
+          // are immutable — `reply.password` itself cannot be zeroed in
+          // memory — but every Buffer we allocated for this can be, and we
+          // drop our only reference to the string immediately after.
+          out.fill(0);
+          passwordBuf.fill(0);
+          reply.password = '';
+          reply = null;
+        }
+        finish(0);
+        return;
+      }
+
+      // {"ok":false,...} or any other shape: refuse silently.
+      finish(1);
+      return;
+    }
+  };
 
   socket.on('data', (chunk) => {
     if (finished) return;
@@ -229,46 +339,7 @@ function main() {
     }
     chunk.copy(received, receivedLen);
     receivedLen += chunk.length;
-    // Search only the bytes actually received so far — `subarray` is a
-    // VIEW over `received`, not a copy, so this adds no extra buffer to
-    // scrub later.
-    const newline = received.subarray(0, receivedLen).indexOf(0x0a); // '\n'
-    if (newline === -1) return; // still short of one full line — keep waiting, still under the cap
-
-    const lineBuf = received.subarray(0, newline);
-    let reply;
-    try {
-      reply = JSON.parse(lineBuf.toString('utf8'));
-    } catch {
-      finish(1);
-      return;
-    }
-
-    if (reply && reply.ok === true && typeof reply.password === 'string') {
-      // WHY fs.writeSync(1, ...) and not console.log: this is stdout as
-      // sudo's own pipe (never the model), and writeSync avoids Node's
-      // stream buffering putting any of the password where an async flush
-      // could still be pending when we exit.
-      const passwordBuf = Buffer.from(reply.password, 'utf8');
-      const out = Buffer.concat([passwordBuf, Buffer.from('\n', 'utf8')]);
-      try {
-        fs.writeSync(1, out);
-      } finally {
-        // Overwrite every buffer/string reference we control. JS strings
-        // are immutable — `reply.password` itself cannot be zeroed in
-        // memory — but every Buffer we allocated for this can be, and we
-        // drop our only reference to the string immediately after.
-        out.fill(0);
-        passwordBuf.fill(0);
-        reply.password = '';
-        reply = null;
-      }
-      finish(0);
-      return;
-    }
-
-    // {"ok":false,...} or any other shape: refuse silently.
-    finish(1);
+    drainLines();
   });
 
   // A transport error (ECONNREFUSED, EPIPE, ...) is the same as any other
@@ -277,7 +348,10 @@ function main() {
   // The socket closing before we ever saw {"ok":true,...} — withdrawn ask,
   // command killed, app quit — is the "waits indefinitely, no timeout"
   // behaviour (design §6): we simply exit once there is nothing left to
-  // wait for, never inventing a timeout of our own.
+  // wait for, never inventing a timeout of our own. This also covers a
+  // server that never sends {"harden":true} at all: no more data ever
+  // arrives, the socket eventually closes (or the ask is withdrawn), and
+  // we exit 1 having never held anything sensitive.
   socket.on('close', () => finish(1));
 }
 

@@ -91,21 +91,51 @@ function makeScratchScriptsAskpassDir(): { root: string; wrapperCopy: string } {
   return { root, wrapperCopy };
 }
 
-/** A minimal fake AskpassServer: reads the one handshake line, then calls
- *  `onHandshake` with the connection to decide what (if anything) to send
- *  back. Mirrors the real server's protocol (design §2.2) closely enough to
- *  drive the helper end to end without needing AskpassServer itself. */
+/**
+ * A minimal fake AskpassServer speaking protocol v2 (askpass.cjs's own
+ * file-level comment has the full ordering argument: the app verifies this
+ * process from the OUTSIDE while it is still plain/readable, THEN
+ * instructs it to harden, THEN sends the password). Drives the harden
+ * round trip itself — receives `{"v":2}`, replies `{"harden":true}`, waits
+ * for `{"hardened":true}` — and only then calls `onReady` with the
+ * connection (plus the original handshake line, for tests that want to
+ * assert on it) so the test body only has to decide the FINAL reply
+ * (password / refusal / garbage / close). Tests that need to act on
+ * something DURING the round trip (e.g. checking /proc state right after
+ * the helper has hardened but before it holds a password) do that inside
+ * `onReady` itself — by the time it's called, the helper has already sent
+ * back `{"hardened":true}`, which askpass.cjs's main() only writes AFTER
+ * hardenSelf() has succeeded, so the ordering guarantee holds transitively
+ * through the socket.
+ */
 function startFakeServer(
   socketPath: string,
-  onHandshake: (conn: net.Socket, line: string) => void,
+  onReady: (conn: net.Socket, handshakeLine: string) => void,
 ): net.Server {
   const server = net.createServer((conn) => {
     let buf = Buffer.alloc(0);
+    let stage: 'awaiting-v' | 'awaiting-hardened' = 'awaiting-v';
+    let handshakeLine = '';
     conn.on('data', (chunk: Buffer) => {
       buf = Buffer.concat([buf, chunk]);
-      const nl = buf.indexOf(0x0a);
-      if (nl === -1) return;
-      onHandshake(conn, buf.subarray(0, nl).toString('utf8'));
+      for (;;) {
+        const nl = buf.indexOf(0x0a);
+        if (nl === -1) return;
+        const line = buf.subarray(0, nl).toString('utf8');
+        buf = buf.subarray(nl + 1);
+        if (stage === 'awaiting-v') {
+          handshakeLine = line;
+          conn.write('{"harden":true}\n');
+          stage = 'awaiting-hardened';
+        } else {
+          // Whatever the helper replied with here is expected to be
+          // {"hardened":true} — tests in this suite don't need to assert
+          // on it themselves; the ordering guarantee above is what
+          // matters, and onReady owns the connection from this point on.
+          onReady(conn, handshakeLine);
+          return;
+        }
+      }
     });
   });
   server.listen(socketPath);
@@ -126,9 +156,10 @@ describe('askpass helper: (i) delivers the password on {ok:true}', () => {
     const result = await done;
     server.close();
 
-    // The helper's ONLY outbound message is the bare handshake — no pid, no
-    // argv, nothing a spoofing peer could reuse (design §2.2, review 1 D3).
-    expect(handshakeLine).toBe('{"v":1}');
+    // The helper's initial outbound message is the bare v2 handshake — no
+    // pid, no argv, nothing a spoofing peer could reuse (design §2.2,
+    // review 1 D3).
+    expect(handshakeLine).toBe('{"v":2}');
     expect(result.code).toBe(0);
     expect(result.stdout.toString('utf8')).toBe(SENTINEL + '\n');
     expect(result.stderr.toString('utf8')).toBe('');
@@ -211,7 +242,7 @@ describe('askpass helper: (iii) env -i blocks a caller-set loader hijack', () =>
   });
 });
 
-describe('askpass helper: (iv) makes itself non-dumpable before touching the socket', () => {
+describe('askpass helper: (iv) makes itself non-dumpable before the password can arrive', () => {
   // Design §3 (review 2, E1): PR_SET_DUMPABLE=0 is what closes same-uid
   // ptrace/core-dump access to this process while it holds the password.
   // The kernel's ptrace_may_access() check that PR_SET_DUMPABLE=0 triggers
@@ -223,15 +254,21 @@ describe('askpass helper: (iv) makes itself non-dumpable before touching the soc
   // child leaves /proc/<pid>/mem openable; a child that calls
   // prctl(PR_SET_DUMPABLE, 0, ...) makes that same open() fail EACCES.
   //
+  // Protocol v2: hardenSelf() now runs when the helper receives
+  // `{"harden":true}`, not before it ever connects (that ordering flipped
+  // specifically because the app needs to read this process's real
+  // /proc/<pid>/environ etc. from OUTSIDE it while it's still readable —
+  // see askpass.cjs's file-level comment). `startFakeServer`'s `onReady`
+  // callback fires only after it has RECEIVED the helper's
+  // `{"hardened":true}` reply, which askpass.cjs's main() only writes
+  // after hardenSelf() has already succeeded — so this check still runs
+  // at the right moment (hardened, not yet holding the password), just
+  // one round trip later than under protocol v1.
+  //
   // WHY no setTimeout/sleep here (test-suite-hygiene: never let a fixed
-  // sleep stand in for a real signal): the REAL signal that the helper has
-  // already run hardenSelf() (which design §3 requires runs strictly
-  // BEFORE the socket connect — see main()) is the fake server's own
-  // `data` event carrying the handshake line. By the time that callback
-  // runs, the helper has already hardened and is now blocked waiting for
-  // our reply — verified empirically to be reliable (no flakiness from
-  // racing it) before writing this test. So the /proc/<pid>/mem probe runs
-  // synchronously inside the handshake handler, with no delay at all.
+  // sleep stand in for a real signal): the ordering guarantee above IS the
+  // real signal — no delay needed, no flakiness observed while writing
+  // this test.
   it.skipIf(process.platform !== 'linux')(
     '/proc/<helper-pid>/mem is not openable from this (same-uid) test process while the helper is alive',
     async () => {
@@ -296,13 +333,18 @@ describe('askpass wrapper: (T2-3) resulting environment is EXACTLY the two-varia
   // {ELECTRON_RUN_AS_NODE, YOUCODED_ASKPASS_SOCKET} — no more, no less.
   // The obvious way to check this ("read /proc/<helper-pid>/environ from
   // outside while it's alive and waiting on the socket") turns out NOT to
-  // work for the real, hardened askpass.cjs: verified empirically that
-  // /proc/<pid>/environ is gated by the SAME same-uid ptrace_may_access()
-  // check as /proc/<pid>/mem (see the (iv) tests above) — once
-  // hardenSelf() has run, this test process can no longer read it at all
-  // (EACCES), and hardenSelf() always runs before the socket is ever
-  // touched. Reading it in the narrow window before hardening would be a
-  // real race, which test-suite-hygiene rules out as a signal.
+  // work for the real askpass.cjs ONCE IT HAS HARDENED: verified
+  // empirically that /proc/<pid>/environ is gated by the SAME same-uid
+  // ptrace_may_access() check as /proc/<pid>/mem (see the (iv) tests
+  // above). This is exactly WHY protocol v2 verifies before hardening
+  // rather than after (see askpass.cjs's file-level comment) — but this
+  // particular test is about the WRAPPER's env -i line, which is already
+  // fully in effect before the helper ever hardens, so it still can't
+  // simply read the real process's live /proc/<pid>/environ from a test
+  // reliably positioned before that (a real race, which test-suite-hygiene
+  // rules out as a signal). Easier and just as conclusive: substitute a
+  // stub for askpass.cjs entirely (below), so there is no hardening at all
+  // to race against.
   //
   // So this test exercises the WRAPPER's env -i line directly instead: a
   // byte-for-byte copy of the real, unmodified wrapper script (relocated,
@@ -348,42 +390,57 @@ describe('askpass wrapper: (T2-3) resulting environment is EXACTLY the two-varia
   });
 });
 
-describe('askpass helper: (T2-4) hardening runs before the socket is ever touched', () => {
-  // main() calls hardenSelf() and, if it fails, exits BEFORE net is ever
-  // asked to connect (askpass.cjs's own main(), top of the function). This
-  // test makes hardenSelf() fail (by running a copy of askpass.cjs with no
-  // node_modules/koffi two levels up from it, so requireKoffi() throws)
-  // against a real listening server that records whether it EVER received
-  // a connection, and asserts both: exit code 1, and the connection
-  // handler was never invoked. No sleep/grace-period needed to check the
-  // negative — the assertion runs only after the child's `close` event, by
-  // which point a unix-socket connect() attempt would already have either
-  // happened or not; nothing can arrive later once the process is gone.
-  it('a helper that fails to harden itself never connects to the socket', async () => {
-    const { root, wrapperCopy } = makeScratchScriptsAskpassDir();
-    cleanupDirs.push(root);
-    // Byte-for-byte copy of the real askpass.cjs, relocated to a directory
-    // with no node_modules/koffi sibling at all — requireKoffi()'s
-    // `fs.existsSync(candidate)` check fails closed exactly as it would
-    // for a genuinely broken packaged install.
-    fs.copyFileSync(ASKPASS_CJS_PATH, path.join(root, 'scripts', 'askpass', 'askpass.cjs'));
-
+describe('askpass helper: (T2-4) the password only arrives after hardening — never before', () => {
+  // Protocol v2 (askpass.cjs's file-level comment has the full ordering
+  // argument): the app verifies this process from the outside first, THEN
+  // instructs it to harden (`{"harden":true}`), THEN — and only then —
+  // sends the password. These two tests prove the helper's own state
+  // machine enforces that ordering: it never accepts a password that
+  // arrives before it has been told to harden, and it produces nothing at
+  // all if it is never told to harden in the first place.
+  it('a server that sends the password without a harden step first: helper exits 1, prints nothing', async () => {
     const { dir, socketPath } = makeSocketDir();
     cleanupDirs.push(dir);
-    let sawConnection = false;
+    // Replies to the bare {"v":2} handshake with the password directly,
+    // skipping {"harden":true} entirely — exactly the shortcut a buggy or
+    // hostile server might try. askpass.cjs's `stage` is still
+    // 'awaiting-harden' at this point, so `reply.harden !== true` refuses
+    // it before the password is ever looked at.
     const server = net.createServer((conn) => {
-      sawConnection = true;
-      conn.destroy();
+      conn.on('data', () => {
+        conn.write(JSON.stringify({ ok: true, password: 'should-never-print' }) + '\n');
+      });
     });
     server.listen(socketPath);
 
-    const { done } = spawnHelper(socketPath, {}, wrapperCopy);
+    const { done } = spawnHelper(socketPath);
     const result = await done;
     server.close();
 
     expect(result.code).toBe(1);
     expect(result.stdout.length).toBe(0);
-    expect(sawConnection).toBe(false);
+  });
+
+  it('a server that never sends {"harden":true} at all (closes instead) gets nothing back', async () => {
+    const { dir, socketPath } = makeSocketDir();
+    cleanupDirs.push(dir);
+    // Closes right after the initial handshake rather than sending
+    // anything — standing in for a server that never gets around to
+    // asking the helper to harden. The helper cannot have written
+    // {"hardened":true} in this scenario: that reply is only ever written
+    // from the 'awaiting-harden' branch after parsing a line the server
+    // sent, and this server never sends one.
+    const server = net.createServer((conn) => {
+      conn.on('data', () => conn.end());
+    });
+    server.listen(socketPath);
+
+    const { done } = spawnHelper(socketPath);
+    const result = await done;
+    server.close();
+
+    expect(result.code).toBe(1);
+    expect(result.stdout.length).toBe(0);
   });
 });
 
@@ -397,7 +454,11 @@ describe('askpass wrapper: (T2-5) ulimit -c 0 actually zeroes the core-dump limi
   // /proc/<pid>/limits — unlike /proc/<pid>/environ or .../mem, this file
   // is NOT gated by the dumpable flag (verified empirically), so it can be
   // read the same way the (iv) tests read other /proc files: synchronously
-  // inside the fake server's handshake handler, no sleep required.
+  // inside `startFakeServer`'s `onReady` (i.e. after the full harden round
+  // trip completes), no sleep required. The rlimit itself was already set
+  // by the wrapper long before that — checking here is just a convenient,
+  // already-synchronized point to observe it from, not a claim about when
+  // `ulimit -c 0` took effect.
   it('resulting process has "Max core file size" 0/0 even though the spawning shell set it unlimited', async () => {
     const { dir, socketPath } = makeSocketDir();
     cleanupDirs.push(dir);
