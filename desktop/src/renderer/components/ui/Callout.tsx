@@ -39,7 +39,11 @@ const TONE: Record<CalloutTone, { surface: string; body: string; title: string }
   info: { surface: 'bg-accent/10 border-accent/25', body: 'text-fg-2', title: 'text-fg' },
   // Status colors stay hardcoded per the standing rule (desktop/CLAUDE.md), so
   // amber is a raw Tailwind color rather than a theme token.
-  warning: { surface: 'bg-amber-500/10 border-amber-500/25', body: 'text-fg-2', title: 'text-amber-400' },
+  // WHY the warning title is normal text colour, not amber (fix batch 2, 2026-09-26): amber-400
+  // text on the pale amber tint was near-invisible on light and wallpaper themes ("Download
+  // interrupted" inside a model card), and the app's own rule is that a status hue lives in the
+  // tint and border, NEVER in the word (react-renderer.md, "Status colours").
+  warning: { surface: 'bg-amber-500/10 border-amber-500/25', body: 'text-fg-2', title: 'text-fg' },
   // `destructive` is the one status color that IS tokenised: change 17 moved the
   // app's reds onto it so theme packs can restyle their own danger.
   // WHY body text-fg-2 (2026-09-25, decisions.md P-2): "text is normal
