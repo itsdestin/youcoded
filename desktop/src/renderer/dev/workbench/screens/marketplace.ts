@@ -14,4 +14,6 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   { ...mp('marketplace#empty', 'view', 'empty-state'), params: { marketplace: 'empty' } },
   mp('library/themes', 'view'),
   { ...mp('library#empty', 'view', 'empty-state'), params: { marketplace: 'empty' } },
+  { ...mp('library#load-failed', 'view', 'error-state'), params: { fail: 'skills.list' } },
+  { ...mp('library/themes#load-failed', 'view', 'error-state'), params: { fail: 'theme.marketplace.list' } },
 ];

@@ -47,4 +47,13 @@ export const CHAT: readonly ScreenEntry[] = [
   // hands over to the app after 1.5 s by design.
   ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'ENABLE_DEVELOPER_MODE', 'AUTHENTICATE'].map((st) => ({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}`, tags: ['first-run', 'view'], params: { firstRun: st } })),
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },
+  // The arcade signed in (a friend online), and its lonelier states.
+  { ...chat('chat/games#signed-in', 'pane', 'games'), params: { signedIn: '1' } },
+  ...['degraded', 'empty'].map((a) => ({ ...chat(`chat/games#${a}`, 'pane', 'games'), params: { signedIn: '1', arcade: a } })),
+  // The status bar per kind of session (scenarios built for it).
+  ...(['statusbar-cc', 'statusbar-local', 'statusbar-metered', 'statusbar-unpriced', 'statusbar-delegated'] as const).map((sc) => ({ ...chat(`chat#${sc}`, 'view', 'status-bar'), scenario: sc })),
+  // A read that fails when the screen opens (?fail=<channel>).
+  { ...chat('chat/skills#load-failed', 'drawer', 'error-state'), params: { fail: 'skills.list' } },
+  { ...chat('chat/tags#load-failed', 'dialog', 'error-state'), params: { fail: 'tags.list' } },
+  { ...chat('chat/close-session#meta-unreadable', 'dialog', 'error-state'), params: { fail: 'session.getMeta' } },
 ];
