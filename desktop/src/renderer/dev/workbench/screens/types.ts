@@ -8,6 +8,9 @@ export type ScreenEntry = {
   scenario?: 'default' | 'empty' | 'no-providers' | 'refused' | 'stress';
   /** Extra workbench URL switches, e.g. `{ fail: 'tags.list' }`. */
   params?: Readonly<Record<string, string>>;
+  /** A practice session to select before opening (fixtures/sessions.ts ids: wb-2 is the
+   *  native-runtime session that seeded conversations, error cards and `stalled` replay into). */
+  session?: string;
   /** Another screen this one is EXPECTED to look identical to, and why. */
   sameAs?: { name: string; why: string };
 };

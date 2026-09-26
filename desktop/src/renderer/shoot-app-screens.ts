@@ -21,6 +21,7 @@ export type AppScreenSetters = {
   setOpenTasksPopupOpen: Setter<boolean>;
   toggleView: (mode: 'chat' | 'terminal') => void;
   openSessionFiles: (sessionId: string) => void;
+  selectSession: (id: string) => void;
   gamePanelOpen: boolean;
   toggleGamePanel: () => void;
   openProjects: () => void;
@@ -30,6 +31,8 @@ export type AppScreenSetters = {
 export function useAppScreens(s: AppScreenSetters): void {
   const id = s.sessionId;
   useScreenOpen('settings', () => s.setSettingsOpen(true));
+  // Not a screen: the driver selects an entry's practice session through this first.
+  useScreenOpen('_select-session', (id) => { if (id) s.selectSession(id); });
   // The chat itself: nothing to open, it is where the app starts.
   useScreenOpen('chat', () => s.setActiveView('chat'));
   // The welcome screen shows when there is no session (its entry uses the `empty` scenario).

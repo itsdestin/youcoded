@@ -759,6 +759,8 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
   // extended to the theme editor so its header can go too.
   const [showInfo, setShowInfo] = useState(false);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
+  useScreenOpen('settings/appearance/about', () => setShowInfo(true));
+  useScreenOpen('settings/appearance/edit', () => setEditingSlug('halftone-dimension')); // a fixture community theme
   const editingTheme = editingSlug ? (allThemes.find((t) => t.slug === editingSlug) ?? null) : null;
   const popupRef = useRef<HTMLDivElement>(null);
 
@@ -818,6 +820,8 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
         fill
         panelRef={popupRef}
       >
+        {showInfo && <ScreenMark name="settings/appearance/about" />}
+        {editingTheme && <ScreenMark name="settings/appearance/edit" />}
         <ThemeScreen
           onClose={() => setOpen(false)}
           onSendInput={onSendInput}

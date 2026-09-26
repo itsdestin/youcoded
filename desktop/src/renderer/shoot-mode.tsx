@@ -60,7 +60,7 @@ export function ScreenMark({ name }: { name: string }) {
 }
 
 /** Installed only by the photo-only boot (index.tsx). `shoot` drives it over CDP. */
-export function installScreenDriver(screens: readonly { name: string }[]): void {
+export function installScreenDriver(screens: readonly { name: string; session?: string }[]): void {
   if (!(typeof __SHOOT__ !== 'undefined' && __SHOOT__)) return;
   const known = screens.map((s) => s.name);
   const frame = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
@@ -80,6 +80,15 @@ export function installScreenDriver(screens: readonly { name: string }[]): void 
     async open(name: string): Promise<{ ok: true } | { ok: false; reason: string }> {
       if (!known.includes(name)) return { ok: false, reason: `not in the screen list: ${name}` };
       const base = name.split('#')[0];
+      // An entry that names a practice session selects it first (App registers the
+      // `_select-session` helper; a leading underscore marks it as not a screen).
+      const session = screens.find((s) => s.name === name)?.session;
+      if (session) {
+        const select = await waitFor('_select-session', 3000);
+        if (!select) return { ok: false, reason: 'no _select-session helper registered' };
+        select(session);
+        await frame();
+      }
       const parts = base.split('/');
       for (let i = 1; i <= parts.length; i++) {
         const p = parts.slice(0, i).join('/');

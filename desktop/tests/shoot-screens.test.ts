@@ -49,7 +49,8 @@ describe('screen list ↔ useScreenOpen registrations', () => {
   });
 
   it('every registered name is in the screen list', () => {
-    const missing = [...registered.keys()].filter((n) => !listed.map(base).includes(n));
+    // A leading underscore is a helper the driver calls (`_select-session`), not a screen.
+    const missing = [...registered.keys()].filter((n) => !n.startsWith('_') && !listed.map(base).includes(n));
     expect(missing, 'add these to dev/workbench/screens/index.ts').toEqual([]);
   });
 
