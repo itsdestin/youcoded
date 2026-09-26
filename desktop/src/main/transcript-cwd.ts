@@ -47,6 +47,12 @@ const HEAD_CHUNK_BYTES = 16 * 1024;
  *  otherwise a POSIX fixture silently only tests correctly on POSIX runners
  *  (this exact gap turned 4 tests wrong on the Windows CI leg). */
 export async function firstCwd(filePath: string, platform: NodeJS.Platform = process.platform): Promise<string | null> {
+  return scanFirstCwd(filePath, platform).catch(() => null);
+}
+
+/** firstCwd, except an unreadable file THROWS instead of reading as "no cwd" —
+ *  for callers that remember the answer and must never remember a failed read. */
+export async function scanFirstCwd(filePath: string, platform: NodeJS.Platform = process.platform): Promise<string | null> {
   const accept = (line: string): string | null => {
     const cwd = extractCwd(line);
     return cwd && !isForeignCwd(cwd, platform) ? cwd : null;
@@ -80,7 +86,7 @@ export async function firstCwd(filePath: string, platform: NodeJS.Platform = pro
     // is still a line to the old split('\n') — scan it the same way.
     if (lines < R2_SCAN_CAP && pending.length) return accept(pending.toString('utf8'));
     return null;
-  } catch { return null; }
+  }
   // WHY .catch on close: a rejection thrown inside `finally` REPLACES the
   // function's return value. An uncaught close failure would turn a successful
   // read into a throw that climbs firstCwd -> r1CwdForDir -> resolveSlugToPath,

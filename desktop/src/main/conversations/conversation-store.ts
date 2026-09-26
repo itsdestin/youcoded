@@ -199,14 +199,34 @@ export function createConversationStore(conversationsRoot: string): Conversation
   // '<copy>.healing-<pid>-<nonce>' gives every claim a private name,
   // including recovery of an old claim. Cleanup cannot delete a recreated copy;
   // the bytes actually claimed are revalidated before folding.
+  // WHY a one-second listing memo (2026-09-26): heal runs before EVERY get/
+  // upsert and lists the whole provider directory to look for conflict copies.
+  // The launch repair does ~900 gets in a row on a big history — ~900 listings
+  // of ~2,600 names. Listings made within a second of each other share one.
+  // Heal is opportunistic already ("the next read retries"): a copy the sync
+  // engine drops in during that second is healed by a later read, never lost.
+  // Any change THIS store makes to the directory (claim, cleanup, remove)
+  // forgets the listing at once, so a retry always sees its own claims.
+  const LISTING_TTL_MS = 1000;
+  const listings = new Map<string, { at: number; names: Promise<string[]> }>();
+  function recentListing(dir: string): Promise<string[]> {
+    const hit = listings.get(dir);
+    if (hit && Date.now() - hit.at < LISTING_TTL_MS) return hit.names;
+    const names = fs.promises.readdir(dir);
+    listings.set(dir, { at: Date.now(), names });
+    // A failed listing is not remembered — the next heal asks again.
+    names.catch(() => { if (listings.get(dir)?.names === names) listings.delete(dir); });
+    return names;
+  }
+
   async function heal(provider: string, id: string): Promise<void> {
     const dir = providerDir(provider);
     let names: string[];
     // The provider dir may not exist yet — nothing to heal.
-    // WHY async (2026-09-26): heal runs before EVERY get/upsert, and listing a
-    // ~2,600-record directory synchronously each time was measured freezing the
-    // whole app ~0.85 s during the launch repair (every window stalls).
-    try { names = await fs.promises.readdir(dir); } catch { return; }
+    // WHY async (2026-09-26): listing a ~2,600-record directory synchronously
+    // on each call was measured freezing the whole app ~0.85 s during the
+    // launch repair (every window stalls).
+    try { names = await recentListing(dir); } catch { return; }
     const baseName = `${id}.json`;
 
     const validated: { path: string; record: ConversationRecord }[] = [];
@@ -222,6 +242,8 @@ export function createConversationStore(conversationsRoot: string): Conversation
       try { peek = parseRecord(await fs.promises.readFile(full, 'utf8')); } catch { continue; }
       if (!peek || peek.id !== id || peek.provider !== provider) continue;
       const quarantine = path.join(dir, original) + HEALING_MARKER + process.pid + '-' + randomUUID();
+      // Our own rename changes the directory: a remembered listing is now wrong.
+      listings.delete(dir);
       try { fs.renameSync(full, quarantine); } catch { continue; }
       // Another live healer may reclaim this private path. Never restore over
       // an original name that the sync engine may have recreated meanwhile.
@@ -256,6 +278,7 @@ export function createConversationStore(conversationsRoot: string): Conversation
     }
     // Only successfully incorporated private paths are disposable. Failed
     // commits leave the claims as evidence; failed unlinks retry later.
+    listings.delete(dir);
     for (const q of folded) {
       try { fs.unlinkSync(q); } catch { /* retained or reclaimed — retry later */ }
     }
@@ -433,6 +456,7 @@ export function createConversationStore(conversationsRoot: string): Conversation
           const original = originalConflictName(n);
           return isConflictCopyName(original) && extractConflictBase(original) === baseName;
         });
+        listings.delete(dir);
         for (const n of targets) {
           try { fs.unlinkSync(path.join(dir, n)); removed = true; }
           catch { /* already gone / raced another remover — treat as removed by someone */ }

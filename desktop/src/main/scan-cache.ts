@@ -52,7 +52,10 @@ export function createScanCache<V>(file: string, schema: number): ScanCache<V> {
     // tmp + rename: a reader (another app copy) never sees a half-written file.
     const tmp = `${file}.${process.pid}.tmp`;
     try {
-      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      // Only the cache folder itself is created — never its parents. The app's
+      // private home always exists; a home that has gone (a finished test's
+      // temp folder) must not be recreated by a late save.
+      await fs.promises.mkdir(path.dirname(file)).catch((e) => { if (e?.code !== 'EEXIST') throw e; });
       await fs.promises.writeFile(tmp, JSON.stringify(body));
       await fs.promises.rename(tmp, file);
     } catch {

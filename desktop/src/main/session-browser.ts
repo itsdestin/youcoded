@@ -129,8 +129,31 @@ async function withRetry<T>(fn: () => Promise<T>, attempts: number = 3, delayMs:
 // helpers below ran on fs.*Sync — called ONCE PER PROJECT SLUG on every
 // Resume Browser open, so a big ~/.claude/projects tree froze the main
 // thread for the whole scan. listPastSessions's one call site now awaits.
+// WHY remember R1 per slug directory (2026-09-26): r1CwdForDir's exhaustive
+// tier reads EVERY transcript in the directory in full when no first-line cwd
+// re-slugs to the directory name — e.g. a folder named "PAF 574 - Diversity,
+// Ethics, & Public Change" on a real history: ~6 MB read and parsed on every
+// Resume open, ~0.5 s of a settled open. The answer only depends on which
+// transcripts the directory holds, so it is kept (on disk, across restarts)
+// until the directory's modified time changes — i.e. a transcript is added or
+// removed. Only the R1 answer (including "none") is kept; the filesystem
+// fallbacks below still run live, since they depend on folders elsewhere.
+type R1Answer = { cwd: string | null };
+let r1Answers: ScanCache<R1Answer> = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'slug-r1.json'), 1);
+async function r1CwdForSlug(slug: string): Promise<string | null> {
+  const dir = path.join(PROJECTS_DIR, slug);
+  const st = await fs.promises.stat(dir).catch(() => null);
+  if (!st) return r1CwdForDir(dir);
+  const key = { size: 0, mtimeMs: st.mtimeMs };
+  const hit = await r1Answers.get(slug, key);
+  if (hit) return hit.cwd;
+  const cwd = await r1CwdForDir(dir);
+  r1Answers.set(slug, key, { cwd });
+  return cwd;
+}
+
 async function resolveSlugToPath(slug: string): Promise<string> {
-  const recorded = await r1CwdForDir(path.join(PROJECTS_DIR, slug));
+  const recorded = await r1CwdForSlug(slug);
   if (recorded) return recorded;
 
   const forward = await forwardResolveSlug(slug);
@@ -454,6 +477,7 @@ function pruneTranscriptMetaCache(seen: Set<string>) {
 
 export function __clearTranscriptMetaCacheForTests() {
   metaCache.clear();
+  r1Answers = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'slug-r1.json'), 1);
   diskMeta = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'transcript-meta.json'), 1);
 }
 
@@ -597,7 +621,7 @@ export async function listPastSessions(
   // Only prune against a real production scan of PROJECTS_DIR — a test scan of
   // a temp tree (subagent-exclusion.test.ts, this file's own cache tests) must
   // never wipe cache entries a concurrent production scan is relying on.
-  if (projectsDir === PROJECTS_DIR) pruneTranscriptMetaCache(seenPaths);
+  if (projectsDir === PROJECTS_DIR) { pruneTranscriptMetaCache(seenPaths); r1Answers.prune(new Set(slugs)); }
   perfMark('bg:browse:transcripts-done', { scanId, transcripts: seenPaths.size });
 
   // Deduplicate: aggregation symlinks/copies place project-specific .jsonl

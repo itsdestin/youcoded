@@ -8,13 +8,23 @@ import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import { ccProjectSlug, nativeStoreSlug } from '../slug-encoding';
-import { firstCwd, isForeignCwd } from '../transcript-cwd';
+import { firstCwd, scanFirstCwd, isForeignCwd } from '../transcript-cwd';
 import { readFolders } from '../saved-folders';
 import { getManagedRoots } from '../sync-spaces/service';
 import { getConversationStore } from './service';
 import { log } from '../logger';
 import { perfMark } from '../perf-marks';
+import { createScanCache } from '../scan-cache';
 import { readState, writeState, defaultStateFile } from './slug-repair-state';
+
+/** `fn` over `items`, at most `limit` at once; results in the items' order. */
+async function mapInOrder<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i]); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 
 export function uuidSet(filePath: string): Set<string> {
   const out = new Set<string>();
@@ -166,6 +176,9 @@ export interface RepairOpts {
   // and threaded through so the fork branches below can skip re-snapshotting
   // an already-held pair. See heldForkIds' WHY in slug-repair-state.ts.
   heldForks?: Set<string>;
+  // How §6.2 reads a transcript's R2 cwd. Production passes a remembered
+  // version (runSlugRepair); tests and other callers get the plain read.
+  firstCwdOf?: (file: string) => Promise<string | null>;
 }
 export interface RepairFinding {
   sessionId: string;
@@ -374,26 +387,56 @@ export async function repairRecordsAndSpace(
   // the ORIGIN device, store-core.ts:26 — was silently overwritten with
   // THIS device's path and pushed to the store (and from there synced to
   // peers), with no log line anywhere. Mirrors repairHomeForks' R2 gate above.
+  // WHY the reads run 8 at a time but are APPLIED in the original order
+  // (2026-09-26): one-at-a-time, ~3,300 small reads made this stage 7–25 s of
+  // wall time on a big history, holding back the sweeps that wait on it. The
+  // repair set is a Map whose later set() wins, so the order of the set()
+  // calls — (a) before (b), file by file — is kept exactly.
+  const readCwd = opts.firstCwdOf ?? ((f: string) => firstCwd(f, platform));
+  const firstCwds = (files: string[]) => mapInOrder(files, 8, readCwd);
   for (const P of knownFolders) {
     const correctDir = path.join(projectsDir, ccProjectSlug(P));
-    for (const f of topLevelJsonl(correctDir)) {
-      const cwd = await firstCwd(f, platform);
-      if (!cwd || isForeignCwd(cwd, platform) || !sameDir(cwd, P)) continue;
+    const files = topLevelJsonl(correctDir);
+    const cwds = await firstCwds(files);
+    files.forEach((f, i) => {
+      const cwd = cwds[i];
+      if (!cwd || isForeignCwd(cwd, platform) || !sameDir(cwd, P)) return;
       repairSet.set(path.basename(f, '.jsonl'), P);
-    }
+    });
   }
   // (b) every space transcript whose R2 home is a known folder filed under the
   //     wrong bucket (covers space-only sessions like a943d85d)
   let buckets: string[] = [];
   try { buckets = fs.readdirSync(lane); } catch { /* no space yet */ }
   for (const bucket of buckets) {
-    for (const f of topLevelJsonl(path.join(lane, bucket))) {
-      const cwd = await firstCwd(f, platform);
-      if (!cwd || isForeignCwd(cwd, platform)) continue;
+    const files = topLevelJsonl(path.join(lane, bucket));
+    const cwds = await firstCwds(files);
+    files.forEach((f, i) => {
+      const cwd = cwds[i];
+      if (!cwd || isForeignCwd(cwd, platform)) return;
       const P = knownFolders.find(p => sameDir(p, cwd));
       if (P && path.basename(P) !== bucket) repairSet.set(path.basename(f, '.jsonl'), P);
-    }
+    });
   }
+
+  // WHY list each bucket once (2026-09-26): the per-session existence check
+  // below asked every bucket about every session — ~99 buckets × ~900 sessions
+  // ≈ 90,000 file-system calls per launch, crowding out the Resume list's reads.
+  // One listing per bucket answers the same question. It stays correct while
+  // the loop moves files because each session id is visited exactly once and a
+  // move only touches that session's own file. Symlinks keep existsSync's
+  // meaning (a dangling one is not a copy); other entries count, as before.
+  const bucketNames = new Map<string, Set<string>>();
+  await Promise.all(buckets.map(async (b) => {
+    const names = new Set<string>();
+    try {
+      for (const e of await fs.promises.readdir(path.join(lane, b), { withFileTypes: true })) {
+        if (!e.isSymbolicLink()) { names.add(e.name); continue; }
+        if (await fs.promises.access(path.join(lane, b, e.name)).then(() => true, () => false)) names.add(e.name);
+      }
+    } catch { /* unreadable bucket — no copies there, as existsSync would say */ }
+    bucketNames.set(b, names);
+  }));
 
   const emptiedBuckets = new Set<string>();
   for (const [sessionId, P] of repairSet) {
@@ -402,12 +445,11 @@ export async function repairRecordsAndSpace(
     const rec = await store.get('claude', sessionId);
     const recordOk = rec && rec.projectName === bucketName && rec.originalPath === P;
     // Space copies across ALL buckets for this session:
-    // WHY async (2026-09-26): one existence check per bucket per session —
-    // ~99 buckets × a few hundred sessions on a big history — was ~0.1-0.17 s
-    // of synchronous stat inside the launch repair's measured app-wide freeze.
-    const candidates = buckets.map(b => path.join(lane, b, `${sessionId}.jsonl`));
-    const present = await Promise.all(candidates.map(p => fs.promises.access(p).then(() => true, () => false)));
-    const copies = candidates.filter((_, i) => present[i]);
+    // Answered from the listings above (was one existsSync per bucket: ~0.1-
+    // 0.17 s of synchronous stat inside the launch repair's app-wide freeze).
+    const copies = buckets
+      .filter(b => bucketNames.get(b)?.has(`${sessionId}.jsonl`))
+      .map(b => path.join(lane, b, `${sessionId}.jsonl`));
     // Fix (final review, CRITICAL 2): convergence must be a true fixed point,
     // not just "zero copies anywhere". The old skip only fired when there
     // were literally no space copies at all, so a HEALTHY session — record
@@ -718,8 +760,34 @@ export async function runSlugRepair(overrides?: Partial<RepairOpts> & {
   const stateFile = overrides?.stateFile ?? defaultStateFile(homeDir);
   const state = readState(stateFile);
   const heldForks = new Set(state.surfacedForks.map(f => f.id));
+  // WHY remembered (2026-09-26): §6.2 re-reads the opening lines of every
+  // transcript (~3,300 on a big history) on EVERY launch to re-derive answers
+  // that only change when a file does — seconds of disk work competing with
+  // the Resume list the user is opening at that moment. A transcript's first
+  // cwd is kept per file, keyed by its size + modified time (scan-cache.ts).
+  // "No usable cwd" IS kept (most transcripts synced from a Windows machine
+  // read that way on Linux); an unreadable file is not (scanFirstCwd throws).
+  const cwdCache = createScanCache<{ cwd: string | null }>(path.join(homeDir, '.youcoded', 'cache', `first-cwd-${process.platform}.json`), 1);
+  const scannedCwdFiles = new Set<string>();
+  const cwdReads = { remembered: 0, read: 0 };
+  const firstCwdOf = async (file: string): Promise<string | null> => {
+    scannedCwdFiles.add(file);
+    const st = await fs.promises.stat(file).catch(() => null);
+    if (!st) return firstCwd(file);
+    const key = { size: st.size, mtimeMs: st.mtimeMs };
+    const hit = await cwdCache.get(file, key);
+    if (hit) { cwdReads.remembered++; return hit.cwd; }
+    cwdReads.read++;
+    try {
+      const cwd = await scanFirstCwd(file);
+      cwdCache.set(file, key, { cwd });
+      return cwd;
+    } catch { return null; }
+  };
   const opts: RepairOpts = { projectsDir, homeDir, knownFolders, quarantine, heldForks,
-    liveMs: overrides?.liveMs, now: overrides?.now };
+    liveMs: overrides?.liveMs, now: overrides?.now,
+    // A test that pins another platform keeps the plain read (the cache file is per real platform).
+    firstCwdOf: overrides?.platform ? undefined : firstCwdOf };
 
   const stageFns = {
     repairHomeForks: overrides?.stages?.repairHomeForks ?? repairHomeForks,
@@ -764,7 +832,11 @@ export async function runSlugRepair(overrides?: Partial<RepairOpts> & {
   // surviving wrong record right after a supervised run as a failure; check
   // again after one more launch.
   try {
-    perfMark('bg:slug-repair:6.3:start');
+    // Written now rather than on the cache's own timer: the repair runs once per
+  // launch, and the next launch is the reader.
+  cwdCache.prune(scannedCwdFiles);
+  await cwdCache.flush();
+  perfMark('bg:slug-repair:6.3:start', cwdReads);
     all.push(...stageFns.repairOrphanDirs(opts));                         // 6.3
   } catch (e) {
     log('ERROR', 'SlugRepair', 'stage failed', { stage: '6.3 repairOrphanDirs', error: String(e) });
