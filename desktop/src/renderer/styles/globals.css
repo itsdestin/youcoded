@@ -2952,3 +2952,14 @@ html[data-platform="electron"][data-view-mode="terminal"] .chrome-glass {
 [data-chrome-style='floating'] .screen-view[data-screen-frame='bleed'] .screen-pane--panel ~ .screen-pane--frame > * {
   left: calc(15rem + 16px);
 }
+
+/* "Ask about this" chip ↔ its source text (use-ref-source-highlight.ts).
+   Hovering a chip washes the source in the accent; clicking scrolls to it
+   and flashes a stronger wash. Text colour untouched so it stays readable
+   in every theme. */
+::highlight(ref-source-hover) {
+  background-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+::highlight(ref-source-flash) {
+  background-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}

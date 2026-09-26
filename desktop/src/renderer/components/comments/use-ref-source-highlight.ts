@@ -1,0 +1,108 @@
+// useRefSourceHighlight — lights up the text an "Ask about this" chip came
+// from (Destin, 2026-09-24: "i should be able to click the chip and have it
+// focus/highlight the originating text in some way. should be hover
+// sensitive as well"). Mounted once per open commentable file
+// (CommentableDocument), in both Reading and Comments mode.
+//
+//   hover a chip  → the source text gets a soft accent wash, no scrolling
+//   click a chip  → scrolled into view (centred) and a stronger wash that
+//                   fades after FLASH_MS
+//   click when the file is closed → compose-ref.ts opens it and leaves a
+//                   pending jump, taken here once the content has loaded
+//
+// WHY the CSS Custom Highlight API (like ContentFindBar): it paints a Range
+// without touching the DOM, so it can never fight the comment <mark>s
+// use-quote-marks.ts wraps into the same text.
+import { useEffect, type RefObject } from 'react';
+import { findQuote } from './use-quote-marks';
+import { takePendingJump, type ComposeRef } from '../context-menu/compose-ref';
+
+const HOVER_NAME = 'ref-source-hover';
+const FLASH_NAME = 'ref-source-flash';
+const FLASH_MS = 1800;
+// A just-opened file renders its content asynchronously (bytes → parse →
+// render), so a pending jump retries until the text exists or it expires.
+const PENDING_RETRY_MS = 150;
+const PENDING_TRIES = 30;
+
+function rangeFor(root: HTMLElement, ref: ComposeRef): Range | null {
+  if (ref.cell) {
+    const cellEl = root.querySelector(`[data-cell="${ref.cell}"]`);
+    if (!cellEl) return null;
+    const r = document.createRange();
+    r.selectNodeContents(cellEl);
+    return r;
+  }
+  if (!ref.quote) return null;
+  const hit = findQuote(root, ref.quote);
+  if (!hit) return null;
+  const r = document.createRange();
+  r.setStart(hit.start.node, hit.start.offset);
+  r.setEnd(hit.end.node, hit.end.offset);
+  return r;
+}
+
+// Guarded: an engine without the API simply shows no highlight.
+function paint(name: string, range: Range | null): void {
+  const reg = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights;
+  const HighlightCtor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
+  if (!reg || !HighlightCtor) return;
+  if (range) reg.set(name, new HighlightCtor(range));
+  else reg.delete(name);
+}
+
+function scrollToRange(range: Range): void {
+  const el = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
+  el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>, path: string): void {
+  useEffect(() => {
+    let flashTimer: number | null = null;
+    let pendingTimer: number | null = null;
+    const flash = (range: Range) => {
+      scrollToRange(range);
+      paint(FLASH_NAME, range);
+      if (flashTimer) window.clearTimeout(flashTimer);
+      flashTimer = window.setTimeout(() => paint(FLASH_NAME, null), FLASH_MS);
+    };
+    const onHover = (e: Event) => {
+      const ref = (e as CustomEvent<{ ref: ComposeRef | null }>).detail?.ref;
+      const root = contentRef.current;
+      paint(HOVER_NAME, ref && root && ref.path === path ? rangeFor(root, ref) : null);
+    };
+    const onJump = (e: Event) => {
+      const detail = (e as CustomEvent<{ ref?: ComposeRef; handled?: boolean }>).detail;
+      const root = contentRef.current;
+      if (!detail?.ref || !root || detail.ref.path !== path) return;
+      // Handled even if the text is gone: the file IS open, so compose-ref
+      // must not try to open it again.
+      detail.handled = true;
+      const range = rangeFor(root, detail.ref);
+      if (range) flash(range);
+    };
+    window.addEventListener('youcoded:ref-hover', onHover);
+    window.addEventListener('youcoded:jump-to-ref', onJump);
+
+    const pending = takePendingJump(path);
+    if (pending) {
+      let tries = 0;
+      const attempt = () => {
+        const root = contentRef.current;
+        const range = root ? rangeFor(root, pending) : null;
+        if (range) { flash(range); pendingTimer = null; return; }
+        if (++tries < PENDING_TRIES) pendingTimer = window.setTimeout(attempt, PENDING_RETRY_MS);
+      };
+      attempt();
+    }
+
+    return () => {
+      window.removeEventListener('youcoded:ref-hover', onHover);
+      window.removeEventListener('youcoded:jump-to-ref', onJump);
+      if (flashTimer) window.clearTimeout(flashTimer);
+      if (pendingTimer) window.clearTimeout(pendingTimer);
+      paint(HOVER_NAME, null);
+      paint(FLASH_NAME, null);
+    };
+  }, [contentRef, path]);
+}

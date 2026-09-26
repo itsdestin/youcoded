@@ -29,6 +29,8 @@ vi.mock('../src/renderer/state/ArtifactContext', () => {
   const state = { drawerOpenBySession: {}, drawerExpanded: false };
   return {
     useArtifactSelector: (select: (s: any) => unknown) => select(state),
+    // UserMessage's reference chips open their file on click (useOpenFilepath).
+    useArtifactStoreOptional: () => null,
     useArtifactDispatch: () => vi.fn(),
   };
 });

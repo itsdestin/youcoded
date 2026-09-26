@@ -17,7 +17,8 @@
 // identically before and after sending. On the accent-coloured sent bubble
 // the tint is taken from --on-accent (the bubble's own text colour), which
 // stays readable on every theme's accent.
-import type { ComposeRef } from '../context-menu/compose-ref';
+import { useState } from 'react';
+import { dispatchRefHover, type ComposeRef } from '../context-menu/compose-ref';
 
 interface Props {
   ref_: ComposeRef;
@@ -30,16 +31,22 @@ interface Props {
 export function TokenPill({ ref_, onJump, tone = 'default' }: Props) {
   const clickable = ref_.kind === 'doc' && !!onJump;
   const base = tone === 'on-accent' ? 'var(--on-accent)' : 'var(--accent)';
+  // Hover lights up the source text in an open viewer (compose-ref.ts
+  // "Chip ↔ source text") and deepens the chip's own fill to say "this does
+  // something".
+  const [hover, setHover] = useState(false);
   return (
     <span
       className={`rounded-sm px-1 py-0.5 whitespace-nowrap select-none ${tone === 'on-accent' ? 'text-on-accent' : 'text-fg'}`}
       style={{
-        backgroundColor: `color-mix(in srgb, ${base} 22%, transparent)`,
+        backgroundColor: `color-mix(in srgb, ${base} ${hover ? 36 : 22}%, transparent)`,
         boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${base} 50%, transparent)`,
         ...(clickable ? { cursor: 'pointer' } : null),
       }}
       title={ref_.fileName ? `${ref_.label} · ${ref_.fileName}` : ref_.label}
       onClick={clickable ? () => onJump?.(ref_) : undefined}
+      onMouseEnter={clickable ? () => { setHover(true); dispatchRefHover(ref_); } : undefined}
+      onMouseLeave={clickable ? () => { setHover(false); dispatchRefHover(null); } : undefined}
     >
       {ref_.label}
     </span>

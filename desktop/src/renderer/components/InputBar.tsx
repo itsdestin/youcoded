@@ -8,7 +8,8 @@ import { AttachmentChip } from './AttachmentChip';
 // markers, with a real pill drawn over each by the mirror layer below — see
 // compose-ref.ts's own header comment for the full WHY. Ported from the
 // "inline & conversational" mockup (session/comments-mock-c).
-import { makeDraftToken, splitDraftTokens, draftTokenRanges, expandDraftTokens, type ComposeRef } from './context-menu/compose-ref';
+import { makeDraftToken, splitDraftTokens, draftTokenRanges, expandDraftTokens, draftRef, dispatchRefHover, jumpToRef, type ComposeRef } from './context-menu/compose-ref';
+import { useOpenFilepath } from '../hooks/useOpenFilepath';
 import { AttachIcon, CompassIcon } from './Icons';
 import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { StatusStrip } from './ui/StatusStrip';
@@ -587,6 +588,30 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     });
   }, []);
 
+  // Chips point back at their source text (Destin, 2026-09-24: "click the
+  // chip and have it focus/highlight the originating text… hover sensitive
+  // as well"). The mirror layer sits UNDER the textarea with pointer events
+  // off, so the pointer is hit-tested against the chips' own rects here.
+  const openFile = useOpenFilepath(sessionId);
+  const [hoverChipKey, setHoverChipKey] = useState<string | null>(null);
+  const chipKeyAt = useCallback((x: number, y: number): string | null => {
+    const chips = mirrorContentRef.current?.querySelectorAll<HTMLElement>('[data-draft-chip]');
+    if (!chips) return null;
+    for (const chip of chips) {
+      for (const r of chip.getClientRects()) {
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return chip.dataset.draftChip ?? null;
+      }
+    }
+    return null;
+  }, []);
+  const hoverChipKeyRef = useRef<string | null>(null);
+  const updateChipHover = useCallback((key: string | null) => {
+    if (hoverChipKeyRef.current === key) return;
+    hoverChipKeyRef.current = key;
+    setHoverChipKey(key);
+    dispatchRefHover(key ? draftRef(key) : null);
+  }, []);
+
   // A chip is one object: a click (or any caret move) that lands inside one
   // snaps to its nearer edge, and a selection that cuts through one grows to
   // take it whole — so typing can never split a chip into stray invisible
@@ -1116,7 +1141,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
                     (their × and jump-click) despite this layer's pointer-events-none. */}
                 {splitDraftTokens(text).map((seg, i) => (
                   seg.type === 'token'
-                    ? <DraftChip key={`tok-${i}`} tokenKey={seg.key} label={seg.label} />
+                    ? <DraftChip key={`tok-${i}`} tokenKey={seg.key} label={seg.label} hovered={hoverChipKey === seg.key} />
                     : <FlowingKeywordsText key={`t-${i}`} text={seg.value} />
                 ))}
                 {voiceTail && <span className="text-fg-muted">{voiceTail}</span>}
@@ -1133,6 +1158,14 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"
+            // Only does work while the draft actually holds a chip.
+            onMouseMove={text.includes('⦃') ? (e) => updateChipHover(chipKeyAt(e.clientX, e.clientY)) : undefined}
+            onMouseLeave={hoverChipKey ? () => updateChipHover(null) : undefined}
+            onClick={text.includes('⦃') ? (e) => {
+              const key = chipKeyAt(e.clientX, e.clientY);
+              const ref = key ? draftRef(key) : null;
+              if (ref) jumpToRef(ref, openFile);
+            } : undefined}
             onScroll={(e) => {
               if (mirrorContentRef.current) {
                 mirrorContentRef.current.style.transform = `translateY(${-e.currentTarget.scrollTop}px)`;
@@ -1297,7 +1330,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // keyword text as you type, and selection reveals a second copy
             // of the text. Inherit font metrics from the parent so both
             // layers measure identically.
-            style={{ caretColor: 'var(--fg)', fontFamily: 'inherit', letterSpacing: 'inherit' }}
+            style={{ caretColor: 'var(--fg)', fontFamily: 'inherit', letterSpacing: 'inherit', cursor: hoverChipKey ? 'pointer' : undefined }}
             // break-words makes the textarea wrap long URLs/paths at the same
             // character position as the mirror (which also has break-words).
             // Without this, textarea used Chromium's default algorithm and
@@ -1383,12 +1416,14 @@ export default InputBar;
  *  the invisible brackets act as the side padding. Styled after TagChip (the
  *  app's chip: a tinted fill, a stronger tinted edge, the text in the theme's
  *  own colour), in the accent. */
-function DraftChip({ tokenKey, label }: { tokenKey: string; label: string }) {
+function DraftChip({ tokenKey, label, hovered }: { tokenKey: string; label: string; hovered: boolean }) {
   return (
     <span
+      data-draft-chip={tokenKey}
       className="rounded-sm py-0.5 text-fg"
       style={{
-        backgroundColor: 'color-mix(in srgb, var(--accent) 22%, transparent)',
+        // Deeper fill while hovered — the same cue as the sent chip (TokenPill).
+        backgroundColor: `color-mix(in srgb, var(--accent) ${hovered ? 36 : 22}%, transparent)`,
         boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent)',
         boxDecorationBreak: 'clone',
         WebkitBoxDecorationBreak: 'clone',

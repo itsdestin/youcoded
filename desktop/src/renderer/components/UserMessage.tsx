@@ -9,7 +9,8 @@ import { FilepathToken } from './FilepathToken';
 // assistant" rides in message.content as an invisible marker (compose-ref.ts)
 // — decode it back into the SAME pill the composer showed, inline in the
 // sentence, so a reference reads identically before and after sending.
-import { splitComposeRefs, dispatchJumpToRef } from './context-menu/compose-ref';
+import { splitComposeRefs, jumpToRef } from './context-menu/compose-ref';
+import { useOpenFilepath } from '../hooks/useOpenFilepath';
 import { TokenPill } from './comments/TokenPill';
 
 interface Props {
@@ -31,6 +32,9 @@ function renderTextRun(text: string, keyPrefix: string): React.ReactNode[] {
 }
 
 export default React.memo(function UserMessage({ message, sessionId, showTimestamps }: Props) {
+  // A chip click opens its file when it isn't already open, then jumps to
+  // the source text (compose-ref.ts "Chip ↔ source text").
+  const openFile = useOpenFilepath(sessionId);
   const content = message.content;
 
   // Attached files: message.attachments carries the EXACT picker paths (which
@@ -78,7 +82,7 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
   const body: React.ReactNode[] = [...attachmentPills];
   splitComposeRefs(text).forEach((seg, i) => {
     if (seg.type === 'ref') {
-      body.push(<TokenPill key={`ref-${seg.ref.id}-${i}`} ref_={seg.ref} onJump={dispatchJumpToRef} tone="on-accent" />);
+      body.push(<TokenPill key={`ref-${seg.ref.id}-${i}`} ref_={seg.ref} onJump={(r) => jumpToRef(r, openFile)} tone="on-accent" />);
     } else {
       body.push(...renderProseSegment(seg.value, `s${i}-`));
     }

@@ -9,6 +9,7 @@ import { useRef, type ReactNode } from 'react';
 import { CommentsMargin } from './CommentsMargin';
 import { ReadingHighlights } from './ReadingHighlights';
 import { useContainerNarrow } from '../../hooks/use-container-narrow';
+import { useRefSourceHighlight } from './use-ref-source-highlight';
 
 // 640px, same NUMBER the app's viewport breakpoint uses, but measuring the
 // PANE (see useContainerNarrow's own WHY) — SessionDrawer's fixed ~480px
@@ -39,6 +40,8 @@ export function CommentableDocument({
 }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [rootRef, narrow] = useContainerNarrow<HTMLDivElement>(MARGIN_COLLAPSE_PX);
+  // Hover/click an "Ask about this" chip → light up its source text here.
+  useRefSourceHighlight(contentRef, path);
   // Round 13: the wide comment list is its own scroller BESIDE the document
   // (cards stack from the top, no longer pinned to their highlights). Only
   // the narrow marker rail still lives inside the document's scroller, since

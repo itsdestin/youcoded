@@ -25,6 +25,7 @@ import { ContextMenu } from '../context-menu/ContextMenu';
 import { buildContextMenu, type MenuEntry } from '../context-menu/build-menu';
 import { useQuoteMarks, ACTIVE_CLASSES, segmentsRect } from './use-quote-marks';
 import { useDocComments } from '../../state/doc-comments-store';
+import type { ComposeRef } from '../context-menu/compose-ref';
 
 // Hover-card open delay + a short close delay: a highlight answering on the
 // first pixel of hover would fire constantly while reading/scanning text;
@@ -181,7 +182,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
   // dispatchJumpToRef: there is no cross-file navigation here).
   useEffect(() => {
     const listener = (e: Event) => {
-      const commentId = (e as CustomEvent<{ commentId?: string }>).detail?.commentId;
+      const commentId = (e as CustomEvent<{ ref?: ComposeRef }>).detail?.ref?.commentId;
       if (!commentId) return;
       if (!marks.has(commentId)) return;
       onOpenComments(commentId);

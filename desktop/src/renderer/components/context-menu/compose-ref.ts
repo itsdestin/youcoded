@@ -26,6 +26,11 @@ export interface ComposeRef {
   path?: string;
   /** doc kind only — the file's display name (not the full path). */
   fileName?: string;
+  /** doc kind — the selected text itself (capped), so hovering or clicking
+   *  the chip can find and light up where it came from. */
+  quote?: string;
+  /** doc kind, spreadsheets — the cell ("C4") the reference points at. */
+  cell?: string;
   /** doc kind, code/raw text — 1-indexed inclusive line range. */
   lineRange?: [number, number];
   /** Present when this ref represents an EXISTING comment thread (batched via
@@ -81,15 +86,42 @@ export function splitComposeRefs(text: string): ComposeSegment[] {
   return parts;
 }
 
-/** Click-a-pill "jump to the span" — a no-op unless the SAME document happens
- *  to be open right now; there is no cross-file navigation here, only a
- *  scroll+flash of an already-open match (DocHighlights/CommentsMargin listen
- *  for this). */
-export function dispatchJumpToRef(ref: ComposeRef): void {
+// ── Chip ↔ source text (Destin, 2026-09-24: "i should be able to click the
+// chip and have it focus/highlight the originating text… should be hover
+// sensitive as well") ──────────────────────────────────────────────────────
+// Hover: 'youcoded:ref-hover' with the ref (or null on leave) — an open viewer
+// of that file tints the source text while the pointer is on the chip.
+// Click: 'youcoded:jump-to-ref' — an open viewer of that file scrolls to the
+// text and flashes it, and marks the event handled. When no viewer answered,
+// the caller's `openFile` opens the file and the jump waits as `pendingJump`
+// until that viewer mounts and its content has loaded (useRefSourceHighlight).
+
+/** Hovering a chip (null when the pointer leaves it). */
+export function dispatchRefHover(ref: ComposeRef | null): void {
+  window.dispatchEvent(new CustomEvent('youcoded:ref-hover', { detail: { ref } }));
+}
+
+let pendingJump: { ref: ComposeRef; until: number } | null = null;
+const PENDING_JUMP_MS = 6000;
+
+/** Clicking a chip: jump to its source text, opening the file if needed. */
+export function jumpToRef(ref: ComposeRef, openFile?: (path: string) => Promise<void> | void): void {
   if (ref.kind !== 'doc') return;
-  window.dispatchEvent(new CustomEvent('youcoded:jump-to-ref', {
-    detail: { path: ref.path, commentId: ref.commentId },
-  }));
+  const detail = { ref, handled: false };
+  window.dispatchEvent(new CustomEvent('youcoded:jump-to-ref', { detail }));
+  if (!detail.handled && openFile && ref.path) {
+    pendingJump = { ref, until: Date.now() + PENDING_JUMP_MS };
+    void openFile(ref.path);
+  }
+}
+
+/** The jump a just-opened viewer of `path` should perform, if any. */
+export function takePendingJump(path: string): ComposeRef | null {
+  if (!pendingJump || pendingJump.ref.path !== path) return null;
+  if (Date.now() > pendingJump.until) { pendingJump = null; return null; }
+  const ref = pendingJump.ref;
+  pendingJump = null;
+  return ref;
 }
 
 /** Truncates a quoted snippet for a pill label — single line, short. */
@@ -129,6 +161,11 @@ export function makeDraftToken(ref: ComposeRef): string {
   draftRegistry.set(key, ref);
   // Non-breaking spaces: a chip never wraps across two lines, in either layer.
   return `${OPEN}${key}${ref.label.replace(/ /g, ' ')}${CLOSE}`;
+}
+
+/** The ref behind a draft token's key (the mirror chip carries the key). */
+export function draftRef(key: string): ComposeRef | null {
+  return draftRegistry.get(key) ?? null;
 }
 
 const DRAFT_RE = /⦃([​‌]+⁠)([^⦃⦄]*)⦄/g;

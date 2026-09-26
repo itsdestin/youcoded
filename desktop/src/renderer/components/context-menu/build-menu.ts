@@ -144,6 +144,7 @@ function buildDocRef(quote: string, ref: string, path: string): ComposeRef {
     kind: 'doc',
     path,
     fileName,
+    quote: quote.slice(0, 2000),
     label: line ? `${ref} · ${fileName}` : `“${truncateQuote(quote)}”`,
     lineRange: line ? [line.startLine, line.endLine] : undefined,
   };
@@ -341,7 +342,7 @@ function cellEntries(td: HTMLElement, path: string): MenuEntry[] {
   return [
     {
       type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true,
-      run: () => addReference({ id: genRefId(), kind: 'doc', path, fileName: baseName(path), label }),
+      run: () => addReference({ id: genRefId(), kind: 'doc', path, fileName: baseName(path), label, cell, quote: value }),
     },
     {
       type: 'item', id: 'comment', label: 'Add comment', icon: 'comment',

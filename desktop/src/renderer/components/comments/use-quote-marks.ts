@@ -67,7 +67,7 @@ interface TextPoint { node: Text; offset: number }
  * the real build stores prefix/suffix context (Web Annotation's
  * TextQuoteSelector) so a repeated phrase lands on the right occurrence.
  */
-function findQuote(root: HTMLElement, quote: string): { start: TextPoint; end: TextPoint } | null {
+export function findQuote(root: HTMLElement, quote: string): { start: TextPoint; end: TextPoint } | null {
   const needle = quote.replace(/\s+/g, '');
   if (!needle) return null;
   const points: TextPoint[] = [];
