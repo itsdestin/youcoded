@@ -6,12 +6,17 @@
 // Task 5 wires registration in from `harness/tools/bash.ts` /
 // `shell-registry.ts` on spawn/exit, and adds `registerPid` (reads the
 // pid's start time itself, via the SAME koffi-backed ProcReader every other
-// part of this feature uses, so a call site only ever needs a bare pid),
-// `hasGranted` (seeds ShellRegistry's admin flag for a run registered AFTER
-// its call already got a password — the common up-front-then-handed-off
-// case, design §7) and `recordSudoPath`/`verifiedSudoPath` (the forget
-// step's `-K` target, design §5 — "the path from the verifier's genuine-sudo
-// check, never PATH").
+// part of this feature uses, so a call site only ever needs a bare pid) and
+// `recordSudoPath`/`verifiedSudoPath` (the forget step's `-K` target, design
+// §5 — "the path from the verifier's genuine-sudo check, never PATH").
+//
+// Review fix T5-4: `hasGranted` (a bare "was this call EVER delivered a
+// password") existed here to seed ShellRegistry's `admin` flag, but a
+// delivery that turns out WRONG is still a delivery — seeding from it let
+// the "Running as admin" strip show before sudo actually accepted anything.
+// ShellRegistry now tracks acceptance itself (`acceptedToolCallIds`, fed by
+// its own `markAdmin`); this class stays the granted-Set/`-K` bookkeeping
+// only.
 'use strict';
 
 import type { ProcReader } from './proc-info';
@@ -64,14 +69,6 @@ export class RunningCalls {
     const startTime = await this.reader.startTime(rootPid);
     if (startTime === null) return;
     this.register(rootPid, startTime, meta);
-  }
-
-  /** design §7: whether `toolCallId` has received at least one password
-   *  delivery so far — seeds ShellRegistry's `admin` flag for a run
-   *  registered AFTER the delivery already happened (the up-front ask, then
-   *  a hand-off to the background). */
-  hasGranted(toolCallId: string): boolean {
-    return this.grantedToolCallIds.has(toolCallId);
   }
 
   /** Recorded by AdminPasswordService on every delivery (design §5). */

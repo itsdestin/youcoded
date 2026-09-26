@@ -3,12 +3,57 @@
 // YOUCODED_ASKPASS_RUNTIME applied AFTER shellEnv/persistent_env, never
 // persisted, and the NODE_OPTIONS-class drop. No real askpass server or
 // sudo runs here — just env-var plumbing through a real `bash -c`.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+//
+// Review fix (task 5 review, T5-1/T5-2): `ADMIN_ENV.SUDO_ASKPASS` used to be
+// hand-written to a value pointing at `askpass.cjs` — the exact wrong value
+// the real wiring shipped with (SUDO_ASKPASS must be the executable wrapper
+// `youcoded-askpass`, never the non-executable `askpass.cjs` it eventually
+// execs into). Built from the REAL production resolver
+// (`ipc-handlers.ts`'s `resolveAskpassPaths`) instead, so this fixture can
+// never silently diverge from what the app actually wires again.
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { BashTool } from '../src/main/harness/tools/bash';
 import type { ToolContext } from '../src/main/harness/tools/types';
+
+// `ipc-handlers.ts` imports `./main`, which runs module-scope side effects
+// (`installCrashDiagnostics(app)`, an `app.on(...)` call) the instant it is
+// imported — a resolver-only `{isPackaged, getAppPath}` stub throws before
+// `resolveAskpassPaths` is even reachable (observed: passes run alone,
+// fails when other files' fuller electron mocks share this worker's module
+// registry first). Same comprehensive shape `tearoff-handoff.test.ts` and
+// `admin-password-wiring.test.ts` already need for the same reason.
+vi.mock('electron', () => {
+  const BrowserWindowMock: any = vi.fn(() => ({ loadURL: vi.fn(), on: vi.fn(), webContents: { send: vi.fn() } }));
+  BrowserWindowMock.getAllWindows = vi.fn(() => []);
+  return {
+    app: {
+      isPackaged: false,
+      getAppPath: () => path.resolve(__dirname, '..'), // desktop/ — resolveAskpassPaths' own dev branch
+      getPath: vi.fn(() => '/tmp'),
+      getVersion: vi.fn(() => '0.0.0-test'),
+      whenReady: vi.fn(() => new Promise(() => {})),
+      on: vi.fn(),
+      quit: vi.fn(),
+      setAppUserModelId: vi.fn(),
+      commandLine: { appendSwitch: vi.fn() },
+      getGPUInfo: vi.fn(() => new Promise(() => {})),
+    },
+    ipcMain: { handle: vi.fn(), on: vi.fn() },
+    BrowserWindow: BrowserWindowMock,
+    Menu: { setApplicationMenu: vi.fn() },
+    protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
+    dialog: { showOpenDialog: vi.fn() },
+    clipboard: { readImage: vi.fn(() => ({ isEmpty: () => true })) },
+    nativeImage: {},
+    shell: { openExternal: vi.fn() },
+    powerSaveBlocker: { start: vi.fn(() => 0), stop: vi.fn() },
+    screen: { getCursorScreenPoint: vi.fn(() => ({ x: 0, y: 0 })), getAllDisplays: vi.fn(() => []) },
+    webContents: { fromId: vi.fn(() => null) },
+  };
+});
 
 let dir: string;
 const TEST_SESSION_ID = `test-bash-env-${process.pid}`;
@@ -24,11 +69,24 @@ function makeCtx(over: Partial<ToolContext> = {}): ToolContext {
   };
 }
 
-const ADMIN_ENV = {
-  SUDO_ASKPASS: '/opt/YouCoded/resources/app.asar.unpacked/scripts/askpass/askpass.cjs',
-  YOUCODED_ASKPASS_SOCKET: '/run/user/1000/youcoded/askpass-123.sock',
-  YOUCODED_ASKPASS_RUNTIME: process.execPath,
-};
+let ADMIN_ENV: { SUDO_ASKPASS: string; YOUCODED_ASKPASS_SOCKET: string; YOUCODED_ASKPASS_RUNTIME: string };
+
+beforeAll(async () => {
+  const { resolveAskpassPaths } = await import('../src/main/ipc-handlers');
+  const paths = await resolveAskpassPaths();
+  if (!paths) throw new Error('resolveAskpassPaths() found nothing on disk — scripts/askpass/ moved?');
+  ADMIN_ENV = {
+    SUDO_ASKPASS: paths.wrapperRealpath,
+    YOUCODED_ASKPASS_SOCKET: '/run/user/1000/youcoded/askpass-123.sock',
+    YOUCODED_ASKPASS_RUNTIME: process.execPath,
+  };
+  // The one assertion T5-1 was missing, right at the fixture's own source:
+  // this MUST be the wrapper, never the non-executable askpass.cjs it execs
+  // into (admin-password-wiring.test.ts pins the full resolver contract).
+  if (!ADMIN_ENV.SUDO_ASKPASS.endsWith('youcoded-askpass')) {
+    throw new Error(`SUDO_ASKPASS fixture is not the wrapper: ${ADMIN_ENV.SUDO_ASKPASS}`);
+  }
+});
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-env-'));

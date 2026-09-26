@@ -129,17 +129,33 @@ function goodProcs(): Map<number, FakeProc> {
 function makeDeps(
   procs: Map<number, FakeProc>,
   statByPath: Map<string, ProcStat>,
-  opts?: { registerRoot?: { pid: number; startTime: number }; mutateAfterFirstRead?: Set<number> },
+  opts?: {
+    registerRoot?: { pid: number; startTime: number };
+    mutateAfterFirstRead?: Set<number>;
+    /** T5-6: defaults to 0 (retry disabled) so every EXISTING negative test
+     *  keeps refusing immediately rather than paying the real 1000ms
+     *  default retry window — tests that specifically exercise the retry
+     *  pass their own short values. */
+    registrationRetryMs?: number;
+    registrationPollMs?: number;
+    /** Skips the default pre-registration entirely — for tests that
+     *  register the root THEMSELVES, mid-test, to exercise the T5-6 race. */
+    skipRegister?: boolean;
+  },
 ): VerifyDeps {
   const runningCalls = new RunningCalls();
-  const registerRoot = opts?.registerRoot ?? { pid: 300, startTime: 300_00 };
-  runningCalls.register(registerRoot.pid, registerRoot.startTime, { sessionId: 's1', toolCallId: 't1' });
+  if (!opts?.skipRegister) {
+    const registerRoot = opts?.registerRoot ?? { pid: 300, startTime: 300_00 };
+    runningCalls.register(registerRoot.pid, registerRoot.startTime, { sessionId: 's1', toolCallId: 't1' });
+  }
   return {
     reader: new FakeProcReader(procs, statByPath, opts?.mutateAfterFirstRead),
     execPath: EXEC_PATH,
     helperScriptRealpath: HELPER_SCRIPT,
     runningCalls,
     platform: 'linux',
+    registrationRetryMs: opts?.registrationRetryMs ?? 0,
+    registrationPollMs: opts?.registrationPollMs,
   };
 }
 
@@ -333,6 +349,52 @@ describe('verifyAskpassPeer: refusals', () => {
     // Registered root (300) is never reached because the call root the test
     // registers below doesn't match anything in this process tree.
     const deps = makeDeps(procs, baseFilesystem(), { registerRoot: { pid: 999, startTime: 1 } });
+    const result = await verifyAskpassPeer(500, deps);
+    expect(result).toEqual({ ok: false, reason: 'no-registered-ancestor' });
+  });
+
+  // Review fix T5-6: bash.ts's foreground registerPid() is fire-and-forget
+  // async (a /proc/<pid>/stat start-time read) — a command whose very first
+  // statement is `sudo -A …` can reach verification before that read
+  // resolves. The chain must retry, not refuse a legitimate sudo outright.
+  it('accepts when the call root registers a little AFTER the ancestor walk starts, within the retry window', async () => {
+    const procs = goodProcs();
+    const deps = makeDeps(procs, baseFilesystem(), {
+      skipRegister: true,
+      registrationRetryMs: 500,
+      registrationPollMs: 15,
+    });
+    setTimeout(() => {
+      deps.runningCalls.register(300, 300_00, { sessionId: 's1', toolCallId: 't1' });
+    }, 60);
+    const result = await verifyAskpassPeer(500, deps);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.callRoot).toBe(300);
+  });
+
+  it('still refuses with no-registered-ancestor once the retry window elapses and nothing ever registered', async () => {
+    const procs = goodProcs();
+    const deps = makeDeps(procs, baseFilesystem(), {
+      skipRegister: true,
+      registrationRetryMs: 80,
+      registrationPollMs: 15,
+    });
+    const result = await verifyAskpassPeer(500, deps);
+    expect(result).toEqual({ ok: false, reason: 'no-registered-ancestor' });
+  });
+
+  it('a recycled root pid registering during the retry window (wrong start time) is rejected, not accepted', async () => {
+    const procs = goodProcs();
+    const deps = makeDeps(procs, baseFilesystem(), {
+      skipRegister: true,
+      registrationRetryMs: 200,
+      registrationPollMs: 15,
+    });
+    setTimeout(() => {
+      // A DIFFERENT incarnation of pid 300 — its own real start time (per
+      // FakeProcReader/goodProcs) is 300_00, not this stale value.
+      deps.runningCalls.register(300, 999_99, { sessionId: 's1', toolCallId: 't1' });
+    }, 40);
     const result = await verifyAskpassPeer(500, deps);
     expect(result).toEqual({ ok: false, reason: 'no-registered-ancestor' });
   });

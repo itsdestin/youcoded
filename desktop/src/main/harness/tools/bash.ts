@@ -582,9 +582,10 @@ export const BashTool = defineTool({
         return { text: `Failed to start shell: ${started.detail} (shell=${shell.cmd}; cwd=${startCwd})`, isError: true };
       }
       // Started successfully: ShellRegistry.register() just ran (and, when
-      // this call was already granted a password, seeded `admin: true`
-      // from RunningCalls.hasGranted) — the up-front hold, if any, survives
-      // for ShellRegistry.onExit to wipe on THIS run's own eventual exit.
+      // this call's password was already ACCEPTED, seeded `admin: true`
+      // from its own `acceptedToolCallIds` — review fix T5-4, never from a
+      // bare delivery) — the up-front hold, if any, survives for
+      // ShellRegistry.onExit to wipe on THIS run's own eventual exit.
       return {
         text: `Started in the background (shell id ${started.run.shellId}). You'll be told when it finishes. BashOutput reads new output (or lists runs); KillShell stops it. Running now: ${started.runningExplicit} of ${MAX_EXPLICIT_RUNNING}.`,
       };

@@ -2018,7 +2018,15 @@ export class RemoteServer {
         // of every log, transcript and store (design R13) — this case reads
         // it once, passes it straight to submitAdminPassword(), and nothing
         // here retains a reference to it afterward.
-        const result = this.nativeRuntime
+        // T4-2 (review): an authenticated-but-buggy or malicious remote peer
+        // controls this payload — a non-string `password` would otherwise
+        // throw synchronously inside submit()'s `Buffer.from`, an
+        // unnecessary throw path reachable over the WS hop specifically
+        // (nothing awaits this handler's promise, so it would only surface
+        // via the process-wide unhandledRejection log). Refused here
+        // instead, matching submit()'s own "unknown/expired requestId
+        // returns false" contract.
+        const result = this.nativeRuntime && typeof payload.password === 'string' && payload.password.length > 0
           ? this.nativeRuntime.nativeHost.submitAdminPassword(payload.requestId, payload.password)
           : false;
         this.respond(client.ws, type, id, result);

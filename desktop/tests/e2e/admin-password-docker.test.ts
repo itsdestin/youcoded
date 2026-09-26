@@ -90,9 +90,19 @@ async function runSudoIdAsUser(
 
 async function main() {
   const runningCalls = new RunningCalls();
+  // T5-1/T5-2 review fix: derive BOTH paths the SAME way
+  // ipc-handlers.ts's resolveAskpassPaths() does — helperScriptRealpath
+  // (askpass.cjs) first, then the wrapper as a SIBLING of ITS OWN real
+  // directory — rather than reconstructing each independently from
+  // __dirname. Electron cannot run in this container, so the real
+  // Electron-coupled resolver itself can't execute here; this mirrors its
+  // exact algorithm instead of re-deriving the two paths separately, which
+  // is what let a wrong SUDO_ASKPASS ship unnoticed the first time.
+  const helperScriptRealpath = fs.realpathSync(path.join(__dirname, 'scripts', 'askpass', 'askpass.cjs'));
+  const wrapperRealpath = fs.realpathSync(path.join(path.dirname(helperScriptRealpath), 'youcoded-askpass'));
   const server = new AskpassServer({
     execPath: process.execPath,
-    helperScriptRealpath: fs.realpathSync(path.join(__dirname, 'scripts', 'askpass', 'askpass.cjs')),
+    helperScriptRealpath,
     runningCalls,
     socketDirOverride: '/tmp/youcoded-askpass-e2e',
   });
@@ -106,7 +116,10 @@ async function main() {
     PATH: '/usr/sbin:/usr/bin:/sbin:/bin',
     HOME: '/root',
     LANG: 'C',
-    SUDO_ASKPASS: path.join(__dirname, 'scripts', 'askpass', 'youcoded-askpass'),
+    // SUDO_ASKPASS is the WRAPPER — never helperScriptRealpath (askpass.cjs)
+    // directly (T5-1: that file has no execute bit and no shebang, so
+    // sudo's execve() of it fails outright).
+    SUDO_ASKPASS: wrapperRealpath,
     YOUCODED_ASKPASS_SOCKET: server.socketPath!,
     // No Electron in this container — plain node IS the runtime the wrapper execs.
     YOUCODED_ASKPASS_RUNTIME: process.execPath,

@@ -370,15 +370,30 @@ export function buddyShowRefusal(status: HelperStatus | null): string | null {
   return status.reason ?? 'The buddy needs its KDE helper on this desktop, and the helper is not running.';
 }
 
-/** admin-password design §2.1/§11 task 5: the shipped `askpass.cjs`'s real
- *  path — dev is the worktree file under `desktop/scripts/askpass/`
+/** admin-password design §2.1/§11 tasks 5+review: the ONE resolver for both
+ *  askpass paths, so `SUDO_ASKPASS` (the wrapper) and `helperScriptRealpath`
+ *  (the verifier's argv[1] check, `askpass.cjs`) can never drift apart —
+ *  T5-1 shipped with SUDO_ASKPASS pointed at `askpass.cjs` directly (no
+ *  execute bit, no shebang: sudo's execve() of it fails outright, and even
+ *  fixing that by making askpass.cjs itself executable would silently
+ *  delete the wrapper's `env -i` scrub, the actual control against a
+ *  command-supplied `NODE_OPTIONS` reaching the verified helper — design
+ *  review 1, D1). `wrapperRealpath` is resolved as a SIBLING of
+ *  `helperScriptRealpath`'s own real directory (never re-derived from `base`
+ *  independently), so the two can never name files in different directories.
+ *  dev is the worktree files under `desktop/scripts/askpass/`
  *  (`app.getAppPath()` is `desktop/` itself in dev, where `package.json`
  *  lives); packaged is `process.resourcesPath/app.asar.unpacked/scripts/
  *  askpass/` (electron-builder.yml's `asarUnpack: scripts/**\/*`). Returns
- *  null (never throws) when the file genuinely isn't there — the caller
+ *  null (never throws) when either file genuinely isn't there — the caller
  *  logs plainly and skips the whole feature, exactly like a failed
- *  self-test (design §2.2: "no fallback to a self-reported pid"). */
-function resolveAskpassScript(): string | null {
+ *  self-test (design §2.2: "no fallback to a self-reported pid").
+ *
+ *  T5-3: async (`fs.promises.realpath`) — a startup-only `fs.*Sync` call
+ *  needs no `main-blocking-calls.allowlist.json` entry (that list may only
+ *  shrink, `.claude/rules/performance.md` rule 1) when the async form is
+ *  just as easy at this one call site. */
+export async function resolveAskpassPaths(): Promise<{ helperScriptRealpath: string; wrapperRealpath: string } | null> {
   const rel = path.join('scripts', 'askpass', 'askpass.cjs');
   try {
     // Test doubles for `app` (many suites construct a minimal fake) may
@@ -386,7 +401,9 @@ function resolveAskpassScript(): string | null {
     // this feature has a chance to be genuinely unavailable, exactly like a
     // missing file below.
     const base = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', rel) : path.join(app.getAppPath(), rel);
-    return fs.realpathSync(base);
+    const helperScriptRealpath = await fs.promises.realpath(base);
+    const wrapperRealpath = await fs.promises.realpath(path.join(path.dirname(helperScriptRealpath), 'youcoded-askpass'));
+    return { helperScriptRealpath, wrapperRealpath };
   } catch {
     return null;
   }
@@ -3080,20 +3097,24 @@ export function registerIpcHandlers(
   // design §2.2.
   let askpassServer: AskpassServer | null = null;
   if (process.platform === 'linux') {
-    const helperScriptRealpath = resolveAskpassScript();
-    if (helperScriptRealpath) {
+    void resolveAskpassPaths().then(async (paths) => {
+      if (!paths) {
+        log('WARN', 'AdminPassword', 'askpass.cjs/youcoded-askpass not found — sudo commands will fail exactly as before this feature existed');
+        return;
+      }
+      // T5-1: `helperScriptRealpath` (askpass.cjs) feeds ONLY the verifier's
+      // argv[1] check; `wrapperRealpath` (youcoded-askpass) is the ONLY
+      // value that may ever become SUDO_ASKPASS — sudo execve()s the
+      // wrapper, never askpass.cjs directly.
       askpassServer = new AskpassServer({
         execPath: process.execPath,
-        helperScriptRealpath,
+        helperScriptRealpath: paths.helperScriptRealpath,
         runningCalls: nativeHost.runningCallsForAskpass(),
       });
-      void askpassServer.start().then(() => {
-        if (!askpassServer!.available) return;
-        nativeHost.attachAdminPassword(askpassServer!, helperScriptRealpath);
-      });
-    } else {
-      log('WARN', 'AdminPassword', 'askpass.cjs not found — sudo commands will fail exactly as before this feature existed');
-    }
+      await askpassServer.start();
+      if (!askpassServer.available) return;
+      nativeHost.attachAdminPassword(askpassServer, paths.wrapperRealpath);
+    });
   }
 
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref
@@ -4888,8 +4909,16 @@ export function registerIpcHandlers(
   // nativeHost.submitAdminPassword() (AdminPasswordService.submit() under
   // it), which converts it to a Buffer and hands it to the verified askpass
   // socket without holding it beyond that call.
+  // T4-2 (review): a malformed/malicious payload's `password` is only typed
+  // as `string` at compile time — nothing upstream of this line actually
+  // checks it. A non-string reaching `Buffer.from(password, 'utf8')` inside
+  // submit() throws synchronously; Electron rejects the ipcMain.handle
+  // promise for that (no crash), but it's an unnecessary throw path a
+  // buggy/malicious renderer can trigger. Refused here instead, matching
+  // submit()'s own "unknown/expired requestId returns false" contract —
+  // never logs `password` (a non-string value included).
   ipcMain.handle(IPC.NATIVE_SUBMIT_ADMIN_PASSWORD, (_event, { requestId, password }: { requestId: string; password: string }) =>
-    nativeHost.submitAdminPassword(requestId, password));
+    typeof password === 'string' && password.length > 0 ? nativeHost.submitAdminPassword(requestId, password) : false);
 
   // --- Settings → Development feature handlers (see dev-tools.ts) ---
 

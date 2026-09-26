@@ -1554,6 +1554,30 @@ describe('RemoteServer specialist run + native hook replay', () => {
       // The ONE place the sentinel is allowed to appear: the call this case makes.
       expect(submitAdminPassword).toHaveBeenCalledWith('req-1', SENTINEL);
     });
+
+    // T4-2 (review): a non-string `password` used to reach
+    // `Buffer.from(password, 'utf8')` three calls deep (submit()'s default
+    // toBuffer), throwing synchronously — on this WS hop specifically that
+    // throw is inside a promise nothing awaits, surfacing only via the
+    // process-wide unhandledRejection log. Answered `false` here instead,
+    // never even calling submitAdminPassword.
+    it('answers false for a non-string or empty password, without calling submitAdminPassword or throwing', async () => {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+      const { frames, ws } = fakeWs();
+      const submitAdminPassword = vi.fn(() => true);
+      server.setNativeRuntime({ nativeHost: { submitAdminPassword } });
+
+      for (const [id, password] of [['r1', 12345], ['r2', null], ['r3', undefined], ['r4', {}], ['r5', '']] as const) {
+        // No matcher needed to prove "does not throw" — an unhandled throw
+        // inside handleMessage would fail this `await` itself.
+        await server.handleMessage({ ws, authenticated: true }, JSON.stringify({
+          type: 'native:submit-admin-password', id, payload: { requestId: 'req-1', password },
+        }));
+        expect(frames.find((m: any) => m.id === id)?.payload).toBe(false);
+      }
+      expect(submitAdminPassword).not.toHaveBeenCalled();
+    });
   });
 });
 

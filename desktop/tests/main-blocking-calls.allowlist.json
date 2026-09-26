@@ -18,8 +18,7 @@
     {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.readdirSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
     {"file": "sync-spaces/space-manager.ts", "fn": "SpaceManager.loadInitial", "call": "fs.readFileSync", "count": 1, "reason": "startup only: the FIRST read of the small sync-spaces.json state file, made once when startSyncSpaces constructs the manager and asks isEnabled(); every later read is served from memory and every write is async"},
     {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.readlinkSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.unlinkSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "ipc-handlers.ts", "fn": "resolveAskpassScript", "call": "fs.realpathSync", "count": 1, "reason": "startup only: registerIpcHandlers resolves the bundled askpass.cjs's real path once, before AskpassServer.start()"}
+    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.unlinkSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"}
   ],
   "user-rare": [
     {"file": "conversations/conversation-store.ts", "fn": "createConversationStore.mutateRecord", "call": "fs.writeFileSync", "count": 1, "reason": "runs only when a record file is unreadable: keeps its bytes before the locked write replaces them; mutateFileUnderLock's callback is synchronous, so it cannot await"},

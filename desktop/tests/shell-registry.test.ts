@@ -329,12 +329,25 @@ describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
     expect(wipeUpfront).toHaveBeenCalledWith('tu-1');
   });
 
-  it('seeds admin: true at registration when RunningCalls already granted this toolCallId (the up-front-then-background case)', async () => {
+  // Review fix T5-4: admin must come ONLY from acceptance (markAdmin), never
+  // from a bare delivery — a delivered-but-wrong password is still "granted"
+  // in RunningCalls' own bookkeeping, and seeding from that would show
+  // "Running as admin" before sudo ever actually took the password.
+  it('seeds admin: true at registration when the password was already ACCEPTED (the up-front-then-background race)', async () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
-    rc.markGranted('tu-1');
+    reg.markAdmin('tu-1'); // acceptance arrives BEFORE the run is registered
     const r = reg.start(startSpec('sleep 5', dir));
     if (!r.ok) throw new Error('start failed');
     expect(reg.toView(r.run).admin).toBe(true);
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('does NOT seed admin: true from a bare RunningCalls delivery that was never accepted', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    rc.markGranted('tu-1'); // delivered — but never accepted (could still be wrong)
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(reg.toView(r.run).admin).toBe(false);
     await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
   });
 
@@ -364,12 +377,24 @@ describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
 
   it('the admin flag is cleared when the run exits', async () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
-    rc.markGranted('tu-1');
+    reg.markAdmin('tu-1');
     const r = reg.start(startSpec('echo done', dir));
     if (!r.ok) throw new Error('start failed');
     expect(reg.toView(r.run).admin).toBe(true);
     await r.run.exited;
     expect(reg.toView(r.run).admin).toBe(false);
+  });
+
+  it('a SECOND run for the same toolCallId does not inherit acceptedToolCallIds after the first exited and cleared it', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    reg.markAdmin('tu-1');
+    const first = reg.start(startSpec('echo done', dir));
+    if (!first.ok) throw new Error('start failed');
+    await first.run.exited; // clears acceptedToolCallIds for 'tu-1'
+
+    const second = reg.start(startSpec('echo done again', dir, 'tu-1'));
+    if (!second.ok) throw new Error('start failed');
+    expect(reg.toView(second.run).admin).toBe(false);
   });
 });
 

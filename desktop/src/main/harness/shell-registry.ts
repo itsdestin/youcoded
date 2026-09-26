@@ -83,9 +83,12 @@ export interface ShellRun {
   detached: boolean;
   /** admin-password design §7: true once a delivered password for this
    *  call's admin sudo was ACCEPTED (no re-ask within ~1s) — cleared when
-   *  the run exits. Seeded at registration from RunningCalls.hasGranted()
-   *  for the common up-front-then-handed-off case (the delivery happened
-   *  before this run object even existed). */
+   *  the run exits. Review fix T5-4: seeded ONLY from
+   *  `acceptedToolCallIds` (the "accepted" signal), NEVER from
+   *  RunningCalls.markGranted's bare delivery — a delivery that turns out
+   *  wrong must never show "Running as admin" for the window before sudo
+   *  re-asks. `acceptedToolCallIds` still covers the up-front-then-handed-
+   *  off race (acceptance can arrive before this run object even exists). */
   admin: boolean;
   /** Counts toward the cap (D5). */
   explicit: boolean;
@@ -248,6 +251,15 @@ export class ShellRegistry extends EventEmitter {
    *  ToolContext.adminPasswordService's own doc for why the tool layer and
    *  this registry both only ever need that one method. */
   private readonly wipeUpfront?: (toolCallId: string) => void;
+  /** admin-password design §7, review fix T5-4: toolCallIds whose password
+   *  was ACCEPTED (markAdmin's own signal), independent of whether a
+   *  ShellRun for that call exists yet — the "accepted" event and this
+   *  run's own registration can arrive in EITHER order (an up-front ask
+   *  accepted moments before a hand-off/background-start, or the reverse),
+   *  and `admin` must come from THIS Set either way, never from
+   *  RunningCalls' mere-delivery bookkeeping (which says nothing about
+   *  whether sudo actually accepted it). Cleared per-toolCallId on exit. */
+  private readonly acceptedToolCallIds = new Set<string>();
 
   /** `longRunNoticeMs` is a test seam — production callers pass nothing and
    *  get LONG_RUN_NOTICE_MS. `runningCalls`/`wipeUpfront` are optional so
@@ -333,10 +345,13 @@ export class ShellRegistry extends EventEmitter {
       shellId, toolUseId: spec.toolUseId, command: spec.command, cwd: spec.cwd, child: spec.child,
       logPath, logStream, tail: [], partial: '', lastReadBytes: 0, captureEnv: spec.captureEnv,
       startedAt: spec.startedAt, status: 'running', detached: flags.detached, explicit: flags.explicit,
-      // design §7: seeded true when this call's password was already
-      // delivered before this run object existed (an up-front ask, then a
-      // hand-off or an explicit background start of the SAME approved call).
-      admin: this.runningCalls.hasGranted(spec.toolUseId),
+      // design §7, review fix T5-4: seeded true when this call's password
+      // was already ACCEPTED before this run object existed (an up-front
+      // ask, accepted, then a hand-off or an explicit background start of
+      // the SAME approved call) — from `acceptedToolCallIds`, never from a
+      // bare delivery (RunningCalls.hasGranted), which says nothing about
+      // whether sudo actually took it.
+      admin: this.acceptedToolCallIds.has(spec.toolUseId),
       reported: false, exited, resolveExited, logPending: 0, logWaiters: [], logDone: null, changeTimer: null,
       longRunTimers: [],
     };
@@ -442,6 +457,7 @@ export class ShellRegistry extends EventEmitter {
     forgetOnCallExit(this.runningCalls, run.toolUseId);
     this.wipeUpfront?.(run.toolUseId);
     run.admin = false;
+    this.acceptedToolCallIds.delete(run.toolUseId);
     for (const t of run.longRunTimers.splice(0)) clearTimeout(t);
     if (run.stopReason) {
       run.status = 'stopped';
@@ -508,10 +524,16 @@ export class ShellRegistry extends EventEmitter {
 
   /** admin-password design §7: called from AdminPasswordService's
    *  "accepted" signal (native-session-host.ts's `attachAdminPassword`
-   *  wiring) — a no-op if no run for `toolUseId` exists yet (the common
-   *  case: the command finished in the foreground before ever reaching
-   *  this registry) or it already exited. */
+   *  wiring). Review fix T5-4: records the acceptance into
+   *  `acceptedToolCallIds` UNCONDITIONALLY first — this is what lets a run
+   *  registered AFTER acceptance (the up-front-then-hand-off race) still
+   *  come up `admin: true` (see `register()`'s own seed) — then, if a run
+   *  already exists for `toolUseId`, flips it live. A no-op past the Set
+   *  write if no run exists yet (the common case: the command finished in
+   *  the foreground before ever reaching this registry) or it already
+   *  exited. */
   markAdmin(toolUseId: string): void {
+    this.acceptedToolCallIds.add(toolUseId);
     for (const run of this.runs.values()) {
       if (run.toolUseId !== toolUseId || run.status !== 'running' || run.admin) continue;
       run.admin = true;

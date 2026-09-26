@@ -105,6 +105,27 @@ export interface VerifyDeps {
    *  its pins, instead of running to completion unobserved. Optional —
    *  omitting it just means nothing can cancel this call early. */
   signal?: AbortSignal;
+  /** Review fix T5-6: `registerPid` (bash.ts's foreground path) reads the
+   *  new pid's start time ASYNCHRONOUSLY and is never awaited before the
+   *  shell continues — a command whose very FIRST statement is `sudo -A …`
+   *  can reach here before that read resolves, and the ancestor walk above
+   *  would otherwise refuse a legitimate sudo outright (a false-negative
+   *  ask failure, not a security gap either way). How long (ms) to keep
+   *  re-checking the SAME already-walked pids for a registration that
+   *  lands moments later, before finally refusing. Defaults to 1000ms;
+   *  overridable for tests. 0 disables the retry (refuses immediately,
+   *  the pre-fix behavior). */
+  registrationRetryMs?: number;
+  /** How often (ms) to re-check during `registrationRetryMs`. Defaults to
+   *  50ms; overridable for tests. */
+  registrationPollMs?: number;
+}
+
+/** T5-6: a plain timer wait — the retry window itself is the point, so
+ *  unlike every OTHER wait in this file (which races a real read against
+ *  `deps.signal`), this one has nothing to await except time passing. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** The ONLY names design §3 item 1 allows in P's environment — anything
@@ -288,6 +309,34 @@ export async function verifyAskpassPeer(pid: number, deps: VerifyDeps): Promise<
           const next = await reader.ppid(node);
           if (next === null || next <= 1) break;
           node = next;
+        }
+        // T5-6: no registered root on the first pass — before refusing,
+        // retry the SAME already-walked pids (their own ppid chain cannot
+        // change during this short window; only WHETHER one of them is
+        // registered can) for up to `registrationRetryMs`, covering the
+        // registerPid() race described on VerifyDeps.registrationRetryMs.
+        if (callRoot === null) {
+          const retryMs = deps.registrationRetryMs ?? 1_000;
+          const pollMs = deps.registrationPollMs ?? 50;
+          const deadline = Date.now() + retryMs;
+          while (callRoot === null && Date.now() < deadline) {
+            if (aborted(deps.signal)) return { ok: false, reason: 'aborted' };
+            await sleep(pollMs);
+            for (const p of walked) {
+              const entry = deps.runningCalls.lookup(p);
+              if (!entry) continue;
+              const pin2 = await pin(reader, p);
+              const startTime2 = await reader.startTime(p);
+              if (startTime2 === null || startTime2 !== entry.startTime) {
+                closeAll([pin2]);
+                continue; // not a match after all — keep retrying/looking
+              }
+              callRootPin = pin2;
+              callRootStartTime0 = startTime2;
+              callRoot = p;
+              break;
+            }
+          }
         }
         if (callRoot === null) return { ok: false, reason: 'no-registered-ancestor' };
         // Narrows callRootStartTime0 for TS below — logically implied by

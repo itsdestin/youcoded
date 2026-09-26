@@ -2374,8 +2374,13 @@ export class NativeSessionHost extends EventEmitter {
    *  and RunningCalls' OWN start/stop lifecycle — this host only holds the
    *  resulting AdminPasswordService and the SAME RunningCalls instance
    *  (see `runningCallsForAskpass`) `askpass` was itself constructed
-   *  against. */
-  attachAdminPassword(askpass: AskpassServer, helperScriptRealpath: string): AdminPasswordServiceLike {
+   *  against. `sudoAskpassPath` is the value the caller has ALREADY
+   *  resolved for `SUDO_ASKPASS` (ipc-handlers.ts's `resolveAskpassPaths` —
+   *  the wrapper `youcoded-askpass`, never `askpass.cjs`, which is a
+   *  DIFFERENT file `askpass` itself already holds as its own
+   *  `helperScriptRealpath` for the verifier's argv[1] check; T5-1: the two
+   *  must never come from independent resolutions). */
+  attachAdminPassword(askpass: AskpassServer, sudoAskpassPath: string): AdminPasswordServiceLike {
     const service = new AdminPasswordService({
       broker: this.broker,
       askpass,
@@ -2391,7 +2396,7 @@ export class NativeSessionHost extends EventEmitter {
     // here — see AskpassServer.start()'s own contract.
     this.adminPasswordEnvValue = askpass.socketPath
       ? {
-          SUDO_ASKPASS: helperScriptRealpath,
+          SUDO_ASKPASS: sudoAskpassPath,
           YOUCODED_ASKPASS_SOCKET: askpass.socketPath,
           YOUCODED_ASKPASS_RUNTIME: process.execPath,
         }
@@ -2406,6 +2411,16 @@ export class NativeSessionHost extends EventEmitter {
    *  walk must see. Used for nothing else outside that one wiring call. */
   runningCallsForAskpass(): RunningCalls {
     return this.runningCalls;
+  }
+
+  /** Test/diagnostic seam (task 5 review, T5-2) — the exact env
+   *  `attachAdminPassword()` last computed (null before/without a
+   *  successful attach). `toolWiring()`/`buildSpecialistSession()` read the
+   *  SAME private field live at session creation; this getter lets a test
+   *  assert on the real wiring's result without constructing a full
+   *  session. */
+  get adminPasswordEnv(): Record<string, string> | null {
+    return this.adminPasswordEnvValue;
   }
 
   /** admin-password design §2.4/§11 task 5: childId -> {parentId, agentType,
