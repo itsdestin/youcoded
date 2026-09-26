@@ -409,6 +409,8 @@ const IPC = {
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',
+  // admin-password design §2.5 — mirrors shared/types.ts.
+  NATIVE_SUBMIT_ADMIN_PASSWORD: 'native:submit-admin-password',
   // "What the assistant was given" (2026-09-10): the session-start push carrying
   // the inventory, and the on-demand read of ONE file's text. Two channels
   // because file bodies do not belong in a push — see shared/types.ts's
@@ -1548,6 +1550,11 @@ contextBridge.exposeInMainWorld('claude', {
     // G-1: the Bash card's Stop button. Request-response — the card needs
     // {ok, reason} to stop showing "Stopping…" when nothing was stopped.
     killShell: (sessionId: string, shellId: string) => ipcRenderer.invoke(IPC.NATIVE_KILL_SHELL, { sessionId, shellId }),
+    // admin-password design §2.5: the card's Confirm button. Request-response —
+    // the card needs the boolean to show itself as ended on a false (expired ask).
+    // Never logged/echoed on this side either; main converts to a Buffer at once.
+    submitAdminPassword: (requestId: string, password: string) =>
+      ipcRenderer.invoke(IPC.NATIVE_SUBMIT_ADMIN_PASSWORD, { requestId, password }),
     // One file's text for the "What the assistant was given" panel, read when the
     // user opens that row. Runs the session's OWN fitter and budget in main, so
     // what the panel shows is what the model would receive.

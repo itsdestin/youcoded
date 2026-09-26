@@ -1471,6 +1471,90 @@ describe('RemoteServer specialist run + native hook replay', () => {
 
     expect(frames.some((m) => m.type === 'hook:event' && m.payload.type === 'PermissionResolved')).toBe(false);
   });
+
+  // admin-password design §2.5: a PasswordRequest must never be buffered at
+  // all, not even transiently — the broker's own re-announce heartbeat and
+  // the live broadcast are what cover a reconnect within a few seconds.
+  it('a PasswordRequest is never buffered, so a reconnecting client is never replayed one', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    const { frames, ws } = fakeWs();
+
+    server.bufferHookEvent({ sessionId: 's1', type: 'PasswordRequest', payload: { _requestId: 'pw-1', toolUseId: 'bash-1', command: 'apt update' }, timestamp: Date.now() });
+
+    await replayAndWait(server, ws);
+
+    expect(frames.some((m) => m.type === 'hook:event' && m.payload.type === 'PasswordRequest')).toBe(false);
+  });
+
+  it('a PasswordResolved purges a same-id PasswordRequest if one somehow got in, and is never replayed itself', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    const { frames, ws } = fakeWs();
+
+    // A different open ask must survive, mirroring the PermissionResolved test above.
+    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionRequest', payload: { _requestId: 'native-open' }, timestamp: Date.now() });
+    server.bufferHookEvent({ sessionId: 's1', type: 'PasswordResolved', payload: { _requestId: 'pw-1' }, timestamp: Date.now() });
+
+    await replayAndWait(server, ws);
+
+    expect(frames.some((m) => m.type === 'hook:event' && m.payload.type === 'PasswordResolved')).toBe(false);
+    expect(frames.some((m) => m.type === 'hook:event' && m.payload.payload?._requestId === 'native-open')).toBe(true);
+  });
+
+  // admin-password design §2.5/R6/R13: a paired phone or browser may answer
+  // the password card, and `password` must never reach a log line anywhere
+  // in this path.
+  describe('native:submit-admin-password over WS', () => {
+    const SENTINEL = 'sentinel-password-should-never-be-logged-xyz';
+
+    it('routes to nativeHost.submitAdminPassword and answers with its result; not-live answers false', async () => {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+      const { frames, ws } = fakeWs();
+
+      await server.handleMessage({ ws, authenticated: true }, JSON.stringify({
+        type: 'native:submit-admin-password', id: 'r1', payload: { requestId: 'req-1', password: SENTINEL },
+      }));
+      expect(frames.find((m: any) => m.id === 'r1')?.payload).toBe(false);
+
+      const submitAdminPassword = vi.fn(() => true);
+      server.setNativeRuntime({ nativeHost: { submitAdminPassword } });
+      await server.handleMessage({ ws, authenticated: true }, JSON.stringify({
+        type: 'native:submit-admin-password', id: 'r2', payload: { requestId: 'req-1', password: SENTINEL },
+      }));
+      expect(frames.find((m: any) => m.id === 'r2')?.payload).toBe(true);
+      expect(submitAdminPassword).toHaveBeenCalledWith('req-1', SENTINEL);
+    });
+
+    it('never logs the password — the sentinel appears only in the one call into submitAdminPassword', async () => {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+      const { ws } = fakeWs();
+      const submitAdminPassword = vi.fn(() => true);
+      server.setNativeRuntime({ nativeHost: { submitAdminPassword } });
+
+      const spies = [
+        vi.spyOn(console, 'log').mockImplementation(() => {}),
+        vi.spyOn(console, 'warn').mockImplementation(() => {}),
+        vi.spyOn(console, 'error').mockImplementation(() => {}),
+      ];
+      try {
+        await server.handleMessage({ ws, authenticated: true }, JSON.stringify({
+          type: 'native:submit-admin-password', id: 'r1', payload: { requestId: 'req-1', password: SENTINEL },
+        }));
+        for (const spy of spies) {
+          for (const call of spy.mock.calls) {
+            expect(JSON.stringify(call)).not.toContain(SENTINEL);
+          }
+        }
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+      // The ONE place the sentinel is allowed to appear: the call this case makes.
+      expect(submitAdminPassword).toHaveBeenCalledWith('req-1', SENTINEL);
+    });
+  });
 });
 
 // Security regression: the transcript:read-meta WS handler validated the

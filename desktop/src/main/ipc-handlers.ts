@@ -4832,6 +4832,14 @@ export function registerIpcHandlers(
     return hookRelay ? hookRelay.respond(requestId, decision) : false;
   });
 
+  // admin-password design §2.5: the card's Confirm button. `password` is never
+  // logged, echoed, or stored on this hop — it goes straight into
+  // nativeHost.submitAdminPassword() (AdminPasswordService.submit() under
+  // it), which converts it to a Buffer and hands it to the verified askpass
+  // socket without holding it beyond that call.
+  ipcMain.handle(IPC.NATIVE_SUBMIT_ADMIN_PASSWORD, (_event, { requestId, password }: { requestId: string; password: string }) =>
+    nativeHost.submitAdminPassword(requestId, password));
+
   // --- Settings → Development feature handlers (see dev-tools.ts) ---
 
   ipcMain.handle(IPC.DEV_LOG_TAIL, async (_event, maxLines: number) => {

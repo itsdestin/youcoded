@@ -131,6 +131,12 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // G-1 — real backend as of 2026-08-28; hand-written so the gallery's Bash
   // cards keep their fixture state instead of talking to a real process.
   'native.killShell', 'on.shellEvent',
+  // admin-password (2026-09-26) — real backend on all five surfaces
+  // (permission-broker.ts's password kind, admin-password-service.ts,
+  // ipc-handlers/preload/remote-shim/remote-server/SessionService.kt);
+  // hand-written so the gallery's password card can be reviewed with no
+  // real sudo, socket or askpass helper.
+  'native.submitAdminPassword',
   // "What the assistant was given" — real backend as of 2026-09-10; hand-written
   // here so the panel has file text to show without a filesystem.
   'native.sessionContextText', 'native.onSessionContext',
@@ -1794,6 +1800,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // G-1: the card's Stop just resolves — the gallery fixture stays in its
     // captured state rather than spawning anything real.
     killShell: async (_sessionId: string, _shellId: string) => ({ ok: true }),
+    // admin-password (2026-09-26): the fixture stays in its captured state —
+    // there is no real sudo/askpass here to actually deliver a password to.
+    // `?adminPasswordFail=1` lets a reviewer pin the "ask expired" card state
+    // (submit returns false) without needing a real socket to close.
+    submitAdminPassword: async (_requestId: string, _password: string) =>
+      new URLSearchParams(location.search).get('adminPasswordFail') !== '1',
     // "What the assistant was given": one file's text, read on demand. The real
     // one reads the file and runs the session's own fitter; there is no
     // filesystem here, so the fixtures below stand in — including a genuinely

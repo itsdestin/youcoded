@@ -361,8 +361,12 @@ export function loadFixture(
         actions.push(action);
       } else if (parsed.type === 'password_ask') {
         // The admin password card (design 2026-09-25): a RUNNING Bash call whose
-        // sudo waits for the computer password. No reducer action exists for it
-        // yet, so it is laid onto the tool's final block below.
+        // sudo waits for the computer password. A real reducer action
+        // (PASSWORD_REQUEST) exists now, but this fixture format predates it
+        // and keeps laying the ask directly onto the tool's final block below
+        // — simpler for a fixture line that only ever needs to PIN a state,
+        // never to exercise the request/resolve lifecycle itself (that is
+        // reducer-tests.test.ts's job, not the workbench's).
         passwordAsks.set(parsed.tool_use_id, parsed.ask);
       } else if (parsed.type === 'permission_expired') {
         // WHY: the KEPT card (PERMISSION_EXPIRED 'hook-closed') — the hook socket

@@ -114,16 +114,59 @@ export interface AskDecision {
 // the card stayed answerable. Every ask — the main assistant's or a
 // specialist's — now simply waits for the person, so an entry is pending until
 // it is answered or canceled, and nothing else.
+
+/** admin-password design §2.2: a password ask lives in the SAME pending map
+ *  as a permission ask (same re-announce heartbeat, same replay-on-reconnect,
+ *  same cancel-on-teardown), but resolves through a DIFFERENT door —
+ *  `withdraw()`, never `respond()`. `kind` is what every method below reads
+ *  to route to the right door, instead of guessing from which fields are
+ *  present. */
+type AskKind = 'permission' | 'password';
+
 interface PendingAsk {
+  kind: AskKind;
   sessionId: string;
   /** The CHILD that raised a routed ask (see AskRequest.raisedBy) — read only
-   *  by cancelSession, so a child's teardown also clears its own ask. */
+   *  by cancelSession, so a child's teardown also clears its own ask. Also
+   *  set on a routed PASSWORD ask (admin-password-service.ts routes a
+   *  specialist child's own sudo the same way childAskRouter routes a
+   *  permission ask), for the identical reason. */
   raisedBy?: string;
-  resolve: (d: AskDecision) => void;
-  /** The exact PermissionRequest this ask emitted, minus its timestamp, kept so
-   *  the heartbeat re-announces something byte-identical. Rebuilding it from
-   *  the fields above would silently drift from the emit in `ask()`. */
-  announcement: { sessionId: string; type: 'PermissionRequest'; payload: Record<string, unknown> };
+  /** Only present for kind 'permission' — a password ask is never resolved
+   *  with a decision (design §2.2), so there is no Promise to settle; see
+   *  `askPassword()`/`withdraw()`. */
+  resolve?: (d: AskDecision) => void;
+  /** The exact PermissionRequest/PasswordRequest this ask emitted, minus its
+   *  timestamp, kept so the heartbeat re-announces something byte-identical.
+   *  Rebuilding it from the fields above would silently drift from the emit
+   *  in `ask()`/`askPassword()`. */
+  announcement: { sessionId: string; type: 'PermissionRequest' | 'PasswordRequest'; payload: Record<string, unknown> };
+}
+
+/** A running Bash call's sudo is waiting for the computer password
+ *  (admin-password design §2.2/§2.5) — registered via `askPassword()` below,
+ *  built by `admin-password-service.ts` from a verified askpass connection.
+ *  NEVER carries a password field, and never `tool_input` — the card's own
+ *  wording is fixed (R14); the payload only names WHICH step is asking. */
+export interface PasswordAskRequest {
+  sessionId: string;
+  toolUseId: string;
+  /** The admin step sudo will actually run, already stripped of `sudo`
+   *  itself and its own flags — read from the sudo process's own argv
+   *  (design §3 item 5), never from the helper or `-p`. */
+  command: string;
+  via?: string;
+  triesLeft?: number;
+  /** Mirrors AskRequest.specialist — set when this password ask belongs to a
+   *  specialist child's OWN Bash call, routed to the PARENT session the same
+   *  way childAskRouter routes a permission ask, so the card nests under the
+   *  right Task card. */
+  specialist?: { childId: string; agentType: string; title: string; parentToolCallId: string };
+  /** Mirrors AskRequest.raisedBy — the CHILD's own session id, for the same
+   *  reason: cancelSession(childId) and the `ownOnly` Stop carve-out both need
+   *  to find a routed password ask by who actually raised it, not just by
+   *  the parent session it was announced on. */
+  raisedBy?: string;
 }
 
 /** How often an open ask re-announces itself to the renderer.
@@ -178,6 +221,7 @@ export class PermissionBroker extends EventEmitter {
         },
       };
       const entry: PendingAsk = {
+        kind: 'permission',
         sessionId: req.sessionId,
         raisedBy: req.raisedBy,
         resolve,
@@ -189,23 +233,74 @@ export class PermissionBroker extends EventEmitter {
     });
   }
 
-  /** The ONE place a PermissionRequest hook-event is BUILT — the live
-   *  announcement, every heartbeat and the pendingEventsFor() replay all route
-   *  through this so the shape (sessionId/type/payload/timestamp) is defined in
-   *  exactly one place. `payload` is a fresh copy per call: the stored
-   *  announcement is reused indefinitely, so handing every listener the same
-   *  object would let one in-process consumer's mutation rewrite what all
-   *  later beats say. */
+  /** admin-password design §2.2/§2.5: registers a password ask. Unlike `ask()`
+   *  this is NOT a Promise — a password ask has no allow/deny decision for
+   *  this broker to make; it is resolved out of band (AskpassServer's own
+   *  deliver/refuse), relayed here through `withdraw()`. Returns the minted
+   *  requestId so the caller (admin-password-service.ts) can map it back to
+   *  the askpass-level askId that actually holds the socket. */
+  askPassword(req: PasswordAskRequest): string {
+    const requestId = `native-pw-${randomUUID()}`;
+    const announcement = {
+      sessionId: req.sessionId,
+      type: 'PasswordRequest' as const,
+      payload: {
+        _requestId: requestId,
+        toolUseId: req.toolUseId,
+        command: req.command,
+        // Spread-omitted (not undefined-valued), same convention as every
+        // optional PermissionRequest field in `ask()` above — and the payload
+        // must NEVER carry a `password` field or `tool_input`, ever (design §2.2).
+        ...(req.via ? { via: req.via } : {}),
+        ...(typeof req.triesLeft === 'number' ? { triesLeft: req.triesLeft } : {}),
+        ...(req.specialist ? { specialist: req.specialist } : {}),
+      },
+    };
+    const entry: PendingAsk = {
+      kind: 'password',
+      sessionId: req.sessionId,
+      raisedBy: req.raisedBy,
+      announcement,
+    };
+    this.pending.set(requestId, entry);
+    this.syncReannounceTimer();
+    this.emitAnnouncement(entry);
+    return requestId;
+  }
+
+  /** The ONLY way a password ask stops being pending (design §2.2: "a
+   *  password ask's resolve is never called with a decision — it is removed
+   *  by broker.withdraw(requestId)"). False for an unknown id, or one that is
+   *  not a password ask — `respond()` is the permission-kind counterpart, and
+   *  the two must never cross: this never resolves a permission ask's
+   *  Promise, and `respond()` never touches a password ask. */
+  withdraw(requestId: string): boolean {
+    const entry = this.pending.get(requestId);
+    if (!entry || entry.kind !== 'password') return false;
+    this.removeEntry(requestId, entry);
+    return true;
+  }
+
+  /** The ONE place a PermissionRequest/PasswordRequest hook-event is BUILT —
+   *  the live announcement, every heartbeat and the pendingEventsFor() replay
+   *  all route through this so the shape (sessionId/type/payload/timestamp)
+   *  is defined in exactly one place, for EITHER kind (design §2.2: "re-
+   *  announce + pendingEventsFor replay cover both"). `type` comes from the
+   *  stored announcement, never hardcoded — a password ask re-announced as a
+   *  PermissionRequest would hand the renderer a payload with no tool_name.
+   *  `payload` is a fresh copy per call: the stored announcement is reused
+   *  indefinitely, so handing every listener the same object would let one
+   *  in-process consumer's mutation rewrite what all later beats say. */
   private requestEventFor(entry: PendingAsk): HookEvent {
     return {
       sessionId: entry.announcement.sessionId,
-      type: 'PermissionRequest',
+      type: entry.announcement.type,
       payload: { ...entry.announcement.payload },
       timestamp: Date.now(),
     };
   }
 
-  /** The ONE place a PermissionRequest goes out, first time and every beat. */
+  /** The ONE place a PermissionRequest/PasswordRequest goes out, first time and every beat. */
   private emitAnnouncement(entry: PendingAsk): void {
     this.emit('hook-event', this.requestEventFor(entry));
   }
@@ -250,7 +345,13 @@ export class PermissionBroker extends EventEmitter {
   /** Returns false when the id isn't ours — caller falls through to hookRelay. */
   respond(requestId: string, decision: Record<string, unknown>): boolean {
     const entry = this.pending.get(requestId);
-    if (!entry) return false;
+    // A password ask never goes through respond() (design §2.2) — it has no
+    // `resolve` to call and no allow/deny for a decision to mean anything
+    // against. Refusing here (rather than falling into the code below and
+    // crashing on a missing `entry.resolve`) also means a stray
+    // permission:respond against a password's requestId is a silent no-op,
+    // exactly like an unknown id.
+    if (!entry || entry.kind === 'password') return false;
     // ToolCard's PermissionButtons send { decision: { behavior }, updatedPermissions? }
     // (see src/renderer/components/ToolCard.tsx). Unwrap that nested shape;
     // fall back to a flat { behavior } for direct callers/tests. "Always allow"
@@ -278,7 +379,9 @@ export class PermissionBroker extends EventEmitter {
     const resolved: AskDecision = { behavior, always, grantScope, ...(behavior === 'deny' ? { dismissed: true } : {}), ...(updatedInput ? { updatedInput } : {}) };
 
     this.removeEntry(requestId, entry);
-    entry.resolve(resolved);
+    // Non-null: the guard above already returned false for entry.kind ===
+    // 'password' (the only kind whose `resolve` is absent).
+    entry.resolve!(resolved);
     return true;
   }
 
@@ -321,6 +424,13 @@ export class PermissionBroker extends EventEmitter {
 
   private cancelOne(id: string, entry: PendingAsk): void {
     this.removeEntry(id, entry);
+    // A password ask has no Promise waiting (askPassword() is not awaited)
+    // and design has no 'PasswordExpired' event — removeEntry's own
+    // PasswordResolved (emitted above) IS the whole signal. It reaches
+    // admin-password-service.ts's own 'hook-event' listener, which refuses
+    // the underlying askpass socket if one is still open (design §6: "Stop /
+    // Skip / session close / app quit: pending sockets answered {ok:false}").
+    if (entry.kind === 'password') return;
     // PermissionExpired clears the approval card; _requestId matches the field
     // hook-dispatcher reads for the expired branch. Emitted AFTER removeEntry's
     // PermissionResolved (below) so a RemoteServer buffer purge keyed on the
@@ -333,7 +443,7 @@ export class PermissionBroker extends EventEmitter {
       payload: { _requestId: id },
       timestamp: Date.now(),
     });
-    entry.resolve({ behavior: 'canceled' });
+    entry.resolve!({ behavior: 'canceled' });
   }
 
   /** The ONE place a `PendingAsk` stops being pending — whichever route
@@ -356,7 +466,11 @@ export class PermissionBroker extends EventEmitter {
     this.syncReannounceTimer();
     this.emit('hook-event', {
       sessionId: entry.sessionId,
-      type: 'PermissionResolved',
+      // Password asks get their own terminal type (design §2.2) — never
+      // PermissionResolved, which hook-dispatcher/RemoteServer both key their
+      // OWN purge logic on by requestId prefix/shape assumptions that a
+      // password ask does not share (no tool_input, no decision).
+      type: entry.kind === 'password' ? 'PasswordResolved' : 'PermissionResolved',
       payload: { _requestId: id },
       timestamp: Date.now(),
     });

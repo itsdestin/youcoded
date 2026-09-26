@@ -377,6 +377,10 @@ declare global {
         setStepGuard: (value: number | null) => Promise<number | null>;
         sessionsList: () => Promise<any[]>;
         killShell: (sessionId: string, shellId: string) => Promise<{ ok: true } | { ok: false; reason: string }>;   // G-1
+        // admin-password design §2.5: the card's Confirm button. false means the
+        // ask expired (no live askpass connection left to deliver into) — the
+        // card shows itself as ended, never a retry of the same field.
+        submitAdminPassword: (requestId: string, password: string) => Promise<boolean>;
         // Per-session bound-model residency push (2026-07-14): { sessionId,
         // modelId, state: 'unloaded'|'loading'|'loaded'|'sleeping', sizeBytes }.
         onModelState: (cb: (s: any) => void) => () => void;

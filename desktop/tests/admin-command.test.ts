@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
-import { adminCommandVerdict, visibleSudoLines } from '../src/main/harness/tools/admin-command';
+import { adminCommandVerdict, visibleSudoLines, displayCommandFromSudoArgv } from '../src/main/harness/tools/admin-command';
 
 describe('admin-command floor: sudo asks, whatever shape it hides in', () => {
   it.each([
@@ -192,5 +192,40 @@ describe('visibleSudoLines: sudo argv with sudo and its own options stripped', (
 
   it('a heredoc fed to a shell yields its sudo line', () => {
     expect(visibleSudoLines('bash <<EOF\nsudo apt update\nEOF')).toEqual([['apt', 'update']]);
+  });
+});
+
+// admin-password-service.ts (design §2.4/§3 item 5): the up-front/mid-command
+// card's command text, built from a REAL sudo process's own argv (already
+// read from /proc/<sudo>/cmdline) rather than parsed shell text — the same
+// option-stripping rule as visibleSudoLines above, applied to a plain argv
+// array instead.
+describe('displayCommandFromSudoArgv', () => {
+  it('strips sudo itself (by basename) and joins the rest with spaces', () => {
+    expect(displayCommandFromSudoArgv(['sudo', 'apt', 'update'])).toBe('apt update');
+  });
+
+  it('strips sudo read by its real path, not just the bare word', () => {
+    expect(displayCommandFromSudoArgv(['/usr/bin/sudo', 'apt', 'update'])).toBe('apt update');
+  });
+
+  it('strips a bare flag and a value-taking flag before the real command', () => {
+    expect(displayCommandFromSudoArgv(['sudo', '-n', '--user', 'root', 'apt', 'update'])).toBe('apt update');
+  });
+
+  it('stops stripping at -- (everything after belongs to the wrapped command)', () => {
+    expect(displayCommandFromSudoArgv(['sudo', '--', '-x', 'rm'])).toBe('-x rm');
+  });
+
+  it('keeps flags that belong to the wrapped command, not sudo', () => {
+    expect(displayCommandFromSudoArgv(['sudo', 'rm', '-rf', '/tmp/x'])).toBe('rm -rf /tmp/x');
+  });
+
+  it('single-quotes an argument containing whitespace, for display only', () => {
+    expect(displayCommandFromSudoArgv(['sudo', 'sh', '-c', 'echo hello world'])).toBe("sh -c 'echo hello world'");
+  });
+
+  it('is empty when sudo was given no command at all', () => {
+    expect(displayCommandFromSudoArgv(['sudo'])).toBe('');
   });
 });

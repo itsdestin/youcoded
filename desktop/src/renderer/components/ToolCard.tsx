@@ -1620,7 +1620,26 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
       {/* The admin password card: this running command's sudo is waiting for
           the computer password (design 2026-09-25). */}
       {tool.status === 'running' && tool.passwordAsk && (
-        <AdminPasswordPrompt ask={tool.passwordAsk} />
+        <AdminPasswordPrompt
+          ask={tool.passwordAsk}
+          onSubmit={async (password) => {
+            const requestId = tool.passwordAsk!.requestId;
+            const ok = await window.claude.native.submitAdminPassword(requestId, password);
+            // WHY dispatch on false: an expired ask has nothing left on the
+            // main side to send a PasswordResolved push for THIS device (the
+            // socket it would have delivered to is already gone) — say so
+            // locally instead of leaving the field disabled forever (design
+            // §2.6: "a card whose ask was withdrawn shows the ask as ended;
+            // no field"). A successful submit needs no local dispatch: main's
+            // own broker.withdraw() already broadcasts PasswordResolved to
+            // every device, this one included.
+            // sessionId is absent only in the workbench's standalone tool
+            // gallery (?view=tools), which never wires a real IPC call for
+            // this to matter — guarded rather than asserted so that view
+            // still renders.
+            if (!ok && sessionId) dispatch({ type: 'PASSWORD_RESOLVED', sessionId, requestId });
+          }}
+        />
       )}
       {tool.shellRun?.status === 'running' && tool.shellRun.admin && (
         <AdminRunStrip run={tool.shellRun} sessionId={sessionId} />

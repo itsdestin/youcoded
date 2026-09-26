@@ -138,6 +138,49 @@ export function adminCommandVerdict(command: string, ctx?: AdminCommandContext):
   return analyse(command);
 }
 
+/** The shared flag-skip loop behind both `visibleSudoLines` (a `sudo` word
+ *  found while parsing shell TEXT) and `displayCommandFromSudoArgv` below (a
+ *  `sudo` word already at argv[0] of a REAL process, read from
+ *  /proc/<pid>/cmdline by askpass-server.ts's verify.ts) — both need the same
+ *  rule for what sudo itself will consume before its real command starts:
+ *  `--` ends flag parsing, a known value-flag consumes the next slot,
+ *  anything else starting with `-` is a bare flag, and the first non-flag
+ *  word starts the command sudo will actually run. `rest` is everything
+ *  AFTER the `sudo` word itself in both callers. */
+function stripSudoOptionsFromArgv(rest: string[]): string[] {
+  const valueFlags = WRAPPERS.sudo.valueFlags;
+  const argv: string[] = [];
+  let endOfFlags = false;
+  for (let i = 0; i < rest.length; i++) {
+    const v = rest[i];
+    if (endOfFlags) { argv.push(v); continue; }
+    if (v === '--') { endOfFlags = true; continue; }
+    if (v.startsWith('-')) { if (valueFlags.includes(v)) i++; continue; }
+    endOfFlags = true;
+    argv.push(v);
+  }
+  return argv;
+}
+
+/** admin-password-service.ts (design §2.4/§3 item 5): builds the password
+ *  card's command text directly from a REAL sudo process's own argv (already
+ *  read fresh from /proc/<sudo>/cmdline by verify.ts) — the up-front ask's
+ *  counterpart to `visibleSudoLines` below, which reads shell TEXT instead of
+ *  a live process. Same option-stripping rule (`stripSudoOptionsFromArgv`),
+ *  applied after dropping the `sudo` word itself (argv[0], by basename —
+ *  sudo's own argv[0] is whatever path invoked it, e.g. `/usr/bin/sudo`).
+ *  Display only: joins with single spaces and single-quotes any argument
+ *  containing whitespace, never re-parsed as shell syntax, never shown the
+ *  raw argv a hostile arg could otherwise use to fake a different-looking
+ *  command. */
+export function displayCommandFromSudoArgv(sudoArgv: string[]): string {
+  const rest = sudoArgv.length > 0 && baseName(sudoArgv[0]) === 'sudo' ? sudoArgv.slice(1) : sudoArgv;
+  const stripped = stripSudoOptionsFromArgv(rest);
+  return stripped
+    .map((a) => (/\s/.test(a) ? `'${a.replace(/'/g, "'\\''")}'` : a))
+    .join(' ');
+}
+
 /** The argv sudo will actually run in each sudo simple-command inside
  *  `command`, with `sudo` itself and its own options stripped (`sudo --user
  *  root apt update` → `['apt', 'update']`). Used by the up-front password ask
@@ -147,19 +190,9 @@ export function adminCommandVerdict(command: string, ctx?: AdminCommandContext):
  *  password. Only `sudo` lines: the refused words never reach a password ask. */
 export function visibleSudoLines(command: string): string[][] {
   const lines: string[][] = [];
-  const valueFlags = WRAPPERS.sudo.valueFlags;
 
   const pushSudoLine = (rest: Word[]): void => {
-    const argv: string[] = [];
-    let endOfFlags = false;
-    for (let i = 0; i < rest.length; i++) {
-      const v = rest[i].value;
-      if (endOfFlags) { argv.push(v); continue; }
-      if (v === '--') { endOfFlags = true; continue; }
-      if (v.startsWith('-')) { if (valueFlags.includes(v)) i++; continue; }
-      endOfFlags = true;
-      argv.push(v);
-    }
+    const argv = stripSudoOptionsFromArgv(rest.map((w) => w.value));
     if (argv.length) lines.push(argv);
   };
 

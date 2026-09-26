@@ -11,7 +11,7 @@ import {
   abnormalStopReason,
   SerializedChatState,
 } from './chat-types';
-import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
+import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState, type PasswordAsk } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
@@ -2662,6 +2662,108 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
 
       next.set(action.sessionId, { ...session, toolCalls, timeline, attentionState: 'ok' });
       return next;
+    }
+
+    // admin-password design §2.5/§2.6: a running Bash call's sudo is waiting
+    // for the password. Unlike PERMISSION_REQUEST, `toolUseId` names the
+    // exact card directly — no name/input matching, because the broker/
+    // askpass-server already know exactly which call is asking.
+    case 'PASSWORD_REQUEST': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const ask: PasswordAsk = {
+        requestId: action.requestId,
+        command: action.command,
+        ...(action.via ? { via: action.via } : {}),
+        ...(typeof action.triesLeft === 'number' ? { triesLeft: action.triesLeft } : {}),
+      };
+
+      // Specialists 1c: a child's OWN sudo nests under the Task card that
+      // hired it, exactly like a routed permission ask (findSpecialistCard,
+      // used by PERMISSION_REQUEST above) — the card's toolUseId lives inside
+      // that Task card's subagentSegments, never in session.toolCalls.
+      if (action.specialist) {
+        const cardId = findSpecialistCard(session.toolCalls, {
+          parentToolCallId: action.specialist.parentToolCallId,
+          childId: action.specialist.childId,
+        });
+        if (cardId) {
+          const card = session.toolCalls.get(cardId)!;
+          const segs = card.subagentSegments;
+          const idx = segs?.findIndex((s) => s.type === 'tool' && s.toolUseId === action.toolUseId) ?? -1;
+          if (idx >= 0) {
+            const seg = segs![idx] as Extract<SubagentSegment, { type: 'tool' }>;
+            // Repeatable like PERMISSION_REQUEST's own heartbeat — an
+            // unchanged requestId is a no-op so a 3s re-announce doesn't
+            // rebuild the whole Map for nothing.
+            if (seg.passwordAsk?.requestId === action.requestId) return state;
+            const nextSegs = [...segs!];
+            nextSegs[idx] = { ...seg, passwordAsk: ask };
+            const toolCalls = new Map(session.toolCalls);
+            toolCalls.set(cardId, { ...card, subagentSegments: nextSegs });
+            next.set(action.sessionId, { ...session, toolCalls });
+            return next;
+          }
+        }
+        // No segment to nest under yet (a routed ask replayed onto a
+        // timeline without its Task card, or the child's own tool-use event
+        // hasn't landed) — fall through to the top-level path below, which
+        // still carries the specialist label via ToolCallState.specialist.
+      }
+
+      const existing = session.toolCalls.get(action.toolUseId);
+      if (existing?.passwordAsk?.requestId === action.requestId) return state; // heartbeat no-op
+      const toolCalls = new Map(session.toolCalls);
+      if (existing) {
+        toolCalls.set(action.toolUseId, {
+          ...existing,
+          passwordAsk: ask,
+          ...(action.specialist
+            ? { specialist: { childId: action.specialist.childId, agentType: action.specialist.agentType, title: action.specialist.title } }
+            : {}),
+        });
+      } else {
+        // A password ask necessarily happens strictly AFTER its Bash call's
+        // own tool-use event (sudo cannot run before the shell exists), so
+        // this is a genuine race/replay edge rather than the ordinary case
+        // PERMISSION_REQUEST's synthetic-card fallback exists for — but drop
+        // it rather than fabricate a card with an empty toolName/input that
+        // the real tool-use event would then have to reconcile with.
+        return state;
+      }
+      next.set(action.sessionId, { ...session, toolCalls });
+      return next;
+    }
+
+    case 'PASSWORD_RESOLVED': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+
+      // Nested (specialist) segment first.
+      for (const [id, tool] of session.toolCalls) {
+        const segs = tool.subagentSegments;
+        if (!segs) continue;
+        const idx = segs.findIndex((s) => s.type === 'tool' && s.passwordAsk?.requestId === action.requestId);
+        if (idx < 0) continue;
+        const seg = segs[idx] as Extract<SubagentSegment, { type: 'tool' }>;
+        const { passwordAsk: _drop, ...rest } = seg;
+        const nextSegs = [...segs];
+        nextSegs[idx] = rest as typeof seg;
+        const toolCalls = new Map(session.toolCalls);
+        toolCalls.set(id, { ...tool, subagentSegments: nextSegs });
+        next.set(action.sessionId, { ...session, toolCalls });
+        return next;
+      }
+
+      for (const [id, tool] of session.toolCalls) {
+        if (tool.passwordAsk?.requestId !== action.requestId) continue;
+        const { passwordAsk: _drop, ...rest } = tool;
+        const toolCalls = new Map(session.toolCalls);
+        toolCalls.set(id, rest);
+        next.set(action.sessionId, { ...session, toolCalls });
+        return next;
+      }
+      return state;
     }
 
     case 'PERMISSION_RESPONDED': {

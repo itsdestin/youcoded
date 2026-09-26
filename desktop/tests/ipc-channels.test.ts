@@ -1502,6 +1502,8 @@ describe('native:* channel parity', () => {
     'native:get-permission-mode',
     'native:sessions-list',
     'native:kill-shell',
+    // admin-password design §2.5: the password card's Confirm button.
+    'native:submit-admin-password',
     // "What the assistant was given" — the on-demand read of one file's text.
     // The session-context PUSH is pinned separately below: a push has no
     // ipc-handlers request arm and no Kotlin case, so it does not belong in a

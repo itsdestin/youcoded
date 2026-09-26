@@ -699,6 +699,11 @@ export type SubagentSegment =
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
       resolvedRequestId?: string;
+      /** admin-password design §2.5/§2.6: this nested Bash call's sudo is
+       *  waiting for the computer password — mirrors ToolCallState.passwordAsk
+       *  so a specialist's own sudo nests under its Task card exactly like a
+       *  permission ask does, instead of showing at the top level. */
+      passwordAsk?: PasswordAsk;
     }
   | {
       /** A steer — "send a note" — from the user (card action) or the parent
@@ -2162,6 +2167,9 @@ export const IPC = {
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',   // G-1: the Bash card's Stop button
+  // admin-password design §2.5: the card's Confirm button. Request-response —
+  // the card needs the boolean to know whether to show the ask as ended.
+  NATIVE_SUBMIT_ADMIN_PASSWORD: 'native:submit-admin-password',
   // "What the assistant was given" (2026-09-10): the session-start push carrying
   // the inventory, and the on-demand read of ONE file's text. Two channels
   // because file bodies do not belong in a push — see SessionContext above.

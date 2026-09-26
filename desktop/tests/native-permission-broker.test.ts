@@ -421,3 +421,146 @@ describe('PermissionBroker — PermissionResolved (fix pass)', () => {
     expect(emitted.some((e) => e.type === 'PermissionResolved')).toBe(false);
   });
 });
+
+// admin-password design: a password ask lives in the SAME pending map as a
+// permission ask (same heartbeat, same replay, same cancel-on-teardown) but
+// resolves through withdraw(), never respond() — these tests pin that both
+// kinds share the plumbing and never cross doors.
+describe('PermissionBroker — password asks share the pending map, but resolve through withdraw() never respond()', () => {
+  function emitterFor(broker: PermissionBroker) {
+    const emitted: any[] = [];
+    broker.on('hook-event', (e) => emitted.push(e));
+    return emitted;
+  }
+
+  it('askPassword emits a PasswordRequest with no password field and no tool_input, ever', () => {
+    const broker = new PermissionBroker();
+    const emitted = emitterFor(broker);
+    const requestId = broker.askPassword({ sessionId: 's1', toolUseId: 'bash-1', command: 'apt update', via: 'install.sh', triesLeft: 2 });
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].type).toBe('PasswordRequest');
+    expect(emitted[0].sessionId).toBe('s1');
+    expect(emitted[0].payload).toEqual({
+      _requestId: requestId, toolUseId: 'bash-1', command: 'apt update', via: 'install.sh', triesLeft: 2,
+    });
+    expect('password' in emitted[0].payload).toBe(false);
+    expect('tool_input' in emitted[0].payload).toBe(false);
+    expect(requestId).toMatch(/^native-/);
+  });
+
+  it('omits via/triesLeft/specialist when the caller did not supply them', () => {
+    const broker = new PermissionBroker();
+    const emitted = emitterFor(broker);
+    broker.askPassword({ sessionId: 's1', toolUseId: 'bash-1', command: 'apt update' });
+    expect(emitted[0].payload).toEqual({ _requestId: emitted[0].payload._requestId, toolUseId: 'bash-1', command: 'apt update' });
+  });
+
+  it('carries the specialist label so the renderer can nest it under the right Task card', () => {
+    const broker = new PermissionBroker();
+    const emitted = emitterFor(broker);
+    broker.askPassword({
+      sessionId: 'parent-1', toolUseId: 'bash-1', command: 'apt update',
+      specialist: { childId: 'child-1', agentType: 'worker', title: 'Wren the Worker', parentToolCallId: 'task-1' },
+      raisedBy: 'child-1',
+    });
+    expect(emitted[0].payload.specialist).toEqual({ childId: 'child-1', agentType: 'worker', title: 'Wren the Worker', parentToolCallId: 'task-1' });
+  });
+
+  it('re-announces a still-pending password ask on the heartbeat, as PasswordRequest (not PermissionRequest)', () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new PermissionBroker();
+      const emitted = emitterFor(broker);
+      broker.askPassword({ sessionId: 's1', toolUseId: 'bash-1', command: 'apt update' });
+      expect(emitted).toHaveLength(1);
+      vi.advanceTimersByTime(ASK_REANNOUNCE_MS);
+      expect(emitted).toHaveLength(2);
+      expect(emitted[1].type).toBe('PasswordRequest');
+      expect(emitted[1].payload).toEqual(emitted[0].payload);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('pendingEventsFor replays an open password ask as PasswordRequest, for reconnect catch-up', () => {
+    const broker = new PermissionBroker();
+    const emitted = emitterFor(broker);
+    broker.askPassword({ sessionId: 's1', toolUseId: 'bash-1', command: 'apt update' });
+    const events = broker.pendingEventsFor('s1');
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('PasswordRequest');
+    expect(events[0].payload).toEqual(emitted[0].payload);
+  });
+
+  it('withdraw() removes it and emits PasswordResolved, never PermissionExpired', () => {
+    const broker = new PermissionBroker();
+    const emitted = emitterFor(broker);
+    const requestId = broker.askPassword({ sessionId: 's1', toolUseId: 'bash-1', command: 'apt update' });
+    expect(broker.withdraw(requestId)).toBe(true);
+    expect(emitted.map((e) => e.type)).toEqual(['PasswordRequest', 'PasswordResolved']);
+    expect(emitted[1].payload).toEqual({ _requestId: requestId });
+    expect(broker.pendingEventsFor('s1')).toEqual([]);
+  });
+
+  it('withdraw() returns false for an unknown id, and for a PERMISSION ask\'s id (the two doors never cross)', async () => {
+    const broker = new PermissionBroker();
+    const emitted = emitterFor(broker);
+    expect(broker.withdraw('nope')).toBe(false);
+    const p = broker.ask({ sessionId: 's1', toolName: 'Bash', toolInput: {}, denyListed: false });
+    const permissionRequestId = emitted[0].payload._requestId as string;
+    expect(broker.withdraw(permissionRequestId)).toBe(false);
+    // Still fully alive — withdraw() must not have silently resolved it.
+    broker.respond(permissionRequestId, { behavior: 'allow' });
+    await expect(p).resolves.toMatchObject({ behavior: 'allow' });
+  });
+
+  it('respond() never touches a password ask (returns false; the ask stays open)', () => {
+    const broker = new PermissionBroker();
+    const emitted = emitterFor(broker);
+    const requestId = broker.askPassword({ sessionId: 's1', toolUseId: 'bash-1', command: 'apt update' });
+    expect(broker.respond(requestId, { behavior: 'allow' })).toBe(false);
+    expect(broker.pendingEventsFor('s1')).toHaveLength(1); // still open
+    expect(emitted.some((e) => e.type === 'PermissionResolved')).toBe(false);
+  });
+
+  it('cancelSession() clears an open password ask with PasswordResolved only — no PermissionExpired', () => {
+    const broker = new PermissionBroker();
+    const emitted = emitterFor(broker);
+    const requestId = broker.askPassword({ sessionId: 's1', toolUseId: 'bash-1', command: 'apt update' });
+    broker.cancelSession('s1');
+    expect(emitted.map((e) => e.type)).toEqual(['PasswordRequest', 'PasswordResolved']);
+    expect(emitted[1].payload).toEqual({ _requestId: requestId });
+    expect(broker.pendingEventsFor('s1')).toEqual([]);
+  });
+
+  it('cancelAll() clears every open password ask across sessions', () => {
+    const broker = new PermissionBroker();
+    const emitted = emitterFor(broker);
+    broker.askPassword({ sessionId: 's1', toolUseId: 'bash-1', command: 'apt update' });
+    broker.askPassword({ sessionId: 's2', toolUseId: 'bash-2', command: 'apt upgrade' });
+    broker.cancelAll();
+    const resolved = emitted.filter((e) => e.type === 'PasswordResolved');
+    expect(resolved.map((e) => e.sessionId).sort()).toEqual(['s1', 's2']);
+  });
+
+  it('a routed password ask (raisedBy) is canceled by the child\'s own teardown, like a routed permission ask', () => {
+    const broker = new PermissionBroker();
+    const emitted = emitterFor(broker);
+    const requestId = broker.askPassword({ sessionId: 'parent-1', toolUseId: 'bash-1', command: 'apt update', raisedBy: 'child-1' });
+    broker.cancelSession('child-1');
+    expect(emitted.map((e) => e.type)).toEqual(['PasswordRequest', 'PasswordResolved']);
+    expect(emitted[1].payload).toEqual({ _requestId: requestId });
+  });
+
+  it('a password ask does not appear in isWaitingOnUser\'s permission-shaped bookkeeping crash paths (raisedBy still works)', () => {
+    // Regression guard for the requestEventFor() bug this task fixed: before,
+    // requestEventFor hardcoded type: 'PermissionRequest', so EVERY replay/
+    // heartbeat of a password ask (including this raisedBy path) silently
+    // mislabeled it — a renderer reading `type` would never match PasswordRequest.
+    const broker = new PermissionBroker();
+    broker.askPassword({ sessionId: 'parent-1', toolUseId: 'bash-1', command: 'apt update', raisedBy: 'child-1' });
+    expect(broker.isWaitingOnUser('child-1')).toBe(true);
+    const events = broker.pendingEventsFor('parent-1');
+    expect(events[0].type).toBe('PasswordRequest');
+  });
+});

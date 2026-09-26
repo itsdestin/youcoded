@@ -771,6 +771,30 @@ export type ChatAction =
       requestId: string;
     }
   | {
+      // admin-password design §2.5/§2.6: sets ToolCallState.passwordAsk (or
+      // the matching nested Task-card segment for a specialist's own sudo) on
+      // the Bash card named by `toolUseId` — matched directly, unlike
+      // PERMISSION_REQUEST, because the broker/askpass-server already know
+      // exactly which running call is asking.
+      type: 'PASSWORD_REQUEST';
+      sessionId: string;
+      requestId: string;
+      toolUseId: string;
+      command: string;
+      via?: string;
+      triesLeft?: number;
+      specialist?: { childId: string; agentType: string; title: string; parentToolCallId?: string };
+    }
+  | {
+      // admin-password design §2.2/§2.6: clears passwordAsk wherever it is
+      // set for this requestId — delivered, refused, socket closed, or the
+      // session was torn down. Matched by requestId (unique per ask), so no
+      // toolUseId is needed to find the right card.
+      type: 'PASSWORD_RESOLVED';
+      sessionId: string;
+      requestId: string;
+    }
+  | {
       // Remote access batch 2 (§7): the host says this ask was answered on
       // another device (hook:event PermissionResolved). Clears the ask with a
       // neutral note; a no-op unless the card is still awaiting.

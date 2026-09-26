@@ -77,6 +77,44 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
       return { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId, requestId };
     }
 
+    // admin-password design §2.5: a running Bash call's sudo is waiting for
+    // the computer password. Unlike PermissionRequest, the card is matched
+    // by `toolUseId` DIRECTLY (the broker/askpass-server already know exactly
+    // which Bash call is asking — no name/input guessing needed), and the
+    // payload NEVER carries a password field or tool_input (R13/R14).
+    case 'PasswordRequest': {
+      const requestId = payload._requestId as string;
+      const toolUseId = payload.toolUseId as string;
+      const command = payload.command as string;
+      if (!requestId || !toolUseId || typeof command !== 'string') return null;
+      const via = typeof payload.via === 'string' ? payload.via : undefined;
+      const triesLeft = typeof payload.triesLeft === 'number' ? payload.triesLeft : undefined;
+      // Same validate-the-shape-not-the-wire posture as PermissionRequest's
+      // own specialist field above — a peer on another build degrades to an
+      // unlabelled top-level ask rather than a mis-nested one.
+      const rawSpecialist = payload.specialist as Record<string, unknown> | undefined;
+      const specialist = rawSpecialist && typeof rawSpecialist.childId === 'string'
+        ? {
+            childId: rawSpecialist.childId,
+            agentType: typeof rawSpecialist.agentType === 'string' ? rawSpecialist.agentType : 'specialist',
+            title: typeof rawSpecialist.title === 'string' ? rawSpecialist.title : 'A specialist',
+            parentToolCallId: typeof rawSpecialist.parentToolCallId === 'string' ? rawSpecialist.parentToolCallId : undefined,
+          }
+        : undefined;
+      return { type: 'PASSWORD_REQUEST', sessionId, requestId, toolUseId, command, via, triesLeft, specialist };
+    }
+
+    // admin-password design §2.2/§2.6: the ask stopped being pending — a
+    // delivered password, a refused/closed socket, or a session
+    // Stop/Skip/close/quit. Clears the card's field; "no field" either way,
+    // never a claim about whether the password itself was accepted (sudo's
+    // own next askpass round, or the tool result, says that).
+    case 'PasswordResolved': {
+      const requestId = payload._requestId as string;
+      if (!requestId) return null;
+      return { type: 'PASSWORD_RESOLVED', sessionId, requestId };
+    }
+
     case 'PermissionExpired': {
       const requestId = payload._requestId as string;
       if (!requestId) return null;

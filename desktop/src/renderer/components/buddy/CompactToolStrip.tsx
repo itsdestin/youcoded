@@ -265,6 +265,12 @@ function ToolRow({
           buttons that cannot do what they say. */}
       {tool.status === 'awaiting-approval' && tool.toolName === 'ExitPlanMode' ? (
         <span style={{ flexShrink: 0, color: 'var(--fg-dim)' }}>Review the plan in the main window</span>
+      ) : tool.status === 'running' && tool.passwordAsk ? (
+        // admin-password design §2.6: a THIRD surface for a secret is a third
+        // place to leak, so the buddy floater never gets its own password
+        // field — it only says where the field actually is, same shape as
+        // the ExitPlanMode row above.
+        <span style={{ flexShrink: 0, color: 'var(--fg-dim)' }}>Enter your password in YouCoded</span>
       ) : tool.status === 'awaiting-approval' && tool.expired ? (
         // A KEPT card: its hook socket died, Claude Code's menu may still be up
         // in the main window's terminal. Nothing here can answer that menu, so

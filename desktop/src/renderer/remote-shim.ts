@@ -2973,6 +2973,12 @@ export function installShim(): void {
       // G-1: NOT gated on `supported` — a phone must be able to Stop a command
       // running on the DESKTOP, whose runtime is the one that owns it.
       killShell: (sessionId: string, shellId: string) => invoke('native:kill-shell', { sessionId, shellId }),
+      // admin-password design §2.5, contract R6: a paired phone or browser may
+      // answer the password card too — NOT gated on `supported`, same as
+      // killShell above. `password` is never logged or echoed on this hop
+      // either; it rides straight inside the WS frame to remote-server.ts.
+      submitAdminPassword: (requestId: string, password: string) =>
+        invoke('native:submit-admin-password', { requestId, password }),
       // One file's text for the session-context panel. NOT gated on `supported`,
       // for the same reason killShell is not: the desktop owns the session and
       // its files, and a phone looking at that chat must be able to read them.

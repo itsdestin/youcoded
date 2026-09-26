@@ -27,6 +27,7 @@ import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
 import { SessionStore, validatedDeltaReferences, type NativeSessionListEntry } from './session-store';
 import { PermissionBroker } from './permission-broker';
+import type { AdminPasswordServiceLike } from './admin-password-service';
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
 import { getShell } from './tools/bash';
@@ -408,6 +409,15 @@ export class NativeSessionHost extends EventEmitter {
   // re-emitted on this host so ipc-handlers forwards them on the SAME channel
   // as native transcript events (which is the SAME channel CC hook events ride).
   private broker = new PermissionBroker();
+
+  // admin-password design §2.5/§11 task 5: null until task 5 constructs the
+  // real AskpassServer + RunningCalls, builds the real AdminPasswordService
+  // around this SAME broker, and calls setAdminPasswordService() below. A
+  // settable field (not a constructor param) so ipc-handlers.ts/remote-
+  // server.ts can keep calling `nativeHost.submitAdminPassword(...)` — a
+  // STABLE reference — the whole time, rather than each holding their own
+  // snapshot of a value that gets set later.
+  private adminPasswordService: AdminPasswordServiceLike | null = null;
 
   // Per-session permission mode (spec §2.4 layer 2). decide() reads this fresh
   // on every tool, so setPermissionMode() takes effect on the NEXT gated call
@@ -2307,6 +2317,23 @@ export class NativeSessionHost extends EventEmitter {
    *  PermissionBroker.pendingEventsFor for why this is needed at all. */
   pendingAskEventsFor(sessionId: string): HookEvent[] {
     return this.broker.pendingEventsFor(sessionId);
+  }
+
+  /** admin-password design §11 task 5's assignment point — see
+   *  `adminPasswordService`'s own comment for why this is a settable field
+   *  rather than a constructor param. */
+  setAdminPasswordService(service: AdminPasswordServiceLike | null): void {
+    this.adminPasswordService = service;
+  }
+
+  /** native:submit-admin-password (design §2.5) on both the desktop IPC
+   *  handler and the remote WS case (contract R6) — never logs, never stores
+   *  `password` beyond this call; AdminPasswordService.submit() converts it
+   *  to a Buffer and zeroes it before this returns. `false` while task 5
+   *  hasn't wired a real service yet, and honestly for an unknown/expired
+   *  requestId once it has. */
+  submitAdminPassword(requestId: string, password: string): boolean {
+    return this.adminPasswordService?.submit(requestId, password) ?? false;
   }
 
   /** Wire the "no session uses model X anymore" callback (→ engine unload). */
