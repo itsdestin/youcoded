@@ -48,6 +48,7 @@ import { useResumeOptions, ResumeOptionsForm } from './ResumeOptions';
 import type { PastSession } from '../../shared/types';
 import { triggerTip } from './guide/tips';
 import { TagNoteEditor } from './tags/TagNoteEditor';
+import { ScreenMark } from '../shoot-mode';
 
 // 'type' removed 2026-07-23 — the Type FILTER supersedes sorting by type.
 type SortKey = 'recent' | 'name';
@@ -940,7 +941,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // unreachable — the very first Preview click would open the drawer and
   // then immediately show nothing.
   if (!active && !activePreview) {
-    return <aside ref={asideRef} className={asideClass}>{resizeHandle}{listInner}</aside>;
+    return <aside ref={asideRef} className={asideClass}><ScreenMark name="chat/files" />{resizeHandle}{listInner}</aside>;
   }
 
   // Same session-scoped fix as ArtifactListItem: the footer describes what
@@ -952,6 +953,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
 
   return (
     <aside ref={asideRef} className={asideClass}>
+      <ScreenMark name="chat/files" />
       {resizeHandle}
       {unsavedDialog}
       {discardAsk && active && (

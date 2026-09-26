@@ -25,11 +25,13 @@ const openers = new Map<string, Opener>();
  * outside the photo-only build. `subpages` also registers `<name>/<sub>` for
  * each entry, opening through the same function with `sub` set.
  *
+ * `enabled` false withdraws the registration (a hidden copy of a screen).
+ *
  * Call it unconditionally at the top of the component, like any hook: the
  * early return is a build-time constant, so the hook order never changes
  * within one build.
  */
-export function useScreenOpen(name: string, open: Opener, subpages?: readonly string[]): void {
+export function useScreenOpen(name: string, open: Opener, subpages?: readonly string[], enabled = true): void {
   if (!(typeof __SHOOT__ !== 'undefined' && __SHOOT__)) return;
   // eslint-disable-next-line react-hooks/rules-of-hooks -- guarded by a build-time constant, see above
   const ref = useRef(open);
@@ -37,10 +39,13 @@ export function useScreenOpen(name: string, open: Opener, subpages?: readonly st
   const subKey = subpages?.join(',') ?? '';
   // eslint-disable-next-line react-hooks/rules-of-hooks -- guarded by a build-time constant, see above
   useEffect(() => {
+    // `enabled`: a component mounted once per session (ChatView) registers only while it
+    // is the one on screen, so the name always opens the visible copy.
+    if (!enabled) return undefined;
     const names = [name, ...(subKey ? subKey.split(',').map((s) => `${name}/${s}`) : [])];
     names.forEach((n, i) => openers.set(n, (sub) => ref.current(i === 0 ? sub : names[i].slice(name.length + 1))));
     return () => names.forEach((n) => openers.delete(n));
-  }, [name, subKey]);
+  }, [name, subKey, enabled]);
 }
 
 /**
@@ -70,12 +75,15 @@ export function installScreenDriver(screens: readonly { name: string }[]): void 
     // Opens every KNOWN prefix of `name` in order (settings → settings/assistant →
     // settings/assistant/cloud). A prefix that is a known screen must register an
     // opener within 3 s of its parent opening, or the open fails with its name.
+    // A `#state` suffix (`chat/resume#stress`) is the same screen under other practice
+    // data (the entry's scenario / params): it opens, and is marked, as the plain name.
     async open(name: string): Promise<{ ok: true } | { ok: false; reason: string }> {
       if (!known.includes(name)) return { ok: false, reason: `not in the screen list: ${name}` };
-      const parts = name.split('/');
+      const base = name.split('#')[0];
+      const parts = base.split('/');
       for (let i = 1; i <= parts.length; i++) {
         const p = parts.slice(0, i).join('/');
-        if (!known.includes(p)) continue;
+        if (!known.includes(p) && p !== base) continue;
         const open = await waitFor(p, 3000);
         if (!open) return { ok: false, reason: `no opener registered for ${p} (is its component mounted?)` };
         open();

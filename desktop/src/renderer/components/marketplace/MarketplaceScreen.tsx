@@ -28,6 +28,7 @@ import { useCurrentPlatform } from "../../state/platform";
 import { platformDisplayName, platformListDisplay } from "../../../shared/platform-display";
 import type { SkillEntry, IntegrationEntry, IntegrationState } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
+import { ScreenMark } from '../../shoot-mode';
 
 // Integrations carry their catalog metadata plus live installed/connected state.
 // Previously lived in IntegrationCard.tsx; moved inline when the dedicated
@@ -383,6 +384,7 @@ export default function MarketplaceScreen({
 
   return (
     <div className="fixed inset-0 z-40">
+      <ScreenMark name="marketplace" />
       {/* Pre-blurred wallpaper as a non-scrolling backdrop. Absolute-positioned
           inside the FIXED outer wrapper (not the inner scroll container) so it
           stays pinned to the viewport while content scrolls over it. */}

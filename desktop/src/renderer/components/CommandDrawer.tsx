@@ -8,6 +8,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { isAndroid } from '../platform';
 import { EmptyState, ErrorState, FilterChip } from './ui';
 import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-store';
+import { ScreenMark } from '../shoot-mode';
 
 interface Props {
   open: boolean;
@@ -227,6 +228,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
         }`}
         style={{ maxHeight: '45vh' }}
       >
+        {open && <ScreenMark name="chat/skills" />}
         {/* Grab handle */}
         <div className="flex justify-center py-2">
           <div className="w-8 h-1 rounded-full bg-fg-faint" />

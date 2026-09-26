@@ -87,6 +87,7 @@ function readStoredFileView(): FileViewMode {
 import { Button, Checkbox, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
 import { isRemoteMode } from '../../platform';
+import { ScreenMark } from '../../shoot-mode';
 
 interface ProjectViewProps {
   // cwd of the conversation that is focused RIGHT NOW (undefined on the welcome
@@ -759,6 +760,7 @@ export function ProjectView(props: ProjectViewProps) {
     // view has (Destin, 2026-09-17: "add the same styled frame/header in
     // projects view. we will unify these separate page/menu styles").
     <div className="screen-view fixed inset-0 bg-panel z-40 flex flex-col" data-screen-frame={workbenchScreenFrame()}>
+      <ScreenMark name="projects" />
       <ScreenBand
         settingsOpen={props.settingsOpen}
         onToggleSettings={props.onToggleSettings}

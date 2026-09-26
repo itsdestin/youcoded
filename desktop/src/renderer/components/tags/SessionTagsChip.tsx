@@ -13,9 +13,11 @@ import { TagNoteEditor } from './TagNoteEditor';
 import { PRIORITY_TAG, PRIORITY_HINT } from './built-in-tags';
 import { TagManagerPopup } from './TagManagerPopup';
 import { Tooltip } from '../ui';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
   const [open, setOpen] = useState(false);
+  useScreenOpen('chat/tags', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   // Tag registry editing moved out of TagPicker into its own surface; this is
   // the route to it from the in-session chip. Layer 3 because this popup is
   // itself layer 2.
@@ -75,6 +77,7 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
               className="w-full max-w-[360px] max-h-[80vh] flex flex-col pointer-events-auto"
               style={{ position: 'relative', zIndex: 'auto' }}
             >
+              <ScreenMark name="chat/tags" />
               <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
                 <h2 className="text-sm font-bold text-fg">Tags &amp; note</h2>
                 <button onClick={() => setOpen(false)}

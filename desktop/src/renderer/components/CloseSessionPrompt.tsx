@@ -237,7 +237,7 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
       {/* P-15: title + session name come from the shared Dialog header now, so
           this prompt gets the same header (and the ✕) every other dialog has
           instead of a hand-rolled copy of it. */}
-      <Dialog open onClose={onCancel} size="prompt" title="Close session" subtitle={sessionName} scrollBody={false}>
+      <Dialog screen="chat/close-session" open onClose={onCancel} size="prompt" title="Close session" subtitle={sessionName} scrollBody={false}>
           {/* min-h-0 + overflow-y-auto: this dialog passes scrollBody={false}
               because it renders its own header and footer, and Dialog's own doc
               is explicit that doing so makes the SCROLL REGION the caller's

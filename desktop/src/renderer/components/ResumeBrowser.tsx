@@ -32,6 +32,7 @@ import { TagGlyph } from './tags/glyphs';
 import { NoteEditor } from './tags/NoteEditor';
 import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from './ResumeOptions';
 import { resolveNativeBinding } from '../state/welcome-back';
+import { ScreenMark } from '../shoot-mode';
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
@@ -1753,6 +1754,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           style={{ position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >
+          <ScreenMark name="chat/resume" />
         {/* The body row. `contents` when there is no preview so the header and
             list stay DIRECT flex children of the panel, and the single-column
             browser (narrow, or Android) renders exactly as it always has. */}

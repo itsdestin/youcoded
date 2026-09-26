@@ -30,6 +30,7 @@ import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { StatusStrip, Button } from './ui';
 import { helperAsksOf } from '../utils/specialist-cards';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -202,6 +203,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // Ctrl+F find-over-chat-history. Searches the message timeline (contentRef)
   // via the same CSS-Highlight ContentFindBar the artifact viewer uses.
   const [findOpen, setFindOpen] = useState(false);
+  // Photo-only build: only the chat on screen answers to `shoot` (one ChatView per session).
+  useScreenOpen('chat/find', () => setFindOpen(true), undefined, visible);
 
   // "What the assistant was given" — opened ONLY from the strip above the
   // conversation. It used to open itself once per session; Destin chose "never"
@@ -1064,6 +1067,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       <div className={`framed-shell${rightPaneOpen ? ' drawer-open' : ''}${drawerExpanded && !gameOpen ? ' drawer-expanded' : ''}`}>
         <div className="frame-edge" />
         <div className="chat-pane">
+          {visible && <ScreenMark name="chat" />}
           {/* Empty-state hint — absolutely centered in the chat-pane between the
               top and bottom chrome. Uses --top-chrome-bottom (not the broken
               h-full centering it replaces) so it clears a FLOATING header pill,

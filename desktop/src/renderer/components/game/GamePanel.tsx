@@ -3,6 +3,7 @@ import ArcadeShell from './ArcadeShell';
 import { GameConnection } from '../../state/game-types';
 import { useTheme } from '../../state/theme-context';
 import { clampDrawerWidth, applyGameWidthVar } from '../../state/drawer-width';
+import { ScreenMark } from '../../shoot-mode';
 
 interface Props {
   connection: GameConnection;
@@ -64,6 +65,7 @@ export default function GamePanel({ connection, chessConnection, incognito, onTo
     // w-80 / border-l / bg-panel slide-out styling.
     // relative: positioning context for the resize handle below.
     <div className="relative h-full flex flex-col overflow-hidden bg-inset">
+      <ScreenMark name="chat/games" />
       {/* w-1.5 is a 6px hit area hugging the pane's left edge; the visible
           affordance is the hover/drag accent tint. Theme tokens only — no new
           backdrop-filter (react-renderer rule). */}

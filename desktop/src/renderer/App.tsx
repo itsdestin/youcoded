@@ -17,7 +17,8 @@ import FolderSwitcher from './components/FolderSwitcher';
 import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { useChatViewHandlers } from './hooks/use-chatview-handlers';
-import { useScreenOpen } from './shoot-mode';
+import { useAppScreens } from './shoot-app-screens';
+import { ScreenMark } from './shoot-mode';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
@@ -3726,8 +3727,8 @@ function AppInner() {
   }, []);
   const toggleGamePanel = useCallback(() => gameDispatch({ type: 'TOGGLE_PANEL' }), [gameDispatch]);
   const toggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
-  // Photo-only build: `shoot` opens the Settings drawer by name (shoot-mode.tsx).
-  useScreenOpen('settings', () => setSettingsOpen(true));
+  // Photo-only build: `shoot` opens these screens by name (shoot-app-screens.ts).
+  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPages: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }) });
   const openResumeBrowser = useCallback(() => setResumeRequested(true), []);
 
   // Still loading first-run check
@@ -4079,6 +4080,7 @@ function AppInner() {
             // still centres in the open middle instead of drifting downward.
             style={{ paddingTop: 'var(--top-chrome-bottom, 2.5rem)', paddingBottom: 'var(--top-chrome-height, 2.5rem)' }}
           >
+            <ScreenMark name="welcome" />
             {/* First-time version (deck 2026-09-10, Q-8): "No Active Session"
                 reads like an error to someone who has never had one. Once a
                 session exists to resume, this is the everyday screen again.

@@ -14,6 +14,7 @@ import MarketplaceDetailOverlay, {
 } from "../marketplace/MarketplaceDetailOverlay";
 import type { SkillEntry } from "../../../shared/types";
 import { plainMessage } from "../../utils/ipc-error";
+import { ScreenMark } from '../../shoot-mode';
 
 interface Props {
   onExit(): void;
@@ -170,6 +171,7 @@ export default function LibraryScreen({
 
   return (
     <div className="fixed inset-0 z-40">
+      <ScreenMark name="library" />
       {/* Pre-blurred wallpaper as a non-scrolling backdrop — pinned to the
           fixed outer wrapper so it stays put as content scrolls. */}
       <WallpaperBackdrop />

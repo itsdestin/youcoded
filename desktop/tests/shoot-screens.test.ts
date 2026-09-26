@@ -39,7 +39,9 @@ for (const f of files(SRC)) {
     registered.set(m[1], { file: f.slice(SRC.length + 1), subpages: /\}\s*,\s*[A-Za-z_][\w.]*\s*\)\s*;/.test(rest) });
   }
 }
+// A `#state` entry opens as its plain name, so it is registered under that.
 const listed = SCREENS.map((s) => s.name);
+const base = (n: string) => n.split('#')[0];
 
 describe('screen list ↔ useScreenOpen registrations', () => {
   it('finds registrations at all (the pattern still matches the code)', () => {
@@ -47,12 +49,12 @@ describe('screen list ↔ useScreenOpen registrations', () => {
   });
 
   it('every registered name is in the screen list', () => {
-    const missing = [...registered.keys()].filter((n) => !listed.includes(n));
+    const missing = [...registered.keys()].filter((n) => !listed.map(base).includes(n));
     expect(missing, 'add these to dev/workbench/screens/index.ts').toEqual([]);
   });
 
   it('every listed name is registered, directly or as a sub-page of its parent', () => {
-    const orphans = listed.filter((n) => {
+    const orphans = listed.map(base).filter((n) => {
       if (registered.has(n)) return false;
       const parent = n.slice(0, n.lastIndexOf('/'));
       return !(registered.get(parent)?.subpages);

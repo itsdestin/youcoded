@@ -433,7 +433,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
   return createPortal(
     // Overlay layer L2 — theme-driven scrim/surface via Scrim/OverlayPanel.
     <>
-      <Dialog open onClose={onClose} title={isNative ? "Model" : "Model & Effort"} size="panel" scrollBody={false}>
+      <Dialog screen="chat/model-picker" open onClose={onClose} title={isNative ? "Model" : "Model & Effort"} size="panel" scrollBody={false}>
 
         {!loaded ? (
           <LoadingState what="models" />

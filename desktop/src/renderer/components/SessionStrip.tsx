@@ -37,6 +37,7 @@ import type { MenuEntry } from './context-menu/build-menu';
 import { SkipPermissionsCaption } from './SkipPermissionsCaption';
 import { useFirstTimeGate } from './FirstTimeWarning';
 import { isSmallModel } from './first-time-warnings';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // Stable empty map for the non-dragging render, so a new Map is not allocated
 // on every frame the strip re-renders.
@@ -391,6 +392,9 @@ export default function SessionStrip({
   const [menuOpen, setMenuOpen] = useState(false);
   const [shiftNavIdx, setShiftNavIdx] = useState<number>(-1);
   const shiftNavActive = useRef(false);
+  // Photo-only build: `shoot` opens the list, or the Shift-hold switcher (the same list, Shift-navigation armed).
+  useScreenOpen('chat/sessions', () => setMenuOpen(true));
+  useScreenOpen('chat/switcher', () => { shiftNavActive.current = true; const i = sessions.findIndex((s) => s.id === activeSessionId); setShiftNavIdx(i >= 0 ? i : 0); setMenuOpen(true); });
   const [showNewForm, setShowNewForm] = useState(false);
   const [newCwd, setNewCwd] = useState('');
   const [dangerous, setDangerous] = useState(false);
@@ -2216,6 +2220,8 @@ export default function SessionStrip({
             };
           })()}
         >
+          <ScreenMark name="chat/sessions" />
+          {shiftNavActive.current && <ScreenMark name="chat/switcher" />}
           {/* Android only ever has one window, so the "in this window" scoping label is meaningless there */}
           {sessions.length > 0 && !isAndroid() && (
             <>

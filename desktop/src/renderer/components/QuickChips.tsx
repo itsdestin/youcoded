@@ -6,6 +6,7 @@ import type { ChipConfig } from '../../shared/types';
 import { Button, Dialog, TextInput, Textarea, Tooltip } from './ui';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useScreenOpen } from '../shoot-mode';
 
 // Pencil SVG icon — matches the one used in StatusBar.tsx
 function PencilIcon({ size = 10 }: { size?: number }) {
@@ -42,6 +43,7 @@ interface Props {
 export default function QuickChips({ onChipTap }: Props) {
   const { chips, setChips, installed } = useSkills();
   const [editorOpen, setEditorOpen] = useState(false);
+  useScreenOpen('chat/quick-chips', () => setEditorOpen(true)); // photo-only build: `shoot` opens it by name
 
   // The store is the only source. There is deliberately no hardcoded fallback
   // list here: one used to stand in whenever `chips` was empty, which conflated
@@ -289,7 +291,7 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
 
   return createPortal(
     <>
-      <Dialog open onClose={onClose} title="Edit Quick Chips" size="panel">
+      <Dialog screen="chat/quick-chips" open onClose={onClose} title="Edit Quick Chips" size="panel">
             {/* Chip list — drag-to-reorder via pointer events (mirrors
                 SessionStrip dropdown). Grip icon appears on hover; drop
                 splices the row into the target position. */}

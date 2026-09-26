@@ -14,6 +14,7 @@ import { useTheme } from '../state/theme-context';
 import { isAndroid, isRemoteMode, isTouchDevice } from '../platform';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
+import { ScreenMark } from '../shoot-mode';
 
 // Photo-only build flag (vite.config.ts `define`); see shoot-mode.tsx.
 declare const __SHOOT__: boolean;
@@ -676,6 +677,7 @@ function TerminalView({ sessionId, visible }: Props) {
         pointerEvents: visible ? 'auto' : 'none',
       }}
     >
+      {visible && <ScreenMark name="chat/terminal" />}
       {terminalBg && (
         <div
           aria-hidden
