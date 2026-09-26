@@ -1,0 +1,8 @@
+/* Design-guide review (2026-09-25): SMALLEST TEXT 11px. The app's smallest
+   step (text-3xs) is 10px and carries most hints; this lifts it to 11px so a
+   real screen can be compared. Workbench-only: ?proposal=text-floor-11.
+   WHY !important: a proposal layer is declared first, so only !important
+   beats the theme layer's own value of this variable. */
+@layer proposal {
+:root { --text-3xs: 11px !important; }
+}
