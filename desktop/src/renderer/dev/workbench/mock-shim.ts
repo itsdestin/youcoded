@@ -491,6 +491,26 @@ function applyFailSwitch(impls: Record<string, Record<string, unknown>>): void {
   }
 }
 
+/** `?stall=session.browse` — the stall twin of `?fail=`: each named channel never
+ *  answers, so a spinner's long-wait state (Resume's "still loading", 2026-09-26)
+ *  can be photographed. Same nested-path rules as applyFailSwitch. */
+function applyStallSwitch(impls: Record<string, Record<string, unknown>>): void {
+  const raw = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('stall') : null;
+  if (!raw) return;
+  for (const path of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const parts = path.split('.');
+    if (parts.length < 2) continue;
+    let parent: Record<string, unknown> = impls;
+    for (const key of parts.slice(0, -1)) {
+      const current = parent[key];
+      const copy = current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
+      parent[key] = copy;
+      parent = copy;
+    }
+    parent[parts[parts.length - 1]] = () => new Promise(() => {});
+  }
+}
+
 /** `?update=available` — the status pill's update, which no scenario otherwise sends. */
 function updateStatusSwitch(): { current: string; latest: string; update_available: true; download_url: string } | null {
   if (typeof location === 'undefined' || new URLSearchParams(location.search).get('update') !== 'available') return null;
@@ -548,6 +568,7 @@ export function createMockShim(store: MockStore): Window['claude'] {
   // "Cannot read properties of undefined (reading 'find')". Driving the impl
   // keys means a new namespace works the moment it is written.
   applyFailSwitch(impls);
+  applyStallSwitch(impls);
   for (const ns of new Set([...NAMESPACES, ...Object.keys(impls)])) {
     bridge[ns] = withCatchAll(ns, impls[ns] ?? {});
   }

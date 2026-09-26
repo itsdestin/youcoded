@@ -296,6 +296,10 @@ interface WelcomeBackMode { // not exported: only this file's own prop type uses
 // its conversation starts building — long enough that sweeping across the list
 // warms nothing, short enough to finish before a deliberate click.
 const PANES_KEPT = 4;
+// How long the Resume list may load before the spinner says it still is.
+// Measured 2026-09-26 on a 2,600-conversation history: 0.3-1.5 s normally,
+// ~3 s on the first launch after an update — 6 s is well past ordinary.
+const SLOW_LOAD_MS = 6000;
 const WARM_AFTER_MS = 150;
 // How far the previewed conversation must scroll one way before the header card
 // tucks away or comes back. Small enough that a short flick counts, big enough
@@ -663,7 +667,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // sentence about someone's own history. Destin hit it over remote access on 2026-09-10:
   // nothing appeared, then it worked on the second try, and there was no way to tell from
   // the screen that the first attempt had failed at all.
+  // Past SLOW_LOAD_MS of loading, the spinner gains a "still loading" line.
+  // loadGen restarts the wait on "Try again", which starts a new load while
+  // `loading` is already true.
+  const [loadSlow, setLoadSlow] = useState(false);
+  const [loadGen, setLoadGen] = useState(0);
+  useEffect(() => {
+    setLoadSlow(false);
+    if (!loading) return;
+    const t = setTimeout(() => setLoadSlow(true), SLOW_LOAD_MS);
+    return () => clearTimeout(t);
+  }, [loading, loadGen]);
+
   const loadSessions = useCallback(() => {
+    setLoadGen((g) => g + 1);
     setLoading(true);
     setLoadError(null);
     (window as any).claude.session.browse()
@@ -1876,7 +1893,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           <div ref={listRef} className={previewOn ? 'scroll-fade flex-1' : 'scroll-fade'}>
             <div className="py-2">
               {loading ? (
-                <LoadingState what="sessions" />
+                <div className="flex flex-col items-center">
+                  <LoadingState what="sessions" />
+                  {/* WHY (Destin, 2026-09-25: the first Resume open "can seemingly
+                      load indefinitely"): a spinner alone never says whether
+                      anything is still happening. After a few seconds it says so
+                      and offers a fresh try; no cause is claimed, because none is
+                      known (docs/error-message-standards.md). */}
+                  {loadSlow && (
+                    <div className="flex flex-col items-center gap-2 -mt-4 pb-6">
+                      <span className="text-xs text-fg-muted">Still loading — this is taking longer than usual.</span>
+                      <Button variant="secondary" size="sm" onClick={loadSessions}>Try again</Button>
+                    </div>
+                  )}
+                </div>
               ) : loadError !== null ? (
                 loadError ? (
                   <ErrorState mode="recoverable" message={`Couldn\u2019t load your conversations: ${loadError}`} onRetry={loadSessions} variant="inline" />
