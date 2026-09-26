@@ -244,3 +244,39 @@ describe('settleAdminCapability / adminCapabilityReady: the readiness gate itsel
     expect(getSettledAdminCapability()).toBe('windows');
   });
 });
+
+// A conversation continued on another computer: the saved history carries no
+// tool text, so the resumed session describes sudo the way THIS machine can do
+// it — nothing about the admin guidance travels with the conversation.
+describe('a resumed conversation gets the current machine\'s sudo sentence', () => {
+  it('history saved on a "card" machine, resumed on a Windows one, sends only the Windows sentence', async () => {
+    const { MockLanguageModelV4 } = await import('ai/test');
+    const { makeSession, scriptModel, drainTurn } = await import('./helpers/harness-fakes');
+    const { BashTool } = await import('../src/main/harness/tools/bash');
+    const bashTextSent = async () => {
+      const calls: any[] = [];
+      const inner = scriptModel([{ text: 'ok' }]);
+      const model = new MockLanguageModelV4({ doStream: async (o: any) => { calls.push(o); return inner.doStream(o); } });
+      return { calls, session: makeSession({ model, extraTools: [BashTool] }) };
+    };
+
+    // Machine A: the card works here.
+    resetAdminCapabilityForTests();
+    settleAdminCapability('card');
+    const a = await bashTextSent();
+    await drainTurn(a.session, 'install the drivers');
+    const savedHistory = a.session.acceptedHistory().messages;
+    const bashOn = (calls: any[]) => calls[0].tools.find((t: any) => t.name === 'Bash').description as string;
+    expect(bashOn(a.calls)).toContain('the user types their admin password in a card');
+
+    // Machine B: a fresh app process on Windows resumes the same conversation.
+    resetAdminCapabilityForTests();
+    settleAdminCapability('windows');
+    const b = await bashTextSent();
+    b.session.seedHistory(savedHistory as any);
+    await drainTurn(b.session, 'try again');
+    expect(bashOn(b.calls)).toContain('opens Windows\' own permission window');
+    expect(bashOn(b.calls)).not.toContain('the user types their admin password in a card');
+    resetAdminCapabilityForTests();
+  });
+});
