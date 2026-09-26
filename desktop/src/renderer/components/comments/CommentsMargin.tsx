@@ -10,11 +10,12 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom';
 import { CommentCard } from './CommentCard';
 import { CheckIcon } from '../Icons';
-import { Scrim, OverlayPanel } from '../overlays/Overlay';
+import { Scrim, OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { CloseButton } from '../ui/CloseButton';
 import { EmptyState } from '../ui/states';
 import { CommentsPaneFrame } from './CommentsPaneFrame';
 import { revealSheet } from './sheet-reveal';
+import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { useDocComments, type DocComment } from '../../state/doc-comments-store';
 // Round 2: mark-wrapping moved to a shared hook — ReadingHighlights (Reading
 // mode) needs the identical highlight, and the two modes are mutually
@@ -129,6 +130,12 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   const rawTops = useAnchorTops(marks, marginRef, containerRef);
   const tops = useMemo(() => stackedTops(visible, rawTops, narrow), [visible, rawTops, narrow]);
   const [openId, setOpenId] = useState<string | null>(null);
+  // The marker a desktop popover opens beside (null → centred fallback).
+  const [openAnchor, setOpenAnchor] = useState<DOMRect | null>(null);
+  // Phones get the bottom sheet; a narrow PANE on desktop (the file drawer,
+  // or mid maximize/minimize) gets a small popover by the marker instead —
+  // the sheet spanning the whole desktop window was never an approved design.
+  const phone = useNarrowViewport();
   // activeId = whatever the pointer is on (card or highlight); selectedId =
   // the thread last clicked, which stays lit until another is picked
   // (round 13: "clicking a comment should focus the relevant highlight").
@@ -157,12 +164,18 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps -- jump reads marks via closure; marks is the trigger
   }, [marks]);
 
+  // Opens a thread ONCE per request. WHY the ref (Destin, 2026-09-26: a comment
+  // "popup thing when i maximize/minimize the file window a few times"): this
+  // used to re-run whenever `narrow` flipped, so every resize across the
+  // marker-rail breakpoint re-opened the last-focused comment on its own.
+  const handledThreadRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!openThreadId || !marks.has(openThreadId)) return;
+    if (!openThreadId || handledThreadRef.current === openThreadId || !marks.has(openThreadId)) return;
+    handledThreadRef.current = openThreadId;
     focusThread(openThreadId);
-    if (narrow) setOpenId(openThreadId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- jump/marks read via closure; openThreadId (+ marks becoming ready) is the real trigger
-  }, [openThreadId, marks, narrow]);
+    if (narrow) { setOpenAnchor(null); setOpenId(openThreadId); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- jump/marks/narrow read via closure; openThreadId (+ marks becoming ready) is the real trigger
+  }, [openThreadId, marks]);
 
   // Hovering or clicking the in-document highlight scrolls/highlights its
   // card; hovering the card (below) highlights the mark back — one DOM
@@ -215,7 +228,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
             <button
               key={c.id}
               type="button"
-              onClick={() => setOpenId(c.id)}
+              onClick={(e) => { setOpenAnchor(e.currentTarget.getBoundingClientRect()); setOpenId(c.id); }}
               aria-label={`${c.resolved ? 'Resolved comment' : 'Comment'}: ${c.cell ?? c.quote}`}
               className={`absolute left-1.5 coarse-hit w-6 h-6 rounded-full border flex items-center justify-center text-2xs
                 ${c.resolved ? 'bg-inset border-edge-dim text-fg-muted' : 'bg-panel border-edge text-fg-2'}`}
@@ -230,7 +243,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
             composer, quick chips and status bar painted OVER it and hid the
             reply box. Same createPortal + Scrim + OverlayPanel recipe Dialog.tsx
             uses. */}
-        {openComment && createPortal(
+        {openComment && phone && createPortal(
           <>
             <Scrim layer={2} onClick={() => setOpenId(null)} />
             <OverlayPanel layer={2} className="fixed inset-x-3 bottom-3 max-h-3/4 overflow-auto p-2 rounded-lg">
@@ -248,6 +261,23 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
               />
             </OverlayPanel>
           </>,
+          document.body,
+        )}
+        {/* Desktop: the same card in a small popover LEFT of its marker (the
+            rail sits on the pane's right edge), no dimming — a click outside
+            or Esc closes it, like any popover. */}
+        {openComment && !phone && createPortal(
+          <MarkerPopover anchor={openAnchor} onClose={() => setOpenId(null)}>
+              <CommentCard
+                comment={openComment}
+                autoFocus={openComment.id === focusId}
+                onTextChange={(t) => setCommentText(openComment.id, t)}
+                onReply={(t) => addReply(openComment.id, 'user', t)}
+                onResolve={() => { resolveComment(openComment.id, 'user'); setOpenId(null); }}
+                onReopen={() => reopenComment(openComment.id)}
+                onDelete={() => { removeComment(openComment.id); setOpenId(null); }}
+              />
+          </MarkerPopover>,
           document.body,
         )}
       </>
@@ -291,4 +321,33 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   // The settled panel (round 16/17): rounded, titled, Show Resolved switch —
   // CommentsPaneFrame, shared with code files.
   return <CommentsPaneFrame path={path} frameRef={marginRef}>{list}</CommentsPaneFrame>;
+}
+
+const POPOVER_W = 288;
+/** The desktop marker popover: beside the marker, clamped to the window. */
+function MarkerPopover({ anchor, onClose, children }: { anchor: DOMRect | null; onClose: () => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [top, setTop] = useState(anchor ? anchor.top : 80);
+  const left = anchor ? Math.max(8, anchor.left - POPOVER_W - 8) : Math.max(8, (window.innerWidth - POPOVER_W) / 2);
+  // Measured after the first paint so a tall thread near the bottom is lifted
+  // back on screen rather than cut off.
+  useLayoutEffect(() => {
+    const h = ref.current?.offsetHeight ?? 0;
+    const want = anchor ? anchor.top - 8 : 80;
+    setTop(Math.max(8, Math.min(want, window.innerHeight - h - 8)));
+  }, [anchor]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onDown); };
+  }, [onClose]);
+  return (
+    <div ref={ref} className="fixed" style={{ left, top, width: POPOVER_W, zIndex: POPOVER_Z }}>
+      <OverlayPanel layer={4} className="p-2 max-h-3/4 overflow-auto" style={{ zIndex: 'auto', borderRadius: 'var(--radius-lg)' }}>
+        {children}
+      </OverlayPanel>
+    </div>
+  );
 }
