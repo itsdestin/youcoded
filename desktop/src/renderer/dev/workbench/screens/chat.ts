@@ -23,6 +23,12 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/files', 'pane'),
   chat('chat/terminal', 'view'),
   chat('chat/games', 'pane'),
+  // Right-click menus, opened on the first visible element of each kind.
+  chat('chat/menu/assistant', 'menu'),
+  chat('chat/menu/user', 'menu'),
+  chat('chat/menu/composer', 'menu'),
+  chat('chat/menu/code', 'menu'),
+  chat('chat/menu/file', 'menu'),
   // No session at all: the first screen a new user sees.
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
   { name: 'projects', tags: ['view', 'projects'] },

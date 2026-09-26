@@ -4,6 +4,7 @@ import { OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { MenuIcon } from './menu-icons';
 import type { MenuEntry } from './build-menu';
+import { ScreenMark } from '../../shoot-mode';
 
 // The themed right-click menu itself. Portalled to document.body on the app's
 // .layer-surface popover (L4, like the Select dropdown) so it re-themes and
@@ -17,11 +18,14 @@ export function ContextMenu({
   y,
   entries,
   onClose,
+  screen,
 }: {
   x: number;
   y: number;
   entries: MenuEntry[];
   onClose: () => void;
+  /** Set when `shoot` opened this menu (photo-only build): names its mark. */
+  screen?: string;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const menuElRef = useRef<HTMLDivElement>(null);
@@ -121,6 +125,7 @@ export function ContextMenu({
       className="fixed select-none"
       style={{ left: pos.left, top: pos.top, minWidth: 200, borderRadius: 'var(--radius-lg)' }}
     >
+      {screen && <ScreenMark name={screen} />}
       {/* Keyboard handling lives on this inner div — OverlayPanel's typed props
           don't include onKeyDown, and the menu shouldn't scroll (no overflow on
           the surface). */}
