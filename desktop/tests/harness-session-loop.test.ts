@@ -11,7 +11,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { HarnessSession } from '../src/main/harness/harness-session';
-import { BashTool, setAdminPasswordAvailable } from '../src/main/harness/tools/bash';
+import { BashTool } from '../src/main/harness/tools/bash';
+import { settleAdminCapability, resetAdminCapabilityForTests } from '../src/main/harness/admin-capability';
 import { isContextOverflow } from '../src/main/providers/context-overflow';
 import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES } from '../src/main/harness/image-support';
 import type { HarnessManifest } from '../src/shared/harness-manifest';
@@ -1352,9 +1353,11 @@ describe('HarnessSession — multi-step turn driver', () => {
       // it still runs AND the assistant is told why a password-needing sudo
       // won't work. With no service wired the availability flag stays at its
       // default (off), so the real Bash tool's description must say so.
-      setAdminPasswordAvailable(false);
+      resetAdminCapabilityForTests();
+      settleAdminCapability('no-password-only');
       expect(BashTool.description).toContain('`sudo` only works here when the command needs no password (NOPASSWD)');
       expect(BashTool.description).not.toContain('the user types their admin password in a card');
+      resetAdminCapabilityForTests(); // never leak into a later test in this file
     });
 
     it('a no from the person on the APPROVAL card means the password is never asked either', async () => {

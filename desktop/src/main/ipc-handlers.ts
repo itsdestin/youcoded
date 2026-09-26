@@ -65,9 +65,8 @@ import { detectEndpoints } from './models/endpoint-detectors';
 import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
-import { AskpassServer } from './harness/askpass/askpass-server';
-import { setAdminPasswordAvailable } from './harness/tools/bash';
-import { forgetOnQuit } from './harness/askpass/admin-forget';
+import { adminCapabilityReady } from './harness/admin-capability';
+import { startAdminPassword } from './harness/admin-password-startup';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
@@ -891,6 +890,14 @@ export function registerIpcHandlers(
     // host sees a cwd.
     // The window can close while admission or native startup is awaiting I/O.
     const checkWindow = () => { attemptCheck?.(); if (event?.sender.isDestroyed?.()) throw new Error('The window closed before this conversation opened.'); };
+    checkWindow();
+    // Task 1 (Destin, 2026-09-26): no session may exist before this
+    // machine's admin capability is settled — a session created in the
+    // first moments of app start would otherwise read the Bash
+    // description's placeholder default and keep it, byte-identical, for
+    // its own whole life (prompt cache). Resolves instantly once settled;
+    // pending only in the brief window right after app launch.
+    await adminCapabilityReady();
     checkWindow();
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
@@ -3086,42 +3093,10 @@ export function registerIpcHandlers(
     { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
   );
 
-  // admin-password design §11 task 5, item 1: ONE AskpassServer + ONE
-  // AdminPasswordService for the app's whole life. Linux only for now —
-  // "POSIX only; Linux enabled; macOS stays off" (design §11): verify.ts's
-  // own MAC_ENABLED switch is defence in depth, but starting the socket
-  // server at all on a platform this feature doesn't support yet is
-  // needless risk for zero benefit. If `start()`'s own self-test fails
-  // (peer-cred resolution untrustworthy on this build), `available` stays
-  // false, `attachAdminPassword` is never called, and sudo fails exactly as
-  // it did before this feature existed — no fallback identity check, per
-  // design §2.2.
-  let askpassServer: AskpassServer | null = null;
-  if (process.platform === 'linux') {
-    void resolveAskpassPaths().then(async (paths) => {
-      if (!paths) {
-        log('WARN', 'AdminPassword', 'askpass.cjs/youcoded-askpass not found — sudo commands will fail exactly as before this feature existed');
-        return;
-      }
-      // T5-1: `helperScriptRealpath` (askpass.cjs) feeds ONLY the verifier's
-      // argv[1] check; `wrapperRealpath` (youcoded-askpass) is the ONLY
-      // value that may ever become SUDO_ASKPASS — sudo execve()s the
-      // wrapper, never askpass.cjs directly.
-      askpassServer = new AskpassServer({
-        execPath: process.execPath,
-        helperScriptRealpath: paths.helperScriptRealpath,
-        runningCalls: nativeHost.runningCallsForAskpass(),
-      });
-      await askpassServer.start();
-      if (!askpassServer.available) return;
-      nativeHost.attachAdminPassword(askpassServer, paths.wrapperRealpath);
-      // Code review F1: only now does the Bash tool description tell the
-      // model sudo works with a password — before this point (macOS,
-      // Windows, or a failed self-test above) it stays at its default
-      // `false` and the description says sudo only works there without one.
-      setAdminPasswordAvailable(true);
-    });
-  }
+  // admin-password: the password card's app-start wiring and its quit teardown
+  // (harness/admin-password-startup.ts). Always settles this machine's capability,
+  // which session creation below awaits.
+  const stopAdminPassword = startAdminPassword(nativeHost, resolveAskpassPaths);
 
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref
   // noteModelUsed persists — thin async wrapper around bindingToPortableModel
@@ -5700,13 +5675,7 @@ export function registerIpcHandlers(
     // is synchronous and callers don't await it, so this mirrors the async
     // stopSyncSpaces() teardown pattern in main.ts window-all-closed.
     void nativeHost.destroyAll().catch(() => {});
-    // admin-password design §11 task 5, item 1/§5: refuse every still-open
-    // password ask (AskpassServer.stop() answers each pending one
-    // {"ok":false} and removes the socket) and run the forget step's final
-    // sweep — belt-and-suspenders alongside the per-call exits destroyAll()
-    // above already triggers. Fire-and-forget, same reasoning as destroyAll.
-    void askpassServer?.stop().catch(() => {});
-    forgetOnQuit(nativeHost.runningCallsForAskpass());
+    stopAdminPassword(); // refuse open password asks; final forget sweep
     // Awaited by the caller: never leave an orphaned llama-server on quit.
     const engineStopped = engineManager.stopAll().catch(() => {});
     for (const watcher of topicWatchers.values()) {

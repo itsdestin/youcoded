@@ -18,6 +18,7 @@ import type { ToolResultPayload } from './types';
 import { spawnDetached, killTree, formatElapsed, MAX_EXPLICIT_RUNNING } from '../shell-registry';
 import { CWD_SENTINEL, ENV_SENTINEL, stripAnsi, stripSentinelLines } from './shell-text';
 import { forgetOnCallExit } from '../askpass/admin-forget';
+import { getSettledAdminCapability } from '../admin-capability';
 // Why re-exported: harness-tools-core.test.ts and other callers import
 // stripAnsi from here; moving the implementation into shell-text.ts (so the
 // ShellRegistry can use it without an import cycle) must not move the import
@@ -143,29 +144,16 @@ export function resetShellCache(): void {
   cachedShell = null;
 }
 
-// admin-password design, code review F1: whether THIS machine can ever show
-// the password card at all — macOS (MAC_ENABLED is off), Windows (no
-// AskpassServer is ever constructed), or Linux with a failed peer-cred
-// self-test. Set exactly once, from ipc-handlers.ts's app-start wiring,
-// right after NativeSessionHost.attachAdminPassword() actually succeeds —
-// never from a platform check here, so this file states only the OUTCOME,
-// never re-derives the platform logic that decided it.
-//
-// WHY a module-level flag rather than threading it through ctx: this is a
-// per-APP fact (every session on this machine either can or can't show the
-// card), not a per-session one — the same shape `cachedShell` already uses
-// above, for the same reason (`.description` is a zero-arg getter read once
-// per session by buildAiTools()).
-let adminPasswordAvailable = false;
-export function setAdminPasswordAvailable(v: boolean): void {
-  adminPasswordAvailable = v;
-}
-// knip: not exported — nothing outside this file reads the flag directly;
-// tests instead assert on BashTool.description's own text after calling
-// setAdminPasswordAvailable().
-function isAdminPasswordAvailable(): boolean {
-  return adminPasswordAvailable;
-}
+// admin-password design, code review F1, redesigned 2026-09-26 (Destin,
+// "the model's guidance must always be true on the machine in use") — which
+// of THREE sentences this sudo paragraph shows is now `admin-capability.ts`'s
+// settled value, not a boolean this file owns: 'card' (macOS stays off while
+// MAC_ENABLED is; Windows is its own third sentence; Linux needs both a
+// passed peer-cred self-test AND a supported sudo flavour). Settled exactly
+// once, from ipc-handlers.ts's app-start wiring, BEFORE any session may be
+// created (`adminCapabilityReady()` gates session creation there) — so this
+// file states only the OUTCOME, never re-derives the platform/flavour logic
+// that decided it, and no session can ever read a stale placeholder.
 
 /** Only the bash shells get cwd tracking. The PowerShell fallback would need a
  *  different sentinel AND an $LASTEXITCODE dance to preserve exit codes, and it
@@ -447,24 +435,35 @@ function bashDescription(): string {
     // answers it.
     'A command that might prompt for input hangs: pass its non-interactive flag ' +
     '(`-y`, `--yes`, `--non-interactive`, or the tool\'s equivalent) whenever a command could ask a question. ' +
-    // admin-password design §8, code review F1: what the model needs to know
-    // about sudo — that it WORKS (unlike before this feature) WHEN the
-    // password card is available on THIS machine, who types the password,
-    // and the two things never to do (both would leak the password to the
-    // model's own stdout, or bypass the app's own verification entirely).
-    // On a machine where the card can never appear (macOS, Windows, or a
-    // Linux self-test failure), telling the model sudo "works" would be
-    // false — a sudo needing a password there just fails or hangs with no
-    // explanation. Passwordless (NOPASSWD) sudo keeps working on EVERY
-    // platform either way — nothing about this feature refuses it, and this
-    // sentence only changes the model's own expectations, never behavior.
-    (isAdminPasswordAvailable()
-      ? '`sudo` works: the user types their admin password in a card inside the app itself, never in this ' +
-        'output — do not pass a password, `-S`, or `-A`, and do not set `SUDO_ASKPASS` yourself. '
-      : '`sudo` only works here when the command needs no password (NOPASSWD) — this computer can\'t show ' +
-        'a password card, so a `sudo` that asks for one will fail or hang with no further explanation. ') +
+    // admin-password design §8, code review F1, redesigned 2026-09-26: what
+    // the model needs to know about sudo on THIS machine — one true sentence
+    // per settled AdminCapability value, never a guess. 'card': it WORKS,
+    // who types the password, and the two things never to do (both would
+    // leak the password to the model's own stdout, or bypass the app's own
+    // verification entirely). 'windows': sudo there, when the user enabled
+    // it, opens Windows' own permission window — nothing this app shows or
+    // controls. 'no-password-only': telling the model sudo "works" would be
+    // false — a sudo needing a password fails or hangs with no explanation.
+    // Passwordless (NOPASSWD) sudo keeps working on EVERY platform either
+    // way — nothing about this feature refuses it; this paragraph only ever
+    // changes the model's own expectations, never behavior.
+    adminSudoSentence() +
     '`doas`, `su`, `pkexec`, and `run0` are refused; use `sudo` instead.'
   );
+}
+
+function adminSudoSentence(): string {
+  const capability = getSettledAdminCapability();
+  if (capability === 'card') {
+    return '`sudo` works: the user types their admin password in a card inside the app itself, never in this ' +
+      'output — do not pass a password, `-S`, or `-A`, and do not set `SUDO_ASKPASS` yourself. ';
+  }
+  if (capability === 'windows') {
+    return '`sudo`, if enabled on this PC, opens Windows\' own permission window for the user; it never asks ' +
+      'for a password here. ';
+  }
+  return '`sudo` only works here when the command needs no password (NOPASSWD) — this computer can\'t show ' +
+    'a password card, so a `sudo` that asks for one will fail or hang with no further explanation. ';
 }
 
 // Spill paths live in ./spill-paths so guards.ts can recognize one without

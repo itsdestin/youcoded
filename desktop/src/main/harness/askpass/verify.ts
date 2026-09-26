@@ -219,7 +219,7 @@ const KNOWN_SUDO_LOCATIONS = ['/usr/bin/sudo', '/usr/local/bin/sudo', '/bin/sudo
  *  (its ownership/setuid/writability is checked by the caller, using the
  *  exact same per-file logic used for an absolute argv[0]) — or null if
  *  none of them exist here. */
-async function firstExistingKnownSudoPath(reader: ProcReader): Promise<string | null> {
+export async function firstExistingKnownSudoPath(reader: ProcReader): Promise<string | null> {
   for (const candidate of KNOWN_SUDO_LOCATIONS) {
     const st = await reader.statPath(candidate);
     if (st) return candidate;

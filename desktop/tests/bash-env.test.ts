@@ -15,7 +15,8 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { BashTool, setAdminPasswordAvailable } from '../src/main/harness/tools/bash';
+import { BashTool } from '../src/main/harness/tools/bash';
+import { settleAdminCapability, resetAdminCapabilityForTests } from '../src/main/harness/admin-capability';
 import type { ToolContext } from '../src/main/harness/tools/types';
 
 // `ipc-handlers.ts` imports `./main`, which runs module-scope side effects
@@ -211,25 +212,67 @@ describe('Bash env — the sudo askpass variables', () => {
   });
 });
 
-// F1 (code review): where the password card can never appear (macOS,
-// Windows, or a Linux self-test failure), the description must say so
+// F1 (code review), redesigned 2026-09-26: which of the three settled
+// AdminCapability sentences shows must say the true thing for THIS machine
 // instead of unconditionally claiming sudo works with a password.
-describe('Bash description — reflects whether the password card is actually available (F1)', () => {
+describe('Bash description — reflects the settled AdminCapability (F1)', () => {
+  beforeEach(() => {
+    resetAdminCapabilityForTests(); // settleAdminCapability is idempotent-once — reset before EVERY settle below
+  });
   afterEach(() => {
-    setAdminPasswordAvailable(false); // restore the default for every other test file
+    resetAdminCapabilityForTests(); // restore the default for every other test file
   });
 
   it('says sudo works with a password card when the feature is available', () => {
-    setAdminPasswordAvailable(true);
+    settleAdminCapability('card');
     const d = BashTool.description;
     expect(d).toContain('`sudo` works: the user types their admin password in a card');
     expect(d).not.toContain('only works here when the command needs no password');
+    expect(d).not.toContain('Windows\' own permission window');
   });
 
   it('says sudo only works without a password when the card is unavailable — never claims the card exists', () => {
-    setAdminPasswordAvailable(false);
+    settleAdminCapability('no-password-only');
     const d = BashTool.description;
     expect(d).toContain('`sudo` only works here when the command needs no password (NOPASSWD)');
     expect(d).not.toContain('the user types their admin password in a card');
+  });
+
+  it('says sudo opens Windows\' own permission window, never a password, on Windows', () => {
+    settleAdminCapability('windows');
+    const d = BashTool.description;
+    expect(d).toContain('opens Windows\' own permission window for the user');
+    expect(d).not.toContain('the user types their admin password in a card');
+    expect(d).not.toContain('only works here when the command needs no password');
+  });
+
+  it('defaults to the no-password-only sentence when read before anything ever settled', () => {
+    // resetAdminCapabilityForTests() above leaves capability unsettled —
+    // matches getSettledAdminCapability()'s own documented fallback, which
+    // should be unreachable in production (session creation gates on
+    // adminCapabilityReady()) but must still be the conservative answer.
+    const d = BashTool.description;
+    expect(d).toContain('`sudo` only works here when the command needs no password (NOPASSWD)');
+  });
+
+  // Task 3 (Destin, 2026-09-26): resuming a conversation in a fresh app
+  // process — possibly on a DIFFERENT machine — must get THAT machine's
+  // answer, never anything stored with the conversation. There is no
+  // per-session cache to defeat here (BashTool.description is a plain
+  // getter reading admin-capability.ts's one module-level value, and
+  // harness-session.ts's buildAiTools() re-reads `.description` fresh on
+  // EVERY turn — grep confirms no conversation/session store field ever
+  // holds an AdminCapability or description string); this test pins that
+  // by proving the SAME BashTool object carries zero memory of a PRIOR
+  // machine's settle once a fresh process's own settle lands.
+  it('resume on another machine: a fresh process\'s settled capability wins over any prior machine\'s answer', () => {
+    settleAdminCapability('card'); // "process A" — e.g. the machine the conversation started on
+    expect(BashTool.description).toContain('the user types their admin password in a card');
+
+    resetAdminCapabilityForTests(); // simulates a FRESH app process (a resume/continue)
+    settleAdminCapability('windows'); // "process B" — a different machine's own answer
+    const resumed = BashTool.description;
+    expect(resumed).toContain('opens Windows\' own permission window for the user');
+    expect(resumed).not.toContain('the user types their admin password in a card');
   });
 });
