@@ -14,7 +14,7 @@
 // here, every listed name is registered somewhere); `shoot --check` opens every
 // entry in the photo-only build.
 //
-// Spec: docs/active/specs/2026-09-24-shoot-and-explore.md (workspace repo).
+// Spec: docs/archive/specs/2026-09-24-shoot-and-explore.md (workspace repo).
 
 import type { ScreenEntry } from './types';
 import { SETTINGS } from './settings';
