@@ -21,7 +21,7 @@
     "shared/types.ts": 2349,
     "renderer/components/SyncPanel.tsx": 2041,
     "main/engine/engine-manager.ts": 2035,
-    "renderer/components/ResumeBrowser.tsx": 2030,
+    "renderer/components/ResumeBrowser.tsx": 2060,
     "main/preload.ts": 1954,
     "renderer/components/StatusBar.tsx": 1799,
     "renderer/components/ToolCard.tsx": 1618,

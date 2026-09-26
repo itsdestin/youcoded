@@ -71,11 +71,6 @@ describe('perpetual animations are frame-budgeted', () => {
   // reason. An entry here is a decision, not an oversight — adding one should
   // take the same thought as quantizing the animation instead.
   const ANIMATION_EXCEPTIONS: Record<string, string> = {
-    'rig-breathe': 'character motion — steps() reads as juddering; gated on visibilitychange instead (MascotRig)',
-    'rig-bounce-loop': 'character motion — see rig-breathe',
-    'rig-float-loop': 'character motion — see rig-breathe',
-    'rig-sleep-loop': 'character motion — see rig-breathe',
-    'rig-dizzy-sway': 'character motion — see rig-breathe',
     'comp-twinkle': 'theme companion SVG — visibility-gated with the scene',
     'comp-spin': 'theme companion SVG — 26s period, visibility-gated with the scene',
     'comp-pulse': 'theme companion SVG — visibility-gated with the scene',

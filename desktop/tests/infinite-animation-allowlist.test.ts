@@ -28,11 +28,6 @@ import { RENDERER, readStripped, assertScopeIsPopulated, assertPatternMatches } 
 // load) and for which stepping is visibly worse. This guard changes no CSS;
 // it makes the next smooth infinite animation a reviewed decision.
 const SMOOTH_OK: Record<string, string> = {
-  'rig-breathe': 'character motion — steps() reads as juddering; paused via [data-doc-hidden] when the document is hidden (MascotRig)',
-  'rig-bounce-loop': 'character motion — see rig-breathe',
-  'rig-float-loop': 'character motion — see rig-breathe',
-  'rig-sleep-loop': 'character motion — see rig-breathe',
-  'rig-dizzy-sway': 'character motion — see rig-breathe',
   'comp-twinkle': 'theme companion SVG — visibility-gated with the scene',
   'comp-spin': 'theme companion SVG — 26s period, visibility-gated with the scene',
   'comp-pulse': 'theme companion SVG — visibility-gated with the scene',
@@ -197,10 +192,11 @@ describe('every infinite animation is stepped, or in SMOOTH_OK with a reason', (
   });
 
   it('finds the known smooth set in the real tree (non-vacuity)', () => {
-    // The mascot rig and model-load sweep are smooth on purpose; if the sweep
-    // stops seeing them it is blind, not clean.
+    // The companion loops and model-load sweep are smooth on purpose; if the
+    // sweep stops seeing them it is blind, not clean. (The rig body loops left
+    // CSS on 2026-09-26 — MascotRig draws them at 30 fps, rig-body-loop.ts.)
     const names = new Set(smooth.map((f) => f.name));
-    expect(names.has('rig-breathe')).toBe(true);
+    expect(names.has('comp-twinkle')).toBe(true);
     expect(names.has('model-load-sweep')).toBe(true);
   });
 

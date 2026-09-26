@@ -2,44 +2,11 @@
    Loaded globally (globals.css) — the rig renders in the main window (welcome
    screen, gates) AND the buddy mascot window.
 
-   Idle body loops run on #rig-root INSIDE the rig SVG (transform-box:view-box
-   is set by MascotRig). --amp is the intensity multiplier (0.5–2×), set on the
-   MascotRig host div. These use the `transform` property — the wrapper-level
-   hover `scale` / peek `rotate` / breathing `translate` live on OUTER elements
-   as independent CSS properties, so nothing clobbers. */
-
-@keyframes rig-breathe {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(calc(-1.6% * var(--amp, 1))); }
-}
-svg #rig-root.rig-breathing { animation: rig-breathe 4s ease-in-out infinite; }
-svg #rig-root.rig-fast-breath { animation-duration: 1.8s; }
-
-@keyframes rig-bounce-loop {
-  0%, 100% { transform: translateY(0) scale(1, 1); }
-  28% { transform: translateY(calc(-3% * var(--amp, 1))) scale(0.985, 1.02); }
-  55% { transform: translateY(0) scale(1.015, 0.985); }
-  72% { transform: translateY(calc(-0.9% * var(--amp, 1))) scale(1, 1); }
-}
-svg #rig-root.rig-bounce-loop { transform-origin: 50% 85%; animation: rig-bounce-loop 1.15s ease-in-out infinite; }
-
-@keyframes rig-float-loop {
-  0%, 100% { transform: translateY(calc(1.6% * var(--amp, 1))) rotate(-1.2deg); }
-  50% { transform: translateY(calc(-2.8% * var(--amp, 1))) rotate(1.2deg); }
-}
-svg #rig-root.rig-float-loop { transform-origin: 50% 60%; animation: rig-float-loop 5.8s ease-in-out infinite; }
-
-@keyframes rig-sleep-loop {
-  0%, 100% { transform: translateY(0) scale(1, 1); }
-  50% { transform: translateY(calc(-2.2% * var(--amp, 1))) scale(1.012, 0.988); }
-}
-svg #rig-root.rig-sleep-loop { transform-origin: 50% 85%; animation: rig-sleep-loop 6.5s ease-in-out infinite; }
-
-@keyframes rig-dizzy-sway {
-  0%, 100% { transform: rotate(-2.6deg); }
-  50% { transform: rotate(2.6deg); }
-}
-svg #rig-root.rig-dizzy-sway { transform-origin: 50% 85%; animation: rig-dizzy-sway 1.5s ease-in-out infinite; }
+   The rig's idle BODY loops (breathe, bounce, float, sleep, dizzy sway) are no
+   longer keyframes here: MascotRig draws them on #rig-root in its own 30 fps
+   update (components/mascot/rig-body-loop.ts). WHY (2026-09-26): a smooth CSS
+   loop made the browser draw at the panel's full refresh rate — 180/s on
+   Destin's screen — and was most of an idle welcome screen's graphics cost. */
 
 /* ── Scene companions (MascotScene) ──
    Sanctioned intra-companion animation classes — theme companion SVGs carry
@@ -88,12 +55,12 @@ svg #rig-root.rig-dizzy-sway { transform-origin: 50% 85%; animation: rig-dizzy-s
   animation: none !important;
 }
 
-/* Hidden document: stop the rig and companion keyframe loops. These are
-   character motion and so are exempt from steps() budgeting — this rule is what
-   makes that exemption honest, since an unpaused smooth loop presents at the
-   panel's full refresh rate whether or not anyone is looking.
+/* Hidden document: stop the companion keyframe loops. These are character
+   motion and so are exempt from steps() budgeting — this rule is what makes
+   that exemption honest, since an unpaused smooth loop presents at the panel's
+   full refresh rate whether or not anyone is looking. (The rig body loop stops
+   with MascotRig's update, which pauses while the document is hidden.)
    Set by index.tsx on visibilitychange. */
-html[data-doc-hidden='1'] svg #rig-root,
 html[data-doc-hidden='1'] .mascot-comp,
 html[data-doc-hidden='1'] .mascot-comp * {
   animation-play-state: paused;
