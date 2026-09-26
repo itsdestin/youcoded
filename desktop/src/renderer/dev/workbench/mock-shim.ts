@@ -1,3 +1,4 @@
+import type { NativePermissionMode } from '../../../shared/permission-types';
 import { MARKETPLACE_API_HOST } from '../../state/marketplace-api-client';
 import type { ChatGptAccountStatus } from '../../../shared/chatgpt-types';
 import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
@@ -1719,6 +1720,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
 
   let contextPreferences: import('../../../shared/context-preferences').ContextPreferences = { openrouter: 'standard', chatgpt: 'standard' };
   let stepGuard: number | null = null;
+  const nativeModes = new Map<string, NativePermissionMode>();
+  const nativePermission = {
+    getPermissionMode: async (sessionId: string) => nativeModes.get(sessionId) ?? 'ask',
+    setPermissionMode: async (sessionId: string, mode: NativePermissionMode) => {
+      if (store.refuseWrites) return nativeModes.get(sessionId) ?? 'ask';
+      nativeModes.set(sessionId, mode);
+      return mode;
+    },
+  };
   const native: Ns<'native'> = {
     supported: true,
     getContextPreferences: async () => ({ ...contextPreferences }),
@@ -1727,6 +1737,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       contextPreferences = { ...contextPreferences, ...patch };
       return { ...contextPreferences };
     },
+    // Permission mode per native session. WHY (2026-09-24): with no entry here the
+    // catch-all proxy answered `[]`, which App.tsx reads as 'unknown' — so every
+    // native session in the workbench wore a red "PERMISSION UNKNOWN" chip no real
+    // session shows (seen in the themes' preview screenshots). A new session starts
+    // on 'ask', the preset default (main/harness/preset-registry.ts).
+    // getPermissionMode is in preload but not in the renderer's Window type (App.tsx
+    // reaches it through `as any`), so it is spread in rather than written here.
+    ...nativePermission,
     getStepGuard: async () => stepGuard,
     setStepGuard: async (value: number | null) => {
       if (store.refuseWrites) throw new Error('The workbench is refusing writes.');

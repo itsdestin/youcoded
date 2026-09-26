@@ -796,7 +796,7 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
         title={
           showInfo ? 'About Appearance'
             : editingTheme ? `Edit: ${editingTheme.name}`
-              : 'Themes'
+              : 'Appearance' // holds Look + Effects too since 2026-09-24, not only themes
         }
         onBack={
           showInfo ? () => setShowInfo(false)

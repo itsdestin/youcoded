@@ -16,6 +16,7 @@ import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
 import { useTheme } from '../state/theme-context';
+import ChatEdgeFade from './ChatEdgeFade';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
 import { useSwitchFirstFrame } from '../hooks/use-switch-first-frame';
 import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
@@ -1064,12 +1065,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       <div className={`framed-shell${rightPaneOpen ? ' drawer-open' : ''}${drawerExpanded && !gameOpen ? ' drawer-expanded' : ''}`}>
         <div className="frame-edge" />
         <div className="chat-pane">
-          {/* Empty-state hint — absolutely centered in the chat-pane between the
-              top and bottom chrome. Uses --top-chrome-bottom (not the broken
-              h-full centering it replaces) so it clears a FLOATING header pill,
-              which sits below --top-chrome-height by its own margin; otherwise
-              the text tucked slightly behind the pill. Provider-aware: native
-              sessions must not be told to talk to a vendor's name. */}
+          {visible && <ChatEdgeFade belowFindRow={findOpen || !!stripStatus} />}
+          {/* Center the hint between measured chrome edges, clearing even a
+              floating header's extra margin. Use the actual provider name. */}
           {state.timeline.length === 0 && !state.isThinking && (
             <div
               // select-none: a hint, not content. Ctrl+A must not paint it

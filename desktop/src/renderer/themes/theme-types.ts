@@ -66,7 +66,18 @@ export type InputStyle = 'default' | 'floating' | 'minimal' | 'terminal';
 export type BubbleStyle = 'default' | 'pill' | 'flat' | 'bordered';
 export type HeaderStyle = 'default' | 'minimal' | 'hidden';
 export type StatusbarStyle = 'default' | 'minimal';
-export type ChromeStyle = 'default' | 'floating';
+/** `float` = the "popped through glass" chrome: the wrapping chrome surfaces go
+ *  away entirely — no header strip, no container around the composer + quick
+ *  chips, no strip behind the status chips — and the individual chrome elements
+ *  rise out of the canvas on their own, as if a sign were being pushed through a
+ *  soft translucent sheet. Unlike `floating`, which gives each BAR a detached
+ *  rounded card, this gives each CONTROL its own lift.
+ *
+ *  WHY the value is `float` and not `minimal`: `input-style: minimal` and
+ *  `header-style: minimal` already exist and mean something finer-grained, and
+ *  the theme-builder Kit already shows a preset called "Minimal" — a third
+ *  meaning would be ambiguous in the one place a non-developer picks it. */
+export type ChromeStyle = 'default' | 'floating' | 'float';
 export type ParticlePreset = 'none' | 'rain' | 'dust' | 'ember' | 'snow' | 'custom';
 
 export interface ThemeLayout {

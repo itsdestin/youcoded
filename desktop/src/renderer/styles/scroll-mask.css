@@ -1,0 +1,22 @@
+/* The masked fade — the newer look (ui-consistency work, 2026-09-23): the CONTENT
+   itself fades to transparent at an edge, instead of a panel-coloured band painted
+   over it. So it blends into whatever is behind, wallpaper and glass included.
+   First home: Appearance's themes box (Destin, appearance-panel-review-3: "replace the
+   painted fade ... with our new fade"). Same hook as .scroll-fade (useScrollFade sets
+   data-fade-top / data-fade-bottom). Each edge fades only while there is more that
+   way. --scroll-mask-under (optional) reserves a strip at the bottom where the box's
+   own buttons sit: content is hidden under it and the fade ends at its top edge, so
+   cards pass UNDER the buttons. No @property / transition: the stops snap
+   (performance.md rule 6). */
+.scroll-mask {
+  --scroll-mask-top: 0px;
+  --scroll-mask-bottom: 0px;
+  --scroll-mask-under: 0px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--scroll-mask-top), #000 calc(100% - var(--scroll-mask-under) - var(--scroll-mask-bottom)), transparent calc(100% - var(--scroll-mask-under)));
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--scroll-mask-top), #000 calc(100% - var(--scroll-mask-under) - var(--scroll-mask-bottom)), transparent calc(100% - var(--scroll-mask-under)));
+}
+.scroll-mask::-webkit-scrollbar { display: none; }
+.scroll-mask[data-fade-top="true"] { --scroll-mask-top: 40px; }
+.scroll-mask[data-fade-bottom="true"] { --scroll-mask-bottom: 40px; }
