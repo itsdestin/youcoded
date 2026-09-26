@@ -652,10 +652,13 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
     if (idx >= 0 && segments[idx].type === 'tool') {
       const existing = segments[idx] as Extract<SubagentSegment, { type: 'tool' }>;
       existingToolSegment = existing;
+      // passwordAsk dropped on settle, same reasoning as the top-level
+      // TRANSCRIPT_TOOL_RESULT branch (coordinator, 2026-09-26).
+      const { passwordAsk: _resolved, ...base } = existing;
       segments[idx] = action.isError
-        ? { ...existing, status: 'failed', error: action.result }
+        ? { ...base, status: 'failed', error: action.result }
         : {
-            ...existing,
+            ...base,
             status: 'complete',
             response: action.result,
             ...(action.structuredPatch ? { structuredPatch: action.structuredPatch } : {}),
@@ -2077,7 +2080,11 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // KEPT card ends (the user answered Claude Code's menu in the terminal,
         // the tool ran, its result landed here). A card is either kept
         // (awaiting-approval + expired) or settled — never both.
-        const { expired: _settled, ...base } = existing;
+        // `passwordAsk` goes too, for the same reason (coordinator, 2026-09-26):
+        // the command can't finish before sudo gets the password, so this is
+        // not a real race in practice — but a settled card must never still
+        // carry an ask ToolCard would try to render on top of a finished tool.
+        const { expired: _settled, passwordAsk: _resolved, ...base } = existing;
         if (action.isError) {
           toolCalls.set(action.toolUseId, {
             ...base, status: 'failed', error: action.result,
@@ -2697,8 +2704,16 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             // unchanged requestId is a no-op so a 3s re-announce doesn't
             // rebuild the whole Map for nothing.
             if (seg.passwordAsk?.requestId === action.requestId) return state;
+            // Bug (Destin, real-machine test): the command looked like it was
+            // still running while the password card waited — nothing marked
+            // it as needing input. Flips this row to 'awaiting-approval' the
+            // same way a nested permission ask does (PERMISSION_REQUEST
+            // above) — every existing 'awaiting-approval' consumer that also
+            // needs to recognize a password ask now goes through
+            // needsUserAnswer() (specialist-cards.ts) instead of a bare
+            // requestId check.
             const nextSegs = [...segs!];
-            nextSegs[idx] = { ...seg, passwordAsk: ask };
+            nextSegs[idx] = { ...seg, passwordAsk: ask, status: 'awaiting-approval' };
             const toolCalls = new Map(session.toolCalls);
             toolCalls.set(cardId, { ...card, subagentSegments: nextSegs });
             next.set(action.sessionId, { ...session, toolCalls });
@@ -2718,6 +2733,9 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         toolCalls.set(action.toolUseId, {
           ...existing,
           passwordAsk: ask,
+          // Same flip as the nested branch above — a top-level password ask
+          // must look and act exactly like a pending permission ask.
+          status: 'awaiting-approval',
           ...(action.specialist
             ? { specialist: { childId: action.specialist.childId, agentType: action.specialist.agentType, title: action.specialist.title } }
             : {}),
@@ -2748,7 +2766,13 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         const seg = segs[idx] as Extract<SubagentSegment, { type: 'tool' }>;
         const { passwordAsk: _drop, ...rest } = seg;
         const nextSegs = [...segs];
-        nextSegs[idx] = rest as typeof seg;
+        // Back to 'running' — the mirror of PASSWORD_REQUEST's flip. If the
+        // command already finished by the time this lands (a genuine result
+        // beat the resolution — see TRANSCRIPT_TOOL_RESULT's own passwordAsk
+        // drop), `rest.status` is already 'complete'/'failed' and this would
+        // wrongly revive it, so only flip a row this action's OWN ask is
+        // still holding open.
+        nextSegs[idx] = (rest.status === 'awaiting-approval' ? { ...rest, status: 'running' } : rest) as typeof seg;
         const toolCalls = new Map(session.toolCalls);
         toolCalls.set(id, { ...tool, subagentSegments: nextSegs });
         next.set(action.sessionId, { ...session, toolCalls });
@@ -2758,8 +2782,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       for (const [id, tool] of session.toolCalls) {
         if (tool.passwordAsk?.requestId !== action.requestId) continue;
         const { passwordAsk: _drop, ...rest } = tool;
+        // Same guard as the nested branch above.
+        const settled = rest.status === 'awaiting-approval' ? { ...rest, status: 'running' as const } : rest;
         const toolCalls = new Map(session.toolCalls);
-        toolCalls.set(id, rest);
+        toolCalls.set(id, settled);
         next.set(action.sessionId, { ...session, toolCalls });
         return next;
       }

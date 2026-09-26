@@ -884,8 +884,16 @@ export interface ToolCallState {
    *  → the "Always allow" button is HIDDEN (for the same reason as `external`)
    *  and Full auto's stop band names which floor. See FloorStop. */
   floorStop?: FloorStop;
-  /** Native runtime only: this running command's sudo is waiting for the
-   *  computer password. Set on a 'running' card, not a new status. */
+  /** Native runtime only: this command's sudo is waiting for the computer
+   *  password. Status flip (Destin, 2026-09-26 dogfood: while the password
+   *  card waits, the card looked like it was still running, with nothing
+   *  marking the session as needing input): the card's own `status` flips to
+   *  'awaiting-approval' for as long as this is set (chat-reducer.ts
+   *  PASSWORD_REQUEST/PASSWORD_RESOLVED) — exactly like a permission ask,
+   *  so it can't be mistaken for a running command. A password ask has no
+   *  `requestId` of its own on this field (only nested inside `passwordAsk`
+   *  itself), so a consumer that used to gate on `!!requestId` alone must
+   *  use `needsUserAnswer()` (specialist-cards.ts) instead. */
   passwordAsk?: PasswordAsk;
   /** Native broker only: the session's permission mode when the ask fired.
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop

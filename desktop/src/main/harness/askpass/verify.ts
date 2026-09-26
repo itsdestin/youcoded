@@ -35,6 +35,18 @@ type VerifyReason =
   | 'traced'
   | 'no-parent'
   | 'parent-not-sudo-basename'
+  /** Redesigned 2026-09-26 (Destin, real-machine bug report): the parent's
+   *  effective uid, read from /proc/<ppid>/status (exe/environ/maps are
+   *  unreadable for a real setuid sudo — see the note at item 2 below),
+   *  is not 0. */
+  | 'parent-euid-not-root'
+  /** The parent's REAL uid (same /proc/<ppid>/status read) is not ours —
+   *  this euid-0 process belongs to a different user entirely. */
+  | 'parent-real-uid-mismatch'
+  /** Neither an absolute argv[0] nor any of the fixed, never-PATH-derived
+   *  known sudo install locations named a file that passed the ownership/
+   *  setuid/writability chain below. */
+  | 'no-verified-sudo-candidate'
   | 'parent-not-regular-file'
   | 'parent-not-root-owned'
   | 'parent-not-setuid'
@@ -119,6 +131,13 @@ export interface VerifyDeps {
   /** How often (ms) to re-check during `registrationRetryMs`. Defaults to
    *  50ms; overridable for tests. */
   registrationPollMs?: number;
+  /** The invoking user's own real uid — `process.getuid()` (POSIX-only;
+   *  this feature never runs on win32, R19). Compared against the
+   *  parent's OWN real uid (item 2, redesigned) to confirm the euid-0
+   *  process is running as the SAME user who ran the approved command,
+   *  not some other user entirely. Defaults to `process.getuid()`;
+   *  overridable for tests. */
+  ourUid?: number;
 }
 
 /** T5-6: a plain timer wait — the retry window itself is the point, so
@@ -181,6 +200,29 @@ async function walkDirectoryChain(reader: ProcReader, startExePath: string): Pro
     const parent = path.dirname(dir);
     if (parent === dir) break; // reached '/'
     dir = parent;
+  }
+  return null;
+}
+
+/** Fixed, well-known install locations for `sudo` on Linux — NEVER derived
+ *  from $PATH (design §3's threat model: "plant a fake sudo earlier in
+ *  PATH"). Used only when the parent's argv[0] is a bare name (the common
+ *  case — a shell passes argv[0] exactly as typed, not the path it
+ *  resolved via its own PATH lookup) and we therefore have no candidate
+ *  path from the kernel-reported argv itself. A distro installing sudo
+ *  somewhere else needs an entry added here — a real, accepted limit of
+ *  not being able to read the running process's own /proc/<pid>/exe
+ *  (design doc §3 item 2 spells out why). */
+const KNOWN_SUDO_LOCATIONS = ['/usr/bin/sudo', '/usr/local/bin/sudo', '/bin/sudo'];
+
+/** The first of `KNOWN_SUDO_LOCATIONS` that exists on this machine at all
+ *  (its ownership/setuid/writability is checked by the caller, using the
+ *  exact same per-file logic used for an absolute argv[0]) — or null if
+ *  none of them exist here. */
+async function firstExistingKnownSudoPath(reader: ProcReader): Promise<string | null> {
+  for (const candidate of KNOWN_SUDO_LOCATIONS) {
+    const st = await reader.statPath(candidate);
+    if (st) return candidate;
   }
   return null;
 }
@@ -264,9 +306,58 @@ export async function verifyAskpassPeer(pid: number, deps: VerifyDeps): Promise<
     }
 
     try {
-      const sudoExePath = await reader.exePath(sudoPid);
-      if (sudoExePath === null) return { ok: false, reason: 'proc-read-failed' };
-      if (path.basename(sudoExePath) !== 'sudo') return { ok: false, reason: 'parent-not-sudo-basename' };
+      // Item 2 (redesigned 2026-09-26 — Destin's real-machine bug report:
+      // every real sudo was refused with 'proc-read-failed' right here).
+      // sudo runs setuid-root, so /proc/<sudoPid>/exe, /environ and /maps
+      // become unreadable (EACCES) to us the instant it execs — the
+      // kernel clears "dumpable" on any privilege-elevating exec, and that
+      // gate applies even though our own real uid matches sudo's (verified
+      // empirically against /proc/1/exe and /proc/1/environ: EACCES for
+      // both, while /proc/1/status, /proc/1/comm, /proc/1/cmdline and
+      // /proc/1/stat of the SAME pid all stayed readable). The old
+      // readlink-then-stat check here could therefore never pass for a
+      // genuine sudo. Rebuilt on only what a user CAN read for a root
+      // setuid process it did not create:
+      const sudoUids = await reader.uids(sudoPid);
+      if (sudoUids === null) return { ok: false, reason: 'proc-read-failed' };
+      // The kernel sets effective uid 0 ONLY via execve() of an actual
+      // root-owned setuid regular file — an attacker without root cannot
+      // fake this by naming, moving, or symlinking anything.
+      if (sudoUids.effective !== 0) return { ok: false, reason: 'parent-euid-not-root' };
+      // Real uid must be OURS — otherwise this euid-0 process belongs to a
+      // different user entirely and has nothing to do with our call.
+      const ourUid = deps.ourUid ?? (typeof process.getuid === 'function' ? process.getuid() : -1);
+      if (sudoUids.real !== ourUid) return { ok: false, reason: 'parent-real-uid-mismatch' };
+
+      // comm is set by the KERNEL from the EXECUTED FILE's own basename at
+      // exec time — never from the caller-supplied argv[0] (below), which
+      // is exactly why this remains a meaningful identity signal despite
+      // argv[0] itself being freely chosen by whoever calls execve().
+      const sudoComm = await reader.comm(sudoPid);
+      if (sudoComm === null) return { ok: false, reason: 'proc-read-failed' };
+      if (sudoComm !== 'sudo') return { ok: false, reason: 'parent-not-sudo-basename' };
+
+      const sudoArgv = await reader.cmdline(sudoPid);
+      if (sudoArgv === null || sudoArgv.length === 0) return { ok: false, reason: 'proc-read-failed' };
+
+      // argv[0] IS attacker-choosable at exec time (unlike comm), so it is
+      // never trusted as proof of identity by itself — only, when
+      // absolute, as a candidate PATH to run the SAME ownership/setuid/
+      // writability chain item 2 always required, exactly as it used to
+      // run against the readlink result. A bare name ("sudo") was already
+      // resolved by the CALLER's own PATH lookup before exec, and
+      // repeating that lookup OURSELVES is exactly the "fake sudo earlier
+      // in PATH" attack the design's threat model calls out — so a bare
+      // name instead falls back to the fixed, never-PATH-derived location
+      // list above.
+      let sudoExePath: string;
+      if (path.isAbsolute(sudoArgv[0])) {
+        sudoExePath = sudoArgv[0];
+      } else {
+        const found = await firstExistingKnownSudoPath(reader);
+        if (found === null) return { ok: false, reason: 'no-verified-sudo-candidate' };
+        sudoExePath = found;
+      }
 
       const sudoStat = await reader.statPath(sudoExePath);
       if (!sudoStat) return { ok: false, reason: 'proc-read-failed' };
@@ -344,9 +435,10 @@ export async function verifyAskpassPeer(pid: number, deps: VerifyDeps): Promise<
         // compiler tracks the two variables independently.
         if (callRootStartTime0 === null) return { ok: false, reason: 'proc-read-failed' };
 
-        // --- item 5: card text comes only from sudo's own argv. ---
-        const sudoArgv = await reader.cmdline(sudoPid);
-        if (sudoArgv === null) return { ok: false, reason: 'proc-read-failed' };
+        // --- item 5: card text comes only from sudo's own argv. --- Reuses
+        // the SAME read item 2 already did above — re-reading it a second
+        // time bought nothing (the starttime re-check below is what
+        // actually guards against a mid-check change, not re-reading argv).
 
         // via names the OUTERMOST script under the call root (T3-3) — e.g.
         // call root → install.sh → helper.sh → sudo reports 'install.sh',

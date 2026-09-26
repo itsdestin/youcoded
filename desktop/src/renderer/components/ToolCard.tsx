@@ -1617,9 +1617,11 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         );
       })()}
 
-      {/* The admin password card: this running command's sudo is waiting for
-          the computer password (design 2026-09-25). */}
-      {tool.status === 'running' && tool.passwordAsk && (
+      {/* The admin password card: this command's sudo is waiting for the
+          computer password (design 2026-09-25, status flip 2026-09-26 —
+          the card now reads 'awaiting-approval', same as a permission ask,
+          so it can't be mistaken for a still-running command). */}
+      {tool.status === 'awaiting-approval' && tool.passwordAsk && (
         <AdminPasswordPrompt
           ask={tool.passwordAsk}
           onSubmit={async (password) => {

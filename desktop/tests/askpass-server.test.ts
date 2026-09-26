@@ -37,6 +37,8 @@ function makeHealthyReader(): ProcReader {
     tracerPid: async () => 0,
     statPath: async (_p: string): Promise<ProcStat | null> => null,
     pidfdOpen: async (): Promise<PidHandle | null> => null,
+    uids: async () => null,
+    comm: async () => null,
   };
 }
 

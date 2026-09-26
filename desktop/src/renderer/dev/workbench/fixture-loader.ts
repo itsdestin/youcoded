@@ -490,7 +490,10 @@ export function loadFixture(
 
     const withAsks = [...refreshed, ...stillRunning].map((b) =>
       b.kind === 'tool' && passwordAsks.has(b.tool.toolUseId)
-        ? { kind: 'tool' as const, tool: { ...b.tool, passwordAsk: passwordAsks.get(b.tool.toolUseId) } }
+        // Status flip 2026-09-26 (coordinator): a password ask now reads
+        // 'awaiting-approval', same as a permission ask — a fixture that
+        // still hardcoded 'running' would render the OLD, buggy look.
+        ? { kind: 'tool' as const, tool: { ...b.tool, passwordAsk: passwordAsks.get(b.tool.toolUseId), status: 'awaiting-approval' as const } }
         : b,
     );
     return { blocks: withAsks, actions };

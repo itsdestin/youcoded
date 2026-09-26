@@ -215,9 +215,14 @@ describe('the real wrapper against a real AskpassServer (no sudo — refused at 
         // NOT a wrong-exe/wrong-argv/wrong-env-* reason — those are exactly
         // T5-1's class of bug (the wrapper/env pointed somewhere wrong).
         // Refused for lacking a genuine sudo parent instead, which proves
-        // the helper's own identity check already passed.
+        // the helper's own identity check already passed. This test
+        // process (this vitest worker) is an ordinary, non-setuid process
+        // — its effective uid is never 0 — so item 2's redesigned check
+        // (2026-09-26) refuses at the FIRST thing it looks at: it never
+        // even reaches the old exe/basename-shaped checks, because those
+        // require the parent to have genuinely elevated first.
         expect(['wrong-exe', 'wrong-argv', 'wrong-env-keys', 'wrong-env-value']).not.toContain(captured[0].reason);
-        expect(captured[0].reason).toBe('parent-not-sudo-basename');
+        expect(captured[0].reason).toBe('parent-euid-not-root');
       }
     } finally {
       await server.stop();

@@ -60,6 +60,20 @@ export interface ProcReader {
    *  the startTime re-check, which is why this is optional rather than
    *  required for correctness. */
   pidfdOpen(pid: number): Promise<PidHandle | null>;
+  /** Real + effective uid (Linux `/proc/pid/status`'s `Uid:` line; macOS
+   *  unimplemented — see MAC_ENABLED). Unlike exe/environ/maps, this file
+   *  stays readable for a setuid process regardless of the kernel's
+   *  "dumpable" flag (confirmed empirically against /proc/1: exe/environ
+   *  EACCES, status/comm/cmdline/stat all readable) — verify.ts's
+   *  redesigned item 2 relies on this instead of a readlink it can no
+   *  longer perform against a real sudo. Null if unreadable / pid gone. */
+  uids(pid: number): Promise<{ real: number; effective: number } | null>;
+  /** Linux `/proc/pid/comm` (macOS unimplemented). Set by the KERNEL from
+   *  the EXECUTED FILE's own basename at exec time — never from the
+   *  caller-supplied argv[0] — which is what makes it a meaningful
+   *  identity signal despite argv[0] itself being freely chosen by
+   *  whoever calls execve(). Null if unreadable / pid gone. */
+  comm(pid: number): Promise<string | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +133,32 @@ async function linuxTracerPid(pid: number): Promise<number> {
 async function linuxExePath(pid: number): Promise<string | null> {
   try {
     return await fs.readlink(`/proc/${pid}/exe`);
+  } catch {
+    return null;
+  }
+}
+
+/** `Uid:` line of `/proc/pid/status` is `Uid:\t<real>\t<effective>\t<saved>\t<fs>`
+ *  — only the first two columns matter here (verify.ts's redesigned item
+ *  2). Unlike `exe`/`environ`, this file is NOT gated by the kernel's
+ *  "dumpable" flag, so it stays readable for a setuid-root process even
+ *  though its euid differs from ours (empirically confirmed against
+ *  /proc/1, a root-owned process: exe/environ EACCES, status readable). */
+async function linuxUids(pid: number): Promise<{ real: number; effective: number } | null> {
+  try {
+    const status = await fs.readFile(`/proc/${pid}/status`, 'utf8');
+    const match = status.match(/^Uid:\s*(\d+)\s+(\d+)/m);
+    if (!match) return null;
+    return { real: Number.parseInt(match[1], 10), effective: Number.parseInt(match[2], 10) };
+  } catch {
+    return null;
+  }
+}
+
+async function linuxComm(pid: number): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(`/proc/${pid}/comm`, 'utf8');
+    return raw.replace(/\n$/, '');
   } catch {
     return null;
   }
@@ -229,6 +269,8 @@ const linuxReader: ProcReader = {
   tracerPid: linuxTracerPid,
   statPath: statPathImpl,
   pidfdOpen: linuxPidfdOpen,
+  uids: linuxUids,
+  comm: linuxComm,
 };
 
 // ---------------------------------------------------------------------------
@@ -400,6 +442,17 @@ async function macTracerPid(_pid: number): Promise<number> {
   return -1; // fail closed: "cannot confirm untraced" until this is implemented for real
 }
 
+// Uid/comm reads for macOS are unimplemented — same posture as
+// macTracerPid above (MAC_ENABLED gates the whole platform off regardless,
+// and verify.ts's redesigned item 2 has never been exercised against a
+// real Mac). Failing closed (null) rather than guessing a layout.
+async function macUids(_pid: number): Promise<{ real: number; effective: number } | null> {
+  return null;
+}
+async function macComm(_pid: number): Promise<string | null> {
+  return null;
+}
+
 const darwinReader: ProcReader = {
   exePath: macExePath,
   cmdline: macCmdline,
@@ -411,6 +464,8 @@ const darwinReader: ProcReader = {
   // No pidfd_open equivalent is used on macOS — design §3 item 0 relies on
   // the startTime re-check there regardless.
   pidfdOpen: async () => null,
+  uids: macUids,
+  comm: macComm,
 };
 
 const unsupportedReader: ProcReader = {
@@ -422,6 +477,8 @@ const unsupportedReader: ProcReader = {
   tracerPid: async () => -1,
   statPath: statPathImpl,
   pidfdOpen: async () => null,
+  uids: async () => null,
+  comm: async () => null,
 };
 
 /** Real, platform-appropriate `ProcReader`. `askpass-verify.test.ts` never

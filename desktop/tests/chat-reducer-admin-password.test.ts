@@ -45,11 +45,15 @@ function seedTaskCard(state: ChatState, toolUseId = TASK_ID): ChatState {
 }
 
 describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — top-level Bash card', () => {
-  it('sets passwordAsk on the RUNNING Bash card named by toolUseId', () => {
+  it('sets passwordAsk on the Bash card and flips its status to awaiting-approval', () => {
+    // Bug (Destin, real-machine dogfood): the card looked like it was still
+    // running while the password field waited, with nothing marking the
+    // session as needing input. Fixed by flipping status exactly like a
+    // pending permission ask — 'running' here was the bug, not the contract.
     let state = bashCard(initState(), 'bash-1');
     state = dispatch(state, { type: 'PASSWORD_REQUEST', sessionId: SESSION, requestId: 'req-1', toolUseId: 'bash-1', command: 'apt update' });
     const tool = state.get(SESSION)!.toolCalls.get('bash-1')!;
-    expect(tool.status).toBe('running'); // never becomes awaiting-approval
+    expect(tool.status).toBe('awaiting-approval');
     expect(tool.passwordAsk).toEqual({ requestId: 'req-1', command: 'apt update' });
   });
 
@@ -79,13 +83,30 @@ describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — top-level Bash card', () => {
     expect(state.get(SESSION)!.toolCalls.get('bash-1')!.passwordAsk).toEqual({ requestId: 'req-2', command: 'apt update', triesLeft: 2 });
   });
 
-  it('PASSWORD_RESOLVED clears the field, leaving the card running with no other change', () => {
+  it('PASSWORD_RESOLVED clears the field and flips the card back to running', () => {
     let state = bashCard(initState(), 'bash-1');
     state = dispatch(state, { type: 'PASSWORD_REQUEST', sessionId: SESSION, requestId: 'req-1', toolUseId: 'bash-1', command: 'apt update' });
+    expect(state.get(SESSION)!.toolCalls.get('bash-1')!.status).toBe('awaiting-approval');
     state = dispatch(state, { type: 'PASSWORD_RESOLVED', sessionId: SESSION, requestId: 'req-1' });
     const tool = state.get(SESSION)!.toolCalls.get('bash-1')!;
     expect(tool.passwordAsk).toBeUndefined();
     expect(tool.status).toBe('running');
+  });
+
+  it('a result that lands while the ask is still open settles the card and PASSWORD_RESOLVED then leaves it alone', () => {
+    // Guards against a late transcript/tool-result clobbering the ask, and
+    // against PASSWORD_RESOLVED reviving a card the result already settled
+    // (coordinator, 2026-09-26: "a late transcript event... can't clobber
+    // the status" — this proves it holds in BOTH directions).
+    let state = bashCard(initState(), 'bash-1');
+    state = dispatch(state, { type: 'PASSWORD_REQUEST', sessionId: SESSION, requestId: 'req-1', toolUseId: 'bash-1', command: 'apt update' });
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'result-1', toolUseId: 'bash-1', result: 'ok', isError: false });
+    let tool = state.get(SESSION)!.toolCalls.get('bash-1')!;
+    expect(tool.status).toBe('complete');
+    expect(tool.passwordAsk).toBeUndefined(); // dropped on settle, never left dangling on a finished card
+    state = dispatch(state, { type: 'PASSWORD_RESOLVED', sessionId: SESSION, requestId: 'req-1' });
+    tool = state.get(SESSION)!.toolCalls.get('bash-1')!;
+    expect(tool.status).toBe('complete'); // NOT revived to 'running'
   });
 
   it('PASSWORD_RESOLVED for an unknown requestId is a no-op', () => {
@@ -106,7 +127,7 @@ describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — top-level Bash card', () => {
 });
 
 describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — nested under a specialist\'s Task card', () => {
-  it('sets passwordAsk on the CHILD\'s own segment inside the Task card, not a top-level card', () => {
+  it('sets passwordAsk and flips to awaiting-approval on the CHILD\'s own segment inside the Task card, not a top-level card', () => {
     let state = seedTaskCard(initState());
     state = dispatch(state, {
       type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-child-bash', toolUseId: 'child-bash-1',
@@ -119,8 +140,10 @@ describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — nested under a specialist\'s 
 
     const card = state.get(SESSION)!.toolCalls.get(TASK_ID)!;
     expect(card.passwordAsk).toBeUndefined(); // never on the Task card itself
+    expect(card.status).toBe('running'); // the Task card's OWN status is untouched
     const seg = card.subagentSegments!.find((s) => s.type === 'tool' && s.toolUseId === 'child-bash-1') as any;
     expect(seg.passwordAsk).toEqual({ requestId: 'req-1', command: 'apt update' });
+    expect(seg.status).toBe('awaiting-approval');
   });
 
   it('a repeat for the nested segment is a heartbeat no-op', () => {
@@ -139,7 +162,7 @@ describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — nested under a specialist\'s 
     expect(state).toBe(settled);
   });
 
-  it('PASSWORD_RESOLVED clears the nested segment\'s field', () => {
+  it('PASSWORD_RESOLVED clears the nested segment\'s field and flips it back to running', () => {
     let state = seedTaskCard(initState());
     state = dispatch(state, {
       type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-child-bash', toolUseId: 'child-bash-1',
@@ -153,6 +176,7 @@ describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — nested under a specialist\'s 
     const card = state.get(SESSION)!.toolCalls.get(TASK_ID)!;
     const seg = card.subagentSegments!.find((s) => s.type === 'tool' && s.toolUseId === 'child-bash-1') as any;
     expect(seg.passwordAsk).toBeUndefined();
+    expect(seg.status).toBe('running');
   });
 
   it('falls back to a top-level card carrying the specialist label when no Task card/segment exists yet', () => {
@@ -164,6 +188,7 @@ describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — nested under a specialist\'s 
     const tool = state.get(SESSION)!.toolCalls.get('child-bash-1')!;
     expect(tool.passwordAsk).toEqual({ requestId: 'req-1', command: 'apt update' });
     expect(tool.specialist?.title).toBe('Wren');
+    expect(tool.status).toBe('awaiting-approval');
   });
 });
 

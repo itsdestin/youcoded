@@ -1,6 +1,7 @@
 import type React from 'react';
 import type { SubagentSegment } from '../../../shared/types';
 import { PermissionButtons } from '../ToolCard';
+import { AdminPasswordPrompt } from '../permissions/AdminPasswordPrompt';
 import { useChatDispatch } from '../../state/chat-context';
 import { useArtifactSelectorOptional } from '../../state/ArtifactContext';
 
@@ -32,6 +33,33 @@ export function SpecialistAskBlock({ segment, sessionId, specialistName, compact
   const dispatch = useChatDispatch();
   // Narrow selector: redraws only when this session's cwd changes.
   const sessionCwd = useArtifactSelectorOptional((s) => (sessionId ? s.sessionCwd?.[sessionId] : undefined));
+
+  // admin-password (coordinator, 2026-09-26): a helper's OWN sudo nests here
+  // exactly like its permission ask (chat-types.ts's own comment on the
+  // segment's passwordAsk field) — same card position, different UI: the
+  // password field, never Yes/No/Always (a password ask has no requestId of
+  // its own on this row — see needsUserAnswer/askIdOf in specialist-cards.ts).
+  if (segment.passwordAsk) {
+    const ask = segment.passwordAsk;
+    return (
+      <div data-testid="nested-ask" className={compact ? 'space-y-1' : 'border-t border-edge/60 bg-canvas/40'}>
+        {compact && leading}
+        <AdminPasswordPrompt
+          ask={ask}
+          onSubmit={async (password) => {
+            const requestId = ask.requestId;
+            const ok = await window.claude.native.submitAdminPassword(requestId, password);
+            // Mirrors ToolCard's own top-level password card: an expired ask
+            // has nothing left on the main side to push a resolution for
+            // THIS device, so say so locally rather than leave the field
+            // disabled forever.
+            if (!ok && sessionId) dispatch({ type: 'PASSWORD_RESOLVED', sessionId, requestId });
+          }}
+        />
+      </div>
+    );
+  }
+
   const requestId = segment.requestId!;
   // Destin's 2026-08-26/27 copy review: the outside-the-folder note is now a
   // full sentence, so the name lands MID-sentence — "The specialist" would

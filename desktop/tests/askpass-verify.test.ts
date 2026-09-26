@@ -8,6 +8,10 @@ import type { ProcReader, ProcStat, PidHandle } from '../src/main/harness/askpas
 
 const EXEC_PATH = '/opt/YouCoded/youcoded';
 const HELPER_SCRIPT = '/opt/YouCoded/resources/app.asar.unpacked/scripts/askpass/askpass.cjs';
+// The invoking user's own uid in every fixture below — matched against
+// `makeDeps`'s `ourUid` so the redesigned item 2 (real-uid-must-match-ours)
+// passes for a genuinely-ours sudo/call-root/helper by default.
+const OUR_UID = 1000;
 
 interface FakeProc {
   ppid: number | null;
@@ -16,6 +20,13 @@ interface FakeProc {
   environ: Map<string, string> | null;
   startTime: number | null;
   tracerPid: number;
+  /** /proc/<pid>/status's `Uid:` line (real, effective) — unlike exe/
+   *  environ, NOT gated by the kernel's dumpable flag on a real setuid
+   *  process (verify.ts's redesigned item 2 relies on this instead). */
+  uids: { real: number; effective: number } | null;
+  /** /proc/<pid>/comm — set by the kernel from the EXECUTED FILE's own
+   *  basename, never from argv[0]. */
+  comm: string | null;
 }
 
 /** A tiny, fully in-memory stand-in for /proc, keyed by pid. `statByPath`
@@ -66,6 +77,12 @@ class FakeProcReader implements ProcReader {
     // degradation when pidfd_open is unavailable).
     return null;
   }
+  async uids(pid: number): Promise<{ real: number; effective: number } | null> {
+    return this.procs.get(pid)?.uids ?? null;
+  }
+  async comm(pid: number): Promise<string | null> {
+    return this.procs.get(pid)?.comm ?? null;
+  }
 }
 
 const ROOT_DIR_STAT: ProcStat = { uid: 0, mode: 0o755, isFile: false, isDirectory: true };
@@ -99,17 +116,26 @@ function goodProcs(): Map<number, FakeProc> {
         environ: new Map(GOOD_ENVIRON),
         startTime: 500_00,
         tracerPid: 0,
+        uids: { real: OUR_UID, effective: OUR_UID },
+        comm: 'youcoded',
       },
     ],
     [
       400,
       {
         ppid: 300,
-        exePath: '/usr/bin/sudo',
-        cmdline: ['sudo', 'apt', 'update'],
+        // Deliberately null — a genuine setuid sudo's /proc/<pid>/exe and
+        // /environ are EACCES to us in reality (that was the whole bug);
+        // verify.ts's redesigned item 2 never reads either for sudoPid, so
+        // these being unreadable here must NOT stop the accept-path tests
+        // from passing.
+        exePath: null,
         environ: null,
+        cmdline: ['sudo', 'apt', 'update'],
         startTime: 400_00,
         tracerPid: 0,
+        uids: { real: OUR_UID, effective: 0 },
+        comm: 'sudo',
       },
     ],
     [
@@ -121,6 +147,8 @@ function goodProcs(): Map<number, FakeProc> {
         environ: null,
         startTime: 300_00,
         tracerPid: 0,
+        uids: { real: OUR_UID, effective: OUR_UID },
+        comm: 'bash',
       },
     ],
   ]);
@@ -156,6 +184,7 @@ function makeDeps(
     platform: 'linux',
     registrationRetryMs: opts?.registrationRetryMs ?? 0,
     registrationPollMs: opts?.registrationPollMs,
+    ourUid: OUR_UID,
   };
 }
 
@@ -185,6 +214,8 @@ describe('verifyAskpassPeer: accept path', () => {
       environ: null,
       startTime: 350_00,
       tracerPid: 0,
+      uids: { real: OUR_UID, effective: OUR_UID },
+      comm: 'bash',
     });
     const deps = makeDeps(procs, baseFilesystem());
     const result = await verifyAskpassPeer(500, deps);
@@ -209,6 +240,8 @@ describe('verifyAskpassPeer: accept path', () => {
       environ: null,
       startTime: 350_00,
       tracerPid: 0,
+      uids: { real: OUR_UID, effective: OUR_UID },
+      comm: 'bash',
     });
     procs.set(360, {
       ppid: 300,
@@ -217,6 +250,8 @@ describe('verifyAskpassPeer: accept path', () => {
       environ: null,
       startTime: 360_00,
       tracerPid: 0,
+      uids: { real: OUR_UID, effective: OUR_UID },
+      comm: 'bash',
     });
     const deps = makeDeps(procs, baseFilesystem());
     const result = await verifyAskpassPeer(500, deps);
@@ -236,6 +271,8 @@ describe('verifyAskpassPeer: accept path', () => {
       environ: null,
       startTime: 350_00,
       tracerPid: 0,
+      uids: { real: OUR_UID, effective: OUR_UID },
+      comm: 'bash',
     });
     const deps = makeDeps(procs, baseFilesystem());
     const result = await verifyAskpassPeer(500, deps);
@@ -302,11 +339,61 @@ describe('verifyAskpassPeer: refusals', () => {
 
   it('refuses a fake sudo with the wrong basename', async () => {
     const procs = goodProcs();
-    procs.get(400)!.exePath = '/usr/bin/notsudo';
-    const statByPath = baseFilesystem();
-    statByPath.set('/usr/bin/notsudo', SUDO_EXE_STAT_OK);
-    const result = await verifyAskpassPeer(500, makeDeps(procs, statByPath));
+    // comm — set by the KERNEL from the executed file's own basename,
+    // never from argv[0] — is what item 2 now checks; argv[0] itself
+    // could say anything and would never trip this check alone.
+    procs.get(400)!.comm = 'notsudo';
+    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
     expect(result).toEqual({ ok: false, reason: 'parent-not-sudo-basename' });
+  });
+
+  // Coordinator, 2026-09-26: the real bug. sudo's own /proc/<pid>/exe and
+  // /environ are EACCES to us in reality (dumpable cleared on any
+  // privilege-elevating exec) — goodProcs() already fakes exactly that
+  // (both null for pid 400) and the WHOLE accept-path suite above already
+  // exercises this; these two are the negative side of the same redesign.
+  it('refuses when the parent never actually reached effective uid 0', async () => {
+    const procs = goodProcs();
+    procs.get(400)!.uids = { real: OUR_UID, effective: OUR_UID }; // never elevated — not a genuine setuid exec
+    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
+    expect(result).toEqual({ ok: false, reason: 'parent-euid-not-root' });
+  });
+
+  it('refuses when the euid-0 parent belongs to a different user, not us', async () => {
+    const procs = goodProcs();
+    procs.get(400)!.uids = { real: OUR_UID + 1, effective: 0 }; // someone else's sudo
+    const result = await verifyAskpassPeer(500, makeDeps(procs, baseFilesystem()));
+    expect(result).toEqual({ ok: false, reason: 'parent-real-uid-mismatch' });
+  });
+
+  it('refuses a bare "sudo" argv[0] when none of the fixed known install locations exist here', async () => {
+    const procs = goodProcs(); // cmdline is the bare ['sudo', ...] — never a PATH lookup performed by us
+    const result = await verifyAskpassPeer(500, makeDeps(procs, new Map())); // no /usr/bin/sudo, /usr/local/bin/sudo, or /bin/sudo stat entry at all
+    expect(result).toEqual({ ok: false, reason: 'no-verified-sudo-candidate' });
+  });
+
+  it('accepts an ABSOLUTE argv[0] and validates that exact path (never a fixed-location fallback)', async () => {
+    const procs = goodProcs();
+    procs.get(400)!.cmdline = ['/opt/vendor/sudo', 'apt', 'update'];
+    const statByPath = baseFilesystem();
+    statByPath.delete('/usr/bin/sudo'); // proves the fixed-location list is never consulted when argv[0] is absolute
+    statByPath.set('/opt/vendor', ROOT_DIR_STAT);
+    statByPath.set('/opt', ROOT_DIR_STAT);
+    statByPath.set('/opt/vendor/sudo', SUDO_EXE_STAT_OK);
+    const result = await verifyAskpassPeer(500, makeDeps(procs, statByPath));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.sudoExePath).toBe('/opt/vendor/sudo');
+  });
+
+  it('refuses an absolute argv[0] that fails the ownership chain, without falling back to a fixed location', async () => {
+    const procs = goodProcs();
+    procs.get(400)!.cmdline = ['/opt/vendor/sudo', 'apt', 'update'];
+    const statByPath = baseFilesystem(); // /usr/bin/sudo stays genuinely valid here…
+    statByPath.set('/opt/vendor', ROOT_DIR_STAT);
+    statByPath.set('/opt', ROOT_DIR_STAT);
+    statByPath.set('/opt/vendor/sudo', { uid: 1000, mode: 0o4755, isFile: true, isDirectory: false }); // …but argv[0] points at THIS one, which isn't root-owned
+    const result = await verifyAskpassPeer(500, makeDeps(procs, statByPath));
+    expect(result).toEqual({ ok: false, reason: 'parent-not-root-owned' });
   });
 
   it('refuses a fake sudo that is not setuid', async () => {
