@@ -67,10 +67,17 @@ describe('resolveSelector — whitespace tolerance', () => {
       suffix: ' here',
       occurrence: 0,
     });
-    const result = resolveSelector(fullText, sel);
-    expect(result).not.toBe('detached');
-    const { start, end } = result as { start: number; end: number };
-    expect(fullText.slice(start, end).replace(/\s+/g, '')).toBe(sel.exact.replace(/\s+/g, ''));
+    // F2 (review): assert the LITERAL substring and its exact start/end, not
+    // just a whitespace-collapsed equality — a collapsed compare would pass
+    // even if `start`/`end` landed a character or two off (e.g. swallowing a
+    // neighboring space into or out of the match), which is exactly the
+    // off-by-one class this anchor's offsets must never have: every other
+    // caller (highlight marks, MoveComment's range) slices `fullText` with
+    // these numbers directly.
+    const literal = 'Line   two continues'; // the document's ACTUAL internal spacing
+    const start = fullText.indexOf(literal);
+    expect(start).toBeGreaterThan(-1);
+    expect(resolveSelector(fullText, sel)).toEqual({ start, end: start + literal.length });
   });
 });
 
@@ -107,6 +114,95 @@ describe('resolveSelector — combined out-of-range occurrence and scoring tie',
     const firstBlockStart = fullText.indexOf(block);
     const start = firstBlockStart + block.indexOf('TARGET');
     expect(resolveSelector(fullText, sel)).toEqual({ start, end: start + 'TARGET'.length });
+  });
+});
+
+describe('resolveSelector — occurrence at the very start of the document', () => {
+  it('clamps the prefix window at 0 instead of reading (or wrapping) past it', () => {
+    // F3 (review): `windowStart = Math.max(0, occ.start - sel.prefix.length)`
+    // — this pins that clamp for the occurrence it actually matters for: one
+    // starting at offset 0, where `occ.start - sel.prefix.length` goes
+    // negative. Without the clamp, `String.prototype.slice` treats a
+    // negative start as "from the end of the string", which would silently
+    // score this candidate against unrelated text from the document's TAIL
+    // instead of "there's nothing before it" — exactly backwards, and enough
+    // to make the decoy below win instead.
+    //
+    // The real match's SUFFIX is left intact (available, matching) so only
+    // its prefix is clamped away — a small, unavoidable "missing 6 chars"
+    // cost. The decoy has BOTH sides fully available but drawn from a
+    // disjoint alphabet (digits vs. the selector's own digits-as-letters
+    // stand-in), so its cost is a real, larger mismatch rather than a tie —
+    // this is a clamp check, not a "which candidate happens to read closer"
+    // check.
+    const fullText = 'TARGET222222 filler filler completely unrelated padding text 000000TARGET333333';
+    const sel = textSelector({ exact: 'TARGET', prefix: '111111', suffix: '222222', occurrence: 0 });
+    const start = fullText.indexOf('TARGET');
+    expect(start).toBe(0); // the real match sits flush against the start of the document
+    const decoyStart = fullText.lastIndexOf('TARGET');
+    expect(decoyStart).toBeGreaterThan(start);
+    expect(resolveSelector(fullText, sel)).toEqual({ start, end: start + 'TARGET'.length });
+  });
+});
+
+describe('resolveSelector — occurrence at the very end of the document', () => {
+  it('clamps the suffix window at the document length instead of reading past it', () => {
+    // F3 (review): the matching clamp on the other edge —
+    // `windowEnd = Math.min(fullText.length, occ.end + sel.suffix.length)`
+    // — for an occurrence whose match ends exactly at `fullText.length`. Same
+    // disjoint-alphabet decoy technique as the start-of-document test above.
+    const fullText = '000000TARGET111111 filler filler completely unrelated padding text in between PREFIXTARGET';
+    const sel = textSelector({ exact: 'TARGET', prefix: 'PREFIX', suffix: 'SUFFIX', occurrence: 0 });
+    const decoyStart = fullText.indexOf('TARGET');
+    const start = fullText.lastIndexOf('TARGET');
+    expect(start + 'TARGET'.length).toBe(fullText.length); // the real match sits flush against EOF
+    expect(start).toBeGreaterThan(decoyStart);
+    expect(resolveSelector(fullText, sel)).toEqual({ start, end: start + 'TARGET'.length });
+  });
+});
+
+describe('resolveSelector — many occurrences of a large quote (F1 perf bound)', () => {
+  it('resolves the correct occurrence, quickly, for a 20 KB quote repeated 50 times', () => {
+    // F1 (review, major perf finding): before the bound, this scored every
+    // occurrence by running Levenshtein over the FULL prefix+exact+suffix —
+    // ~20 KB per candidate, 50 candidates — on every anchoring lookup for a
+    // file with a large quote pasted many times. The bound (sampling
+    // `exact`'s edges, §"F1" note on `sampleEdges`) makes the cost
+    // independent of `exact`'s length; this pins BOTH that it stays fast AND
+    // that it still picks the one true candidate out of 50 near-identical
+    // ones by its (short) prefix/suffix context.
+    const quote = 'Q'.repeat(20_000);
+    const blockCount = 50;
+    const targetIndex = 37;
+    const blocks: string[] = [];
+    for (let i = 0; i < blockCount; i++) {
+      blocks.push(`PRE${i}--${quote}--POST${i}`);
+    }
+    const fullText = blocks.join(' filler filler filler ');
+    const sel = textSelector({
+      exact: quote,
+      prefix: `PRE${targetIndex}--`,
+      suffix: `--POST${targetIndex}`,
+      occurrence: 0,
+    });
+    const targetBlock = `PRE${targetIndex}--${quote}--POST${targetIndex}`;
+    const blockStart = fullText.indexOf(targetBlock);
+    expect(blockStart).toBeGreaterThan(-1);
+    const start = blockStart + `PRE${targetIndex}--`.length;
+
+    // CPU time, never wall clock (test-suite-hygiene.md "Never assert on
+    // wall-clock time") — a loaded machine must not make this flaky.
+    const startedCpu = process.cpuUsage();
+    const result = resolveSelector(fullText, sel);
+    const usedCpu = process.cpuUsage(startedCpu);
+    const cpuMs = (usedCpu.user + usedCpu.system) / 1000;
+
+    // Generous — measured well under 100ms locally; the old unbounded
+    // algorithm did O(50 * 20000^2) Levenshtein cells, seconds to minutes of
+    // CPU time for one anchoring lookup. This is a "did the bound work"
+    // check, not a tight budget.
+    expect(cpuMs).toBeLessThan(5_000);
+    expect(result).toEqual({ start, end: start + quote.length });
   });
 });
 
