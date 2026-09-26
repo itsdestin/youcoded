@@ -17,7 +17,9 @@
 // passes it by construction. Same posture as guards.ts. `python3 -c
 // "os.execvp('pkexec', …)"` still reaches polkit — the honest limit of a floor
 // that reads shell syntax, not a sandbox.
-import { tokenize, commandIndex, inlineShellScript, baseName, WRAPPERS, type Op, type Word } from './shell-words';
+import {
+  tokenize, commandIndex, inlineShellScript, baseName, splitHeredocs, SHELL_FEEDERS, WRAPPERS, type Op, type Word,
+} from './shell-words';
 
 export interface AdminCommandContext {
   /** Injected for tests; defaults to the running platform. Windows has neither
@@ -29,6 +31,10 @@ export interface AdminCommandContext {
 const REFUSE_WORDS = new Set(['doas', 'su', 'pkexec', 'run0']);
 /** The set commandIndex must STOP at rather than skip past (see file header). */
 const STOP_WORDS = new Set(['sudo', ...REFUSE_WORDS]);
+/** `find`'s own actions that run an arbitrary command (review T1-2): the same
+ *  shape bash-secret-paths.ts already recurses into for its own threat model.
+ *  Ended by a bare `;` or `+`. */
+const FIND_EXEC = new Set(['-exec', '-execdir', '-ok', '-okdir']);
 
 export type AdminVerdict =
   | { kind: 'admin'; word: 'sudo' }
@@ -40,6 +46,25 @@ function verdictForWord(name: string): AdminVerdict | null {
   return null;
 }
 
+/** Refusal text for each refused word — states the TRUE cause for THAT word
+ *  (docs/error-message-standards.md: never invent one; review T1-4).
+ *  `pkexec`/`run0` raise the desktop's OWN polkit dialog outside the app;
+ *  `doas`/`su` have no askpass hook this app can intercept, so they'd ask for
+ *  the password in a terminal YouCoded can't show — a different failure, not
+ *  "a password window outside YouCoded". */
+const REFUSE_CAUSE: Record<'doas' | 'su' | 'pkexec' | 'run0', string> = {
+  pkexec: 'it would open a password window outside YouCoded',
+  run0: 'it would open a password window outside YouCoded',
+  doas: "it asks for your password in a terminal, which YouCoded can't show",
+  su: "it asks for your password in a terminal, which YouCoded can't show",
+};
+
+/** The model-facing tool result for a refused word — the caller (harness-
+ *  session.ts step 3b) denies with this text and no ask at all. */
+export function refuseMessage(word: 'doas' | 'su' | 'pkexec' | 'run0'): string {
+  return `${word} can't be used here: ${REFUSE_CAUSE[word]}. Use sudo instead — the user is asked for their password in the app.`;
+}
+
 /** Whether `command` visibly runs `sudo` (→ the admin floor) or one of the
  *  refused tools (`doas`/`su`/`pkexec`/`run0`), reading shell syntax the same
  *  way rm-target.ts and bash-secret-paths.ts do: wrappers, pipelines,
@@ -49,22 +74,42 @@ export function adminCommandVerdict(command: string, ctx?: AdminCommandContext):
   const win = (ctx?.platform ?? process.platform) === 'win32';
 
   const analyse = (source: string): AdminVerdict | null => {
-    const { tokens, nested } = tokenize(source, !win);
+    // Heredoc bodies are text unless a shell runs them (review T1-1, same
+    // idiom as rm-target.ts/bash-secret-paths.ts): `cat <<EOF\nsudo x\nEOF`
+    // never runs sudo — `sudo x` there is just a line `cat` will write out.
+    const { text, bodies } = splitHeredocs(source);
+    const { tokens, nested } = tokenize(text, !win);
     let words: Word[] = [];
-    const runCommand = (): AdminVerdict | null => {
-      const cmd = words;
-      words = [];
+    const verdictForCmd = (cmd: Word[]): AdminVerdict | null => {
       if (cmd.length === 0) return null;
       const w = commandIndex(cmd, STOP_WORDS);
       if (w >= cmd.length) return null;
       const name = baseName(cmd[w].value);
       const verdict = verdictForWord(name);
       if (verdict) return verdict;
+      const args = cmd.slice(w + 1);
       // `bash -c 'sudo x'`, `sh -c -- '…'`, `eval "sudo x"`: the script is a
       // command line of its own (same idiom as the other two floors).
-      const args = cmd.slice(w + 1);
       const script = inlineShellScript(name, args);
-      return script !== null ? analyse(script) : null;
+      if (script !== null) return analyse(script);
+      // `find … -exec sudo … \;` / `-execdir`/`-ok`/`-okdir` (review T1-2):
+      // find runs the command that follows as its own process, the same shape
+      // bash-secret-paths.ts already recurses into for FIND_EXEC.
+      if (name === 'find') {
+        for (let i = 0; i < args.length; i++) {
+          if (!FIND_EXEC.has(args[i].value)) continue;
+          const sub: Word[] = [];
+          for (i++; i < args.length && args[i].value !== ';' && args[i].value !== '+'; i++) sub.push(args[i]);
+          const hit = verdictForCmd(sub);
+          if (hit) return hit;
+        }
+      }
+      return null;
+    };
+    const runCommand = (): AdminVerdict | null => {
+      const cmd = words;
+      words = [];
+      return verdictForCmd(cmd);
     };
     for (const tok of tokens) {
       const op = (tok as Op).op;
@@ -78,6 +123,13 @@ export function adminCommandVerdict(command: string, ctx?: AdminCommandContext):
     // their own, wherever they sit in the line.
     for (const inner of nested) {
       const why = analyse(inner);
+      if (why) return why;
+    }
+    // A heredoc fed to a shell (`bash <<EOF`) runs its body as commands; any
+    // other feeder (`cat > install.sh <<EOF`) only writes it as text.
+    for (const h of bodies) {
+      if (!SHELL_FEEDERS.has(h.feeder)) continue;
+      const why = analyse(h.body);
       if (why) return why;
     }
     return null;
@@ -97,34 +149,48 @@ export function visibleSudoLines(command: string): string[][] {
   const lines: string[][] = [];
   const valueFlags = WRAPPERS.sudo.valueFlags;
 
+  const pushSudoLine = (rest: Word[]): void => {
+    const argv: string[] = [];
+    let endOfFlags = false;
+    for (let i = 0; i < rest.length; i++) {
+      const v = rest[i].value;
+      if (endOfFlags) { argv.push(v); continue; }
+      if (v === '--') { endOfFlags = true; continue; }
+      if (v.startsWith('-')) { if (valueFlags.includes(v)) i++; continue; }
+      endOfFlags = true;
+      argv.push(v);
+    }
+    if (argv.length) lines.push(argv);
+  };
+
   const analyse = (source: string): void => {
-    const { tokens, nested } = tokenize(source, true);
+    // Same heredoc-body exemption as adminCommandVerdict (review T1-1).
+    const { text, bodies } = splitHeredocs(source);
+    const { tokens, nested } = tokenize(text, true);
     let words: Word[] = [];
-    const runCommand = (): void => {
-      const cmd = words;
-      words = [];
+    const visitCmd = (cmd: Word[]): void => {
       if (cmd.length === 0) return;
       const w = commandIndex(cmd, STOP_WORDS);
       if (w >= cmd.length) return;
       const name = baseName(cmd[w].value);
-      if (name !== 'sudo') {
-        const args = cmd.slice(w + 1);
-        const script = inlineShellScript(name, args);
-        if (script !== null) analyse(script);
-        return;
+      const args = cmd.slice(w + 1);
+      if (name === 'sudo') { pushSudoLine(args); return; }
+      const script = inlineShellScript(name, args);
+      if (script !== null) { analyse(script); return; }
+      // `find … -exec sudo … \;` (review T1-2, same shape as adminCommandVerdict).
+      if (name === 'find') {
+        for (let i = 0; i < args.length; i++) {
+          if (!FIND_EXEC.has(args[i].value)) continue;
+          const sub: Word[] = [];
+          for (i++; i < args.length && args[i].value !== ';' && args[i].value !== '+'; i++) sub.push(args[i]);
+          visitCmd(sub);
+        }
       }
-      const rest = cmd.slice(w + 1);
-      const argv: string[] = [];
-      let endOfFlags = false;
-      for (let i = 0; i < rest.length; i++) {
-        const v = rest[i].value;
-        if (endOfFlags) { argv.push(v); continue; }
-        if (v === '--') { endOfFlags = true; continue; }
-        if (v.startsWith('-')) { if (valueFlags.includes(v)) i++; continue; }
-        endOfFlags = true;
-        argv.push(v);
-      }
-      if (argv.length) lines.push(argv);
+    };
+    const runCommand = (): void => {
+      const cmd = words;
+      words = [];
+      visitCmd(cmd);
     };
     for (const tok of tokens) {
       const op = (tok as Op).op;
@@ -133,6 +199,9 @@ export function visibleSudoLines(command: string): string[][] {
     }
     runCommand();
     for (const inner of nested) analyse(inner);
+    for (const h of bodies) {
+      if (SHELL_FEEDERS.has(h.feeder)) analyse(h.body);
+    }
   };
 
   analyse(command);

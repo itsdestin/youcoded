@@ -1243,10 +1243,25 @@ describe('HarnessSession — multi-step turn driver', () => {
       expect(res.data.toolResult).toMatch(/use sudo instead/i);
     });
 
-    it.each(['doas', 'su', 'run0'])('%s is denied without an ask too', async (word) => {
-      const { askUser, ran } = await run(`${word} apt update`, async () => ALLOW);
+    // Review T1-4: pkexec/run0 and doas/su fail for DIFFERENT reasons — the
+    // message must state the true cause for each, never one invented sentence
+    // shared by all four (docs/error-message-standards.md).
+    it.each(['pkexec', 'run0'])('%s: the message names the real cause — a password window outside YouCoded', async (word) => {
+      const { events } = await run(`${word} apt update`, async () => ALLOW);
+      const res = events.find((e) => e.type === 'tool-result')!;
+      expect(res.data.toolResult).toMatch(/password window outside YouCoded/);
+      expect(res.data.toolResult).not.toMatch(/terminal/);
+    });
+
+    it.each(['doas', 'su'])('%s: the message names the real cause — a terminal YouCoded can\'t show', async (word) => {
+      const { askUser, ran, events } = await run(`${word} apt update`, async () => ALLOW);
       expect(askUser).not.toHaveBeenCalled();
       expect(ran).toBe(0);
+      const res = events.find((e) => e.type === 'tool-result')!;
+      expect(res.data.isError).toBe(true);
+      expect(res.data.toolResult).toMatch(/asks for your password in a terminal/);
+      expect(res.data.toolResult).toMatch(/use sudo instead/i);
+      expect(res.data.toolResult).not.toMatch(/password window outside YouCoded/);
     });
 
     it('the admin floor beats the removal-target floor: `sudo rm -rf ~` shows the admin band', async () => {

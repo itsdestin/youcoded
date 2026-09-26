@@ -278,9 +278,13 @@ const SHELL_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'un
  *  read `root` as the command sudo runs, not `cmd`. */
 export const WRAPPERS: Record<string, { valueFlags: string[]; positionals?: number }> = {
   sudo: {
+    // `-R`/`--chroot` and `-T`/`--command-timeout` (review T1-3): confirmed
+    // against `sudo --help`/`man sudo` (1.9.x) as two more real options that
+    // take a separate value, missed in the first pass at this fix.
     valueFlags: [
-      '-u', '-g', '-C', '-h', '-p', '-U', '-D', '-r', '-t',
-      '--user', '--group', '--close-from', '--host', '--prompt', '--role', '--type', '--other-user', '--chdir', '--chroot',
+      '-u', '-g', '-C', '-h', '-p', '-U', '-D', '-r', '-t', '-R', '-T',
+      '--user', '--group', '--close-from', '--host', '--prompt', '--role', '--type', '--other-user',
+      '--chdir', '--chroot', '--command-timeout',
     ],
   },
   doas: { valueFlags: ['-u', '-C'] },

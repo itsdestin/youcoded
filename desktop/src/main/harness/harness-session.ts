@@ -36,7 +36,7 @@ import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServic
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
 import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
-import { adminCommandVerdict } from './tools/admin-command';
+import { adminCommandVerdict, refuseMessage } from './tools/admin-command';
 import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES } from './image-support';
 
@@ -4004,7 +4004,9 @@ export class HarnessSession extends EventEmitter {
       // Denied below every rule, same as a deny-list hit — never logs the
       // command, only which of the four words tripped it.
       log('INFO', 'HarnessSession', 'the admin floor refused a command outright', { sessionId: this.opts.sessionId, word: adminVerdict.word });
-      return { text: `${adminVerdict.word} can't be used here: it would open a password window outside YouCoded. Use sudo instead — the user is asked for their password in the app.`, isError: true };
+      // Per-word message (review T1-4): pkexec/run0 vs doas/su fail for
+      // DIFFERENT reasons — refuseMessage states the true one for each word.
+      return { text: refuseMessage(adminVerdict.word), isError: true };
     }
     const isAdmin = adminVerdict?.kind === 'admin';
     const rmFloor = isBash && !isAdmin ? destructiveRmVerdict(subject, bashCtx) : null;

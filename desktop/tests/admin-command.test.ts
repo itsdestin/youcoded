@@ -28,6 +28,47 @@ describe('admin-command floor: sudo asks, whatever shape it hides in', () => {
   it('finds sudo inside a subshell that also has a leading command', () => {
     expect(adminCommandVerdict('cd /tmp && (sudo rm -rf /var/log/old)')).toEqual({ kind: 'admin', word: 'sudo' });
   });
+
+  // Review T1-2: find's own -exec/-execdir/-ok/-okdir runs an arbitrary
+  // command from ordinary shell syntax, the same shape bash-secret-paths.ts
+  // already recurses into for its own threat model.
+  it.each(['-exec', '-execdir', '-ok', '-okdir'])('finds sudo inside find %s … \\;', (action) => {
+    expect(adminCommandVerdict(`find . -name x ${action} sudo rm {} \\;`)).toEqual({ kind: 'admin', word: 'sudo' });
+  });
+
+  it('finds sudo inside find -exec terminated by +', () => {
+    expect(adminCommandVerdict('find . -exec sudo chown root {} +')).toEqual({ kind: 'admin', word: 'sudo' });
+  });
+
+  it('finds a refused word inside find -exec too', () => {
+    expect(adminCommandVerdict('find . -exec pkexec rm {} \\;')).toEqual({ kind: 'refuse', word: 'pkexec' });
+  });
+
+  it('leaves a find with no -exec/-execdir/-ok/-okdir alone', () => {
+    expect(adminCommandVerdict('find . -name "sudo*"')).toBeNull();
+  });
+});
+
+// Review T1-1: a heredoc BODY is text fed to a command, not a command — the
+// missing splitHeredocs() call read a body's first line as a second top-level
+// shell command, so a harmless script mentioning one of the five words on its
+// own line got asked (or, worse, silently refused with no card at all).
+describe('admin-command floor: heredoc bodies are text, not commands', () => {
+  it('a heredoc body mentioning sudo is NOT flagged when the feeder only writes it', () => {
+    expect(adminCommandVerdict('cat <<EOF\nsudo x\nEOF')).toBeNull();
+  });
+
+  it('a heredoc body mentioning pkexec is NOT flagged (would otherwise refuse a harmless write)', () => {
+    expect(adminCommandVerdict("cat > install.sh <<'EOF'\npkexec do-something --now\nEOF")).toBeNull();
+  });
+
+  it('`sudo bash <<EOF` IS flagged — sudo is the command that runs, right there on the first line', () => {
+    expect(adminCommandVerdict('sudo bash <<EOF\nls\nEOF')).toEqual({ kind: 'admin', word: 'sudo' });
+  });
+
+  it('a heredoc fed to a shell DOES run its body as commands', () => {
+    expect(adminCommandVerdict('bash <<EOF\nsudo apt update\nEOF')).toEqual({ kind: 'admin', word: 'sudo' });
+  });
 });
 
 describe('admin-command floor: doas/su/pkexec/run0 refuse outright', () => {
@@ -99,6 +140,21 @@ describe('visibleSudoLines: sudo argv with sudo and its own options stripped', (
     expect(visibleSudoLines(cmd)).toEqual([['apt', 'update']]);
   });
 
+  // Review T1-3: -R/--chroot's short pair and -T/--command-timeout (both
+  // forms) were missing from the first pass at this fix, so each misparsed
+  // its value as the command sudo runs.
+  it('strips -R (the short form of --chroot)', () => {
+    expect(visibleSudoLines('sudo -R /jail apt update')).toEqual([['apt', 'update']]);
+  });
+
+  it('strips -T (the short form of --command-timeout)', () => {
+    expect(visibleSudoLines('sudo -T 30 apt update')).toEqual([['apt', 'update']]);
+  });
+
+  it('strips --command-timeout', () => {
+    expect(visibleSudoLines('sudo --command-timeout 30 apt update')).toEqual([['apt', 'update']]);
+  });
+
   it('keeps flags that belong to the wrapped command, not sudo', () => {
     expect(visibleSudoLines('sudo rm -rf /tmp/x')).toEqual([['rm', '-rf', '/tmp/x']]);
   });
@@ -123,5 +179,18 @@ describe('visibleSudoLines: sudo argv with sudo and its own options stripped', (
 
   it('is empty for the refused words — never a sudo line', () => {
     expect(visibleSudoLines('doas apt update')).toEqual([]);
+  });
+
+  // Same two fixes as adminCommandVerdict, kept symmetric (review T1-1/T1-2).
+  it('finds a sudo line inside find -exec', () => {
+    expect(visibleSudoLines('find . -exec sudo rm {} \\;')).toEqual([['rm', '{}']]);
+  });
+
+  it('a heredoc body mentioning sudo yields no line when the feeder only writes it', () => {
+    expect(visibleSudoLines('cat <<EOF\nsudo apt update\nEOF')).toEqual([]);
+  });
+
+  it('a heredoc fed to a shell yields its sudo line', () => {
+    expect(visibleSudoLines('bash <<EOF\nsudo apt update\nEOF')).toEqual([['apt', 'update']]);
   });
 });
