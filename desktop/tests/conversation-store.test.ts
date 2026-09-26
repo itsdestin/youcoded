@@ -767,3 +767,27 @@ describe('path traversal guard', () => {
     expect(await s.list('..')).toEqual([]);
   });
 });
+
+// The launch repair calls get() ~900 times in a row on a big history; each used
+// to list the whole ~2,600-record directory. Listings within a second share one,
+// but a conflict copy is still healed once the listing is fresh again.
+describe('heal shares a recent directory listing', () => {
+  let root: string;
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-conv-memo-')); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  it('many gets in a row list the directory once, and a copy added later is healed after the listing expires', async () => {
+    const s = createConversationStore(root);
+    stage(root, 'claude', 'a.json', recJson({ id: 'a', title: 'A' }));
+    stage(root, 'claude', 'b.json', recJson({ id: 'b', title: 'B' }));
+    const readdir = vi.spyOn(fs.promises, 'readdir');
+    for (let i = 0; i < 20; i++) await s.get('claude', i % 2 ? 'a' : 'b');
+    expect(readdir).toHaveBeenCalledTimes(1);
+
+    // The sync engine drops a conflict copy with a newer title.
+    stage(root, 'claude', 'a (from B, 2026-07-03).json', recJson({ id: 'a', title: 'Newer', lastActive: '2026-07-05T00:00:00.000Z' }));
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now + 1500);
+    expect((await s.get('claude', 'a'))?.title).toBe('Newer');
+  });
+});

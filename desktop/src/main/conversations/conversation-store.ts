@@ -199,11 +199,34 @@ export function createConversationStore(conversationsRoot: string): Conversation
   // '<copy>.healing-<pid>-<nonce>' gives every claim a private name,
   // including recovery of an old claim. Cleanup cannot delete a recreated copy;
   // the bytes actually claimed are revalidated before folding.
+  // WHY a one-second listing memo (2026-09-26): heal runs before EVERY get/
+  // upsert and lists the whole provider directory to look for conflict copies.
+  // The launch repair does ~900 gets in a row on a big history — ~900 listings
+  // of ~2,600 names. Listings made within a second of each other share one.
+  // Heal is opportunistic already ("the next read retries"): a copy the sync
+  // engine drops in during that second is healed by a later read, never lost.
+  // Any change THIS store makes to the directory (claim, cleanup, remove)
+  // forgets the listing at once, so a retry always sees its own claims.
+  const LISTING_TTL_MS = 1000;
+  const listings = new Map<string, { at: number; names: Promise<string[]> }>();
+  function recentListing(dir: string): Promise<string[]> {
+    const hit = listings.get(dir);
+    if (hit && Date.now() - hit.at < LISTING_TTL_MS) return hit.names;
+    const names = fs.promises.readdir(dir);
+    listings.set(dir, { at: Date.now(), names });
+    // A failed listing is not remembered — the next heal asks again.
+    names.catch(() => { if (listings.get(dir)?.names === names) listings.delete(dir); });
+    return names;
+  }
+
   async function heal(provider: string, id: string): Promise<void> {
     const dir = providerDir(provider);
     let names: string[];
     // The provider dir may not exist yet — nothing to heal.
-    try { names = fs.readdirSync(dir); } catch { return; }
+    // WHY async (2026-09-26): listing a ~2,600-record directory synchronously
+    // on each call was measured freezing the whole app ~0.85 s during the
+    // launch repair (every window stalls).
+    try { names = await recentListing(dir); } catch { return; }
     const baseName = `${id}.json`;
 
     const validated: { path: string; record: ConversationRecord }[] = [];
@@ -219,6 +242,8 @@ export function createConversationStore(conversationsRoot: string): Conversation
       try { peek = parseRecord(await fs.promises.readFile(full, 'utf8')); } catch { continue; }
       if (!peek || peek.id !== id || peek.provider !== provider) continue;
       const quarantine = path.join(dir, original) + HEALING_MARKER + process.pid + '-' + randomUUID();
+      // Our own rename changes the directory: a remembered listing is now wrong.
+      listings.delete(dir);
       try { fs.renameSync(full, quarantine); } catch { continue; }
       // Another live healer may reclaim this private path. Never restore over
       // an original name that the sync engine may have recreated meanwhile.
@@ -253,6 +278,7 @@ export function createConversationStore(conversationsRoot: string): Conversation
     }
     // Only successfully incorporated private paths are disposable. Failed
     // commits leave the claims as evidence; failed unlinks retry later.
+    listings.delete(dir);
     for (const q of folded) {
       try { fs.unlinkSync(q); } catch { /* retained or reclaimed — retry later */ }
     }
@@ -317,7 +343,7 @@ export function createConversationStore(conversationsRoot: string): Conversation
       // fold, so nothing is lost).
       try { await heal(provider, id); } catch { /* heal retries on next read */ }
       try {
-        return parseRecord(fs.readFileSync(recordPath(provider, id), 'utf8'));
+        return parseRecord(await fs.promises.readFile(recordPath(provider, id), 'utf8'));
       } catch {
         // Missing file → null. (A corrupt file is handled by parseRecord
         // returning null above; either way we never delete on a read.)
@@ -332,7 +358,10 @@ export function createConversationStore(conversationsRoot: string): Conversation
       try { dir = providerDir(provider); } catch { return []; }
       let names: string[];
       // No provider dir → no conversations.
-      try { names = fs.readdirSync(dir); } catch { return []; }
+      // WHY async here and below (2026-09-26): list() runs on every Resume open
+      // and every materialize sweep; ~2,600 synchronous record reads held the
+      // main thread (and so every window) for their whole duration.
+      try { names = await fs.promises.readdir(dir); } catch { return []; }
       // Heal any conflict copies (and stale quarantine files) found in this
       // listing pass, then read clean. Heal failures are swallowed per fix 4 —
       // a stuck lock on ONE record must not empty the whole list.
@@ -347,20 +376,26 @@ export function createConversationStore(conversationsRoot: string): Conversation
           }
         }
       }
-      const out: ConversationRecord[] = [];
       // Re-read the dir (heal may have deleted copies) — guarded like the
       // first read: a dir that vanished mid-list yields [] not a crash.
       let finalNames: string[];
-      try { finalNames = fs.readdirSync(dir); } catch { return []; }
-      for (const n of finalNames) {
-        if (!n.endsWith('.json') || isConflictCopyName(n)) continue;
-        try {
-          const r = parseRecord(fs.readFileSync(path.join(dir, n), 'utf8'));
-          // A corrupt record damages exactly ONE conversation, never the list.
-          if (r) out.push(r);
-        } catch { /* unreadable file — skip */ }
-      }
-      return out;
+      try { finalNames = await fs.promises.readdir(dir); } catch { return []; }
+      const wanted = finalNames.filter((n) => n.endsWith('.json') && !isConflictCopyName(n));
+      // Bounded parallel reads (32 open at once — well under any descriptor
+      // limit), kept in directory order so callers see the same sequence.
+      const read = new Array<ConversationRecord | null>(wanted.length).fill(null);
+      let next = 0;
+      const worker = async () => {
+        while (next < wanted.length) {
+          const i = next++;
+          try {
+            // A corrupt record damages exactly ONE conversation, never the list.
+            read[i] = parseRecord(await fs.promises.readFile(path.join(dir, wanted[i]), 'utf8'));
+          } catch { /* unreadable file — skip */ }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(32, wanted.length) }, worker));
+      return read.filter((r): r is ConversationRecord => r !== null);
     },
 
     async setFlag(provider, id, flag, value) {
@@ -421,6 +456,7 @@ export function createConversationStore(conversationsRoot: string): Conversation
           const original = originalConflictName(n);
           return isConflictCopyName(original) && extractConflictBase(original) === baseName;
         });
+        listings.delete(dir);
         for (const n of targets) {
           try { fs.unlinkSync(path.join(dir, n)); removed = true; }
           catch { /* already gone / raced another remover — treat as removed by someone */ }

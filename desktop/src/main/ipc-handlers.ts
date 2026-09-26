@@ -90,6 +90,8 @@ import { tavilyBackend } from './harness/search/backends/tavily';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
 import { listPastSessions, loadHistory, readSessionTranscriptMeta } from './session-browser';
+import { perfMark } from './perf-marks';
+import { shareInFlight } from './share-in-flight';
 import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
 import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
@@ -126,7 +128,7 @@ import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateI
 import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
 import { verifyDownloadedUpdate } from './update-manifest-verify';
 import { readReleaseStatus, selectRelease, type UpdateStatus } from './update-release-status';
-import { linuxInstallKind } from './linux-install-kind';
+import { linuxInstallKind, primeLinuxInstallKind } from './linux-install-kind';
 import { UpdateSettings } from './update-settings';
 import { UPDATE_SIGNING_PUBLIC_KEY_PEM } from './update-signing-key';
 import { getChangelog } from './changelog-service';
@@ -1871,6 +1873,9 @@ export function registerIpcHandlers(
   }
 
   // --- Session browser (resume) ---
+  // One scan answers every browse made while it runs with the same live sessions
+  // excluded (share-in-flight.ts has the why: two full scans per first open).
+  const browseOnce = shareInFlight<Awaited<ReturnType<typeof listPastSessions>>>();
   ipcMain.handle(IPC.SESSION_BROWSE, async () => {
     // Collect active Claude Code session IDs so we can exclude them.
     // Bug 1 (2026-07-13 dogfood): a stale sessionIdMap entry (missed exit event,
@@ -1888,7 +1893,14 @@ export function registerIpcHandlers(
     // registry; passing it in (rather than session-browser.ts reading disk
     // itself) keeps NativeSessionHost the one source of truth for what native
     // sessions exist.
-    return listPastSessions(activeIds, await nativeHost.listAsync());
+    // WHY the marks: measured 2026-09-26, this native list is most of a first
+    // Resume open on a big history (it runs before listPastSessions starts).
+    return browseOnce([...activeIds].sort().join(','), async () => {
+      perfMark('bg:browse:native-list:start');
+      const nativeEntries = await nativeHost.listAsync();
+      perfMark('bg:browse:native-list:done', { native: nativeEntries.length });
+      return listPastSessions(activeIds, nativeEntries);
+    });
   });
 
   ipcMain.handle(IPC.SESSION_HISTORY, async (
@@ -2028,13 +2040,15 @@ export function registerIpcHandlers(
           https.get(res.headers.location!, { headers: { 'User-Agent': 'YouCoded', 'Accept': 'application/vnd.github.v3+json' }, timeout: 10000 }, (rRes) => {
             let body = '';
             rRes.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-            rRes.on('end', () => { parseReleaseResponse(body, listing); resolve(); });
+            rRes.on('end', () => { void primeLinuxInstallKind().finally(() => { parseReleaseResponse(body, listing); resolve(); }); });
           }).on('error', () => { resolve(); });
           return;
         }
         let body = '';
         res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-        res.on('end', () => { parseReleaseResponse(body, listing); resolve(); });
+        // WHY prime first: parseReleaseResponse reads linuxInstallKind(); priming
+        // answers it off the main thread instead of blocking spawnSync calls.
+        res.on('end', () => { void primeLinuxInstallKind().finally(() => { parseReleaseResponse(body, listing); resolve(); }); });
       });
       req.on('error', () => { resolve(); });
       req.on('timeout', () => { req.destroy(); resolve(); });
