@@ -513,6 +513,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   // Confirmation dialog state
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  // photo-only build: the "Remove backup?" confirmation on the first backend row
+  // (the default fixture's only backend, `drive-1`) — same fixture the row itself uses.
+  useScreenOpen('settings/sync/remove-backend', () => setConfirmRemoveId(status?.backends[0]?.id ?? null));
   // Cross-device sync spaces (spec 2026-07-03) — separate from the backend backups
   // above. Status refetches whenever the engine emits an event so the list and
   // per-space connected/local state stay live.
@@ -950,7 +953,15 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     // Overlay layer L2 — theme-driven via Scrim/OverlayPanel (matches SettingsPanel popups).
     return (
       <>
-        <Dialog open onClose={onClose} aria-label="Backup & Sync" size="panel" fill scrollBody={false}>
+        <Dialog
+          open
+          onClose={onClose}
+          aria-label="Backup & Sync"
+          size="panel"
+          fill
+          scrollBody={false}
+          noScreen="a transient loading spinner before settings/sync replaces it; never worth a picture"
+        >
           <LoadingState what="sync status" className="h-full" />
         </Dialog>
       </>
@@ -1744,6 +1755,9 @@ function ConfirmDialog({
         size="prompt"
         title={title}
         scrollBody={false}
+        // Only call site is SyncPanel's "Remove backup?" — a literal name is
+        // correct here rather than a prop, since nothing else renders this.
+        screen="settings/sync/remove-backend"
       >
         {/* The hand-rolled tinted header is gone. Tranche 2 recorded the confirm
             cards as residue — "titling them is a copy decision, not a mechanical

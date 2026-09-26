@@ -179,6 +179,13 @@ export type DialogProps = {
    * in any other build (shoot-mode.tsx).
    */
   screen?: string;
+  /**
+   * Instead of `screen`: why this dialog has no shoot screen (it can only be
+   * reached mid-flow — explore covers it). tests/shoot-screens.test.ts requires
+   * one or the other, so a new dialog cannot slip out of `shoot --all` unnoticed.
+   * Documentation only; renders nothing.
+   */
+  noScreen?: string;
   children: React.ReactNode;
 };
 

@@ -215,6 +215,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // someone to dismiss a warning unread. The strip is amber when something was
   // cut, which is the signal that has to earn the click.
   const [contextPopupOpen, setContextPopupOpen] = useState(false);
+  // Photo-only build: same `visible` gating as chat/find above, so only the
+  // on-screen session's copy answers.
+  useScreenOpen('chat/session-context', () => setContextPopupOpen(true), undefined, visible);
 
   // Single pass — compute all tool status flags, memoized to avoid re-iterating
   // the Map on every render (toolCalls is a new ref on every reducer dispatch)

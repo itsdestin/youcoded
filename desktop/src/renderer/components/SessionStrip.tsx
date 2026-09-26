@@ -15,6 +15,7 @@ import { pillSurfaceClass } from './header/control-states';
 import { ProviderIcon } from './ProviderIcon';
 import { nextSlotId, clampFloatLeft, layoutRects, reorderIndices, neighbourOffsets, mapToSettled, DRAG_TUNE, type PillRect } from './header/drag-order';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
+import { useEscClose } from '../hooks/use-esc-close';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useArtifactDispatch } from '../state/ArtifactContext';
 import { useTheme } from '../state/theme-context';
@@ -395,6 +396,7 @@ export default function SessionStrip({
   // Photo-only build: `shoot` opens the list, or the Shift-hold switcher (the same list, Shift-navigation armed).
   useScreenOpen('chat/sessions', () => setMenuOpen(true));
   useScreenOpen('chat/switcher', () => { shiftNavActive.current = true; const i = sessions.findIndex((s) => s.id === activeSessionId); setShiftNavIdx(i >= 0 ? i : 0); setMenuOpen(true); });
+  useScreenOpen('chat/rename-session', () => setRenameId(activeSessionId));
   const [showNewForm, setShowNewForm] = useState(false);
   const [newCwd, setNewCwd] = useState('');
   const [dangerous, setDangerous] = useState(false);
@@ -804,6 +806,8 @@ export default function SessionStrip({
     setMenuOpen(prev => !prev);
     setShowNewForm(false);
   }, []);
+  // WHY: Escape left the All Sessions menu open — only the arrow closed it (UX tester, 2026-09-26).
+  useEscClose(menuOpen, useCallback(() => { setMenuOpen(false); setShowNewForm(false); }, []));
 
   const handleCreate = useCallback(() => {
     // Native runtime carries a provider/model binding; a missing binding is

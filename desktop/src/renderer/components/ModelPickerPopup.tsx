@@ -7,6 +7,7 @@ import { Button, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SettingRow
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
 import type { NativeSwitchResult } from '../../shared/types';
+import { useScreenOpen } from '../shoot-mode';
 
 // Model + effort + fast picker. Replaces the cycle-only status bar chip with
 // a full picker. Invoked by:
@@ -183,6 +184,11 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
   // user already chose to stay.
   const [switchPrompt, setSwitchPrompt] = useState<{ choice: Extract<ModelChoice, { runtime: 'native' }>; state: ModelSwitchPromptState } | null>(null);
   const switchAbandoned = useRef(false);
+  // photo-only build: the popup itself opens via chat/model-picker (its own
+  // registration is in shoot-app-screens.ts); these are children reached only
+  // on a native session, so the entry that opens them selects one first.
+  useScreenOpen('chat/model-picker/fast-mode', () => setFastConfirmOpen(true));
+  useScreenOpen('chat/model-picker/switch-model', () => setSwitchPrompt({ choice: { runtime: 'native', providerId: 'local', modelId: 'llama3.1:8b' }, state: { kind: 'ask' } }));
   // WHY: the shared picker folds its list away on every pick (it expects this
   // dialog to close). When the switch does NOT happen — the popup asks, or it
   // fails — remounting reopens the list; otherwise the dialog was left an
@@ -561,6 +567,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
             size="prompt"
             aria-label="Enable Fast mode?"
             scrollBody={false}
+            screen="chat/model-picker/fast-mode"
           >
             <div className="p-5 space-y-4">
               <div className="flex items-start gap-3">

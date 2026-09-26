@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button, Dialog, TextInput, LoadingState, ErrorState } from './ui';
 import { namingApi } from './assistant-settings/naming-api';
+import { useEscClose } from '../hooks/use-esc-close';
 
 type Props = { id: string; name: string; onClose: () => void };
 export default function SessionRenameDialog(props: Props) {
@@ -63,8 +64,14 @@ function RenameForm({ id, name, onClose }: Props) {
     catch (e) { if (alive.current) { setError(e instanceof Error ? e.message : 'The name was not saved.'); setRetry(() => () => { void save(); }); } }
     finally { if (alive.current) setSaving(false); }
   };
+  // WHY: <Dialog> does not listen for Escape itself — each dialog registers — and this
+  // one never did, so Escape left it open (found by `explore`, 2026-09-26). Same rule as
+  // its close button: not while a save is in flight.
+  useEscClose(true, () => { if (!saving) onClose(); });
   // WHY: this dialog only saves protected manual names; it never clears ownership.
-  return <Dialog open title="Rename session" size="panel" layer={3} onClose={() => { if (!saving) onClose(); }}>
+  // WHY loaded-gated: the dialog opens showing "Loading…" until the name
+  // fetch resolves — the screen mark must not fire before real content is up.
+  return <Dialog open screen={loaded ? 'chat/rename-session' : undefined} title="Rename session" size="panel" layer={3} onClose={() => { if (!saving) onClose(); }}>
     {error && <ErrorState message={error} onRetry={retry} variant="inline" />}
     {!loaded ? <LoadingState what="the session name" /> : <form className="space-y-3" onSubmit={(e) => {
       e.preventDefault(); if (draft.trim()) void save();

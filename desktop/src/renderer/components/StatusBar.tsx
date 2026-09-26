@@ -1006,9 +1006,14 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   const [updatePanelOpen, setUpdatePanelOpen] = useState(false);
   useScreenOpen('chat/update', () => setUpdatePanelOpen(true)); // photo-only build
   const [contextPopupOpen, setContextPopupOpen] = useState(false);
+  useScreenOpen('chat/context', () => setContextPopupOpen(true)); // photo-only build
   // Full-text view of the announcement chip — the chip itself truncates at 280px,
   // so longer messages are read here.
   const [announcementOpen, setAnnouncementOpen] = useState(false);
+  // photo-only build: `?announcement=1` (mock-shim) is what actually makes the
+  // Dialog below exist to open — without it hasAnnouncement is false and this
+  // would open nothing.
+  useScreenOpen('chat/announcement', () => setAnnouncementOpen(true));
   const hasAnnouncement = !!statusData.announcement?.message && !isExpired(statusData.announcement.expires);
   // WHY: without this, an announcement that expires while its popup is open would
   // leave the flag set, and the NEXT announcement would pop open unprompted.
@@ -1767,7 +1772,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {/* Announcement popup — the whole message, since the chip truncates it.
           pre-wrap keeps the line breaks the author wrote. */}
       {hasAnnouncement && statusData.announcement && (
-        <Dialog open={announcementOpen} onClose={() => setAnnouncementOpen(false)} title="Announcement" size="panel">
+        <Dialog open={announcementOpen} onClose={() => setAnnouncementOpen(false)} title="Announcement" size="panel" screen="chat/announcement">
           <p className="text-sm text-fg whitespace-pre-wrap break-words leading-relaxed">
             {statusData.announcement.message}
           </p>

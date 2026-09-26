@@ -503,6 +503,14 @@ function updateStatusSwitch(): { current: string; latest: string; update_availab
   };
 }
 
+/** `?announcement=1` — a real, unexpired announcement, so `chat/announcement` can
+ *  open StatusBar's own Announcement <Dialog> (statusData otherwise always sends
+ *  `announcement: null`, matching the fetch-not-run default). */
+function announcementSwitch(): { message: string; fetched_at: string; expires?: string } | null {
+  if (typeof location === 'undefined' || new URLSearchParams(location.search).get('announcement') !== '1') return null;
+  return { message: 'YouCoded 1.3.0 is out — new themes, faster sync, and the games arcade.', fetched_at: new Date().toISOString() };
+}
+
 export function createMockShim(store: MockStore): Window['claude'] {
   const impls = handWritten(store);
 
@@ -2394,8 +2402,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // stay reviewable.
   const signedInSwitch = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('signedIn') === '1';
+  // `?handleMissing=1` (with `?signedIn=1`) fakes a just-signed-in account with no
+  // handle yet, so `chat/handle-prompt`'s screen entry can open the real
+  // HandlePrompt dialog instead of needing `noScreen`.
+  const handleMissingSwitch = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('handleMissing') === '1';
   const FIXTURE_USER: MarketplaceUser = {
-    id: 'workbench:you', login: 'you', avatar_url: '', display_name: 'You', handle: 'you',
+    id: 'workbench:you', login: 'you', avatar_url: '', display_name: 'You',
+    handle: handleMissingSwitch ? null : 'you',
   };
   const account: Ns<'account'> = {
     signedIn: async () => signedInSwitch,
@@ -2998,7 +3012,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         cb({
           usage: fixture.usage,
           chatgptUsage: chatgptUsageFixture(),
-          announcement: null,
+          announcement: announcementSwitch(),
           updateStatus: updateStatusSwitch(),
           syncWarnings: [],
           contextMap: {},
@@ -3016,9 +3030,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // effort: 'auto'`, which is exactly what App.tsx read before this namespace
   // existed (the untyped `(window.claude as any).modes` access resolved to the
   // catch-all's `[]`, so `m?.fast` was always undefined -> false).
+  // Remembers a set() for the page's life, as the real handler keeps a file: a tester
+  // who picked Low saw Auto again on reopening and reported it as an app bug (2026-09-26).
+  let modesState = { fast: activeScenario === 'statusbar-cc', effort: 'auto' };
   const modes = {
-    get: async () => ({ fast: activeScenario === 'statusbar-cc', effort: 'auto' }),
-    set: async () => ({ ok: true }),
+    get: async () => ({ ...modesState }),
+    set: async (m: { fast?: boolean; effort?: string }) => { modesState = { ...modesState, ...m }; return { ...modesState }; },
   };
   // Scripted replies: the transcript/hook events a played reply fixture emits
   // (playReply in sendInput above). Same attachment pattern as specialistEvent
@@ -3064,6 +3081,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // throwing synchronously inside marketplace-context's Promise.all.
     marketplace: {
       list: async () => (marketplaceEmpty ? [] : MARKETPLACE_THEMES.map((t) => ({ ...t }))),
+      // Real implementations for ThemeShareSheet's two mount-time calls: left to
+      // the catch-all, both resolve `[]` (truthy), and `previewPath.replace(...)`
+      // on an array crashes the dialog on open (found opening `marketplace/theme-share`).
+      generatePreview: async () => null,
+      resolvePublishState: async () => ({ kind: 'draft' }),
     },
   };
 
@@ -3154,6 +3176,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return [...skillFavourites];
     },
     getFeatured: async () => (marketplaceEmpty ? { hero: [], rails: [] } : JSON.parse(JSON.stringify(FEATURED))),
+    // ShareSheet's mount-time call: left to the catch-all, it resolves `[]`
+    // (truthy), and the QR code renders garbage instead of a real-looking link.
+    getShareLink: async (id: string) => `https://youcoded.app/skill/${id}`,
   };
   // fs:read-head — the first bytes of an attached file, for the composer's
   // attachment cards. Canned per file kind so the screenshot rig sees a REAL

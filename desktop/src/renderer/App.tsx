@@ -2533,6 +2533,14 @@ function AppInner() {
     setDrawerFilter(undefined);
   }, []);
 
+  // A Claude Code session's model, in BOTH places it is read: the status bar chip
+  // (sessionModels) and the session itself, which the All Sessions menu labels its row
+  // from. Writing only the first left the menu on the old model (UX tester, 2026-09-26).
+  const rememberSessionModel = useCallback((sid: string, m: ModelAlias) => {
+    setSessionModels((prev) => new Map(prev).set(sid, m));
+    setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, model: m } : s)));
+  }, []);
+
   // Shared core for any "switch THIS session to model X" flow — Shift+Space
   // cycling and the typed `/model <alias>` chat command both route through
   // this so the guarded PTY send, the optimistic pill update, and the
@@ -2546,7 +2554,7 @@ function AppInner() {
     // on CC's live Ink menu and answer it. Refusing BEFORE the optimistic
     // state writes also keeps the model pill truthful when nothing was sent.
     if (!guardedPtySend(sid, `/model ${target}\r`)) return 'blocked';
-    setSessionModels((prev) => new Map(prev).set(sid, target));
+    rememberSessionModel(sid, target);
     setPendingModel(target);
     // Fix: don't verify against in-flight events from the current turn —
     // wait until a new user turn starts so we know Claude is using the new model.
@@ -2635,7 +2643,7 @@ function AppInner() {
         const actual = MODELS.find(m => actualModel.includes(baseKey(m)));
         // Revert this session's model and persisted preference to what Claude is actually using
         if (actual) {
-          if (sessionId) setSessionModels((prev) => new Map(prev).set(sessionId, actual));
+          if (sessionId) rememberSessionModel(sessionId, actual);
           (window.claude as any).model?.setPreference(actual);
         }
         const failures = consecutiveFailures.current + 1;
@@ -3728,7 +3736,7 @@ function AppInner() {
   const toggleGamePanel = useCallback(() => gameDispatch({ type: 'TOGGLE_PANEL' }), [gameDispatch]);
   const toggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
   // Photo-only build: `shoot` opens these screens by name (shoot-app-screens.ts).
-  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => setTakeoverPrompt({ device: 'Devins laptop', phase }), openWelcomeForm });
+  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => setTakeoverPrompt({ device: 'Devins laptop', phase }), openWelcomeForm, showNativeResumeModel: () => { setPendingNativeBinding(null); setPendingNativeResume({ claudeSessionId: 'shoot-native-resume', projectSlug: 'youcoded', projectPath: '/home/destin/youcoded-dev/youcoded' }); }, setQuitPrompt, gateSkip, gateSmallModel, gateFullAuto, setEditorSkillId, setPublishThemeSlug, setShareSkillId });
   const openResumeBrowser = useCallback(() => setResumeRequested(true), []);
 
   // Still loading first-run check
@@ -4527,7 +4535,7 @@ function AppInner() {
           // optimistic state writes keeps the model pill truthful when the
           // command never reached CC. Mirrors cycleModel.
           if (!guardedPtySend(sessionId, `/model ${m}\r`)) return;
-          setSessionModels((prev) => new Map(prev).set(sessionId, m));
+          rememberSessionModel(sessionId, m);
           setPendingModel(m);
           postSwitchTurnReady.current = false;
           (window.claude as any).model?.setPreference(m);
@@ -4703,7 +4711,7 @@ function AppInner() {
       {pendingNativeResume && (
         <>
           <Dialog
-            open
+            screen="chat/resume/pick-model" open
             // Dismissal stays suppressed while the resume is in flight.
             onClose={() => { if (pendingNativeResuming) return; setPendingNativeResume(null); setPendingNativeBinding(null); }}
             size="panel"

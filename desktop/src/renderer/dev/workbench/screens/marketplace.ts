@@ -10,6 +10,10 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('marketplace/search', 'view'),
   mp('marketplace/detail', 'dialog'),
   mp('marketplace/theme-detail', 'dialog'),
+  // Share/publish sheets — App.tsx owns their id state; both open on the same
+  // fixture items marketplace/detail and marketplace/theme-detail use.
+  mp('marketplace/share', 'dialog'),
+  mp('marketplace/theme-share', 'dialog'),
   // Nothing installed and the registry unreachable.
   { ...mp('marketplace#empty', 'view', 'empty-state'), params: { marketplace: 'empty' } },
   mp('library/themes', 'view'),

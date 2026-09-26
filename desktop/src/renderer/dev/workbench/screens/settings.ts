@@ -12,7 +12,12 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/assistant/cloud', 'dialog'),
   settings('settings/assistant/local', 'dialog'),
   settings('settings/assistant/local/engine-advanced', 'dialog'),
+  // The one installed model with a load-failure state (mock-shim switch by model id).
+  settings('settings/assistant/local/model-settings', 'dialog'),
+  settings('settings/assistant/cloud/claude-code/sign-out', 'dialog'),
+  settings('settings/assistant/cloud/openrouter/key', 'dialog'),
   settings('settings/assistant/permissions', 'dialog'),
+  settings('settings/assistant/permissions/skip-confirm', 'dialog'),
   settings('settings/assistant/specialists', 'dialog'),
   settings('settings/appearance', 'dialog'),
   settings('settings/appearance/about', 'dialog'),
@@ -25,6 +30,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
   { ...settings('settings/sync#oversize', 'dialog', 'error-state'), params: { sync: 'oversize' } },
+  // "Remove backup?" on the default fixture's one backend (drive-1).
+  settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),
   settings('settings/help', 'dialog'),
   settings('settings/development', 'dialog'),
@@ -33,6 +40,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/shortcuts', 'dialog'),
   settings('settings/donate', 'dialog'),
   settings('settings/about', 'dialog'),
+  // Android-only rows (isAndroid() gates AndroidSettings vs. DesktopSettings).
+  { ...settings('settings/android/tier', 'dialog'), params: { platform: 'android' } },
+  { ...settings('settings/android/connect-desktop', 'dialog'), params: { platform: 'android' } },
   // Sign-in and key states of the cloud providers (mock-shim switches); each picture
   // scrolls to its provider's card.
   { ...settings('settings/assistant/cloud/chatgpt#signed-out', 'dialog', 'sign-in'), params: { chatgpt: 'signed-out', planUsage: '1' } },

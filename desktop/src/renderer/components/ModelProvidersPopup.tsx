@@ -184,6 +184,9 @@ export function ClaudeCodeBlock({
   }
   const claudeUsage = useClaudePlanUsage();
   const [signOutOpen, setSignOutOpen] = useState(false);
+  // photo-only build: `claudeCodeStatus` defaults to signed-in, so the Sign out
+  // button (and this dialog) are on the Cloud page with no params needed.
+  useScreenOpen('settings/assistant/cloud/claude-code/sign-out', () => setSignOutOpen(true));
 
   return (
     <>
@@ -239,7 +242,7 @@ export function ClaudeCodeBlock({
           to clear it — the CLI's /logout is a terminal-only screen, which is
           exactly what the command list already tells people. So this says
           where to go, in the same words. */}
-      <Dialog open={signOutOpen} onClose={() => setSignOutOpen(false)} title="Sign out of Claude Code" size="prompt">
+      <Dialog open={signOutOpen} onClose={() => setSignOutOpen(false)} title="Sign out of Claude Code" size="prompt" screen="settings/assistant/cloud/claude-code/sign-out">
         <div className="space-y-3 text-xs text-fg leading-relaxed">
           <p>
             Open any conversation, switch it to Terminal view, and type <code className="font-mono bg-inset px-1 rounded">/logout</code>.
@@ -499,6 +502,10 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
   // loading; null = not found (shouldn't happen — it's builtin).
   const [openrouter, setOpenrouter] = useState<ProviderStatus | null | undefined>(undefined);
   const [connectOpen, setConnectOpen] = useState(false);
+  // photo-only build: the Connect/Replace-key modal, independent of sign-in
+  // state (it's the manual paste-a-key route) — `openrouter` is already
+  // resolved by the time `shoot` clicks through here.
+  useScreenOpen('settings/assistant/cloud/openrouter/key', () => setConnectOpen(true));
   // Sign in with OpenRouter (design §3.5). Gated on `supported === true` like
   // the ChatGPT card: over remote access there is no browser on this computer
   // for the phone to use, so the card keeps only the paste-a-key route there.
@@ -718,6 +725,7 @@ function ConnectOpenRouterModal({
         size="prompt"
         title={hasKey ? 'Replace OpenRouter key' : 'Connect OpenRouter'}
         scrollBody={false}
+        screen="settings/assistant/cloud/openrouter/key"
       >
         <div className="p-4 space-y-3">
           <ol className="text-2xs text-fg-2 leading-relaxed space-y-1 list-decimal pl-4">

@@ -8,12 +8,19 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat', 'view'),
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
+  chat('chat/rename-session', 'dialog'),
   chat('chat/close-session', 'dialog'),
   chat('chat/find', 'bar'),
   chat('chat/skills', 'drawer'),
+  // App.tsx's own editorSkillId — no live trigger reaches it yet; a fixture id
+  // opens the real editor, a bogus one its "not found" branch.
+  chat('chat/skills/edit', 'dialog'),
+  chat('chat/skills/edit-missing', 'dialog', 'error-state'),
   chat('chat/commands', 'drawer'),
   { ...chat('chat/overflow', 'menu', 'narrow'), viewport: { width: 390, height: 844 } },
   chat('chat/model-picker', 'dialog'),
+  chat('chat/model-picker/fast-mode', 'dialog'),
+  chat('chat/model-picker/switch-model', 'dialog'),
   chat('chat/preferences', 'dialog'),
   chat('chat/resume', 'dialog'),
   { ...chat('chat/resume#stress', 'dialog'), scenario: 'stress' },
@@ -21,7 +28,15 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/tags', 'dialog'),
   chat('chat/status-bar', 'dialog'),
   chat('chat/status-bar/themes', 'dialog'),
+  chat('chat/context', 'dialog'),
+  // A real, unexpired announcement — statusData otherwise always sends `null`.
+  { ...chat('chat/announcement', 'dialog'), params: { announcement: '1' } },
   chat('chat/quick-chips', 'dialog'),
+  chat('chat/session-context', 'dialog'),
+  chat('chat/quit-sessions', 'dialog'),
+  // Each first-run warning, once per kind (localStorage is unwritten on a fresh
+  // photo-only tab, so every kind is still un-acknowledged).
+  ...['skip-permissions', 'full-auto', 'small-model'].map((k) => chat(`chat/first-time-warning/${k}`, 'dialog')),
   chat('chat/files', 'pane'),
   chat('chat/terminal', 'view'),
   chat('chat/games', 'pane'),
@@ -37,6 +52,9 @@ export const CHAT: readonly ScreenEntry[] = [
   { name: 'projects', tags: ['view', 'projects'] },
   { name: 'marketplace', tags: ['view', 'marketplace'] },
   { name: 'library', tags: ['view', 'marketplace'] },
+  // A just-signed-in account with no handle yet (mock-shim's `?handleMissing=1`,
+  // paired with `?signedIn=1` so account.user() reports one at all).
+  { name: 'handle-prompt', tags: ['dialog'], params: { signedIn: '1', handleMissing: '1' } },
   // Conversations on the practice sessions. wb-2 is the native-runtime session that the
   // seeded conversations, OpenRouter error cards and the stalled replay play into.
   { ...chat('chat#native', 'view'), session: 'wb-2' },
@@ -72,6 +90,8 @@ export const CHAT: readonly ScreenEntry[] = [
   ...['confirm', 'force', 'undeliverable', 'claim-denied'].map((ph) => chat(`chat/takeover/${ph}`, 'dialog', 'handoff')),
   chat('chat/resume/preview', 'dialog'),
   { ...chat('chat/resume/preview#stress', 'dialog'), scenario: 'stress' },
+  // The pre-resume model picker: a fixture claudeSessionId, no real resume behind it.
+  chat('chat/resume/pick-model', 'dialog'),
   { ...chat('chat/specialists', 'dialog'), session: 'wb-11' },
   chat('chat/tags/manage', 'dialog'),
   { ...chat('chat/tags/manage#load-failed', 'dialog', 'error-state'), params: { fail: 'tags.list' } },

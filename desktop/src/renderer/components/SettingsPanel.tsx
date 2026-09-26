@@ -2188,6 +2188,8 @@ const TIER_OPTIONS = [
 function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string) => void }) {
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+  // photo-only build: only mounted inside AndroidSettings (`?platform=android`).
+  useScreenOpen('settings/android/tier', () => setOpen(true));
 
   useEffect(() => {
     if (!open) return;
@@ -2227,6 +2229,7 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
         title="Package Tier"
         size="prompt"
         panelRef={popupRef}
+        screen="settings/android/tier"
       >
               {TIER_OPTIONS.map(t => {
                 const isActive = tier === t.id;
@@ -2285,6 +2288,10 @@ export function ConnectToDesktopButton() {
   const [tailscaleLoading, setTailscaleLoading] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   const claude = (window as any).claude;
+  // photo-only build: only mounted inside AndroidSettings (`?platform=android`);
+  // its default (not-connected, no form) view — a static Scan QR / Enter
+  // Manually choice, no live pairing handshake needed to show it correctly.
+  useScreenOpen('settings/android/connect-desktop', () => { setOpen(true); setShowConnectForm(false); });
 
   // Track connection mode
   useEffect(() => {
@@ -2425,6 +2432,7 @@ export function ConnectToDesktopButton() {
         title="Connect to Desktop"
         size="panel"
         panelRef={popupRef}
+        screen="settings/android/connect-desktop"
       >
 
               {/* Tailscale warning */}

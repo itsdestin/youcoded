@@ -315,6 +315,8 @@ export function ProjectView(props: ProjectViewProps) {
   useScreenOpen('projects/context', () => setTab('context'));
   useScreenOpen('projects/switcher', () => setSwitcherOpen(true));
   useScreenOpen('projects/add', () => { setSwitcherOpen(false); setAddOpen(true); });
+  // Same modal the hero's "Turn on sync" button opens, seeded from the active project.
+  useScreenOpen('projects/turn-on-sync', () => { if (activeProject) setTurnOnSyncFor({ path: activeProject.path, name: activeProject.name }); });
 
   // ESC closes the browser via the shared LIFO stack — the header says
   // "Esc · Back to chat", so the key must actually work. Child overlays

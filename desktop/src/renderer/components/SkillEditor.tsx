@@ -42,7 +42,7 @@ export default function SkillEditor({ skillId, onClose }: SkillEditorProps) {
     return (
       // Overlay layer L2 — theme-driven via Scrim/OverlayPanel.
       <>
-        <Dialog open onClose={onClose} size="prompt" aria-label="Skill not found" scrollBody={false} className="p-5">
+        <Dialog open onClose={onClose} size="prompt" aria-label="Skill not found" scrollBody={false} className="p-5" screen="chat/skills/edit-missing">
           <p className="text-sm text-fg-muted">Skill not found</p>
         </Dialog>
       </>
@@ -81,7 +81,7 @@ export default function SkillEditor({ skillId, onClose }: SkillEditorProps) {
   return (
     // Overlay layer L2 — theme-driven via Scrim/OverlayPanel.
     <>
-      <Dialog open onClose={onClose} size="prompt" title="Edit Skill" scrollBody={false} className="p-5">
+      <Dialog open onClose={onClose} size="prompt" title="Edit Skill" scrollBody={false} className="p-5" screen="chat/skills/edit">
 
         {/* Name */}
         <label className="block mb-3">

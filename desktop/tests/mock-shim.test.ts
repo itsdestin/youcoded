@@ -349,10 +349,12 @@ describe('proxy semantics', () => {
     it('nested namespaces resolve to any depth, including under a real impl', async () => {
       const c = shim();
       // `theme.marketplace.list` and `skills.getFeatured` have fixtures since
-      // 2026-08-25; `detail`/`getShareLink` are the still-unimplemented siblings.
+      // 2026-08-25; `theme.marketplace.detail` is still an unimplemented sibling.
       await expect(c.theme.marketplace.detail()).resolves.toEqual([]);
-      await expect(c.skills.getShareLink()).resolves.toEqual([]);
       await expect(c.a.b.c.d()).resolves.toEqual([]);
+      // `skills.getShareLink` got a real impl (ShareSheet's mount-time call,
+      // 2026-09-26) — it now returns a real string, not the catch-all's `[]`.
+      await expect(c.skills.getShareLink('civic-report')).resolves.toBe('https://youcoded.app/skill/civic-report');
       // And the fixture-backed nested member returns real rows, not the catch-all.
       await expect(c.theme.marketplace.list()).resolves.toContainEqual(expect.objectContaining({ slug: 'meadow-mist' }));
       // And the hand-written members of that same namespace still work.
