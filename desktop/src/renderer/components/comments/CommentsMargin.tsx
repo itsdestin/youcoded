@@ -16,6 +16,7 @@ import { EmptyState } from '../ui/states';
 import { Button } from '../ui/Button';
 import { readPaneVariant } from './pane-variant';
 import { CommentsPaneFrame } from './CommentsPaneFrame';
+import { revealSheet } from './sheet-reveal';
 import { useDocComments, type DocComment } from '../../state/doc-comments-store';
 // Round 2: mark-wrapping moved to a shared hook — ReadingHighlights (Reading
 // mode) needs the identical highlight, and the two modes are mutually
@@ -141,11 +142,22 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   const jump = (id: string) => marks.get(id)?.[0]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   // Select a thread from either side: scroll the document to its highlight
   // and the list to its card, and keep both lit.
+  // A cell comment on a sheet tab that isn't showing has no mark yet: ask
+  // the viewer for that tab, and finish the jump once its cell is marked.
+  const pendingJumpRef = useRef<string | null>(null);
   const focusThread = (id: string) => {
     setSelectedId(id);
+    const c = comments.find((x) => x.id === id);
+    if (!marks.has(id) && c?.sheet) { pendingJumpRef.current = id; revealSheet(path, c.sheet); }
     jump(id);
     cardRefs.current.get(id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   };
+
+  useEffect(() => {
+    const id = pendingJumpRef.current;
+    if (id && marks.has(id)) { pendingJumpRef.current = null; jump(id); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- jump reads marks via closure; marks is the trigger
+  }, [marks]);
 
   useEffect(() => {
     if (!openThreadId || !marks.has(openThreadId)) return;

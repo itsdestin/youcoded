@@ -33,6 +33,8 @@ export interface ComposeRef {
   entryKey?: string;
   /** doc kind, spreadsheets — the cell ("C4") the reference points at. */
   cell?: string;
+  /** doc kind, multi-sheet workbooks — the tab that cell is on. */
+  sheet?: string;
   /** doc kind, code/raw text — 1-indexed inclusive line range. */
   lineRange?: [number, number];
   /** Present when this ref represents an EXISTING comment thread (batched via

@@ -54,12 +54,18 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
   // — the pane lists cells in sheet order, and with no quoted text on the
   // card the reference is the only way to tell which cell a card is about
   // without clicking it. Only the thread's own header gets it, not replies.
+  // A multi-sheet workbook's comment names its tab too ("By rep · B4").
+  const cellRef = comment.cell ? (comment.sheet ? `${comment.sheet} · ${comment.cell}` : comment.cell) : undefined;
+  // The reference sits on its own muted line under name · time: beside them,
+  // "By rep · B4" squeezed the author's name down to "Pr…" (polish pass).
   const header = (c: { author: DocComment['author']; createdAt: number }, cell?: string) => (
-    <div className="flex items-baseline gap-1.5 min-w-0">
-      <span className="font-medium text-fg truncate">{authorName(c.author)}</span>
-      <span className="text-2xs text-fg-muted shrink-0">{formatRelativeTime(c.createdAt)}</span>
-      {cell && <span className="text-2xs text-fg-muted shrink-0">· {cell}</span>}
-    </div>
+    <>
+      <div className="flex items-baseline gap-1.5 min-w-0">
+        <span className="font-medium text-fg truncate">{authorName(c.author)}</span>
+        <span className="text-2xs text-fg-muted shrink-0">{formatRelativeTime(c.createdAt)}</span>
+      </div>
+      {cell && <div className="text-2xs text-fg-muted truncate">{cell}</div>}
+    </>
   );
 
   if (comment.resolved) {
@@ -74,7 +80,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
         <div className="flex items-start gap-2">
           <Avatar author={comment.author} />
           <div className="flex-1 min-w-0">
-            {header(comment, comment.cell)}
+            {header(comment, cellRef)}
             <p className="mt-0.5 text-fg-muted truncate">{comment.text}</p>
           </div>
           {resolveToggle}
@@ -91,7 +97,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
       <div className="flex items-start gap-2">
         <Avatar author={comment.author} />
         <div className="flex-1 min-w-0">
-          {header(comment, comment.cell)}
+          {header(comment, cellRef)}
           {isDraft ? (
             <Textarea
               ref={textRef}

@@ -111,7 +111,7 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
       {/* A cell comment names its cell ("Cell C6"): the value alone ("88")
           would not say which of many identical-looking numbers it is. */}
       <p className="text-fg-muted italic line-clamp-2 mb-1.5 border-l-2 border-edge-dim pl-2">
-        {comment.cell ? `Cell ${comment.cell}` : <>&ldquo;{comment.quote}&rdquo;</>}
+        {comment.cell ? `Cell ${comment.cell}${comment.sheet ? ` on ${comment.sheet}` : ''}` : <>&ldquo;{comment.quote}&rdquo;</>}
       </p>
       <Textarea
         ref={textRef}

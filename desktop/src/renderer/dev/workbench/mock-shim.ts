@@ -24,6 +24,7 @@ import {
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { resolveFixture, CS_ERR_READ } from './fixtures/chatsearch';
 import { SHEET_BEFORE, SHEET_AFTER } from './fixtures/sheets';
+import { SHEET_BY_REP } from './fixtures/sheets-by-rep';
 import { DOC_LAUNCH_BRIEF } from './fixtures/docs';
 import type { MockState, MockSessionMeta } from './scenarios';
 import { stressRowCount } from './scenarios';
@@ -2715,6 +2716,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // swaps in the sorted workbook; the viewer re-reads when its file is
       // re-opened, and the video cuts across that re-open.
       if (ext === 'xlsx') {
+        // Doc comments mockup: a two-tab workbook, so cell comments can name
+        // their sheet (fixtures/sheets/make-by-rep.mjs).
+        if (absolutePath.endsWith('q3-sales-by-rep.xlsx')) {
+          return { ok: true, base64: SHEET_BY_REP, mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+        }
         const after = (globalThis as any).__workbenchSheet === 'after';
         return { ok: true, base64: after ? SHEET_AFTER : SHEET_BEFORE,
                  mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };

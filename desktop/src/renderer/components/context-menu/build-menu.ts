@@ -348,15 +348,19 @@ function describeArtifactSelection(sel: string, container: HTMLElement): string 
 function cellEntries(td: HTMLElement, path: string): MenuEntry[] {
   const cell = td.getAttribute('data-cell') || '';
   const value = (td.textContent ?? '').trim();
-  const label = `${cell} · ${baseName(path)}`;
+  // The tab name only when the workbook has more than one (XlsxView stamps
+  // both on the grid) — "By rep · B4 · file.xlsx" vs "C4 · file.xlsx".
+  const grid = td.closest<HTMLElement>('[data-sheet]');
+  const sheet = grid && Number(grid.dataset.sheetCount) > 1 ? grid.dataset.sheet : undefined;
+  const label = `${sheet ? `${sheet} · ` : ''}${cell} · ${baseName(path)}`;
   return [
     {
       type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true,
-      run: () => addReference({ id: genRefId(), kind: 'doc', path, fileName: baseName(path), label, cell, quote: value }),
+      run: () => addReference({ id: genRefId(), kind: 'doc', path, fileName: baseName(path), label, cell, sheet, quote: value }),
     },
     {
       type: 'item', id: 'comment', label: 'Add comment', icon: 'comment',
-      run: () => { addDocComment(path, value, label, { cell }); },
+      run: () => { addDocComment(path, value, label, { cell, sheet }); },
     },
   ];
 }

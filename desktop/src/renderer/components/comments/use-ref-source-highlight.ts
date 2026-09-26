@@ -14,8 +14,9 @@
 // without touching the DOM, so it can never fight the comment <mark>s
 // use-quote-marks.ts wraps into the same text.
 import { useEffect, type RefObject } from 'react';
-import { findQuote } from './use-quote-marks';
+import { findQuote, cellSelector } from './use-quote-marks';
 import { takePendingJump, type ComposeRef } from '../context-menu/compose-ref';
+import { revealSheet } from './sheet-reveal';
 
 export const HOVER_NAME = 'ref-source-hover';
 export const FLASH_NAME = 'ref-source-flash';
@@ -27,7 +28,7 @@ const PENDING_TRIES = 30;
 
 function rangeFor(root: HTMLElement, ref: ComposeRef): Range | null {
   if (ref.cell) {
-    const cellEl = root.querySelector(`[data-cell="${ref.cell}"]`);
+    const cellEl = root.querySelector(cellSelector(ref));
     if (!cellEl) return null;
     const r = document.createRange();
     r.selectNodeContents(cellEl);
@@ -88,8 +89,17 @@ export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>,
       // Handled even if the text is gone: the file IS open, so compose-ref
       // must not try to open it again.
       detail.handled = true;
-      const range = rangeFor(root, detail.ref);
-      if (range) flash(range);
+      const ref = detail.ref;
+      const range = rangeFor(root, ref);
+      if (range) { flash(range); return; }
+      // A cell on a sheet tab that isn't showing: switch to it, then look again.
+      if (ref.cell && ref.sheet) {
+        revealSheet(path, ref.sheet);
+        pendingTimer = window.setTimeout(() => {
+          const again = contentRef.current ? rangeFor(contentRef.current, ref) : null;
+          if (again) flash(again);
+        }, PENDING_RETRY_MS);
+      }
     };
     window.addEventListener('youcoded:ref-hover', onHover);
     window.addEventListener('youcoded:jump-to-ref', onJump);

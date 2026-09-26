@@ -23,7 +23,7 @@ import { HighlightHoverCard } from './HighlightHoverCard';
 import { NewCommentPopover } from './NewCommentPopover';
 import { ContextMenu } from '../context-menu/ContextMenu';
 import { buildContextMenu, type MenuEntry } from '../context-menu/build-menu';
-import { useQuoteMarks, ACTIVE_CLASSES, segmentsRect } from './use-quote-marks';
+import { useQuoteMarks, ACTIVE_CLASSES, segmentsRect, cellSelector } from './use-quote-marks';
 import { useDocComments } from '../../state/doc-comments-store';
 import type { ComposeRef } from '../context-menu/compose-ref';
 
@@ -279,8 +279,8 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
     if (!focusId) return;
     // A cell comment (spreadsheets) anchors to its cell — there is no text
     // selection behind it, the cell was right-clicked.
-    const cell = comments.find((c) => c.id === focusId)?.cell;
-    const cellEl = cell ? containerRef.current?.querySelector(`[data-cell="${cell}"]`) : null;
+    const draft = comments.find((c) => c.id === focusId);
+    const cellEl = draft?.cell ? containerRef.current?.querySelector(cellSelector(draft)) : null;
     if (cellEl) { setDraftAnchor(cellEl.getBoundingClientRect()); return; }
     const sel = window.getSelection();
     const rect = sel && sel.rangeCount > 0 && !sel.isCollapsed

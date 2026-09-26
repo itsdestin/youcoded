@@ -50,6 +50,14 @@ export const ACTIVE_CLASSES = ['!bg-accent/30'];
 // removed on the next pass. `.comment-cell-mark` (globals.css) draws Excel's
 // familiar corner triangle in the accent colour.
 const CELL_ATTR = 'data-comment-cell';
+
+/** The rendered cell a comment names. With a sheet, only on that sheet's
+ *  grid (XlsxView stamps data-sheet on it) — a C4 on another tab is a
+ *  different cell, and is found once that tab is showing. */
+export function cellSelector(c: { cell?: string; sheet?: string }): string {
+  const cell = `[data-cell="${CSS.escape(c.cell ?? '')}"]`;
+  return c.sheet ? `[data-sheet="${CSS.escape(c.sheet)}"] ${cell}` : cell;
+}
 const CELL_OPEN = 'comment-cell-mark';
 const CELL_RESOLVED = 'comment-cell-mark comment-cell-mark--resolved';
 
@@ -176,7 +184,7 @@ function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLEle
   const found = new Map<string, HTMLElement[]>();
   for (const c of comments) {
     if (c.cell) {
-      const td = root.querySelector<HTMLElement>(`[data-cell="${c.cell}"]`);
+      const td = root.querySelector<HTMLElement>(cellSelector(c));
       if (!td) continue;
       td.setAttribute(CELL_ATTR, '');
       td.setAttribute('data-comment-id', c.id);

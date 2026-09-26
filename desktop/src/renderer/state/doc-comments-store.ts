@@ -46,6 +46,10 @@ export interface DocComment {
    *  set, the highlight is the cell itself (use-quote-marks.ts) and `quote`
    *  just records the cell's value for the assistant. */
   cell?: string;
+  /** The sheet tab a cell comment is on — set only when the workbook has
+   *  more than one sheet ("By rep · B4"); a one-sheet workbook needs no tab
+   *  name. Polish pass, 2026-09-26. */
+  sheet?: string;
   text: string;
   author: CommentAuthor;
   createdAt: number;
@@ -240,8 +244,9 @@ function seedComments(): DocComment[] {
       id: 'seed-xlsx-north',
       path: XLSX_PATH,
       cell: 'C4',
+      sheet: 'Q3',
       quote: '41',
-      sourceLabel: `C4 · ${basenameOf(XLSX_PATH)}`,
+      sourceLabel: `Q3 · C4 · ${basenameOf(XLSX_PATH)}`,
       text: 'North looks low for July — was the Denver account left out?',
       author: PRIYA,
       createdAt: now - 20 * HOUR,
@@ -254,8 +259,9 @@ function seedComments(): DocComment[] {
       id: 'seed-xlsx-south',
       path: XLSX_PATH,
       cell: 'C15',
+      sheet: 'Q3',
       quote: '167',
-      sourceLabel: `C15 · ${basenameOf(XLSX_PATH)}`,
+      sourceLabel: `Q3 · C15 · ${basenameOf(XLSX_PATH)}`,
       text: 'Can you check this against the invoice total? It seems high.',
       author: 'user',
       createdAt: now - 2 * HOUR,
@@ -270,8 +276,9 @@ function seedComments(): DocComment[] {
       id: 'seed-xlsx-header',
       path: XLSX_PATH,
       cell: 'C1',
+      sheet: 'Q3',
       quote: 'Amount',
-      sourceLabel: `C1 · ${basenameOf(XLSX_PATH)}`,
+      sourceLabel: `Q3 · C1 · ${basenameOf(XLSX_PATH)}`,
       text: 'Say what unit this is in (thousands?).',
       author: 'user',
       createdAt: now - 7 * HOUR,
@@ -279,6 +286,23 @@ function seedComments(): DocComment[] {
       resolved: true,
       resolvedBy: 'user',
       resolvedAt: now - 6 * HOUR,
+    },
+    // 13. On the workbook's SECOND sheet — its card names the tab ("By rep ·
+    // B4") and clicking it switches the viewer to that tab.
+    {
+      id: 'seed-xlsx-byrep',
+      path: XLSX_PATH,
+      cell: 'B4',
+      sheet: 'By rep',
+      quote: '161',
+      sourceLabel: `By rep · B4 · ${basenameOf(XLSX_PATH)}`,
+      text: 'Lena is well behind the others — is her territory smaller?',
+      author: PRIYA,
+      createdAt: now - 5 * HOUR,
+      replies: [],
+      resolved: false,
+      resolvedBy: null,
+      resolvedAt: null,
     },
   ];
 }
@@ -314,7 +338,7 @@ export function addComment(
   path: string,
   quote: string,
   sourceLabel: string,
-  opts?: { startLine?: number; endLine?: number; cell?: string; author?: CommentAuthor },
+  opts?: { startLine?: number; endLine?: number; cell?: string; sheet?: string; author?: CommentAuthor },
 ): string {
   const id = nextId('c');
   const comment: DocComment = {
@@ -325,6 +349,7 @@ export function addComment(
     startLine: opts?.startLine,
     endLine: opts?.endLine,
     cell: opts?.cell,
+    sheet: opts?.sheet,
     text: '',
     author: opts?.author ?? 'user',
     createdAt: Date.now(),
@@ -392,7 +417,7 @@ export interface DocCommentsApi {
   focusId: string | null;
   showResolved: boolean;
   setShowResolved: (value: boolean) => void;
-  addComment: (quote: string, sourceLabel: string, opts?: { startLine?: number; endLine?: number; cell?: string }) => string;
+  addComment: (quote: string, sourceLabel: string, opts?: { startLine?: number; endLine?: number; cell?: string; sheet?: string }) => string;
   setCommentText: typeof setCommentText;
   addReply: typeof addReply;
   resolveComment: typeof resolveComment;

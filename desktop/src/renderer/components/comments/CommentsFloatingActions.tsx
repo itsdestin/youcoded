@@ -31,6 +31,7 @@ function useSendOpenComments(path: string, beforeSend?: () => void) {
       commentId: c.id,
       quote: c.quote,
       cell: c.cell,
+      sheet: c.sheet,
       // 60, not the default 28: these chips render one per line in the sent
       // bubble (UserMessage groups a batch), so there is room to read the note.
       label: `“${truncateQuote(c.text.trim() || c.quote, 60)}”`,
