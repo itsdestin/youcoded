@@ -59,35 +59,228 @@ export function genRefId(): string {
   return `ref-${Date.now().toString(36)}-${counter}`;
 }
 
-/** Encodes a ComposeRef as an inert plain-text marker. Kept short-ish (no full
- *  quote, no full path) — a longer marker widens the gap between the
- *  invisible textarea text and the pill the mirror draws over it. */
+function baseName(p: string): string {
+  return p.replace(/\\/g, '/').split('/').pop() || p;
+}
+
+// ── Wire format (build design §6.2, review 1 F11/F12, review 2 F2/F7) ─────
+//
+// WHY this replaced `${OPEN}${encodeURIComponent(JSON.stringify(ref))}${CLOSE}`:
+// that produced unreadable percent-encoded JSON in the model's own turn (the
+// literal text a "Ask about this" chip sends is exactly what Claude Code
+// reads as the user's prompt) — the bug the design doc's §6.1 opens with.
+// The delimiters stay; the payload is now a small fixed grammar built from
+// the fields a ComposeRef already carries, so the model sees a normal quoted
+// excerpt plus a path/id instead of a JSON blob.
+//
+// PTY-safety (F12): every structural separator this grammar invents is `_`,
+// NEVER a literal space. YouCoded types this text into Claude Code's PTY in
+// chunks (`pty-worker.js`), and a chunk boundary landing on a literal space
+// byte is exactly the kind of thing that can go missing in transit — the old
+// JSON scheme was accidentally safe here only because `encodeURIComponent`
+// never emits a literal space. The quote/path VALUES keep their own real
+// characters (including any spaces of their own — ordinary prose already
+// flows through chat messages today); only the syntax this file invents is
+// underscore-joined.
+//
+// Escaping (F7): a literal `"` inside a quote is written as `\"`. The parser
+// locates the closing quote as the LAST unescaped `"` immediately followed by
+// a recognized trailing token (`_` or the end of the payload) — never the
+// first `"` after the opening one, which would cut the quote short on any
+// embedded quote mark. An underscore inside a real path or quote is never
+// mistaken for a structural separator because every form below is located
+// structurally (fixed keywords, the quote's own `"` marks, a suffix anchored
+// at the END of the remaining text), never by splitting on `_`.
+//
+// Four forms (F2 added the 4th — the original 3-form draft broke every
+// shipped chat-message/code-block "Ask about this", a live, R15-covered
+// feature):
+//   1. doc quote (ephemeral, no comment):      "<quote>"_<path>[_L<a>-<b>|_cell_<C>[_<sheet>]]
+//   2. an existing comment thread:              comment_<commentId>_"<quote>"_<path>
+//   3. a chat message / code block (pathless):  chat_<entryKey>_"<quote>"
+//   4. Ask Your Assistant's summary chip:        <N>_open_comments_<path>_use_ReadFileComments_to_read_them
+//      (deliberately a POINTER, not the comments themselves — see
+//      CommentsFloatingActions.tsx's own comment. A decoded summary chip
+//      therefore cannot recover which N comments it covered, only the count:
+//      the sent bubble's hover-all/click-to-thread on THIS one chip kind is a
+//      known, accepted trade-off of the frozen wire format, not a bug here —
+//      `jumpToRef` still opens the file itself via `ref.path`.)
+function escapeQuote(q: string): string {
+  return q.replace(/"/g, '\\"');
+}
+
+function unescapeQuote(q: string): string {
+  return q.replace(/\\"/g, '"');
+}
+
+/** `_cell_<C>[_<sheet>]` or `_L<start>-<end>`, whichever `ref` carries — the
+ *  optional suffix after a doc quote's path (form 1). */
+function pathSuffix(ref: ComposeRef): string {
+  if (ref.cell) return `_cell_${ref.cell}${ref.sheet ? `_${ref.sheet}` : ''}`;
+  if (ref.lineRange) return `_L${ref.lineRange[0]}-${ref.lineRange[1]}`;
+  return '';
+}
+
+function encodeRefPayload(ref: ComposeRef): string {
+  // Checked first: CommentsFloatingActions sets BOTH commentId and
+  // commentIds on its one summary ref, and the summary form must win.
+  if (ref.commentIds && ref.commentIds.length > 0 && ref.path) {
+    return `${ref.commentIds.length}_open_comments_${ref.path}_use_ReadFileComments_to_read_them`;
+  }
+  if (ref.commentId && ref.path) {
+    return `comment_${ref.commentId}_"${escapeQuote(ref.quote ?? '')}"_${ref.path}`;
+  }
+  if (ref.kind === 'chat') {
+    return `chat_${ref.entryKey ?? ''}_"${escapeQuote(ref.quote ?? '')}"`;
+  }
+  return `"${escapeQuote(ref.quote ?? '')}"_${ref.path ?? ''}${pathSuffix(ref)}`;
+}
+
+/** Encodes a ComposeRef as an inert plain-text marker (see the wire-format
+ *  block above for the grammar and why it replaced percent-encoded JSON). */
 function encodeRefMarker(ref: ComposeRef): string {
-  return `${OPEN}${encodeURIComponent(JSON.stringify(ref))}${CLOSE}`;
+  return `${OPEN}${encodeRefPayload(ref)}${CLOSE}`;
 }
 
 const MARKER_RE = /⦃([^⦃⦄]*)⦄/g;
+
+/** Locates a payload's closing quote mark: the LAST `"` (index > 0, i.e. not
+ *  the opening mark itself) that is NOT itself an escaped `\"` and is
+ *  immediately followed by a recognized trailing token (`_`, or the end of
+ *  the payload) — F7. Returns -1 for a malformed/hand-edited payload. */
+function findClosingQuote(payload: string): number {
+  let last = -1;
+  for (let i = 1; i < payload.length; i++) {
+    if (payload[i] !== '"' || payload[i - 1] === '\\') continue;
+    const next = payload[i + 1];
+    if (next === undefined || next === '_') last = i;
+  }
+  return last;
+}
+
+/** Reads a leading `"…"` off `payload` (which must start with `"`),
+ *  unescaping `\"`. `rest` is whatever follows the closing mark, for the
+ *  caller to keep parsing (a path, or nothing for the chat form). */
+function extractQuote(payload: string): { quote: string; rest: string } | null {
+  if (!payload.startsWith('"')) return null;
+  const end = findClosingQuote(payload);
+  if (end < 0) return null;
+  return { quote: unescapeQuote(payload.slice(1, end)), rest: payload.slice(end + 1) };
+}
+
+/** Splits `<path>[_L<start>-<end>|_cell_<C>[_<sheet>]]` — form 1's optional
+ *  suffix. Anchored at the END of the remaining text (never found by
+ *  blindly splitting on `_`), so an underscore inside a real path is never
+ *  mistaken for the separator (F12's own reasoning, applied to decode). */
+function splitPathSuffix(rem: string): { path: string; lineRange?: [number, number]; cell?: string; sheet?: string } {
+  const cellMatch = /^(.*)_cell_([A-Za-z]+[0-9]+)(?:_(.*))?$/.exec(rem);
+  if (cellMatch) return { path: cellMatch[1], cell: cellMatch[2], sheet: cellMatch[3] || undefined };
+  const lineMatch = /^(.*)_L(\d+)-(\d+)$/.exec(rem);
+  if (lineMatch) return { path: lineMatch[1], lineRange: [Number(lineMatch[2]), Number(lineMatch[3])] };
+  return { path: rem };
+}
+
+/** Reverses `encodeRefPayload`. Returns null for anything that doesn't match
+ *  one of the grammar's four forms — the caller treats that as plain text
+ *  rather than throwing (same "never crash a render over a mangled marker"
+ *  policy the old JSON parser's `catch` had). Reconstructs everything the
+ *  pill/hover/click machinery reads (quote, path, cell/sheet, lineRange,
+ *  commentId, entryKey) and a human-readable `label` matching the same
+ *  formulas `build-menu.ts`/`CommentsFloatingActions.tsx` use when they first
+ *  build a ref, so a reference reads the same before and after sending in
+ *  every case the wire format can actually carry (see the summary-chip note
+ *  above for the one case it can't). */
+function decodeRefPayload(payload: string): ComposeRef | null {
+  const summary = /^(\d+)_open_comments_(.+)_use_ReadFileComments_to_read_them$/.exec(payload);
+  if (summary) {
+    const count = Number(summary[1]);
+    const path = summary[2];
+    if (path && count > 0) {
+      const fileName = baseName(path);
+      return {
+        id: genRefId(),
+        kind: 'doc',
+        path,
+        fileName,
+        label: `${count} ${count === 1 ? 'comment' : 'comments'} · ${fileName}`,
+      };
+    }
+    return null;
+  }
+
+  if (payload.startsWith('comment_')) {
+    const afterKind = payload.slice('comment_'.length);
+    // A comment id (`c-${randomUUID()}`, T1's schema) has no `_` or `"` of
+    // its own, so the first `_"` run unambiguously starts the quote.
+    const qStart = afterKind.indexOf('_"');
+    if (qStart < 0) return null;
+    const commentId = afterKind.slice(0, qStart);
+    const parsed = extractQuote(afterKind.slice(qStart + 1));
+    if (!commentId || !parsed || !parsed.rest.startsWith('_')) return null;
+    const path = parsed.rest.slice(1);
+    if (!path) return null;
+    const fileName = baseName(path);
+    return {
+      id: genRefId(),
+      kind: 'doc',
+      commentId,
+      path,
+      fileName,
+      quote: parsed.quote,
+      label: `“${truncateQuote(parsed.quote)}” · ${fileName}`,
+    };
+  }
+
+  if (payload.startsWith('chat_')) {
+    const afterKind = payload.slice('chat_'.length);
+    const qStart = afterKind.indexOf('_"');
+    if (qStart < 0) return null;
+    const entryKey = afterKind.slice(0, qStart);
+    const parsed = extractQuote(afterKind.slice(qStart + 1));
+    if (!parsed || parsed.rest.length > 0) return null; // the quote is the LAST element in this form
+    return {
+      id: genRefId(),
+      kind: 'chat',
+      entryKey: entryKey || undefined,
+      quote: parsed.quote,
+      label: `“${truncateQuote(parsed.quote)}”`,
+    };
+  }
+
+  if (payload.startsWith('"')) {
+    const parsed = extractQuote(payload);
+    if (!parsed || !parsed.rest.startsWith('_')) return null;
+    const { path, lineRange, cell, sheet } = splitPathSuffix(parsed.rest.slice(1));
+    if (!path) return null;
+    const fileName = baseName(path);
+    const label = cell
+      ? `${sheet ? `${sheet} · ` : ''}${cell} · ${fileName}`
+      : lineRange
+        ? `${lineRange[0] === lineRange[1] ? `line ${lineRange[0]}` : `lines ${lineRange[0]}-${lineRange[1]}`} · ${fileName}`
+        : `“${truncateQuote(parsed.quote)}”`;
+    return { id: genRefId(), kind: 'doc', path, fileName, quote: parsed.quote, lineRange, cell, sheet, label };
+  }
+
+  return null;
+}
 
 export type ComposeSegment =
   | { type: 'text'; value: string }
   | { type: 'ref'; ref: ComposeRef; raw: string };
 
 /** Splits composer/bubble text into plain-text runs and decoded ref tokens.
- *  A marker that fails to parse (hand-edited, truncated by a paste) degrades
- *  to plain text rather than throwing — never crash a render over a mangled
- *  marker. */
+ *  A marker that fails to parse (hand-edited, truncated by a paste, or one
+ *  whose quoted text happens to contain a raw ⦃/⦄) degrades to plain text
+ *  rather than throwing — never crash a render over a mangled marker. */
 export function splitComposeRefs(text: string): ComposeSegment[] {
   const parts: ComposeSegment[] = [];
   let last = 0;
   for (const m of text.matchAll(MARKER_RE)) {
     const start = m.index ?? 0;
     if (start > last) parts.push({ type: 'text', value: text.slice(last, start) });
-    try {
-      const ref = JSON.parse(decodeURIComponent(m[1])) as ComposeRef;
-      parts.push({ type: 'ref', ref, raw: m[0] });
-    } catch {
-      parts.push({ type: 'text', value: m[0] });
-    }
+    const ref = decodeRefPayload(m[1]);
+    if (ref) parts.push({ type: 'ref', ref, raw: m[0] });
+    else parts.push({ type: 'text', value: m[0] });
     last = start + m[0].length;
   }
   if (last < text.length) parts.push({ type: 'text', value: text.slice(last) });
