@@ -6,11 +6,12 @@
 // tests/fixtures/doc-comments/make-xlsx-fixture.mjs (see that file's header
 // for exactly how and why, including the exceljs value-less-cell limitation
 // that shaped the fixture's own cell choices) — a real workbook exceljs
-// itself wrote, with three real Notes across two sheets.
+// itself wrote, with eight real Notes across two sheets.
 import { describe, it, expect } from 'vitest';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { readXlsxComments } from '../src/main/doc-comments/xlsx-comments';
+import { buildDeclaredOversizeZip } from './fixtures/doc-comments/oversized-zip';
 
 const FIXTURE = join(__dirname, 'fixtures', 'doc-comments', 'q3-sales-by-rep.xlsx');
 
@@ -56,9 +57,10 @@ describe('xlsx-comments — multi-sheet cell targeting', () => {
     const result = await readXlsxComments(bytes, 'reports/q3-sales-by-rep.xlsx');
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // Three real notes total, spread across both sheets — a reader that only
-    // looked at worksheet 0 would report just one.
-    expect(result.comments).toHaveLength(3);
+    // Eight real notes total, spread across both sheets (B2/B18/B19/B20 on
+    // Q3, B4/B5/B6/B7 on By rep) — a reader that only looked at worksheet 0
+    // would report far fewer.
+    expect(result.comments).toHaveLength(8);
   });
 });
 
@@ -109,5 +111,99 @@ describe('xlsx-comments — not a valid workbook at all', () => {
   it('refuses honestly instead of throwing', async () => {
     const result = await readXlsxComments(Buffer.from('not a workbook'), 'reports/garbage.xlsx');
     expect(result).toEqual({ ok: false, error: 'invalid-xlsx' });
+  });
+});
+
+// Implementation-review F1 (major): a bordered, VALUE-LESS cell still has a
+// real note, but exceljs's `eachRow`/`eachCell` SKIP a value-less cell
+// unless `includeEmpty: true` is passed — the pre-fix reader silently missed
+// exactly this shape.
+describe('xlsx-comments — a bordered, value-less cell', () => {
+  it('finds its note (includeEmpty: true)', async () => {
+    const bytes = await loadFixture();
+    const result = await readXlsxComments(bytes, 'reports/q3-sales-by-rep.xlsx');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const note = result.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B18');
+    expect(note).toBeDefined();
+    expect(note?.author).toBe('person:Priya Shah');
+    expect(note?.text).toContain('Reserved for the September actuals');
+    expect(note?.resolved).toBe(false);
+  });
+});
+
+// Implementation-review F5 (major): a foreign note this app never wrote must
+// never lose its text, and must never be misattributed to whatever precedes
+// a colon that isn't shaped like this app's own "Name:" convention.
+describe('xlsx-comments — foreign notes this app did not write', () => {
+  it('keeps the full text of a colon-free note, with a neutral author', async () => {
+    const bytes = await loadFixture();
+    const result = await readXlsxComments(bytes, 'reports/q3-sales-by-rep.xlsx');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const note = result.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B19');
+    expect(note).toBeDefined();
+    expect(note?.author).toBe('person:Unknown');
+    expect(note?.text).toBe('Diego mentioned this figure needs a second look before the board meeting.');
+  });
+
+  it('does not misread a colon that is not this app’s own "Name:" convention', async () => {
+    const bytes = await loadFixture();
+    const result = await readXlsxComments(bytes, 'reports/q3-sales-by-rep.xlsx');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const note = result.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B20');
+    expect(note).toBeDefined();
+    // "Check this number" is not a name this app would have written (lowercase
+    // words follow the first) — the WHOLE line stays the comment's text.
+    expect(note?.author).toBe('person:Unknown');
+    expect(note?.text).toBe('Check this number: 42 seems low for August.');
+  });
+});
+
+// Implementation-review F4: the resolve marker changed shape (a readable
+// "✓ Resolved" line instead of a bracketed machine token), but the reader
+// must keep recognizing the OLD token too, and must never mistake a real
+// reply that happens to end with the same visible words — but no leading
+// zero-width space — for the marker.
+describe('xlsx-comments — the resolve marker, old and new', () => {
+  it('reads the legacy bracketed-token marker as resolved (backward compatibility)', async () => {
+    const bytes = await loadFixture();
+    const result = await readXlsxComments(bytes, 'reports/q3-sales-by-rep.xlsx');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const note = result.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B6');
+    expect(note).toBeDefined();
+    expect(note?.resolved).toBe(true);
+    expect(note?.replies[0].text).not.toContain('yc:resolved');
+  });
+
+  it('does NOT read a real reply ending in plain "✓ Resolved" (no ZWSP) as resolved', async () => {
+    const bytes = await loadFixture();
+    const result = await readXlsxComments(bytes, 'reports/q3-sales-by-rep.xlsx');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const note = result.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B7');
+    expect(note).toBeDefined();
+    expect(note?.resolved).toBe(false);
+    expect(note?.text).toBe('Following up next week. ✓ Resolved');
+  });
+});
+
+// Implementation-review F2 (major): a decompression-bomb-shaped archive must
+// be refused BEFORE exceljs ever gets to unzip it. `buildDeclaredOversizeZip`
+// builds a real, tiny zip whose central-directory metadata falsely declares
+// a huge uncompressed size for one entry — the actual compressed bytes stay
+// a few dozen bytes, so this test never allocates anywhere near the declared
+// size itself; it only proves the pre-scan trips on the declared metadata.
+describe('xlsx-comments — a decompression-bomb-shaped archive', () => {
+  it('refuses before handing the bytes to exceljs', async () => {
+    const bytes = await buildDeclaredOversizeZip(
+      { 'xl/workbook.xml': '<workbook/>', 'xl/worksheets/sheet1.xml': '<worksheet/>' },
+      'xl/worksheets/sheet1.xml',
+      500 * 1024 * 1024
+    );
+    const result = await readXlsxComments(bytes, 'reports/bomb.xlsx');
+    expect(result).toEqual({ ok: false, error: 'archive-too-large' });
   });
 });

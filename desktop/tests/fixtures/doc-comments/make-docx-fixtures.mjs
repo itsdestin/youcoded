@@ -1,16 +1,36 @@
 #!/usr/bin/env node
-// Generates the two REAL .docx fixtures T10's pinning tests read
+// Generates the REAL .docx fixtures T10's pinning tests read
 // (docs/active/specs/2026-09-26-doc-comments-build-design.md §3.2, §8 T10):
 //
-//   launch-brief.docx  — a real Word document with REAL comments.xml +
-//                         commentsExtended.xml parts: a resolved top-level
-//                         comment (w15:done="1") and a second top-level
-//                         comment with a reply thread (w15:paraIdParent),
-//                         exactly the two shapes T10's test list requires
-//                         ("w15:paraIdParent reply reconstruction").
-//   no-comments.docx   — a plain Word document with NO comments.xml part
-//                         at all, for T10's "a docx with no comments.xml
-//                         part doesn't crash" pinning test.
+//   launch-brief.docx    — a real Word document with REAL comments.xml +
+//                          commentsExtended.xml parts: a resolved top-level
+//                          comment (w15:done="1") and a second top-level
+//                          comment with a reply thread (w15:paraIdParent),
+//                          exactly the two shapes T10's test list requires
+//                          ("w15:paraIdParent reply reconstruction").
+//   no-comments.docx     — a plain Word document with NO comments.xml part
+//                          at all, for T10's "a docx with no comments.xml
+//                          part doesn't crash" pinning test.
+//   spanning-comment.docx — implementation-review F6: one comment range
+//                          split across MULTIPLE runs (formatting
+//                          boundaries) AND across TWO paragraphs, pinning
+//                          that `walkDocument` records the exact quote —
+//                          including the paragraph-break newline landing
+//                          inside it — rather than only the single-run,
+//                          single-paragraph shape every other fixture here
+//                          happens to use.
+//   deeply-nested.docx    — implementation-review F3: a comment whose
+//                          surrounding paragraph sits thousands of levels
+//                          deep inside nested `w:sdt`/`w:sdtContent`
+//                          wrappers. Pins that `walkDocument`'s iterative
+//                          walk finds it without overflowing the call
+//                          stack a naive recursive walk would have hit
+//                          (empirically confirmed elsewhere: a plain
+//                          recursive tree walk in this Node overflows well
+//                          under 5,000 levels) — while staying a genuinely
+//                          tiny file, because nesting depth costs only a
+//                          fixed number of bytes per level and is NOT
+//                          bounded by the F2 byte-size ceiling.
 //
 // Built by hand-assembling the same OOXML parts real Word/Google Docs write
 // (Content_Types, package rels, document rels, document.xml,
@@ -154,4 +174,89 @@ await writeDocx('no-comments.docx', {
     'B0000002',
     run('Nothing here has ever been commented on.')
   )}</w:body></w:document>`,
+});
+
+// ---------------------------------------------------------------------------
+// spanning-comment.docx — implementation-review F6: one comment range (id 5)
+// that starts mid-paragraph, is split across TWO separate runs ("first " /
+// "half "), crosses a paragraph boundary, and ends mid-SECOND-paragraph
+// (also split across two runs, "second " / "half."). The exact quoted text
+// is therefore "first half \nsecond half." — the embedded "\n" is the
+// paragraph break `walkDocument` appends between the two `<w:p>`s, landing
+// INSIDE the comment's own range because the range is still open when it's
+// appended. No other fixture in this file exercises a range that spans a
+// paragraph break or more than one run.
+// ---------------------------------------------------------------------------
+const SPANNING_PARA_ID = 'F0000001';
+const spanningBody = [
+  para(null, 'C0000001', run('Before the change: '), '<w:commentRangeStart w:id="5"/>', run('first '), run('half ')),
+  para(
+    null,
+    'C0000002',
+    run('second '),
+    run('half.'),
+    '<w:commentRangeEnd w:id="5"/>',
+    '<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="5"/></w:r>',
+    run(' After the note.')
+  ),
+].join('');
+
+const spanningCommentsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments ${W} ${W14}>${comment(
+  5,
+  'Priya Shah',
+  'PS',
+  '2026-09-26T09:00:00Z',
+  SPANNING_PARA_ID,
+  'Should this be one paragraph instead of two?'
+)}</w:comments>`;
+
+await writeDocx('spanning-comment.docx', {
+  contentTypesExtra: `<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>`,
+  documentRels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>`,
+  documentXml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document ${W} ${W14}><w:body>${spanningBody}</w:body></w:document>`,
+  extraParts: {
+    'word/comments.xml': spanningCommentsXml,
+  },
+});
+
+// ---------------------------------------------------------------------------
+// deeply-nested.docx — implementation-review F3: the commented paragraph
+// sits inside NESTING_DEPTH levels of nested `w:sdt`/`w:sdtContent` wrappers
+// (a real, if unusual, OOXML construct — Word's own "structured document
+// tag" content-control wrapper, which the schema allows nesting). A
+// recursive `visit()`-per-element walk would overflow the call stack long
+// before reaching this depth (confirmed empirically elsewhere: a plain
+// recursive tree walk in this Node overflows under 5,000 levels); the fixed
+// iterative walk has no such ceiling. Each nesting level costs only ~24
+// bytes, so this file stays tiny even at a depth chosen to be comfortably
+// past where a recursive walk would already have crashed.
+// ---------------------------------------------------------------------------
+const NESTING_DEPTH = 8000;
+const deepCommentText = 'A comment buried very deep in the document tree.';
+let deepBody = para('Heading2', 'D0000001', commented(9, deepCommentText));
+{
+  let open = '';
+  let close = '';
+  for (let i = 0; i < NESTING_DEPTH; i++) {
+    open += '<w:sdt><w:sdtContent>';
+    close += '</w:sdtContent></w:sdt>';
+  }
+  deepBody = open + deepBody + close;
+}
+
+const deepCommentsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments ${W} ${W14}>${comment(9, 'Priya Shah', 'PS', '2026-09-26T09:10:00Z', 'F0000009', deepCommentText)}</w:comments>`;
+
+await writeDocx('deeply-nested.docx', {
+  contentTypesExtra: `<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>`,
+  documentRels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>`,
+  documentXml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document ${W} ${W14}><w:body>${deepBody}</w:body></w:document>`,
+  extraParts: {
+    'word/comments.xml': deepCommentsXml,
+  },
 });

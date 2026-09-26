@@ -45,12 +45,19 @@ import type {
   CommentSelector,
   PersistedComment,
 } from '../../shared/doc-comments-types';
+import { checkNamedEntriesWithinCeiling } from './zip-size-guard';
 
 // Not exported: nothing outside this module needs the error union by name
 // (knip flags an exported type nothing ever imports as dead code — same
 // convention doc-comments-store.ts's own `DocCommentsError` already uses).
 // Callers only need the shape of `DocxReadResult`, which IS exported.
-type DocxReadError = 'invalid-docx' | 'missing-document-part';
+//
+// 'archive-too-large' (implementation-review F2 — major): refused BEFORE any
+// entry is decompressed, when word/document.xml, word/comments.xml, or
+// word/commentsExtended.xml declares an implausibly large uncompressed size —
+// see zip-size-guard.ts for why this check is possible cheaply and what it
+// actually guards against.
+type DocxReadError = 'invalid-docx' | 'missing-document-part' | 'archive-too-large';
 export type DocxReadResult = { ok: true; comments: PersistedComment[] } | { ok: false; error: DocxReadError };
 
 // ~32 chars, per §1.1's TextQuoteSelector doc comment ("~32 chars before,
@@ -101,6 +108,22 @@ interface RangeInfo {
   end: number;
 }
 
+/** One stack frame in `walkDocument`'s iterative walk: an element whose
+ *  element-children we're partway through visiting. */
+interface WalkFrame {
+  el: Element;
+  children: Element[];
+  idx: number;
+}
+
+function elementChildren(el: Element): Element[] {
+  const out: Element[] = [];
+  for (const child of Array.from(el.childNodes)) {
+    if (child.nodeType === 1 /* ELEMENT_NODE */) out.push(child as unknown as Element);
+  }
+  return out;
+}
+
 /**
  * Walks `<w:body>` in document order, building the same kind of flat text a
  * text-only viewer would render (§3.2: "Word's own range becomes the anchor
@@ -117,41 +140,63 @@ interface RangeInfo {
  * `w15:paraId` — that identifier only exists on `<w:p>` elements inside
  * comments.xml, and only commentsExtended.xml's `w15:commentEx` entries key
  * off it).
+ *
+ * F3 (implementation review, major): this walk is ITERATIVE, with an
+ * explicit stack, rather than a recursive `visit()` call per element (the
+ * original shape). A recursive walk's call-stack depth grows with the DOM's
+ * NESTING depth, not its byte size — a document.xml that nests an element
+ * (e.g. `w:sdt`/`w:sdtContent`) thousands of levels deep costs only ~20
+ * bytes per level, so it can sit comfortably under zip-size-guard.ts's F2
+ * byte-size ceiling while still being deep enough to overflow a recursive
+ * call stack. F2's ceiling therefore does NOT bound recursion depth — it
+ * bounds total bytes read, and by extension the total amount of synchronous
+ * WORK this walk does (each element is visited once, so total work is
+ * linear in element count, which the byte ceiling does cap). Depth itself
+ * needed a structural fix, not a bigger or smarter limit: an explicit stack
+ * lives on the heap, so it has no call-stack ceiling to hit regardless of
+ * how deep the document nests — F2's size ceiling remains what bounds how
+ * much synchronous work one call to this function can demand.
  */
 function walkDocument(doc: Document): { fullText: string; ranges: Map<string, RangeInfo> } {
   const ranges = new Map<string, RangeInfo>();
   let fullText = '';
-  const body = doc.getElementsByTagName('w:body')[0];
+  const body = doc.getElementsByTagName('w:body')[0] as unknown as Element | undefined;
   if (!body) return { fullText, ranges };
 
-  function visit(node: Element): void {
-    for (const child of Array.from(node.childNodes)) {
-      if (child.nodeType !== 1 /* ELEMENT_NODE */) continue;
-      const el = child as unknown as Element;
-      const tag = el.tagName;
-      if (tag === 'w:t') {
-        fullText += el.textContent ?? '';
-      } else if (tag === 'w:tab') {
-        fullText += '\t';
-      } else if (tag === 'w:br' || tag === 'w:cr') {
-        fullText += '\n';
-      } else if (tag === 'w:commentRangeStart') {
-        const id = el.getAttribute('w:id');
-        if (id !== null) ranges.set(id, { start: fullText.length, end: fullText.length });
-      } else if (tag === 'w:commentRangeEnd') {
-        const id = el.getAttribute('w:id');
-        if (id !== null) {
-          const existing = ranges.get(id);
-          if (existing) existing.end = fullText.length;
-        }
-      }
-      visit(el);
-      // A paragraph break, appended AFTER recursing into the paragraph's own
-      // children so text inside it lands before the break.
-      if (tag === 'w:p') fullText += '\n';
+  const stack: WalkFrame[] = [{ el: body, children: elementChildren(body), idx: 0 }];
+
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame.idx >= frame.children.length) {
+      // Every child of this element has been visited — the post-order step,
+      // mirroring the old recursive code's "append \n after the recursive
+      // call returns" for a paragraph.
+      if (frame.el.tagName === 'w:p') fullText += '\n';
+      stack.pop();
+      continue;
     }
+    const el = frame.children[frame.idx++];
+    const tag = el.tagName;
+    if (tag === 'w:t') {
+      fullText += el.textContent ?? '';
+    } else if (tag === 'w:tab') {
+      fullText += '\t';
+    } else if (tag === 'w:br' || tag === 'w:cr') {
+      fullText += '\n';
+    } else if (tag === 'w:commentRangeStart') {
+      const id = el.getAttribute('w:id');
+      if (id !== null) ranges.set(id, { start: fullText.length, end: fullText.length });
+    } else if (tag === 'w:commentRangeEnd') {
+      const id = el.getAttribute('w:id');
+      if (id !== null) {
+        const existing = ranges.get(id);
+        if (existing) existing.end = fullText.length;
+      }
+    }
+    // Descend into this element's own children next (pre-order for this
+    // element's own tag handling above, matching the old `visit(el)` call).
+    stack.push({ el, children: elementChildren(el), idx: 0 });
   }
-  visit(body as unknown as Element);
   return { fullText, ranges };
 }
 
@@ -267,6 +312,18 @@ export async function readDocxComments(bytes: Uint8Array | Buffer, path: string)
     return { ok: false, error: 'missing-document-part' };
   }
   const extendedFile = zip.file('word/commentsExtended.xml');
+
+  // F2 (major): refuse a decompression-bomb-shaped archive BEFORE spending
+  // any CPU/memory decompressing it — checked against the central-directory
+  // metadata `loadAsync` already parsed, never against actually-decompressed
+  // bytes (zip-size-guard.ts).
+  const sizeCheck = checkNamedEntriesWithinCeiling(zip, [
+    'word/comments.xml',
+    'word/document.xml',
+    'word/commentsExtended.xml',
+  ]);
+  if (!sizeCheck.ok) return { ok: false, error: sizeCheck.error };
+
   const [commentsXml, documentXml, extendedXml] = await Promise.all([
     commentsFile.async('string'),
     documentFile.async('string'),
