@@ -19,10 +19,12 @@
 import type { ScreenEntry } from './types';
 import { SETTINGS } from './settings';
 import { CHAT } from './chat';
+import { MARKETPLACE } from './marketplace';
 
 export type { ScreenEntry } from './types';
 
 export const SCREENS: readonly ScreenEntry[] = [
   ...SETTINGS,
   ...CHAT,
+  ...MARKETPLACE,
 ];

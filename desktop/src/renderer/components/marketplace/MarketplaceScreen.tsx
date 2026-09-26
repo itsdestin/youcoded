@@ -28,7 +28,7 @@ import { useCurrentPlatform } from "../../state/platform";
 import { platformDisplayName, platformListDisplay } from "../../../shared/platform-display";
 import type { SkillEntry, IntegrationEntry, IntegrationState } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
-import { ScreenMark } from '../../shoot-mode';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 // Integrations carry their catalog metadata plus live installed/connected state.
 // Previously lived in IntegrationCard.tsx; moved inline when the dedicated
@@ -69,6 +69,13 @@ export default function MarketplaceScreen({
     return f;
   });
   const [detail, setDetail] = useState<DetailTarget | null>(null);
+  // Photo-only build: `shoot` opens a tab, a search, or a detail by name. Fixture ids from the
+  // practice marketplace: the civic-report skill and the meadow-mist theme.
+  useScreenOpen('marketplace/skills', () => setFilter({ ...emptyFilter(), type: 'plugin' }));
+  useScreenOpen('marketplace/themes', () => setFilter({ ...emptyFilter(), type: 'theme' }));
+  useScreenOpen('marketplace/search', () => setFilter({ ...emptyFilter(), query: 'civic' }));
+  useScreenOpen('marketplace/detail', () => setDetail({ kind: 'skill', id: 'civic-report' }));
+  useScreenOpen('marketplace/theme-detail', () => setDetail({ kind: 'theme', slug: 'meadow-mist' }));
   const [integrations, setIntegrations] = useState<IntegrationCardItem[]>([]);
   // Integration click-to-expand — mirrors the plugin detail-overlay pattern
   // but renders IntegrationDetailOverlay (below) because integrations aren't
@@ -384,7 +391,11 @@ export default function MarketplaceScreen({
 
   return (
     <div className="fixed inset-0 z-40">
-      <ScreenMark name="marketplace" />
+      {/* Marked once the catalog has loaded, so a picture never shows the spinner. */}
+      {!mp.loading && <ScreenMark name="marketplace" />}
+      {!mp.loading && !filter.query && filter.type === 'plugin' && <ScreenMark name="marketplace/skills" />}
+      {!mp.loading && !filter.query && filter.type === 'theme' && <ScreenMark name="marketplace/themes" />}
+      {!mp.loading && filter.query.trim() !== '' && <ScreenMark name="marketplace/search" />}
       {/* Pre-blurred wallpaper as a non-scrolling backdrop. Absolute-positioned
           inside the FIXED outer wrapper (not the inner scroll container) so it
           stays pinned to the viewport while content scrolls over it. */}
