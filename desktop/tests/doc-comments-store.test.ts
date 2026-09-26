@@ -4,7 +4,12 @@
 // just the root, so a symlink inside the project can't dodge it), and its
 // lock-path canonicalization (review 2 F3 — the project root only, never a
 // possibly-nonexistent leaf, so a first-ever write's lock is still stable
-// across two aliases of the same project).
+// across two aliases of the same project). Also pins the commit a219ab9dd
+// implementation-review fixes: F1's `rel` now comes from the resolved,
+// containment-verified target (never the unresolved path, which could carry
+// stray `..` through an outside-rooted symlink); F3's corrupt/unsupported-
+// version sidecar refusal; F4's absolute-path requirement on the fallback
+// path; and F5's walk-up depth cap.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
@@ -169,6 +174,53 @@ describe('fallback path for a file with no project root', () => {
     const projectSidecar = path.join(root, '.youcoded', 'comments', 'standalone.md.json');
     await expect(fs.promises.access(projectSidecar)).rejects.toThrow();
   });
+
+  it('refuses a relative path with no projectRoot instead of resolving it against the process cwd (F4)', async () => {
+    // path.resolve('relative/path') with no base resolves against
+    // process.cwd() — never a caller-meaningful directory in the fallback
+    // case, since there is no root to resolve against by design (§1.4).
+    const result = await addComment({ path: 'relative/standalone.md', selector: TEXT_SELECTOR, text: 'x', author: 'user' });
+    expect(result).toEqual({ ok: false, error: 'path-not-absolute' });
+  });
+});
+
+describe('corrupt or unsupported-version sidecar (F3)', () => {
+  it('listComments refuses a sidecar with invalid JSON instead of throwing', async () => {
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'broken.md.json');
+    await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.promises.writeFile(sidecarPath, '{ not valid json');
+
+    await expect(listComments({ path: 'docs/broken.md', projectRoot: root })).resolves.toEqual({
+      ok: false,
+      error: 'sidecar-corrupt',
+    });
+  });
+
+  it('listComments refuses a sidecar with an unsupported/missing version instead of treating it as valid', async () => {
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'future.md.json');
+    await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.promises.writeFile(sidecarPath, JSON.stringify({ version: 2, comments: [] }));
+
+    await expect(listComments({ path: 'docs/future.md', projectRoot: root })).resolves.toEqual({
+      ok: false,
+      error: 'sidecar-corrupt',
+    });
+  });
+
+  it('a mutation against a corrupt sidecar refuses without writing anything', async () => {
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'broken2.md.json');
+    await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.promises.writeFile(sidecarPath, 'not json at all');
+    const before = await fs.promises.readFile(sidecarPath, 'utf8');
+
+    const result = await addComment({ path: 'docs/broken2.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'x', author: 'user' });
+    expect(result).toEqual({ ok: false, error: 'sidecar-corrupt' });
+
+    // The mutation must never have touched the file — refusing means refusing,
+    // not repairing it into a fresh empty sidecar and losing whatever was there.
+    const after = await fs.promises.readFile(sidecarPath, 'utf8');
+    expect(after).toBe(before);
+  });
 });
 
 describe('path containment refusal', () => {
@@ -218,6 +270,57 @@ describe('path containment refusal', () => {
   it('an ordinary in-project path is unaffected by the containment check', async () => {
     const result = await addComment({ path: 'src/app.ts', projectRoot: root, selector: TEXT_SELECTOR, text: 'x', author: 'user' });
     expect(result.ok).toBe(true);
+  });
+
+  it('a symlink OUTSIDE the project that points back INSIDE it cannot push the sidecar out of .youcoded/comments (F1)', async () => {
+    // Review F1 (blocker): the old code passed containment (the REAL target
+    // is inside the project) but then computed `rel` from the UNRESOLVED
+    // path, which still contained the `..` segments used to walk OUT to the
+    // symlink before it led back IN — joining that onto the project root put
+    // the sidecar outside `.youcoded/comments`. Shape from the finding:
+    // project `/x/work/myproject`, symlink `/x/linked -> .../myproject/subdir`,
+    // argument `../linked/file.md`.
+    const subdir = path.join(root, 'subdir');
+    await fs.promises.mkdir(subdir);
+    await fs.promises.writeFile(path.join(subdir, 'file.md'), 'hello');
+
+    const outsideLink = path.join(os.tmpdir(), `ycd-doc-comments-linked-${process.pid}`);
+    try {
+      await fs.promises.symlink(subdir, outsideLink, 'dir');
+    } catch {
+      return; // no symlink rights on this platform — skip
+    }
+    try {
+      // One '..' from `root` reaches its parent (os.tmpdir(), where mkdtemp
+      // put `root`), then into the outside symlink, then back down to the
+      // real file — the string path never looks like it stays in-project.
+      const relPath = path.join('..', path.basename(outsideLink), 'file.md');
+      const result = await addComment({ path: relPath, projectRoot: root, selector: TEXT_SELECTOR, text: 'via-symlink', author: 'user' });
+      expect(result.ok).toBe(true);
+
+      // The sidecar must land under <realProjectRoot>/.youcoded/comments —
+      // never outside it, and never outside the project root entirely.
+      const realRoot = await fs.promises.realpath(root);
+      const commentsDir = path.join(realRoot, '.youcoded', 'comments') + path.sep;
+      const expectedSidecar = path.join(realRoot, '.youcoded', 'comments', 'subdir', 'file.md.json');
+      expect(expectedSidecar.startsWith(commentsDir)).toBe(true);
+      const onDisk = await readSidecar(expectedSidecar);
+      expect(onDisk.comments).toHaveLength(1);
+      expect(onDisk.comments[0].text).toBe('via-symlink');
+    } finally {
+      await fs.promises.rm(outsideLink, { force: true });
+    }
+  });
+});
+
+describe('walk-up depth cap (F5)', () => {
+  it('refuses a path whose non-existent ancestor chain exceeds the walk-up cap, instead of walking forever', async () => {
+    // 250 non-existent nested segments — comfortably past any sane cap. This
+    // must refuse cleanly (fail closed, matching every other "can't verify
+    // containment" case), never hang or throw.
+    const deepRel = path.join(...Array.from({ length: 250 }, (_, i) => `level${i}`), 'file.md');
+    const result = await addComment({ path: deepRel, projectRoot: root, selector: TEXT_SELECTOR, text: 'x', author: 'user' });
+    expect(result).toEqual({ ok: false, error: 'path-outside-project' });
   });
 });
 

@@ -34,7 +34,15 @@ const FALLBACK_DIR = ['.youcoded', 'loose-file-comments'];
 // `Refusal`, which IS exported below) — knip counts a bare export nobody
 // imports as dead code (see doc-comments-store.ts's use of the same
 // convention on artifact-store.ts's private helpers).
-type DocCommentsError = 'path-outside-project' | 'lock-timeout' | 'comment-not-found';
+// 'sidecar-corrupt' and 'path-not-absolute' added post-review (F3, F4 — see
+// their fix sites below) — both are refusals a caller can surface honestly,
+// same as the three that shipped with T1.
+type DocCommentsError =
+  | 'path-outside-project'
+  | 'lock-timeout'
+  | 'comment-not-found'
+  | 'sidecar-corrupt'
+  | 'path-not-absolute';
 
 /** A refusal shared by every entry point below — a typed error the caller
  *  surfaces honestly (§1.5), never a silent clamp or a thrown exception. */
@@ -52,8 +60,19 @@ export type Refusal = { ok: false; error: DocCommentsError };
  * — write-authorization.ts's `judgeRelativeRecord()` fails closed on ENOENT
  * instead (review 2, F1), and this mirrors that.
  *
- * Returns null only when even the filesystem root can't be realpathed.
+ * Returns null when even the filesystem root can't be realpathed, OR when
+ * the walk-up exceeds `MAX_WALKUP_DEPTH` (review F5) — a `path`/`projectRoot`
+ * argument is model-controlled input (§1.5), and without a cap a
+ * pathologically deep non-existent chain (e.g. hundreds of `a/b/c/...`
+ * segments that don't exist) would cost one `fs.realpath` call per level with
+ * no bound. Every caller already treats null as "can't verify, refuse" —
+ * `checkContainment` fails closed, `locateFallback` falls back to the
+ * unresolved path (its documented, non-security-critical degraded case) — so
+ * capping here fails the same honest way the codebase already fails on a
+ * plain ENOENT-to-root, never a silent clamp or an unbounded loop.
  */
+const MAX_WALKUP_DEPTH = 200;
+
 async function realpathWithNonexistentTail(targetAbs: string): Promise<string | null> {
   try {
     return await fs.realpath(targetAbs);
@@ -62,7 +81,7 @@ async function realpathWithNonexistentTail(targetAbs: string): Promise<string | 
   }
   const segments: string[] = [];
   let dir = targetAbs;
-  for (;;) {
+  for (let depth = 0; depth < MAX_WALKUP_DEPTH; depth++) {
     const parent = path.dirname(dir);
     if (parent === dir) return null; // hit the filesystem root; nothing exists
     segments.unshift(path.basename(dir));
@@ -74,6 +93,7 @@ async function realpathWithNonexistentTail(targetAbs: string): Promise<string | 
       dir = parent;
     }
   }
+  return null; // exceeded the cap — refuse rather than keep walking
 }
 
 /**
@@ -85,12 +105,20 @@ async function realpathWithNonexistentTail(targetAbs: string): Promise<string | 
  * the weaker one, which would let a symlink INSIDE the project (a
  * `notes.md` -> `~/.ssh/config`) dodge containment, since readFile/writeFile
  * follow symlinks regardless of what the unresolved path claims to be.
+ *
+ * Returns the resolved, verified-contained path itself (not just a boolean) —
+ * `locateInProject` below builds the sidecar's relative suffix from THIS
+ * value (post-review F1), never from the caller's unresolved `abs`, so a
+ * symlink OUTSIDE the project that happens to point back INSIDE it (e.g. a
+ * `../../../linked/file.md`-shaped path through a symlink rooted elsewhere)
+ * can no longer leave stray `..` segments in the relative suffix once
+ * containment has already proven the real target is inside the root.
  */
-async function checkContainment(realProjectRoot: string, abs: string): Promise<boolean> {
+async function checkContainment(realProjectRoot: string, abs: string): Promise<string | null> {
   const realAbs = await realpathWithNonexistentTail(abs);
-  if (realAbs === null) return false;
+  if (realAbs === null) return null;
   const withSep = realProjectRoot.endsWith(path.sep) ? realProjectRoot : realProjectRoot + path.sep;
-  return realAbs === realProjectRoot || realAbs.startsWith(withSep);
+  return realAbs === realProjectRoot || realAbs.startsWith(withSep) ? realAbs : null;
 }
 
 interface Located {
@@ -106,18 +134,27 @@ interface Located {
  * and gets refused the same way) or a symlink.
  *
  * WHY the returned `sidecarPath` is built from `realProjectRoot` plus the
- * UNRESOLVED relative suffix, rather than from `checkContainment`'s own
- * fully-resolved path: review 2 (F3) found that realpathing the LEAF sidecar
- * path (for lock-path purposes) throws ENOENT on a file's first-ever comment
- * — the single most common case — and both racing writers then fell through
- * to a non-canonical path, silently reopening the alias trap the
- * canonicalization existed to close. Canonicalizing the project root only
- * (it always exists — this is an open project) and joining the relative
- * suffix gives every caller — this process's next call, a second YouCoded
- * instance, the MCP script (§9) — the SAME stable path whether or not the
- * sidecar exists yet, and that same path is what mutateFileUnderLock below
- * derives its lock name from (`sidecarPath + '.lock'`), so two processes
- * agreeing on `sidecarPath` is what actually excludes them from each other.
+ * relative suffix of the RESOLVED, containment-verified target (`checkContainment`'s
+ * return value — post-review F1), never from the caller's unresolved `abs`:
+ * a path that escapes the project and comes back in through a symlink rooted
+ * OUTSIDE it (project `/x/work/myproject`, symlink `/x/linked ->
+ * /x/work/myproject/subdir`, argument `../../../linked/file.md`) passes
+ * containment because the REAL target is inside the root, but the unresolved
+ * `abs` still contains the `..` segments that walked out to `/x/linked` —
+ * joining THAT onto `realProjectRoot` put the sidecar outside
+ * `.youcoded/comments`, sometimes outside the project entirely. Deriving
+ * `rel` from the already-resolved, already-verified-contained path instead
+ * means it can never carry a leading `..`: the value is either exactly
+ * `realProjectRoot`, or a real descendant of it that `path.relative` can only
+ * express as clean forward segments (this is the same fix shape a regression
+ * test at the bottom of the test file pins).
+ *
+ * This is a separate concern from lock-path canonicalization (review 2, F3):
+ * `sidecarPath` itself is still never realpathed here (that would ENOENT on a
+ * file's first-ever comment, the bug F3 fixed) — only the SOURCE FILE being
+ * commented on is resolved, and it — unlike the sidecar we're about to create
+ * — is expected to already exist (or `realpathWithNonexistentTail`'s walk-up
+ * covers the rest), so this never reopens F3's trap.
  */
 async function locateInProject(projectRoot: string, filePath: string): Promise<Located | { ok: false; error: 'path-outside-project' }> {
   let realProjectRoot: string;
@@ -127,10 +164,11 @@ async function locateInProject(projectRoot: string, filePath: string): Promise<L
     return { ok: false, error: 'path-outside-project' };
   }
   const abs = path.resolve(realProjectRoot, filePath);
-  if (!(await checkContainment(realProjectRoot, abs))) {
+  const realAbs = await checkContainment(realProjectRoot, abs);
+  if (realAbs === null) {
     return { ok: false, error: 'path-outside-project' };
   }
-  const rel = path.relative(realProjectRoot, abs);
+  const rel = path.relative(realProjectRoot, realAbs);
   const sidecarPath = path.join(realProjectRoot, ...SIDECAR_DIR, `${rel}.json`);
   return { sidecarPath };
 }
@@ -144,33 +182,72 @@ async function locateInProject(projectRoot: string, filePath: string): Promise<L
  * path changes, the same accepted limitation `useMissingArtifacts.ts` already
  * has at the artifact level. No containment check applies here: there is no
  * root to escape, only a hash of wherever the caller says the file is.
+ *
+ * WHY an absolute path is required (F4): `path.resolve(absoluteFilePath)`
+ * with no second argument resolves a RELATIVE input against `process.cwd()`
+ * — this main process's cwd, not any caller-meaningful directory — so a
+ * relative `path` here would silently hash a location the caller never
+ * specified, and that hash would drift with whatever the process's cwd
+ * happened to be that launch. There is no root to resolve a relative path
+ * against in the fallback case (that's the whole reason it's the fallback),
+ * so a non-absolute `path` is refused rather than guessed.
  */
-async function locateFallback(absoluteFilePath: string): Promise<string> {
+async function locateFallback(absoluteFilePath: string): Promise<{ ok: true; sidecarPath: string } | Refusal> {
+  if (!path.isAbsolute(absoluteFilePath)) {
+    return { ok: false, error: 'path-not-absolute' };
+  }
   const abs = path.resolve(absoluteFilePath);
   const resolved = (await realpathWithNonexistentTail(abs)) ?? abs;
   const hash = createHash('sha256').update(resolved).digest('hex');
-  return path.join(os.homedir(), ...FALLBACK_DIR, `${hash}.json`);
+  return { ok: true, sidecarPath: path.join(os.homedir(), ...FALLBACK_DIR, `${hash}.json`) };
 }
 
 async function resolveSidecarPath(args: {
   path: string;
   projectRoot?: string;
-}): Promise<{ ok: true; sidecarPath: string } | { ok: false; error: 'path-outside-project' }> {
+}): Promise<{ ok: true; sidecarPath: string } | Refusal> {
   if (args.projectRoot) {
     const located = await locateInProject(args.projectRoot, args.path);
     if ('error' in located) return located;
     return { ok: true, sidecarPath: located.sidecarPath };
   }
-  return { ok: true, sidecarPath: await locateFallback(args.path) };
+  return locateFallback(args.path);
 }
 
 function emptySidecar(): CommentsSidecarFile {
   return { version: 1, comments: [] };
 }
 
-function parseSidecar(onDisk: string | null): CommentsSidecarFile {
-  if (onDisk === null) return emptySidecar();
-  return JSON.parse(onDisk) as CommentsSidecarFile;
+/**
+ * WHY this returns a typed refusal instead of letting `JSON.parse` throw
+ * (F3): every sidecar is read on a path a click or IPC call reaches (a GET in
+ * `listComments`, or inside the mutation lock in `mutateSidecar`) — an
+ * uncaught throw there would surface as an unhandled main-process rejection,
+ * not the honest, typed error the rest of this module already returns for
+ * every other failure mode (§1.5). A hand-edited or half-written (pre-`fsync`
+ * torn write, or a future version this build predates) sidecar is refused the
+ * same way a corrupt one is: neither case is safe to guess at, and both are
+ * rare enough that a caller surfacing "this file's comments are unreadable"
+ * is the right outcome, not a crash and not silently discarding history by
+ * treating it as empty.
+ */
+function parseSidecar(onDisk: string | null): { ok: true; file: CommentsSidecarFile } | Refusal {
+  if (onDisk === null) return { ok: true, file: emptySidecar() };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(onDisk);
+  } catch {
+    return { ok: false, error: 'sidecar-corrupt' };
+  }
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    (parsed as { version?: unknown }).version !== 1 ||
+    !Array.isArray((parsed as { comments?: unknown }).comments)
+  ) {
+    return { ok: false, error: 'sidecar-corrupt' };
+  }
+  return { ok: true, file: parsed as CommentsSidecarFile };
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +271,9 @@ export async function listComments(args: {
     if (e.code === 'ENOENT') return { ok: true, comments: [] };
     throw e;
   }
-  return { ok: true, comments: parseSidecar(raw).comments };
+  const parsed = parseSidecar(raw);
+  if (!parsed.ok) return parsed;
+  return { ok: true, comments: parsed.file.comments };
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +295,18 @@ export async function listComments(args: {
  *  `Record<string, never>`-shaped placeholder, which would make `{ok:true} &
  *  Extra` an uninhabitable type (the `ok` property itself would have to
  *  satisfy an index signature of `never`). */
+// F2 (minor, inherited from cas-write.ts, left as-is): mutateFileUnderLock
+// unconditionally `fs.mkdir(dirname(target), { recursive: true })`s before
+// acquiring the lock, so a failed lookup (e.g. replyToComment against a
+// comment id that was never added, on a path with no sidecar yet) leaves
+// behind an empty `.youcoded/comments/<dirs>/` chain even though `apply`
+// returns 'not-found' and no sidecar file is ever written. Not fixed here:
+// `mutateFileUnderLock` is a shared primitive other callers (the artifacts
+// central index) also depend on, so changing its mkdir timing is out of this
+// task's scope; and pre-checking existence in THIS module before calling it
+// would just duplicate the lock's own existence check outside the lock,
+// reopening a TOCTOU race the lock exists to close. An empty directory is
+// harmless (gitignored under `.youcoded/`, no data in it) — noted, not fixed.
 async function mutateSidecar<Extra extends Record<string, unknown>>(
   sidecarPath: string,
   apply: (file: CommentsSidecarFile) => { file: CommentsSidecarFile; extra: Extra } | 'not-found'
@@ -226,8 +317,16 @@ async function mutateSidecar<Extra extends Record<string, unknown>>(
   // assignments and would report this as always `null` after the `await`.
   const box: { outcome: (({ ok: true } & Extra) | Refusal) | null } = { outcome: null };
   const acquired = await mutateFileUnderLock(sidecarPath, (onDisk) => {
-    const current = parseSidecar(onDisk);
-    const applied = apply(current);
+    // F3: a corrupt/unsupported-version sidecar refuses here too, inside the
+    // lock, same as a real 'not-found' — never falls through to `apply` with
+    // a bogus empty file, which would silently discard whatever couldn't be
+    // parsed the moment any mutation next touched this path.
+    const parsed = parseSidecar(onDisk);
+    if (!parsed.ok) {
+      box.outcome = parsed;
+      return null;
+    }
+    const applied = apply(parsed.file);
     if (applied === 'not-found') {
       box.outcome = { ok: false, error: 'comment-not-found' };
       return null;
