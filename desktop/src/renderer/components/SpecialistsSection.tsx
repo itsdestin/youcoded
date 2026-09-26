@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { SpecialistDefinitionView, DelegatedModelsView, SpecialistsListResult } from '../../shared/types';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
-import { Button, EmptyState, ErrorState, FieldError, LoadingState, SectionLabel } from './ui';
+import { Button, Callout, EmptyState, ErrorState, FieldError, LoadingState, Pill, SectionLabel } from './ui';
 import type { ExplainerSection } from './SettingsExplainer';
 import { refreshSpecialistRoster, useSpecialistRoster, provenanceWithinGroup, NOT_IMPLEMENTED_ON_MOBILE } from '../hooks/useSpecialists';
 import { AUTOMATIC_SPECIALIST_MODEL_COPY, SPECIALIST_DEFAULTS_CHANGED_EVENT } from './SpecialistModelUnavailable';
@@ -192,12 +192,20 @@ export default function SpecialistsSection({ cwd }: {
   const warningCount = definitions.reduce((n, d) => n + d.warnings.length, 0);
 
   return (
-    <section className="space-y-5">
+    // space-y-4: the guide's 16px between groups (fix batch 2; was 20px, off
+    // the 4·8·12·16·24 scale).
+    <section className="space-y-4">
       {/* ── 1. Models for specialists ─────────────────────────────────────── */}
       {/* Destin's copy (workbench pass): the panel opens by saying what this
           screen is for and pointing at the ⓘ for the long version, so neither
-          block below has to carry an explainer of its own. */}
-      <p className="text-2xs text-fg-dim leading-relaxed">
+          block below has to carry an explainer of its own.
+          WHY -mt-2 (fix batch 2, 2026-09-26): this is the "Specialists"
+          heading's own intro, so it sits 8px under it (the scale's step for
+          things that belong together), not 16px. The page shell spaces every
+          block 16px apart, which is right between groups but read as a big gap
+          between a heading and its first line — Destin, B1-4: "the large gap
+          after the specialists header before the copy". */}
+      <p className="-mt-2 text-2xs text-fg-dim leading-relaxed">
         Your assistant may utilize “specialists” to help it accomplish some tasks. This menu allows you to configure which specialists your assistant has access to. Click the (i) above for additional information.
       </p>
 
@@ -257,10 +265,17 @@ export default function SpecialistsSection({ cwd }: {
 
       {/* ── 2. The roster ─────────────────────────────────────────────────── */}
       <div>
-        <SectionLabel className="mb-2">
-          Available specialists{roster.status === 'ready' ? ` · ${definitions.length}` : ''}
-          {warningCount ? ` · ${warningCount} warning${warningCount === 1 ? '' : 's'}` : ''}
-        </SectionLabel>
+        {/* WHY this shape (fix batch 2 — design guide "Text and numbers"): a
+            count beside a label is the word then a smaller, fainter number
+            ("Available specialists 7"), never "· 7 ·". The warnings are a
+            status, so they are the tinted pill ("1 warning"), not more text. */}
+        <div className="mb-2 flex items-center gap-2">
+          <SectionLabel>
+            Available specialists
+            {roster.status === 'ready' && <span className="ml-1.5 text-3xs font-normal text-fg-dim">{definitions.length}</span>}
+          </SectionLabel>
+          {warningCount > 0 && <Pill tone="warning">{warningCount} warning{warningCount === 1 ? '' : 's'}</Pill>}
+        </div>
         {/* Fix (UX review 1, U27): an empty padded div sat here above the first
             group and read as a missing row; the first group's top border now
             starts the card. */}
@@ -352,7 +367,9 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
           emptyLabel={loaded ? AUTOMATIC_SPECIALIST_MODEL_COPY : 'Loading models…'}
         />
         {value && (
-          <Button size="sm" variant="ghost" className="w-full" onClick={onClear} title={`Unset the ${tier} model`}>Clear</Button>
+          // Outlined, not bare text (fix batch 2 — decisions.md "Secondary
+          // buttons"/"Follow-up actions": never bare text as a button).
+          <Button size="sm" variant="secondary" className="w-full" onClick={onClear} title={`Unset the ${tier} model`}>Clear</Button>
         )}
       </div>
       {/* Destin (2026-09-15 review): the unset explanation belongs INSIDE the
@@ -385,14 +402,19 @@ function RosterRow({ d, folders }: { d: SpecialistDefinitionView; folders?: Spec
               same neutral styling as read-only — the words already say what the
               helper can do, and colouring one capability as a hazard made the
               list read as a warning rather than a roster. */}
-          <span className="text-4xs uppercase tracking-wide px-1 rounded border border-edge text-fg-muted">
-            {d.charter === 'read-write' ? (canShell ? 'can edit & run commands' : 'can edit files') : 'read-only'}
-          </span>
+          {/* WHY Pill (fix batch 2, 2026-09-26): the guide's tinted pill in
+              normal case ("Read-only", "Can edit & run commands") — these were
+              9px spaced-out capitals in a hairline box. Both capabilities keep
+              ONE tint (Destin's earlier call: colouring read-write as a hazard
+              made the roster read as a warning); only a real warning is amber. */}
+          <Pill tone="info">
+            {d.charter === 'read-write' ? (canShell ? 'Can edit & run commands' : 'Can edit files') : 'Read-only'}
+          </Pill>
           {d.modelPreference && d.modelPreference !== 'parent' && (
-            <span className="text-4xs uppercase tracking-wide px-1 rounded border border-edge text-fg-muted">prefers {d.modelPreference}</span>
+            <Pill tone="info">Prefers {d.modelPreference}</Pill>
           )}
           {d.warnings.length > 0 && (
-            <span className="text-4xs uppercase tracking-wide px-1 rounded border border-amber-700/40 text-amber-700">{d.warnings.length} warning{d.warnings.length === 1 ? '' : 's'}</span>
+            <Pill tone="warning">{d.warnings.length} warning{d.warnings.length === 1 ? '' : 's'}</Pill>
           )}
         </div>
         {/* Task 10: provenance — where this row's definition actually came
@@ -415,11 +437,18 @@ function RosterRow({ d, folders }: { d: SpecialistDefinitionView; folders?: Spec
         <div className="mt-1 pl-2 border-l-2 border-edge-dim space-y-1 text-2xs">
           <div className="text-fg-muted">Tools: <span className="text-fg-dim">{d.allowedTools.join(', ')}</span></div>
           {d.path && <div className="text-fg-muted">File: <span className="font-mono text-fg-dim break-all">{d.path}</span></div>}
-          {d.warnings.map((w, i) => <div key={i} className="text-amber-700">⚠ {w}</div>)}
         </div>
       )}
-      {!open && d.warnings.length > 0 && (
-        <div className="text-2xs text-amber-700 mt-0.5">⚠ {d.warnings[0]}</div>
+      {/* WHY a warning Callout inside the row (fix batch 2 — decisions.md
+          "Problem on a list item"): a warning about this specialist is the
+          shared tinted box inside its own row, text grey — it was amber text
+          with a ⚠. Closed: the first warning; open: all of them. */}
+      {d.warnings.length > 0 && (
+        <Callout tone="warning" className="mt-1.5">
+          {open
+            ? <ul className="space-y-0.5">{d.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+            : d.warnings[0]}
+        </Callout>
       )}
     </li>
   );
