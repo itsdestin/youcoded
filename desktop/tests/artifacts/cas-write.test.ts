@@ -60,10 +60,12 @@ describe('casWrite', () => {
   it('unlinks its temp file when the rename fails (no permanent orphan)', async () => {
     // A pid+time temp name is never overwritten by the next write, so a strand
     // from a failed rename (e.g. Windows AV EPERM) would linger forever unless
-    // the error path unlinks it.
+    // the error path unlinks it. The hold never lets go (mockRejectedValue, not
+    // …Once): on Windows renameReplacing retries a brief EPERM, so a one-shot
+    // hold would succeed there and never reach the error path this pins.
     const renameSpy = vi
       .spyOn(fsp, 'rename')
-      .mockRejectedValueOnce(Object.assign(new Error('EPERM: simulated AV hold'), { code: 'EPERM' }));
+      .mockRejectedValue(Object.assign(new Error('EPERM: simulated AV hold'), { code: 'EPERM' }));
     try {
       const target = join(dir, 'foo.json');
       await expect(casWrite(target, null, '{}')).rejects.toThrow('EPERM');
