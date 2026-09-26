@@ -52,7 +52,7 @@ export function CommentsPaneFrame({ path, children, frameRef }: Props) {
             the list's pb-28 lets the last card scroll clear of it. */}
         {actionsInPane && (
           <div className="absolute inset-x-2 bottom-2">
-            <CommentsFloatingActions path={path} withShowResolved={false} beforeSend={actionsInPane.beforeAsk} />
+            <CommentsFloatingActions path={path} beforeSend={actionsInPane.beforeAsk} />
           </div>
         )}
       </div>

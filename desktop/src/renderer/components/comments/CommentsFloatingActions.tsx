@@ -1,12 +1,11 @@
-// CommentsFloatingActions — Comments mode's two actions, "Show resolved" and
-// the one primary action for the whole view (G-4) "Ask Your Assistant",
-// which sends every OPEN comment as a batch.
+// CommentsFloatingActions — Comments mode's one primary action (G-4), "Ask
+// Your Assistant", which sends every OPEN comment as a batch. (Show Resolved
+// moved to the panel's title row in round 16 — CommentsPaneFrame.)
 //
-// Destin, round 5: "the 'ask assistant' and 'show resolved' buttons in the
-// comment pane shouldn't have a separate background/panel, they should float
-// over the same [comment] panel". They render in SessionDrawer's floating
-// bottom-right cluster, stacked above the Comments/Edit row, with no bar or
-// surface of their own. The icon is the
+// Destin, round 5: the buttons "shouldn't have a separate background/panel,
+// they should float over the same [comment] panel". It floats at the panel's
+// bottom — placed there by SessionDrawer in the file drawer, or by
+// CommentsPaneFrame itself on the Projects screen. The icon is the
 // "ask" sparkle the "Ask about this" menu row uses, so both ways of asking the
 // assistant about marked-up text share one glyph.
 import { Button } from '../ui/Button';
@@ -54,10 +53,8 @@ function useSendOpenComments(path: string, beforeSend?: () => void) {
   return { openCount: open.length, send };
 }
 
-export function CommentsFloatingActions({ path, withShowResolved = true, beforeSend }: { path: string; withShowResolved?: boolean; beforeSend?: () => void }) {
-  const { comments, showResolved, setShowResolved } = useDocComments(path);
+export function CommentsFloatingActions({ path, beforeSend }: { path: string; beforeSend?: () => void }) {
   const { openCount, send } = useSendOpenComments(path, beforeSend);
-  const resolvedCount = comments.filter((c) => c.resolved).length;
   const askTitle = openCount === 0
     ? 'No open comments to ask about'
     : `Ask your assistant to work through ${openCount === 1 ? 'the open comment' : `the ${openCount} open comments`}`;
@@ -70,21 +67,6 @@ export function CommentsFloatingActions({ path, withShowResolved = true, beforeS
   // never an accent badge (G-8).
   return (
     <div className="flex flex-col gap-2 w-full">
-      {withShowResolved && resolvedCount > 0 && (
-        // `raised` (solid panel fill + edge border) — the primitive's variant
-        // for a control that sits ON other content. Round 8: `secondary` is
-        // transparent/outlined, so floating over a card it read as a hole.
-        <Button
-          variant="raised"
-          size="md"
-          aria-pressed={showResolved}
-          onClick={() => setShowResolved(!showResolved)}
-          className="pointer-events-auto w-full"
-        >
-          {showResolved ? 'Hide resolved' : 'Show resolved'}
-          <span className="text-fg-muted">{resolvedCount}</span>
-        </Button>
-      )}
       <Button
         variant="primary"
         size="md"

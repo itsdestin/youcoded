@@ -13,8 +13,6 @@ import { CheckIcon } from '../Icons';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { CloseButton } from '../ui/CloseButton';
 import { EmptyState } from '../ui/states';
-import { Button } from '../ui/Button';
-import { readPaneVariant } from './pane-variant';
 import { CommentsPaneFrame } from './CommentsPaneFrame';
 import { revealSheet } from './sheet-reveal';
 import { useDocComments, type DocComment } from '../../state/doc-comments-store';
@@ -121,7 +119,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   // "Show resolved" toggle's UI and the header's count reads the same store,
   // so all of them share ONE boolean without threading it through
   // ActiveArtifactView.
-  const { comments, focusId, showResolved, setShowResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path);
+  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path);
   const visible = useMemo(
     () => comments.filter((c) => showResolved || !c.resolved).sort((a, b) => a.createdAt - b.createdAt),
     [comments, showResolved],
@@ -256,8 +254,6 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
     );
   }
 
-  const variant = readPaneVariant();
-  const resolvedCount = comments.filter((c) => c.resolved).length;
   const list = (
     // data-comments-list: ActiveArtifactView measures this box to line the
     // floating comment actions up with the cards, whatever the framing.
@@ -292,46 +288,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
     </div>
   );
 
-  // The list is its own scroller in every framing (MarkdownView renders it
-  // BESIDE the document's scroller): with cards no longer tied to their
-  // highlights, scrolling the document must not carry the list away.
-  // data-comments-pane: the framing's outer edge, measured by
-  // ActiveArtifactView so Comments/Edit clear it.
-  if (variant === 'combined') {
-    return <CommentsPaneFrame path={path} frameRef={marginRef}>{list}</CommentsPaneFrame>;
-  }
-  if (variant === 'sheet') {
-    return (
-      <div ref={marginRef} data-comments-pane className="w-64 shrink-0 p-2">
-        <div className="h-full rounded-xl border border-edge bg-panel overflow-y-auto">{list}</div>
-      </div>
-    );
-  }
-  if (variant === 'margin') {
-    return (
-      <div ref={marginRef} data-comments-pane className="w-64 shrink-0 overflow-y-auto">{list}</div>
-    );
-  }
-  if (variant === 'titled') {
-    return (
-      <div ref={marginRef} data-comments-pane className="w-64 shrink-0 border-l border-edge bg-panel flex flex-col">
-        {/* The Session Files pane's title row (SessionDrawer.tsx): same
-            padding, border and title weight; the count is G-19's
-            "label + muted numeral". Show resolved moves up here, so only Ask
-            Your Assistant floats at the bottom in this framing. */}
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-edge shrink-0">
-          <span className="font-semibold text-sm">Comments</span>
-          {resolvedCount > 0 && (
-            <Button variant="ghost" size="sm" aria-pressed={showResolved} onClick={() => setShowResolved(!showResolved)}>
-              {showResolved ? 'Hide resolved' : 'Show resolved'} <span className="text-fg-muted">{resolvedCount}</span>
-            </Button>
-          )}
-        </div>
-        <div className="flex-1 min-h-0 overflow-y-auto">{list}</div>
-      </div>
-    );
-  }
-  return (
-    <div ref={marginRef} data-comments-pane className="w-64 shrink-0 border-l border-edge bg-panel overflow-y-auto">{list}</div>
-  );
+  // The settled panel (round 16/17): rounded, titled, Show Resolved switch —
+  // CommentsPaneFrame, shared with code files.
+  return <CommentsPaneFrame path={path} frameRef={marginRef}>{list}</CommentsPaneFrame>;
 }

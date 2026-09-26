@@ -18,7 +18,6 @@ import { gitFooterState } from '../utils/git-footer';
 import { ActiveArtifactView, type ActiveArtifactHandle, type CommentsHeaderState } from './artifact-views/ActiveArtifactView';
 import { MenuIcon } from './context-menu/menu-icons';
 import { CommentsFloatingActions } from './comments/CommentsFloatingActions';
-import { hasTitleRow, readPaneVariant } from './comments/pane-variant';
 import SessionPreviewPane from './SessionPreviewPane';
 // 6b: COPY was originally added ONLY for the "Referenced
 // conversations" list block below (a cut candidate — see Task 6 brief 6b).
@@ -1296,7 +1295,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   clickable while invisible. Clicking Comments folds the list
                   away, like clicking Edit does, so the buttons Comments mode
                   needs are on screen the moment it opens. */}
-              {/* Comment actions (Show resolved / Ask Your Assistant) at the foot
+              {/* Ask Your Assistant at the foot
                   of the comment column — w-60 = the margin's card width, right-2
                   = the cards' 8px inset from the edge (measured). Round 10
                   (Destin: "should only appear when the full pane is actually
@@ -1305,9 +1304,9 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   list's pop-in rule, and not over the collapsed marker rail. */}
               {active && commentsState.paneVisible && (
                 // Lined up with the cards' measured edges (ActiveArtifactView,
-                // rounds 11/15) — right for every pane framing and scrollbar.
+                // rounds 11/15) — right with or without a scrollbar.
                 <div className="absolute z-20 pointer-events-none" style={{ right: commentsState.actionsRight, width: commentsState.actionsWidth, bottom: commentsState.actionsBottom }}>
-                  <CommentsFloatingActions path={active.path} withShowResolved={!hasTitleRow(readPaneVariant())} />
+                  <CommentsFloatingActions path={active.path} />
                 </div>
               )}
               {active && (
