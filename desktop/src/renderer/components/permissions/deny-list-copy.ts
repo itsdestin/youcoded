@@ -82,6 +82,14 @@ export function floorAskNote(floorStop: FloorStop): string {
   return FLOOR_NOTES[floorStop];
 }
 
+/** An admin command's stop band outside Full auto (admin-password design,
+ *  review R-1, 2026-09-26: "should match push/deletion prompt"). Same header as
+ *  Full auto's; the subline drops "Full auto still stops here", which would be
+ *  false in Ask first / Auto-edit. */
+export function adminStopCopy(): { header: string; subline: string } {
+  return { header: HEADERS.admin, subline: `This always asks — ${CLAUSES.admin}` };
+}
+
 export function fullAutoStopCopy(command: string | undefined, floorStop?: FloorStop): { header: string; subline: string } {
   if (command) {
     for (const rule of DESTRUCTIVE_DENY_LIST) {

@@ -19,7 +19,7 @@ import { useCardKeysLive } from '../state/card-keys-context';
 import { asString } from '../utils/tool-input';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
-import { fullAutoStopCopy, floorAskNote } from './permissions/deny-list-copy';
+import { fullAutoStopCopy, floorAskNote, adminStopCopy } from './permissions/deny-list-copy';
 import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
 import { PERMISSION_DISPLAY } from './StatusBar';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
@@ -579,7 +579,11 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // Full-auto's only rule-based ask is a deny-list stop — swap the generic row
   // for the safety-stop footer the compare view settled (workbench surface
   // 'full-auto-ask', R1–R4). Every other combination keeps the row as-is.
-  const fullAutoStop = permissionMode === 'full-auto' && !!denyListed;
+  // An admin command gets the same stop band in EVERY mode (admin-password
+  // design, review R-1: "should match push/deletion prompt… no extra subtext
+  // below the buttons"). It never offers Always Allow (floorStop suppresses it).
+  const adminStop = floorStop === 'admin';
+  const fullAutoStop = (permissionMode === 'full-auto' && !!denyListed) || adminStop;
   // Consequence-gated confirm strip (deny-listed asks) — mirrors the delete-model
   // confirm in LocalModelsSection: replace the button row with a plain-language
   // warning + Cancel / confirm.
@@ -829,7 +833,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // stopping itself, not a generic permission question.
   if (fullAutoStop) {
     const fa = PERMISSION_DISPLAY['full-auto'];
-    const stop = fullAutoStopCopy(command, floorStop);
+    const stop = adminStop && permissionMode !== 'full-auto' ? adminStopCopy() : fullAutoStopCopy(command, floorStop);
     return (
       <div className="px-3 py-2 space-y-2 border-t" style={{ background: fa.bg, borderColor: fa.border }}>
         {/* Header + subheader as ONE tight block; the footer's only real gap
@@ -892,12 +896,6 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     // paint an accent ring on top of this one on the selected button. Left alone
     // on purpose; don't "finish the migration" by adding FOCUS_RING here.
     <div className={bare ? 'space-y-1.5' : 'px-3 py-2 border-t border-edge bg-inset/30 space-y-1.5'}>
-    {/* An admin command shows its exact command line before Yes (UX review 1,
-        U1, admin-password design 2026-09-25): the header carries only the
-        assistant's summary, and this is a full-control-of-your-computer ask. */}
-    {floorStop === 'admin' && command && (
-      <p className="text-2xs leading-relaxed text-fg-2 bg-inset/70 px-2 py-1.5 rounded-sm break-all font-mono">{command}</p>
-    )}
     <div className="flex items-center gap-2">
       <button
         ref={el => { buttonsRef.current[0] = el; }}
