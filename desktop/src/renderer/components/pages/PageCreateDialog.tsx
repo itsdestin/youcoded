@@ -19,6 +19,9 @@ export interface PageCreateRequest {
   cwd?: string;
   /** Dialog title: "Create a page" or "Edit <name>". */
   title: string;
+  /** Line under the title; defaults to the page-building one. Document
+   *  comments' Ask Your Assistant (Projects screen) reuses this dialog. */
+  subtitle?: string;
 }
 
 export function PageCreateDialog({ request, onCreated, onCancel, onManageProjects }: {
@@ -31,7 +34,7 @@ export function PageCreateDialog({ request, onCreated, onCancel, onManageProject
   return (
     // Layer 3: the library (z-60, layer 2's band) may be under it — Make a
     // page lives there too — and a dialog must sit above what opened it.
-    <Dialog open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle="Pick where the conversation starts and which model builds it.">
+    <Dialog open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle={request.subtitle ?? 'Pick where the conversation starts and which model builds it.'}>
       <BuddyNewSessionForm
         key={request.initialInput + (request.cwd ?? '')}
         initialInput={request.initialInput}

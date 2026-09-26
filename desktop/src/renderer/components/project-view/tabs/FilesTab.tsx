@@ -15,6 +15,7 @@
 // Drawer (artifacts.listSession) — that stays their home.
 // Cards use .layer-surface; the deleted badge is a plain word "deleted" (the ●◐○ / ✕
 // glyph language is disliked — plain words instead).
+import { makeDraftToken, type ComposeRef } from '../../context-menu/compose-ref';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // WHY no useArtifact import: this file must not read ArtifactContext — see the
 // memo comment on FilesTab below. The one value it needs arrives as props.
@@ -1194,7 +1195,18 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   // Edit — the file drawer's "Comments next to Edit", in this screen's style.
   const [commentsState, setCommentsState] = useState<CommentsHeaderState | null>(null);
   // Stable, so the viewer's context value doesn't change every render.
-  const askInPane = useMemo(() => ({ beforeAsk: () => dispatch({ type: 'PROJECT_VIEW_CLOSED' }) }), [dispatch]);
+  // Review deck Q-1 (Destin, 2026-09-26: "a chat in the file's project… show a
+  // popup requesting model and such. kinda like we do for the 'build a page'
+  // button"): Ask Your Assistant here opens the new-session dialog (App's
+  // PageCreateDialog) in THIS project, with the request waiting in the
+  // composer — not a send into whatever chat happens to be current.
+  const askInPane = useMemo(() => ({
+    sendVia: (lead: string, refs: ComposeRef[]) => {
+      window.dispatchEvent(new CustomEvent('youcoded:ask-in-new-session', {
+        detail: { cwd: project.path, initialInput: `${lead} ${refs.map(makeDraftToken).join(' ')} ` },
+      }));
+    },
+  }), [project.path]);
   const [copied, setCopied] = useState(false);
 
   const filename = artifact.path.split('/').pop() ?? artifact.path;
