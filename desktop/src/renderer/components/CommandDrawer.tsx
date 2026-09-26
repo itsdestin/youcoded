@@ -201,12 +201,20 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
   return (
     <>
       {/* Backdrop — L1 drawer scrim via layer-scrim class (theme-tinted). */}
+      {/* WHY visibility as well as opacity (2026-09-26): this scrim is ALWAYS
+          mounted, and on wallpaper themes (Meadow Mist, Halftone) the theme
+          engine gives .layer-scrim a backdrop blur. At opacity 0 Chromium
+          can still paint that blur in some compositing paths — Destin saw the
+          whole chat blurred inside the review deck's app panes. Hidden after
+          the fade (visibility transitions at its end), it can never paint. */}
       <div
-        className={`layer-scrim transition-opacity duration-300 ${
-          open ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
+        className={`layer-scrim ${open ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         data-layer={1}
-        style={{ zIndex: 40 }}
+        style={{
+          zIndex: 40,
+          visibility: open ? 'visible' : 'hidden',
+          transition: 'opacity 300ms, visibility 300ms',
+        }}
         onClick={onClose}
       />
 
