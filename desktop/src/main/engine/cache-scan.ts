@@ -89,6 +89,54 @@ export function scanLocalDownloads(cacheDir: string): LocalDownload[] {
   return out.sort((a, b) => a.modelId.localeCompare(b.modelId));
 }
 
+/** scanLocalDownloads without blocking the main thread — the SAME scan (same
+ *  one-level walk, same grouping via foldOneDir, same sort), read through
+ *  fs.promises.
+ *
+ *  WHY both exist (perf, 2026-09-24): the engine's model poll runs this every
+ *  10 s, and every 400 ms while a model loads, and the sync form stat'ed every
+ *  file in the cache folder on the main thread each time — the thread every
+ *  window shares. The poll now uses this; the sync form remains for callers
+ *  outside the engine that are still synchronous (see the blocking-call
+ *  allowlist). Parity is pinned by cache-scan.test.ts. */
+export async function scanLocalDownloadsAsync(cacheDir: string): Promise<LocalDownload[]> {
+  const out: LocalDownload[] = [];
+  const top = await readDirentsAsync(cacheDir);
+  out.push(...await scanOneDirAsync(cacheDir, null, top));
+  const folders = top.filter((ent) => ent.isDirectory());
+  const perFolder = await Promise.all(folders.map((ent) => scanOneDirAsync(path.join(cacheDir, ent.name), ent.name)));
+  for (const rows of perFolder) out.push(...rows);
+  return out.sort((a, b) => a.modelId.localeCompare(b.modelId));
+}
+
+async function readDirentsAsync(dir: string): Promise<fs.Dirent[]> {
+  try {
+    return await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return []; // cache dir not created yet — no downloads, not an error
+  }
+}
+
+/** The async twin of scanOneDir: gathers the same (name, size) list, then
+ *  folds it with the SAME foldOneDir. `listed` lets the top-level call reuse
+ *  the directory listing it already read. */
+async function scanOneDirAsync(dirAbs: string, subdir: string | null, listed?: fs.Dirent[]): Promise<LocalDownload[]> {
+  const candidates = (listed ?? await readDirentsAsync(dirAbs)).filter((ent) => ent.isFile() && isCacheFile(ent.name));
+  const sized = await Promise.all(candidates.map(async (ent) => {
+    try { return { name: ent.name, sizeBytes: (await fs.promises.stat(path.join(dirAbs, ent.name))).size }; }
+    catch { return null; } // raced delete
+  }));
+  return foldOneDir(sized.filter((f): f is SizedFile => f !== null), subdir);
+}
+
+/** A file this scan cares about: published weights, an in-flight .partial, or
+ *  a download manifest. Notes, .tmp and anything else are ignored. */
+function isCacheFile(name: string): boolean {
+  return /\.gguf$/i.test(name) || /\.gguf\.partial$/i.test(name) || name.endsWith(`.gguf${MANIFEST_SUFFIX}`);
+}
+
+interface SizedFile { name: string; sizeBytes: number }
+
 function readDirents(dir: string): fs.Dirent[] {
   try {
     return fs.readdirSync(dir, { withFileTypes: true });
@@ -101,24 +149,34 @@ function readDirents(dir: string): fs.Dirent[] {
  *  folder inside it. A folder holds exactly one model as far as the engine is
  *  concerned, so its rows are folded into one before they are returned. */
 function scanOneDir(dirAbs: string, subdir: string | null): LocalDownload[] {
+  const files: SizedFile[] = [];
+  for (const ent of readDirents(dirAbs)) {
+    if (!ent.isFile() || !isCacheFile(ent.name)) continue;   // notes, .tmp, anything else
+    let sizeBytes = 0;
+    try { sizeBytes = fs.statSync(path.join(dirAbs, ent.name)).size; } catch { continue; } // raced delete
+    files.push({ name: ent.name, sizeBytes });
+  }
+  return foldOneDir(files, subdir);
+}
+
+/** The pure half of scanning one directory: group its (name, size) list into
+ *  download rows. Shared by scanOneDir and scanOneDirAsync so the two can never
+ *  disagree about what a folder holds. */
+function foldOneDir(files: SizedFile[], subdir: string | null): LocalDownload[] {
   const sets = new Map<string, LocalDownload>();
   // The projector is tracked apart from the sets on purpose — see hasProjector.
   let projectorBytes = 0;
   let projectorPartialBytes = 0;
   let hasProjector = false;
-  for (const ent of readDirents(dirAbs)) {
-    if (!ent.isFile()) continue;
-    const published = /\.gguf$/i.test(ent.name);
-    const partial = /\.gguf\.partial$/i.test(ent.name);
-    const manifest = ent.name.endsWith(`.gguf${MANIFEST_SUFFIX}`);
-    if (!published && !partial && !manifest) continue;   // notes, .tmp, anything else
-    let sizeBytes = 0;
-    try { sizeBytes = fs.statSync(path.join(dirAbs, ent.name)).size; } catch { continue; } // raced delete
+  for (const { name, sizeBytes } of files) {
+    const published = /\.gguf$/i.test(name);
+    const partial = /\.gguf\.partial$/i.test(name);
+    const manifest = name.endsWith(`.gguf${MANIFEST_SUFFIX}`);
     // The final filename this entry belongs to ('X.gguf.partial' -> 'X.gguf',
     // 'X.gguf.download.json' -> 'X.gguf').
-    const finalName = partial ? ent.name.replace(/\.partial$/i, '')
-      : manifest ? ent.name.slice(0, -MANIFEST_SUFFIX.length)
-      : ent.name;
+    const finalName = partial ? name.replace(/\.partial$/i, '')
+      : manifest ? name.slice(0, -MANIFEST_SUFFIX.length)
+      : name;
     // A vision projector is NOT a model and NOT one of the weight set's parts.
     // The router never lists it (it pairs it onto the model beside it), so
     // letting it through here would invent a model row nothing can serve, and —
@@ -235,7 +293,11 @@ export function visionModelIdsOnDisk(cacheDir: string): Set<string> {
  *  picker — inherits that, so there is no second place to remember the rule.
  *  A half-downloaded split model listed as installed was the 2026-08-26 bug. */
 export function scanGgufCache(cacheDir: string): EngineModel[] {
-  return scanLocalDownloads(cacheDir)
+  return toEngineModels(scanLocalDownloads(cacheDir));
+}
+
+function toEngineModels(downloads: LocalDownload[]): EngineModel[] {
+  return downloads
     .filter(isComplete)
     .map((d) => ({
       id: d.modelId,
@@ -243,4 +305,10 @@ export function scanGgufCache(cacheDir: string): EngineModel[] {
       loaded: false,
       state: 'unloaded' as const, // cache scan = engine-off view; nothing is resident
     }));
+}
+
+/** scanGgufCache without blocking — for the engine's model poll. Same filter,
+ *  same shape; see scanLocalDownloadsAsync. */
+export async function scanGgufCacheAsync(cacheDir: string): Promise<EngineModel[]> {
+  return toEngineModels(await scanLocalDownloadsAsync(cacheDir));
 }

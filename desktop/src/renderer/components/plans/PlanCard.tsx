@@ -441,7 +441,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               ErrorState). A paused plan says the same thing as a line inside the
               pause strip it already has. */}
           {limitNotice && plan.status === 'proposed' && (
-            <StatusStrip tone="warn" surface="tinted" className="!py-2">
+            <StatusStrip tone="warn" surface="tinted" className="my-0.5">
               <span data-testid="plan-limit-notice">{limitNotice}</span>
             </StatusStrip>
           )}
@@ -513,7 +513,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               settings" subtitle={name}` — rather than the bare "Plan
               settings" every plan's popup used to share. */}
           {settingsOpen && (
-            <Dialog open onClose={() => setSettingsOpen(false)} title="Plan settings" subtitle={plan.title} size="panel">
+            <Dialog open onClose={() => setSettingsOpen(false)} title="Plan settings" subtitle={plan.title} size="panel" noScreen="Opens from a plan card only; the plan and its settings must be seeded together.">
               <div data-testid="plan-settings-popup" className="contents">
                 <PlanSettingsFields plan={plan} sessionId={sessionId} onChanged={(p) => dispatch({ type: 'PLAN_CHANGED', sessionId: id, plan: p })} />
               </div>
@@ -557,7 +557,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
             <StatusStrip
               tone="warn"
               surface="tinted"
-              className="!py-2"
+              className="my-0.5"
               wrapAction
               action={readOnly ? undefined : !settingNewLimit ? (
                 <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-pause-actions">
@@ -609,7 +609,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               // Task 9b: grey while the assistant has it — waiting, not warning.
               tone={handoffPending ? 'idle' : 'warn'}
               surface="tinted"
-              className="!py-2"
+              className="my-0.5"
               // Task 11: at 390 px the buttons move under the reason instead
               // of crushing it into a one-letter column.
               wrapAction
@@ -724,7 +724,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               // showing — that one needs an answer; waiting for Continue does not.
               tone={limitNotice ? 'warn' : 'idle'}
               surface="tinted"
-              className="!py-2"
+              className="my-0.5"
               // Review finding 14: the changed-specialists question adds ~130
               // characters to this strip's one line, which at 390 px would
               // squeeze Stop · Continue against a column of single words. Only
@@ -1017,7 +1017,8 @@ const STEP_GLYPH: Record<PlanStepView['status'], React.ReactNode> = {
   pending: <span className="inline-block w-3.5 h-3.5 rounded-full border border-edge" aria-label="not started" />,
   running: <BrailleSpinner size="sm" />,
   done: <CheckIcon className="w-3.5 h-3.5 text-fg-dim" />,
-  paused: <StoppedIcon className="w-3.5 h-3.5 text-amber-500" />,
+  // WHY paused status uses the theme's semantic warning token, not a fixed palette.
+  paused: <StoppedIcon className="w-3.5 h-3.5 text-amber-700" />,
   failed: <FailIcon className="w-3.5 h-3.5 text-destructive-fg" />,
   skipped: <StoppedIcon className="w-3.5 h-3.5 text-fg-muted" />,
 };

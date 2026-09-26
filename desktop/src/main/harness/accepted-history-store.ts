@@ -202,27 +202,43 @@ function providerOptionsFor(value: unknown, kind: keyof typeof PROVIDER_OPTIONS_
   return withinSpec(value, PROVIDER_OPTIONS_ALLOWLIST[kind]) ? { providerOptions: value } : null;
 }
 
-function readDigest(file: string): string | null {
-  try { return digest(fs.readFileSync(file)); } catch { return null; }
-}
+/**
+ * Path digests for the life of ONE publish, filled ASYNCHRONOUSLY.
+ *
+ * WHY memoised: without it a turn carrying N image parts re-hashes every
+ * attachment of every accepted user message N times.
+ *
+ * WHY async-filled (2026-09-24 blocking-calls B8): publish() runs at every turn
+ * boundary, and the old lazy cache stat'ed and read each attachment
+ * synchronously from inside the (synchronous) describe pass — every window froze
+ * for those reads. The describe pass stays synchronous; a lookup it cannot
+ * answer yet records the path and answers null, publish() reads the recorded
+ * paths off the main thread and runs the pass again (see publish()). The last
+ * pass has every path it consulted in hand, so it decides exactly what the old
+ * lazy lookup decided.
+ */
+class DigestTable {
+  private known = new Map<string, string | null>();
+  /** Paths a pass asked for that are not read yet. */
+  readonly missing = new Set<string>();
 
-/** Path digests memoised for the life of ONE publish, keyed by identity+mtime+size.
- *  WHY: without it a turn carrying N image parts re-hashes every attachment of every
- *  accepted user message N times; a single stat per lookup keeps that to one read. */
-function createDigestCache(): (file: string) => string | null {
-  const cache = new Map<string, string | null>();
-  return (file: string) => {
-    let key: string;
-    try {
-      const stat = fs.statSync(file);
-      key = `${stat.mtimeMs}:${stat.size}:${file}`;
-    } catch { return null; }
-    const hit = cache.get(key);
-    if (hit !== undefined || cache.has(key)) return hit ?? null;
-    const value = readDigest(file);
-    cache.set(key, value);
-    return value;
+  readonly lookup = (file: string): string | null => {
+    if (this.known.has(file)) return this.known.get(file)!;
+    this.missing.add(file);
+    return null;
   };
+
+  async fill(): Promise<void> {
+    const files = [...this.missing];
+    this.missing.clear();
+    // Sequential, not Promise.all: attachments can each be up to 10 MB, and
+    // the old reader never held more than one in memory at a time either.
+    for (const file of files) {
+      let value: string | null;
+      try { value = digest(await fs.promises.readFile(file)); } catch { value = null; }
+      this.known.set(file, value);
+    }
+  }
 }
 
 type RawTranscript = { bytes: number; digest: string; events: Map<string, TranscriptEvent> };
@@ -248,10 +264,12 @@ function parseTranscriptLines(text: string, events: Map<string, TranscriptEvent>
   return true;
 }
 
-/** Whole-file, synchronous read. Serves restore(), which runs once at resume. */
-function rawTranscriptSync(file: string): RawTranscript | null {
+/** Whole-file read. Serves restore(), which runs once at resume. WHY async
+ *  (2026-09-24 blocking-calls B8): a long conversation's transcript is MBs, and
+ *  the sync read froze every window on each Resume of a native chat. */
+async function rawTranscript(file: string): Promise<RawTranscript | null> {
   let data: Buffer;
-  try { data = fs.readFileSync(file); } catch { return null; }
+  try { data = await fs.promises.readFile(file); } catch { return null; }
   const events = new Map<string, TranscriptEvent>();
   if (!parseTranscriptLines(data.toString('utf8'), events)) return null;
   return { bytes: data.length, digest: digest(data), events };
@@ -368,13 +386,13 @@ function eventText(event: TranscriptEvent, field: TextField): string | null {
  */
 class AnchorSet {
   readonly uuids: string[] = [];
-  /** WHY: one cache per AnchorSet means one cache per publish — attachment and
-   *  tool-image lookups within a turn hash each file once, and nothing outlives it. */
-  readonly digestOf = createDigestCache();
   private byField = new Map<Field, Array<{ uuid: string; event: TranscriptEvent }>>();
   private cursor = new Map<Field, number>();
 
-  constructor(uuids: string[], private events: Map<string, TranscriptEvent>) {
+  /** `digestOf` comes from the publish's DigestTable — one table per publish, so
+   *  attachment and tool-image lookups within a turn hash each file once, and
+   *  nothing outlives it. */
+  constructor(uuids: string[], private events: Map<string, TranscriptEvent>, readonly digestOf: (file: string) => string | null) {
     for (const uuid of uuids) {
       // WHY: acceptedAnchors() already proved every accepted uuid resolves to an event.
       const event = events.get(uuid)!;
@@ -554,7 +572,17 @@ export class AcceptedHistoryStore {
             eventUuids = allAccepted.filter(uuid => !retired.has(uuid));
           }
         }
-        const messages = describeMessages(proposal.messages, new AnchorSet(eventUuids, raw.events));
+        // Describe, then read any attachment/tool-image the pass needed but the
+        // table did not hold yet, and describe again (DigestTable's WHY). Each
+        // round reads at least one new path from a finite set, so it ends; the
+        // round with nothing missing is the answer.
+        const digests = new DigestTable();
+        let messages: MessageDescriptor[] | null;
+        for (;;) {
+          messages = describeMessages(proposal.messages, new AnchorSet(eventUuids, raw.events, digests.lookup));
+          if (digests.missing.size === 0) break;
+          await digests.fill();
+        }
         if (!messages) return { ok: false, reason: 'unreferenced-history' } as const;
         const manifest: Manifest = {
           v: VERSION, sessionId: proposal.sessionId, transcriptPath: proposal.transcriptPath,
@@ -583,21 +611,31 @@ export class AcceptedHistoryStore {
     });
   }
 
-  restore(input: { sessionId: string; transcriptPath: string; binding: string; assemblyDigest: string }): AcceptedHistoryRestore {
-    const eligibility = this.readBoundedJson(this.eligibilityPath(input.sessionId)) as Eligibility | null;
+  /** WHY async and on the session's chain (2026-09-24 blocking-calls B8): the
+   *  reads below (fence, manifest, the whole transcript, every image) ran
+   *  synchronously on each Resume of a native chat and froze every window.
+   *  Now that they yield, running them on the same per-session chain as
+   *  publish()/invalidate() keeps the answer a consistent snapshot — a publish
+   *  can no longer land between reading the fence and reading the manifest. */
+  restore(input: { sessionId: string; transcriptPath: string; binding: string; assemblyDigest: string }): Promise<AcceptedHistoryRestore> {
+    return this.enqueue(input.sessionId, () => this.restoreNow(input));
+  }
+
+  private async restoreNow(input: { sessionId: string; transcriptPath: string; binding: string; assemblyDigest: string }): Promise<AcceptedHistoryRestore> {
+    const eligibility = await this.readBoundedJsonAsync(this.eligibilityPath(input.sessionId)) as Eligibility | null;
     if (!eligibility || eligibility.v !== VERSION || eligibility.sessionId !== input.sessionId || !eligibility.eligible) return { ok: false, reason: 'ineligible' };
     const file = this.manifestPath(input.sessionId);
     let stat: fs.Stats;
-    try { stat = fs.statSync(file); } catch { return { ok: false, reason: 'ineligible' }; }
+    try { stat = await fs.promises.stat(file); } catch { return { ok: false, reason: 'ineligible' }; }
     if (stat.size > ACCEPTED_HISTORY_MAX_BYTES) return { ok: false, reason: 'oversized' };
-    const manifest = this.readBoundedJson(file) as Manifest | null;
+    const manifest = await this.readBoundedJsonAsync(file) as Manifest | null;
     if (!manifest || manifest.v !== VERSION || manifest.sessionId !== input.sessionId || manifest.revision !== eligibility.revision
       || !Array.isArray(manifest.messages) || !Array.isArray(manifest.eventUuids)
       || !validTransformation(manifest.transformation)) return { ok: false, reason: 'malformed' };
     if (manifest.binding !== input.binding) return { ok: false, reason: 'binding-mismatch' };
     if (manifest.assemblyDigest !== input.assemblyDigest) return { ok: false, reason: 'assembly-mismatch' };
     if (path.resolve(manifest.transcriptPath) !== path.resolve(input.transcriptPath)) return { ok: false, reason: 'missing-transcript' };
-    const raw = rawTranscriptSync(input.transcriptPath);
+    const raw = await rawTranscript(input.transcriptPath);
     if (!raw) { void this.remove(input.sessionId); return { ok: false, reason: 'missing-transcript' }; }
     if (raw.bytes !== manifest.transcript.bytes || raw.digest !== manifest.transcript.digest) return { ok: false, reason: 'transcript-advanced' };
     const accepted = new Set(manifest.eventUuids);
@@ -608,7 +646,7 @@ export class AcceptedHistoryStore {
       // unrecognised one is a corrupt manifest, not something to pass through.
       if (!record(descriptor) || !ROLES.includes(descriptor.role) ||
         (descriptor.appGenerated !== undefined && (descriptor.appGenerated !== true || descriptor.role !== 'user' || descriptor.content?.kind !== 'literal'))) return { ok: false, reason: 'malformed' };
-      const content = restoreContent(descriptor?.content, raw.events, accepted);
+      const content = await restoreContent(descriptor?.content, raw.events, accepted);
       if ('reason' in content) return { ok: false, reason: content.reason };
       const message = { role: descriptor.role, content: content.value } as ModelMessage;
       // A transcript reference proves origin; text that merely LOOKS like a
@@ -660,7 +698,7 @@ export class AcceptedHistoryStore {
       try { return decodeURIComponent(name.slice(0, -suffix.length)); } catch { return null; }
     };
     for (const name of files.filter(name => name.endsWith('.manifest.json'))) {
-      const manifest = this.readBoundedJson(path.join(this.dir, name)) as Manifest | null;
+      const manifest = await this.readBoundedJsonAsync(path.join(this.dir, name)) as Manifest | null;
       if (manifest && typeof manifest.transcriptPath === 'string' && fs.existsSync(manifest.transcriptPath)) continue;
       const sessionId = sessionIdOf(name, '.manifest.json');
       if (sessionId !== null) await this.remove(sessionId);
@@ -675,11 +713,23 @@ export class AcceptedHistoryStore {
     }
   }
 
+  /** Sync on purpose: only currentRevision() uses it, once per session (then
+   *  memoised), and invalidate() must fence in memory before its first await. */
   private readBoundedJson(file: string): unknown | null {
     try {
       const stat = fs.statSync(file);
       if (stat.size > ACCEPTED_HISTORY_MAX_BYTES) return null;
       return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch { return null; }
+  }
+
+  /** readBoundedJson's async twin (same bound, same null-on-anything) for
+   *  restore() and the orphan sweep — 2026-09-24 blocking-calls B8. */
+  private async readBoundedJsonAsync(file: string): Promise<unknown | null> {
+    try {
+      const stat = await fs.promises.stat(file);
+      if (stat.size > ACCEPTED_HISTORY_MAX_BYTES) return null;
+      return JSON.parse(await fs.promises.readFile(file, 'utf8'));
     } catch { return null; }
   }
 
@@ -942,17 +992,19 @@ function concatText(uuids: unknown, field: TextField, events: Map<string, Transc
   return text;
 }
 
-function restoreImage(image: ImageDescriptor): Buffer | null {
+/** WHY async (2026-09-24 blocking-calls B8): up to 10 MB per image, read on
+ *  each Resume of a native chat that saw images. */
+async function restoreImage(image: ImageDescriptor): Promise<Buffer | null> {
   let data: Buffer;
-  try { data = fs.readFileSync(image.path); } catch { return null; }
+  try { data = await fs.promises.readFile(image.path); } catch { return null; }
   return digest(data) === image.digest ? data : null;
 }
 
-function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEvent>, accepted: Set<string>): Resolved {
+async function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEvent>, accepted: Set<string>): Promise<Resolved> {
   if (!record(raw)) return { reason: 'malformed' };
   const part = raw as PartDescriptor;
   if (part.kind === 'image') {
-    const data = restoreImage(part);
+    const data = await restoreImage(part);
     return data ? { value: { type: 'file', mediaType: part.mediaType, data } } : { reason: 'image-mismatch' };
   }
   if (part.kind === 'concat') {
@@ -988,7 +1040,7 @@ function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEvent>, 
     else if (part.images?.length) {
       const files: any[] = [];
       for (const image of part.images) {
-        const data = restoreImage(image);
+        const data = await restoreImage(image);
         if (!data) return { reason: 'image-mismatch' };
         files.push({ type: 'file', mediaType: image.mediaType, data: { type: 'data', data }, ...(image.filename !== undefined ? { filename: image.filename } : {}) });
       }
@@ -1002,7 +1054,7 @@ function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEvent>, 
   return { value: { type: part.field === 'reasoning-text' ? 'reasoning' : 'text', text, ...providerOptions } };
 }
 
-function restoreContent(raw: ContentDescriptor | undefined, events: Map<string, TranscriptEvent>, accepted: Set<string>): Resolved {
+async function restoreContent(raw: ContentDescriptor | undefined, events: Map<string, TranscriptEvent>, accepted: Set<string>): Promise<Resolved> {
   if (!record(raw)) return { reason: 'malformed' };
   const descriptor = raw as ContentDescriptor;
   if (descriptor.kind === 'literal') return typeof descriptor.value === 'string' ? { value: descriptor.value } : { reason: 'malformed' };
@@ -1021,7 +1073,7 @@ function restoreContent(raw: ContentDescriptor | undefined, events: Map<string, 
   if (descriptor.kind !== 'parts' || !Array.isArray(descriptor.parts)) return { reason: 'malformed' };
   const parts: any[] = [];
   for (const part of descriptor.parts) {
-    const resolved = restorePart(part, events, accepted);
+    const resolved = await restorePart(part, events, accepted);
     if ('reason' in resolved) return resolved;
     parts.push(resolved.value);
   }

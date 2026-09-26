@@ -75,20 +75,33 @@ interface ScannedLine { offset: number; text: string }
  * When `readFrom > 0` we read one byte earlier so the first segment is
  * definitionally a partial (or empty) line and can be dropped without having to
  * guess whether the cut landed on a newline.
+ *
+ * WHY async (2026-09-24, blocking-call batch B1): this ran as one fs.readSync
+ * of up to PAGE_MAX_BYTES on every conversation open, scroll-up and buddy open
+ * — the main process serves every window, so each page froze all of them. The
+ * read now goes through a FileHandle (only the needed byte range, never the
+ * whole file); the newline scan uses Buffer.indexOf (native) instead of a JS
+ * loop over every byte. Line boundaries and offsets are unchanged.
  */
-function readLines(fd: number, readFrom: number, end: number): ScannedLine[] {
+async function readLines(handle: fs.promises.FileHandle, readFrom: number, end: number): Promise<ScannedLine[]> {
   const from = readFrom > 0 ? readFrom - 1 : 0;
   const span = end - from;
   if (span <= 0) return [];
   const buf = Buffer.alloc(span);
-  fs.readSync(fd, buf, 0, span, from);
+  // Loop until the range is filled: a positional read may return short. A
+  // shortfall (file shrank under us) leaves zeros, exactly as the old single
+  // readSync did, which the trailing-fragment rule below drops.
+  let filled = 0;
+  while (filled < span) {
+    const { bytesRead } = await handle.read(buf, filled, span - filled, from + filled);
+    if (bytesRead === 0) break;
+    filled += bytesRead;
+  }
   const lines: ScannedLine[] = [];
   let start = 0;
-  for (let i = 0; i < buf.length; i++) {
-    if (buf[i] === NEWLINE) {
-      lines.push({ offset: from + start, text: buf.toString('utf8', start, i) });
-      start = i + 1;
-    }
+  for (let i = buf.indexOf(NEWLINE, start); i !== -1; i = buf.indexOf(NEWLINE, start)) {
+    lines.push({ offset: from + start, text: buf.toString('utf8', start, i) });
+    start = i + 1;
   }
   // A trailing fragment with no newline is an incomplete line (the tailer is
   // mid-write) — never parse it.
@@ -109,11 +122,13 @@ export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPage
   const format = args.format ?? 'claude';
   const empty: TranscriptPageResult = { events: [], cursor: null, hasMore: false };
 
-  let fd: number;
-  try { fd = fs.openSync(jsonlPath, 'r'); } catch { return empty; }
+  // WHY fs.promises (B1): this was `async` with no `await` — openSync/fstatSync
+  // /readSync/closeSync all ran on the main thread. Same open-fail → empty page.
+  let handle: fs.promises.FileHandle;
+  try { handle = await fs.promises.open(jsonlPath, 'r'); } catch { return empty; }
 
   try {
-    const size = fs.fstatSync(fd).size;
+    const size = (await handle.stat()).size;
     // A cursor minted before a /clear or /compact rewrite points past the new
     // end. Treat it as "history is over" so the renderer drops the cursor
     // rather than serving turns from a file state the cursor never described —
@@ -129,7 +144,7 @@ export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPage
     // that, the oldest boundary inside the byte budget; failing that (we saw the
     // whole remaining file), byte 0.
     const scanStart = Math.max(0, end - PAGE_MAX_BYTES);
-    const lines = readLines(fd, scanStart, end);
+    const lines = await readLines(handle, scanStart, end);
     const boundaries: number[] = []; // ascending absolute offsets
     for (const { offset, text } of lines) {
       if (!text.trim()) continue;
@@ -150,7 +165,7 @@ export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPage
     const hasMore = startByte > 0;
 
     // --- 2. Parse [startByte, end) forward --------------------------------
-    // Replay-side uuid dedup, mirroring TranscriptWatcher.getHistory exactly:
+    // Replay-side uuid dedup, mirroring the live tailer's semantics exactly:
     // CC rewrites the same-uuid line as an assistant message grows, so a
     // repeated uuid skips assistant-text (first write wins) while tool events
     // still emit.
@@ -185,8 +200,10 @@ export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPage
     // --- 3. Subagent files, ONLY for Agent tool_uses inside this page ------
     // A throwaway index primed with just the in-page parents: getHistory skips
     // any agent whose parent it cannot bind, so an older page's subagent
-    // transcript is never dragged in. Same mechanism TranscriptWatcher.
-    // getHistory uses for a full replay, narrowed to the page.
+    // transcript is never dragged in. (TranscriptWatcher.getHistory, the
+    // whole-transcript replay that used the same mechanism, was removed as dead
+    // in blocking-call batch B1 — this is SubagentWatcher.getHistory's only
+    // caller.)
     if (args.subagentsDir) {
       const replayIndex = new SubagentIndex();
       for (const ev of events) {
@@ -204,7 +221,7 @@ export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPage
         index: replayIndex,
         emit: () => { /* replay-only: this watcher never starts, so it never emits */ },
       });
-      for (const ev of watcher.getHistory(replayIndex)) events.push(ev);
+      for (const ev of await watcher.getHistory(replayIndex)) events.push(ev);
     }
 
     const cursor: PageCursor | null = hasMore
@@ -212,6 +229,6 @@ export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPage
       : null;
     return { events, cursor, hasMore };
   } finally {
-    fs.closeSync(fd);
+    await handle.close().catch(() => undefined);
   }
 }

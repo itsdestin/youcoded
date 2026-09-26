@@ -120,6 +120,7 @@ export default function ContextPopup({
         // The explainer takes the shell's scroll body (and its edge fades); the
         // main view still owns its own surface.
         scrollBody={showInfo}
+        screen="chat/context"
       >
         {showInfo ? (
           <SettingsExplainer intro={INFO_INTRO} sections={INFO_SECTIONS} />

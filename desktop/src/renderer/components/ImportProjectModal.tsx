@@ -107,6 +107,7 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
         aria-label="Import project"
         scrollBody={false}
         className="p-4"
+        screen="projects/turn-on-sync"
       >
         {doneWarnings ? (
           <>

@@ -381,7 +381,7 @@ describe('F25: plan cards in a conversation preview are read-only', () => {
 // Task 12 review fix 2: a plan whose progress couldn't be saved pauses with a
 // general line on the card; the system's own text (an EIO, say) goes only to
 // the report screen (docs/error-message-standards.md).
-describe('review fix 2: an unsaved-progress pause keeps the system text for the report', () => {
+describe('an unsaved-progress pause keeps the system text for the report', () => {
   const GENERAL = "The plan stopped because its progress couldn't be saved.";
   const orphanPause = () => paused({
     paused: { stepId: 's1', reason: GENERAL, kind: 'unexpected-error', actions: ['continue', 'stop'], report: 'EIO: i/o error, write' },

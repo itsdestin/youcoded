@@ -8,7 +8,7 @@ import { PLAN_PAUSE_KINDS } from '../src/shared/types';
 
 const effect = (tool: string) => ({ toolEffect: nativeToolEffect(tool) });
 
-describe('routing per kind (§1)', () => {
+describe('routing per kind', () => {
   it.each([
     ['launch-failed', {}],
     ['specialist-error', {}],

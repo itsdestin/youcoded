@@ -6,6 +6,18 @@ import { AcceptedHistoryStore, type AcceptedHistoryProposal } from '../src/main/
 import { imageCollapsedToolResultText, isAppGenerated, markAppGenerated, summaryProvenanceNote, prunedToolResultText } from '../src/main/harness/compaction';
 import type { PersistedEventReference } from '../src/main/harness/session-store';
 
+// Pass-through fs whose sync reads are RECORDED while `watch.on` is set — how the
+// B8 test proves publish()/restore() make no blocking read (vi.spyOn cannot patch
+// the module namespace the store imports).
+const watch = vi.hoisted(() => ({ on: false, calls: [] as string[] }));
+vi.mock('fs', async (orig) => {
+  const real = await orig() as typeof import('fs');
+  const wrap = <T extends (...args: any[]) => any>(name: string, fn: T) =>
+    ((...args: any[]) => { if (watch.on) watch.calls.push(`${name}(${String(args[0])})`); return fn(...args); }) as T;
+  const patched = { ...real, readFileSync: wrap('readFileSync', real.readFileSync), statSync: wrap('statSync', real.statSync) };
+  return { ...patched, default: patched };
+});
+
 const sessionId = 'private-session';
 const binding = 'chatgpt\u0000gpt-5\u0000account-hash\u00007';
 const assemblyDigest = 'assembly-v1';
@@ -104,7 +116,7 @@ describe('AcceptedHistoryStore', () => {
       expect((fs.statSync(store.manifestPath(sessionId)).mode & 0o077)).toBe(0);
     }
 
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }))
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }))
       .toEqual({ ok: true, messages: proposal().messages, messageOrigins: [['u1'], null], eventUuids: ['u1', 'r1', 'a1'], revision });
   });
 
@@ -199,7 +211,7 @@ describe('AcceptedHistoryStore', () => {
     const revision = await store.invalidate(sessionId, 'history-mutation');
     const bad = proposal({ revision, messages: [{ role: 'assistant', content: [{ type: 'text', text: 'abandoned' }] }] as any });
     await expect(store.publish(bad)).resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
   });
 
   it('keeps the parallel-call wrapper argument string and nothing else: no per-call input, no tool output', async () => {
@@ -367,11 +379,11 @@ describe('AcceptedHistoryStore', () => {
       fs.writeFileSync(store.manifestPath(sessionId), JSON.stringify(manifest));
       return store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
     };
-    expect(tamper(m => { m.messages[0].role = 'root'; })).toEqual({ ok: false, reason: 'malformed' });
-    expect(tamper(m => { m.messages[0].appGenerated = true; })).toEqual({ ok: false, reason: 'malformed' });
-    expect(tamper(m => { m.transformation = { kind: 'summary' }; })).toEqual({ ok: false, reason: 'malformed' });
-    expect(tamper(m => { m.transformation = { kind: 'rewritten' }; })).toEqual({ ok: false, reason: 'malformed' });
-    expect(tamper(m => { m.messages[0].content = { kind: 'event', uuid: 'u1', field: 'tool-call' }; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await tamper(m => { m.messages[0].role = 'root'; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await tamper(m => { m.messages[0].appGenerated = true; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await tamper(m => { m.transformation = { kind: 'summary' }; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await tamper(m => { m.transformation = { kind: 'rewritten' }; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await tamper(m => { m.messages[0].content = { kind: 'event', uuid: 'u1', field: 'tool-call' }; })).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('re-reads a tool-delivered image by path and refuses a changed one', async () => {
@@ -392,7 +404,59 @@ describe('AcceptedHistoryStore', () => {
     expect(restored).toEqual({ ok: true, messages, messageOrigins: [['t2']], eventUuids: ['t2'], revision: store.currentRevision(sessionId) });
 
     fs.writeFileSync(image, Buffer.from('pixels-v2'));
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'image-mismatch' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'image-mismatch' });
+  });
+
+  it('publish and restore of an image-bearing history make no synchronous file read (blocking-calls B8)', async () => {
+    // WHY: publish() runs at every turn boundary and restore() on every Resume;
+    // both used to stat/read attachments, tool images and the transcript with
+    // *Sync calls, freezing every window. The attachment AND two tool images
+    // here also exercise publish's describe → read-missing → describe-again loop.
+    const a = path.join(root, 'a.png');
+    const b = path.join(root, 'b.png');
+    const c = path.join(root, 'c.png');
+    fs.writeFileSync(a, Buffer.from('pixels-a'));
+    fs.writeFileSync(b, Buffer.from('pixels-b'));
+    fs.writeFileSync(c, Buffer.from('pixels-c'));
+    const events: Fixture[] = [
+      { type: 'user-message', sessionId, uuid: 'u-img', data: { text: 'look', attachments: [a] } },
+      { type: 'tool-result', sessionId, uuid: 't2', data: { toolUseId: 'call_1', toolName: 'Read', toolResult: 'here', images: [b, c] } },
+    ];
+    writeTranscript(events);
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'file', mediaType: 'image/png', data: fs.readFileSync(a) }] },
+      { role: 'tool', content: [{
+        type: 'tool-result', toolCallId: 'call_1', toolName: 'Read',
+        output: { type: 'content', value: [
+          { type: 'text', text: 'here' },
+          { type: 'file', mediaType: 'image/png', data: { type: 'data', data: fs.readFileSync(b) } },
+          { type: 'file', mediaType: 'image/png', data: { type: 'data', data: fs.readFileSync(c) } },
+        ] },
+      }] },
+    ];
+    const revision = await store.invalidate(sessionId, 'history-mutation');   // memoises currentRevision's one sync read
+    watch.calls = [];
+    watch.on = true;
+    try {
+      await expect(store.publish(proposal({ references: events.map(refFor), messages: messages as any, revision }))).resolves.toEqual({ ok: true });
+      const restored = await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      expect(restored).toEqual({ ok: true, messages, messageOrigins: [null, ['t2']], eventUuids: ['u-img', 't2'], revision });
+      watch.on = false;
+      expect(watch.calls).toEqual([]);
+    } finally {
+      watch.on = false;
+    }
+  });
+
+  it('restore waits for a publish already queued for the session, so it never reads half of one (B8)', async () => {
+    // WHY: restore() became async. Off the per-session chain, a publish could
+    // land between its fence read and its manifest read. On the chain, a
+    // restore issued while a publish is in flight sees the finished publish.
+    const revision = await store.invalidate(sessionId, 'history-mutation');
+    const publishing = store.publish(proposal({ revision }));
+    const restoring = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+    await expect(publishing).resolves.toEqual({ ok: true });
+    await expect(restoring).resolves.toMatchObject({ ok: true, revision });
   });
 
   it('recomputes pruned and image-collapsed tool results from the untouched event text', async () => {
@@ -419,7 +483,7 @@ describe('AcceptedHistoryStore', () => {
     const manifest = JSON.parse(sidecar());
     manifest.messages[0].content.parts[0].pruned.keepChars = long.length + 1;
     fs.writeFileSync(store.manifestPath(sessionId), JSON.stringify(manifest));
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('keeps injected user strings as bounded literals and refuses an oversized one', async () => {
@@ -505,19 +569,19 @@ describe('AcceptedHistoryStore', () => {
     await store.publish({ ...proposal(), revision: first });
     await store.invalidate(sessionId, 'context-clear');
     await expect(store.publish({ ...proposal(), revision: first })).resolves.toEqual({ ok: false, reason: 'stale-generation' });
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
 
     const next = await store.invalidate(sessionId, 'history-mutation');
     await store.publish({ ...proposal(), revision: next });
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding: `${binding}-other`, assemblyDigest })).toEqual({ ok: false, reason: 'binding-mismatch' });
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest: 'assembly-v2' })).toEqual({ ok: false, reason: 'assembly-mismatch' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding: `${binding}-other`, assemblyDigest })).toEqual({ ok: false, reason: 'binding-mismatch' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest: 'assembly-v2' })).toEqual({ ok: false, reason: 'assembly-mismatch' });
     fs.appendFileSync(transcript, `${JSON.stringify({ type: 'user-message', sessionId, uuid: 'u2', data: { text: 'later' } })}\n`);
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'transcript-advanced' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'transcript-advanced' });
 
     fs.writeFileSync(store.manifestPath(sessionId), '{bad');
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
     fs.writeFileSync(store.manifestPath(sessionId), Buffer.alloc(16 * 1024 * 1024 + 1));
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'oversized' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'oversized' });
   });
 
   it('invalidates an older checkpoint before oversized/failed replacement and survives failed unlink', async () => {
@@ -530,17 +594,17 @@ describe('AcceptedHistoryStore', () => {
     const flood = Array.from({ length: 300 }, () => ({ role: 'user', content: 'x'.repeat(60_000) }));
     await expect(store.publish(proposal({ revision: second, messages: flood as any })))
       .resolves.toEqual({ ok: false, reason: 'oversized' });
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
 
     let writes = 0;
     const failing = new AcceptedHistoryStore(path.join(root, 'electron-user-data'), { beforeRename: () => { if (++writes > 1) throw new Error('disk'); } });
     const third = await failing.invalidate(sessionId, 'history-mutation');
     await expect(failing.publish({ ...proposal(), revision: third })).resolves.toEqual({ ok: false, reason: 'write-failed' });
-    expect(failing.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
+    expect(await failing.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
 
     const unlinkFailing = new AcceptedHistoryStore(path.join(root, 'electron-user-data'), { unlink: () => { throw new Error('busy'); } });
     await expect(unlinkFailing.remove(sessionId)).resolves.toEqual({ ok: false, reason: 'unlink-failed' });
-    expect(unlinkFailing.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
+    expect(await unlinkFailing.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
   });
 
   it('validates user attachment bytes and removes orphan sidecars when the real transcript disappears', async () => {
@@ -553,7 +617,7 @@ describe('AcceptedHistoryStore', () => {
     expect(restored).toEqual({ ok: true, messages, messageOrigins: [null], eventUuids: ['u-img'], revision: store.currentRevision(sessionId) });
 
     fs.writeFileSync(image, Buffer.from('pixels-v2'));
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'image-mismatch' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'image-mismatch' });
 
     fs.rmSync(transcript);
     await store.cleanupOrphans();
@@ -592,7 +656,7 @@ describe('AcceptedHistoryStore', () => {
       ] as any })).resolves.toEqual({ ok: true });
       expect(store.reader.stats).toEqual({ full: 1, incremental: 1 });
       // restore() reads the whole file and compares its digest to the manifest's.
-      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      const restored = await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
       expect(restored.ok).toBe(true);
       expect((restored as any).eventUuids).toEqual(['u1', 'r1', 'a1', 'u2', 'a2']);
     });
@@ -603,7 +667,7 @@ describe('AcceptedHistoryStore', () => {
       fs.writeFileSync(transcript, [JSON.stringify({ v: 1, sessionId, title: 'renamed later' }), ...base.map(e => JSON.stringify(e)), ''].join('\n'));
       await expect(publishFresh()).resolves.toEqual({ ok: true });
       expect(store.reader.stats).toEqual({ full: 2, incremental: 0 });
-      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+      expect((await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).ok).toBe(true);
     });
 
     it('a transcript that shrank is re-read in full', async () => {
@@ -612,7 +676,7 @@ describe('AcceptedHistoryStore', () => {
       writeTranscript(base); // back to the shorter file
       await expect(publishFresh()).resolves.toEqual({ ok: true });
       expect(store.reader.stats).toEqual({ full: 2, incremental: 0 });
-      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+      expect((await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).ok).toBe(true);
     });
 
     it('a duplicate uuid appended later still fails the publish', async () => {
@@ -626,11 +690,11 @@ describe('AcceptedHistoryStore', () => {
       fs.appendFileSync(transcript, '{"type":"user-message","sessionId":"' + sessionId + '","uuid":"u2","data":{"te');
       await expect(publishFresh()).resolves.toEqual({ ok: true });
       // The manifest's digest must be of the WHOLE file, torn tail included.
-      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+      expect((await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).ok).toBe(true);
       fs.appendFileSync(transcript, 'xt":"more"}}\n');
       await expect(publishFresh()).resolves.toEqual({ ok: true });
       expect(store.reader.stats.full).toBe(1);
-      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      const restored = await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
       expect(restored.ok).toBe(true);
     });
 
@@ -648,7 +712,7 @@ describe('AcceptedHistoryStore', () => {
         { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
       ] as any })).resolves.toEqual({ ok: true });
       expect(store.reader.stats).toEqual({ full: 1, incremental: 1 });
-      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      const restored = await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
       expect(restored.ok).toBe(true);
       expect((restored as any).eventUuids).toEqual(['u1', 'r1', 'a1', 'u2', 'a2']);
       // The cached prefix survives the junk line: a third publish is incremental again.

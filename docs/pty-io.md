@@ -23,7 +23,7 @@ Three deterministic shapes; no 600ms timing guesses on the Windows path:
 ## Answering a live Ink select menu (2026-07-26, CC 2.1.220)
 
 Driving CC's menus (folder trust, Resume Session, theme/login pickers, usage-limit,
-auto-mode opt-in) is a separate protocol from submitting text, and it was wrong from
+auto-mode opt-in; on 2.1.281 the startup dialogs are unnumbered — see below) is a separate protocol from submitting text, and it was wrong from
 the feature's introduction until 2026-07-26. Two behaviours, both measured with
 `node-pty` + `@xterm/headless` against the real CLI:
 
@@ -39,20 +39,51 @@ the feature's introduction until 2026-07-26. Two behaviours, both measured with
   fix — was false independently of the point above.
 - **A bare digit selects AND submits the matching numbered option.** One byte, no
   Enter, no dependence on cursor position. Verified on `/model`, the real Resume
-  Session prompt, and the folder-trust prompt. This is now the only path buttons take
-  (`menuToButtons` → `state/prompt-input.ts` → `sendPromptInput`); the digit is read
-  off the option's own screen line (`ParsedMenu.optionNumbers`), never inferred from
-  list position.
+  Session prompt, and the 2.1.220 folder-trust prompt. A numbered menu's button always
+  takes this path (`menuToButtons` → `state/prompt-input.ts` → `sendPromptInput`); the
+  digit is read off the option's own screen line (`ParsedMenu.optionNumbers`), never
+  inferred from list position.
 
-The arrow fallback (only reachable for a menu whose options carry no number, which CC
-has never produced) sends navigation and the `\r` as TWO writes 150ms apart. Split that
-way the arrows all land: `UP×5 + DOWN×N` then `\r` committed the option N steps away for
-N = 1,2,3, where the identical sequence in ONE write committed the already-highlighted
-option every time. (Arrow-to-arrow works down to at least 60ms; the submit gap was not
-bisected — 150ms is simply the verified value.) Guards:
-`desktop/tests/keystroke-diagnostic.test.ts`, `prompt-integration.test.ts`,
-`prompt-card.test.tsx`. Protocol facts live in `docs/cc-dependencies.md` → "Ink menu
-option selection"; re-probe on a CC version bump.
+**Unnumbered menus exist since CC 2.1.281** (2026-09-23): the folder-trust dialog, the
+bypass-permissions warning and single-server MCP approval print no "1." / "2.", and a
+typed digit does nothing on them (fixture `untrusted-digit-ignored`). Their buttons carry
+`pick` and go through `state/ink-menu-driver.ts` (`answerInkMenu`) — verified navigation:
+- before the first key the screen must show the SAME option set the card showed (its
+  signature); otherwise nothing is typed;
+- ONE arrow per write, toward the target, each confirmed on screen before the next; the
+  direction comes from where the cursor really is (the menus wrap);
+- Enter alone, only once the cursor sits on exactly the target label; success = the menu
+  left the screen and stayed gone. Timings: `INK_MENU_TIMING`; failures `menu-changed` /
+  `menu-gone` / `not-taken`, worded by the card.
+
+Only ONE device may drive such a menu at a time: `main/menu-answer-lock.ts` (IPC
+`session:menu-lock`, a 20 s lease, one instance shared by desktop IPC and the remote
+WebSocket host; Kotlin `MenuAnswerLock.kt`). Without it a desktop's arrows and a phone's
+Enter could combine into an answer neither person chose. The second device is refused and its card says
+"Another device is answering this right now, so nothing was sent."
+
+The old two-write fallback (navigation, then `\r` 150ms later — `PROMPT_SUBMIT_DELAY_MS`,
+verified on 2.1.220: split that way `UP×5 + DOWN×N` then `\r` committed the option N steps
+away, where ONE write committed the highlighted one) now only serves a `submitInput`
+button from Android's native detector or an older build's saved state.
+
+**The plan card** (`parser/plan-menu-parser.ts` + `state/plan-menu-driver.ts`, 2026-09-23)
+builds its buttons from CC's REAL plan menu (its rows vary plan to plan; the old four
+fixed buttons could APPROVE on "No, refine plan"). Each button types the digit printed on
+its own row, after re-reading the screen and finding the same number and wording. The
+feedback row is a live text box, so when the cursor sits there one up-arrow goes first
+(its own write, confirmed); feedback is typed only into an empty box, and Enter only after
+the box shows exactly that text. Unreadable → the card says so and points at terminal
+view; it never falls back to positions. **Kept cards** (a card whose hook closed while
+CC's menu may still be up) offer buttons only when the prompt on screen shows THIS call
+(`parser/kept-card-binding.ts`); two asks with identical visible input cannot be told apart.
+
+Guards: `desktop/tests/keystroke-diagnostic.test.ts`, `prompt-integration.test.ts`,
+`prompt-card.test.tsx`, `startup-dialogs.test.ts`, `menu-answer-lock.test.ts`,
+`plan-menu-parser.test.ts`, `plan-menu-driver.test.ts`, `kept-card-binding.test.ts`.
+Protocol facts live in `docs/cc-dependencies.md` → "Ink menu option selection",
+"Plan-approval menu" and "Startup dialogs"; re-probe on a CC version bump.
+<!-- verify: {"path": "youcoded/desktop/src/main/menu-answer-lock.ts", "contains": "MENU_ANSWER_LEASE_MS = 20_000"} -->
 
 ## Invariants
 
@@ -60,7 +91,7 @@ option selection"; re-probe on a CC version bump.
 - Don't atomic-write any `body + \r` longer than 56 bytes — the constants are version-coupled and can shift downward.
 - Don't reintroduce bracketed-paste markers (`\x1b[200~...\x1b[201~`) on Windows (ConPTY mangles them).
 - **`useSubmitConfirmation` is the second-line defense** — sends a bare `\r` only when `pending` stays set 8s after submit AND `canRetrySubmit()` passes: `attentionState==='ok'`, no awaiting-approval/running current-turn tools, no in-flight assistant turn, no uncompleted interactive prompt. `attentionState==='ok'` ALONE is not idle (normal mid-turn + while a permission/AskUserQuestion menu is up); gating on it alone auto-answered prompts. Don't gate on `!isThinking` (never clears if CC never got the message).
-- **Never write to the PTY during a pending interaction** — CC's Ink select menu is LIVE while a hook permission card is up. Every automated writer consults `hasPendingInteraction`/`canRetrySubmit` or main-side `HookRelay.hasPendingPermission(sessionId)`. Deliberate menu-drivers (ToolCard plan-approval arrows, TrustGate, terminal-view xterm keystrokes) intentionally bypass. Fixed youcoded#110.
+- **Never write to the PTY during a pending interaction** — CC's Ink select menu is LIVE while a hook permission card is up. Every automated writer consults `hasPendingInteraction`/`canRetrySubmit` or main-side `HookRelay.hasPendingPermission(sessionId)` (Android: `EventBridge.hasPendingPermission`). Deliberate menu-drivers (`state/prompt-input.ts` for PromptCard/TrustGate, `plan-menu-driver.ts` for the plan card, kept-card buttons, terminal-view xterm keystrokes) intentionally bypass; ToolCard itself no longer writes to the PTY. Fixed youcoded#110.
 - **One sanitized string** — the optimistic bubble + PTY send both derive from `components/outgoing-message.ts`; the transcript confirms by content match (PTY send replaces newlines AND tabs with spaces — CC takes a typed tab as the Tab key and drops it, 2026-09-23). A newline-bearing bubble stayed `pending` forever + armed a stray retry `\r`.
 
 ## Diagnostics
@@ -69,6 +100,7 @@ option selection"; re-probe on a CC version bump.
 - `test-conpty/test-worker-submit.mjs` runs the actual forked `pty-worker.js` against real `claude`.
 - `test-conpty/test-multiline-submit.mjs` runs `node-pty` directly (distinguishes CC behavior from worker regressions).
 - `test-conpty/cc-snapshot.mjs` captures the empirical baseline (paste threshold, echo). `test-conpty/README.md` is the reusable methodology.
+- Startup dialogs: `main/startup-dialog-log.ts` writes a `startup-dialog` line to `~/.claude/desktop.log` for every dialog Claude Code shows before a session starts, and a warning after a minute of waiting. `test-conpty/capture-startup-dialogs.mjs` captures the real dialogs in an isolated home (shared helpers: `cc-capture-lib.mjs`); `test-conpty/check-startup-drift.mjs --app` names any change, and `.github/workflows/cc-startup-drift.yml` runs it daily. Procedure: `docs/cc-dependencies.md` → "Startup dialogs".
 
 ## PTY resize (Windows) & ESC routing
 

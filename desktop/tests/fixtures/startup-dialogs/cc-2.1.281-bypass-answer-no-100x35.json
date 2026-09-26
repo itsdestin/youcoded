@@ -1,0 +1,119 @@
+{
+ "ccVersion": "2.1.281",
+ "scenario": "bypass-answer-no",
+ "key": "bypass-answer-no-100x35",
+ "folder": "plain",
+ "trusted": true,
+ "args": [
+  "--dangerously-skip-permissions"
+ ],
+ "files": [],
+ "auth": false,
+ "cols": 100,
+ "rows": 35,
+ "capturedAt": "2026-09-24T04:48:02.542Z",
+ "chunks": [
+  {
+   "t": 215,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 229,
+   "b64": "G1s/MjVs"
+  },
+  {
+   "t": 229,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 235,
+   "b64": "DQ0KG1szODsyOzI1NTsxMDc7MTI4beKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgBtbMzltDQ0KG1szRxtbMzg7MjsyNTU7MTA3OzEyOG0bWzFtV0FSTklORzobWzEyR0NsYXVkZRtbMTlHQ29kZRtbMjRHcnVubmluZxtbMzJHaW4bWzM1R0J5cGFzcxtbNDJHUGVybWlzc2lvbnMbWzU0R21vZGUbWzIybRtbMzltDQ0KDQ0KG1szR0luG1s2R0J5cGFzcxtbMTNHUGVybWlzc2lvbnMbWzI1R21vZGUsG1szMUdDbGF1ZGUbWzM4R0NvZGUbWzQzR3dpbGwbWzQ4R25vdBtbNTJHYXNrG1s1Nkdmb3IbWzYwR3lvdXIbWzY1R2FwcHJvdmFsG1s3NEdiZWZvcmUbWzgxR3J1bm5pbmcNDQobWzNHcG90ZW50aWFsbHkbWzE1R2Rhbmdlcm91cxtbMjVHY29tbWFuZHMuDQ0KG1szR1RoaXMbWzhHbW9kZRtbMTNHc2hvdWxkG1syMEdvbmx5G1syNUdiZRtbMjhHdXNlZBtbMzNHaW4bWzM2R2EbWzM4R3NhbmRib3hlZBtbNDhHY29udGFpbmVyL1ZNG1s2MUd0aGF0G1s2NkdoYXMbWzcwR3Jlc3RyaWN0ZWQbWzgxR2ludGVybmV0G1s5MEdhY2Nlc3MNDQobWzNHYW5kG1s3R2NhbhtbMTFHZWFzaWx5G1sxOEdiZRtbMjFHcmVzdG9yZWQbWzMwR2lmG1szM0dkYW1hZ2VkLg0NCg0NChtbM0dCeRtbNkdwcm9jZWVkaW5nLBtbMThHeW91G1syMkdhY2NlcHQbWzI5R2FsbBtbMzNHcmVzcG9uc2liaWxpdHkbWzQ4R2ZvchtbNTJHYWN0aW9ucxtbNjBHdGFrZW4bWzY2R3doaWxlG1s3MkdydW5uaW5nG1s4MEdpbhtbODNHQnlwYXNzDQ0KG1szR1Blcm1pc3Npb25zG1sxNUdtb2RlLg0NCg0NChtbM0dodHRwczovL2NvZGUuY2xhdWRlLmNvbS9kb2NzL2VuL3NlY3VyaXR5DQ0KDQ0KG1szRxtbMzg7MjsxNzc7MTg1OzI0OW3ina8bWzVHTm8sG1s5R2V4aXQbWzM5bQ0NChtbNUdZZXMsG1sxMEdJG1sxMkdhY2NlcHQNDQoNDQobWzNHG1szODsyOzE1MzsxNTM7MTUzbRtbM21FbnRlchtbOUd0bxtbMTJHY29uZmlybRtbMjBHwrcbWzIyR0VzYxtbMjZHdG8bWzI5R2NhbmNlbBtbMjNtG1szOW0NDQobWzJDG1s0QQ=="
+  },
+  {
+   "t": 240,
+   "b64": "G1s+MHE="
+  },
+  {
+   "t": 240,
+   "b64": "G1s/dRtbYw=="
+  },
+  {
+   "t": 972,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 1224,
+   "b64": "G1syRBtbNEI="
+  },
+  {
+   "t": 1225,
+   "b64": "G1s/MTAwNGwbWz40bRtbPHUbWz8yMDMxbBtbPzIwMDRsGyhCDxtbPzEwMTZsG1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGwbWz8yNWgbNxtbchs4G10wOwc="
+  }
+ ],
+ "marks": [
+  {
+   "t": 968,
+   "label": "dialog-1-visible",
+   "chunkIndex": 6
+  },
+  {
+   "t": 969,
+   "label": "send",
+   "chunkIndex": 6,
+   "data": "\r"
+  },
+  {
+   "t": 1614,
+   "label": "dialog-1-stuck",
+   "chunkIndex": 9
+  },
+  {
+   "t": 1614,
+   "label": "exited",
+   "chunkIndex": 9
+  }
+ ],
+ "dialogs": [
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "WARNING: Claude Code running in Bypass Permissions mode",
+   "options": [
+    "No, exit",
+    "Yes, I accept"
+   ],
+   "numbers": [
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "In Bypass Permissions mode, Claude Code will not ask for your approval before running",
+    "potentially dangerous commands.",
+    "This mode should only be used in a sandboxed container/VM that has restricted internet access",
+    "and can easily be restored if damaged.",
+    "By proceeding, you accept all responsibility for actions taken while running in Bypass",
+    "Permissions mode.",
+    "https://code.claude.com/docs/en/security"
+   ]
+  }
+ ],
+ "outcome": {
+  "steps": [
+   {
+    "dialog": 1,
+    "answered": "No, exit",
+    "gone": false
+   }
+  ],
+  "exitCode": 1,
+  "folderTrusted": true,
+  "bypassAccepted": false,
+  "userSettingsKeys": [
+   "hooks"
+  ],
+  "sessionStartHookAt": []
+ }
+}

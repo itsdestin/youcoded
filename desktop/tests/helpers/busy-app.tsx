@@ -252,8 +252,21 @@ const CWD = '/home/destin/busy-app';
 /** Mounts <App/> with ONE session, then opens the rest the way the app opens
  *  them (session.create → on.sessionCreated), so everything a new tab
  *  attaches is attached through the real path. Ends on the FIRST session,
- *  settled, with every counter at zero. */
-export async function mountBusyApp({ sessions }: { sessions: number }): Promise<BusyApp> {
+ *  settled, with every counter at zero.
+ *
+ *  `beforeMount`, if given, runs right after the bridge is wrapped but before
+ *  <App/> renders — the only window to swap in a test double for something
+ *  App reads once on mount (e.g. `window.claude.window.onCloseRequest`, which
+ *  App subscribes to in a `useEffect` with an empty dep array, so patching it
+ *  AFTER mount would be too late). Replace the whole namespace object
+ *  (`claude.window = {...}`), never a single member on it
+ *  (`claude.window.onCloseRequest = fn`) — every namespace off `claude` is a
+ *  caching catch-all Proxy with no `set` trap (mock-shim.ts's withCatchAll),
+ *  so a member write silently lands on the Proxy's own throwaway target and
+ *  the `get` trap goes on answering from its closed-over impl forever. */
+export async function mountBusyApp(
+  { sessions, beforeMount }: { sessions: number; beforeMount?: (claude: any) => void },
+): Promise<BusyApp> {
   installStorage();
   installBrowserStubs();
   wrapListeners();
@@ -269,6 +282,7 @@ export async function mountBusyApp({ sessions }: { sessions: number }): Promise<
   const store = (window as any).__workbenchStore as MockStore;
   const bridgeCalls: string[] = [];
   wrapBridge(window.claude, bridgeCalls);
+  beforeMount?.(window.claude);
   store.setState((s) => ({
     ...s,
     sessions: [{

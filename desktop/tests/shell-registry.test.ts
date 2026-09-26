@@ -102,6 +102,18 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
     expect(third!.text).toBe('');
   });
 
+  it('read: two reads of one shell at once never hand out the same output twice (B8)', async () => {
+    // WHY: read() is async since 2026-09-24 (blocking-calls B8). A parallel
+    // tool batch can issue two BashOutput calls for one shell; unserialized,
+    // both would read from the same cursor and the model would see it twice.
+    const r = reg.start(startSpec('echo alpha; echo beta', dir));
+    if (!r.ok) throw new Error('start failed');
+    await r.run.exited;
+    const [a, b] = await Promise.all([reg.read(r.run.shellId), reg.read(r.run.shellId)]);
+    expect(a!.text).toBe('alpha\nbeta\n');
+    expect(b!.text).toBe('');
+  });
+
   it('cap: the 6th explicit start is refused naming the running ids; adopt still succeeds', async () => {
     const ids: string[] = [];
     for (let i = 0; i < MAX_EXPLICIT_RUNNING; i++) {

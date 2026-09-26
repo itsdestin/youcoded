@@ -322,6 +322,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   return createPortal(
     <>
       <Dialog
+        screen="chat/update"
         open
         onClose={onClose}
         size="document"

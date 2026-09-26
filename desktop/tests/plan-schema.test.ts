@@ -61,7 +61,7 @@ const nestedRepeat: LooseDocument = {
 };
 
 describe('plan schema and semantic validator', () => {
-  it('a step may name a model, up to 128 characters (design §2/§9, decision 35.4)', () => {
+  it('a step may name a model, up to 128 characters', () => {
     const doc = (model: string) => ({ goal: 'g', steps: [{ id: 's', kind: 'map', specialist: 'worker', task: 't', summary: 's', items: ['x'], model }] });
     expect(PlanDocumentSchema.safeParse(doc('frontier')).success).toBe(true);
     expect(PlanDocumentSchema.safeParse(doc('a'.repeat(128))).success).toBe(true);

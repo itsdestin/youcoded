@@ -14,6 +14,7 @@ import MarketplaceDetailOverlay, {
 } from "../marketplace/MarketplaceDetailOverlay";
 import type { SkillEntry } from "../../../shared/types";
 import { plainMessage } from "../../utils/ipc-error";
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface Props {
   onExit(): void;
@@ -58,6 +59,7 @@ export default function LibraryScreen({
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   // Tab state — defaults to 'skills' if no initialTab provided.
   const [tab, setTab] = useState<'skills' | 'themes' | 'updates'>(initialTab ?? 'skills');
+  useScreenOpen('library/themes', () => setTab('themes')); // photo-only build: `shoot` opens it by name
 
   // Register with the dismissal stack — ESC (desktop) and hardware back
   // (Android) both call onExit. LIFO with any nested overlay so the overlay
@@ -170,6 +172,8 @@ export default function LibraryScreen({
 
   return (
     <div className="fixed inset-0 z-40">
+      {!mp.loading && <ScreenMark name="library" />}
+      {!mp.loading && tab === 'themes' && <ScreenMark name="library/themes" />}
       {/* Pre-blurred wallpaper as a non-scrolling backdrop — pinned to the
           fixed outer wrapper so it stays put as content scrolls. */}
       <WallpaperBackdrop />

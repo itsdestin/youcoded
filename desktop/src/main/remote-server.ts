@@ -88,6 +88,7 @@ import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import { getField, setField } from './claude-settings';
 import { resolveStaticFile } from './remote-static-path';
+import { menuAnswerLock } from './menu-answer-lock';
 
 // 4M UTF-16 units per session — enough for full conversation replay. Named for what it
 // counts (batch 2): JavaScript string length, not bytes.
@@ -383,6 +384,14 @@ export class RemoteServer {
        *  home folder instead of the private place the desktop gives it. main.ts wires it;
        *  tests that pass nothing get the payload untouched. */
       prepareCreate?: <T extends { cwd?: string }>(payload: T) => T;
+      /** Welcome back (design 2026-09-24 §2): a phone/remote browser's own X on a
+       *  session must untrack it too — the desktop's SESSION_DESTROY IPC handler
+       *  does this for the Electron path, but this WS host answers session:destroy
+       *  for remote clients independently and never reaches that handler. Wired
+       *  from main.ts to the (later-constructed) welcome-back-store, the same lazy
+       *  closure-over-a-module-var pattern as `prepareCreate` above. Absent in
+       *  tests that don't care — every call site is optional-chained. */
+      untrackWelcomeBack?: (desktopId: string) => void;
     },
   ) {
     this.devices = new RemoteDeviceStore();
@@ -395,11 +404,13 @@ export class RemoteServer {
     this.prepareCreate = opts?.prepareCreate ?? ((p) => p);
     this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
     this.serveBuiltPage = opts?.serveBuiltPage ?? true;
+    this.untrackWelcomeBack = opts?.untrackWelcomeBack;
   }
   private serveBuiltPage: boolean;
   private listCommands: (() => Promise<unknown[]>) | null;
   private prepareCreate: <T extends { cwd?: string }>(payload: T) => T;
   private listThemes: () => string[];
+  private untrackWelcomeBack?: (desktopId: string) => void;
   private sessionCreate?: (opts: Parameters<SessionManager['createSession']>[0]) => Promise<import('../shared/types').SessionCreateResult>;
   private handoffRoute?: ReturnType<typeof createHandoffTransport>;
   /** WHY: remote requests share the exact Electron backend; no connection may supply another owner's identity. */
@@ -1812,9 +1823,28 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         if (result) {
           this.broadcast({ type: 'session:destroyed', payload: { sessionId: payload.sessionId || payload, focus: { sessionId: this.getFocusSessionId() } } });
+          // Welcome back (design §2): this IS a phone/remote browser's own X —
+          // the same "explicit destroy" case Electron's SESSION_DESTROY handler
+          // untracks for. Without this, a session closed from a phone was wrongly
+          // offered back on the desktop's next launch.
+          this.untrackWelcomeBack?.(payload.sessionId || payload);
         }
         break;
       }
+      // Welcome back (design 2026-09-24 §3, S-phone): the per-install "open at
+      // last shutdown" screen is desktop-only — a phone or remote browser
+      // never shows it — so this host always answers as if nothing is
+      // offered, with no dependency on the desktop-only welcome-back-store.
+      case 'session:reopen-list': {
+        this.respond(client.ws, type, id, []);
+        break;
+      }
+      case 'session:forget-reopen': {
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      // The SAME lock the desktop window uses (menu-answer-lock.ts, review F4).
+      case 'session:menu-lock': this.respond(client.ws, type, id, menuAnswerLock.handle(payload.sessionId, payload.holder, payload.action)); break;
       case 'session:list': {
         const sessions = this.sessionManager.listSessions();
         this.respond(client.ws, type, id, sessions);

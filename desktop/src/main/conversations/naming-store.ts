@@ -99,27 +99,107 @@ export function createNamingStore(namesRoot: string): NamingStore {
     return target;
   }
 
-  function readAt(file: string): NamingRecord | null {
-    try { return parseNamingRecord(fs.readFileSync(file, 'utf8')); } catch { return null; }
+  // WHY async (2026-09-24 main-blocking triage #16/#17/#3): get() runs on
+  // every completed reply (the per-turn auto-naming check) and a sync read or
+  // listing here froze every window for the duration of the disk call.
+  async function readAt(file: string): Promise<NamingRecord | null> {
+    try { return parseNamingRecord(await fs.promises.readFile(file, 'utf8')); } catch { return null; }
   }
 
-  // Fold this id's conflict copies into `base` and delete them. Returns the
-  // merged record and whether anything was folded (the caller must persist it —
-  // deleting a copy without writing its content back would LOSE the name it
-  // carried, which is the one outcome this whole module exists to prevent).
-  function foldConflicts(provider: string, id: string, base: NamingRecord): { rec: NamingRecord; folded: string[] } {
+  // ---- Conflict-copy index ------------------------------------------------
+  // WHY an in-memory index instead of listing the folder every time: the
+  // folder holds one file per conversation ever named, and get() used to list
+  // ALL of it once per reply just to learn that (almost always) no
+  // '<id> (from <device>, <date>).json' copy exists. Now one cheap stat of the
+  // folder answers "has anything been added, removed or renamed since the last
+  // listing?" — the OS bumps a folder's modified time on every such change,
+  // whoever makes it (the sync engine, another app instance, our own writes) —
+  // and the folder is re-listed only when it has.
+  //
+  // The one way a stat could lie is a coarse clock: on a filesystem that
+  // records times in whole seconds (or FAT's two), a copy landing in the same
+  // tick as the change the listing already saw leaves the time unchanged. So a
+  // listing is only trusted when the folder's last change was comfortably
+  // older (RACY_MS) than the moment we looked — git's "racily clean" rule. A
+  // recently changed folder is simply re-listed next time, i.e. the old
+  // behaviour, never a missed copy. A clock that runs backwards likewise just
+  // falls back to listing.
+  const RACY_MS = 3000;
+  interface DirIndex { mtimeMs: number; trusted: boolean; copies: Map<string, string[]> }
+  const dirIndex = new Map<string, DirIndex>();
+  // Single-flight: overlapping callers (a streaming reply's naming check plus a
+  // rename click) share one stat+listing instead of racing two.
+  const listing = new Map<string, Promise<Map<string, string[]>>>();
+
+  function conflictCopiesIn(dir: string): Promise<Map<string, string[]>> {
+    const running = listing.get(dir);
+    if (running) return running;
+    const run = (async () => {
+      const lookedAt = Date.now();
+      let mtimeMs: number;
+      try { mtimeMs = (await fs.promises.stat(dir)).mtimeMs; } catch {
+        dirIndex.delete(dir);
+        return new Map<string, string[]>();
+      }
+      const cached = dirIndex.get(dir);
+      if (cached && cached.trusted && cached.mtimeMs === mtimeMs) return cached.copies;
+      let entries: string[];
+      try { entries = await fs.promises.readdir(dir); } catch {
+        dirIndex.delete(dir);
+        return new Map<string, string[]>();
+      }
+      const copies = new Map<string, string[]>();
+      for (const name of entries) {
+        if (!isConflictCopyName(name)) continue;
+        const base = extractConflictBase(name);
+        if (!base) continue;
+        const list = copies.get(base);
+        if (list) list.push(name); else copies.set(base, [name]);
+      }
+      // The stat came BEFORE the listing, so a change in between is either in
+      // this listing or bumps the time past the recorded one — never lost.
+      dirIndex.set(dir, { mtimeMs, trusted: mtimeMs <= lookedAt - RACY_MS, copies });
+      return copies;
+    })();
+    listing.set(dir, run);
+    const clear = () => { if (listing.get(dir) === run) listing.delete(dir); };
+    run.then(clear, clear);
+    return run;
+  }
+
+  interface ReadCopy { file: string; parsed: NamingRecord | null }
+
+  // This id's conflict copies and their contents. A copy that vanished since
+  // the listing (someone else already folded it) is skipped, not "deleted".
+  async function readConflictCopies(provider: string, id: string): Promise<ReadCopy[]> {
+    let dir: string;
+    try { dir = providerDir(provider); } catch { return []; }
+    const names = (await conflictCopiesIn(dir)).get(`${id}.json`) ?? [];
+    const out: ReadCopy[] = [];
+    for (const name of names) {
+      const file = path.join(dir, name);
+      let raw: string;
+      try { raw = await fs.promises.readFile(file, 'utf8'); } catch { continue; }
+      let parsed: NamingRecord | null = null;
+      try { parsed = parseNamingRecord(raw); } catch { parsed = null; }
+      out.push({ file, parsed });
+    }
+    return out;
+  }
+
+  // Fold this id's conflict copies into `base`. Returns the merged record and
+  // the copies folded (the caller must persist it — deleting a copy without
+  // writing its content back would LOSE the name it carried, which is the one
+  // outcome this whole module exists to prevent). Pure and synchronous so it
+  // can run inside mutateFileUnderLock's synchronous callback.
+  function foldConflicts(base: NamingRecord, copies: ReadCopy[]): { rec: NamingRecord; folded: string[] } {
     const folded: string[] = [];
     let rec = base;
-    let entries: string[];
-    try { entries = fs.readdirSync(providerDir(provider)); } catch { return { rec, folded }; }
-    for (const name of entries) {
-      if (!isConflictCopyName(name) || extractConflictBase(name) !== `${id}.json`) continue;
-      const copy = path.join(providerDir(provider), name);
-      const parsed = readAt(copy);
+    for (const { file, parsed } of copies) {
       // An unparseable copy is still deleted: it carries nothing we can keep,
       // and leaving it makes the engine re-offer it on every read.
       if (parsed) rec = mergeNamingRecords(rec, parsed);
-      folded.push(copy);
+      folded.push(file);
     }
     return { rec, folded };
   }
@@ -130,17 +210,21 @@ export function createNamingStore(namesRoot: string): NamingStore {
     fn: (cur: NamingRecord) => NamingRecord,
   ): Promise<NamingRecord> {
     const target = recordPath(provider, id);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
+    await fs.promises.mkdir(path.dirname(target), { recursive: true });
+    // WHY the copies are read before the lock rather than inside it: the
+    // lock's callback is synchronous, and listing/reading synchronously there
+    // is exactly the main-thread stall this store must not cause. Nothing is
+    // lost by it: only copies whose content is MERGED INTO the written record
+    // are deleted below, and the merge is commutative, so folding a copy into
+    // whatever the lock hands back gives the same record as folding it inside.
+    // A copy that lands after this read is left on disk and folded by the
+    // next read — never deleted unseen.
+    const copies = await readConflictCopies(provider, id);
     let result: NamingRecord | undefined;
-    // Every copy that was MERGED INTO the written record, so the delete below
-    // can never remove one whose content did not make it in. Collected from
-    // inside the lock (a copy can land between the mkdir above and the lock)
-    // rather than from a pre-lock listing — that earlier version deleted only
-    // what it saw first and re-folded the rest on every later read.
     let folded: string[] = [];
     const committed = await mutateFileUnderLock(target, (onDisk) => {
       const existing = (onDisk ? parseNamingRecord(onDisk) : null) ?? emptyNamingRecord(id, provider);
-      const fold = foldConflicts(provider, id, existing);
+      const fold = foldConflicts(existing, copies);
       folded = fold.folded;
       result = fn(fold.rec);
       // WHY: a conditional initial title that lost the lock must not rewrite
@@ -152,7 +236,10 @@ export function createNamingStore(namesRoot: string): NamingStore {
       throw new Error(`naming-store: could not write ${provider}/${id} (lock timeout)`);
     }
     // Only now that the merged content is durable may the copies go.
-    for (const copy of folded) { try { fs.unlinkSync(copy); } catch { /* already gone */ } }
+    for (const copy of folded) { try { await fs.promises.unlink(copy); } catch { /* already gone */ } }
+    // WHY: the deletes bump the folder's time anyway; dropping the index
+    // outright also covers a clock too coarse to show it.
+    if (folded.length) dirIndex.delete(path.dirname(target));
     return result;
   }
 
@@ -162,8 +249,9 @@ export function createNamingStore(namesRoot: string): NamingStore {
     async get(provider: string, id: string): Promise<NamingRecord | null> {
       let target: string;
       try { target = recordPath(provider, id); } catch { return null; }
-      const onDisk = readAt(target);
-      const { rec, folded } = foldConflicts(provider, id, onDisk ?? emptyNamingRecord(id, provider));
+      const onDisk = await readAt(target);
+      const copies = await readConflictCopies(provider, id);
+      const { rec, folded } = foldConflicts(onDisk ?? emptyNamingRecord(id, provider), copies);
       if (folded.length) {
         // A read that discovered conflict copies must persist the fold before
         // answering, or the next read re-does it and a crash in between drops
@@ -181,7 +269,7 @@ export function createNamingStore(namesRoot: string): NamingStore {
     mutate,
 
     async remove(provider: string, id: string): Promise<void> {
-      try { fs.rmSync(recordPath(provider, id), { force: true }); } catch { /* nothing to remove */ }
+      try { await fs.promises.rm(recordPath(provider, id), { force: true }); } catch { /* nothing to remove */ }
     },
   };
 }

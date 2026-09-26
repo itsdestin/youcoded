@@ -64,6 +64,25 @@ sealed class TranscriptEvent {
         // Subagent threading: set when this result originated inside a subagent turn
         val parentAgentToolUseId: String? = null,
         val agentId: String? = null,
+        /** The result only LAUNCHED background work (an Agent's agentId, or a Bash
+         *  backgroundTaskId); its end arrives as BackgroundTask. Desktop: shared/types.ts. */
+        val backgroundTaskId: String? = null,
+        /** SendMessage: the finished helper this call resumed (toolUseResult.resumedAgentId). */
+        val resumedTaskId: String? = null,
+    ) : TranscriptEvent()
+
+    /** Claude Code background work a card launched ended — parsed from its
+     *  <task-notification>. Mirrors desktop's 'background-task' event (2026-09-24). */
+    data class BackgroundTask(
+        override val sessionId: String,
+        override val uuid: String,
+        override val timestamp: Long,
+        val toolUseId: String?,
+        val taskIds: List<String>,
+        /** completed | failed | stopped ('killed' is folded into stopped). */
+        val status: String,
+        val summary: String? = null,
+        val result: String? = null,
     ) : TranscriptEvent()
 
     /** Per-turn usage counts, mirrors desktop's TurnUsage (shared/types.ts). */

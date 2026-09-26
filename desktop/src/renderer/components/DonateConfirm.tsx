@@ -22,6 +22,7 @@ export function DonateConfirm({ open, onClose }: { open: boolean; onClose: () =>
   // createPortal wrapper it used to sit in is gone too.
   return (
     <Dialog
+      screen="settings/donate"
       open
       onClose={onClose}
       layer={3}

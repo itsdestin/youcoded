@@ -130,6 +130,20 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+        // …then the transcript's confirmation, as a live session receives it. WHY
+        // (2026-09-24): USER_PROMPT alone leaves the bubble PENDING, and the reducer
+        // keeps pending bubbles at the timeline's tail (appendAbovePending) — so every
+        // seeded conversation drew its user message BELOW the replies to it. Found
+        // when the workbench started taking the themes' preview screenshots.
+        const confirm: ChatAction = {
+          type: 'TRANSCRIPT_USER_MESSAGE',
+          sessionId,
+          uuid: `fixture-user-${actions.length}`,
+          text: parsed.text,
+          timestamp: FIXTURE_T0 + actions.length * 1000,
+        };
+        state = chatReducer(state, confirm);
+        actions.push(confirm);
       } else if (parsed.type === 'turn_complete') {
         // Without this a seeded conversation is frozen MID-TURN: the thinking
         // chip ("Contemplating…") and the stop button stay up forever, which
@@ -289,6 +303,10 @@ export function loadFixture(
           // denyListed:true → the destructive-deny-list rule won; ToolCard
           // gates the "Always allow" strip behind a consequence warning.
           denyListed: parsed.denyListed === true,
+          // WHY: workbench reviews must exercise the same Full Auto stop as a
+          // live PermissionRequest, not silently downgrade it to generic Yes/No.
+          external: parsed.external === true,
+          permissionMode: parsed.permissionMode,
         };
         state = chatReducer(state, action);
         actions.push(action);

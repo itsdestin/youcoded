@@ -36,7 +36,7 @@
 // a script file) passes by construction. Same posture as guards.ts.
 import * as os from 'os';
 import * as path from 'path';
-import { checkPathGuard } from './guards';
+import { checkPathGuard, toPosix } from './guards';
 import {
   tokenize, expandHome, commandIndex, splitHeredocs, inlineShellScript, inlineInterpreterScript, baseName,
   SHELL_FEEDERS, INTERPRETERS, type Op, type Word,
@@ -165,13 +165,18 @@ export function secretPathVerdict(command: string, ctx: SecretPathContext): Secr
     const tildeHome = word.tilde && (v === '~' || v.startsWith('~/'));
     const rel = tildeHome ? v.slice(2) : v;
     const offset = tildeHome ? 2 : 0;
-    const prefix = tildeHome ? `${home}/` : v.startsWith('/') ? '' : `${base}/`;
+    // WHY toPosix on both sides: the pattern is a shell glob, spelled with `/`,
+    // but on Windows `home`/`base` and `path.join` use `\`. Comparing the two
+    // spellings never matched, so `cat .env*` ran without asking on Windows
+    // (and bash-secret-paths.test.ts failed only on Windows CI). One spelling
+    // for both keeps `*`/`?` confined to a segment on every platform.
+    const prefix = tildeHome ? `${toPosix(home)}/` : v.startsWith('/') ? '' : `${toPosix(base)}/`;
     const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const rx = new RegExp(`^${esc(prefix)}${globSource(rel, (i) => word.glob[i + offset], true)}$`);
     for (const root of [base, home]) {
       for (const sample of SECRET_PATH_SAMPLES) {
         const candidate = path.join(root, sample);
-        if (rx.test(candidate) && isSecret(candidate, false)) return true;
+        if (rx.test(toPosix(candidate)) && isSecret(candidate, false)) return true;
       }
     }
     return false;

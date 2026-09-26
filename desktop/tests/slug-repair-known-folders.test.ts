@@ -106,3 +106,74 @@ describe('runSlugRepair default knownFolders — managed projects + saved folder
     expect(fs.existsSync(path.join(correctDir, 's2.jsonl'))).toBe(false); // nothing moved
   });
 });
+
+// The repair re-derived every transcript's first cwd on every launch (~3,300
+// reads on a big history). It now remembers each answer per file (size +
+// modified time), so the next launch reads only what changed — with the same
+// outcome.
+describe('runSlugRepair remembers first cwds between launches', () => {
+  const F = (uuid: string, cwd: string) => JSON.stringify({ type: 'user', uuid, cwd }) + '\n';
+  let home = '';
+  beforeEach(() => { home = fs.mkdtempSync(path.join(os.tmpdir(), 'r-cwdcache-')); h.managedProjects = []; h.savedFolders = []; });
+  afterEach(() => { vi.restoreAllMocks(); try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* best-effort */ } });
+
+  it('a second launch opens only the transcript that changed', async () => {
+    const P = path.join(home, 'proj');
+    fs.mkdirSync(P, { recursive: true });
+    h.managedProjects = [{ name: 'proj', path: P }];
+    const projectsDir = path.join(home, '.claude', 'projects');
+    const correctDir = path.join(projectsDir, ccProjectSlug(P));
+    fs.mkdirSync(correctDir, { recursive: true });
+    const files = ['a', 'b', 'c'].map((n) => { const f = path.join(correctDir, `${n}.jsonl`); fs.writeFileSync(f, F(`u-${n}`, P)); return f; });
+    const spaceRoot = path.join(home, 'Conversations');
+    fs.mkdirSync(path.join(spaceRoot, 'claude', 'transcripts'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.youcoded'), { recursive: true }); // the app's private home always exists
+    const run = () => runSlugRepair({ projectsDir, homeDir: home, store: createConversationStore(spaceRoot), spaceRoot, stateFile: path.join(home, '.youcoded', 'state.json'), quarantine: new Quarantine(home) });
+
+    const open = vi.spyOn(fs.promises, 'open');
+    const opened = (f: string) => open.mock.calls.filter(([p]) => String(p) === f).length;
+    await run();
+    expect(files.every((f) => opened(f) >= 1)).toBe(true);   // non-vacuous: first launch read them
+    open.mockClear();
+
+    fs.appendFileSync(files[1], F('u-b2', P));                // one transcript changes
+    await run();
+    expect(opened(files[0])).toBe(0);
+    expect(opened(files[2])).toBe(0);
+    expect(opened(files[1])).toBeGreaterThanOrEqual(1);
+  });
+
+  it('remembers "no usable folder" (a Windows-made transcript on Linux) but never a failed read', async () => {
+    // POSIX only (the foreign case is a drive-letter path there), and not as root,
+    // for whom chmod 000 does not make a file unreadable.
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+    const P = path.join(home, 'proj');
+    fs.mkdirSync(P, { recursive: true });
+    h.managedProjects = [{ name: 'proj', path: P }];
+    const projectsDir = path.join(home, '.claude', 'projects');
+    const correctDir = path.join(projectsDir, ccProjectSlug(P));
+    fs.mkdirSync(correctDir, { recursive: true });
+    const foreign = path.join(correctDir, 'win.jsonl');
+    fs.writeFileSync(foreign, F('u-w', 'C:\\Users\\x\\proj'));
+    const locked = path.join(correctDir, 'locked.jsonl');
+    fs.writeFileSync(locked, F('u-l', P));
+    fs.chmodSync(locked, 0o000);                               // unreadable on the first launch
+    const spaceRoot = path.join(home, 'Conversations');
+    fs.mkdirSync(path.join(spaceRoot, 'claude', 'transcripts'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.youcoded'), { recursive: true });
+    const run = () => runSlugRepair({ projectsDir, homeDir: home, store: createConversationStore(spaceRoot), spaceRoot, stateFile: path.join(home, '.youcoded', 'state.json'), quarantine: new Quarantine(home) });
+
+    const open = vi.spyOn(fs.promises, 'open');
+    const opened = (f: string) => open.mock.calls.filter(([p]) => String(p) === f).length;
+    try {
+      await run();
+      expect(opened(foreign)).toBeGreaterThanOrEqual(1);
+      expect(opened(locked)).toBeGreaterThanOrEqual(1);
+      open.mockClear();
+      fs.chmodSync(locked, 0o644);                             // readable now; size and time unchanged
+      await run();
+      expect(opened(foreign)).toBe(0);                         // "no usable folder" was remembered
+      expect(opened(locked)).toBeGreaterThanOrEqual(1);        // the failed read was not
+    } finally { fs.chmodSync(locked, 0o644); }
+  });
+});

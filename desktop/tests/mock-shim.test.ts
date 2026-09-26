@@ -349,10 +349,12 @@ describe('proxy semantics', () => {
     it('nested namespaces resolve to any depth, including under a real impl', async () => {
       const c = shim();
       // `theme.marketplace.list` and `skills.getFeatured` have fixtures since
-      // 2026-08-25; `detail`/`getShareLink` are the still-unimplemented siblings.
+      // 2026-08-25; `theme.marketplace.detail` is still an unimplemented sibling.
       await expect(c.theme.marketplace.detail()).resolves.toEqual([]);
-      await expect(c.skills.getShareLink()).resolves.toEqual([]);
       await expect(c.a.b.c.d()).resolves.toEqual([]);
+      // `skills.getShareLink` got a real impl (ShareSheet's mount-time call,
+      // 2026-09-26) — it now returns a real string, not the catch-all's `[]`.
+      await expect(c.skills.getShareLink('civic-report')).resolves.toBe('https://youcoded.app/skill/civic-report');
       // And the fixture-backed nested member returns real rows, not the catch-all.
       await expect(c.theme.marketplace.list()).resolves.toContainEqual(expect.objectContaining({ slug: 'meadow-mist' }));
       // And the hand-written members of that same namespace still work.
@@ -531,6 +533,21 @@ describe('proxy semantics', () => {
       expect(transcript[0]).toMatchObject({ type: 'assistant-text' });
       expect(transcript.at(-1)).toMatchObject({ type: 'turn-complete' });
       vi.useRealTimers();
+    });
+    // A Claude Code session's typed message is recorded in the transcript first, as Claude
+    // Code does. Without it the sent bubble stayed "pending" — the timeline's tail — and every
+    // reply drew ABOVE the message it answered (seen in the practice app, 2026-09-26).
+    it('session.sendInput records the typed message before the reply', async () => {
+      vi.useFakeTimers();
+      try {
+        const c = createMockShim(createStore('default')) as any;
+        const transcript: any[] = [];
+        c.on.transcriptEvent((e: any) => transcript.push(e));
+        c.session.sendInput('s1', 'hello there');
+        await vi.advanceTimersByTimeAsync(15000);
+        expect(transcript[0]).toMatchObject({ type: 'user-message', data: { text: 'hello there' } });
+        expect(transcript.slice(1).some((e) => e.type === 'assistant-text')).toBe(true);
+      } finally { vi.useRealTimers(); }
     });
   });
 
@@ -869,11 +886,12 @@ describe('promo fakes', () => {
       expect(created.name).toBe('econ midterm brief');
       await new Promise((r) => setTimeout(r, 120));
       expect(hooks).toEqual([expect.objectContaining({ type: 'SessionStart', sessionId: created.id })]);
-      // A plain create is untouched: no hook, the given name.
+      // A plain create keeps its given name, and is lifted out of "Initializing" too
+      // (2026-09-26: it used to sit there forever, so no journey could send a message).
       const plain = await c.session.create({ name: 'fresh', cwd: '/home/you' });
       await new Promise((r) => setTimeout(r, 120));
       expect(plain.name).toBe('fresh');
-      expect(hooks).toHaveLength(1);
+      expect(hooks).toEqual([expect.objectContaining({ sessionId: created.id }), expect.objectContaining({ type: 'SessionStart', sessionId: plain.id })]);
     });
   });
 });

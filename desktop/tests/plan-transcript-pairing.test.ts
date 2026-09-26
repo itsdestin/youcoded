@@ -104,7 +104,9 @@ async function persistedViews(session: HarnessSession, events: TranscriptEvent[]
         revision: durable.currentRevision('s-1'), references: refs.references, messages: accepted.messages,
       })
       : { ok: false as const, reason: refs.reason };
-    const restored = durable.restore({ sessionId: 's-1', transcriptPath, binding: accepted.binding, assemblyDigest: accepted.assemblyDigest });
+    // WHY restore now reads the transcript asynchronously; await before removing
+    // the temporary store so the round-trip tests the bytes it actually wrote.
+    const restored = await durable.restore({ sessionId: 's-1', transcriptPath, binding: accepted.binding, assemblyDigest: accepted.assemblyDigest });
     return { rebuilt: rebuildHistory(persisted), published, restored };
   } finally {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
@@ -152,7 +154,7 @@ function replayIntoReducer(events: TranscriptEvent[]): ChatState {
   return state;
 }
 
-describe('propose_plan: completed calls are persisted with their real arguments (finding 1)', () => {
+describe('propose_plan: completed calls are persisted with their real arguments', () => {
   it('a proposal turn: transcript carries the document, rebuild == live, publish round-trips, ONE card', async () => {
     const { session, events } = planSession([
       scripted(stream(...toolInputChunks('pc', 'propose_plan', JSON.stringify(VALID)), toolCallChunk('pc', 'propose_plan', VALID), finishChunk('tool-calls'))),
@@ -201,7 +203,7 @@ describe('propose_plan: completed calls are persisted with their real arguments 
   });
 });
 
-describe('propose_plan: a plan shell never survives an empty step (finding 2)', () => {
+describe('propose_plan: a plan shell never survives an empty step', () => {
   it('an orderly finish with only an unfinished plan closes the card and does not retry silently', async () => {
     const { session, events, calls } = planSession([
       scripted(stream(...toolInputChunks('bp', 'propose_plan', '{"goal":'), finishChunk('tool-calls'))),
@@ -217,7 +219,7 @@ describe('propose_plan: a plan shell never survives an empty step (finding 2)', 
   });
 });
 
-describe('propose_plan: stall retries close the writing card (finding 3)', () => {
+describe('propose_plan: stall retries close the writing card', () => {
   it('an automatic stall retry pairs the abandoned plan before re-running', async () => {
     const { session, events, calls } = planSession([
       hanging(...toolInputChunks('stalled', 'propose_plan', '{"goal":')),
@@ -358,7 +360,7 @@ describe('propose_plan: every result for a plan id leaves the writing set (findi
   });
 });
 
-describe('propose_plan: a truncated plan after text pushes the text once (finding 5)', () => {
+describe('propose_plan: a truncated plan after text pushes the text once', () => {
   it('pushes ONE assistant message holding the text and the failed plan call', async () => {
     const { session, events } = planSession([
       scripted(stream(...textChunks('t', 'I will plan.'), ...toolInputChunks('tp', 'propose_plan', '{"goal":'), finishChunk('length'))),

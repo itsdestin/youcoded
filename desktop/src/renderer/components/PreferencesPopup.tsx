@@ -116,7 +116,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
 
   return createPortal(
     <>
-      <Dialog open={open} onClose={onClose} title="Claude Code Preferences" size="panel">
+      <Dialog screen="chat/preferences" open={open} onClose={onClose} title="Claude Code Preferences" size="panel">
         {!loaded ? (
           <LoadingState what="preferences" />
         ) : (

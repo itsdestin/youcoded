@@ -56,6 +56,9 @@ export function SpecialistAskBlock({ segment, sessionId, specialistName, compact
       // Helper requests are click-only — see PermissionButtons.noKeyboard.
       noKeyboard
       denyListed={segment.denyListed}
+      toolName={segment.toolName}
+      external={segment.external}
+      specialistName={specialistName ?? 'the specialist'}
       permissionMode={segment.permissionMode}
       command={typeof segment.input?.command === 'string' ? (segment.input.command as string) : undefined}
       folderName={sessionCwd ? sessionCwd.split(/[\\/]/).filter(Boolean).pop() : undefined}

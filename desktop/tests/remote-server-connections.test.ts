@@ -1248,6 +1248,36 @@ describe('RemoteServer — session focus', () => {
       await server.handleMessage(client, JSON.stringify({ type: 'session:destroy', id: 'd1', payload: { sessionId: 's1' } }));
       expect(frames.find((f) => f.type === 'session:destroyed')?.payload).toEqual({ sessionId: 's1', focus: { sessionId: null } });
     });
+
+    // Welcome back (design 2026-09-24 §2): a phone/remote browser's own X is the
+    // same "explicit destroy" case the desktop's SESSION_DESTROY IPC handler
+    // untracks for — this WS host answers session:destroy independently and
+    // never reaches that handler, so it needs its own untrack call.
+    it('untracks Welcome back when a remote client destroys it', async () => {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const sm = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []), destroySession: vi.fn(() => true) });
+      const config = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
+      const untrackWelcomeBack = vi.fn();
+      const server: any = new RemoteServer(sm as never, new EventEmitter() as never, config as never, undefined,
+        { getFocusSessionId: () => null, untrackWelcomeBack });
+      const client = { id: 'c', ws: { readyState: 1, bufferedAmount: 0, send: () => {} }, deviceId: 'd', ip: '', connectedAt: 0 };
+      server.clients.add(client);
+      await server.handleMessage(client, JSON.stringify({ type: 'session:destroy', id: 'd1', payload: { sessionId: 's1' } }));
+      expect(untrackWelcomeBack).toHaveBeenCalledWith('s1');
+    });
+
+    it('does not untrack Welcome back when the destroy fails', async () => {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const sm = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []), destroySession: vi.fn(() => false) });
+      const config = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
+      const untrackWelcomeBack = vi.fn();
+      const server: any = new RemoteServer(sm as never, new EventEmitter() as never, config as never, undefined,
+        { getFocusSessionId: () => null, untrackWelcomeBack });
+      const client = { id: 'c', ws: { readyState: 1, bufferedAmount: 0, send: () => {} }, deviceId: 'd', ip: '', connectedAt: 0 };
+      server.clients.add(client);
+      await server.handleMessage(client, JSON.stringify({ type: 'session:destroy', id: 'd1', payload: { sessionId: 's1' } }));
+      expect(untrackWelcomeBack).not.toHaveBeenCalled();
+    });
   });
 
   describe('a remote client never reports a selection', () => {

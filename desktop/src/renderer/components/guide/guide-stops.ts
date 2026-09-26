@@ -93,7 +93,7 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
   },
   {
     id: 'themes',
-    text: 'Make it yours: pick a theme here. Browse Theme Marketplace, just below, has more themes and plugins made by other people.',
+    text: 'Make it yours: pick a theme here. Browse Marketplace, just below, has more themes and plugins made by other people.',
     screen: 'settings:appearance',
     anchor: 'theme-grid',
     pose: 'inquisitive',

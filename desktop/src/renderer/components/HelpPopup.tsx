@@ -67,7 +67,7 @@ export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, version, b
   // `prompt` height cap on a short window. G-11: a dialog must never switch
   // the body off and then overflow — the shared body scrolls and fades instead.
   return (
-    <Dialog open onClose={onClose} size="prompt" title="Help & feedback">
+    <Dialog screen="settings/help" open onClose={onClose} size="prompt" title="Help & feedback">
       {/* data-guide-anchor: the tour's last stop rings this page. */}
       <div className="space-y-2" data-guide-anchor="help-popup">
         {/* Only where a tour exists (desktop): a row that visibly does nothing

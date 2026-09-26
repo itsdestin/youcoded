@@ -142,3 +142,39 @@ describe('Dialog shell', () => {
 // no-hand-rolled-dialog-shell-exemption-still-applies (youcoded-dev
 // scripts/ast-grep/rules/), which carry the scope and the NOT_DIALOGS
 // exemptions this file used to hold.
+
+// Escape closes a Dialog — the shell's job, not each caller's. Ten dialogs never
+// registered (2026-09-26): Escape did nothing (quit warning, first-time warnings), or
+// closed the panel UNDER the dialog and left the dialog up (Donate, Assistant settings,
+// Create a page), or closed two layers at once (Manage Tags). A sweep of every shoot
+// screen found none left after this.
+describe('Dialog — Escape', () => {
+  it('closes the dialog, and only the top one', async () => {
+    const { EscCloseProvider } = await import('../src/renderer/hooks/use-esc-close');
+    const { fireEvent } = await import('@testing-library/react');
+    const under = vi.fn(); const over = vi.fn();
+    render(
+      <EscCloseProvider>
+        <Dialog open onClose={under} title="Under"><p>a</p></Dialog>
+        <Dialog open onClose={over} title="Over" layer={3}><p>b</p></Dialog>
+      </EscCloseProvider>,
+    );
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(over).toHaveBeenCalledTimes(1);
+    expect(under).not.toHaveBeenCalled();
+  });
+
+  it('a caller with its own layered Escape keeps it (its entry sits above the shell)', async () => {
+    const { EscCloseProvider, useEscClose } = await import('../src/renderer/hooks/use-esc-close');
+    const { fireEvent } = await import('@testing-library/react');
+    const close = vi.fn(); const peel = vi.fn();
+    function Caller() {
+      useEscClose(true, peel);   // e.g. "close the sub-view first"
+      return <Dialog open onClose={close} title="Layered"><p>c</p></Dialog>;
+    }
+    render(<EscCloseProvider><Caller /></EscCloseProvider>);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(peel).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+  });
+});

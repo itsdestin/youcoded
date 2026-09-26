@@ -95,7 +95,7 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }));
 
-describe('the frozen manifest — per-leaf-step resolution (design §5)', () => {
+describe('the frozen manifest — per-leaf-step resolution', () => {
   it('uses the automatic specialist default and freezes the CATALOG label, not the bare id', async () => {
     const m = await new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC });
     expect(m.specialists.reviewer).toEqual({ definitionFingerprint: definitionFingerprint(resolveSpecialist('reviewer')!) });
@@ -293,7 +293,7 @@ const pausedRecord = (over: Partial<PlanRecord> = {}): PlanRecord => ({
   paused: { stepId: 's1', reason: 'a specialist paused' },
   ...over,
 });
-describe('review fix 6: starts that can never succeed are refusals', () => {
+describe('starts that can never succeed are refusals', () => {
   const launchInput = (over: Record<string, unknown> = {}) => ({
     ref: { cwd: '/proj', sessionId: SID }, planId: 'p1', fence: 'f', stepId: 's1', attemptId: 'a1',
     itemIndex: 0, iteration: 0, specialist: 'reviewer', brief: 'b', signal: new AbortController().signal,
@@ -404,7 +404,7 @@ describe('Ask the assistant', () => {
     }
   });
 
-  it('registers the handoff first, records it pending in the write, then queues the notice (§6, review 4-4)', async () => {
+  it('registers the handoff first, records it pending in the write, then queues the notice', async () => {
     const order: string[] = [];
     let bridge!: PlanHostBridge;
     const t = await setup({
@@ -445,7 +445,7 @@ describe('Ask the assistant', () => {
     expect(t.queued[0].text).toContain("The user's question (their own words):\n<user-question>\nCan it finish with 5,000 more?\n</user-question>");
   });
 
-  it('a conversation that cannot take a notice refuses with the real reason, before any write (§6)', async () => {
+  it('a conversation that cannot take a notice refuses with the real reason, before any write', async () => {
     const t = await setup({ noticeRefusal: () => 'You stopped this conversation. Send the assistant a message, then ask again.' });
     const seq = (await t.bridge.journal.get(REF, 'p-h'))!.seq;
     expect(await t.bridge.askAssistant(SID, 'p-h')).toEqual({ ok: false, error: 'You stopped this conversation. Send the assistant a message, then ask again.' });
@@ -454,7 +454,7 @@ describe('Ask the assistant', () => {
     expect(t.queued).toHaveLength(0);
   });
 
-  it('a model that cannot use tools is refused, and every card it is shown hides Ask (§6, review 4-9)', async () => {
+  it('a model that cannot use tools is refused, and every card it is shown hides Ask', async () => {
     let tools: boolean | undefined = false;
     const t = await setup({ planToolsAvailable: () => tools });
     expect(await t.bridge.askAssistant(SID, 'p-h')).toEqual({ ok: false, error: "The model in this conversation can't use tools, so it can't look into the plan." });
@@ -498,7 +498,7 @@ describe('Ask the assistant', () => {
     expect((t.bridge as any).noticeTurns.size).toBe(0);
   });
 
-  it('a question behind a reply in progress is recorded as waiting; delivery starting clears that (§6, review 4-5)', async () => {
+  it('a question behind a reply in progress is recorded as waiting; delivery starting clears that', async () => {
     const t = await setup({ noticeWouldWait: () => true });
     const res = await t.bridge.askAssistant(SID, 'p-h');
     expect(res).toMatchObject({ ok: true, plan: { paused: { handoff: { state: 'pending', waiting: 'reply' } } } });
@@ -516,7 +516,7 @@ describe('Ask the assistant', () => {
     await vi.waitFor(async () => expect((await t.handoff())!.waiting).toBe('reply'));
   });
 
-  it('the backstop clears a question that never started, withdraws it, and leaves an error with Retry (§6, review 4-5)', async () => {
+  it('the backstop clears a question that never started, withdraws it, and leaves an error with Retry', async () => {
     const t = await setup({}, { handoffBackstopMs: 20 });
     await t.bridge.askAssistant(SID, 'p-h');
     const id = (await t.handoff())!.id;
@@ -560,7 +560,7 @@ describe('Ask the assistant', () => {
     expect((await t.handoff())!.state).toBe('pending');
   });
 
-  it('a Stop that lands during the Ask write never leaves the card greyed (review of Task 11, finding 1)', async () => {
+  it('a Stop that lands during the Ask write never leaves the card greyed', async () => {
     let bridge!: PlanHostBridge;
     let fired = false;
     const t = await setup({

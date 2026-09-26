@@ -4,7 +4,8 @@
 // below keeps its own window.claude bridge, mount helper and hooks; only the
 // jsdom accommodations and the DataTransfer model are shared.
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
-import { render, fireEvent, within } from '@testing-library/react';
+import { render, fireEvent, within, screen, waitFor } from '@testing-library/react';
+import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
 import SessionStrip from '../src/renderer/components/SessionStrip';
 import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
 import { SESSION_DRAG_MIME, endLocalSessionDrag } from '../src/renderer/session-drag-model';
@@ -572,6 +573,44 @@ describe('renaming from the session list', () => {
   }
 
   beforeEach(() => { vi.clearAllMocks(); document.body.innerHTML = ''; });
+
+  // Escape closes what is on top, one layer per press (found 2026-09-26: Escape did
+  // nothing to the All Sessions menu, nor to the Rename session dialog opened from it —
+  // neither had joined the app's Escape stack). Mounted inside the provider the app has.
+  describe('SessionStrip — Escape', () => {
+    function mountWithEsc() {
+      const root = document.createElement('div'); root.id = 'root'; document.body.appendChild(root);
+      const view = render(
+        <EscCloseProvider>
+          <ArtifactProvider value={{ state: {} as any, dispatch: vi.fn() } as any}>
+            <SessionStrip sessions={[sess('a', 'alpha'), sess('b', 'beta')]} activeSessionId="a" onSelectSession={vi.fn()}
+              onCreateSession={vi.fn()} onCloseSession={vi.fn()} onOpenResumeBrowser={vi.fn()} onReorderSessions={vi.fn()} myWindowId={MY_WINDOW} />
+          </ArtifactProvider>
+        </EscCloseProvider>,
+        { container: root },
+      );
+      fireEvent.click(view.container.querySelector('[data-hint="All Sessions"]')!);
+      return view;
+    }
+    const menuRow = () => Array.from(document.querySelectorAll('[data-session-id="b"]')).find((el) => !el.closest('[data-session-strip]'));
+
+    it('closes the All Sessions menu', () => {
+      bridge(true);
+      mountWithEsc();
+      expect(menuRow()).toBeTruthy();
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(menuRow()).toBeUndefined();
+    });
+
+    it('closes the Rename session dialog', async () => {
+      bridge(true);
+      mountWithEsc();
+      fireEvent.click(within(menuRow() as HTMLElement).getByRole('button', { name: 'Rename beta' }));
+      expect(await screen.findByText('Rename session')).toBeTruthy();
+      fireEvent.keyDown(window, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByText('Rename session')).toBeNull());
+    });
+  });
 
   describe('SessionStrip — renaming from the session list', () => {
     it('gives every row a pencil beside its name', () => {

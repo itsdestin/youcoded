@@ -8,9 +8,12 @@ import fs from 'fs';
 
 const PERF_LOG = process.env.YOUCODED_PERF_LOG || '';
 
-export function perfMark(name: string): void {
+// `detail` (optional) rides along on the line — e.g. how many conversations a
+// Resume scan read. WHY: background work that repeats (a scan per Resume open)
+// needs a count beside its time to be comparable across machines and runs.
+export function perfMark(name: string, detail?: Record<string, unknown>): void {
   if (!PERF_LOG) return;
   try {
-    fs.appendFileSync(PERF_LOG, JSON.stringify({ name, t: Date.now(), pid: process.pid }) + '\n');
+    fs.appendFileSync(PERF_LOG, JSON.stringify({ ...detail, name, t: Date.now(), pid: process.pid }) + '\n');
   } catch { /* never let instrumentation break boot */ }
 }

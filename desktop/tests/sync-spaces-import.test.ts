@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -22,7 +22,7 @@ beforeEach(() => {
   // match the slug dir the code under test actually creates.
   tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-import-')));
 });
-afterEach(() => fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+afterEach(() => { vi.restoreAllMocks(); fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
 
 describe('import enablers', () => {
   it('MAX_IMPORT_FILE_COUNT is a sane positive bound', () => {
@@ -79,24 +79,24 @@ describe('import enablers', () => {
 });
 
 describe('countFilesBounded', () => {
-  it('counts regular files and skips DEFAULT_IGNORES dirs', () => {
+  it('counts regular files and skips DEFAULT_IGNORES dirs', async () => {
     const root = path.join(tmp, 'proj');
     fs.mkdirSync(path.join(root, 'src'), { recursive: true });
     fs.mkdirSync(path.join(root, 'node_modules', 'x'), { recursive: true });
     fs.writeFileSync(path.join(root, 'a.txt'), 'a');
     fs.writeFileSync(path.join(root, 'src', 'b.ts'), 'b');
     fs.writeFileSync(path.join(root, 'node_modules', 'x', 'huge.js'), 'x');
-    expect(countFilesBounded(root, 100)).toBe(2);
+    expect(await countFilesBounded(root, 100)).toBe(2);
   });
 
-  it('stops early once the limit is exceeded', () => {
+  it('stops early once the limit is exceeded', async () => {
     const root = path.join(tmp, 'many');
     fs.mkdirSync(root, { recursive: true });
     for (let i = 0; i < 10; i++) fs.writeFileSync(path.join(root, `f${i}.txt`), 'x');
-    expect(countFilesBounded(root, 3)).toBe(4); // limit+1: enough to know it's over
+    expect(await countFilesBounded(root, 3)).toBe(4); // limit+1: enough to know it's over
   });
 
-  it('treats a walk deeper than MAX_DEPTH (100) as over-limit', () => {
+  it('treats a walk deeper than MAX_DEPTH (100) as over-limit', async () => {
     // Build a 120-level-deep chain of single-char dirs with one file at the
     // bottom. This stands in for the junction-cycle hazard: isSymbolicLink()
     // misses NTFS junctions, so an unbounded walk would recurse forever. The
@@ -107,7 +107,25 @@ describe('countFilesBounded', () => {
     for (let i = 0; i < 120; i++) deep = path.join(deep, 'd');
     fs.mkdirSync(deep, { recursive: true });
     fs.writeFileSync(path.join(deep, 'bottom.txt'), 'x');
-    expect(countFilesBounded(path.join(tmp, 'deep'), 100)).toBeGreaterThan(100);
+    expect(await countFilesBounded(path.join(tmp, 'deep'), 100)).toBeGreaterThan(100);
+  });
+
+  // main-blocking-calls B6 (2026-09-24): the walk is async now. Pin that it
+  // really yields — a timer queued before the walk must get to run while the
+  // walk is still going (a sync walk would finish first, then the timer).
+  it('yields to other work while it walks (does not hold the main thread)', async () => {
+    const root = path.join(tmp, 'wide');
+    for (let i = 0; i < 30; i++) {
+      fs.mkdirSync(path.join(root, `d${i}`), { recursive: true });
+      fs.writeFileSync(path.join(root, `d${i}`, 'f.txt'), 'x');
+    }
+    let walkDone = false;
+    let timerRanDuringWalk = false;
+    setTimeout(() => { timerRanDuringWalk = !walkDone; }, 0);
+    const n = await countFilesBounded(root, 1000);
+    walkDone = true;
+    expect(n).toBe(30);
+    expect(timerRanDuringWalk).toBe(true);
   });
 });
 
@@ -122,47 +140,47 @@ describe('checkImport', () => {
     return { sourcePath: source, name: 'mywork', projectsRoot, youcodedRoot, liveCwds: [] as string[], ...over };
   }
 
-  it('passes for a plain folder', () => {
-    expect(checkImport(ctx())).toBeNull();
+  it('passes for a plain folder', async () => {
+    expect(await checkImport(ctx())).toBeNull();
   });
 
-  it('rejects a missing source', () => {
-    expect(checkImport(ctx({ sourcePath: path.join(tmp, 'ghost') }))).toMatch(/no longer exists/);
+  it('rejects a missing source', async () => {
+    expect(await checkImport(ctx({ sourcePath: path.join(tmp, 'ghost') }))).toMatch(/no longer exists/);
   });
 
-  it('rejects a file source', () => {
+  it('rejects a file source', async () => {
     const f = path.join(tmp, 'file.txt');
     fs.writeFileSync(f, 'x');
-    expect(checkImport(ctx({ sourcePath: f }))).toMatch(/file, not a folder/);
+    expect(await checkImport(ctx({ sourcePath: f }))).toMatch(/file, not a folder/);
   });
 
-  it('passes validateSyncName failures through verbatim', () => {
-    expect(checkImport(ctx({ name: 'bad:name' }))).toMatch(/character not allowed/);
+  it('passes validateSyncName failures through verbatim', async () => {
+    expect(await checkImport(ctx({ name: 'bad:name' }))).toMatch(/character not allowed/);
   });
 
-  it('rejects a source already inside ~/YouCoded', () => {
+  it('rejects a source already inside ~/YouCoded', async () => {
     const c = ctx();
     const inside = path.join(c.youcodedRoot, 'Personal', 'notes');
     fs.mkdirSync(inside, { recursive: true });
-    expect(checkImport({ ...c, sourcePath: inside })).toMatch(/already inside your YouCoded folder/);
+    expect(await checkImport({ ...c, sourcePath: inside })).toMatch(/already inside your YouCoded folder/);
   });
 
-  it('rejects a source that CONTAINS ~/YouCoded (would move the destination into itself)', () => {
+  it('rejects a source that CONTAINS ~/YouCoded (would move the destination into itself)', async () => {
     const c = ctx();
-    expect(checkImport({ ...c, sourcePath: tmp, name: 'everything' })).toMatch(/contains your YouCoded folder/);
+    expect(await checkImport({ ...c, sourcePath: tmp, name: 'everything' })).toMatch(/contains your YouCoded folder/);
   });
 
-  it('rejects when the destination name is taken', () => {
+  it('rejects when the destination name is taken', async () => {
     const c = ctx();
     fs.mkdirSync(path.join(c.projectsRoot, 'mywork'), { recursive: true });
-    expect(checkImport(c)).toMatch(/already exists/);
+    expect(await checkImport(c)).toMatch(/already exists/);
   });
 
-  it('rejects while a live session has its cwd inside the source', () => {
+  it('rejects while a live session has its cwd inside the source', async () => {
     const c = ctx();
-    expect(checkImport({ ...c, liveCwds: [path.join(c.sourcePath, 'sub')] })).toMatch(/session is currently open/);
-    expect(checkImport({ ...c, liveCwds: [c.sourcePath] })).toMatch(/session is currently open/);
-    expect(checkImport({ ...c, liveCwds: [path.join(tmp, 'elsewhere')] })).toBeNull();
+    expect(await checkImport({ ...c, liveCwds: [path.join(c.sourcePath, 'sub')] })).toMatch(/session is currently open/);
+    expect(await checkImport({ ...c, liveCwds: [c.sourcePath] })).toMatch(/session is currently open/);
+    expect(await checkImport({ ...c, liveCwds: [path.join(tmp, 'elsewhere')] })).toBeNull();
   });
 });
 
@@ -300,5 +318,66 @@ describe('importProjectFolder', () => {
     expect(result.ok).toBe(true);
     expect(fs.existsSync(path.join(newSlugDir, 'session1.jsonl'))).toBe(true);
     expect(fs.existsSync(path.join(newSlugDir, 'existing.jsonl'))).toBe(true);
+  });
+  // main-blocking-calls B6 (2026-09-24): the cross-drive branch is async now
+  // (fs.promises.cp / rm). EXDEV can't be produced inside one tmp dir, so fake
+  // the rename refusal and check the copy-then-delete MOVE still happens.
+  it('cross-drive (EXDEV) import copies then deletes the source — still a MOVE', async () => {
+    const s = await setup();
+    const realRename = fs.promises.rename;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(from) === s.source) throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+      return realRename(from, to);
+    });
+    const result = await importProjectFolder({
+      sourcePath: s.source, name: 'budget-app',
+      projectsRoot: s.projectsRoot, youcodedRoot: s.youcodedRoot,
+      liveCwds: [], claudeDir: s.claudeDir,
+    });
+    expect(result.ok).toBe(true);
+    const dest = path.join(s.projectsRoot, 'budget-app');
+    expect(fs.readFileSync(path.join(dest, 'docs', 'plan.md'), 'utf8')).toBe('the plan');
+    expect(fs.existsSync(s.source)).toBe(false);
+  });
+
+  it('cross-drive import refuses, touching nothing, when the destination appeared after the check', async () => {
+    const s = await setup();
+    const dest = path.join(s.projectsRoot, 'budget-app');
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async () => {
+      // The destination is claimed between the check and the move (e.g. the
+      // sync engine materializing the same project from another device).
+      fs.mkdirSync(path.join(dest, 'theirs'), { recursive: true });
+      throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+    });
+    const cp = vi.spyOn(fs.promises, 'cp');
+    const result = await importProjectFolder({
+      sourcePath: s.source, name: 'budget-app',
+      projectsRoot: s.projectsRoot, youcodedRoot: s.youcodedRoot,
+      liveCwds: [], claudeDir: s.claudeDir,
+    });
+    expect(result).toEqual({ ok: false, error: 'A project with that name already exists' });
+    expect(cp).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(dest, 'theirs'))).toBe(true); // never merged into or deleted
+    expect(fs.existsSync(path.join(s.source, 'docs', 'plan.md'))).toBe(true);
+  });
+
+  // WHY: check + move used to be one synchronous step, so two imports to the
+  // same name in this process could never interleave. Now both await; without
+  // the in-flight claim both could pass the check, and on Linux/macOS rename()
+  // silently replaces an EMPTY destination folder.
+  it('two overlapping imports to the same name: exactly one moves, the other is refused', async () => {
+    const s = await setup();
+    const other = path.join(tmp, 'other-budget');
+    fs.mkdirSync(other, { recursive: true }); // empty — the rename-replaces-empty-dir case
+    const common = { name: 'budget-app', projectsRoot: s.projectsRoot, youcodedRoot: s.youcodedRoot, liveCwds: [], claudeDir: s.claudeDir };
+    const [a, b] = await Promise.all([
+      importProjectFolder({ ...common, sourcePath: s.source }),
+      importProjectFolder({ ...common, sourcePath: other }),
+    ]);
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    expect(a.ok).toBe(true); // the first to start wins
+    expect(b.ok).toBe(false);
+    expect(fs.existsSync(other)).toBe(true); // the refused source is untouched
+    expect(fs.readFileSync(path.join(s.projectsRoot, 'budget-app', 'docs', 'plan.md'), 'utf8')).toBe('the plan');
   });
 });

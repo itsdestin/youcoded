@@ -133,22 +133,16 @@ press enter to confirm`;
       }
     });
 
-    it('falls back to relative DOWN steps plus a SEPARATE submit write when options carry no number', () => {
-      // Only reachable for a menu whose option lines have no digit, which CC has
-      // never produced (the parser requires a numeric prefix to see an option at
-      // all) — so this is the hand-built / future-proofing path.
+    it('gives a menu with no printed numbers verified-navigation buttons, never a blind keystroke', () => {
       const buttons = menuToButtons({
         id: 'test',
         title: 'Test',
         options: ['a', 'b', 'c'],
         selectedIndex: 2,
       });
-
-      // Relative steps from the parsed cursor, wrapping — these menus wrap.
-      expect(buttons[0].input).toBe(DOWN.repeat(1)); // 2 -> 0
-      expect(buttons[1].input).toBe(DOWN.repeat(2)); // 2 -> 1
-      expect(buttons[2].input).toBe('');             // already there
-      expect(buttons.every((b) => b.submitInput === '\r')).toBe(true);
+      expect(buttons.map((b) => b.pick?.index)).toEqual([0, 1, 2]);
+      expect(new Set(buttons.map((b) => b.pick?.signature)).size).toBe(1);
+      expect(buttons.every((b) => b.input === '' && b.submitInput === undefined)).toBe(true);
     });
 
     it('is independent of where the cursor sits for numbered menus', () => {

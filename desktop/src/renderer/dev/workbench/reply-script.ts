@@ -33,6 +33,11 @@ export interface ReplySinks {
   cps?: number;
   /** playback multiplier for the text AND each line's pause (`?replySpeed=`); 1 when absent */
   speed?: number;
+  /** Record the typed message in the transcript first, as Claude Code does. WHY (2026-09-26):
+   *  without it the sent bubble stayed "pending" — and pending bubbles stay the timeline's
+   *  tail — so every reply drew ABOVE the message it answered. Off for `?autoplay=`, whose
+   *  fixture brings its own user_message line. */
+  echoUser?: boolean;
 }
 
 export function parseReplyScript(raw: string): ReplyLine[] {
@@ -77,6 +82,7 @@ export async function playReply(sessionId: string, text: string, script: ReplyLi
     sinks.transcript({ type, sessionId, uuid: uid(), timestamp: stamp(), data });
   const speed = sinks.speed && sinks.speed > 0 ? sinks.speed : 1;
   const perChar = 1000 / ((sinks.cps ?? 40) * speed);
+  if (sinks.echoUser) t('user-message', { text: text.replace(/\r$/, '') });
 
   for (const line of script) {
     await sleep((line.delay ?? 400) / speed);

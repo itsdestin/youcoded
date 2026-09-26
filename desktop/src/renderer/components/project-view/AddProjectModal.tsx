@@ -12,6 +12,7 @@ import { useEscClose } from '../../hooks/use-esc-close';
 import ImportProjectModal from '../ImportProjectModal';
 import { plainMessage } from '../../utils/ipc-error';
 import { Button, InputGroup } from '../ui';
+import { ScreenMark } from '../../shoot-mode';
 
 interface Props {
   onClose: () => void;
@@ -128,6 +129,7 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
         aria-modal
         aria-labelledby="add-project-title"
       >
+        <ScreenMark name="projects/add" />
         {step.kind === 'choose' ? (
           <>
             <div id="add-project-title" className="text-sm font-medium text-fg">Add a project</div>

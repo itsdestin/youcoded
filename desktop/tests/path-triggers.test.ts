@@ -24,78 +24,78 @@ function write(root: string, rel: string, body: string): void {
 }
 
 describe('nested project instructions', () => {
-  it('a file inside a nested package triggers that package\'s CLAUDE.md', () => {
+  it('a file inside a nested package triggers that package\'s CLAUDE.md', async () => {
     const root = tmpRepo();
     write(root, 'CLAUDE.md', 'root rules');
     write(root, 'packages/api/CLAUDE.md', 'api package rules');
-    const hits = buildTriggerIndex(root).match(path.join(root, 'packages', 'api', 'server.ts'));
+    const hits = (await buildTriggerIndex(root)).match(path.join(root, 'packages', 'api', 'server.ts'));
     expect(hits.map((h) => h.body)).toContain('api package rules');
   });
 
-  it('does NOT re-trigger the root file — it is already in the system prompt', () => {
+  it('does NOT re-trigger the root file — it is already in the system prompt', async () => {
     const root = tmpRepo();
     write(root, 'CLAUDE.md', 'root rules');
     write(root, 'packages/api/CLAUDE.md', 'api package rules');
-    const hits = buildTriggerIndex(root).match(path.join(root, 'packages', 'api', 'server.ts'));
+    const hits = (await buildTriggerIndex(root)).match(path.join(root, 'packages', 'api', 'server.ts'));
     expect(hits.map((h) => h.body)).not.toContain('root rules');
   });
 
-  it('a file outside the nested package triggers nothing', () => {
+  it('a file outside the nested package triggers nothing', async () => {
     const root = tmpRepo();
     write(root, 'packages/api/CLAUDE.md', 'api package rules');
-    expect(buildTriggerIndex(root).match(path.join(root, 'README.md'))).toEqual([]);
+    expect((await buildTriggerIndex(root)).match(path.join(root, 'README.md'))).toEqual([]);
   });
 
-  it('AGENTS.md wins over CLAUDE.md in the same directory', () => {
+  it('AGENTS.md wins over CLAUDE.md in the same directory', async () => {
     // Same precedence prompt-assembly uses: AGENTS.md is the cross-tool standard.
     const root = tmpRepo();
     write(root, 'packages/api/AGENTS.md', 'agents wins');
     write(root, 'packages/api/CLAUDE.md', 'claude loses');
-    const bodies = buildTriggerIndex(root).match(path.join(root, 'packages', 'api', 'x.ts')).map((h) => h.body);
+    const bodies = (await buildTriggerIndex(root)).match(path.join(root, 'packages', 'api', 'x.ts')).map((h) => h.body);
     expect(bodies).toContain('agents wins');
     expect(bodies).not.toContain('claude loses');
   });
 
-  it('nested directories stack, least specific first', () => {
+  it('nested directories stack, least specific first', async () => {
     // The model should read the most specific instructions LAST, so they land
     // closest to the work.
     const root = tmpRepo();
     write(root, 'packages/CLAUDE.md', 'all packages');
     write(root, 'packages/api/CLAUDE.md', 'api only');
-    const bodies = buildTriggerIndex(root).match(path.join(root, 'packages', 'api', 'x.ts')).map((h) => h.body);
+    const bodies = (await buildTriggerIndex(root)).match(path.join(root, 'packages', 'api', 'x.ts')).map((h) => h.body);
     expect(bodies).toEqual(['all packages', 'api only']);
   });
 
-  it('a repo with no nested instructions yields an empty index, not a crash', () => {
+  it('a repo with no nested instructions yields an empty index, not a crash', async () => {
     const root = tmpRepo();
-    expect(buildTriggerIndex(root).match(path.join(root, 'x.ts'))).toEqual([]);
+    expect((await buildTriggerIndex(root)).match(path.join(root, 'x.ts'))).toEqual([]);
   });
 
-  it('skips node_modules — a dependency\'s CLAUDE.md is not this project\'s rules', () => {
+  it('skips node_modules — a dependency\'s CLAUDE.md is not this project\'s rules', async () => {
     const root = tmpRepo();
     write(root, 'node_modules/some-dep/CLAUDE.md', 'dependency rules');
-    expect(buildTriggerIndex(root).match(path.join(root, 'node_modules', 'some-dep', 'index.js'))).toEqual([]);
+    expect((await buildTriggerIndex(root)).match(path.join(root, 'node_modules', 'some-dep', 'index.js'))).toEqual([]);
   });
 
-  it('an empty instructions file is not a trigger', () => {
+  it('an empty instructions file is not a trigger', async () => {
     // Injecting an empty <project-rule> block wastes window and says nothing.
     const root = tmpRepo();
     write(root, 'packages/api/CLAUDE.md', '   \n  ');
-    expect(buildTriggerIndex(root).match(path.join(root, 'packages', 'api', 'x.ts'))).toEqual([]);
+    expect((await buildTriggerIndex(root)).match(path.join(root, 'packages', 'api', 'x.ts'))).toEqual([]);
   });
 
-  it('a directory PREFIX that is not a path boundary does not match', () => {
+  it('a directory PREFIX that is not a path boundary does not match', async () => {
     // packages/api must not match packages/api-client — a string startsWith
     // without the separator would.
     const root = tmpRepo();
     write(root, 'packages/api/CLAUDE.md', 'api only');
-    expect(buildTriggerIndex(root).match(path.join(root, 'packages', 'api-client', 'x.ts'))).toEqual([]);
+    expect((await buildTriggerIndex(root)).match(path.join(root, 'packages', 'api-client', 'x.ts'))).toEqual([]);
   });
 
-  it('each trigger carries a stable id and a readable source', () => {
+  it('each trigger carries a stable id and a readable source', async () => {
     const root = tmpRepo();
     write(root, 'packages/api/CLAUDE.md', 'api only');
-    const [hit] = buildTriggerIndex(root).match(path.join(root, 'packages', 'api', 'x.ts'));
+    const [hit] = (await buildTriggerIndex(root)).match(path.join(root, 'packages', 'api', 'x.ts'));
     expect(hit.id).toBeTruthy();
     expect(hit.source).toBe(path.join('packages', 'api', 'CLAUDE.md'));
   });
@@ -110,43 +110,43 @@ describe('nested project instructions', () => {
 describe('path-scoped rules', () => {
   const RULE = '---\npaths:\n  - "src/api/**"\n---\nAlways validate input.';
 
-  it('a rule whose glob matches the touched file is triggered', () => {
+  it('a rule whose glob matches the touched file is triggered', async () => {
     const root = tmpRepo();
     write(root, '.claude/rules/api.md', RULE);
-    const bodies = buildTriggerIndex(root).match(path.join(root, 'src', 'api', 'users.ts')).map((h) => h.body);
+    const bodies = (await buildTriggerIndex(root)).match(path.join(root, 'src', 'api', 'users.ts')).map((h) => h.body);
     expect(bodies.join()).toContain('Always validate input');
   });
 
-  it('a rule whose glob does not match stays out of the conversation', () => {
+  it('a rule whose glob does not match stays out of the conversation', async () => {
     const root = tmpRepo();
     write(root, '.claude/rules/api.md', RULE);
-    expect(buildTriggerIndex(root).match(path.join(root, 'src', 'ui', 'Button.tsx'))).toEqual([]);
+    expect((await buildTriggerIndex(root)).match(path.join(root, 'src', 'ui', 'Button.tsx'))).toEqual([]);
   });
 
-  it('a rule with NO paths: is ignored, never treated as global', () => {
+  it('a rule with NO paths: is ignored, never treated as global', async () => {
     // An eager rule rides every turn — exactly the cost M3 item 5 exists to
     // control. The workspace's own .claude/rules/README.md calls omitting
     // `paths:` a mistake ("omitting it makes the rule EAGER").
     const root = tmpRepo();
     write(root, '.claude/rules/loose.md', 'No frontmatter here.');
-    expect(buildTriggerIndex(root).match(path.join(root, 'anything.ts'))).toEqual([]);
+    expect((await buildTriggerIndex(root)).match(path.join(root, 'anything.ts'))).toEqual([]);
   });
 
-  it('a rule with frontmatter but an empty paths: list is ignored too', () => {
+  it('a rule with frontmatter but an empty paths: list is ignored too', async () => {
     const root = tmpRepo();
     write(root, '.claude/rules/empty.md', '---\npaths:\nlast_verified: 2026-01-01\n---\nBody.');
-    expect(buildTriggerIndex(root).match(path.join(root, 'anything.ts'))).toEqual([]);
+    expect((await buildTriggerIndex(root)).match(path.join(root, 'anything.ts'))).toEqual([]);
   });
 
-  it('multiple globs in one rule all match', () => {
+  it('multiple globs in one rule all match', async () => {
     const root = tmpRepo();
     write(root, '.claude/rules/multi.md', '---\npaths:\n  - "src/api/**"\n  - "src/db/**"\n---\nBoth.');
-    const idx = buildTriggerIndex(root);
+    const idx = (await buildTriggerIndex(root));
     expect(idx.match(path.join(root, 'src', 'api', 'a.ts')).length).toBe(1);
     expect(idx.match(path.join(root, 'src', 'db', 'b.ts')).length).toBe(1);
   });
 
-  it('a single * stays inside one path segment; ** crosses them', () => {
+  it('a single * stays inside one path segment; ** crosses them', async () => {
     // WHY this is pinned: shared/subject-glob.ts deliberately lets * cross
     // separators (correct for bash command strings — "git push*" must match
     // "git push origin x"). Reusing it here would make src/*.ts match
@@ -155,7 +155,7 @@ describe('path-scoped rules', () => {
     const root = tmpRepo();
     write(root, '.claude/rules/shallow.md', '---\npaths:\n  - "src/*.ts"\n---\nShallow only.');
     write(root, '.claude/rules/deep.md', '---\npaths:\n  - "src/**"\n---\nAny depth.');
-    const idx = buildTriggerIndex(root);
+    const idx = (await buildTriggerIndex(root));
 
     const top = idx.match(path.join(root, 'src', 'a.ts')).map((h) => h.body);
     expect(top).toContain('Shallow only.');
@@ -166,26 +166,26 @@ describe('path-scoped rules', () => {
     expect(nested).toContain('Any depth.');
   });
 
-  it('the rule BODY is injected, never its frontmatter', () => {
+  it('the rule BODY is injected, never its frontmatter', async () => {
     const root = tmpRepo();
     write(root, '.claude/rules/api.md', '---\npaths:\n  - "src/**"\nlast_verified: 2026-07-28\n---\nThe actual rule.');
-    const [hit] = buildTriggerIndex(root).match(path.join(root, 'src', 'x.ts'));
+    const [hit] = (await buildTriggerIndex(root)).match(path.join(root, 'src', 'x.ts'));
     expect(hit.body).toBe('The actual rule.');
     expect(hit.body).not.toContain('last_verified');
   });
 
-  it('rules and nested instructions surface together from one index', () => {
+  it('rules and nested instructions surface together from one index', async () => {
     // The point of one mechanism: a single match() answers both.
     const root = tmpRepo();
     write(root, '.claude/rules/api.md', '---\npaths:\n  - "packages/**"\n---\nRule text.');
     write(root, 'packages/api/CLAUDE.md', 'Nested text.');
-    const bodies = buildTriggerIndex(root).match(path.join(root, 'packages', 'api', 'x.ts')).map((h) => h.body);
+    const bodies = (await buildTriggerIndex(root)).match(path.join(root, 'packages', 'api', 'x.ts')).map((h) => h.body);
     expect(bodies).toContain('Rule text.');
     expect(bodies).toContain('Nested text.');
   });
 
-  it('a repo with no .claude/rules directory is fine', () => {
+  it('a repo with no .claude/rules directory is fine', async () => {
     const root = tmpRepo();
-    expect(buildTriggerIndex(root).match(path.join(root, 'x.ts'))).toEqual([]);
+    expect((await buildTriggerIndex(root)).match(path.join(root, 'x.ts'))).toEqual([]);
   });
 });

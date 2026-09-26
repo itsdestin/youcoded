@@ -871,7 +871,7 @@ describe('pausing, stopping and interruption settle before anything is visible',
     expect(runner.live).toBe(0);
   });
 
-  it('review fix 7 follow-up: the heartbeat is stopped and the run is gone BEFORE the paused card is emitted', async () => {
+  it('the heartbeat is stopped and the run is gone BEFORE the paused card is emitted', async () => {
     const runner = new FakeRunner((l) => (l.brief === 'Review a' ? failsWith('used up') : completes('ok')));
     const fence = await seed(record(TWO_STEP));
     const timers = { setInterval: () => 'hb', clearInterval: () => { log.push('heartbeat-cleared'); } };
@@ -1082,7 +1082,7 @@ describe('what a specialist transcript proves', () => {
       .toEqual({ kind: 'resumable', briefDelivered: true });
   });
 
-  it('Task 9a: a tool call without a result → dangling, with its declared effect (the widest of several)', () => {
+  it('a tool call without a result → dangling, with its declared effect (the widest of several)', () => {
     expect(classifyChildTranscript([
       ev('user-message', { text: 'b' }),
       ev('tool-use', { toolUseId: 'w', toolName: 'Write' }),
@@ -1147,7 +1147,7 @@ describe('what a specialist transcript proves', () => {
 // write (settle's finalWrite setting `pauseAcknowledged`) rather than a
 // hand-seeded flag — see describe('Task 9a: automatic recovery …').
 
-describe('Task 9a: automatic recovery (pause handoff §1)', () => {
+describe('automatic recovery', () => {
   const THREE: PlanDocumentV1 = { goal: 'three', steps: [
     { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', summary: 'Plain sentence.', items: ['flaky', 'b', 'c'] },
   ] };
@@ -1223,7 +1223,7 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     expect(p.recoveries).toHaveLength(1);
   });
 
-  it('review fix 4: a recovery the user\'s Continue reset does not count — the next hiccup is retried by itself again', async () => {
+  it('a recovery the user\'s Continue reset does not count — the next hiccup is retried by itself again', async () => {
     const rec = record(THREE, {
       status: 'interrupted', usedTokens: 100,
       recoveries: [{ stepId: 's1', iteration: 0, itemIndex: 0, cause: 'specialist-error', at: 1, relaunched: true, reset: true }],
@@ -1251,14 +1251,14 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     expect(p.recoveries![1].reset).toBeUndefined();
   });
 
-  it('review fix 3: a restart after Continue (a cut-off local call) is not "Retried after an error"', async () => {
+  it('a restart after Continue (a cut-off local call) is not "Retried after an error"', async () => {
     await resumeWithTool('Write');
     const p = await plan();
     expect(p.recoveries).toHaveLength(1);
     expect(projectPlan(p).steps[0].children!.some((c) => c.retried)).toBe(false);
   });
 
-  it('review fix 3: a recovery recorded before a crash (never relaunched automatically) does not mark the row', async () => {
+  it('a recovery recorded before a crash (never relaunched automatically) does not mark the row', async () => {
     const rec = record(THREE, {
       status: 'interrupted', usedTokens: 100,
       recoveries: [{ stepId: 's1', iteration: 0, itemIndex: 0, cause: 'specialist-error', at: 1 }],
@@ -1540,7 +1540,7 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     expect(p.recoveries).toBeUndefined();
   });
 
-  it('review fix 1: a pause never settles while a sibling\'s retry is still journalling its recovery', async () => {
+  it('a pause never settles while a sibling\'s retry is still journalling its recovery', async () => {
     // flaky fails at once → restartAfter's own recovery write (recordRecovery,
     // BEFORE the relaunch) is what this test delays. b's launch is refused
     // outright (never retried), which requests the pause almost immediately —
@@ -1601,7 +1601,7 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     expect(exec.activeRuns()).toBe(0);
   });
 
-  it('review fix 1: a journal failure while a start error is being retried pauses on that specialist (never an escaped error)', async () => {
+  it('a journal failure while a start error is being retried pauses on that specialist (never an escaped error)', async () => {
     const runner = new FakeRunner(() => slowCompletes(5));
     const real = runner.launch.bind(runner);
     runner.launch = async (input) => {
@@ -1724,7 +1724,7 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     expect((await plan()).lease).toBeUndefined();
   });
 
-  it('review fix 6: a start the runner refuses (no approved settings, unusable budget route) is never retried and is Stop-only', async () => {
+  it('a start the runner refuses (no approved settings, unusable budget route) is never retried and is Stop-only', async () => {
     const runner = new FakeRunner(() => completes('ok'));
     const real = runner.launch.bind(runner);
     let calls = 0;
@@ -2210,7 +2210,7 @@ describe('local engine: at most one plan specialist at a time', () => {
   });
 });
 
-describe('recovery charges nothing (design §3 "Crash safety")', () => {
+describe('recovery charges nothing', () => {
   it("a restarted attempt keeps its already-recorded spend; nothing in the recovery/restart path adds to it", async () => {
     const rec = record(TWO_STEP, {
       status: 'interrupted', usedTokens: 700, usedUsd: 0.42,

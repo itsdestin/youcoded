@@ -83,6 +83,13 @@ function makeDeps(opts?: { liveDesktopIds?: string[]; flushRejects?: boolean; pr
     // (the same "the suite certifies the bug" trap that hid the missing native
     // interrupt — 2026-07-18 review).
     destroyNative: vi.fn(async (did: string) => { order.push(`destroyNative:${did}`); }),
+    // Welcome back (design 2026-09-24 §2): a takeover means the conversation
+    // moved to another device, so it must stop being "open here" — every test
+    // that destroys a live holder below checks this ran; the review 1 D1
+    // pairing test ("leaves open while a crash-exit id stays") is completed by
+    // ipc-handlers.test.ts, which pins the OTHER half (an ordinary
+    // destroySession call, outside a takeover, must NOT untrack).
+    untrackWelcomeBack: vi.fn((did: string) => { order.push(`untrackWelcomeBack:${did}`); }),
   };
   return deps;
 }
@@ -179,11 +186,24 @@ describe('createHolderTakeover', () => {
       'push:desktop-1:Laptop-B',       // desktopId reverse-mapped, from.device forwarded
       'destroyNative:desktop-1',       // native teardown BEFORE destroySession...
       'destroy:desktop-1',             // ...matching the sanctioned SESSION_DESTROY order
+      // Welcome back (design §2): untracked right alongside the local destroy,
+      // since this device no longer holds the conversation from this point on.
+      'untrackWelcomeBack:desktop-1',
       'release:claude-abc',            // after the writer has stopped
     ]);
     // The reverse-map picked the correct desktop id, not desktop-2.
     expect(deps.sessionManager.sendInput).toHaveBeenCalledWith('desktop-1', '\x1b');
     expect(deps.pushMoved).toHaveBeenCalledWith('desktop-1', 'Laptop-B');
+  });
+
+  // Design 2026-09-24 §2 (review 1 D1): a takeover-destroyed id must leave
+  // `open` — this pins that half; ipc-handlers.test.ts pins the other half (an
+  // ordinary destroySession/session-exit, with NO takeover, must NOT untrack).
+  it('does not touch Welcome back when there is no live holder to take over', async () => {
+    const deps = makeDeps({ liveDesktopIds: [] });
+    const handler = createHolderTakeover(deps as any);
+    await handler('claude-abc');
+    expect(deps.untrackWelcomeBack).not.toHaveBeenCalled();
   });
 
   // Task 9: a NATIVE holder has no PTY, so the ESC byte is a no-op. Step 3 must
@@ -204,6 +224,7 @@ describe('createHolderTakeover', () => {
       'push:native-1:Laptop-B',
       'destroyNative:native-1',
       'destroy:native-1',
+      'untrackWelcomeBack:native-1',
       'release:claude-nat',
     ]);
     expect(deps.quiesceNative).toHaveBeenCalledWith('native-1');
@@ -306,7 +327,7 @@ describe('createHolderTakeover', () => {
     await expect(handler('c1', { deviceId: 'x', device: 'X' })).resolves.toBeUndefined();
     // Step 8 still runs after the guarded push throw — no half-done handoff.
     expect(deps.sessionManager.destroySession).toHaveBeenCalledWith('d1');
-    expect(deps.order).toEqual(['interrupt:d1:"\\u001b"', 'flush:c1', 'push:d1', 'destroyNative:d1', 'destroy:d1', 'release:c1']);
+    expect(deps.order).toEqual(['interrupt:d1:"\\u001b"', 'flush:c1', 'push:d1', 'destroyNative:d1', 'destroy:d1', 'untrackWelcomeBack:d1', 'release:c1']);
   });
 
   // 2026-07-18 (investigation Break 4). destroySession alone tears down the PTY
@@ -558,5 +579,53 @@ describe('createHolderTakeover', () => {
     } as any)('c1', { deviceId: 'requester', device: 'Other' });
     expect(d.leaseClient.release).toHaveBeenCalledWith('c1');
     expect(endQuiesceNative).not.toHaveBeenCalled();
+  });
+
+  // Design 2026-09-24 §2 — the OTHER destroySession call site (captureWriter's
+  // pinned-snapshot path, distinct from the plain quiesce/interrupt path tested
+  // above) must also untrack, not just the more common branch.
+  it('pinned-snapshot path: untracks Welcome back once the native writer is torn down', async () => {
+    const d = makeDeps({ liveDesktopIds: ['nat'], providers: { nat: 'native' } }); d.sessionIdMap.set('nat', 'c1');
+    await createHolderTakeover({ ...d, senderDeviceId: 'sender',
+      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+      captureWriter: () => ({ provider: 'native', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
+        persisted: () => true, current: () => true }),
+    } as any)('c1', { deviceId: 'requester', device: 'Other' });
+    expect(d.untrackWelcomeBack).toHaveBeenCalledWith('nat');
+  });
+
+  // F1 (code review 2026-09-24): the pinned-snapshot path's 'claude' branch
+  // (stopSessionForHandoff, the `else` beside the native destroy above) fell
+  // through with NO untrackWelcomeBack call at all — only the native sibling
+  // had one. A Claude Code session handed off through this verified-receipt
+  // path stayed marked "open" on this device forever and got wrongly
+  // re-offered by the next Welcome back screen. Proven stopped AND merely
+  // attempted-but-unproven ('unknown') both must untrack: like the native
+  // branch's destroySession() call above, calling stopSessionForHandoff is
+  // this device's own act of giving up the writer — independent of whether
+  // the stop is later provable (which only gates `proven`/publish, not
+  // whether this device still holds the conversation).
+  it("pinned-snapshot path: untracks Welcome back for a Claude Code writer once stop is proven", async () => {
+    const d = makeDeps({ liveDesktopIds: ['cc'], providers: { cc: 'claude' } }); d.sessionIdMap.set('cc', 'c1');
+    await createHolderTakeover({ ...d, senderDeviceId: 'sender',
+      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+      captureWriter: () => ({ provider: 'claude', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
+        persisted: () => true, current: () => true }),
+      sessionManager: { ...d.sessionManager, stopSessionForHandoff: vi.fn(async () => ({ status: 'stopped' as const })) },
+    } as any)('c1', { deviceId: 'requester', device: 'Other' });
+    expect(d.untrackWelcomeBack).toHaveBeenCalledWith('cc');
+  });
+
+  it("pinned-snapshot path: untracks Welcome back for a Claude Code writer even when the stop is unproven", async () => {
+    const d = makeDeps({ liveDesktopIds: ['cc'], providers: { cc: 'claude' } }); d.sessionIdMap.set('cc', 'c1');
+    const protectUnsafe = vi.fn();
+    await createHolderTakeover({ ...d, senderDeviceId: 'sender', protectUnsafe,
+      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+      captureWriter: () => ({ provider: 'claude', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
+        persisted: () => true, current: () => true }),
+      sessionManager: { ...d.sessionManager, stopSessionForHandoff: vi.fn(async () => ({ status: 'unknown' as const })) },
+    } as any)('c1', { deviceId: 'requester', device: 'Other' });
+    expect(protectUnsafe).toHaveBeenCalledWith('c1'); // unproven still refuses the handoff...
+    expect(d.untrackWelcomeBack).toHaveBeenCalledWith('cc'); // ...but this device already gave up the writer
   });
 });

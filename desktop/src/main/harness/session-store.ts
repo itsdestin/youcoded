@@ -16,6 +16,8 @@ import type { ModelBinding } from '../../shared/provider-types';
 import { nativeStoreSlug } from '../slug-encoding';
 import { NativeHome } from '../native-home';
 import { shortenPathTokens } from '../conversations/naming-core';
+import { createScanCache, type ScanCache } from '../scan-cache';
+import path from 'path';
 
 export interface NativeSessionHeader {
   v: 1;
@@ -423,17 +425,38 @@ export class SessionStore {
   async listAsync(options?: { includeChildren?: boolean }): Promise<NativeSessionListEntry[]> {
     const includeChildren = options?.includeChildren ?? false;
     const files = await this.home.listSessionFilesAsync();
+    const cache = this.listCache();
+    const keyOf = (f: { slug: string; sessionId: string }) => `${f.slug}/${f.sessionId}`;
     // WHY bounded (review, 2026-09-16): opening every session file at once could
     // exhaust file descriptors on a long-used install, and an open failure
     // reads back as "not a native session" — rows would vanish from Resume
     // with no error. Sixteen at a time keeps the read parallel and safe.
-    const heads = await mapLimit(files, 16, (file) => this.home.readSessionHeadAsync(file.slug, file.sessionId));
-    const out: NativeSessionListEntry[] = [];
-    files.forEach((file, i) => {
-      const entry = this.listEntry(file, heads[i], includeChildren);
-      if (entry) out.push(entry);
+    const rows = await mapLimit(files, 16, async (file) => {
+      const stat = { size: file.sizeBytes, mtimeMs: file.mtimeMs };
+      const hit = await cache.get(keyOf(file), stat);
+      if (hit) return hit;
+      const lines = await this.home.readSessionHeadAsync(file.slug, file.sessionId);
+      // Worked out WITH children so one remembered answer serves both kinds of caller.
+      const entry = this.listEntry(file, lines, true);
+      const row = { entry, child: !!entry && (entry.sessionKind === 'specialist' || !!entry.parentSessionId) };
+      // An empty read is "could not read right now", not an answer — never remember it.
+      if (lines.length > 0) cache.set(keyOf(file), stat, row);
+      return row;
     });
+    cache.prune(new Set(files.map(keyOf)));
+    const out: NativeSessionListEntry[] = [];
+    for (const r of rows) if (r.entry && (includeChildren || !r.child)) out.push(r.entry);
     return sortNewestFirst(out);
+  }
+
+  // WHY remembered across restarts (2026-09-26): this list is read before every
+  // Resume open and re-parsed ~1,000 file heads each time (measured 0.8–2 s). A
+  // file with the same size and modified time gives the same row. Lives in the
+  // app-private home (never synced). See scan-cache.ts.
+  private scanCache: ScanCache<{ entry: NativeSessionListEntry | null; child: boolean }> | null = null;
+  private listCache() {
+    this.scanCache ??= createScanCache(path.join(this.home.root, 'cache', 'native-session-list.json'), 1);
+    return this.scanCache;
   }
 
   /** The name the Resume Browser shows for one session: its header title, else

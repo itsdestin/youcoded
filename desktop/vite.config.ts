@@ -40,5 +40,11 @@ export default defineConfig({
     // release builds, which render unchanged. See src/shared/version-line.ts.
     __BUILD_CHANNEL__: JSON.stringify(process.env.YOUCODED_BUILD_CHANNEL ?? ''),
     __PARTYKIT_HOST__: JSON.stringify(process.env.VITE_PARTYKIT_HOST ?? null),
+    // The photo-only build `shoot` photographs (scripts/shoot/, VITE_SHOOT=1 plus
+    // VITE_WORKBENCH=1). Replaced by a literal at every use site so the screen
+    // openers and marks in shoot-mode.tsx fold away in the real app AND in the
+    // landing page's demo build, which strangers can click. Guard:
+    // tests/shoot-build-guard.test.ts.
+    __SHOOT__: JSON.stringify(process.env.VITE_SHOOT === '1'),
   },
 });

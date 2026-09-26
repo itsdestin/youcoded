@@ -31,7 +31,7 @@ export default function ModelSwitchPrompt({ open, currentLabel, targetLabel, sta
   useEscClose(open, onClose);
   const working = state.kind === 'working';
   return (
-    <Dialog open={open} onClose={onClose} layer={3} size="prompt" title="Switch model" scrollBody={false}>
+    <Dialog open={open} onClose={onClose} layer={3} size="prompt" title="Switch model" scrollBody={false} screen="chat/model-picker/switch-model">
       <div className="p-5 space-y-4">
         <p className="text-sm text-fg">
           This chat is too long for <span className="font-medium">{targetLabel}</span>.{' '}

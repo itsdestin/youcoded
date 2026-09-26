@@ -653,7 +653,7 @@ describe('ProviderRegistry', () => {
 
   // Task 13 (decision 25) — the rest of the readiness table, plus the promise
   // that it spends nothing: no fetch, no model client, no throw.
-  describe('credentialReadiness (Task 13, decision 25)', () => {
+  describe('credentialReadiness', () => {
     const NEEDS_KEY = (label: string) => `${label} needs an API key — add one in Settings → Providers.`;
 
     it('answers every provider type with the sentence languageModel() already uses', async () => {

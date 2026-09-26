@@ -106,7 +106,7 @@ async function proposeAndPause(document?: PlanDocumentV1): Promise<string> {
   return view.planId;
 }
 
-describe('a specialist tier change is a clean, silent resume (design §5)', () => {
+describe('a specialist tier change is a clean, silent resume', () => {
   it('Continue after a switch to a different model runs at once, re-freezes in the SAME write as the status change, and recomputes the estimate', async () => {
     const planId = await proposeAndPause();
     const before = (await journal.get(REF, planId))!.estimate;

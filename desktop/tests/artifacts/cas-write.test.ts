@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, utimesSync, promises as fsp } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { casWrite, CAS_REPLACE_ANY } from '../../src/main/artifacts/cas-write';
+import { casWrite, CAS_REPLACE_ANY, renameReplacing } from '../../src/main/artifacts/cas-write';
 
 describe('casWrite', () => {
   let dir: string;
@@ -60,10 +60,12 @@ describe('casWrite', () => {
   it('unlinks its temp file when the rename fails (no permanent orphan)', async () => {
     // A pid+time temp name is never overwritten by the next write, so a strand
     // from a failed rename (e.g. Windows AV EPERM) would linger forever unless
-    // the error path unlinks it.
+    // the error path unlinks it. The hold never lets go (mockRejectedValue, not
+    // …Once): on Windows renameReplacing retries a brief EPERM, so a one-shot
+    // hold would succeed there and never reach the error path this pins.
     const renameSpy = vi
       .spyOn(fsp, 'rename')
-      .mockRejectedValueOnce(Object.assign(new Error('EPERM: simulated AV hold'), { code: 'EPERM' }));
+      .mockRejectedValue(Object.assign(new Error('EPERM: simulated AV hold'), { code: 'EPERM' }));
     try {
       const target = join(dir, 'foo.json');
       await expect(casWrite(target, null, '{}')).rejects.toThrow('EPERM');
@@ -217,5 +219,42 @@ describe('casWrite — head probe before whole-file read', () => {
     const result = await casWrite(target, '2026-01-01T00:00:00Z', '{"v":1}', probe);
     expect(result.committed).toBe(false);
     expect(existsSync(target)).toBe(false);
+  });
+});
+
+// Windows refuses to rename over a file another handle has open for that
+// instant (a reader, antivirus); one un-retried attempt lost the whole write.
+describe('renameReplacing — a momentarily busy target on Windows', () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cas-rename-')); });
+  afterEach(() => { vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }); });
+
+  const busy = (code: string) => Object.assign(new Error(code), { code });
+
+  it('on Windows, retries a busy rename and lands the write', async () => {
+    const tmp = join(dir, 'a.tmp'); const target = join(dir, 'a.json');
+    writeFileSync(tmp, 'new'); writeFileSync(target, 'old');
+    const real = fsp.rename.bind(fsp);
+    let calls = 0;
+    vi.spyOn(fsp, 'rename').mockImplementation(async (a, b) => {
+      calls++;
+      if (calls <= 2) throw busy(calls === 1 ? 'EPERM' : 'EBUSY');
+      return real(a, b);
+    });
+    await renameReplacing(tmp, target, 'win32');
+    expect(calls).toBe(3);
+    expect(readFileSync(target, 'utf8')).toBe('new');
+  });
+
+  it('on Windows, gives up and throws once the target stays busy', async () => {
+    const spy = vi.spyOn(fsp, 'rename').mockRejectedValue(busy('EACCES'));
+    await expect(renameReplacing(join(dir, 'x.tmp'), join(dir, 'x.json'), 'win32')).rejects.toMatchObject({ code: 'EACCES' });
+    expect(spy.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('elsewhere, a permission error is real and throws on the first attempt', async () => {
+    const spy = vi.spyOn(fsp, 'rename').mockRejectedValue(busy('EACCES'));
+    await expect(renameReplacing(join(dir, 'x.tmp'), join(dir, 'x.json'), 'linux')).rejects.toMatchObject({ code: 'EACCES' });
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

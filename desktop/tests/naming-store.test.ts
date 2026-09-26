@@ -1,7 +1,7 @@
 // Disk behaviour for the naming sidecar: it writes where no older client
 // looks, it refuses path escapes, and a sync conflict copy is folded in rather
 // than discarded — losing a copy here would lose a name the user typed.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,7 +10,7 @@ import { emptyNamingRecord, NAMING_SCHEMA_VERSION } from '../src/main/conversati
 
 let root = '';
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'naming-store-')); });
-afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
 
 const nameOf = (p: string, id: string) => path.join(root, p, `${id}.json`);
 
@@ -166,5 +166,76 @@ describe('createNamingStore', () => {
     await store.remove('claude', 'c1');
     await store.remove('claude', 'c1');
     expect(await store.get('claude', 'c1')).toBeNull();
+  });
+});
+
+// WHY (2026-09-24 main-blocking triage B3): get() runs on every completed
+// reply and used to list the whole naming folder synchronously each time.
+// These pin that the folder is listed only when it changed, that a stale or
+// racy index never hides a sync conflict copy, and that nothing blocks.
+describe('conflict-copy index', () => {
+  const OLD = new Date(Date.now() - 60_000);
+  const age = (p: string) => fs.utimesSync(path.join(root, p), OLD, OLD);
+  const phoneCopy = (id: string, manual: string) => {
+    fs.writeFileSync(path.join(root, 'claude', `${id} (from phone, 2026-09-09).json`), JSON.stringify({
+      ...emptyNamingRecord(id, 'claude'), schema: NAMING_SCHEMA_VERSION,
+      manual, manualAt: '2026-09-09T11:00:00.000Z',
+    }));
+  };
+
+  it('does not re-list an unchanged folder on every read', async () => {
+    const store = createNamingStore(root);
+    await store.mutate('claude', 'c1', (cur) => ({ ...cur, manual: 'Mine', manualAt: '2026-09-09T10:00:00.000Z' }));
+    age('claude');
+    const readdir = vi.spyOn(fs.promises, 'readdir');
+    for (let i = 0; i < 5; i++) expect((await store.get('claude', 'c1'))!.manual).toBe('Mine');
+    expect(readdir).toHaveBeenCalledTimes(1);
+  });
+
+  it('still folds a copy that lands after the folder was indexed', async () => {
+    const store = createNamingStore(root);
+    await store.mutate('claude', 'c1', (cur) => ({ ...cur, auto: 'Auto', autoAt: '2026-09-09T10:00:00.000Z' }));
+    age('claude');
+    await store.get('claude', 'c1'); // warms a trusted index
+    phoneCopy('c1', 'Named on the phone'); // bumps the folder's time
+    expect(await store.get('claude', 'c1')).toMatchObject({ manual: 'Named on the phone', auto: 'Auto' });
+    expect(fs.readdirSync(path.join(root, 'claude'))).toEqual(['c1.json']);
+  });
+
+  it('never trusts an index taken right after a change (coarse-clock filesystems)', async () => {
+    const store = createNamingStore(root);
+    await store.mutate('claude', 'c1', (cur) => ({ ...cur, auto: 'Auto', autoAt: '2026-09-09T10:00:00.000Z' }));
+    // A whole-second, just-now folder time, as a coarse filesystem records it.
+    const dir = path.join(root, 'claude');
+    const tick = Math.floor(Date.now() / 1000);
+    fs.utimesSync(dir, tick, tick);
+    await store.get('claude', 'c1'); // folder changed just now: index not trusted
+    // A copy lands in the same tick: the folder time does not move, so only
+    // the racy rule stands between the stale index and a missed copy.
+    phoneCopy('c1', 'Same tick');
+    fs.utimesSync(dir, tick, tick);
+    expect((await store.get('claude', 'c1'))!.manual).toBe('Same tick');
+  });
+
+  it('mutate folds copies found before the lock and deletes only those', async () => {
+    const store = createNamingStore(root);
+    await store.mutate('claude', 'c1', (cur) => ({ ...cur, auto: 'Auto', autoAt: '2026-09-09T10:00:00.000Z' }));
+    phoneCopy('c1', 'Phone');
+    const rec = await store.mutate('claude', 'c1', (cur) => ({ ...cur, auto: 'Newer', autoAt: '2026-09-09T12:00:00.000Z' }));
+    expect(rec).toMatchObject({ manual: 'Phone', auto: 'Newer' });
+    expect(fs.readdirSync(path.join(root, 'claude'))).toEqual(['c1.json']);
+    expect(JSON.parse(fs.readFileSync(nameOf('claude', 'c1'), 'utf8'))).toMatchObject({ manual: 'Phone', auto: 'Newer' });
+  });
+
+  it('shares one listing between overlapping reads and uses no sync fs', async () => {
+    const store = createNamingStore(root);
+    await store.mutate('claude', 'c1', (cur) => ({ ...cur, manual: 'Mine', manualAt: '2026-09-09T10:00:00.000Z' }));
+    await store.mutate('claude', 'c2', (cur) => ({ ...cur, manual: 'Other', manualAt: '2026-09-09T10:00:00.000Z' }));
+    const readdir = vi.spyOn(fs.promises, 'readdir');
+    const sync = [vi.spyOn(fs, 'readdirSync'), vi.spyOn(fs, 'readFileSync'), vi.spyOn(fs, 'statSync')];
+    const [a, b] = await Promise.all([store.get('claude', 'c1'), store.get('claude', 'c2')]);
+    expect([a!.manual, b!.manual]).toEqual(['Mine', 'Other']);
+    expect(readdir).toHaveBeenCalledTimes(1);
+    for (const s of sync) expect(s).not.toHaveBeenCalled();
   });
 });

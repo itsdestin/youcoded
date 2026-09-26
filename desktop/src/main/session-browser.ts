@@ -11,6 +11,11 @@ import { isPlaceholderModelId } from '../shared/model-ids';
 import { ccProjectSlug, nativeStoreSlug, CC_SLUG_MAX } from './slug-encoding';
 import type { NativeSessionListEntry } from './harness/session-store';
 import { r1CwdForDir } from './transcript-cwd';
+import { perfMark } from './perf-marks';
+import { createScanCache, type ScanCache } from './scan-cache';
+
+// Numbers each Resume scan so overlapping scans' perf marks can be paired.
+let browseScanSeq = 0;
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -124,8 +129,31 @@ async function withRetry<T>(fn: () => Promise<T>, attempts: number = 3, delayMs:
 // helpers below ran on fs.*Sync — called ONCE PER PROJECT SLUG on every
 // Resume Browser open, so a big ~/.claude/projects tree froze the main
 // thread for the whole scan. listPastSessions's one call site now awaits.
+// WHY remember R1 per slug directory (2026-09-26): r1CwdForDir's exhaustive
+// tier reads EVERY transcript in the directory in full when no first-line cwd
+// re-slugs to the directory name — e.g. a folder named "PAF 574 - Diversity,
+// Ethics, & Public Change" on a real history: ~6 MB read and parsed on every
+// Resume open, ~0.5 s of a settled open. The answer only depends on which
+// transcripts the directory holds, so it is kept (on disk, across restarts)
+// until the directory's modified time changes — i.e. a transcript is added or
+// removed. Only the R1 answer (including "none") is kept; the filesystem
+// fallbacks below still run live, since they depend on folders elsewhere.
+type R1Answer = { cwd: string | null };
+let r1Answers: ScanCache<R1Answer> = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'slug-r1.json'), 1);
+async function r1CwdForSlug(slug: string): Promise<string | null> {
+  const dir = path.join(PROJECTS_DIR, slug);
+  const st = await fs.promises.stat(dir).catch(() => null);
+  if (!st) return r1CwdForDir(dir);
+  const key = { size: 0, mtimeMs: st.mtimeMs };
+  const hit = await r1Answers.get(slug, key);
+  if (hit) return hit.cwd;
+  const cwd = await r1CwdForDir(dir);
+  r1Answers.set(slug, key, { cwd });
+  return cwd;
+}
+
 async function resolveSlugToPath(slug: string): Promise<string> {
-  const recorded = await r1CwdForDir(path.join(PROJECTS_DIR, slug));
+  const recorded = await r1CwdForSlug(slug);
   if (recorded) return recorded;
 
   const forward = await forwardResolveSlug(slug);
@@ -404,6 +432,25 @@ export async function readSessionTranscriptMeta(jsonlPath: string, wantTitle: bo
 type MetaEntry = { size: number; mtimeMs: number; wantTitle: boolean; meta: Promise<SessionTranscriptMeta> };
 const metaCache = new Map<string, MetaEntry>();
 
+// WHY a disk layer too (2026-09-26): the in-memory cache above dies with the
+// process, so the first Resume open after every launch re-read all ~1,100
+// transcripts (the open people notice). Same size + modified time = same answer.
+// Only real Claude Code transcripts under ~/.claude/projects are remembered —
+// never a test's temp tree. See scan-cache.ts.
+type DiskMeta = { wantTitle: boolean; meta: SessionTranscriptMeta };
+let diskMeta: ScanCache<DiskMeta> = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'transcript-meta.json'), 1);
+const isRealTranscript = (p: string) => p.startsWith(PROJECTS_DIR + path.sep);
+const failedMeta = (m: SessionTranscriptMeta) => m.fallbackTitle === null && m.lastTimestampMs === null && m.lastModelId === null;
+
+async function readMetaThroughDisk(jsonlPath: string, stat: { size: number; mtimeMs: number }, wantTitle: boolean): Promise<SessionTranscriptMeta> {
+  const d = await diskMeta.get(jsonlPath, stat);
+  if (d && (d.wantTitle || !wantTitle)) return d.meta;
+  const meta = await readSessionTranscriptMeta(jsonlPath, wantTitle);
+  // Same rule as the memory layer: a failed read (all nulls) is never kept.
+  if (!failedMeta(meta)) diskMeta.set(jsonlPath, stat, { wantTitle, meta });
+  return meta;
+}
+
 export function readSessionTranscriptMetaCached(
   jsonlPath: string, stat: { size: number; mtimeMs: number }, wantTitle: boolean,
 ): Promise<SessionTranscriptMeta> {
@@ -412,11 +459,11 @@ export function readSessionTranscriptMetaCached(
   if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs && (hit.wantTitle || !wantTitle)) return hit.meta;
   const entry: MetaEntry = {
     size: stat.size, mtimeMs: stat.mtimeMs, wantTitle,
-    meta: readSessionTranscriptMeta(jsonlPath, wantTitle),
+    meta: isRealTranscript(jsonlPath) ? readMetaThroughDisk(jsonlPath, stat, wantTitle) : readSessionTranscriptMeta(jsonlPath, wantTitle),
   };
   metaCache.set(jsonlPath, entry);
   void entry.meta.then((m) => {
-    const failed = m.fallbackTitle === null && m.lastTimestampMs === null && m.lastModelId === null;
+    const failed = failedMeta(m);
     // Only drop OUR entry — a newer read may have replaced it meanwhile.
     if (failed && metaCache.get(jsonlPath) === entry) metaCache.delete(jsonlPath);
   });
@@ -425,9 +472,14 @@ export function readSessionTranscriptMetaCached(
 
 function pruneTranscriptMetaCache(seen: Set<string>) {
   for (const k of metaCache.keys()) if (!seen.has(k)) metaCache.delete(k);
+  diskMeta.prune(seen);
 }
 
-export function __clearTranscriptMetaCacheForTests() { metaCache.clear(); }
+export function __clearTranscriptMetaCacheForTests() {
+  metaCache.clear();
+  r1Answers = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'slug-r1.json'), 1);
+  diskMeta = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'transcript-meta.json'), 1);
+}
 
 /**
  * Scans all project directories for JSONL transcript files.
@@ -450,6 +502,11 @@ export async function listPastSessions(
   // tree. Production callers pass nothing and get the real projects folder.
   projectsDir: string = PROJECTS_DIR,
 ): Promise<PastSession[]> {
+  // WHY the marks: the first Resume open after launch can sit on a spinner for
+  // a long time on a big history; these split its time into the transcript
+  // scan and the store pass so the perf rig can say which part is slow.
+  const scanId = ++browseScanSeq;
+  perfMark('bg:browse:start', { scanId });
   let slugs: string[];
   try {
     const entries = await withRetry(() => fs.promises.readdir(projectsDir));
@@ -564,7 +621,8 @@ export async function listPastSessions(
   // Only prune against a real production scan of PROJECTS_DIR — a test scan of
   // a temp tree (subagent-exclusion.test.ts, this file's own cache tests) must
   // never wipe cache entries a concurrent production scan is relying on.
-  if (projectsDir === PROJECTS_DIR) pruneTranscriptMetaCache(seenPaths);
+  if (projectsDir === PROJECTS_DIR) { pruneTranscriptMetaCache(seenPaths); r1Answers.prune(new Set(slugs)); }
+  perfMark('bg:browse:transcripts-done', { scanId, transcripts: seenPaths.size });
 
   // Deduplicate: aggregation symlinks/copies place project-specific .jsonl
   // files into the home slug for unified browsing. When the same sessionId
@@ -738,6 +796,7 @@ export async function listPastSessions(
   } catch { /* store unavailable — the legacy list stands alone */ }
 
   result.sort((a, b) => b.lastModified - a.lastModified);
+  perfMark('bg:browse:done', { scanId, rows: result.length });
   return result;
 }
 

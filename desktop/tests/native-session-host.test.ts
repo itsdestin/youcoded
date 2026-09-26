@@ -5717,7 +5717,7 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
 // Specialists plans, Task 4 — the plan executor wired into the real host.
 // Real SessionStore/NativeHome/journal; only the models are scripted.
 // ---------------------------------------------------------------------------
-describe('specialists plans in the native host (Task 4)', () => {
+describe('specialists plans in the native host', () => {
   const SID = 'plan-root';
   const PARENT = { providerId: 'openrouter', modelId: 'parent-model' };
   const CHILD = 'deepseek/deepseek-v4-flash-0731';
@@ -5967,7 +5967,7 @@ describe('specialists plans in the native host (Task 4)', () => {
   // restart (getHistory splices the child's display events in — Task 9). A plan
   // specialist's row must too, through the same history page, stamped exactly
   // like its live copies so the renderer files it under the same row.
-  it('Task 5a: history replays each plan specialist\'s activity, stamped like its live copies', async () => {
+  it('history replays each plan specialist\'s activity, stamped like its live copies', async () => {
     const planId = await proposeOne();
     await host.approvePlan(SID, planId);
     await waitFor(() => planStatus()[0] === 'completed', 'completion');
@@ -6334,7 +6334,7 @@ describe('specialists plans in the native host (Task 4)', () => {
   // assistant"; every "never stuck, never stale" rule still has a test here,
   // each from a bug a design review found.
   // -------------------------------------------------------------------------
-  describe('Task 11: asking the assistant about a paused plan', () => {
+  describe('asking the assistant about a paused plan', () => {
     // Decision 33: one file, but the summing step stays — a plan may not be
     // one specialist doing one thing.
     const SMALL = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a.ts'] }, DOC.steps[1]] };
@@ -6643,7 +6643,7 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(handoff().problem).toEqual({ kind: 'reply-failed', detail: errorEvent.data.text });
     });
 
-    it('a failed notice turn with no error text leaves no invented cause (review of Task 11, finding 2)', async () => {
+    it('a failed notice turn with no error text leaves no invented cause', async () => {
       const planId = await pauseOnBudget();
       const session = (host as any).live.get(SID).session;
       vi.spyOn(session, 'runNotice').mockImplementationOnce(async () => {

@@ -31,6 +31,7 @@ interface ProjectSwitcherProps {
 // NOT a status glyph.)
 import { SearchIcon, CheckIcon, PlusIcon } from './icons';
 import { CloseButton } from '../ui';
+import { ScreenMark } from '../../shoot-mode';
 
 export function ProjectSwitcher({
   projects,
@@ -114,6 +115,7 @@ export function ProjectSwitcher({
         aria-label="Switch project"
         className="fixed left-1/2 top-[15%] -translate-x-1/2 w-[min(640px,92vw)] flex flex-col"
       >
+        <ScreenMark name="projects/switcher" />
         {/* Search row */}
         <div className="p-2.5 border-b border-edge-dim flex items-center gap-2">
           <span className="text-fg-muted pl-1">

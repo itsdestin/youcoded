@@ -36,7 +36,7 @@ export function DevelopmentPopup({ open, onClose, onOpenBug, onOpenContribute }:
   // hand-rolled uppercase <h3> gave this popup a label but no close button.
   // Dialog already portals itself, so the createPortal wrapper is gone too.
   return (
-    <Dialog open onClose={onClose} size="panel" title="Development" scrollBody>
+    <Dialog screen="settings/development" open onClose={onClose} size="panel" title="Development" scrollBody>
       <div className="p-4">
         {/* K2: these are nav rows — each one opens something — so they take the
             nav density (text-sm/text-2xs) rather than the smaller in-menu size

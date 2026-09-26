@@ -75,7 +75,16 @@ export default function ShareSheet({ skillId, onClose }: ShareSheetProps) {
   return (
     // Overlay layer L2 — theme-driven via Scrim/OverlayPanel.
     <>
-      <Dialog open onClose={onClose} size="prompt" aria-label="Share" scrollBody={false} className="p-5">
+      <Dialog
+        open
+        onClose={onClose}
+        size="prompt"
+        aria-label="Share"
+        scrollBody={false}
+        className="p-5"
+        // Marked once the link fetch settles (success OR error) — never mid-spinner.
+        screen={linkLoading ? undefined : 'marketplace/share'}
+      >
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-bold text-fg">
             Share{skill ? `: ${skill.displayName}` : ''}

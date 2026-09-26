@@ -70,6 +70,8 @@ object TranscriptSerializer {
         // Subagent threading: included when this result originated inside a subagent turn
         parentAgentToolUseId: String? = null,
         agentId: String? = null,
+        backgroundTaskId: String? = null,
+        resumedTaskId: String? = null,
     ): JSONObject {
         return build("tool-result", sessionId, uuid, timestamp, JSONObject().apply {
             put("toolUseId", toolUseId)
@@ -77,6 +79,21 @@ object TranscriptSerializer {
             put("isError", isError)
             if (parentAgentToolUseId != null) put("parentAgentToolUseId", parentAgentToolUseId)
             if (agentId != null) put("agentId", agentId)
+            if (backgroundTaskId != null) put("backgroundTaskId", backgroundTaskId)
+            if (resumedTaskId != null) put("resumedTaskId", resumedTaskId)
+        })
+    }
+
+    /** Desktop's 'background-task' event: data.toolUseId + data.backgroundTask. */
+    fun backgroundTask(event: com.youcoded.app.parser.TranscriptEvent.BackgroundTask): JSONObject {
+        return build("background-task", event.sessionId, event.uuid, event.timestamp, JSONObject().apply {
+            if (event.toolUseId != null) put("toolUseId", event.toolUseId)
+            put("backgroundTask", JSONObject().apply {
+                put("taskIds", org.json.JSONArray(event.taskIds))
+                put("status", event.status)
+                if (event.summary != null) put("summary", event.summary)
+                if (event.result != null) put("result", event.result)
+            })
         })
     }
 

@@ -346,7 +346,7 @@ describe('10. a plan specialist waiting on the user lights the specialists chip'
     expect(screen.getByTestId('helper-card-kid-b')).toBeInTheDocument();
   });
 
-  it('a plan with no open ask does not say "needs you" (Task 8: it counts its working specialists instead)', () => {
+  it('a plan with no open ask does not say "needs you"', () => {
     bridge();
     render(<ChatProvider><Card initial={running} /></ChatProvider>);
     expect(screen.getByTestId('specialists-chip')).toHaveTextContent('2 specialists');

@@ -16,12 +16,15 @@ export type ScenarioId =
   // see STATUSBAR_TOTALS_OVERRIDE in seed-chat.ts for the exact numbers.
   | 'statusbar-cc' | 'statusbar-local' | 'statusbar-metered' | 'statusbar-unpriced' | 'statusbar-delegated'
   // Landing-page embed + its recorded loops (site/1.3-rebuild).
-  | 'site';
+  | 'site'
+  // Welcome back (design 2026-09-24): a cold start after a crash — nothing in
+  // the strip, four conversations that were open when the app went down.
+  | 'welcome-back';
 
 export const SCENARIO_IDS: readonly ScenarioId[] = [
   'default', 'empty', 'no-providers', 'refused', 'stress',
   'statusbar-cc', 'statusbar-local', 'statusbar-metered', 'statusbar-unpriced', 'statusbar-delegated',
-  'site',
+  'site', 'welcome-back',
 ];
 
 /** A row in the Resume Browser's list. Mirrors ResumeBrowser.tsx's local
@@ -71,6 +74,8 @@ export interface MockState {
   tags: TagRecord[];
   defaults: MockDefaults;
   permissions: StoredProject[];
+  /** Welcome back: ids open at the "last shutdown" (session.reopenList). */
+  reopen: string[];
 }
 
 const PROJECTS = [
@@ -265,6 +270,7 @@ export function seed(scenario: ScenarioId): MockState {
     tags: seedTags(),
     defaults: seedDefaults(),
     permissions: seedPermissions(),
+    reopen: [],
   };
   switch (scenario) {
     case 'empty':
@@ -316,6 +322,23 @@ export function seed(scenario: ScenarioId): MockState {
     case 'statusbar-unpriced':
     case 'statusbar-delegated':
       return { ...base, sessions: base.sessions.filter((s) => s.id === 'wb-2') };
+    case 'welcome-back':
+      // Rows 0–2 and 4: a Claude Code row, a native row whose model IS set up
+      // here, a local-model row, and a native row on Anthropic — so the batch
+      // resume meets both "reuse the model" and "that model isn't here".
+      // Row 3 (already complete) is left out: it was closed, not crashed.
+      // Rows 1 and 4 are pointed at models the fixture catalog carries, so they
+      // reopen on their own; row 2's local model is NOT installed here, which is
+      // the "pick a model first" case.
+      return {
+        ...base,
+        sessions: [],
+        past: base.past.map((r) =>
+          r.sessionId === 'wb-past-1' ? { ...r, lastUsedModel: { modelId: 'gpt-5.6-sol', providerType: 'chatgpt', providerLabel: 'ChatGPT Plan' } }
+          : r.sessionId === 'wb-past-4' ? { ...r, lastUsedModel: { modelId: 'anthropic/claude-sonnet-4-6', providerType: 'openrouter', providerLabel: 'OpenRouter' } }
+          : r),
+        reopen: ['wb-past-0', 'wb-past-1', 'wb-past-2', 'wb-past-4'],
+      };
     case 'refused':
     case 'default':
     default:

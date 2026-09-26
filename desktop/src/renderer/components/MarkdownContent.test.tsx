@@ -1,8 +1,49 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { describe, it, expect, afterEach } from 'vitest';
+import React from 'react';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import MarkdownContent from './MarkdownContent';
+import { SessionRefsEnabled } from './session-refs-context';
+import { MARKDOWN_STREAM_CORPUS, tokenDeltas, prefixesOf } from '../../../tests/helpers/markdown-stream-corpus';
+
+// Every source string handed to react-markdown, so the streaming cost pins below
+// count real parse+highlight passes. Delegates to the real renderer unchanged.
+const markdownRenders = vi.hoisted(() => [] as string[]);
+vi.mock('react-markdown', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-markdown')>();
+  return {
+    ...actual,
+    default: (props: { children?: string }) => {
+      markdownRenders.push(String(props.children ?? ''));
+      return (actual.default as any)(props);
+    },
+  };
+});
+// Every character the streaming splitter (markdown-blocks.ts) hands to the
+// markdown parser, so the cost pins below see ALL the work an update does, not
+// just the react-markdown passes. Only the app's own import of remark-parse is
+// wrapped (react-markdown's copy is loaded outside the mock), so this counts the
+// splitter alone; it passes through unchanged.
+const splitterParsed = vi.hoisted(() => ({ chars: 0 }));
+vi.mock('remark-parse', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('remark-parse')>();
+  return {
+    default: function countingRemarkParse(this: any, ...args: any[]) {
+      (actual.default as any).apply(this, args);
+      const parse = this.parser;
+      this.parser = (doc: string, file: unknown) => {
+        splitterParsed.chars += doc.length;
+        return parse(doc, file);
+      };
+    },
+  };
+});
+// The reference block resolves ids asynchronously; a fixed stand-in keeps the
+// streaming comparisons below about markdown, not about a network answer.
+vi.mock('./tool-views/ChatsearchRefBlock', () => ({
+  default: ({ shortIds }: { shortIds: string[] }) => <div data-refs={shortIds.join(',')} />,
+}));
 
 afterEach(cleanup);
 
@@ -355,5 +396,531 @@ describe('remote images wait for a tap; local images render inline', () => {
     // point is only that a data: image is NOT treated as a website fetch.
     render(<MarkdownContent content={'![dot](data:image/png;base64,iVBORw0KGgo=)'} />);
     expect(screen.queryByRole('button', { name: /image from/i })).toBeNull();
+  });
+});
+
+// Streaming (smoothness sweep A5): a growing reply is drawn piece by piece, and
+// the page must be byte-for-byte what drawing the whole text at once gives.
+describe('MarkdownContent while a reply streams in', () => {
+  const Bubble = ({ md, incremental }: { md: string; incremental?: boolean }) => (
+    <SessionRefsEnabled.Provider value={true}>
+      <MarkdownContent content={md} sessionId="s1" incremental={incremental} />
+    </SessionRefsEnabled.Provider>
+  );
+  // The page as markup with each element's attributes in name order. WHY sorted:
+  // React appends an attribute it adds to an EXISTING element (a code block's
+  // `class` arriving once its language is typed) after the ones already there,
+  // so an element updated in place lists them in a different order than a fresh
+  // one. Order carries no meaning to the browser, and today's whole-message
+  // render updates in place too; everything else — text nodes included — is
+  // compared exactly.
+  const canonical = (root: Element): string => Array.from(root.childNodes).map((n) => {
+    if (n.nodeType !== 1) return n.nodeType === 3 ? JSON.stringify(n.textContent) : '';
+    const el = n as Element;
+    const attrs = Array.from(el.attributes).map((a) => `${a.name}=${JSON.stringify(a.value)}`).sort().join(' ');
+    return `<${el.tagName.toLowerCase()} ${attrs}>${canonical(el)}</${el.tagName.toLowerCase()}>`;
+  }).join('');
+  const wholeHtml = (md: string) => {
+    const r = render(<Bubble md={md} />);
+    const html = canonical(r.container);
+    r.unmount();
+    return html;
+  };
+  const streamAndCompare = (md: string, prefixes: string[]) => {
+    const live = render(<Bubble md={prefixes[0]} incremental />);
+    for (const prefix of prefixes) {
+      live.rerender(<Bubble md={prefix} incremental />);
+      expect(canonical(live.container), `after ${JSON.stringify(prefix)}`).toBe(wholeHtml(prefix));
+    }
+    live.unmount();
+  };
+
+  for (const sample of MARKDOWN_STREAM_CORPUS) {
+    it(`draws "${sample.name}" exactly like the whole message after every delta`, () => {
+      streamAndCompare(sample.md, prefixesOf(tokenDeltas(sample.md)));
+    });
+  }
+
+  // Where a partial last line can change the block above it, go one character
+  // at a time: "#" then "#f", "-" then "- x", a header row then its delimiter.
+  for (const name of ['setext headings', 'hash that is not a heading, then a real one', 'dashes: setext, rules and list items', 'table appearing under paragraph lines', 'CRLF line endings']) {
+    it(`draws "${name}" exactly like the whole message after every character`, () => {
+      const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === name)!.md;
+      streamAndCompare(md, Array.from({ length: md.length }, (_, i) => md.slice(0, i + 1)));
+    });
+  }
+
+  it('keeps the elements already on screen instead of replacing them as the reply grows', () => {
+    const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
+    const prefixes = prefixesOf(tokenDeltas(md));
+    const live = render(<Bubble md={prefixes[0]} incremental />);
+    live.rerender(<Bubble md={prefixes[1]} incremental />);
+    const heading = live.container.querySelector('h2')!;
+    expect(heading.textContent).toBe('Plan');
+    let firstCode: Element | null = null;
+    for (const prefix of prefixes.slice(2)) {
+      live.rerender(<Bubble md={prefix} incremental />);
+      expect(live.container.querySelector('h2')).toBe(heading);
+      firstCode ??= prefix.includes('```json') ? live.container.querySelector('pre') : null;
+      if (firstCode) expect(live.container.querySelector('pre')).toBe(firstCode);
+    }
+    expect(firstCode).not.toBeNull();
+    live.unmount();
+  });
+
+  it('re-draws only the unfinished paragraph per delta, not the finished code blocks above it', () => {
+    const body = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md.repeat(3);
+    const tailWords = tokenDeltas(' and then some closing words that keep arriving one at a time until the end');
+    const live = render(<Bubble md={body.slice(0, 10)} incremental />);
+    let md = body;
+    live.rerender(<Bubble md={md} incremental />);
+    md += '\n\nClosing';
+    live.rerender(<Bubble md={md} incremental />);
+    markdownRenders.length = 0;
+    for (const word of tailWords) {
+      md += word;
+      live.rerender(<Bubble md={md} incremental />);
+    }
+    // One react-markdown pass per delta, each over the live paragraph alone.
+    expect(markdownRenders).toHaveLength(tailWords.length);
+    for (const source of markdownRenders) expect(source.startsWith('Closing')).toBe(true);
+    live.unmount();
+  });
+
+  // Review F2: a raw-HTML block near the top (a comment, a <br>) used to hold
+  // everything below it live, so every word re-parsed the whole reply twice.
+  it('re-draws only the unfinished paragraph when raw HTML sits near the top', () => {
+    const body = '<!-- note -->\n\nTop <br> line\n\n<br>\n\n' + MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md.repeat(2);
+    const live = render(<Bubble md="<!--" incremental />);
+    let md = body;
+    live.rerender(<Bubble md={md} incremental />);
+    md += '\n\nClosing';
+    live.rerender(<Bubble md={md} incremental />);
+    markdownRenders.length = 0;
+    const words = tokenDeltas(' words that keep arriving one at a time');
+    for (const word of words) {
+      md += word;
+      live.rerender(<Bubble md={md} incremental />);
+    }
+    expect(markdownRenders).toHaveLength(words.length);
+    for (const source of markdownRenders) expect(source.startsWith('Closing')).toBe(true);
+    expect(canonical(live.container)).toBe(wholeHtml(md));
+    live.unmount();
+  });
+
+  it('never draws more per word than the whole message while a disclosure is still open', () => {
+    const intro = 'Intro paragraph.\n\n<details>\n<summary>Log</summary>\n\n';
+    const inside = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
+    const live = render(<Bubble md="Intro" incremental />);
+    let md = intro + inside;
+    live.rerender(<Bubble md={md} incremental />);
+    for (const word of tokenDeltas(' still inside the open disclosure')) {
+      markdownRenders.length = 0;
+      md += word;
+      live.rerender(<Bubble md={md} incremental />);
+      const drawn = markdownRenders.reduce((n, s) => n + s.length, 0);
+      expect(drawn).toBeLessThanOrEqual(md.length);
+      expect(canonical(live.container)).toBe(wholeHtml(md));
+    }
+    // Closing it pairs the whole run into one real disclosure, as the whole render does.
+    for (const word of tokenDeltas('\n\n</details>\n\nAfter it.')) {
+      md += word;
+      live.rerender(<Bubble md={md} incremental />);
+      expect(canonical(live.container)).toBe(wholeHtml(md));
+    }
+    expect(live.container.querySelector('details > summary')?.textContent).toBe('Log');
+    live.unmount();
+  });
+
+  // Review F3: the streaming view is state updated during render, so a render
+  // React discards (StrictMode runs every render twice) leaves nothing stale.
+  it('draws the same page under StrictMode, and when the content is replaced then grows again', () => {
+    const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'fenced code with a language')!.md;
+    const Strict = ({ text }: { text: string }) => <React.StrictMode><Bubble md={text} incremental /></React.StrictMode>;
+    const prefixes = prefixesOf(tokenDeltas(md));
+    const live = render(<Strict text={prefixes[0]} />);
+    for (const p of prefixes) {
+      live.rerender(<Strict text={p} />);
+      expect(canonical(live.container), `after ${JSON.stringify(p)}`).toBe(wholeHtml(p));
+    }
+    // Replaced (not appended to), then growing again from the new text.
+    let next = 'A different reply.\n\n- one\n- two';
+    live.rerender(<Strict text={next} />);
+    expect(canonical(live.container)).toBe(wholeHtml(next));
+    for (const word of tokenDeltas('\n\nThen more\n\n```js\nx()\n```\n\nEnd.')) {
+      next += word;
+      live.rerender(<Strict text={next} />);
+      expect(canonical(live.container), `after ${JSON.stringify(next)}`).toBe(wholeHtml(next));
+    }
+    live.unmount();
+  });
+
+  // Review F4: seeded random replies, streamed word by word into a bubble that
+  // sometimes mounts mid-reply, compared as DRAWN PAGES (not parse trees) with
+  // the whole-message render after every word. Mixes in the constructs that act
+  // across blocks: disclosures, raw HTML, link definitions, footnotes, pictures.
+  it('draws random replies exactly like the whole message after every word, keeping the same elements', () => {
+    const FRAGS = ['Para with *em* and `code`.', 'Another line', '# Head', 'Setext', '===', '---', '- item', '  - nested', '1. one',
+      '> quote', '```js', 'let x = 1;', '```', '    indented', '| a | b |', '| - | - |', '| 1 | 2 |', '<details>', '<summary>Sum</summary>',
+      '</details>', '<details open><summary>Both</summary>', '<!-- c -->', '<br>', '<div>x</div>', '[x]: https://ex.com/x', 'See [x] and [y].',
+      '[y]: https://ex.com/y "T"', 'Note[^1].', '[^1]: The note.', '![pic](https://ex.com/p.png)', '![local](./a.png)', 'https://ex.com/page',
+      '/tmp/file.txt', '- [ ] task', '***', '', '', '', '',
+      // Whole disclosures spanning blank lines, so pairing across pieces is exercised.
+      '<details>\n<summary>Sum</summary>\n\nInside **text**\n\n</details>', '<details open><summary>Two</summary>\n\n- in list\n\n</details>',
+      '<details>\n\n<summary>Apart</summary>\n\nBody\n\n</details>',
+      // Definition runs with no blank lines, duplicate labels, titles on the next line.
+      '[a]: /u', '[A]: /v "t"', 'see [c] and [a][]', '   [c]: /c', '[d]:\n/dd', '[d] late', '"title"', '3. three', '2', '\t- tab'];
+    let seed = 20260924;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    // A fixed count, not a time box (a time box would test less under load):
+    // ~3-4 s here. Thousands of documents, word by word and character by
+    // character, passed when this landed.
+    for (let docs = 0; docs < 30; docs++) {
+      const md = Array.from({ length: 4 + Math.floor(rnd() * 10) }, () => FRAGS[Math.floor(rnd() * FRAGS.length)]).join('\n');
+      const prefixes = prefixesOf(tokenDeltas(md));
+      if (prefixes.length < 2) continue;
+      const mountAt = rnd() < 0.3 ? Math.floor(rnd() * prefixes.length) : 0;
+      // `today` is the whole-message render, updated in place as the app does today.
+      const live = render(<Bubble md={prefixes[mountAt]} incremental />);
+      const today = render(<Bubble md={prefixes[mountAt]} />);
+      let liveEls = elementsByPath(live.container);
+      let todayEls = elementsByPath(today.container);
+      for (const p of prefixes.slice(mountAt)) {
+        live.rerender(<Bubble md={p} incremental />);
+        today.rerender(<Bubble md={p} />);
+        expect(canonical(live.container), `doc ${docs}, after ${JSON.stringify(p)}`).toBe(canonical(today.container));
+        // Every element today's render kept through this update, the streamed
+        // render kept too (review F1). A footnote arriving is the one documented
+        // exception: it switches to the whole-message render once.
+        const nextLive = elementsByPath(live.container);
+        const nextToday = elementsByPath(today.container);
+        if (!p.includes('[^1]:')) {
+          for (const [path, el] of nextToday) {
+            if (todayEls.get(path) === el) expect(nextLive.get(path), `doc ${docs}, ${path} after ${JSON.stringify(p)}`).toBe(liveEls.get(path));
+          }
+        }
+        liveEls = nextLive;
+        todayEls = nextToday;
+      }
+      live.unmount();
+      today.unmount();
+    }
+  });
+
+  // What each streamed update costs, in characters: everything the splitter
+  // parsed plus everything handed to react-markdown. Today's whole-message
+  // render hands react-markdown the whole message once per update — and a
+  // react-markdown pass parses AND transforms, highlights and reconciles, so
+  // counting a splitter parse as a full pass over the same text overstates our
+  // side. Counts, not clock time: the suite runs under load.
+  const streamCosts = (mountAt: string, base: string, deltas: string[]) => {
+    const live = render(<Bubble md={mountAt} incremental />);
+    let md = base;
+    if (base !== mountAt) live.rerender(<Bubble md={md} incremental />);
+    const costs: { md: string; work: number; drawn: string[] }[] = [];
+    for (const d of deltas) {
+      md += d;
+      splitterParsed.chars = 0;
+      markdownRenders.length = 0;
+      live.rerender(<Bubble md={md} incremental />);
+      costs.push({ md, work: splitterParsed.chars + markdownRenders.reduce((n, x) => n + x.length, 0), drawn: markdownRenders.slice() });
+    }
+    expect(canonical(live.container)).toBe(wholeHtml(md));
+    live.unmount();
+    return costs;
+  };
+  const expectNoMoreThanToday = (costs: { md: string; work: number }[]) => {
+    for (const c of costs) expect(c.work, `work after ${JSON.stringify(c.md.slice(-40))}`).toBeLessThanOrEqual(c.md.length);
+  };
+  const lines = (n: number, line: (i: number) => string) => Array.from({ length: n }, (_, i) => line(i)).join('\n');
+
+  // Each update may extend a link definition, and a definition can change how
+  // any block that names it is drawn — but only the blocks that NAME it.
+  it('never does more work per word than the whole message while a list of link definitions streams in', () => {
+    const body = Array.from({ length: 40 }, (_, i) => `Point ${i} see [source ${i}][${i}] and \`code\`.`).join('\n\n') + '\n\n';
+    const defs = lines(40, (i) => `[${i}]: https://example.com/articles/${i}/page "Title ${i}"`);
+    const costs = streamCosts('Point', body, tokenDeltas(defs));
+    expectNoMoreThanToday(costs);
+    // A definition only re-draws the blocks that use its label.
+    for (const c of costs) expect(c.drawn.length, `after ${JSON.stringify(c.md.slice(-40))}`).toBeLessThanOrEqual(2);
+  });
+
+  // A reply that ends in one big block with no blank line in it: the splitter
+  // must not parse that block again on top of drawing it.
+  it('never does more work per word than the whole message while one long list grows', () => {
+    const list = lines(150, (i) => `- item ${i} with **bold** and \`code\` and a [link](https://e.com/${i})`);
+    expectNoMoreThanToday(streamCosts('Intro', `Intro\n\n${list}\n- last`, tokenDeltas(' words that keep arriving\n- and another item\n- a third')));
+  });
+
+  it('never does more work per word than the whole message while one long table grows', () => {
+    const table = `| # | name | value |\n| - | - | - |\n${lines(150, (i) => `| ${i} | name ${i} | **v** \`${i}\` |`)}`;
+    expectNoMoreThanToday(streamCosts('Intro', `Intro\n\n${table}\n| last`, tokenDeltas(' | row | words |\n| next | row | here |')));
+  });
+
+  it('never does more work per word than the whole message while one long quote grows', () => {
+    const quote = lines(150, (i) => `> quoted line ${i} with *emphasis* and a [link](https://e.com/${i})`);
+    expectNoMoreThanToday(streamCosts('Intro', `Intro\n\n${quote}\n> last`, tokenDeltas(' words that keep arriving\n> and one more line')));
+  });
+
+  // Code usually holds blank lines, so this one has them too.
+  it('never does more work per word than the whole message while a long code block is still open', () => {
+    const code = lines(150, (i) => `  const value${i} = compute(${i}, "string ${i}") + other[${i}];`);
+    const costs = streamCosts('Here', `Here:\n\n\`\`\`ts\n${code}\n`, tokenDeltas('  more(1);\n\n  <div>[x]: y</div>\n  after_blank();\n'));
+    expectNoMoreThanToday(costs);
+  });
+
+  // Switching back to a session mid-reply mounts the bubble on a long prefix
+  // drawn as one document. That document is re-drawn as today until its last
+  // block is finished, and never parsed again on top of that.
+  // The promise has ONE accepted exception, pinned here: the update that first
+  // splits a message opened mid-reply parses it once (no redraw), so that update
+  // alone can cost a parse of the message plus the new block.
+  it('never does more work per word than the whole message after opening mid-reply, bar one split that redraws nothing', () => {
+    const long = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
+    const base = `${long}\n\n${long}\n\nA paragraph still being`;
+    const costs = streamCosts(base, base, tokenDeltas(' typed with more words\n\nThen a new paragraph that keeps going word by word\n\nAnd another'));
+    // The update that first starts a new block splits the message once — a
+    // parse, never a re-draw of what was already on screen.
+    const split = costs.findIndex((c) => c.drawn.length > 0 && !c.drawn.some((x) => x.startsWith('## Plan')));
+    expect(split).toBeGreaterThan(0);
+    expect(costs[split].drawn.join('')).not.toContain('Plan');
+    expect(costs[split].work - costs[split].drawn.join('').length).toBeLessThanOrEqual(costs[split].md.length);
+    expectNoMoreThanToday(costs.slice(0, split));
+    expectNoMoreThanToday(costs.slice(split + 1));
+  });
+
+  it('draws a message that never grows (history) as one document, with no split', () => {
+    const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
+    markdownRenders.length = 0;
+    render(<Bubble md={md} incremental />);
+    expect(markdownRenders).toEqual([md]);
+  });
+
+  // Review F1: content already on screen must never be replaced by a fresh copy
+  // as the reply grows — a replaced element loses what the person did to it (a
+  // tapped-to-load picture goes back to its placeholder, an opened disclosure
+  // snaps shut, a selection vanishes). These hold element identity across
+  // updates, not just the markup.
+  const tapImage = (root: HTMLElement) => {
+    fireEvent.click(screen.getByRole('button', { name: /image from/i }));
+    const img = root.querySelector('img');
+    expect(img).not.toBeNull();
+    return img!;
+  };
+  // The whole-message page with its picture tapped open, for comparison.
+  const wholeTappedHtml = (md: string) => {
+    const r = render(<Bubble md={md} />);
+    fireEvent.click(r.container.querySelector('button[title^="Load image"]')!);
+    const html = canonical(r.container);
+    r.unmount();
+    return html;
+  };
+  // Every element under `root`, by its place in the tree (tag and position among
+  // same-tag siblings at each level) — the same place in two equal pages.
+  const elementsByPath = (root: Element) => {
+    const found = new Map<string, Element>();
+    const walk = (el: Element, at: string) => {
+      const seen: Record<string, number> = {};
+      for (const child of Array.from(el.children)) {
+        seen[child.tagName] = (seen[child.tagName] ?? -1) + 1;
+        const path = `${at}/${child.tagName}${seen[child.tagName]}`;
+        found.set(path, child);
+        walk(child, path);
+      }
+    };
+    walk(root, '');
+    return found;
+  };
+  const paragraph = (root: HTMLElement, text: string) =>
+    Array.from(root.querySelectorAll('p')).find((p) => p.textContent === text)!;
+
+  it('keeps what was drawn when the bubble opens with a reply already in progress', () => {
+    // Switching back to a session mid-reply mounts the bubble on a long prefix.
+    let md = 'Intro\n\n![pic](https://x.com/p.png)\n\npara\n\nmore\n\nnext';
+    const live = render(<Bubble md={md} incremental />);
+    const img = tapImage(live.container);
+    const para = paragraph(live.container, 'para');
+    for (const delta of tokenDeltas(' word and on\n\nA new paragraph arrives\n\n```js\nlet x = 1;\n```\n\nThe end.')) {
+      md += delta;
+      live.rerender(<Bubble md={md} incremental />);
+      expect(live.container.querySelector('img'), `after ${JSON.stringify(md)}`).toBe(img);
+      expect(paragraph(live.container, 'para')).toBe(para);
+    }
+    expect(canonical(live.container)).toBe(wholeTappedHtml(md));
+    live.unmount();
+  });
+
+  it('keeps what was drawn when a link definition arrives mid-reply', () => {
+    const full = 'Intro\n\n![pic](https://x.com/p.png)\n\nSee [docs] and [more].\n\nplain words\n\n[docs]: https://example.com/docs\n\nTail [more]\n\n[more]: https://example.com/more\n\nEnd.';
+    const prefixes = prefixesOf(tokenDeltas(full));
+    const cut = prefixes.findIndex((p) => p.includes('plain words'));
+    const live = render(<Bubble md={prefixes[0]} incremental />);
+    for (const p of prefixes.slice(1, cut + 1)) live.rerender(<Bubble md={p} incremental />);
+    const img = tapImage(live.container);
+    const plain = paragraph(live.container, 'plain words');
+    for (const p of prefixes.slice(cut + 1)) {
+      live.rerender(<Bubble md={p} incremental />);
+      expect(live.container.querySelector('img'), `after ${JSON.stringify(p)}`).toBe(img);
+      expect(paragraph(live.container, 'plain words')).toBe(plain);
+      expect(canonical(live.container), `after ${JSON.stringify(p)}`).toBe(wholeTappedHtml(p));
+    }
+    // The definitions took effect in the blocks above them.
+    expect(live.container.querySelector('a[href="https://example.com/docs"]')).not.toBeNull();
+    expect(live.container.querySelector('a[href="https://example.com/more"]')).not.toBeNull();
+    live.unmount();
+  });
+
+  // Streams `prefixes` into a bubble opened at `mountAt` and into today's
+  // whole-message render side by side; after every update the pages must match
+  // and every element today's render kept must be kept too.
+  const streamMatchesToday = (prefixes: string[], mountAt: number, keepElements: boolean) => {
+    const live = render(<Bubble md={prefixes[mountAt]} incremental />);
+    const today = render(<Bubble md={prefixes[mountAt]} />);
+    let liveEls = elementsByPath(live.container);
+    let todayEls = elementsByPath(today.container);
+    for (const p of prefixes.slice(mountAt)) {
+      live.rerender(<Bubble md={p} incremental />);
+      today.rerender(<Bubble md={p} />);
+      expect(canonical(live.container), `mounted at ${mountAt}, after ${JSON.stringify(p)}`).toBe(canonical(today.container));
+      const nextLive = elementsByPath(live.container);
+      const nextToday = elementsByPath(today.container);
+      if (keepElements) {
+        for (const [path, el] of nextToday) {
+          if (todayEls.get(path) === el) expect(nextLive.get(path), `${path} after ${JSON.stringify(p)}`).toBe(liveEls.get(path));
+        }
+      }
+      liveEls = nextLive;
+      todayEls = nextToday;
+    }
+    live.unmount();
+    today.unmount();
+  };
+
+  // Cases where one block changes how another is drawn (definitions, their
+  // labels and duplicates, disclosures, blocks that span blank lines), streamed
+  // a character at a time from the start and from part-way in.
+  const CROSS_BLOCK: [string, string, boolean?][] = [
+    ['a setext heading after definitions', 'Para [a]\n\n[a]: /u\n\nTitle [a]\n===\n\nx'],
+    ['a label defined twice with different case', '[A]: /first\n\nx [a]\n\n[a]: /second\n\ny [A]'],
+    ['a definition long after its use', 'use [z] here\n\nmore\n\nmore2\n\nmore3\n\n[z]: /zz\n\nend [z]'],
+    ['a table naming a definition', '[a]: /u\n\n| x [a] |\n| - |\n| y |\n\nmore'],
+    ['a definition and a paragraph in one piece', '[a]: /u\nfoo [a]\n\nbar [a]'],
+    ['a label over two lines', '[a\nb]: /u\n\n[a b] x\n\ny'],
+    ['a stray closer, then a disclosure', '</details>\n\n<details><summary>S</summary>\n\nb\n\n</details>\n\nafter'],
+    ['a disclosure inside a disclosure', '<details><summary>A</summary>\n\n<details><summary>B</summary>\n\nx\n\n</details>\n\n</details>\n\nz'],
+    ['a summary after a definition', '<details>\n\n[a]: /u\n\n<summary>S</summary>\n\nx [a]\n\n</details>\n\ntail'],
+    ['a disclosure inside a list', '- item\n\n  <details><summary>S</summary>\n\n  body\n\n  </details>\n\nout'],
+    ['ordered lists split by a paragraph', '1. a\n\npara\n\n3. c\n4. d\n\n5. e'],
+    ['a comment spanning blank lines', '<!--\n\nhidden [a]\n\n-->\n\n[a]: /u\n\nvis [a]'],
+    ['a definition inside a code block', '```\n[a]: /u\n\n```\n\n[a] text\n\n[a]: /v'],
+    ['a picture by reference', '![a]\n\nmid\n\nmid2\n\n[a]: https://x.com/p.png\n\nend'],
+    ['emphasis around references', '*[a]*\n\n**[a]: /u**\n\n[a]: /real'],
+    ['definitions with CRLF', 'x [a]\r\n\r\n[a]: /u\r\n\r\ny [a]'],
+    ['a title on the next line', 'x [a]\n\n[a]: /u\n"tit\nle"\n\ny [a]'],
+    ['an item that could join the list above', '1. a\n\n2\n\n2. b\n\n-\n\n- c\n\n10\n\nend'],
+    ['a bare opener that never pairs', 'A\n\n<details>\n\nnot a summary\n\nB\n\nC\n\nD'],
+    // Raw HTML ending a finished block reads differently at the end of a
+    // document, so its blank lines are kept when it is drawn on its own.
+    ['raw HTML right under a list item', '1. one\n<br>\n\nNote\n\nmore\n\n- x\n<!--\n-->\n\nend'],
+    // A footnote switches to the whole-message render once (documented), so
+    // only the page is compared.
+    ['a footnote defined late', 'A[^1]\n\nb\n\nc\n\n[^1]: n\n\nd', false],
+    ['a definition inside a quote', 'A [q]\n\nb\n\n> [q]: /q\n\nd', false],
+  ];
+  for (const [name, md, keep] of CROSS_BLOCK) {
+    it(`draws ${name} exactly like the whole message, from the start and from part-way in`, () => {
+      const prefixes = Array.from({ length: md.length }, (_, i) => md.slice(0, i + 1));
+      for (const mountAt of [0, Math.floor(prefixes.length / 3), Math.floor((prefixes.length * 2) / 3)]) {
+        streamMatchesToday(prefixes, mountAt, keep ?? true);
+      }
+    });
+  }
+
+  // Updates of several characters that land on a markdown-significant spot.
+  const MULTI_CHAR: [string, string[]][] = [
+    ['a digit, then the rest of an ordered item', ['1. a', '1. a\n\n2', '1. a\n\n2. x', '1. a\n\n2. x\n\nend']],
+    ['a digit, then the rest of a ")" item', ['1) a', '1) a\n\n2', '1) a\n\n2) x']],
+    ['one digit, then a two-digit item', ['p', 'p\n\n1. a\n\n1', 'p\n\n1. a\n\n10. x']],
+    ['a label with an escape', ['x', 'x\n\n[my\\_file]: /u', 'x\n\n[my\\_file]: /u\n\nsee [my\\_file]']],
+    ['labels that differ only as raw text', ['[a&amp;]: /one', '[a&amp;]: /one\n\n[a&]: /two', '[a&amp;]: /one\n\n[a&]: /two\n\nuse [a&amp;] and [a&]']],
+  ];
+  for (const [name, steps] of MULTI_CHAR) {
+    it(`draws ${name} exactly like the whole message`, () => {
+      for (let mountAt = 0; mountAt < steps.length; mountAt++) streamMatchesToday(steps, mountAt, true);
+    });
+  }
+
+  // Real streams cut text anywhere — "\n\n2" in one update and ". x" in the
+  // next — while tokenDeltas keeps "\n\n2." together. This streams seeded
+  // random documents in random 1-7 character chunks, and cuts exactly where a
+  // markdown reading can flip: between a digit and "." or ")", between a
+  // label's "]" and ":", around "<" and around a blank line. After every update
+  // the page and every element today's render kept must match.
+  it('draws documents cut into random pieces exactly like the whole message, keeping the same elements', () => {
+    const FRAGS = ['1. one', '2. two', '1) one', '2) two', '10. ten', '1', '2', '- a', '* b', '+ c', '-', '  cont', '[a]: /u', '[A]: /v "t"',
+      'x [a] y', 'see [c] and [a][]', '[c]: /c',
+      // Labels whose raw text differs from their meaning (escapes, entities):
+      // micromark matches labels on the RAW text.
+      'see [my\\_file]\n\n[my\\_file]: /f', '[a&amp;]: /one\n\n[a&]: /two\n\nuse [a&amp;] [a&]', 'see [e\\]]\n\n[e\\]]: /e',
+      '[d]:\n/dd', '[d] late', '<details>', '<summary>S</summary>', '</details>', '<br>', '<!-- c -->', '<b>x</b> text', '```', 'code();',
+      '    indented', '| a | b |', '| - | - |', '===', '---', 'Setext', '> q', '> [a] quoted', 'plain words here', '![i][a]', '', ''];
+    // Where a cut can change how the text before it reads.
+    const boundaries = (md: string) => {
+      const at: number[] = [];
+      for (let i = 1; i < md.length; i++) {
+        const a = md[i - 1];
+        const b = md[i];
+        if ((/\d/.test(a) && /[.)]/.test(b)) || (a === ']' && b === ':') || a === '<' || b === '<' || (a === '\n' && b === '\n') || (md[i - 2] === '\n' && a === '\n')) at.push(i);
+      }
+      return at;
+    };
+    let seed = 20260925;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    // A fixed count sized to ~5 s here, not a time box (under load a time box
+    // would quietly test less).
+    for (let docs = 0; docs < 200; docs++) {
+      const md = Array.from({ length: 2 + Math.floor(rnd() * 5) }, () => FRAGS[Math.floor(rnd() * FRAGS.length)]).join(rnd() < 0.35 ? '\n' : '\n\n');
+      const cuts = boundaries(md);
+      const prefixes: string[] = [];
+      for (let i = 0; i < md.length;) {
+        let next = Math.min(md.length, i + 1 + Math.floor(rnd() * 7));
+        const edge = cuts.find((c) => c > i);
+        if (edge !== undefined && edge < next && rnd() < 0.85) next = edge;
+        prefixes.push(md.slice(0, next));
+        i = next;
+      }
+      if (prefixes.length < 2) continue;
+      const mountAt = rnd() < 0.3 ? Math.floor(rnd() * prefixes.length) : 0;
+      const live = render(<Bubble md={prefixes[mountAt]} incremental />);
+      const today = render(<Bubble md={prefixes[mountAt]} />);
+      let liveEls = elementsByPath(live.container);
+      let todayEls = elementsByPath(today.container);
+      let before = prefixes[mountAt];
+      for (const p of prefixes.slice(mountAt)) {
+        live.rerender(<Bubble md={p} incremental />);
+        today.rerender(<Bubble md={p} />);
+        expect(canonical(live.container), `doc ${JSON.stringify(md)}, after ${JSON.stringify(p)}`).toBe(canonical(today.container));
+        const nextLive = elementsByPath(live.container);
+        const nextToday = elementsByPath(today.container);
+        // The one accepted rebuild (markdown-blocks.ts, advanceStream): a
+        // single update that finishes the last block's unfinished line — so the
+        // block can change kind ("--" -> "---", "<b" -> "<br>", "[a]: " -> a
+        // definition) — AND starts a new block after a blank line. Today's
+        // render reuses the old element for whatever now sits in its place;
+        // ours draws both afresh. Nothing the person did is lost: that block
+        // was still being typed.
+        const turned = !/[\r\n]$/.test(before) && /\n[ \t]*\n/.test(p.slice(before.length));
+        if (!turned) {
+          for (const [path, el] of nextToday) {
+            if (todayEls.get(path) === el) expect(nextLive.get(path), `doc ${JSON.stringify(md)}, ${path} after ${JSON.stringify(p)}`).toBe(liveEls.get(path));
+          }
+        }
+        liveEls = nextLive;
+        todayEls = nextToday;
+        before = p;
+      }
+      live.unmount();
+      today.unmount();
+    }
   });
 });

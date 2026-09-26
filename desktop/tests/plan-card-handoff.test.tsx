@@ -106,7 +106,7 @@ describe('recommended: the assistant\'s button, filled and on the right', () => 
     await waitFor(() => expect(api.resume).toHaveBeenCalledWith(S, 'plan-1'));
   });
 
-  it('stop: one filled Stop button, and nothing else but Ask (Task 11)', () => {
+  it('stop: one filled Stop button, and nothing else but Ask', () => {
     render(<ChatProvider><Card initial={paused({ handoff: { state: 'answered', recommendation: { action: 'stop', message: 'This cannot finish as planned.' } } })} /></ChatProvider>);
     expect(buttons()).toEqual(['Ask the assistant', 'Stop']);
     // Whole class: the light variant only has `hover:bg-destructive/10`.
@@ -122,7 +122,7 @@ describe('recommended: the assistant\'s button, filled and on the right', () => 
   });
 });
 
-describe('answered with no recommendation: the default buttons (§2 step 7)', () => {
+describe('answered with no recommendation: the default buttons', () => {
   // T7 (design §1/§2, decision 34): `budget`/`ceiling-shortfall`/`plan-limit`/
   // `local-pool` are retired pause kinds — `spend-limit` (WITH a handoff,
   // which routes it through this same generic strip: `!!handoff` in

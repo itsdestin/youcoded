@@ -51,7 +51,7 @@ const EXPECTED: Record<string, 'read' | 'local' | 'external'> = {
   mcp__srv__search: 'external', mcp__srv__read_file: 'external',
 };
 
-describe('tool effects (pause handoff §1)', () => {
+describe('tool effects', () => {
   it('the session really attached every conditional tool (so the checks below cover them)', () => {
     const names = everyNativeTool().map((t) => t.name);
     for (const n of ['Skill', 'Task', 'ModelSearch', 'propose_plan', 'recommend_plan_action', 'mcp__srv__search']) expect(names).toContain(n);

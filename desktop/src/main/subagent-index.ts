@@ -38,6 +38,7 @@ interface ParentRecord {
 interface PendingEntry {
   description: string;
   agentType: string;
+  toolUseId?: string;
   events: unknown[];
   firstSeenAt: number;
 }
@@ -45,6 +46,10 @@ interface PendingEntry {
 export interface SubagentMeta {
   description: string;
   agentType: string;
+  /** The parent Agent tool_use this helper was started by, when Claude Code
+   *  records it in the .meta.json (every helper measured on 2026-09-24 did).
+   *  Exact — preferred over description matching, see bindSubagent. */
+  toolUseId?: string;
 }
 
 export interface FlushResult {
@@ -74,9 +79,21 @@ export class SubagentIndex {
   }
 
   bindSubagent(agentId: string, meta: SubagentMeta): string | null {
-    const i = this.unmatchedParents.findIndex(
-      p => p.description === meta.description && p.subagentType === meta.agentType,
-    );
+    // WHY exact id first (2026-09-24, "the app sucks at keeping track of
+    // subagents"): description matching failed two ways on real transcripts.
+    // An Agent call that omits subagent_type records '' here while its meta
+    // says 'general-purpose', so it never bound and the card showed no
+    // activity at all (30 of 1,139 recent calls). And two helpers sharing a
+    // description could land on each other's cards. When the meta names its
+    // parent, that is the answer — and a nested helper (started by another
+    // helper, so its parent tool_use is not in this queue) correctly binds to
+    // nothing instead of borrowing a same-named top-level card.
+    const i = meta.toolUseId
+      ? this.unmatchedParents.findIndex(p => p.toolUseId === meta.toolUseId)
+      : this.unmatchedParents.findIndex(
+        p => p.description === meta.description
+          && (p.subagentType || 'general-purpose') === meta.agentType,
+      );
     if (i < 0) return null;
     // splice removes the parent so it can't be bound to a second subagent
     // (FIFO collision fallback: subsequent subagents with the same meta
@@ -110,6 +127,7 @@ export class SubagentIndex {
     this.pending.set(agentId, {
       description: meta.description,
       agentType: meta.agentType,
+      ...(meta.toolUseId ? { toolUseId: meta.toolUseId } : {}),
       events: [event],
       firstSeenAt: this.nowMs(),
     });
@@ -126,6 +144,7 @@ export class SubagentIndex {
     const parentToolUseId = this.bindSubagent(agentId, {
       description: entry.description,
       agentType: entry.agentType,
+      toolUseId: entry.toolUseId,
     });
     // Parent Agent tool_use not yet recorded — leave buffered, caller may retry later.
     if (!parentToolUseId) return null;

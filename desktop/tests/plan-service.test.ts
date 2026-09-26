@@ -171,7 +171,7 @@ describe('propose', () => {
   });
 });
 
-describe('manifest drift and silent re-freeze (Task 14, decision 27; design §5)', () => {
+describe('manifest drift and silent re-freeze', () => {
   it.each([
     ['definition', (m: ExecutionManifest) => { m.specialists.reviewer.definitionFingerprint = 'def-2'; }, /specialist's instructions/],
     ['permissions', (m: ExecutionManifest) => { m.permissionFingerprint = 'perm-2'; }, /permission settings/],
@@ -270,7 +270,7 @@ describe('approve, resume, stop', () => {
     expect((await journal.get(REF, view.planId))!.fenceEpoch).toBe(2);
   });
 
-  it('review fix 4: the user\'s own Continue gives unfinished work its one automatic retry back, in the lease write', async () => {
+  it('the user\'s own Continue gives unfinished work its one automatic retry back, in the lease write', async () => {
     const view = await propose();
     okPlan(await service.approve(SID, view.planId));
     const attempt = (over: Record<string, unknown>) => ({
@@ -409,7 +409,7 @@ describe('comment and the trusted revision token', () => {
   });
 });
 
-describe('auto-start settings (design §8, decision 34 Q-6)', () => {
+describe('auto-start settings', () => {
   const settingsFile = () => path.join(root, '.youcoded', 'plans.json');
 
   it('defaults off and creates nothing on read', async () => {
@@ -472,7 +472,7 @@ describe('auto-start settings (design §8, decision 34 Q-6)', () => {
     expect(executor.start.mock.calls[0][0].planId).toBe(under.planId);
   });
 
-  it('an unpriced plan never auto-starts, however low the setting (design §8)', async () => {
+  it('an unpriced plan never auto-starts, however low the setting', async () => {
     manifest.steps.s1.pricing = null;
     await service.setAutoApprove(1000);
     const view = await propose({ document: doc(['a']) });
@@ -488,7 +488,7 @@ describe('auto-start settings (design §8, decision 34 Q-6)', () => {
   });
 });
 
-describe('setLimit (T6, design §7)', () => {
+describe('setLimit', () => {
   it('sets a dollar limit on a priced plan (unit follows the plan\'s own pricing class)', async () => {
     const view = await propose();
     const res = await service.setLimit(SID, view.planId, 5);
@@ -552,7 +552,7 @@ describe('setLimit (T6, design §7)', () => {
     expect(await service.setLimit(SID, view.planId, 5)).toMatchObject({ ok: false, error: expect.stringMatching(/already stopped/) });
   });
 
-  it('does not supersede a pending handoff (design §7 — resume/stop still do)', async () => {
+  it('does not supersede a pending handoff', async () => {
     const view = await propose();
     okPlan(await service.approve(SID, view.planId));
     await journal.mutate(REF, (file) => {
@@ -568,7 +568,7 @@ describe('setLimit (T6, design §7)', () => {
   });
 });
 
-describe('resume refuses at an already-reached limit, for any pause kind, and can raise it atomically (T6, design §7)', () => {
+describe('resume refuses at an already-reached limit, for any pause kind, and can raise it atomically', () => {
   async function pausedWithLimit(kind: string, spendLimit: { usd: number } | { tokens: number }, usedUsd?: number, usedTokens = 0): Promise<{ planId: string }> {
     const view = await propose();
     okPlan(await service.approve(SID, view.planId));

@@ -4,14 +4,30 @@ import { emptyTotals, type SessionTotals } from './session-totals';
 // chat-types directly, without reaching into the shared/types boundary.
 export type { ToolCallState, AttentionState };
 
+/** One answer on a parser-detected prompt card (serialized: remote clients and
+ *  Android receive the same shape). */
+interface PromptButtonSpec {
+  label: string;
+  input: string;
+  submitInput?: string;
+  pick?: { signature: string; index: number };
+}
+
 export interface InteractivePrompt {
   promptId: string;
   title: string;
   description?: string; // Contextual text explaining the prompt (e.g., resume trade-offs)
   // `input` is the keystroke(s) that pick this option — a bare digit for CC's
-  // numbered menus. `submitInput` is a rare SECOND write (arrow fallback only);
-  // arrows and `\r` must never share one write. See parser/ink-select-parser.
-  buttons: { label: string; input: string; submitInput?: string }[];
+  // numbered menus. `submitInput` is a rare SECOND write (Android's native
+  // detector / older builds only); arrows and `\r` must never share one write.
+  // `pick` = a menu with no printed numbers: answered by verified navigation
+  // (state/ink-menu-driver.ts), never by a fixed keystroke. See
+  // parser/ink-select-parser.menuToButtons.
+  buttons: PromptButtonSpec[];
+  /** The button Claude Code itself highlights (its ❯ cursor) when the card
+   *  appears — where the card's keyboard focus starts, so Enter means what it
+   *  means in the terminal. Absent = the card's own rule (recommended, else first). */
+  defaultIndex?: number;
   completed?: string; // label of the selected option, if completed
 }
 
@@ -517,15 +533,12 @@ export interface SessionChatState {
    */
   sessionContext: SessionContext | null;
   /**
-   * Specialists plans (Task 5a review): plan records whose propose_plan card
-   * is not on screen yet, keyed by that card's toolUseId, newest `seq` only.
-   * The live-state re-send after the FIRST history page carries every plan in
-   * the conversation, but a plan proposed further back has no card until its
-   * page loads — dropping its record would bring that card back in its
-   * proposal-time state with live Approve/Comment. Applied (and removed) by
-   * whichever event creates the card. Optional: absent = none kept.
+   * Specialists plans: a live record may precede the older history page with
+   * its card. Keep it until that page arrives rather than reviving Approve.
    */
   pendingPlanRecords?: Record<string, import('../../shared/types').PlanView>;
+  /** WHY a background-task end may precede its launch card in paged history. */
+  ccBackgroundOutcomes: Record<string, import('../../shared/types').CcBackgroundRun>;
 }
 
 export function createSessionChatState(): SessionChatState {
@@ -562,6 +575,7 @@ export function createSessionChatState(): SessionChatState {
     history: { cursor: null, hasMore: false, loading: false },
     totals: emptyTotals(),
     sessionContext: null,
+    ccBackgroundOutcomes: {},
   };
 }
 
@@ -616,7 +630,8 @@ export type ChatAction =
       promptId: string;
       title: string;
       description?: string;
-      buttons: { label: string; input: string; submitInput?: string }[];
+      buttons: PromptButtonSpec[];
+      defaultIndex?: number;
     }
   | {
       type: 'COMPLETE_PROMPT';
@@ -927,8 +942,25 @@ export type ChatAction =
       isError: boolean;
       plan?: import('../../shared/types').PlanView;
       structuredPatch?: import('../../shared/types').StructuredPatchHunk[];
+      /** Claude Code: the result is only a launch receipt — see ToolCallState.ccBackground. */
+      backgroundTaskId?: string;
+      /** Claude Code SendMessage: the finished helper this call resumed. */
+      resumedTaskId?: string;
       parentAgentToolUseId?: string;
       agentId?: string;
+    }
+  | {
+      // Claude Code: background work a card started has ended (its
+      // <task-notification>). Matched to the card by toolUseId, else by task id.
+      type: 'TRANSCRIPT_BACKGROUND_TASK';
+      sessionId: string;
+      uuid: string;
+      toolUseId?: string;
+      taskIds: string[];
+      status: Exclude<import('../../shared/types').CcBackgroundRun['status'], 'running'>;
+      summary?: string;
+      result?: string;
+      parentAgentToolUseId?: string;
     }
   | {
       // /skill-name in a native session. Appends the compact invocation card;
@@ -1174,9 +1206,9 @@ export interface SerializedSessionChatState {
   // session's prompt, which IS rebuilt on resume. Optional so a pre-field
   // snapshot from an older host still deserializes.
   sessionContext?: SessionContext | null;
-  // Task 5a review: kept plan records for cards on pages not loaded yet — a
-  // remote client pages older history too. Optional for older hosts.
+  // WHY remote clients page older history too; both records survive hydration.
   pendingPlanRecords?: Record<string, import('../../shared/types').PlanView>;
+  ccBackgroundOutcomes?: Record<string, import('../../shared/types').CcBackgroundRun>;
 }
 
 export interface SerializedChatState {
@@ -1230,6 +1262,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         totals: s.totals,
         sessionContext: s.sessionContext,
         ...(s.pendingPlanRecords && Object.keys(s.pendingPlanRecords).length > 0 ? { pendingPlanRecords: s.pendingPlanRecords } : {}),
+        ccBackgroundOutcomes: s.ccBackgroundOutcomes,
       },
     ]);
   }
@@ -1295,6 +1328,8 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       // Older hosts predate sessionContext — default null (no panel/banner).
       sessionContext: ser.sessionContext ?? null,
       ...(ser.pendingPlanRecords ? { pendingPlanRecords: ser.pendingPlanRecords } : {}),
+      // Older hosts predate background tracking — nothing seen yet.
+      ccBackgroundOutcomes: ser.ccBackgroundOutcomes ?? {},
     });
   }
   return result;

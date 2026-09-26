@@ -497,6 +497,45 @@ describe('HarnessSession — multi-step turn driver', () => {
     }
   });
 
+  it('allows external file edits across folders only after a root session grant, and resets on resume', async () => {
+    const edit = fakeTool('Edit', { permissionSubject: (args: any) => args.file_path });
+    const outsideA = path.join(os.tmpdir(), 'yc-outside-a', 'one.ts');
+    const outsideB = path.join(os.tmpdir(), 'yc-outside-b', 'two.ts');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Edit', { file_path: outsideA }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'Edit', { file_path: outsideB }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow', allowExternalEditsForSession: true }));
+    const session = new HarnessSession(makeOpts({ tools: [edit], decide: async () => ALLOW, askUser }), async () => model as any);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(askUser.mock.calls[0][0]).toMatchObject({ toolName: 'Edit', external: true });
+    expect((edit as any).calls).toHaveLength(2);
+    session.seedHistory([]);
+    const next = scriptedModel([
+      stream(toolCallChunk('c3', 'Edit', { file_path: outsideB }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    (session as any).modelFactory = async () => next as any;
+    await session.send('again');
+    expect(askUser).toHaveBeenCalledTimes(2);
+  });
+
+  it('never applies an external-file grant to a specialist child', async () => {
+    const edit = fakeTool('Edit', { permissionSubject: (args: any) => args.file_path });
+    const outside = path.join(os.tmpdir(), 'yc-outside', 'one.ts');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Edit', { file_path: outside }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'Edit', { file_path: outside }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow', allowExternalEditsForSession: true }));
+    const session = new HarnessSession(makeOpts({ tools: [edit], decide: async () => ALLOW, askUser, isSpecialistChild: true }), async () => model as any);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(2);
+  });
+
   it('askUser canceled → user-interrupt, turn ends, NO turn-complete', async () => {
     const write = fakeTool('Write');
     const model = scriptedModel([

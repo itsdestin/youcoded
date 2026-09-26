@@ -95,7 +95,7 @@ export default function PerformancePopup({
 
   return (
     <>
-      <Dialog open onClose={onClose} title="Performance" size="panel">
+      <Dialog screen="settings/performance" open onClose={onClose} title="Performance" size="panel">
             <p className="text-xs text-fg-2">GPU choice affects performance.</p>
 
             {/* Toggle row. This was a whole-row <button role="switch"> whose

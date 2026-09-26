@@ -82,6 +82,55 @@ class TranscriptWatcher(
             }
             return stripSystemTags(raw)
         }
+
+        /** The raw text of a queued background-task notice, or null. Mirrors desktop's
+         *  queuedTaskNotificationText: a notice that lands mid-turn is recorded ONLY as this. */
+        fun queuedTaskNotificationText(obj: JSONObject): String? {
+            if (obj.optString("type") != "attachment") return null
+            val a = obj.optJSONObject("attachment") ?: return null
+            if (a.optString("type") != "queued_command" || a.optString("commandMode") != "task-notification") return null
+            return a.opt("prompt") as? String
+        }
+
+        /** The id of background work a tool result only LAUNCHED. Mirrors desktop's backgroundLaunchId. */
+        fun backgroundLaunchId(obj: JSONObject): String? {
+            val r = obj.optJSONObject("toolUseResult") ?: return null
+            if (r.optString("status") == "async_launched") r.optString("agentId", "").ifEmpty { null }?.let { return it }
+            return r.optString("backgroundTaskId", "").ifEmpty { null }
+        }
+
+        private val TASK_NOTIFICATION_REGEX = Regex("<task-notification>([\\s\\S]*?)</task-notification>")
+        private val TASK_ID_REGEX = Regex("<task-id>([\\s\\S]*?)</task-id>")
+        private fun tagText(body: String, tag: String): String? =
+            Regex("<$tag>([\\s\\S]*?)</$tag>").find(body)?.groupValues?.get(1)?.trim()?.ifEmpty { null }
+
+        /** One BackgroundTask per <task-notification> in `raw` that reports an end state.
+         *  Mirrors desktop's taskNotificationEvents (transcript-watcher.ts) — same rules. */
+        fun taskNotifications(raw: String, sessionId: String, uuid: String, timestamp: Long): List<TranscriptEvent.BackgroundTask> {
+            if (!raw.contains("<task-notification>")) return emptyList()
+            val out = mutableListOf<TranscriptEvent.BackgroundTask>()
+            for (m in TASK_NOTIFICATION_REGEX.findAll(raw)) {
+                val body = m.groupValues[1]
+                val status = when (tagText(body, "status")) {
+                    "completed" -> "completed"
+                    "failed" -> "failed"
+                    "killed", "stopped" -> "stopped"
+                    else -> null
+                } ?: continue
+                val taskIds = TASK_ID_REGEX.findAll(body).map { it.groupValues[1].trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("__") }.toList()
+                val toolUseId = tagText(body, "tool-use-id")
+                if (taskIds.isEmpty() && toolUseId == null) continue
+                val rs = body.indexOf("<result>")
+                val re = body.lastIndexOf("</result>")
+                val result = if (rs != -1 && re > rs) body.substring(rs + "<result>".length, re).trim() else null
+                out.add(TranscriptEvent.BackgroundTask(
+                    sessionId, if (out.isEmpty()) uuid else "$uuid:${out.size}", timestamp,
+                    toolUseId, taskIds, status, tagText(body, "summary"), result,
+                ))
+            }
+            return out
+        }
     }
 
     private val _events = MutableSharedFlow<TranscriptEvent>(extraBufferCapacity = 1000)
@@ -239,8 +288,13 @@ class TranscriptWatcher(
 
         when (type) {
             "user" -> parseUserLine(obj, sessionId, uuid, timestamp, state)
-            "attachment" -> queuedPromptText(obj)?.takeIf { it.isNotBlank() }?.let {
-                _events.tryEmit(TranscriptEvent.UserMessage(sessionId, uuid, timestamp, it))
+            "attachment" -> {
+                queuedTaskNotificationText(obj)?.let { raw ->
+                    taskNotifications(raw, sessionId, uuid, timestamp).forEach { _events.tryEmit(it) }
+                }
+                queuedPromptText(obj)?.takeIf { it.isNotBlank() }?.let {
+                    _events.tryEmit(TranscriptEvent.UserMessage(sessionId, uuid, timestamp, it))
+                }
             }
             "assistant" -> parseAssistantLine(obj, sessionId, uuid, timestamp, state)
             "progress" -> parseProgressLine(obj, sessionId, state)
@@ -291,6 +345,9 @@ class TranscriptWatcher(
         if (content is String) {
             // Only emit if this is a real user prompt (has promptId), not a tool result
             if (obj.has("promptId")) {
+                // A background task's end notice (origin 'task-notification') strips to nothing
+                // below; read it first — it is the only sign the work is over.
+                taskNotifications(content, sessionId, uuid, timestamp).forEach { _events.tryEmit(it) }
                 val cleaned = stripSystemTags(content)
                 if (cleaned.isNotBlank()) {
                     _events.tryEmit(TranscriptEvent.UserMessage(sessionId, uuid, timestamp, cleaned))
@@ -335,6 +392,8 @@ class TranscriptWatcher(
                         val isError = block.optBoolean("is_error", false)
                         _events.tryEmit(TranscriptEvent.ToolResult(
                             sessionId, uuid, timestamp, toolUseId, resultText, isError,
+                            backgroundTaskId = backgroundLaunchId(obj),
+                            resumedTaskId = obj.optJSONObject("toolUseResult")?.optString("resumedAgentId", "")?.ifEmpty { null },
                         ))
                     }
                 }
@@ -344,6 +403,7 @@ class TranscriptWatcher(
             if (!hasToolResult && obj.has("promptId")) {
                 // Extract text from content blocks
                 val raw = extractTextFromContent(content)
+                taskNotifications(raw, sessionId, uuid, timestamp).forEach { _events.tryEmit(it) }
                 val text = stripSystemTags(raw)
                 if (text.isNotBlank()) {
                     _events.tryEmit(TranscriptEvent.UserMessage(sessionId, uuid, timestamp, text))

@@ -1,0 +1,52 @@
+{
+  "start": {
+    "scenario": "default",
+    "screen": null,
+    "width": 1440,
+    "height": 900,
+    "theme": "meadow-mist",
+    "latency": 0,
+    "params": ""
+  },
+  "steps": [
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Browse skills",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Open marketplace",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Inbox Likely safe @destin Triage captured notes into something useful.",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Install",
+        "nth": 1
+      }
+    },
+    {
+      "do": "expect",
+      "control": {
+        "role": "button",
+        "label": "Uninstall"
+      }
+    }
+  ]
+}

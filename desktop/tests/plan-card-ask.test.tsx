@@ -80,7 +80,7 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); delete (window as any).claude; });
 
-describe('every paused card offers Ask, as the light button on the far left (§6)', () => {
+describe('every paused card offers Ask, as the light button on the far left', () => {
   it.each([
     ['a specialist-error kind', paused(), [ASK, 'Stop', 'Continue']],
     ['a Stop-only kind', paused({ kind: 'iteration-cap', actions: ['stop'], repeat: { rounds: 3, until: 'tests pass' } }), [ASK, 'Stop']],
@@ -132,7 +132,7 @@ describe('every paused card offers Ask, as the light button on the far left (§6
     expect(buttons()).toEqual(['Stop', 'Continue']);
   });
 
-  it('is not offered while a question is pending (§6)', () => {
+  it('is not offered while a question is pending', () => {
     show(paused({ handoff: { state: 'pending' } }));
     expect(buttons()).toEqual([]);
   });
@@ -249,7 +249,7 @@ describe('pressing Ask opens an optional question box (decision 20)', () => {
   });
 });
 
-describe('while the assistant has the question (§6)', () => {
+describe('while the assistant has the question', () => {
   it('delivered: greyed, no buttons, "The assistant is looking into this."', () => {
     show(paused({ handoff: { state: 'pending' } }));
     expect(block()).toHaveClass('opacity-60');
@@ -266,7 +266,7 @@ describe('while the assistant has the question (§6)', () => {
   });
 });
 
-describe('a question cleared without an answer shows an error line with Retry (§6, review 4-5/4-10)', () => {
+describe('a question cleared without an answer shows an error line with Retry', () => {
   it('not started within 10 minutes; Retry asks again with the same question (decision 20)', async () => {
     show(paused({ handoff: { state: 'answered', question: 'Why did it stop?', problem: { kind: 'no-start' } } }));
     const line = screen.getByTestId('plan-ask-error');
@@ -298,7 +298,7 @@ describe('a question cleared without an answer shows an error line with Retry (�
     expect(names[names.length - 1]).toBe('Retry');
   });
 
-  it('while another action\'s error shows, the ask error line hides and Ask comes back (review of Task 11, finding 3)', async () => {
+  it('while another action\'s error shows, the ask error line hides and Ask comes back', async () => {
     api.stop.mockResolvedValueOnce({ ok: false, error: 'This plan is running in another YouCoded window. Stop it there.' });
     show(paused({ handoff: { state: 'answered', problem: { kind: 'no-start' } } }));
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));

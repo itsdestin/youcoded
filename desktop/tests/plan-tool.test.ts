@@ -173,7 +173,7 @@ describe('propose_plan tool', () => {
     expect(result).toMatchObject({ isError: true, plan: { status: 'stopped' } });
   });
 
-  it('reports the durable plan when interruption lands after the commit latched (Task 4)', async () => {
+  it('reports the durable plan when interruption lands after the commit latched', async () => {
     const controller = new AbortController();
     const propose = vi.fn(async (proposal: any) => {
       expect(proposal.commit()).toBe(true);

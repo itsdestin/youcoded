@@ -29,6 +29,23 @@ describe('PermissionBroker', () => {
     await expect(p).resolves.toMatchObject({ behavior: 'allow', always: true });
   });
 
+  it('accepts a session-only external edit grant only for a main assistant outside-edit ask in full auto', async () => {
+    const broker = new PermissionBroker();
+    const emitted: any[] = [];
+    broker.on('hook-event', (e) => emitted.push(e));
+    for (const [request, allowed] of [
+      [{ sessionId: 's', toolName: 'Edit', toolInput: {}, external: true, permissionMode: 'full-auto', denyListed: false }, true],
+      [{ sessionId: 's', toolName: 'Edit', toolInput: {}, external: false, permissionMode: 'full-auto', denyListed: false }, false],
+      [{ sessionId: 's', toolName: 'Edit', toolInput: {}, external: true, permissionMode: 'ask', denyListed: false }, false],
+      [{ sessionId: 's', toolName: 'Edit', toolInput: {}, external: true, permissionMode: 'full-auto', denyListed: false, raisedBy: 'child' }, false],
+    ] as const) {
+      const pending = broker.ask(request);
+      const id = emitted.filter((e) => e.type === 'PermissionRequest').at(-1).payload._requestId;
+      broker.respond(id, { decision: { behavior: 'allow' }, allowExternalEditsForSession: true });
+      expect((await pending).allowExternalEditsForSession === true).toBe(allowed);
+    }
+  });
+
   it('rides permissionMode along the PermissionRequest payload (full-auto safety stop keys on it)', () => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];

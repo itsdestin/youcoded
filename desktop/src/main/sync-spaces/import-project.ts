@@ -42,6 +42,12 @@ function isUnder(child: string, parent: string): boolean {
   return child === parent || child.startsWith(parent + '/');
 }
 
+/** Async twin of fs.existsSync: true when ANYTHING (file, folder, dangling
+ *  symlink excluded — same as existsSync) is at `p`. */
+async function pathExists(p: string): Promise<boolean> {
+  try { await fs.promises.access(p); return true; } catch { return false; }
+}
+
 // Depth + wall-clock caps mirror the sibling bounded walk in
 // artifacts/project-file-discovery.ts (which uses files/dirs/depth caps + a
 // time budget). The §18 guardrail must never itself hang the Electron main
@@ -64,11 +70,17 @@ const WALK_BUDGET_MS = 2000;   // hard wall-clock cap regardless of tree shape
  *  pathological or a cycle, and the honest answer is "too big/weird to
  *  live-sync" — treating it as "fine, N files" would let a monster tree (or an
  *  endless junction loop) through the guardrail. */
-export function countFilesBounded(root: string, limit: number): number {
+//
+// ASYNC (2026-09-24, main-blocking-calls B6): the walk used to be readdirSync,
+// which by design could hold the Electron main thread — every window — for the
+// full 2 s budget on a big folder. Awaiting each readdir lets other windows keep
+// drawing while the dialog waits. Still sequential (one readdir in flight) so
+// the count, the early stop and the caps behave exactly as before.
+export async function countFilesBounded(root: string, limit: number): Promise<number> {
   let count = 0;
   let over = false;
   const deadline = Date.now() + WALK_BUDGET_MS;
-  const walk = (dir: string, rel: string, depth: number): boolean => {
+  const walk = async (dir: string, rel: string, depth: number): Promise<boolean> => {
     // Depth/time exhaustion => treat the whole walk as over-limit (see fn doc).
     if (depth > MAX_DEPTH || Date.now() > deadline) { over = true; return false; }
     let entries: fs.Dirent[];
@@ -76,7 +88,7 @@ export function countFilesBounded(root: string, limit: number): number {
     // unreadable, the count is 0 and the import proceeds past this guard — it
     // then fails at MOVE time with the OS error instead. Accepted trade-off:
     // the pre-flight isn't authoritative (see the module header TOCTOU note).
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return true; }
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return true; }
     for (const e of entries) {
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       if (e.isSymbolicLink()) continue;
@@ -85,7 +97,7 @@ export function countFilesBounded(root: string, limit: number): number {
         // a path SEGMENT, so pass the bare relative path (no trailing slash) —
         // guards.ts splits on separators and checks each segment.
         if (isIgnoredPath(childRel)) continue;
-        if (!walk(path.join(dir, e.name), childRel, depth + 1)) return false;
+        if (!(await walk(path.join(dir, e.name), childRel, depth + 1))) return false;
       } else if (e.isFile()) {
         if (isIgnoredPath(childRel)) continue;
         count++;
@@ -94,17 +106,17 @@ export function countFilesBounded(root: string, limit: number): number {
     }
     return true;
   };
-  walk(root, '', 0);
+  await walk(root, '', 0);
   return over ? limit + 1 : count;
 }
 
 /** Every reason an import must be refused, checked BEFORE anything moves.
  *  Returns a user-facing message, or null when the import may proceed. */
-export function checkImport(opts: ImportCheckOpts): string | null {
+export async function checkImport(opts: ImportCheckOpts): Promise<string | null> {
   const { sourcePath, name, projectsRoot, youcodedRoot, liveCwds } = opts;
 
   let st: fs.Stats;
-  try { st = fs.statSync(sourcePath); } catch { return 'That folder no longer exists'; }
+  try { st = await fs.promises.stat(sourcePath); } catch { return 'That folder no longer exists'; }
   if (!st.isDirectory()) return 'That path is a file, not a folder';
 
   const nameErr = validateSyncName(name);
@@ -118,7 +130,7 @@ export function checkImport(opts: ImportCheckOpts): string | null {
   if (isUnder(srcCanon, ycCanon)) return 'This folder is already inside your YouCoded folder';
   if (isUnder(ycCanon, srcCanon)) return "This folder contains your YouCoded folder, so it can't be moved inside it";
 
-  if (fs.existsSync(path.join(projectsRoot, name))) return 'A project with that name already exists';
+  if (await pathExists(path.join(projectsRoot, name))) return 'A project with that name already exists';
 
   // A live session with its cwd inside the source would break mid-move (its
   // working dir vanishes). Refuse and let the user close it first.
@@ -128,7 +140,7 @@ export function checkImport(opts: ImportCheckOpts): string | null {
     }
   }
 
-  const count = countFilesBounded(sourcePath, MAX_IMPORT_FILE_COUNT);
+  const count = await countFilesBounded(sourcePath, MAX_IMPORT_FILE_COUNT);
   if (count > MAX_IMPORT_FILE_COUNT) {
     return `This folder has too many files to live-sync (more than ${MAX_IMPORT_FILE_COUNT.toLocaleString()}). Move what you need into a smaller folder and import that instead.`;
   }
@@ -151,9 +163,9 @@ export interface ImportOpts extends ImportCheckOpts {
  *  surfaced as a warning, never ignored. Returns warnings; throws with a
  *  user-facing message on a blocked move (Windows EBUSY/EPERM when another
  *  process holds the folder). */
-function moveFolder(src: string, dest: string): string[] {
+async function moveFolder(src: string, dest: string): Promise<string[]> {
   try {
-    fs.renameSync(src, dest);
+    await fs.promises.rename(src, dest);
     return [];
   } catch (e: any) {
     if (e?.code === 'EXDEV') {
@@ -164,19 +176,22 @@ function moveFolder(src: string, dest: string): string[] {
       // would be silently MERGED into by cpSync — and then DELETED by the
       // failure cleanup below. Refuse instead: never touch a folder this
       // import didn't create.
-      if (fs.existsSync(dest)) throw new Error('A project with that name already exists');
+      if (await pathExists(dest)) throw new Error('A project with that name already exists');
       try {
-        fs.cpSync(src, dest, { recursive: true });
+        // WHY async: a cross-drive copy is a full-tree copy of however big the
+        // folder is — synchronously that froze every window until it finished.
+        // Same options as the old cpSync (recursive; symlinks copied as links).
+        await fs.promises.cp(src, dest, { recursive: true });
       } catch {
         // A half-copied dest would shadow checkImport's name guard ("A project
         // with that name already exists") on EVERY retry, permanently blocking
-        // the import. The source is untouched (rmSync(src) hasn't run yet), so
+        // the import. The source is untouched (the source delete hasn't run yet), so
         // clean up the partial dest best-effort and tell the user to retry.
-        try { fs.rmSync(dest, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* best-effort */ }
+        try { await fs.promises.rm(dest, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* best-effort */ }
         throw new Error('Copying the folder to its new drive failed partway. Nothing was lost — your folder is still in its original place. Free up space (or close whatever is using the files) and try again.');
       }
       try {
-        fs.rmSync(src, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        await fs.promises.rm(src, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
         return [];
       } catch {
         return [`The folder was copied to its new home, but the original at ${src} could not be fully removed — delete it manually so you don't keep editing the old copy.`];
@@ -228,44 +243,62 @@ async function remapSidecarManualPaths(newRoot: string, oldRoot: string): Promis
  *  (~/.claude/projects/<slug>/), not stored — so a move silently orphans every
  *  past conversation unless the dir is renamed to the new path's slug. When
  *  the new slug dir already exists (rare), merge file-by-file, never clobber. */
-function remapTranscriptDir(oldPath: string, newPath: string, claudeDir: string): void {
+async function remapTranscriptDir(oldPath: string, newPath: string, claudeDir: string): Promise<void> {
   const projectsDir = path.join(claudeDir, 'projects');
   // CC slugs realpath(cwd) (see slug-encoding.ts fixture "symlink resolves to
   // realpath"). Resolve the same way, falling back exactly as CC's Px() does,
-  // so a symlinked project folder finds CC's real directory.
+  // so a symlinked project folder finds CC's real directory. fs.promises.realpath
+  // is the libuv (native) realpath — the async twin of realpathSync.native.
   let resolvedOld: string;
-  try { resolvedOld = fs.realpathSync.native(oldPath); } catch { resolvedOld = oldPath; }
+  try { resolvedOld = await fs.promises.realpath(oldPath); } catch { resolvedOld = oldPath; }
   let resolvedNew: string;
-  try { resolvedNew = fs.realpathSync.native(newPath); } catch { resolvedNew = newPath; }
+  try { resolvedNew = await fs.promises.realpath(newPath); } catch { resolvedNew = newPath; }
   const oldDir = path.join(projectsDir, ccProjectSlug(resolvedOld));
   const newDir = path.join(projectsDir, ccProjectSlug(resolvedNew));
-  if (!fs.existsSync(oldDir)) return; // no conversations for this folder — nothing to remap
-  if (!fs.existsSync(newDir)) {
-    fs.renameSync(oldDir, newDir);
+  if (!(await pathExists(oldDir))) return; // no conversations for this folder — nothing to remap
+  if (!(await pathExists(newDir))) {
+    await fs.promises.rename(oldDir, newDir);
     return;
   }
-  for (const entry of fs.readdirSync(oldDir)) {
+  for (const entry of await fs.promises.readdir(oldDir)) {
     const from = path.join(oldDir, entry);
     const to = path.join(newDir, entry);
-    if (!fs.existsSync(to)) fs.renameSync(from, to);
+    if (!(await pathExists(to))) await fs.promises.rename(from, to);
   }
-  try { fs.rmdirSync(oldDir); } catch { /* leftovers (all-duplicate names) — harmless */ }
+  try { await fs.promises.rmdir(oldDir); } catch { /* leftovers (all-duplicate names) — harmless */ }
 }
+
+/** Destinations an import in THIS process is currently checking or moving
+ *  into (lowercased) — see the claim in importProjectFolder. */
+const inFlightImports = new Set<string>();
 
 /** Guards → move → best-effort remaps. Remap failures become warnings, not
  *  errors: the folder has already moved, and each store degrades gracefully
  *  (spec §3) — e.g. a missed index remap only means artifact history restarts. */
 export async function importProjectFolder(opts: ImportOpts): Promise<ImportResult> {
   const claudeDir = opts.claudeDir ?? path.join(os.homedir(), '.claude');
-  const err = checkImport(opts);
-  if (err) return { ok: false, error: err };
-
   const dest = path.join(opts.projectsRoot, opts.name);
+  // WHY this claim: when check + move were synchronous, two imports in this
+  // process could never interleave, so the second always saw the first's
+  // folder and got "already exists". Now that both await, two imports to the
+  // same name (a double-submit, or the desktop + a remote client) could both
+  // pass the check — and on Linux/macOS rename() silently REPLACES an empty
+  // destination folder. Claim the name for the whole check→move span instead.
+  // Keyed lowercased: the sync identity is case-insensitive (repoNameForSpace).
+  const claim = dest.toLowerCase();
+  if (inFlightImports.has(claim)) return { ok: false, error: 'A folder is already being imported under that name. Wait for it to finish, then try again.' };
+  inFlightImports.add(claim);
   let warnings: string[];
   try {
-    warnings = moveFolder(opts.sourcePath, dest);
-  } catch (e: any) {
-    return { ok: false, error: String(e?.message ?? e) };
+    const err = await checkImport(opts);
+    if (err) return { ok: false, error: err };
+    try {
+      warnings = await moveFolder(opts.sourcePath, dest);
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  } finally {
+    inFlightImports.delete(claim);
   }
 
   const foldersFile = path.join(claudeDir, 'youcoded-folders.json');
@@ -278,7 +311,7 @@ export async function importProjectFolder(opts: ImportOpts): Promise<ImportResul
   try { await remapSidecarManualPaths(dest, opts.sourcePath); }
   catch { warnings.push('Manually added files in the artifact drawer may need re-adding.'); }
 
-  try { remapTranscriptDir(opts.sourcePath, dest, claudeDir); }
+  try { await remapTranscriptDir(opts.sourcePath, dest, claudeDir); }
   catch { warnings.push('Past conversations could not be re-linked to the new location.'); }
 
   return { ok: true, path: dest, warnings };

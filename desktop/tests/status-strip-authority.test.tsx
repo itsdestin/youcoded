@@ -55,7 +55,7 @@ describe('StatusStrip', () => {
     expect(seen.size, 'each tone gets its own fill').toBe(3);
   });
 
-  it('wrapAction (Task 11) lets the action wrap under the words, and only when asked for', () => {
+  it('wrapAction lets the action wrap under the words, and only when asked for', () => {
     // A 390 px plan card crushed its reason into a one-letter column because
     // only the words could shrink. Opt-in: every other strip keeps one row.
     render(<StatusStrip action={<button>Go</button>}>message</StatusStrip>);

@@ -26,6 +26,7 @@ import ConnectFourBoard from './ConnectFourBoard';
 import GameChat from './GameChat';
 import GameOverlay from './GameOverlay';
 import { Button, LoadingState } from '../ui';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface Props {
   connection: GameConnection;
@@ -93,6 +94,15 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
   /** True while a solo run is actually on screen. Opening a game shows its
    *  board first — you land on "here is where you stand", not mid-run. */
   const [playing, setPlaying] = useState(false);
+  // Photo-only build: `shoot` opens a game by name (its board / lobby), or starts a solo run.
+  const openById = (id: string) => { setPlaying(false); setOpenGame(GAMES.find((g) => g.id === id) ?? null); };
+  useScreenOpen('chat/games/flappy', () => openById('flappy'));
+  useScreenOpen('chat/games/2048', () => openById('twenty-forty-eight'));
+  useScreenOpen('chat/games/chess', () => openById('chess'));
+  useScreenOpen('chat/games/chess/lobby', () => {});
+  useScreenOpen('chat/games/connect-four', () => openById('connect-four'));
+  useScreenOpen('chat/games/connect-four/lobby', () => {});
+  useScreenOpen('chat/games/flappy/play', () => setPlaying(true));
   /** Your own bests, read from this computer on mount (§4.2). These are what
    *  every screen shows when there is no server board — which is currently
    *  ALWAYS outside the workbench, and is also the signed-out and offline case. */
@@ -234,6 +244,9 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
           growing into an unbounded scroll container. */}
       {/* a size container: the chess board reads `cqh` off it to stay inside a short pane (ChessBoard.tsx) */}
       <div className={`flex-1 min-h-0 flex flex-col ${openGame?.kind === 'versus' ? 'overflow-hidden' : 'overflow-y-auto'}`} style={{ containerType: 'size' }}>
+        {/* Photo-only marks: the open game's own screen, once it has drawn. */}
+        {openGame?.kind === 'solo' && !playing && board !== null && <ScreenMark name={`chat/games/${openGame.id === 'twenty-forty-eight' ? '2048' : openGame.id}`} />}
+        {openGame?.kind === 'versus' && <ScreenMark name={`chat/games/${openGame.id}${inPlay ? '' : '/lobby'}`} />}
         {!openGame && (
           statuses === null
             ? <LoadingState what="games" />
@@ -254,6 +267,8 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
               // is required because the game is lazily imported — without it
               // React throws on first open rather than showing anything.
               <Suspense fallback={<LoadingState what={openGame.name} />}>
+                {/* Inside Suspense: marked only once the lazily loaded game has drawn. */}
+                <ScreenMark name={`chat/games/${openGame.id === 'twenty-forty-eight' ? '2048' : openGame.id}/play`} />
                 <openGame.Play
                   onEnd={endRun}
                   best={bestOf(openGame.id)}

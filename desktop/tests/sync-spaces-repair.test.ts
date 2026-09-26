@@ -273,3 +273,76 @@ describe('engine + real transport end-to-end', () => {
     w.cleanup();
   });
 });
+
+// Tier 1 used to point main at origin/main without touching the worktree. When
+// the crash landed after a fetch but before the merge, the disk lagged the new
+// main, and the next add -A pushed that lag as edits: a peer's new file DELETED
+// for every device, a peer's deletion undone. Real git, two devices, one remote.
+describe('repair Tier 1 never turns an unapplied fetch into pushed edits', () => {
+  function twoDevices() {
+    const w = makeWorld();
+    const mk = async (name: string) => {
+      const root = path.join(w.tmp, name);
+      fs.mkdirSync(root);
+      const space: SyncSpace = { id: 'project:repair', kind: 'project', root };
+      const transport = new GitTransport({ deviceName: name, log: () => {} });
+      await transport.init(space);
+      await transport.setRemote(space, w.bare);
+      const env = { ...process.env, GIT_DIR: path.join(root, '.youcoded', 'sync.git'), GIT_WORK_TREE: root };
+      return { root, space, transport, env };
+    };
+    return { w, mk };
+  }
+  const has = (root: string, f: string) => fs.existsSync(path.join(root, f));
+
+  it("keeps a peer's new file and applies a peer's deletion when this device's tip is readable", async () => {
+    const { w, mk } = twoDevices();
+    try {
+      const a = await mk('A');
+      fs.writeFileSync(path.join(a.root, 'shared.txt'), 'v1');
+      fs.writeFileSync(path.join(a.root, 'stale.txt'), 'old');
+      await a.transport.push(a.space, 'seed');
+      const b = await mk('B');
+      await b.transport.pull(b.space);
+      fs.writeFileSync(path.join(a.root, 'new.txt'), 'from A');
+      fs.rmSync(path.join(a.root, 'stale.txt'));
+      await a.transport.push(a.space, 'a edits');
+      execFileSync('git', ['fetch', '-q', 'origin', 'main'], { env: b.env }); // fetched, never applied
+      expect((await b.transport.repair!(b.space))!.tier).toBe(1);
+      await b.transport.pull(b.space);
+      await b.transport.push(b.space, 'after repair');
+      expect(remoteState(w.bare, w.tmp).files).toEqual(['new.txt', 'shared.txt']);
+      expect(has(b.root, 'new.txt')).toBe(true);
+      expect(has(b.root, 'stale.txt')).toBe(false);
+    } finally { w.cleanup(); }
+  });
+
+  it("with this device's tip unreadable: a peer's file survives and a differing local file becomes a copy", async () => {
+    const { w, mk } = twoDevices();
+    try {
+      const a = await mk('A');
+      fs.writeFileSync(path.join(a.root, 'shared.txt'), 'v1');
+      await a.transport.push(a.space, 'seed');
+      const b = await mk('B');
+      await b.transport.pull(b.space);
+      fs.writeFileSync(path.join(a.root, 'new.txt'), 'from A');
+      fs.writeFileSync(path.join(a.root, 'shared.txt'), 'v2 from A');
+      await a.transport.push(a.space, 'a edits');
+      // B edits shared.txt and commits locally; the crash zeroes that commit.
+      fs.writeFileSync(path.join(b.root, 'shared.txt'), 'B local edit');
+      execFileSync('git', ['add', '-A'], { env: b.env });
+      execFileSync('git', ['commit', '-q', '-m', 'stranded'], { env: b.env });
+      const tip = execFileSync('git', ['rev-parse', 'HEAD'], { env: b.env }).toString().trim();
+      execFileSync('git', ['fetch', '-q', 'origin', 'main'], { env: b.env });
+      truncateObject(path.join(b.root, '.youcoded', 'sync.git', 'objects', tip.slice(0, 2), tip.slice(2)));
+      expect((await b.transport.repair!(b.space))!.tier).toBe(1);
+      await b.transport.pull(b.space);
+      await b.transport.push(b.space, 'after repair');
+      const remote = remoteState(w.bare, w.tmp);
+      expect(remote.files).toContain('new.txt');
+      expect(remote.read('shared.txt')).toBe('v2 from A');
+      const copy = remote.files.find((f) => f.startsWith('shared (from B, '));
+      expect(copy && remote.read(copy)).toBe('B local edit');
+    } finally { w.cleanup(); }
+  });
+});

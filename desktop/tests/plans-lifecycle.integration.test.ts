@@ -218,7 +218,7 @@ afterEach(async () => {
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
 });
 
-describe('specialists plans — whole lifecycles on the real host (Task 7)', () => {
+describe('specialists plans — whole lifecycles on the real host', () => {
   it('propose → approve → the map wave runs in parallel, then combine → completed, and the plan owns nothing', async () => {
     const planId = await propose(REVIEW_DOC);
     expect(shown(planId)).toMatchObject({ status: 'proposed' });

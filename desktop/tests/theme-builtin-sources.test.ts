@@ -150,3 +150,25 @@ describe('built-in text ladder', () => {
     });
   }
 });
+
+describe('Minimalist layout control outline', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const rules = require('../scripts/vendor/contrast-rules.js');
+  const outline = (tokens: Record<string, string>) =>
+    rules.evaluate(tokens, {}).results.SOFT.find((r: { rule: string }) => r.rule === 'float control outline vs canvas');
+
+  // Any theme can be shown in the Minimalist layout (the user's Look setting), so the
+  // check must run for every built-in, not only packs that ship chrome-style "float".
+  for (const theme of loadBuiltins()) {
+    it(`${theme.slug}: floating buttons stay visible on its flat background`, () => {
+      expect(outline(theme.tokens)?.status).toBe('PASS');
+    });
+  }
+
+  it('warns when a floating button would vanish into the background', () => {
+    const invisible = { ...loadBuiltins()[0].tokens };
+    invisible.edge = invisible.canvas;
+    invisible.inset = invisible.canvas;
+    expect(outline(invisible)?.status).toBe('FAIL');
+  });
+});

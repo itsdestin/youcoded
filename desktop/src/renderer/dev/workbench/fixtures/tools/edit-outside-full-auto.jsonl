@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_OutsideEdit","name":"Edit","input":{"file_path":"/home/you/Documents/research/notes.md","old_string":"Draft","new_string":"Final"}}
+{"type":"permission_request","tool_use_id":"toolu_OutsideEdit","requestId":"native-fixture-outside","permissionMode":"full-auto","external":true}
