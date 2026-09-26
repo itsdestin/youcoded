@@ -33,8 +33,15 @@ export function AdminPasswordPrompt({ ask, onSubmit }: {
   // the one leak this card exists to prevent.
   useEffect(() => { inputRef.current?.focus(); }, [ask.requestId, ask.triesLeft]);
 
-  // A wrong try re-asks with the field emptied and hidden again.
-  useEffect(() => { setValue(''); setShown(false); setSending(false); }, [ask.triesLeft]);
+  // A wrong try re-asks with the field emptied and hidden again. Review fix
+  // F4: keyed on `ask.triesLeft` alone, this never re-ran for a BRAND NEW
+  // ask (different requestId) that happens to carry the same triesLeft
+  // value as the one just resolved (e.g. two distinct top-level asks both
+  // at `triesLeft: undefined`, or a specialist's ask following the root
+  // session's at the same count) — the typed password and the shown/hidden
+  // toggle would persist into the new card. `ask.requestId` joins the
+  // dependency array, matching the sibling focus effect above.
+  useEffect(() => { setValue(''); setShown(false); setSending(false); }, [ask.requestId, ask.triesLeft]);
 
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -43,6 +50,19 @@ export function AdminPasswordPrompt({ ask, onSubmit }: {
     onSubmit?.(value);
     // WHY clear at once: the text must not linger in React state after send.
     setValue('');
+  };
+
+  // UX review 2, U1: Enter in the field did nothing — clicking Confirm
+  // visibly reacted but Enter didn't reach `submit()` at all. Rather than
+  // rely on the browser's own implicit-submission-on-Enter (which several
+  // window-level capture/bubble keydown listeners sit between this field
+  // and, and which test environments don't simulate at all), the field
+  // handles Enter directly and calls the SAME `submit()` the Confirm click
+  // uses — identical behaviour, one code path.
+  const onFieldKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    submit();
   };
 
   const wrong = typeof ask.triesLeft === 'number';
@@ -83,6 +103,7 @@ export function AdminPasswordPrompt({ ask, onSubmit }: {
           type={shown ? 'text' : 'password'}
           value={value}
           onChange={(e) => setValue(e.target.value)}
+          onKeyDown={onFieldKeyDown}
           placeholder="Password"
           aria-label="Your computer password"
           autoComplete="off"

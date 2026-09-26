@@ -351,6 +351,29 @@ describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
     await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
   });
 
+  // F2 (code review): the common case (a plain foreground admin command)
+  // never registers a ShellRun at all, so onExit's own clear never runs for
+  // it — clearAccepted() is the ONLY thing that removes that entry, and
+  // tools/bash.ts calls it directly on its own foreground exit path.
+  it('clearAccepted() removes an acceptance directly, for a call that never reaches ShellRegistry at all', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    reg.markAdmin('tu-1'); // simulates the "accepted" signal for a plain foreground call
+    reg.clearAccepted('tu-1'); // simulates bash.ts's own foreground exit handler
+
+    // A LATER, unrelated call somehow reusing the same toolUseId string
+    // must NOT come up admin: true — proving the earlier mark was actually
+    // cleared, not just shadowed.
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(reg.toView(r.run).admin).toBe(false);
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('clearAccepted() for a toolUseId that was never marked is a no-op', () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`);
+    expect(() => reg.clearAccepted('never-marked')).not.toThrow();
+  });
+
   it('markAdmin() turns the flag on for a matching RUNNING toolUseId and emits a change', async () => {
     reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
     const changes: any[] = [];

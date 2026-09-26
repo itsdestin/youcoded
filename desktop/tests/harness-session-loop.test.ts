@@ -1329,6 +1329,26 @@ describe('HarnessSession — multi-step turn driver', () => {
       expect(ran).toBe(1);
     });
 
+    // Code review F1: where the password card is genuinely unavailable
+    // (macOS, Windows, or a Linux self-test failure) `adminPasswordService`
+    // is never wired at all — `undefined`, not a service that always
+    // refuses. Passwordless (NOPASSWD) sudo must keep working after
+    // approval exactly as it did before this feature existed: the approval
+    // band still fires (floorStop:'admin' is unconditional), the up-front
+    // password step is simply skipped, and the command still spawns.
+    it('passwordless sudo still runs after approval when adminPasswordService is unset entirely (F1)', async () => {
+      const bash = bashTool();
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true }));
+      const session = new HarnessSession(
+        makeOpts({ tools: [bash], decide: async () => ALLOW, askUser }), // no adminPasswordService key at all
+        async () => oneBash('sudo -n true') as any,
+      );
+      collect(session);
+      await session.send('go');
+      expect(askUser).toHaveBeenCalledTimes(1); // the approval band still shows
+      expect((bash as any).calls.length).toBe(1); // and the command still runs
+    });
+
     it('a no from the person on the APPROVAL card means the password is never asked either', async () => {
       const svc = fakeAdminPasswordService('submitted');
       const bash = bashTool();

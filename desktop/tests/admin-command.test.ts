@@ -193,6 +193,29 @@ describe('visibleSudoLines: sudo argv with sudo and its own options stripped', (
   it('a heredoc fed to a shell yields its sudo line', () => {
     expect(visibleSudoLines('bash <<EOF\nsudo apt update\nEOF')).toEqual([['apt', 'update']]);
   });
+
+  // Code review F3: visibleSudoLines used to hardcode POSIX tokenizing
+  // (`tokenize(text, true)`) regardless of platform, while
+  // adminCommandVerdict already read the SAME command text under the
+  // platform-aware rule. A backslash is an ESCAPE on POSIX but a literal
+  // character on Windows, so `apt\ update` splits into one word on POSIX
+  // (the space is escaped) and two on Windows (it isn't) — before the fix,
+  // visibleSudoLines would have returned the POSIX split even under a
+  // win32 ctx, silently disagreeing with adminCommandVerdict's own
+  // platform-aware read of the identical text.
+  it('tokenizes with the SAME platform rule as adminCommandVerdict, given the same ctx (F3)', () => {
+    const command = 'sudo apt\\ update';
+    const win = { platform: 'win32' as const };
+    const posix = { platform: 'linux' as const };
+
+    expect(adminCommandVerdict(command, win)).toEqual({ kind: 'admin', word: 'sudo' });
+    expect(adminCommandVerdict(command, posix)).toEqual({ kind: 'admin', word: 'sudo' });
+
+    // Windows: backslash is literal — the space still splits the word.
+    expect(visibleSudoLines(command, win)).toEqual([['apt\\', 'update']]);
+    // POSIX: backslash escapes the space — one word.
+    expect(visibleSudoLines(command, posix)).toEqual([['apt update']]);
+  });
 });
 
 // admin-password-service.ts (design §2.4/§3 item 5): the up-front/mid-command

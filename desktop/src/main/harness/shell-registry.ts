@@ -541,6 +541,20 @@ export class ShellRegistry extends EventEmitter {
     }
   }
 
+  /** Code review F2: `onExit()` clears `acceptedToolCallIds` for a run that
+   *  actually registered here (background/hand-off) — but the COMMON case
+   *  (an ordinary approved sudo that runs and exits in the foreground) never
+   *  registers a `ShellRun` at all, per `markAdmin`'s own comment, so its
+   *  entry was never removed: one leaked `Set` entry per approved admin
+   *  command for the life of the session's `ShellRegistry`. tools/bash.ts
+   *  calls this directly on its OWN foreground exit paths (the same
+   *  `onCallExit` closure that already unregisters `RunningCalls` and wipes
+   *  an unconsumed up-front hold), so the accepted mark for a call that
+   *  never reached this registry is still cleared when that call ends. */
+  clearAccepted(toolUseId: string): void {
+    this.acceptedToolCallIds.delete(toolUseId);
+  }
+
   /** New output since the last read (first read: everything so far). The log's
    *  byte length at the last read IS the cursor (review §5.2).
    *

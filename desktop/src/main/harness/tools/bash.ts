@@ -143,6 +143,30 @@ export function resetShellCache(): void {
   cachedShell = null;
 }
 
+// admin-password design, code review F1: whether THIS machine can ever show
+// the password card at all — macOS (MAC_ENABLED is off), Windows (no
+// AskpassServer is ever constructed), or Linux with a failed peer-cred
+// self-test. Set exactly once, from ipc-handlers.ts's app-start wiring,
+// right after NativeSessionHost.attachAdminPassword() actually succeeds —
+// never from a platform check here, so this file states only the OUTCOME,
+// never re-derives the platform logic that decided it.
+//
+// WHY a module-level flag rather than threading it through ctx: this is a
+// per-APP fact (every session on this machine either can or can't show the
+// card), not a per-session one — the same shape `cachedShell` already uses
+// above, for the same reason (`.description` is a zero-arg getter read once
+// per session by buildAiTools()).
+let adminPasswordAvailable = false;
+export function setAdminPasswordAvailable(v: boolean): void {
+  adminPasswordAvailable = v;
+}
+// knip: not exported — nothing outside this file reads the flag directly;
+// tests instead assert on BashTool.description's own text after calling
+// setAdminPasswordAvailable().
+function isAdminPasswordAvailable(): boolean {
+  return adminPasswordAvailable;
+}
+
 /** Only the bash shells get cwd tracking. The PowerShell fallback would need a
  *  different sentinel AND an $LASTEXITCODE dance to preserve exit codes, and it
  *  only ever runs on Windows boxes without Git Bash — not worth the risk, so it
@@ -423,12 +447,22 @@ function bashDescription(): string {
     // answers it.
     'A command that might prompt for input hangs: pass its non-interactive flag ' +
     '(`-y`, `--yes`, `--non-interactive`, or the tool\'s equivalent) whenever a command could ask a question. ' +
-    // admin-password design §8: what the model needs to know about sudo —
-    // that it WORKS (unlike before this feature), who types the password,
+    // admin-password design §8, code review F1: what the model needs to know
+    // about sudo — that it WORKS (unlike before this feature) WHEN the
+    // password card is available on THIS machine, who types the password,
     // and the two things never to do (both would leak the password to the
     // model's own stdout, or bypass the app's own verification entirely).
-    '`sudo` works: the user types their admin password in a card inside the app itself, never in this ' +
-    'output — do not pass a password, `-S`, or `-A`, and do not set `SUDO_ASKPASS` yourself. ' +
+    // On a machine where the card can never appear (macOS, Windows, or a
+    // Linux self-test failure), telling the model sudo "works" would be
+    // false — a sudo needing a password there just fails or hangs with no
+    // explanation. Passwordless (NOPASSWD) sudo keeps working on EVERY
+    // platform either way — nothing about this feature refuses it, and this
+    // sentence only changes the model's own expectations, never behavior.
+    (isAdminPasswordAvailable()
+      ? '`sudo` works: the user types their admin password in a card inside the app itself, never in this ' +
+        'output — do not pass a password, `-S`, or `-A`, and do not set `SUDO_ASKPASS` yourself. '
+      : '`sudo` only works here when the command needs no password (NOPASSWD) — this computer can\'t show ' +
+        'a password card, so a `sudo` that asks for one will fail or hang with no further explanation. ') +
     '`doas`, `su`, `pkexec`, and `run0` are refused; use `sudo` instead.'
   );
 }
@@ -1071,6 +1105,11 @@ export const BashTool = defineTool({
           forgetOnCallExit(ctx.runningCalls, ctx.toolCallId ?? 'unknown');
         }
         wipeAdminUpfront();
+        // Review fix F2: a plain foreground admin command never registers a
+        // ShellRun (ShellRegistry.onExit's own clear never runs for it) — so
+        // this is the ONLY place its "accepted" mark (if any) is ever removed.
+        // A cheap no-op when nothing was ever accepted for this toolCallId.
+        ctx.shells?.clearAccepted(ctx.toolCallId ?? 'unknown');
       };
       // Async spawn failure (the path Windows takes for a bad cwd): name the
       // shell + cwd actually used, not just Node's bare `spawn <cmd> <CODE>` —

@@ -66,6 +66,7 @@ import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
 import { AskpassServer } from './harness/askpass/askpass-server';
+import { setAdminPasswordAvailable } from './harness/tools/bash';
 import { forgetOnQuit } from './harness/askpass/admin-forget';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
@@ -3114,6 +3115,11 @@ export function registerIpcHandlers(
       await askpassServer.start();
       if (!askpassServer.available) return;
       nativeHost.attachAdminPassword(askpassServer, paths.wrapperRealpath);
+      // Code review F1: only now does the Bash tool description tell the
+      // model sudo works with a password — before this point (macOS,
+      // Windows, or a failed self-test above) it stays at its default
+      // `false` and the description says sudo only works there without one.
+      setAdminPasswordAvailable(true);
     });
   }
 

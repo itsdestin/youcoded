@@ -15,7 +15,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { BashTool } from '../src/main/harness/tools/bash';
+import { BashTool, setAdminPasswordAvailable } from '../src/main/harness/tools/bash';
 import type { ToolContext } from '../src/main/harness/tools/types';
 
 // `ipc-handlers.ts` imports `./main`, which runs module-scope side effects
@@ -185,5 +185,49 @@ describe('Bash env — the sudo askpass variables', () => {
     expect(started).toHaveLength(1);
     expect(started[0].env.SUDO_ASKPASS).toBe(ADMIN_ENV.SUDO_ASKPASS);
     expect(started[0].env.YOUCODED_ASKPASS_SOCKET).toBe(ADMIN_ENV.YOUCODED_ASKPASS_SOCKET);
+  });
+
+  // F2 (code review): a plain foreground admin command never touches
+  // ShellRegistry at all — `ctx.shells.clearAccepted` is the one signal that
+  // tells the per-session ShellRegistry this toolCallId's "accepted" mark
+  // (if any) is done, so `acceptedToolCallIds` does not leak one entry per
+  // approved sudo for the life of the session.
+  it('calls ctx.shells.clearAccepted with this call\'s toolCallId when a foreground command exits normally', async () => {
+    const clearAccepted = vi.fn();
+    const ctx = makeCtx({ toolCallId: 'call-123', shells: { clearAccepted } as any });
+    const r = await BashTool.execute({ command: 'echo hi' }, ctx);
+    expect(r.isError).toBeFalsy();
+    expect(clearAccepted).toHaveBeenCalledWith('call-123');
+  });
+
+  it('calls ctx.shells.clearAccepted even when the foreground command exits non-zero', async () => {
+    const clearAccepted = vi.fn();
+    const ctx = makeCtx({ toolCallId: 'call-456', shells: { clearAccepted } as any });
+    const r = await BashTool.execute({ command: 'exit 3' }, ctx);
+    expect(r.isError).toBe(true);
+    expect(clearAccepted).toHaveBeenCalledWith('call-456');
+  });
+});
+
+// F1 (code review): where the password card can never appear (macOS,
+// Windows, or a Linux self-test failure), the description must say so
+// instead of unconditionally claiming sudo works with a password.
+describe('Bash description — reflects whether the password card is actually available (F1)', () => {
+  afterEach(() => {
+    setAdminPasswordAvailable(false); // restore the default for every other test file
+  });
+
+  it('says sudo works with a password card when the feature is available', () => {
+    setAdminPasswordAvailable(true);
+    const d = BashTool.description;
+    expect(d).toContain('`sudo` works: the user types their admin password in a card');
+    expect(d).not.toContain('only works here when the command needs no password');
+  });
+
+  it('says sudo only works without a password when the card is unavailable — never claims the card exists', () => {
+    setAdminPasswordAvailable(false);
+    const d = BashTool.description;
+    expect(d).toContain('`sudo` only works here when the command needs no password (NOPASSWD)');
+    expect(d).not.toContain('the user types their admin password in a card');
   });
 });

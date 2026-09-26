@@ -40,6 +40,20 @@ export type AdminVerdict =
   | { kind: 'admin'; word: 'sudo' }
   | { kind: 'refuse'; word: 'doas' | 'su' | 'pkexec' | 'run0' };
 
+/** Code review F3: the ONE place that decides POSIX vs Windows tokenizing
+ *  rules for THIS floor's own command text — shared by `adminCommandVerdict`
+ *  and `visibleSudoLines`, which read the SAME command text and must agree
+ *  on how it's split into words, or one could see a `sudo` the other
+ *  doesn't (e.g. a backslash read as an escape on POSIX vs a bare path
+ *  separator on Windows). Before this, `visibleSudoLines` hardcoded
+ *  `tokenize(text, true)` regardless of platform — harmless today only
+ *  because the up-front path that calls it is Linux-only (see design
+ *  review F1), and a latent trap otherwise. Mirrors `tokenize`'s own
+ *  second argument: `true` means POSIX rules. */
+function tokenizePosix(ctx?: AdminCommandContext): boolean {
+  return (ctx?.platform ?? process.platform) !== 'win32';
+}
+
 function verdictForWord(name: string): AdminVerdict | null {
   if (name === 'sudo') return { kind: 'admin', word: 'sudo' };
   if (REFUSE_WORDS.has(name)) return { kind: 'refuse', word: name as 'doas' | 'su' | 'pkexec' | 'run0' };
@@ -71,14 +85,12 @@ export function refuseMessage(word: 'doas' | 'su' | 'pkexec' | 'run0'): string {
  *  subshells, `bash -c`/`sh -c` scripts, `eval`, and `$(…)`/backtick
  *  substitutions. Null when the command runs none of the five words. */
 export function adminCommandVerdict(command: string, ctx?: AdminCommandContext): AdminVerdict | null {
-  const win = (ctx?.platform ?? process.platform) === 'win32';
-
   const analyse = (source: string): AdminVerdict | null => {
     // Heredoc bodies are text unless a shell runs them (review T1-1, same
     // idiom as rm-target.ts/bash-secret-paths.ts): `cat <<EOF\nsudo x\nEOF`
     // never runs sudo — `sudo x` there is just a line `cat` will write out.
     const { text, bodies } = splitHeredocs(source);
-    const { tokens, nested } = tokenize(text, !win);
+    const { tokens, nested } = tokenize(text, tokenizePosix(ctx));
     let words: Word[] = [];
     const verdictForCmd = (cmd: Word[]): AdminVerdict | null => {
       if (cmd.length === 0) return null;
@@ -202,8 +214,11 @@ export function displayCommandFromSudoArgv(sudoArgv: string[]): string {
  *  (design §2.4/§4) to match an askpass connection's sudo process to the
  *  approved command's own sudo line — a hidden sudo elsewhere in the same call
  *  (a downloaded script) gets the mid-command card instead, never this one's
- *  password. Only `sudo` lines: the refused words never reach a password ask. */
-export function visibleSudoLines(command: string): string[][] {
+ *  password. Only `sudo` lines: the refused words never reach a password ask.
+ *  `ctx` (review F3): tokenizes with the SAME platform rule
+ *  `adminCommandVerdict` uses for the identical command text — previously
+ *  hardcoded to POSIX regardless of platform. */
+export function visibleSudoLines(command: string, ctx?: AdminCommandContext): string[][] {
   const lines: string[][] = [];
 
   const pushSudoLine = (rest: Word[]): void => {
@@ -214,7 +229,7 @@ export function visibleSudoLines(command: string): string[][] {
   const analyse = (source: string): void => {
     // Same heredoc-body exemption as adminCommandVerdict (review T1-1).
     const { text, bodies } = splitHeredocs(source);
-    const { tokens, nested } = tokenize(text, true);
+    const { tokens, nested } = tokenize(text, tokenizePosix(ctx));
     let words: Word[] = [];
     const visitCmd = (cmd: Word[]): void => {
       if (cmd.length === 0) return;
