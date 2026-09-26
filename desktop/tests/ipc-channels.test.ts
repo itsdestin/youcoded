@@ -1335,6 +1335,75 @@ describe('git:* IPC parity (git surface)', () => {
   });
 });
 
+// docComments:* IPC parity — T3 of the doc-comments build (design
+// docs/active/specs/2026-09-26-doc-comments-build-design.md §1.6). Unlike the
+// git:* block above, this one deliberately does NOT assert an Android arm in
+// SessionService.kt: per the design's own task table, Android parity is a
+// SEPARATE task (T4) that depends on T3, not something T3 lands alongside it.
+// Until T4 lands, these channels fall through Kotlin's existing generic
+// catch-all (buildUnsupportedResponse — android-honest-build.test.ts already
+// pins that arm exists for ANY unhandled channel), which is the correct,
+// honest interim behaviour per ipc-bridge.md ("a channel Kotlin has no branch
+// for answers {ok:false, unsupported:true}") — not a gap this file should
+// paper over with a premature Kotlin-containment assertion.
+describe('docComments:* IPC parity', () => {
+  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
+  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
+  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
+  const server = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
+
+  const channels: Array<[string, string]> = [
+    ['docComments:list', 'DOC_COMMENTS_IPC.LIST'],
+    ['docComments:add', 'DOC_COMMENTS_IPC.ADD'],
+    ['docComments:reply', 'DOC_COMMENTS_IPC.REPLY'],
+    ['docComments:resolve', 'DOC_COMMENTS_IPC.RESOLVE'],
+    ['docComments:reopen', 'DOC_COMMENTS_IPC.REOPEN'],
+    ['docComments:move', 'DOC_COMMENTS_IPC.MOVE'],
+    ['docComments:watch', 'DOC_COMMENTS_IPC.WATCH'],
+    ['docComments:unwatch', 'DOC_COMMENTS_IPC.UNWATCH'],
+  ];
+
+  for (const [ch, constant] of channels) {
+    it(`${ch} present in preload + remote-shim`, () => {
+      expect(preload).toContain(`'${ch}'`);
+      expect(shim).toContain(`'${ch}'`);
+    });
+    it(`${ch} registered in ipc-handlers.ts (literal, DOC_COMMENTS_IPC constant, or the factored registerDocCommentsHandlers call)`, () => {
+      // T3 factors registration into doc-comments/ipc-handlers.ts (testability
+      // — see doc-comments-ipc-handlers.test.ts), so the MAIN ipc-handlers.ts
+      // file carries only the registerDocCommentsHandlers(...) call, not a
+      // literal or constant for every channel — accept either shape.
+      const registeredHere = handlers.includes(`'${ch}'`) || handlers.includes(constant);
+      const factoredOut = handlers.includes('registerDocCommentsHandlers');
+      expect(registeredHere || factoredOut).toBe(true);
+    });
+    it(`${ch} handled by remote-server.ts (WS case)`, () => {
+      expect(server).toContain(`case '${ch}':`);
+    });
+  }
+
+  it('docComments:changed push channel present in preload + remote-shim', () => {
+    expect(preload).toContain(`'docComments:changed'`);
+    expect(shim).toContain(`'docComments:changed'`);
+  });
+
+  it('docComments:watch/:unwatch are registered in remote-shim.ts REJECT_ON_NOT_OK (review 1, F10)', () => {
+    // A failed watch must reject to the caller's catch, never resolve as an
+    // ordinary value a comments pane could misread as "subscribed, no
+    // changes yet" — pinned in full (exact list + behaviour) by
+    // remote-shim-refusals.test.ts; this is the narrower presence check that
+    // belongs with this feature's own IPC parity block.
+    const block = shim.match(/REJECT_ON_NOT_OK[\s\S]*?\]\);/);
+    expect(block, 'REJECT_ON_NOT_OK block not found').toBeTruthy();
+    expect(block![0]).toContain(`'docComments:watch'`);
+    expect(block![0]).toContain(`'docComments:unwatch'`);
+  });
+
+  it('the doc-comments IPC surface registration is actually wired into registerIpcHandlers', () => {
+    expect(handlers).toContain('registerDocCommentsHandlers(ipcMain');
+  });
+});
+
 // Four-surface parity for the native:* channels.
 //
 // GAP THIS CLOSES (found 2026-07-28): shim/Android coverage in this file is

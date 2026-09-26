@@ -146,6 +146,7 @@ import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArti
 import { listProjects, removeProject } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
 import { PageConnectionsStore } from './pages/connections-store';
+import { registerDocCommentsHandlers } from './doc-comments/ipc-handlers';
 import { createAuthStore } from './marketplace-auth-store';
 import type { PageFetchRequest } from '../shared/pages-types';
 import { getMachineIdentity } from './device-identity';
@@ -5195,6 +5196,17 @@ export function registerIpcHandlers(
     pagesService.deleteSavedKey(String(service ?? ''), String(address ?? '')));
   ipcMain.handle(IPC.PAGES_FETCH, async (_e, id: string, req: PageFetchRequest) =>
     pagesService.fetch(String(id ?? ''), req ?? { url: '' }));
+
+  // ── Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
+  // build-design.md §1.5/§1.6) — list/add/reply/resolve/reopen/move plus the
+  // chokidar-backed watch/unwatch relay. Factored into its own function so the
+  // containment/plumbing behaviour is testable without this function's full
+  // dependency graph — see doc-comments/ipc-handlers.ts.
+  registerDocCommentsHandlers(ipcMain, {
+    getAllWebContents: () => webContents.getAllWebContents(),
+    remoteBroadcast: (msg) => remoteServer?.broadcast(msg),
+  });
+
   // A crashed/closed renderer never sends unwatch — drop its refs on destroy so
   // it cannot pin a watcher forever. One listener per webContents, attached on
   // its first subscribe.

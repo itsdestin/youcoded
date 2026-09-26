@@ -19,6 +19,11 @@ import { readFileHead } from './fs-read-head';
 import { getArcadeOps } from './arcade-handlers';
 import { getPagesService } from './pages/pages-service';
 import type { PageFetchRequest } from '../shared/pages-types';
+import {
+  listComments, addComment, replyToComment, resolveComment, reopenComment, moveComment, resolveWatchTarget,
+} from './doc-comments/doc-comments-store';
+import { watchComments, unwatchComments, dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
+import { nativeFormatFor, refuseNativeMutation, listNativeComments } from './doc-comments/doc-comments-dispatch';
 // Shared cap so a local folder's description (set via a remote browser client)
 // can't drift from the synced registry's limit — same constant project-registry.ts
 // and ipc-handlers.ts use.
@@ -229,6 +234,11 @@ interface AuthenticatedClient {
   watchId?: number;
   // Distinct roots this socket watches — capped (MAX_WATCHED_ROOTS_PER_SOCKET).
   watchedRoots?: Set<string>;
+  // Document comments (T3): a SEPARATE subscriber-id space from watchId above
+  // — a different module (doc-comments-watcher.ts) with its own refcounts —
+  // so this client's docComments:watch/:unwatch calls don't share (or
+  // collide with) its artifacts:watch-project subscription.
+  docCommentsWatchId?: number;
 }
 
 // A phone shows one project's Files and one conversation's drawer at a time;
@@ -2198,6 +2208,112 @@ export class RemoteServer {
         catch (err: any) { this.respond(client.ws, type, id, { ok: false, reason: 'network', message: err?.message ?? String(err) }); }
         break;
       }
+      // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
+      // build-design.md §1.6) — the SAME main-process store desktop windows
+      // use, so a phone over remote access sees and edits the same comments
+      // (review 2, F6: remote is NOT the same gap as Android). reply/resolve/
+      // reopen/move all carry `path`, containment-checked identically to
+      // add's (review 3, F1).
+      case 'docComments:list': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        // Word/Excel comments live INSIDE the file (§1.1) — dispatch to
+        // T10/T12's own readers instead of the sidecar store, the SAME
+        // by-extension decision ipc-handlers.ts's desktop surface makes.
+        const format = nativeFormatFor(filePath);
+        this.respond(client.ws, type, id, format
+          ? await listNativeComments(format, { path: filePath, projectRoot })
+          : await listComments({ path: filePath, projectRoot }));
+        break;
+      }
+      case 'docComments:add': {
+        const filePath = String(payload?.path ?? '');
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        this.respond(client.ws, type, id, await addComment({
+          path: filePath,
+          projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          selector: payload?.selector,
+          text: String(payload?.text ?? ''),
+          author: payload?.author,
+        }));
+        break;
+      }
+      case 'docComments:reply': {
+        const filePath = String(payload?.path ?? '');
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        this.respond(client.ws, type, id, await replyToComment({
+          path: filePath,
+          projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          id: String(payload?.id ?? ''),
+          text: String(payload?.text ?? ''),
+          author: payload?.author,
+        }));
+        break;
+      }
+      case 'docComments:resolve': {
+        const filePath = String(payload?.path ?? '');
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        this.respond(client.ws, type, id, await resolveComment({
+          path: filePath,
+          projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          id: String(payload?.id ?? ''),
+          by: payload?.by,
+        }));
+        break;
+      }
+      case 'docComments:reopen': {
+        const filePath = String(payload?.path ?? '');
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        this.respond(client.ws, type, id, await reopenComment({
+          path: filePath,
+          projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          id: String(payload?.id ?? ''),
+          by: payload?.by,
+        }));
+        break;
+      }
+      case 'docComments:move': {
+        const filePath = String(payload?.path ?? '');
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        this.respond(client.ws, type, id, await moveComment({
+          path: filePath,
+          projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          id: String(payload?.id ?? ''),
+          newSelector: payload?.newSelector,
+        }));
+        break;
+      }
+      case 'docComments:watch': {
+        try {
+          const target = await resolveWatchTarget({
+            path: String(payload?.path ?? ''),
+            projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          });
+          if (!target.ok) { this.respond(client.ws, type, id, target); break; }
+          this.respond(client.ws, type, id, await watchComments(target.target, this.docCommentsSubscriberId(client)));
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
+      case 'docComments:unwatch': {
+        try {
+          const target = await resolveWatchTarget({
+            path: String(payload?.path ?? ''),
+            projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          });
+          if (target.ok && client.docCommentsWatchId !== undefined) unwatchComments(target.target, client.docCommentsWatchId);
+          this.respond(client.ws, type, id, { ok: true });
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
       case 'search:set-key': {
         try {
           if (this.nativeRuntime) await this.nativeRuntime.searchKeyStore.setKey(payload.backend, payload.key);
@@ -4044,6 +4160,22 @@ export class RemoteServer {
       }
     }
     return client.watchId;
+  }
+
+  /** Same shape as watchSubscriberId above, for doc-comments-watcher.ts's
+   *  OWN, separate refcount map (T3) — arms its own 'close' cleanup rather
+   *  than reusing watchSubscriberId's, since that one only wires
+   *  project-watcher's dropSubscriber and a docComments-only client (no
+   *  artifacts:watch-project call) would otherwise leak its watcher forever. */
+  private docCommentsSubscriberId(client: AuthenticatedClient): number {
+    if (client.docCommentsWatchId === undefined) {
+      const watchId = this.nextWatchId--;
+      client.docCommentsWatchId = watchId;
+      if (typeof (client.ws as any).once === 'function') {
+        client.ws.once('close', () => dropDocCommentsSubscriber(watchId));
+      }
+    }
+    return client.docCommentsWatchId;
   }
 
   // --- Helpers ---

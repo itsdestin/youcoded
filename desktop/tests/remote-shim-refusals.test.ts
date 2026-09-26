@@ -92,6 +92,12 @@ describe('remote-shim — rejecting failures', () => {
         // Settings card would read it as an install that finished.
         'claude-code:install',
         'commands:list',
+        // Document comments watch/unwatch (T3, design §1.6, review 1 F10): new
+        // channels with no existing caller convention to match, unlike
+        // artifacts:watch-project — a failed watch must reject to the
+        // comments pane's catch, never resolve as "subscribed, no changes yet".
+        'docComments:unwatch',
+        'docComments:watch',
         'engine:prereqs',
         'engine:run-in-terminal',
         'engine:set-config',

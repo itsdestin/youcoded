@@ -1862,6 +1862,42 @@ contextBridge.exposeInMainWorld('claude', {
     deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, service, address),
     fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, id, req),
   },
+  // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
+  // build-design.md §1.6). Channel strings are inlined (preload cannot import
+  // ./doc-comments/ipc-channels.ts — Electron's sandboxed preload forbids a
+  // relative import), same convention as the git/artifacts namespaces above.
+  // Every call sends ONE object argument (never positional args) so main's
+  // handler can destructure `{path, ...}` uniformly — reply/resolve/reopen/
+  // move all carry `path`, containment-checked identically to add's own
+  // (review 3, F1): the sidecar holding a comment id can only be found by
+  // knowing the file.
+  docComments: {
+    list: (filePath: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:list', { path: filePath, projectRoot }),
+    add: (filePath: string, selector: unknown, text: string, author: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:add', { path: filePath, selector, text, author, projectRoot }),
+    reply: (filePath: string, id: string, text: string, author: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:reply', { path: filePath, id, text, author, projectRoot }),
+    resolve: (filePath: string, id: string, by: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:resolve', { path: filePath, id, by, projectRoot }),
+    reopen: (filePath: string, id: string, by: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:reopen', { path: filePath, id, by, projectRoot }),
+    move: (filePath: string, id: string, newSelector: unknown, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:move', { path: filePath, id, newSelector, projectRoot }),
+    // Subscribe/unsubscribe this renderer to comment changes for a file's
+    // project (chokidar in main, refcounted — doc-comments/doc-comments-watcher.ts).
+    // Events arrive on onChanged with the SOURCE file's path; a window not
+    // showing that path ignores the push cheaply (design §1.5 "Broadcast scope").
+    watch: (filePath: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:watch', { path: filePath, projectRoot }),
+    unwatch: (filePath: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:unwatch', { path: filePath, projectRoot }),
+    onChanged: (cb: (evt: { path: string }) => void) => {
+      const handler = (_e: any, evt: { path: string }) => cb(evt);
+      ipcRenderer.on('docComments:changed', handler);
+      return () => ipcRenderer.removeListener('docComments:changed', handler);
+    },
+  },
   git: {
     fileStatus: (projectRoot: string, relPath: string) =>
       ipcRenderer.invoke('git:file-status', projectRoot, relPath),

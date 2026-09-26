@@ -123,6 +123,18 @@ async function checkContainment(realProjectRoot: string, abs: string): Promise<s
 
 interface Located {
   sidecarPath: string;
+  // Added for T3's watch surface (resolveWatchTarget, below): the whole
+  // per-project `.youcoded/comments/` directory is what chokidar watches
+  // (§1.5 — many open files in one project share ONE watcher), which needs
+  // the realpathed root, not just the one file's sidecar path. Existing
+  // callers (resolveSidecarPath) only ever read `.sidecarPath`, so this is
+  // additive.
+  realProjectRoot: string;
+  // Added for T3's docx/xlsx dispatch (resolveSourceFilePath, below): Word/
+  // Excel comments live INSIDE the file (§1.1), so a `.docx`/`.xlsx` target
+  // has no sidecar to read — this is the already-computed, already-
+  // containment-verified absolute path to the SOURCE file itself.
+  sourceAbsolutePath: string;
 }
 
 /**
@@ -170,7 +182,7 @@ async function locateInProject(projectRoot: string, filePath: string): Promise<L
   }
   const rel = path.relative(realProjectRoot, realAbs);
   const sidecarPath = path.join(realProjectRoot, ...SIDECAR_DIR, `${rel}.json`);
-  return { sidecarPath };
+  return { sidecarPath, realProjectRoot, sourceAbsolutePath: realAbs };
 }
 
 /**
@@ -464,4 +476,64 @@ export async function moveComment(args: {
     const next: PersistedComment = { ...comment, selector: args.newSelector };
     return { file: replaceComment(file, args.id, next), extra: {} };
   });
+}
+
+// ---------------------------------------------------------------------------
+// T3's watch surface (docComments:watch/:unwatch, design §1.5 "Watching") —
+// WHERE to watch, reusing this module's own location logic so the watched
+// path can never drift from where list/add/etc. actually read and write.
+// ---------------------------------------------------------------------------
+
+/** A project subscribes as a whole directory (`.youcoded/comments/` — many
+ *  open files in one project share ONE chokidar watcher, §1.5); the fallback
+ *  (no project root) case has exactly one file, the same single sidecar
+ *  `locateFallback` already resolves for list/add. `sourcePath` on the
+ *  fallback arm is the caller's OWN `path` argument (unchanged) — it is what
+ *  a `docComments:changed` push should carry for that scheme, exactly the
+ *  same value `PersistedComment.path` already holds for a fallback-stored
+ *  comment (§1.4). */
+export type CommentsWatchTarget =
+  | { kind: 'project'; commentsDir: string }
+  | { kind: 'fallback'; sidecarPath: string; sourcePath: string };
+
+export async function resolveWatchTarget(args: {
+  path: string;
+  projectRoot?: string;
+}): Promise<{ ok: true; target: CommentsWatchTarget } | Refusal> {
+  if (args.projectRoot) {
+    const located = await locateInProject(args.projectRoot, args.path);
+    if ('error' in located) return located;
+    return {
+      ok: true,
+      target: { kind: 'project', commentsDir: path.join(located.realProjectRoot, ...SIDECAR_DIR) },
+    };
+  }
+  const fb = await locateFallback(args.path);
+  if (!fb.ok) return fb;
+  return { ok: true, target: { kind: 'fallback', sidecarPath: fb.sidecarPath, sourcePath: args.path } };
+}
+
+// ---------------------------------------------------------------------------
+// T3's docx/xlsx dispatch (design §1.1: Word/Excel comments live INSIDE the
+// file, so these two extensions have no sidecar at all) — resolving the
+// SOURCE file's own verified-contained absolute path, reusing the exact same
+// containment algorithm every other entry point uses (§1.5), so a `.docx`/
+// `.xlsx` read can never escape the project either.
+// ---------------------------------------------------------------------------
+
+export async function resolveSourceFilePath(args: {
+  path: string;
+  projectRoot?: string;
+}): Promise<{ ok: true; absolutePath: string } | Refusal> {
+  if (args.projectRoot) {
+    const located = await locateInProject(args.projectRoot, args.path);
+    if ('error' in located) return located;
+    return { ok: true, absolutePath: located.sourceAbsolutePath };
+  }
+  // Mirrors locateFallback's own absolute-path requirement (F4) — there is no
+  // root to resolve a relative path against outside a known project.
+  if (!path.isAbsolute(args.path)) return { ok: false, error: 'path-not-absolute' };
+  const abs = path.resolve(args.path);
+  const resolved = (await realpathWithNonexistentTail(abs)) ?? abs;
+  return { ok: true, absolutePath: resolved };
 }
