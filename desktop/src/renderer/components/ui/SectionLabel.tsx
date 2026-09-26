@@ -15,14 +15,22 @@ import React from 'react';
  * migration — this primitive does not retire that guard, it gives the next
  * migration somewhere to land instead of a fourth hand-typed spelling.
  *
- * 12px is `text-xs` here (the app's scale: 3xs=10, 2xs=11, xs=12, sm=14 —
- * Dialog.tsx's own width-derivation comment has the full ladder), not the old
- * eyebrow's `text-3xs` (10px) — the guide's own number for a small label.
+ * 12px is `text-xs` here (the app's scale: 3xs=11 since 2026-09-26 (was 10),
+ * 2xs=11, xs=12, sm=14 — Dialog.tsx's own width-derivation comment has the
+ * full ladder), not the old eyebrow's `text-3xs` — the guide's own number for
+ * a small label.
  *
  * No default margin: callers vary (mb-2 above a group's rows, px-3 pt-2 pb-1
  * ahead of a sub-list, none at all inline in a header row) and guessing one
  * would just move the inconsistency inside this file instead of removing it.
+ *
+ * `reading` — a label heading a SECTION OF READING TEXT (About's Disclaimer,
+ * an explainer's headings) also gets a soft underline under its words: edge
+ * colour, 4px below the text (decisions.md "Labels over reading sections",
+ * `ui-element-review-final#F-1`). Labels over short settings groups stay plain,
+ * which is why this is opt-in rather than the default.
  */
-export function SectionLabel({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <h3 className={`text-xs font-medium text-fg-muted ${className}`.trim()}>{children}</h3>;
+export function SectionLabel({ children, className = '', reading = false }: { children: React.ReactNode; className?: string; reading?: boolean }) {
+  const underline = reading ? ' underline decoration-edge underline-offset-4' : '';
+  return <h3 className={`text-xs font-medium text-fg-muted${underline} ${className}`.trim()}>{children}</h3>;
 }

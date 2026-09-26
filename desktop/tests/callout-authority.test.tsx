@@ -6,12 +6,15 @@ import '@testing-library/jest-dom/vitest';
 import { Callout } from '../src/renderer/components/ui/Callout';
 import { inScopeFiles, readSource, stripComments } from './helpers/guard-scope';
 
-// Guard for K4 — the callout.
+// Guard for K4 — the callout, THE notice box.
 //
-// A callout is PASSIVE: it states something and offers nothing to press. The
-// moment it grows a button it is a K5 status strip, which is a different role
-// with a different geometry. Keeping the two apart is the entire reason K4 is
-// its own kit entry, so the API is what enforces it: Callout has no action slot.
+// Superseded rule (2026-09-25, decisions.md P-2/P-4): a callout used to be
+// strictly passive, with no action slot, and a notice with a button had to be a
+// K5 status strip. Destin ruled the opposite — every warning/error/info notice
+// is this one tinted box, and a notice's own buttons (Try again, Show details,
+// Resume…) go INSIDE it, at the right. What this guard now pins is that rule:
+// one geometry, the buttons inside the box, and colour only in the box and the
+// title (never red body text).
 
 afterEach(cleanup);
 
@@ -63,6 +66,37 @@ describe('Callout', () => {
     expect(details.tagName).toBe('DETAILS');
     expect(details.open).toBe(false);
     for (const cls of ['rounded-lg', 'p-3', 'border', 'bg-amber-500/10']) expect(details.className).toContain(cls);
+  });
+
+  it('body text is the normal grey in every tone, danger included — colour lives in the box and title', () => {
+    // Design guide "Status and notices": never red or coloured body text. The
+    // danger tone used to write its body in text-destructive-fg.
+    for (const tone of ['info', 'warning', 'danger'] as const) {
+      cleanup();
+      render(<Callout tone={tone} title="Heading">body</Callout>);
+      const body = screen.getByText('body');
+      expect(body.className, tone).toContain('text-fg-2');
+      expect(body.className, tone).not.toMatch(/text-(destructive|red|amber)/);
+    }
+    cleanup();
+    render(<Callout tone="danger" title="Couldn't sync">body</Callout>);
+    expect(screen.getByText("Couldn't sync").className).toContain('text-destructive-fg');
+  });
+
+  it("a notice's buttons sit INSIDE the box, after the text (at the right)", () => {
+    render(
+      <Callout tone="danger" title="Couldn't sync" actions={<><button>Show details</button><button>Try again</button></>}>
+        body
+      </Callout>,
+    );
+    const box = screen.getByText('body').closest('.rounded-lg') as HTMLElement;
+    const retry = screen.getByRole('button', { name: 'Try again' });
+    expect(box.contains(retry), 'the action is inside the tinted box').toBe(true);
+    // Text first, buttons after it in the same row — i.e. on the right.
+    expect(screen.getByText('body').compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect((retry.parentElement as HTMLElement).className).toContain('ml-auto');
+    // Same geometry as a callout without buttons.
+    for (const cls of ['rounded-lg', 'p-3', 'border', 'bg-destructive/10']) expect(box.className).toContain(cls);
   });
 
   it('defaults to info', () => {
@@ -129,15 +163,20 @@ const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
       + '(review-5 Q-1 chose "never" for opening by itself), so it is a K5 status strip rather '
       + 'than passive text',
   },
+  // 3 -> 2 (fix batch 2, 2026-09-26): the Remote Access setup banner lost its
+  // outer box — the intro is plain text and the status strip stands alone.
   'SettingsPanel.tsx': {
-    count: 3,
-    why: 'the Remote setup banner and the "Connected to X" banner both carry buttons, so both are K5; '
-      + 'the third is the Package Tier option selected state',
+    count: 2,
+    why: 'the phone\'s "Connected to X" banner (green, with a Disconnect button — not yet moved onto '
+      + '<Callout actions>, outside fix batch 2\'s screens) and the Package Tier option selected state',
   },
+  // 4 -> 2 (fix batch 2, 2026-09-26): the warnings list is now <Callout actions>
+  // (a notice's buttons go INSIDE the notice — decisions.md P-2), so its two
+  // hand-rolled tints are gone.
   'SyncPanel.tsx': {
-    count: 4,
-    why: 'two are K6 backend-row state tints, two are the warnings list (Fix/Dismiss buttons, so K5) '
-      + 'and its context-menu danger hover',
+    count: 2,
+    why: 'the K6 backend rows\' state tints (red when failing, green when healthy) — a list row\'s '
+      + 'own state, not a notice',
   },
   'SpecialistsChip.tsx': {
     count: 2,

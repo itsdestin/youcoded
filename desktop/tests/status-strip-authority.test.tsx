@@ -8,12 +8,13 @@ import { inScopeFiles, readStripped } from './helpers/guard-scope';
 
 // Guard for K5 (status strip) and K9 (danger zone).
 //
-// K5 and K4 are the pair most likely to collapse back into each other, because
-// the difference is not visual — it is whether the block offers a way OUT of the
-// state it describes. Callout has no action slot precisely so that a passive
-// block cannot quietly grow a button and become a second status strip. These
-// assertions pin the other half: a status strip HAS the slot, and the branches
-// that used to be eleven hand-rolled shapes go through it.
+// K5 is a subsystem's RUNNING state ("Checking…", "Not set up yet") plus the
+// one action that moves it on. Since 2026-09-25 a PROBLEM notice with buttons
+// is a <Callout actions> instead (decisions.md P-2: every warning/error is the
+// one tinted box, its buttons inside it) — the old split "a callout has no
+// action slot, so a notice with a button must be a strip" is superseded. These
+// assertions pin that a status strip HAS its slot, and that the branches that
+// used to be eleven hand-rolled shapes go through it.
 //
 // Plan B (2026-09-16) moved the source-text halves to workspace ast-grep rules
 // (scripts/ast-grep/rules/): no-centred-status-paragraph and
@@ -48,8 +49,8 @@ describe('StatusStrip', () => {
   });
 
   it('carries the one action that resolves the state', () => {
-    // This is the slot K4's Callout deliberately does NOT have. If a design
-    // needs it, the block is a status strip, not a callout.
+    // A running state's one way forward. (A problem notice's buttons go in
+    // <Callout actions> instead — decisions.md P-2.)
     render(<StatusStrip tone="idle" action={<button>Set up</button>}>message</StatusStrip>);
     expect(screen.getByRole('button', { name: 'Set up' })).toBeInTheDocument();
   });
