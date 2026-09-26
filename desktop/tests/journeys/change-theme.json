@@ -1,0 +1,54 @@
+{
+  "start": {
+    "scenario": "default",
+    "screen": null,
+    "width": 1440,
+    "height": 900,
+    "theme": "meadow-mist",
+    "latency": 0,
+    "params": ""
+  },
+  "steps": [
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Settings",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Appearance Meadow Mist",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Midnight",
+        "nth": 1
+      }
+    },
+    {
+      "do": "key",
+      "key": "Escape"
+    },
+    {
+      "do": "key",
+      "key": "Escape"
+    },
+    {
+      "do": "expect",
+      "text": "Meadow Mist",
+      "not": true
+    },
+    {
+      "do": "expect",
+      "text": "Midnight"
+    }
+  ]
+}

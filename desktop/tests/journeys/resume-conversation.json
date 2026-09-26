@@ -1,0 +1,78 @@
+{
+  "start": {
+    "scenario": "default",
+    "screen": null,
+    "width": 1440,
+    "height": 900,
+    "theme": "meadow-mist",
+    "latency": 0,
+    "params": ""
+  },
+  "steps": [
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "All Sessions",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Resume",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "sync health primary system",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Model",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Claude Sonnet 4.6 \u00b7 OpenRouter",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Resume Session",
+        "nth": 1
+      }
+    },
+    {
+      "do": "expect",
+      "screen": "chat/resume",
+      "not": true
+    },
+    {
+      "do": "expect",
+      "text": "Initializing session",
+      "not": true
+    },
+    {
+      "do": "expect",
+      "control": {
+        "role": "button",
+        "label": "sync health primary system"
+      }
+    }
+  ]
+}

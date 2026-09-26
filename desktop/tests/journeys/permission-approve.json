@@ -1,0 +1,75 @@
+{
+  "start": {
+    "scenario": "empty",
+    "screen": null,
+    "width": 1440,
+    "height": 900,
+    "theme": "meadow-mist",
+    "latency": 0,
+    "params": "reply=inbox&replySpeed=4"
+  },
+  "steps": [
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Create Session",
+        "nth": 1
+      }
+    },
+    {
+      "do": "expect",
+      "text": "Initializing session",
+      "not": true
+    },
+    {
+      "do": "type",
+      "target": {
+        "role": "textbox",
+        "label": "Message your assistant...",
+        "nth": 1
+      },
+      "text": "check my mail"
+    },
+    {
+      "do": "key",
+      "key": "Enter"
+    },
+    {
+      "do": "expect",
+      "text": "Three need you"
+    },
+    {
+      "do": "expect",
+      "text": "Creating a file"
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Yes",
+        "nth": 1
+      }
+    },
+    {
+      "do": "expect",
+      "text": "for your review. Now the invites."
+    },
+    {
+      "do": "expect",
+      "text": "Google Calendar: Create Event"
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Yes",
+        "nth": 1
+      }
+    },
+    {
+      "do": "expect",
+      "text": "Both on your calendar"
+    }
+  ]
+}

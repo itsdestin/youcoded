@@ -1,0 +1,37 @@
+{
+  "start": {
+    "scenario": "default",
+    "screen": null,
+    "width": 1440,
+    "height": 900,
+    "theme": "meadow-mist",
+    "latency": 0,
+    "params": ""
+  },
+  "steps": [
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Open Projects",
+        "nth": 1
+      }
+    },
+    {
+      "do": "expect",
+      "text": "README.md"
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Conversations",
+        "nth": 1
+      }
+    },
+    {
+      "do": "expect",
+      "text": "menu internals tranche 3"
+    }
+  ]
+}

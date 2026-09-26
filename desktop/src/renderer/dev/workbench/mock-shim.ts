@@ -860,7 +860,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // is switched, Grok answers, the user reacts) — replaying one fixed answer
   // to every message could not film it. One-turn fixtures behave as before.
   const replyCursor = new Map<string, number>();
-  const startReply = (sessionId: string, text: string) => {
+  // `echoUser`: Claude Code sessions only (session.sendInput) — Claude Code records the typed
+  // message in its transcript; a native session's app draws the user's bubble itself.
+  const startReply = (sessionId: string, text: string, echoUser = false) => {
     const raw = REPLY_SCRIPTS[`./fixtures/replies/${replyScriptName()}.jsonl`];
     if (!raw) { console.warn(`[workbench] no reply script "${replyScriptName()}"`); return; }
     const turns = splitTurns(parseReplyScript(raw));
@@ -881,6 +883,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       transcript: (e) => subs.transcript.forEach((f) => f(e)),
       hook: (e) => subs.hook.forEach((f) => f(e)),
       speed,
+      echoUser,
     });
   };
 
@@ -1011,7 +1014,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // hookHandler). SessionStart maps to no chat action, so the only effect
       // is lifting the Initializing overlay. Deferred so App has run its
       // sessionCreated handler (SESSION_INIT) before the hook arrives.
-      if (resumedRow && created.provider === 'claude') {
+      // Every Claude Code session, not only a resumed one (2026-09-26): a brand-new one
+      // otherwise sat on "Initializing session…" forever, so no journey could send its
+      // first message — the real app lifts it within seconds.
+      if (created.provider === 'claude') {
         setTimeout(() => subs.hook.forEach((f) => f({ type: 'SessionStart', sessionId: id, payload: {} })), 50);
       }
       return created;
@@ -1031,7 +1037,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // Control bytes are ignored inside playReply so the PTY-shaped calls App
     // makes for Claude Code sessions ('\r', '\x1b') never start a script.
     canSend: () => true,
-    sendInput: (sessionId: string, text: string) => startReply(sessionId, text),
+    sendInput: (sessionId: string, text: string) => startReply(sessionId, text, true),
     // Real signature is Promise<boolean> (useIpc.ts/preload.ts), not {ok} —
     // resolvePermission already returns a boolean (false = stale/unknown id).
     respondToPermission: async (requestId: string, _decision: object) => resolvePermission(requestId),
