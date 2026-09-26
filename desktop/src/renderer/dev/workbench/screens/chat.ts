@@ -56,4 +56,14 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/skills#load-failed', 'drawer', 'error-state'), params: { fail: 'skills.list' } },
   { ...chat('chat/tags#load-failed', 'dialog', 'error-state'), params: { fail: 'tags.list' } },
   { ...chat('chat/close-session#meta-unreadable', 'dialog', 'error-state'), params: { fail: 'session.getMeta' } },
+  // Each game, signed in (a friend online). Chess and Connect 4 land on a board by
+  // autoplay; autoplay=0 keeps them in the lobby, where the head-to-head record shows.
+  { ...chat('chat/games/flappy', 'pane', 'games'), params: { signedIn: '1' } },
+  { ...chat('chat/games/flappy#alone', 'pane', 'games'), params: { signedIn: '1', arcade: 'alone' } },
+  { ...chat('chat/games/flappy/play', 'pane', 'games'), params: { signedIn: '1' } },
+  { ...chat('chat/games/2048', 'pane', 'games'), params: { signedIn: '1' } },
+  { ...chat('chat/games/chess', 'pane', 'games'), params: { signedIn: '1' } },
+  { ...chat('chat/games/chess/lobby', 'pane', 'games'), params: { signedIn: '1', autoplay: '0' } },
+  { ...chat('chat/games/connect-four', 'pane', 'games'), params: { signedIn: '1' } },
+  { ...chat('chat/games/connect-four/lobby', 'pane', 'games'), params: { signedIn: '1', autoplay: '0' } },
 ];
