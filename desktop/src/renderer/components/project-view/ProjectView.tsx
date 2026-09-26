@@ -87,7 +87,7 @@ function readStoredFileView(): FileViewMode {
 import { Button, Checkbox, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
 import { isRemoteMode } from '../../platform';
-import { ScreenMark } from '../../shoot-mode';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface ProjectViewProps {
   // cwd of the conversation that is focused RIGHT NOW (undefined on the welcome
@@ -308,6 +308,13 @@ export function ProjectView(props: ProjectViewProps) {
   // ContextEditorOverlay / HowContextWorksPopup render them below.
   const [editingContext, setEditingContext] = useState<ContextFile | null>(null);
   const [infoScope, setInfoScope] = useState<ContextScope | null>(null);
+  // Photo-only build: `shoot` opens a tab, the file filter, the switcher or Add project by name.
+  useScreenOpen('projects/files', () => setTab('files'));
+  useScreenOpen('projects/files/filter', () => { setTab('files'); setFilterOpen(true); });
+  useScreenOpen('projects/conversations', () => setTab('conversations'));
+  useScreenOpen('projects/context', () => setTab('context'));
+  useScreenOpen('projects/switcher', () => setSwitcherOpen(true));
+  useScreenOpen('projects/add', () => { setSwitcherOpen(false); setAddOpen(true); });
 
   // ESC closes the browser via the shared LIFO stack — the header says
   // "Esc · Back to chat", so the key must actually work. Child overlays
@@ -972,6 +979,10 @@ export function ProjectView(props: ProjectViewProps) {
               model this must take its NATURAL height and let the page scroll,
               not clamp itself to the viewport and scroll internally. */}
           <div className="flex-1 overflow-hidden min-h-0 w-full max-w-[1100px] mx-auto max-sm:flex-none max-sm:overflow-visible">
+            {/* Each tab is marked once its content has loaded. */}
+            {activeProject && tab === 'files' && <ScreenMark name="projects/files" />}
+            {activeProject && tab === 'conversations' && conversations && <ScreenMark name="projects/conversations" />}
+            {activeProject && tab === 'context' && context && <ScreenMark name="projects/context" />}
             {/* Files stays MOUNTED and hides when another tab is active. It is
                 the only tab that holds a main-process project watcher, and
                 dropping it on the way out means rebuilding it (a full tree walk

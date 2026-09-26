@@ -20,6 +20,7 @@ import type { ScreenEntry } from './types';
 import { SETTINGS } from './settings';
 import { CHAT } from './chat';
 import { MARKETPLACE } from './marketplace';
+import { PROJECTS } from './projects';
 
 export type { ScreenEntry } from './types';
 
@@ -27,4 +28,5 @@ export const SCREENS: readonly ScreenEntry[] = [
   ...SETTINGS,
   ...CHAT,
   ...MARKETPLACE,
+  ...PROJECTS,
 ];

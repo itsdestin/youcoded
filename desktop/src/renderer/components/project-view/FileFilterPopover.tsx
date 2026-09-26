@@ -17,6 +17,7 @@ import React from 'react';
 import { useEscClose } from '../../hooks/use-esc-close';
 import type { FileTypeGroup } from '../../../shared/artifacts/categorization';
 import type { FileSortKey } from './tabs/FilesTab';
+import { ScreenMark } from '../../shoot-mode';
 
 const TYPE_OPTIONS: { value: FileTypeGroup; label: string }[] = [
   { value: 'document', label: 'Documents' },
@@ -107,6 +108,7 @@ export function FileFilterPopover({
       role="dialog"
       aria-label="File filters"
     >
+      <ScreenMark name="projects/files/filter" />
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-fg">Filters</span>
         {filtersActive && (

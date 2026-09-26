@@ -22,6 +22,7 @@ import {
 import { timingLabel } from './context-labels';
 import { getPlatform } from '../../platform';
 import { Textarea } from '../ui';
+import { ScreenMark } from '../../shoot-mode';
 
 interface ContextEditorOverlayProps {
   project: { path: string };
@@ -219,6 +220,7 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
 
   return (
     <ProjectDetailOverlay title={file.label} onClose={onClose} tools={tools} meta={meta}>
+        <ScreenMark name="projects/context/editor" />
       <div className="flex flex-col h-full min-h-0 px-5 py-4 gap-3">
         {/* Blast-radius banner — always visible at the top of the body. Global
             uses prototype inline colors so the amber warning reads clearly

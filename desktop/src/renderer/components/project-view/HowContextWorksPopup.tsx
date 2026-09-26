@@ -20,6 +20,7 @@ import React, { useState } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { CloseButton } from '../ui';
+import { ScreenMark } from '../../shoot-mode';
 
 // The five teaching topics. `overview` is the broad→specific stack; the other
 // four are per-kind deep dives.
@@ -392,6 +393,7 @@ export function HowContextWorksPopup({ initialTab, onClose }: HowContextWorksPop
         aria-label="How context works"
         className="fixed left-1/2 top-[8%] -translate-x-1/2 w-[min(820px,94vw)] max-h-[84vh] flex flex-col"
       >
+        <ScreenMark name="projects/context/how" />
         {/* Header */}
         <header className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
           <span className="text-base font-semibold text-fg">How context works</span>
