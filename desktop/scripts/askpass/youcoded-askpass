@@ -1,0 +1,62 @@
+#!/bin/sh
+# youcoded-askpass — the SUDO_ASKPASS target for native `sudo` invocations.
+# sudo execve()s this file directly (never through a shell you'd otherwise
+# trust) whenever it has no terminal, and reads whatever it prints to stdout
+# as the password (sudo(8), src/tgetpass.c). Every native Bash command runs
+# under setsid with no controlling terminal, so this is what actually answers
+# `sudo` for the model. See docs/active/specs/2026-09-26-admin-password-
+# technical-design.md §2.1, and design reviews 1 (D1) and 2 (E1).
+#
+# NO OTHER LOGIC BELONGS HERE. Everything downstream (verifying who is
+# allowed to receive a password, reading it back from the app) happens only
+# after this file hands off to askpass.cjs under a scrubbed environment —
+# adding anything else here would run before that scrub, i.e. in an
+# environment this design treats as hostile by construction.
+
+# WHY ulimit -c 0 first, before anything else: `env -i` below scrubs
+# environment VARIABLES only. Resource limits are a separate kernel
+# namespace and pass unchanged through fork()+exec() (review 2, E1) — a
+# command run earlier in the same shell/session (`ulimit -c unlimited`,
+# which is session state, not per-command) could otherwise leave this
+# process's core-dump limit uncapped, and a same-uid SIGQUIT/SIGABRT/SIGSEGV
+# aimed at askpass.cjs (no ptrace, no ancestry needed — same-uid signal
+# delivery is all it takes) could dump the just-received plaintext password
+# to a core file the model then reads back with its own tools. This is a
+# shell builtin, costs nothing, and is not undone by anything below.
+ulimit -c 0
+
+# WHY resolve our own directory from $0, never from an inherited env var:
+# sudo execve()s this script by the absolute path it already resolved from
+# SUDO_ASKPASS, so $0 IS that absolute path — finding our sibling
+# askpass.cjs needs nothing from the environment sudo handed us, trusted or
+# not. Trusting the environment for anything that feeds the verified helper
+# is exactly what review 1 (D1) says never to do.
+dir=$(dirname "$0")
+
+# WHY cd + pwd -P rather than a `realpath` binary: not every POSIX sh
+# environment ships `realpath` on PATH, but `cd` followed by `pwd -P` is a
+# builtin combination that resolves every symlink component (an AppImage
+# mount, a symlinked worktree checkout) down to the real physical
+# directory — this is what "realpath of dir" means below.
+dir=$(cd "$dir" && pwd -P)
+
+# WHY exec, never a plain call: this must be the LAST process in the chain.
+# AskpassServer's identity check (design §3.1) reads the real executable,
+# exact argv and exact environment of the pid that connects to the socket —
+# if this shell stayed alive as a parent instead of being replaced, the
+# process that actually connects would be one hop further from what §3.1
+# expects, and nothing in the design accounts for that hop.
+#
+# WHY env -i is load-bearing (review 1, D1): sudo forks this script with ITS
+# OWN unsanitised process environment, which — because env_reset only
+# scrubs the environment handed to the eventual AUTHORIZED command, never
+# sudo's own process env used to spawn askpass — is transitively the
+# untrusted Bash command's own environment. Without `env -i`, a command
+# could set NODE_OPTIONS=--require=evil.js (directly, or via a
+# `persistent_env` left over from an earlier call) ahead of the approved
+# sudo, and that variable would ride sudo's fork straight into the Node
+# runtime that ends up holding the real password — passing every one of
+# §3.1's checks trivially, because the injected code runs INSIDE the exact
+# verified binary/argv. `env -i` drops everything except the two names
+# given here, so nothing else survives that fork.
+exec /usr/bin/env -i ELECTRON_RUN_AS_NODE=1 YOUCODED_ASKPASS_SOCKET="$YOUCODED_ASKPASS_SOCKET" "$YOUCODED_ASKPASS_RUNTIME" "$dir/askpass.cjs"
