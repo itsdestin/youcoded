@@ -177,6 +177,63 @@ describe('verifyAskpassPeer: accept path', () => {
       expect(result.callRoot).toBe(300);
     }
   });
+
+  it('reports the OUTERMOST script when two layers of wrapper scripts sit between sudo and the call root', async () => {
+    const procs = goodProcs();
+    // call root (300) -> install.sh (360) -> helper.sh (350) -> sudo (400).
+    // sudo's own immediate parent is helper.sh, the INNERMOST wrapper — the
+    // card should still name install.sh, the thing the user actually
+    // approved, not the implementation detail install.sh happens to run.
+    procs.get(400)!.ppid = 350;
+    procs.set(350, {
+      ppid: 360,
+      exePath: '/bin/bash',
+      cmdline: ['bash', 'helper.sh'],
+      environ: null,
+      startTime: 350_00,
+      tracerPid: 0,
+    });
+    procs.set(360, {
+      ppid: 300,
+      exePath: '/bin/bash',
+      cmdline: ['bash', 'install.sh'],
+      environ: null,
+      startTime: 360_00,
+      tracerPid: 0,
+    });
+    const deps = makeDeps(procs, baseFilesystem());
+    const result = await verifyAskpassPeer(500, deps);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.via).toBe('install.sh');
+    }
+  });
+
+  it('refuses rather than silently reporting "direct" when an intermediate script hop is unreadable', async () => {
+    const procs = goodProcs();
+    procs.get(400)!.ppid = 350;
+    procs.set(350, {
+      ppid: 300,
+      exePath: '/bin/bash',
+      cmdline: null, // simulates a transient /proc/<pid>/cmdline read failure
+      environ: null,
+      startTime: 350_00,
+      tracerPid: 0,
+    });
+    const deps = makeDeps(procs, baseFilesystem());
+    const result = await verifyAskpassPeer(500, deps);
+    expect(result).toEqual({ ok: false, reason: 'via-chain-unreadable' });
+  });
+});
+
+describe('verifyAskpassPeer: cancellation', () => {
+  it('stops and refuses with "aborted" when the caller\'s signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const deps: VerifyDeps = { ...makeDeps(goodProcs(), baseFilesystem()), signal: controller.signal };
+    const result = await verifyAskpassPeer(500, deps);
+    expect(result).toEqual({ ok: false, reason: 'aborted' });
+  });
 });
 
 describe('verifyAskpassPeer: refusals', () => {

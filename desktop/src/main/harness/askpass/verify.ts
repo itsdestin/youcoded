@@ -41,7 +41,19 @@ export type VerifyReason =
   | 'ancestor-dir-not-a-directory'
   | 'no-registered-ancestor'
   | 'call-root-starttime-mismatch'
-  | 'starttime-changed-mid-check';
+  | 'starttime-changed-mid-check'
+  /** T3-3: at least one hop between sudo and the call root exists (the
+   *  ancestor walk found a registered root, so the chain itself is real),
+   *  but reading that hop's own argv (to name the outermost script for
+   *  `via`) failed. Distinct from `undefined` `via` — that value means
+   *  "no script was involved at all", which this is NOT: a script chain
+   *  exists, we just couldn't read its name, so this refuses rather than
+   *  silently showing "direct" for an indirect call. */
+  | 'via-chain-unreadable'
+  /** T3-4: `deps.signal` was aborted (the caller gave up waiting, e.g. a
+   *  timed-out connection) before the chain finished. Never reached by a
+   *  caller that doesn't pass a signal. */
+  | 'aborted';
 
 export interface VerifyOk {
   ok: true;
@@ -81,6 +93,11 @@ export interface VerifyDeps {
   platform?: NodeJS.Platform;
   /** Longest ancestor walk (design §3 item 3). Defaults to 64. */
   maxAncestorSteps?: number;
+  /** T3-4: checked between awaits so a caller that gave up (e.g. its own
+   *  timeout elapsed) can make an in-flight chain stop promptly and release
+   *  its pins, instead of running to completion unobserved. Optional —
+   *  omitting it just means nothing can cancel this call early. */
+  signal?: AbortSignal;
 }
 
 /** The ONLY names design §3 item 1 allows in P's environment — anything
@@ -110,6 +127,15 @@ function closeAll(handles: Array<PidHandle | null>): void {
       // best-effort pin release — never fails the caller
     }
   }
+}
+
+/** T3-4: true when `signal` says to stop. A plain function (not a thrown
+ *  exception) so every call site stays a normal early `return` — which
+ *  means it still runs every enclosing `finally` (pin release) exactly the
+ *  way any other refusal does, with no separate cancellation-cleanup path
+ *  to keep in sync. */
+function aborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
 }
 
 /** Walk from `startExePath` up to `/`, requiring every directory component
@@ -162,6 +188,7 @@ export async function verifyAskpassPeer(pid: number, deps: VerifyDeps): Promise<
   if (platform === 'darwin' && !MAC_ENABLED) {
     return { ok: false, reason: 'macos-disabled' };
   }
+  if (aborted(deps.signal)) return { ok: false, reason: 'aborted' };
 
   // --- item 0 (part 1): pin + record P's own start time before reading
   // anything else about it. ---
@@ -195,6 +222,7 @@ export async function verifyAskpassPeer(pid: number, deps: VerifyDeps): Promise<
 
     const tracerPid = await reader.tracerPid(pid);
     if (tracerPid !== 0) return { ok: false, reason: 'traced' };
+    if (aborted(deps.signal)) return { ok: false, reason: 'aborted' };
 
     // --- item 2: P's parent is a genuine setuid sudo. ---
     const sudoPid = await reader.ppid(pid);
@@ -221,14 +249,21 @@ export async function verifyAskpassPeer(pid: number, deps: VerifyDeps): Promise<
 
       const dirReason = await walkDirectoryChain(reader, sudoExePath);
       if (dirReason) return { ok: false, reason: dirReason };
+      if (aborted(deps.signal)) return { ok: false, reason: 'aborted' };
 
-      // --- item 3: P is inside a registered Bash call. ---
+      // --- item 3: P is inside a registered Bash call. `walked` records
+      // EVERY pid checked, in order, ending with callRoot — T3-3 uses this
+      // full chain to name the OUTERMOST script (the one the call root
+      // itself directly ran), not just the one hop nearest sudo. ---
       let node = sudoPid;
       let callRoot: number | null = null;
       let callRootPin: PidHandle | null = null;
       let callRootStartTime0: number | null = null;
+      const walked: number[] = [];
       try {
         for (let step = 0; step < maxSteps; step++) {
+          if (aborted(deps.signal)) return { ok: false, reason: 'aborted' };
+          walked.push(node);
           const entry = deps.runningCalls.lookup(node);
           if (entry) {
             // "RunningCalls stores the root's start time, so a recycled root
@@ -257,23 +292,28 @@ export async function verifyAskpassPeer(pid: number, deps: VerifyDeps): Promise<
         const sudoArgv = await reader.cmdline(sudoPid);
         if (sudoArgv === null) return { ok: false, reason: 'proc-read-failed' };
 
-        // via names the SCRIPT sudo's own parent is running, not sudo's own
-        // argv (that's sudoArgv, above, used for card text) — design §2.2's
-        // example is `bash install.sh` → `install.sh`, i.e. what's one hop
-        // ABOVE sudo. undefined when that hop IS the call root (the simple,
-        // direct case R20 exists for: the approved shell ran `sudo …`
-        // itself, no script in between).
+        // via names the OUTERMOST script under the call root (T3-3) — e.g.
+        // call root → install.sh → helper.sh → sudo reports 'install.sh',
+        // the thing the user actually approved running, even though sudo's
+        // OWN immediate parent is helper.sh. `walked` is
+        // [sudoPid, hop1, hop2, ..., callRoot]; length 1 means sudoPid
+        // itself was the registered root (no parent chain to speak of);
+        // length 2 means sudoPid's own parent IS callRoot (the simple,
+        // direct case R20 exists for — no script in between); length >= 3
+        // means at least one script sits between them, and
+        // walked[walked.length - 2] is the outermost one (its OWN parent is
+        // callRoot). A read failure at that pid is NOT the same as "no
+        // script involved" — silently returning `via: undefined` there
+        // would show "direct" for a call that visibly is not, so this
+        // refuses instead (T3-3's second half).
         let via: string | undefined;
-        if (callRoot === sudoPid) {
-          via = undefined;
+        if (walked.length >= 3) {
+          const outermostPid = walked[walked.length - 2];
+          const outermostArgv = await reader.cmdline(outermostPid);
+          if (outermostArgv === null) return { ok: false, reason: 'via-chain-unreadable' };
+          via = scriptBasenameFromArgv(outermostArgv);
         } else {
-          const shellPid = await reader.ppid(sudoPid);
-          if (shellPid !== null && shellPid !== callRoot) {
-            const shellArgv = await reader.cmdline(shellPid);
-            via = shellArgv ? scriptBasenameFromArgv(shellArgv) : undefined;
-          } else {
-            via = undefined;
-          }
+          via = undefined;
         }
 
         // --- item 0 (part 2): re-read every pinned start time; ANY change

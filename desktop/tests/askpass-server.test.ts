@@ -39,6 +39,33 @@ function makeHealthyReader(): ProcReader {
   };
 }
 
+/** A pin whose closed-ness is observable from the test. */
+interface TrackedPin {
+  closed: boolean;
+}
+
+/** Wraps a reader so every `pidfdOpen` call returns a real, trackable
+ *  handle instead of null — the fake readers elsewhere in this file never
+ *  return one, which means the server's own pin-holding logic (kept open
+ *  through the harden round-trip, closed only by deliver/refuse/withdraw)
+ *  is otherwise completely untested from this side. */
+function withTrackablePins(base: ProcReader): { reader: ProcReader; pins: TrackedPin[] } {
+  const pins: TrackedPin[] = [];
+  const reader: ProcReader = {
+    ...base,
+    pidfdOpen: async (): Promise<PidHandle | null> => {
+      const tracked: TrackedPin = { closed: false };
+      pins.push(tracked);
+      return {
+        close(): void {
+          tracked.closed = true;
+        },
+      };
+    },
+  };
+  return { reader, pins };
+}
+
 const cleanupDirs: string[] = [];
 afterEach(() => {
   for (const dir of cleanupDirs.splice(0)) {
@@ -58,16 +85,26 @@ interface TestServer {
   setVerifyResult: (result: VerifyResult) => void;
 }
 
-async function startTestServer(): Promise<TestServer> {
+interface TestServerOptions {
+  reader?: ProcReader;
+  handshakeTimeoutMs?: number;
+  hardenTimeoutMs?: number;
+  verifyTimeoutMs?: number;
+}
+
+async function startTestServer(options?: TestServerOptions): Promise<TestServer> {
   const runningCalls = new RunningCalls();
   let verifyResult: VerifyResult = { ok: false, reason: 'peer-unresolvable' };
   const server = new AskpassServer({
     execPath: '/fake/execPath',
     helperScriptRealpath: '/fake/askpass.cjs',
     runningCalls,
-    reader: makeHealthyReader(),
+    reader: options?.reader ?? makeHealthyReader(),
     platform: 'linux',
     socketDirOverride: makeTempDir(),
+    handshakeTimeoutMs: options?.handshakeTimeoutMs,
+    hardenTimeoutMs: options?.hardenTimeoutMs,
+    verifyTimeoutMs: options?.verifyTimeoutMs,
     verify: async () => verifyResult,
   });
   await server.start();
@@ -324,6 +361,174 @@ describe('AskpassServer: refusals before an ask is ever raised', () => {
     expect(JSON.parse(reply)).toEqual({ ok: false });
 
     client.destroy();
+    await server.stop();
+  });
+});
+
+describe('AskpassServer: the helper pin stays open through the harden round-trip', () => {
+  it('is still open right when the ask is raised, and closes on deliver', async () => {
+    const { reader, pins } = withTrackablePins(makeHealthyReader());
+    const { server, runningCalls, setVerifyResult } = await startTestServer({ reader });
+    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
+    setVerifyResult(OK_VERIFY_RESULT());
+
+    const { client, ask } = await driveToAsk(server, server.socketPath!);
+    // By the time 'ask' fires, verify() AND the whole harden round-trip
+    // (steps 3-5) are already done — if the pin only covered verify()'s own
+    // chain (T3-1's original gap), it would already be closed here.
+    expect(pins.length).toBe(1);
+    expect(pins[0].closed).toBe(false);
+
+    server.deliver(ask.askId, Buffer.from('pw'));
+    expect(pins[0].closed).toBe(true);
+
+    client.destroy();
+    await server.stop();
+  });
+
+  it('closes on refuse', async () => {
+    const { reader, pins } = withTrackablePins(makeHealthyReader());
+    const { server, runningCalls, setVerifyResult } = await startTestServer({ reader });
+    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
+    setVerifyResult(OK_VERIFY_RESULT());
+
+    const { client, ask } = await driveToAsk(server, server.socketPath!);
+    server.refuse(ask.askId);
+    expect(pins[0].closed).toBe(true);
+
+    client.destroy();
+    await server.stop();
+  });
+
+  it('closes when the client withdraws before deliver/refuse', async () => {
+    const { reader, pins } = withTrackablePins(makeHealthyReader());
+    const { server, runningCalls, setVerifyResult } = await startTestServer({ reader });
+    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
+    setVerifyResult(OK_VERIFY_RESULT());
+
+    const { client, ask } = await driveToAsk(server, server.socketPath!);
+    const withdrawnPromise = new Promise<string>((resolve) => server.once('withdrawn', resolve));
+    client.destroy();
+    await withdrawnPromise;
+    expect(pins[0].closed).toBe(true);
+
+    await server.stop();
+  });
+
+  it('closes right away when verify() fails, before any ask is ever raised', async () => {
+    const { reader, pins } = withTrackablePins(makeHealthyReader());
+    const { server, setVerifyResult } = await startTestServer({ reader });
+    setVerifyResult({ ok: false, reason: 'wrong-exe' });
+
+    const client = new TestClient(server.socketPath!);
+    await client.connect();
+    client.send({ v: 2 });
+    await client.nextLine();
+    expect(pins.length).toBe(1);
+    expect(pins[0].closed).toBe(true);
+
+    client.destroy();
+    await server.stop();
+  });
+});
+
+describe('AskpassServer: attempt counting checks the sudo pid actually IS the same process', () => {
+  it('treats a reused sudo pid number under a different, still-alive call root as a brand-new attempt', async () => {
+    // sudo pid 555 shows up twice with two DIFFERENT recorded start times —
+    // the second occurrence is a genuinely different process that happens
+    // to share the pid number, not a retry of the first.
+    const startTimesForSudoPid555 = [100, 200];
+    let sudoReadCount = 0;
+    const reader: ProcReader = {
+      ...makeHealthyReader(),
+      startTime: async (pid: number) => {
+        if (pid === process.pid) return 4242; // keeps the harden pre/post check happy
+        if (pid === 555) return startTimesForSudoPid555[sudoReadCount++] ?? null;
+        return null;
+      },
+    };
+    const { server, runningCalls, setVerifyResult } = await startTestServer({ reader });
+    runningCalls.register(222, 1, { sessionId: 'sess-A', toolCallId: 'tool-A' });
+    runningCalls.register(333, 2, { sessionId: 'sess-B', toolCallId: 'tool-B' });
+
+    setVerifyResult(OK_VERIFY_RESULT({ sudoPid: 555, callRoot: 222 }));
+    const first = await driveToAsk(server, server.socketPath!);
+    expect(first.ask.attempt).toBe(0);
+    server.deliver(first.ask.askId, Buffer.from('pw-a'));
+    first.client.destroy();
+
+    setVerifyResult(OK_VERIFY_RESULT({ sudoPid: 555, callRoot: 333 }));
+    const second = await driveToAsk(server, server.socketPath!);
+    expect(second.ask.attempt).toBe(0); // NOT 1 — this is not a continuation of call 222's tries
+    expect(second.ask.callRoot).toBe(333);
+
+    server.deliver(second.ask.askId, Buffer.from('pw-b'));
+    second.client.destroy();
+    await server.stop();
+  });
+});
+
+describe('AskpassServer: protocol timeouts and the line-length cap', () => {
+  it('destroys the connection when the handshake line never arrives', async () => {
+    const { server } = await startTestServer({ handshakeTimeoutMs: 30 });
+    const client = new TestClient(server.socketPath!);
+    await client.connect();
+    // Sends nothing at all.
+    await expect(client.nextLine(2000)).rejects.toThrow();
+    await server.stop();
+  });
+
+  it('destroys the connection when the harden confirmation never arrives', async () => {
+    const { server, runningCalls, setVerifyResult } = await startTestServer({ hardenTimeoutMs: 30 });
+    runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
+    setVerifyResult(OK_VERIFY_RESULT());
+
+    const client = new TestClient(server.socketPath!);
+    await client.connect();
+    client.send({ v: 2 });
+    const hardenLine = await client.nextLine();
+    expect(JSON.parse(hardenLine)).toEqual({ harden: true });
+    // Never replies with {"hardened":true}.
+    await expect(client.nextLine(2000)).rejects.toThrow();
+
+    client.destroy();
+    await server.stop();
+  });
+
+  it('refuses and actually aborts a verify() still mid-flight when its own timeout elapses', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const server = new AskpassServer({
+      execPath: '/fake/execPath',
+      helperScriptRealpath: '/fake/askpass.cjs',
+      runningCalls: new RunningCalls(),
+      reader: makeHealthyReader(),
+      platform: 'linux',
+      socketDirOverride: makeTempDir(),
+      verifyTimeoutMs: 30,
+      verify: (_pid: number, signal?: AbortSignal) => {
+        capturedSignal = signal;
+        return new Promise<VerifyResult>(() => {}); // simulates a hung ancestor walk — never settles
+      },
+    });
+    await server.start();
+
+    const client = new TestClient(server.socketPath!);
+    await client.connect();
+    client.send({ v: 2 });
+    const reply = await client.nextLine(2000);
+    expect(JSON.parse(reply)).toEqual({ ok: false });
+    expect(capturedSignal?.aborted).toBe(true);
+
+    client.destroy();
+    await server.stop();
+  });
+
+  it('destroys the connection when a line exceeds the byte cap', async () => {
+    const { server } = await startTestServer();
+    const client = new TestClient(server.socketPath!);
+    await client.connect();
+    client.socket.write(Buffer.alloc(4096, 'a'.charCodeAt(0))); // no newline anywhere, well over the cap
+    await expect(client.nextLine(2000)).rejects.toThrow();
     await server.stop();
   });
 });

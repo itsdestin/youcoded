@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto';
 import { log } from '../../logger';
 import { peerCredPid, selfTest as peerCredSelfTest, type PeerCred } from './peer-cred';
 import { verifyAskpassPeer, type VerifyResult } from './verify';
-import { createProcReader, type ProcReader } from './proc-info';
+import { createProcReader, type ProcReader, type PidHandle } from './proc-info';
 import type { RunningCalls } from './running-calls';
 
 const MAX_LINE_BYTES = 256;
@@ -48,9 +48,20 @@ const MAX_LINE_BYTES = 256;
 // real ancestor of the target, so this window is ancestor-only and
 // milliseconds wide; it is not closed by this protocol and is not claimed
 // to be.
-const HANDSHAKE_TIMEOUT_MS = 5_000;
-const HARDEN_TIMEOUT_MS = 5_000;
-const VERIFY_TIMEOUT_MS = 5_000;
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000;
+const DEFAULT_HARDEN_TIMEOUT_MS = 5_000;
+const DEFAULT_VERIFY_TIMEOUT_MS = 5_000;
+
+/** T3-1: best-effort close, mirrors verify.ts's own `closeAll` — a pin is a
+ *  cheap kernel handle whose only job is preventing pid reuse; a failure
+ *  releasing it is never a reason to fail whatever else is happening. */
+function closePin(pin: PidHandle | null): void {
+  try {
+    pin?.close();
+  } catch {
+    // best-effort — nothing more to do
+  }
+}
 
 export interface AskpassAskEvent {
   askId: string;
@@ -70,6 +81,16 @@ interface PendingAsk {
   socket: net.Socket;
   sudoPid: number;
   callRoot: number;
+  /** T3-1: the helper's own pidfd pin, opened right after its kernel peer
+   *  pid is resolved and held OPEN through the entire pending-ask window —
+   *  not just through verify()'s own chain — so the strongest anti-
+   *  recycling primitive actually covers the window it matters most for:
+   *  the harden round-trip, the step-5 re-check, and however long the ask
+   *  sits waiting for the user. Closed by `deliver`/`refuse`/the withdrawal
+   *  path below — never by `runProtocol` itself once ownership reaches
+   *  here. Null when `pidfdOpen` is unavailable (falls back to the
+   *  starttime-only re-check verify.ts and step 5 already do). */
+  helperPin: PidHandle | null;
 }
 
 export interface AskpassServerConfig {
@@ -89,10 +110,18 @@ export interface AskpassServerConfig {
    *  fields above. `askpass-server.test.ts` (design §9) drives THIS
    *  server's own protocol logic (handshake, byte cap, attempt counting,
    *  deliver/refuse/withdraw) with a stub here, independent of real /proc
-   *  state or a real sudo. */
-  verify?: (pid: number) => Promise<VerifyResult>;
+   *  state or a real sudo. Takes an `AbortSignal` (T3-4) — `verifyAskpassPeer`
+   *  checks it between awaits so a caller that stopped waiting can make an
+   *  in-flight chain stop too. */
+  verify?: (pid: number, signal?: AbortSignal) => Promise<VerifyResult>;
   /** Injectable kernel peer-pid resolver — defaults to `peerCredPid`. */
   resolvePeerPid?: (socket: net.Socket) => PeerCred | null;
+  /** Test-only overrides for the three protocol timeouts (ms). Production
+   *  always uses the 5s defaults; tests use small values so
+   *  T3-4's timeout tests don't cost real wall-clock seconds. */
+  handshakeTimeoutMs?: number;
+  hardenTimeoutMs?: number;
+  verifyTimeoutMs?: number;
 }
 
 function defaultSocketDir(platform: NodeJS.Platform): string {
@@ -111,18 +140,25 @@ export class AskpassServer extends EventEmitter {
   private readonly config: AskpassServerConfig;
   private readonly reader: ProcReader;
   private readonly platform: NodeJS.Platform;
-  private readonly verify: (pid: number) => Promise<VerifyResult>;
+  private readonly verify: (pid: number, signal?: AbortSignal) => Promise<VerifyResult>;
   private readonly resolvePeerPid: (socket: net.Socket) => PeerCred | null;
+  private readonly handshakeTimeoutMs: number;
+  private readonly hardenTimeoutMs: number;
+  private readonly verifyTimeoutMs: number;
 
   private server: net.Server | null = null;
   private socketPathValue: string | null = null;
   private _available = false;
   private readonly pending = new Map<string, PendingAsk>();
-  // Sweeps out entries whose callRoot exited (design §11 task 3 decision,
-  // see reply: attempt counting has no explicit lifecycle in the design, so
-  // this ties it to RunningCalls' own bookkeeping rather than inventing a
-  // separate teardown hook).
-  private readonly attemptsBySudoPid = new Map<number, { count: number; callRoot: number }>();
+  // T3-2: keyed by sudoPid AND its startTime (not the bare pid — sudoPid is
+  // reusable exactly like every other pid this feature tracks) so a
+  // sudo-pid number that gets reused for a DIFFERENT, unrelated, still-alive
+  // call is recognized as a brand-new attempt rather than a continuation of
+  // a stale count. Sweeps out entries whose callRoot exited (design §11
+  // task 3 decision: attempt counting has no explicit lifecycle in the
+  // design, so this ties it to RunningCalls' own bookkeeping rather than
+  // inventing a separate teardown hook).
+  private readonly attemptsBySudoPid = new Map<number, { count: number; callRoot: number; startTime: number | null }>();
 
   constructor(config: AskpassServerConfig) {
     super();
@@ -130,15 +166,19 @@ export class AskpassServer extends EventEmitter {
     this.reader = config.reader ?? createProcReader(config.platform);
     this.platform = config.platform ?? process.platform;
     this.resolvePeerPid = config.resolvePeerPid ?? peerCredPid;
+    this.handshakeTimeoutMs = config.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
+    this.hardenTimeoutMs = config.hardenTimeoutMs ?? DEFAULT_HARDEN_TIMEOUT_MS;
+    this.verifyTimeoutMs = config.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS;
     this.verify =
       config.verify ??
-      ((pid: number) =>
+      ((pid: number, signal?: AbortSignal) =>
         verifyAskpassPeer(pid, {
           reader: this.reader,
           execPath: config.execPath,
           helperScriptRealpath: config.helperScriptRealpath,
           runningCalls: config.runningCalls,
           platform: this.platform,
+          signal,
         }));
   }
 
@@ -245,21 +285,23 @@ export class AskpassServer extends EventEmitter {
     await this.teardown();
   }
 
-  /** Writes `{"ok":true,"password":…}\n`, zeroes the caller's Buffer, ends
-   *  the socket. Returns false if `askId` is unknown (design §2.2: "the
-   *  card says it expired"). */
+  /** Writes `{"ok":true,"password":…}\n`, zeroes every buffer that touched
+   *  the password (including the caller's), ends the socket. Returns false
+   *  if `askId` is unknown (design §2.2: "the card says it expired"). */
   deliver(askId: string, password: Buffer): boolean {
     const ask = this.pending.get(askId);
     if (!ask) return false;
     this.pending.delete(askId);
+    closePin(ask.helperPin); // T3-1: the ask is settling — release the pin now.
+    const reply = buildOkReplyBuffer(password);
     try {
-      const line = JSON.stringify({ ok: true, password: password.toString('utf8') }) + '\n';
-      ask.socket.write(line);
+      ask.socket.write(reply);
       ask.socket.end();
     } catch {
-      // The socket may already be half-closed; the password buffer is
-      // zeroed below regardless of whether the write landed.
+      // The socket may already be half-closed; every buffer below is
+      // zeroed regardless of whether the write landed.
     } finally {
+      reply.fill(0);
       password.fill(0);
     }
     return true;
@@ -271,6 +313,7 @@ export class AskpassServer extends EventEmitter {
     const ask = this.pending.get(askId);
     if (!ask) return false;
     this.pending.delete(askId);
+    closePin(ask.helperPin); // T3-1
     this.writeRefusal(ask.socket);
     return true;
   }
@@ -296,6 +339,7 @@ export class AskpassServer extends EventEmitter {
       for (const [askId, ask] of this.pending) {
         if (ask.socket === socket) {
           this.pending.delete(askId);
+          closePin(ask.helperPin); // T3-1: withdrawn — nothing left to protect
           this.emit('withdrawn', askId);
           break;
         }
@@ -372,165 +416,212 @@ export class AskpassServer extends EventEmitter {
   /** The full per-connection protocol (see the constants above for why it
    *  has this shape). Every early return either destroys the socket
    *  outright (garbage/timeout — nothing legible to refuse) or writes
-   *  `{"ok":false}` first (we understood the peer well enough to say no). */
+   *  `{"ok":false}` first (we understood the peer well enough to say no).
+   *  T3-1: `helperPin`, opened right after the kernel peer pid is resolved,
+   *  is closed by every early-return path below UNLESS ownership is handed
+   *  to `pending` (tracked by `pinOwnedByPending`) — from that point on
+   *  `deliver`/`refuse`/the withdrawal path own closing it. */
   private async runProtocol(socket: net.Socket, state: LineReadState): Promise<void> {
-    // --- Step 1: handshake. The helper is NOT hardened yet — connects,
-    // sends {"v":2}, nothing else. "Any pid it claims is ignored" (design
-    // §2.2) — this line carries no identity; the kernel is the only source
-    // of that (step 2).
-    let handshakeLine: string;
+    let helperPin: PidHandle | null = null;
+    let pinOwnedByPending = false;
     try {
-      handshakeLine = await this.readLine(socket, state, HANDSHAKE_TIMEOUT_MS);
-    } catch {
-      this.destroy(socket);
-      return;
-    }
-    let handshake: unknown;
-    try {
-      handshake = JSON.parse(handshakeLine);
-    } catch {
-      this.destroy(socket);
-      return;
-    }
-    if (!handshake || typeof handshake !== 'object' || (handshake as { v?: unknown }).v !== 2) {
-      this.destroy(socket);
-      return;
-    }
+      // --- Step 1: handshake. The helper is NOT hardened yet — connects,
+      // sends {"v":2}, nothing else. "Any pid it claims is ignored" (design
+      // §2.2) — this line carries no identity; the kernel is the only
+      // source of that (step 2).
+      let handshakeLine: string;
+      try {
+        handshakeLine = await this.readLine(socket, state, this.handshakeTimeoutMs);
+      } catch {
+        this.destroy(socket);
+        return;
+      }
+      let handshake: unknown;
+      try {
+        handshake = JSON.parse(handshakeLine);
+      } catch {
+        this.destroy(socket);
+        return;
+      }
+      if (!handshake || typeof handshake !== 'object' || (handshake as { v?: unknown }).v !== 2) {
+        this.destroy(socket);
+        return;
+      }
 
-    // --- Step 2: kernel peer pid, then verify.ts's FULL chain — exe, argv,
-    // environ, TracerPid, sudo parent, ancestors, starttimes. This is the
-    // last point at which /proc/<pid>/exe and /proc/<pid>/environ are
-    // readable, so it must all happen now, before any harden request.
-    const cred = this.resolvePeerPid(socket);
-    if (!cred) {
-      log('WARN', 'AskpassServer', 'refused: could not resolve kernel peer pid for a connection');
-      this.writeRefusal(socket);
-      return;
-    }
-    // Recorded now (pre-harden) so the post-harden re-check (step 5) has a
-    // baseline — verify.ts pins/re-checks its OWN internal reads, but its
-    // result doesn't carry the helper's starttime out to this caller.
-    const helperStartTimeBeforeHarden = await this.reader.startTime(cred.pid);
-
-    let result: VerifyResult;
-    try {
-      result = await withTimeout(this.verify(cred.pid), VERIFY_TIMEOUT_MS, 'verify');
-    } catch {
-      this.writeRefusal(socket);
-      return;
-    }
-    if (!result.ok) {
-      log('WARN', 'AskpassServer', 'refused askpass connection', { reason: result.reason });
-      this.writeRefusal(socket);
-      return;
-    }
-    if (helperStartTimeBeforeHarden === null) {
-      // Could not establish a pre-harden baseline at all — nothing to prove
-      // "unchanged" against later, so this cannot pass the step-5 re-check
-      // honestly. Refuse now rather than let step 5 pass vacuously.
-      this.writeRefusal(socket);
-      return;
-    }
-
-    // The call may have exited in the window between verify.ts's
-    // ancestor-walk lookup and here — re-check rather than hand out an ask
-    // for a call this server no longer believes is running.
-    const callEntry = this.config.runningCalls.lookup(result.callRoot);
-    if (!callEntry) {
-      log('WARN', 'AskpassServer', 'refused: call root exited before the ask could be raised');
-      this.writeRefusal(socket);
-      return;
-    }
-
-    // --- Step 3: tell the helper it's safe to harden now — everything this
-    // server will ever need to read about it has already been read.
-    try {
-      socket.write('{"harden":true}\n');
-    } catch {
-      this.destroy(socket);
-      return;
-    }
-
-    // --- Step 4: wait for its confirmation.
-    let hardenedLine: string;
-    try {
-      hardenedLine = await this.readLine(socket, state, HARDEN_TIMEOUT_MS);
-    } catch {
-      this.destroy(socket);
-      return;
-    }
-    let hardened: unknown;
-    try {
-      hardened = JSON.parse(hardenedLine);
-    } catch {
-      this.destroy(socket);
-      return;
-    }
-    if (!hardened || typeof hardened !== 'object' || (hardened as { hardened?: unknown }).hardened !== true) {
-      this.writeRefusal(socket);
-      return;
-    }
-
-    // --- Step 5: re-check. TracerPid must still read 0 (status stays
-    // readable throughout hardening); starttime must be unchanged (same
-    // process incarnation, not a recycled pid the helper's own reply raced
-    // with); and — the actual PROOF hardening took effect, not just the
-    // helper's self-report — /proc/<pid>/environ must now be UNREADABLE to
-    // us. `environ()` returns null on ANY read failure, so this check is
-    // only trustworthy in this order: confirm the pid is still the SAME
-    // live incarnation first (TracerPid + starttime), so a null environ
-    // read at that point is credibly "hardening closed it", not "the
-    // process is simply gone".
-    const tracerPidAfter = await this.reader.tracerPid(cred.pid);
-    if (tracerPidAfter !== 0) {
-      this.writeRefusal(socket);
-      return;
-    }
-    const startTimeAfter = await this.reader.startTime(cred.pid);
-    if (startTimeAfter === null || startTimeAfter !== helperStartTimeBeforeHarden) {
-      this.writeRefusal(socket);
-      return;
-    }
-    // The environ-EACCES proof is Linux-specific (macOS's own hardening call
-    // — ptrace(PT_DENY_ATTACH) — has a different, unverified readability
-    // story, and verify.ts already refuses every macOS connection outright
-    // while MAC_ENABLED is false, so this branch is unreachable for darwin
-    // today; it is written defensively rather than assumed impossible).
-    if (this.platform === 'linux') {
-      const environAfterHarden = await this.reader.environ(cred.pid);
-      if (environAfterHarden !== null) {
-        log('WARN', 'AskpassServer', 'refused: helper did not actually become non-dumpable');
+      // --- Step 2: kernel peer pid, then verify.ts's FULL chain — exe,
+      // argv, environ, TracerPid, sudo parent, ancestors, starttimes. This
+      // is the last point at which /proc/<pid>/exe and /proc/<pid>/environ
+      // are readable, so it must all happen now, before any harden request.
+      const cred = this.resolvePeerPid(socket);
+      if (!cred) {
+        log('WARN', 'AskpassServer', 'refused: could not resolve kernel peer pid for a connection');
         this.writeRefusal(socket);
         return;
       }
+
+      // T3-1: pin the helper NOW, before anything else about it is read —
+      // this is the strong anti-recycling primitive `proc-info.ts` documents
+      // ("prevent the KERNEL from recycling the pid... for as long as it
+      // stays open"), and it must cover the harden round-trip and step 5's
+      // re-check, not just verify()'s own internal chain (which pins/closes
+      // this same pid on its OWN, narrower schedule — a SEPARATE pin, not
+      // reused, because verify.ts has no way to hand its pin back out and
+      // doing so would couple two modules that should stay independent).
+      // Best-effort: null when pidfd_open is unavailable, same fallback
+      // verify.ts's own chain already relies on.
+      helperPin = await this.reader.pidfdOpen(cred.pid).catch(() => null);
+
+      // Recorded now (pre-harden) so the post-harden re-check (step 5) has a
+      // baseline — verify.ts pins/re-checks its OWN internal reads, but its
+      // result doesn't carry the helper's starttime out to this caller.
+      const helperStartTimeBeforeHarden = await this.reader.startTime(cred.pid);
+
+      // T3-4: an AbortController lets a timed-out verify() actually stop
+      // (checked between its own awaits) instead of merely being ignored —
+      // `withTimeout` below aborts it the instant the timer fires.
+      const verifyController = new AbortController();
+      let result: VerifyResult;
+      try {
+        result = await withTimeout(
+          this.verify(cred.pid, verifyController.signal),
+          this.verifyTimeoutMs,
+          'verify',
+          () => verifyController.abort(),
+        );
+      } catch {
+        this.writeRefusal(socket);
+        return;
+      }
+      if (!result.ok) {
+        log('WARN', 'AskpassServer', 'refused askpass connection', { reason: result.reason });
+        this.writeRefusal(socket);
+        return;
+      }
+      if (helperStartTimeBeforeHarden === null) {
+        // Could not establish a pre-harden baseline at all — nothing to
+        // prove "unchanged" against later, so this cannot pass the step-5
+        // re-check honestly. Refuse now rather than let step 5 pass
+        // vacuously.
+        this.writeRefusal(socket);
+        return;
+      }
+
+      // The call may have exited in the window between verify.ts's
+      // ancestor-walk lookup and here — re-check rather than hand out an ask
+      // for a call this server no longer believes is running.
+      const callEntry = this.config.runningCalls.lookup(result.callRoot);
+      if (!callEntry) {
+        log('WARN', 'AskpassServer', 'refused: call root exited before the ask could be raised');
+        this.writeRefusal(socket);
+        return;
+      }
+
+      // --- Step 3: tell the helper it's safe to harden now — everything
+      // this server will ever need to read about it has already been read.
+      try {
+        socket.write('{"harden":true}\n');
+      } catch {
+        this.destroy(socket);
+        return;
+      }
+
+      // --- Step 4: wait for its confirmation.
+      let hardenedLine: string;
+      try {
+        hardenedLine = await this.readLine(socket, state, this.hardenTimeoutMs);
+      } catch {
+        this.destroy(socket);
+        return;
+      }
+      let hardened: unknown;
+      try {
+        hardened = JSON.parse(hardenedLine);
+      } catch {
+        this.destroy(socket);
+        return;
+      }
+      if (!hardened || typeof hardened !== 'object' || (hardened as { hardened?: unknown }).hardened !== true) {
+        this.writeRefusal(socket);
+        return;
+      }
+
+      // --- Step 5: re-check. TracerPid must still read 0 (status stays
+      // readable throughout hardening); starttime must be unchanged (same
+      // process incarnation, not a recycled pid the helper's own reply
+      // raced with); and — the actual PROOF hardening took effect, not just
+      // the helper's self-report — /proc/<pid>/environ must now be
+      // UNREADABLE to us. `environ()` returns null on ANY read failure, so
+      // this check is only trustworthy in this order: confirm the pid is
+      // still the SAME live incarnation first (TracerPid + starttime), so a
+      // null environ read at that point is credibly "hardening closed it",
+      // not "the process is simply gone".
+      const tracerPidAfter = await this.reader.tracerPid(cred.pid);
+      if (tracerPidAfter !== 0) {
+        this.writeRefusal(socket);
+        return;
+      }
+      const startTimeAfter = await this.reader.startTime(cred.pid);
+      if (startTimeAfter === null || startTimeAfter !== helperStartTimeBeforeHarden) {
+        this.writeRefusal(socket);
+        return;
+      }
+      // The environ-EACCES proof is Linux-specific (macOS's own hardening
+      // call — ptrace(PT_DENY_ATTACH) — has a different, unverified
+      // readability story, and verify.ts already refuses every macOS
+      // connection outright while MAC_ENABLED is false, so this branch is
+      // unreachable for darwin today; it is written defensively rather than
+      // assumed impossible).
+      if (this.platform === 'linux') {
+        const environAfterHarden = await this.reader.environ(cred.pid);
+        if (environAfterHarden !== null) {
+          log('WARN', 'AskpassServer', 'refused: helper did not actually become non-dumpable');
+          this.writeRefusal(socket);
+          return;
+        }
+      }
+
+      // --- Only now: raise the ask. Everything above is done; nothing else
+      // times out — the UI wait for the user to type (or Skip/Stop) it is
+      // unbounded by design (§6, sudo itself never times out an askpass
+      // read).
+      for (const [sp, info] of this.attemptsBySudoPid) {
+        if (!this.config.runningCalls.lookup(info.callRoot)) this.attemptsBySudoPid.delete(sp);
+      }
+      // T3-2: a bare sudoPid is exactly as reusable as every other pid this
+      // feature tracks — a stored entry only counts as "the same sudo,
+      // retried" when its recorded startTime still matches a FRESH read.
+      // Any mismatch (or an unreadable read) means either a genuinely new
+      // sudo landed on a recycled pid number, or we can no longer prove it
+      // didn't — both get attempt: 0, never a stale continuation.
+      const sudoStartTimeNow = await this.reader.startTime(result.sudoPid);
+      const prior = this.attemptsBySudoPid.get(result.sudoPid);
+      const isContinuation = prior !== undefined && sudoStartTimeNow !== null && prior.startTime === sudoStartTimeNow;
+      const attempt = isContinuation ? prior.count : 0;
+      this.attemptsBySudoPid.set(result.sudoPid, {
+        count: attempt + 1,
+        callRoot: result.callRoot,
+        startTime: sudoStartTimeNow,
+      });
+
+      const askId = randomUUID();
+      pinOwnedByPending = true; // T3-1: from here, deliver/refuse/withdraw own closing helperPin
+      this.pending.set(askId, { socket, sudoPid: result.sudoPid, callRoot: result.callRoot, helperPin });
+
+      const event: AskpassAskEvent = {
+        askId,
+        sudoPid: result.sudoPid,
+        sudoArgv: result.sudoArgv,
+        callRoot: result.callRoot,
+        via: result.via,
+        toolCallId: callEntry.toolCallId,
+        sessionId: callEntry.sessionId,
+        specialist: callEntry.specialist,
+        attempt,
+      };
+      this.emit('ask', event);
+    } finally {
+      if (!pinOwnedByPending) closePin(helperPin);
     }
-
-    // --- Only now: raise the ask. Everything above is done; nothing else
-    // times out — the UI wait for the user to type (or Skip/Stop) it is
-    // unbounded by design (§6, sudo itself never times out an askpass
-    // read).
-    for (const [sp, info] of this.attemptsBySudoPid) {
-      if (!this.config.runningCalls.lookup(info.callRoot)) this.attemptsBySudoPid.delete(sp);
-    }
-    const prior = this.attemptsBySudoPid.get(result.sudoPid);
-    const attempt = prior?.count ?? 0;
-    this.attemptsBySudoPid.set(result.sudoPid, { count: attempt + 1, callRoot: result.callRoot });
-
-    const askId = randomUUID();
-    this.pending.set(askId, { socket, sudoPid: result.sudoPid, callRoot: result.callRoot });
-
-    const event: AskpassAskEvent = {
-      askId,
-      sudoPid: result.sudoPid,
-      sudoArgv: result.sudoArgv,
-      callRoot: result.callRoot,
-      via: result.via,
-      toolCallId: callEntry.toolCallId,
-      sessionId: callEntry.sessionId,
-      specialist: callEntry.specialist,
-      attempt,
-    };
-    this.emit('ask', event);
   }
 
   private destroy(socket: net.Socket): void {
@@ -546,9 +637,19 @@ interface LineReadState {
   buffer: Buffer;
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+/** T3-4: races `promise` against a timer; on timeout, calls `onTimeout` (so
+ *  the caller can actually cancel the abandoned work, e.g. abort a
+ *  verify() still mid-flight) THEN rejects. Without `onTimeout`, the
+ *  original promise would keep running unobserved after this function
+ *  stops waiting on it — harmless here only because verify.ts's own
+ *  `finally` blocks eventually clean up on their own schedule, but that
+ *  schedule is invisible to (and slower than) this caller's stated timeout. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string, onTimeout?: () => void): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+    const timer = setTimeout(() => {
+      onTimeout?.();
+      reject(new Error(`${label} timed out`));
+    }, ms);
     promise.then(
       (v) => {
         clearTimeout(timer);
@@ -560,4 +661,42 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       },
     );
   });
+}
+
+/** T3-5: JSON-escapes `input`'s bytes IN PLACE conceptually — only `"`
+ *  (0x22), `\` (0x5c) and control bytes (< 0x20) ever need escaping in a
+ *  JSON string, and none of those byte values can appear as part of a
+ *  multi-byte UTF-8 sequence (continuation bytes are 0x80-0xBF, lead bytes
+ *  0xC2-0xF4), so scanning byte-by-byte is safe for arbitrary UTF-8 text —
+ *  it never splits or misreads a multi-byte character. Returns a NEW
+ *  Buffer; the caller is responsible for zeroing both it and `input`. */
+function jsonEscapeBytes(input: Buffer): Buffer {
+  const parts: Buffer[] = [];
+  let start = 0;
+  for (let i = 0; i < input.length; i++) {
+    const b = input[i];
+    if (b !== 0x22 && b !== 0x5c && b >= 0x20) continue;
+    if (i > start) parts.push(input.subarray(start, i));
+    if (b === 0x22) parts.push(Buffer.from('\\"', 'ascii'));
+    else if (b === 0x5c) parts.push(Buffer.from('\\\\', 'ascii'));
+    else parts.push(Buffer.from('\\u' + b.toString(16).padStart(4, '0'), 'ascii'));
+    start = i + 1;
+  }
+  if (start < input.length) parts.push(input.subarray(start));
+  return parts.length > 0 ? Buffer.concat(parts) : Buffer.alloc(0);
+}
+
+/** T3-5: builds `{"ok":true,"password":"…"}\n` as ONE Buffer, byte by byte
+ *  — the password never becomes a JS string on this side of the wire
+ *  (`password.toString('utf8')` + `JSON.stringify(...)` each allocate an
+ *  immutable V8 string that can never be zeroed; a Buffer can). The caller
+ *  (`deliver`) zeroes both this function's return value and the
+ *  intermediate escaped buffer built here. */
+function buildOkReplyBuffer(password: Buffer): Buffer {
+  const prefix = Buffer.from('{"ok":true,"password":"', 'utf8');
+  const suffix = Buffer.from('"}\n', 'utf8');
+  const escaped = jsonEscapeBytes(password);
+  const result = Buffer.concat([prefix, escaped, suffix]);
+  escaped.fill(0); // this function's own intermediate copy of the password bytes
+  return result;
 }
