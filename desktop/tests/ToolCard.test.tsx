@@ -345,8 +345,9 @@ describe('Always-allow on a deny-listed tool', () => {
 // command's saved result carries a marked line, and the card explains it plainly.
 describe('a refused admin password request', () => {
   afterEach(() => { cleanup(); });
-  const bash = (response: string): ToolCallState => ({
-    toolUseId: 'tool-r', toolName: 'Bash', input: { command: 'sudo whoami' }, status: 'failed', response,
+  // A failed command keeps its text in `error` — the realistic shape of a refused sudo.
+  const bash = (error: string): ToolCallState => ({
+    toolUseId: 'tool-r', toolName: 'Bash', input: { command: 'sudo whoami' }, status: 'failed', error,
   } as unknown as ToolCallState);
 
   it('shows the plain explanation when the result carries the refusal line', () => {

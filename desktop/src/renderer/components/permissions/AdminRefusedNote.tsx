@@ -7,7 +7,10 @@ import { ADMIN_REFUSED_CARD_LINE, ADMIN_REFUSED_MODEL_MARKER } from '../../../sh
  *  request from this command. The note lives in the command's saved result
  *  (so it survives reloads and reaches a phone); the card says it plainly. */
 export function AdminRefusedNote({ tool }: { tool: ToolCallState }) {
-  if (tool.toolName !== 'Bash' || typeof tool.response !== 'string' || !tool.response.includes(ADMIN_REFUSED_MODEL_MARKER)) return null;
+  // A failed command's text is saved in `error`, a successful one's in `response`
+  // — sudo refused usually means the command failed, so both must be read.
+  const saved = `${tool.response ?? ''}\n${tool.error ?? ''}`;
+  if (tool.toolName !== 'Bash' || !saved.includes(ADMIN_REFUSED_MODEL_MARKER)) return null;
   return (
     <div className="px-3 py-2 border-t border-edge" data-testid="admin-refused-note">
       <Callout tone="warning">{ADMIN_REFUSED_CARD_LINE}</Callout>
