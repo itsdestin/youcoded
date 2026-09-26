@@ -151,6 +151,7 @@ describe('verifyAskpassPeer: accept path', () => {
       ok: true,
       sudoPid: 400,
       sudoArgv: ['sudo', 'apt', 'update'],
+      sudoExePath: '/usr/bin/sudo',
       callRoot: 300,
       via: undefined,
     });

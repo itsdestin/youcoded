@@ -1270,6 +1270,80 @@ describe('HarnessSession — multi-step turn driver', () => {
     });
   });
 
+  // admin-password design §2.4/R20/§11 task 5: after the approval card above
+  // returns allow for a visibly-sudo command, the session asks a SECOND
+  // question — the password — BEFORE the fake tool's own execute() ever runs.
+  describe('the up-front password ask (R20)', () => {
+    const bashTool = () => fakeTool('Bash', {
+      schema: z.object({ command: z.string() }),
+      permissionSubject: (a: any) => a.command,
+    });
+    const oneBash = (command: string) => scriptedModel([
+      stream(toolCallChunk('c1', 'Bash', { command }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'ok'), finishChunk('stop')),
+    ]);
+
+    function fakeAdminPasswordService(result: 'submitted' | 'canceled' = 'submitted') {
+      const calls: Array<{ sessionId: string; toolCallId: string; expectedArgvLines: string[][] }> = [];
+      const askUpFront = vi.fn(async (req: any) => {
+        calls.push(req);
+        return result;
+      });
+      return { askUpFront, wipeUpfront: vi.fn(), calls };
+    }
+
+    const run = async (command: string, adminPasswordService: ReturnType<typeof fakeAdminPasswordService>) => {
+      const bash = bashTool();
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true }));
+      const session = new HarnessSession(
+        makeOpts({ tools: [bash], decide: async () => ALLOW, askUser, adminPasswordService: adminPasswordService as any }),
+        async () => oneBash(command) as any,
+      );
+      const events = collect(session);
+      await session.send('go');
+      return { askUser, ran: (bash as any).calls.length, events };
+    };
+
+    it('asks for the password AFTER the approval card, naming the sudo line, and BEFORE the command spawns', async () => {
+      const svc = fakeAdminPasswordService('submitted');
+      const { askUser, ran } = await run('sudo apt update', svc);
+      expect(askUser).toHaveBeenCalledTimes(1);       // the approval card ran first
+      expect(svc.askUpFront).toHaveBeenCalledTimes(1); // then the password ask
+      expect(svc.calls[0]).toMatchObject({ toolCallId: 'c1', expectedArgvLines: [['apt', 'update']] });
+      expect(ran).toBe(1); // submitted -> the command still spawns
+    });
+
+    it('Skip/cancel of the password ask means the command never runs at all', async () => {
+      const svc = fakeAdminPasswordService('canceled');
+      const { ran, events } = await run('sudo apt update', svc);
+      expect(ran).toBe(0);
+      const res = events.find((e) => e.type === 'tool-result')!;
+      expect(res.data.isError).toBe(true);
+      expect(res.data.toolResult).toMatch(/interrupted/i);
+    });
+
+    it('a command that names no visible sudo line never calls askUpFront', async () => {
+      const svc = fakeAdminPasswordService('submitted');
+      const { ran } = await run('apt update', svc);
+      expect(svc.askUpFront).not.toHaveBeenCalled();
+      expect(ran).toBe(1);
+    });
+
+    it('a no from the person on the APPROVAL card means the password is never asked either', async () => {
+      const svc = fakeAdminPasswordService('submitted');
+      const bash = bashTool();
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
+      const session = new HarnessSession(
+        makeOpts({ tools: [bash], decide: async () => ALLOW, askUser, adminPasswordService: svc as any }),
+        async () => oneBash('sudo apt update') as any,
+      );
+      collect(session);
+      await session.send('go');
+      expect(svc.askUpFront).not.toHaveBeenCalled();
+      expect((bash as any).calls.length).toBe(0);
+    });
+  });
+
   // M5 2c: the RENDERER never names a pattern — it sends a width selector and the
   // session re-derives from the tool call it already holds. A renderer that could
   // name its own pattern could grant itself anything, because remembered rules are

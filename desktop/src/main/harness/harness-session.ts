@@ -36,7 +36,7 @@ import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServic
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
 import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
-import { adminCommandVerdict, refuseMessage } from './tools/admin-command';
+import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
 import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES } from './image-support';
 
@@ -183,6 +183,8 @@ import { createTaskTool } from './tools/task';
 import { ModelSearchTool } from './tools/model-search';
 import { BUILTIN_ROSTER, type SpecialistRoster } from './specialists/registry';
 import type { ShellRegistry } from './shell-registry';
+import type { RunningCalls } from './askpass/running-calls';
+import type { AdminPasswordServiceLike } from './admin-password-service';
 import { createSkillCatalog, type SkillCatalog } from './skills/skill-catalog';
 import { fitInjection } from './injection/injection-budget';
 import type { TriggerIndex } from './injection/path-triggers';
@@ -302,6 +304,23 @@ export interface HarnessSessionOpts {
    *  tools as ctx.shells; absent in tests, where Bash refuses a background
    *  start and a time limit still kills. */
   shells?: ShellRegistry;
+  /** admin-password design §2.3/§11 task 5: this session's ONE RunningCalls
+   *  registry, reaching tools as ctx.runningCalls. Absent in tests, same
+   *  convention as `shells`. */
+  runningCalls?: RunningCalls;
+  /** admin-password design §2.3: `SUDO_ASKPASS`/socket/runtime vars, present
+   *  only when the app's AskpassServer actually started. Reaches tools as
+   *  ctx.adminPasswordEnv. */
+  adminPasswordEnv?: Record<string, string>;
+  /** admin-password design §2.4/R20/§6/§11 task 5: `askUpFront` is called
+   *  HERE, in step 5 below, right after the approval card returns allow for
+   *  a visibly-sudo Bash call — BEFORE tool.execute() spawns anything.
+   *  `wipeUpfront` is also threaded into ctx.adminPasswordService so the
+   *  tool layer (bash.ts/shell-registry.ts) can wipe an unconsumed hold on
+   *  call exit. Absent when the app's AskpassServer never started (self-
+   *  test failed, Windows, macOS off) — the up-front ask is then simply
+   *  skipped and sudo fails as it did before this feature existed. */
+  adminPasswordService?: Pick<AdminPasswordServiceLike, 'askUpFront' | 'wipeUpfront'>;
 }
 // The opts second arg carries per-turn model construction hints. `serialToolCalls`
 // (Task 10 / spec §4.2) tells the local-engine factory to inject
@@ -4071,6 +4090,26 @@ export class HarnessSession extends EventEmitter {
       }
     }
 
+    // admin-password design §2.4/R20/§11 task 5: for a call whose admin
+    // verdict is 'admin' (visible sudo), the card above already returned
+    // allow — isAdmin also forces floorStop:'admin' (step 3b), so this ask
+    // is NEVER skipped by a remembered rule or Full Auto. Ask for the
+    // password now, BEFORE the command spawns (R20), naming the FIRST
+    // visible sudo line; Skip/Stop/session-close/quit cancels it the same
+    // way any other pending ask is canceled (it lives in the SAME broker
+    // pending map) — the call never spawns in that case.
+    if (isAdmin && isBash && this.opts.adminPasswordService) {
+      const expectedArgvLines = visibleSudoLines(subject);
+      if (expectedArgvLines.length > 0) {
+        const upFront = await this.opts.adminPasswordService.askUpFront({
+          sessionId: this.opts.sessionId,
+          toolCallId: call.toolCallId,
+          expectedArgvLines,
+        });
+        if (upFront === 'canceled') return 'interrupted';
+      }
+    }
+
     // 5. Execute (defineTool owns truncation + the actionable-error catch).
     this.toolCallCount += 1;
     return tool.execute(args, {
@@ -4102,6 +4141,12 @@ export class HarnessSession extends EventEmitter {
       // NativeSessionHost.shellsFor). Spread so an unwired session leaves
       // ctx.shells genuinely absent rather than explicitly undefined.
       ...(this.opts.shells ? { shells: this.opts.shells } : {}),
+      // admin-password design §2.3/§6/§11 task 5: same spread convention —
+      // absent means Bash never registers/never gets the askpass env,
+      // exactly the pre-feature behavior.
+      ...(this.opts.runningCalls ? { runningCalls: this.opts.runningCalls } : {}),
+      ...(this.opts.adminPasswordEnv ? { adminPasswordEnv: this.opts.adminPasswordEnv } : {}),
+      ...(this.opts.adminPasswordService ? { adminPasswordService: this.opts.adminPasswordService } : {}),
       todos: this.todos,
       supportsVision: this.profile.supportsVision,
       ...(this.opts.toolServices ? { services: this.opts.toolServices } : {}),

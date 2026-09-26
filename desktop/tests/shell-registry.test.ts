@@ -1,7 +1,7 @@
 // ShellRegistry (G-1 background Bash): the one owner of every command that
 // outlives its call. Process tests need /bin/bash and skip on Windows; the
 // Windows kill path is unit-mocked in shell-registry-win-kill.test.ts.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -9,6 +9,7 @@ import {
   ShellRegistry, MAX_EXPLICIT_RUNNING, RING_LINES, WIRE_TAIL_LINES, READ_MAX_BYTES, LONG_RUN_NOTICE_MS, EXIT_DRAIN_GRACE_MS,
   formatElapsed, formatFinishedNotice, formatLongRunningNotice, stateText, spawnDetached,
 } from '../src/main/harness/shell-registry';
+import { RunningCalls } from '../src/main/harness/askpass/running-calls';
 import { spillRoot, sweepOldSpillFiles } from '../src/main/harness/tools/spill-paths';
 import { CWD_SENTINEL, ENV_SENTINEL, stripSentinelLines, normalizeNewlines } from '../src/main/harness/tools/shell-text';
 
@@ -285,8 +286,90 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
     if (!r.ok) throw new Error('start failed');
     await r.run.exited;
     const v = reg.toView(r.run);
-    expect(Object.keys(v).sort()).toEqual(['detached', 'endedAt', 'exitCode', 'logPath', 'shellId', 'startedAt', 'status', 'stopReason', 'tail', 'toolUseId']);
+    expect(Object.keys(v).sort()).toEqual(['admin', 'detached', 'endedAt', 'exitCode', 'logPath', 'shellId', 'startedAt', 'status', 'stopReason', 'tail', 'toolUseId']);
     expect(v.detached).toBe(false);
+  });
+});
+
+// admin-password design §2.3/§5/§6/§7, §11 task 5. `runningCalls` here is a
+// REAL RunningCalls instance (register()/onExit() call concrete methods on
+// it), but `recordSudoPath` is never called — so `forgetOnCallExit`'s own
+// `-K` branch always early-returns and no real `sudo` is ever invoked by
+// this suite (CI runs it on Windows/macOS too).
+describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
+  let dir: string;
+  let rc: RunningCalls;
+  let reg: ShellRegistry;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shell-reg-admin-'));
+    rc = new RunningCalls();
+  });
+  afterEach(async () => {
+    await reg.killAll('app-quit', { graceMs: 0 });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+  });
+
+  it('registers the spawned root pid into RunningCalls on start()', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    await waitFor(() => rc.lookup(r.run.child.pid!) !== undefined);
+    expect(rc.lookup(r.run.child.pid!)?.toolCallId).toBe('tu-1');
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('unregisters the root pid, and calls the wipeUpfront callback, when the run exits', async () => {
+    const wipeUpfront = vi.fn();
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc, wipeUpfront });
+    const r = reg.start(startSpec('echo done', dir));
+    if (!r.ok) throw new Error('start failed');
+    const pid = r.run.child.pid!;
+    await r.run.exited;
+    expect(rc.lookup(pid)).toBeUndefined();
+    expect(wipeUpfront).toHaveBeenCalledWith('tu-1');
+  });
+
+  it('seeds admin: true at registration when RunningCalls already granted this toolCallId (the up-front-then-background case)', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    rc.markGranted('tu-1');
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(reg.toView(r.run).admin).toBe(true);
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('markAdmin() turns the flag on for a matching RUNNING toolUseId and emits a change', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    const changes: any[] = [];
+    reg.on('change', (v) => changes.push(v));
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(reg.toView(r.run).admin).toBe(false);
+
+    reg.markAdmin('tu-1');
+
+    expect(reg.toView(r.run).admin).toBe(true);
+    expect(changes.some((v) => v.admin === true)).toBe(true);
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('markAdmin() for an unknown toolUseId is a no-op', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(() => reg.markAdmin('no-such-tool-use-id')).not.toThrow();
+    expect(reg.toView(r.run).admin).toBe(false);
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('the admin flag is cleared when the run exits', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    rc.markGranted('tu-1');
+    const r = reg.start(startSpec('echo done', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(reg.toView(r.run).admin).toBe(true);
+    await r.run.exited;
+    expect(reg.toView(r.run).admin).toBe(false);
   });
 });
 

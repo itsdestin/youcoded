@@ -65,6 +65,8 @@ import { detectEndpoints } from './models/endpoint-detectors';
 import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
+import { AskpassServer } from './harness/askpass/askpass-server';
+import { forgetOnQuit } from './harness/askpass/admin-forget';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
@@ -368,6 +370,27 @@ export function buddyShowRefusal(status: HelperStatus | null): string | null {
   return status.reason ?? 'The buddy needs its KDE helper on this desktop, and the helper is not running.';
 }
 
+/** admin-password design §2.1/§11 task 5: the shipped `askpass.cjs`'s real
+ *  path — dev is the worktree file under `desktop/scripts/askpass/`
+ *  (`app.getAppPath()` is `desktop/` itself in dev, where `package.json`
+ *  lives); packaged is `process.resourcesPath/app.asar.unpacked/scripts/
+ *  askpass/` (electron-builder.yml's `asarUnpack: scripts/**\/*`). Returns
+ *  null (never throws) when the file genuinely isn't there — the caller
+ *  logs plainly and skips the whole feature, exactly like a failed
+ *  self-test (design §2.2: "no fallback to a self-reported pid"). */
+function resolveAskpassScript(): string | null {
+  const rel = path.join('scripts', 'askpass', 'askpass.cjs');
+  try {
+    // Test doubles for `app` (many suites construct a minimal fake) may
+    // lack `getAppPath`/`isPackaged` entirely — never let that throw before
+    // this feature has a chance to be genuinely unavailable, exactly like a
+    // missing file below.
+    const base = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', rel) : path.join(app.getAppPath(), rel);
+    return fs.realpathSync(base);
+  } catch {
+    return null;
+  }
+}
 
 export function registerIpcHandlers(
   ipcMain: IpcMain,
@@ -3045,6 +3068,34 @@ export function registerIpcHandlers(
     { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
   );
 
+  // admin-password design §11 task 5, item 1: ONE AskpassServer + ONE
+  // AdminPasswordService for the app's whole life. Linux only for now —
+  // "POSIX only; Linux enabled; macOS stays off" (design §11): verify.ts's
+  // own MAC_ENABLED switch is defence in depth, but starting the socket
+  // server at all on a platform this feature doesn't support yet is
+  // needless risk for zero benefit. If `start()`'s own self-test fails
+  // (peer-cred resolution untrustworthy on this build), `available` stays
+  // false, `attachAdminPassword` is never called, and sudo fails exactly as
+  // it did before this feature existed — no fallback identity check, per
+  // design §2.2.
+  let askpassServer: AskpassServer | null = null;
+  if (process.platform === 'linux') {
+    const helperScriptRealpath = resolveAskpassScript();
+    if (helperScriptRealpath) {
+      askpassServer = new AskpassServer({
+        execPath: process.execPath,
+        helperScriptRealpath,
+        runningCalls: nativeHost.runningCallsForAskpass(),
+      });
+      void askpassServer.start().then(() => {
+        if (!askpassServer!.available) return;
+        nativeHost.attachAdminPassword(askpassServer!, helperScriptRealpath);
+      });
+    } else {
+      log('WARN', 'AdminPassword', 'askpass.cjs not found — sudo commands will fail exactly as before this feature existed');
+    }
+  }
+
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref
   // noteModelUsed persists — thin async wrapper around bindingToPortableModel
   // (portable-model.ts) closed over the live nativeHost/providerRegistry.
@@ -5614,6 +5665,13 @@ export function registerIpcHandlers(
     // is synchronous and callers don't await it, so this mirrors the async
     // stopSyncSpaces() teardown pattern in main.ts window-all-closed.
     void nativeHost.destroyAll().catch(() => {});
+    // admin-password design §11 task 5, item 1/§5: refuse every still-open
+    // password ask (AskpassServer.stop() answers each pending one
+    // {"ok":false} and removes the socket) and run the forget step's final
+    // sweep — belt-and-suspenders alongside the per-call exits destroyAll()
+    // above already triggers. Fire-and-forget, same reasoning as destroyAll.
+    void askpassServer?.stop().catch(() => {});
+    forgetOnQuit(nativeHost.runningCallsForAskpass());
     // Awaited by the caller: never leave an orphaned llama-server on quit.
     const engineStopped = engineManager.stopAll().catch(() => {});
     for (const watcher of topicWatchers.values()) {

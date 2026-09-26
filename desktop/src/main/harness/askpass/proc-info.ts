@@ -124,7 +124,8 @@ async function linuxExePath(pid: number): Promise<string | null> {
   }
 }
 
-export function splitNulRecords(buf: Buffer): string[] {
+// knip: not exported — only used within this file's own environ()/cmdline() readers.
+function splitNulRecords(buf: Buffer): string[] {
   const out: string[] = [];
   let start = 0;
   for (let i = 0; i < buf.length; i++) {

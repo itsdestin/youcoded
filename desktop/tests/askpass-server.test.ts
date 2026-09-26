@@ -213,6 +213,7 @@ const OK_VERIFY_RESULT = (overrides?: Partial<Extract<VerifyResult, { ok: true }
   ok: true,
   sudoPid: 111,
   sudoArgv: ['sudo', 'apt', 'update'],
+  sudoExePath: '/usr/bin/sudo',
   callRoot: 222,
   via: undefined,
   ...overrides,

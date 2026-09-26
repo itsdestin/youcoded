@@ -3,12 +3,19 @@
 // actually spawned, and which of those calls have already received a
 // password (review 2 E5's "forget on last exit" Set).
 //
-// Self-contained here (task 3): registration from `harness/tools/bash.ts` /
-// `shell-registry.ts` on spawn/exit is task 5's wiring. This module exposes
-// the interface those call sites need and the interface verify.ts needs,
-// with no import of either — so the two stay decoupled and this is testable
-// on its own (design §11 task 3's "no wiring" scope).
+// Task 5 wires registration in from `harness/tools/bash.ts` /
+// `shell-registry.ts` on spawn/exit, and adds `registerPid` (reads the
+// pid's start time itself, via the SAME koffi-backed ProcReader every other
+// part of this feature uses, so a call site only ever needs a bare pid),
+// `hasGranted` (seeds ShellRegistry's admin flag for a run registered AFTER
+// its call already got a password — the common up-front-then-handed-off
+// case, design §7) and `recordSudoPath`/`verifiedSudoPath` (the forget
+// step's `-K` target, design §5 — "the path from the verifier's genuine-sudo
+// check, never PATH").
 'use strict';
+
+import type { ProcReader } from './proc-info';
+import { createProcReader } from './proc-info';
 
 export interface RunningCallMeta {
   sessionId: string;
@@ -37,6 +44,44 @@ export interface RunningCallEntry extends RunningCallMeta {
 export class RunningCalls {
   private readonly byRootPid = new Map<number, RunningCallEntry>();
   private readonly grantedToolCallIds = new Set<string>();
+  private readonly reader: ProcReader;
+  /** design §5's `-K` target — the EXACT path verify.ts's genuine-sudo check
+   *  validated for the most recent delivery, never a PATH lookup. Last
+   *  writer wins: in practice there is exactly one genuine sudo binary on
+   *  the machine, so every delivery agrees. */
+  private verifiedSudoPathValue: string | undefined;
+
+  constructor(reader: ProcReader = createProcReader()) {
+    this.reader = reader;
+  }
+
+  /** Convenience for call sites (bash.ts, shell-registry.ts) that only have
+   *  a bare pid, not yet its start time — reads it via the same reader every
+   *  other part of this feature shares, and registers only when the read
+   *  succeeds (a pid that already exited before this ran never becomes a
+   *  garbage entry). */
+  async registerPid(rootPid: number, meta: RunningCallMeta): Promise<void> {
+    const startTime = await this.reader.startTime(rootPid);
+    if (startTime === null) return;
+    this.register(rootPid, startTime, meta);
+  }
+
+  /** design §7: whether `toolCallId` has received at least one password
+   *  delivery so far — seeds ShellRegistry's `admin` flag for a run
+   *  registered AFTER the delivery already happened (the up-front ask, then
+   *  a hand-off to the background). */
+  hasGranted(toolCallId: string): boolean {
+    return this.grantedToolCallIds.has(toolCallId);
+  }
+
+  /** Recorded by AdminPasswordService on every delivery (design §5). */
+  recordSudoPath(sudoExePath: string): void {
+    this.verifiedSudoPathValue = sudoExePath;
+  }
+
+  get verifiedSudoPath(): string | undefined {
+    return this.verifiedSudoPathValue;
+  }
 
   /** Registered on spawn (design §2.3) — foreground AND background, so a
    *  `run_in_background` call that later hands off still resolves. Re-

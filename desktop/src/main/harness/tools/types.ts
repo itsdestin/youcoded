@@ -7,6 +7,8 @@ import type { CatalogModel, ModelBinding } from '../../../shared/provider-types'
 import type { SpecialistDefinition } from '../specialists/registry';
 import type { DelegatedModels } from '../specialists/delegated-models';
 import type { ShellRegistry } from '../shell-registry';
+import type { RunningCalls } from '../askpass/running-calls';
+import type { AdminPasswordServiceLike } from '../admin-password-service';
 
 /** Task 6 — what the Task tool's execute() hands the host to actually run a
  *  specialist. Structural, mirroring the rest of ToolServices: the tool never
@@ -295,6 +297,28 @@ export interface ToolContext {
    *  BashOutput/KillShell read. Absent in test/one-off contexts, in which
    *  case Bash refuses run_in_background and a time limit still kills. */
   shells?: ShellRegistry;
+  /** admin-password design §2.3/§11 task 5: this session's ONE RunningCalls
+   *  registry. bash.ts registers/unregisters its own foreground spawn's
+   *  root pid directly; ShellRegistry (ctx.shells) does the same for a
+   *  background start or a hand-off, sharing the SAME instance. Absent in
+   *  test/one-off contexts (same convention as ctx.shells) — Bash then
+   *  simply never registers, which is safe: nothing can ever verify against
+   *  an empty registry, so sudo would still just fail with no askpass
+   *  helper offered, exactly as before this feature existed. */
+  runningCalls?: RunningCalls;
+  /** admin-password design §2.3: `SUDO_ASKPASS`/`YOUCODED_ASKPASS_SOCKET`/
+   *  `YOUCODED_ASKPASS_RUNTIME` — present only when the app's AskpassServer
+   *  actually started (self-test passed; POSIX, Linux today). bash.ts
+   *  applies these to `spawnEnv` AFTER `shellEnv`/`persistent_env` are
+   *  merged in, so a persisted var from an earlier call can never point
+   *  them elsewhere. */
+  adminPasswordEnv?: Record<string, string>;
+  /** admin-password design §2.4/§6/§11 task 5: only `wipeUpfront` is used
+   *  at the tool layer — bash.ts calls it on EVERY call exit (a no-op
+   *  unless an up-front password was held and never consumed). The session
+   *  layer (harness-session.ts) is what calls `askUpFront` itself, before
+   *  this context object even exists for a given call. */
+  adminPasswordService?: Pick<AdminPasswordServiceLike, 'wipeUpfront'>;
 }
 
 /** What a tool omitted from its own result, and how to see more.

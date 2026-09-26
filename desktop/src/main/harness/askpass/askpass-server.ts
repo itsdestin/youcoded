@@ -67,6 +67,9 @@ export interface AskpassAskEvent {
   askId: string;
   sudoPid: number;
   sudoArgv: string[];
+  /** The EXACT path verify.ts validated as the genuine setuid sudo — design
+   *  §5's `-K` target, never a PATH lookup (§11 task 5). */
+  sudoExePath: string;
   callRoot: number;
   via?: string;
   toolCallId: string;
@@ -611,6 +614,7 @@ export class AskpassServer extends EventEmitter {
         askId,
         sudoPid: result.sudoPid,
         sudoArgv: result.sudoArgv,
+        sudoExePath: result.sudoExePath,
         callRoot: result.callRoot,
         via: result.via,
         toolCallId: callEntry.toolCallId,

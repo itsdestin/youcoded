@@ -17,6 +17,7 @@ import { takeHeadLines, takeTailLines } from './truncate';
 import type { ToolResultPayload } from './types';
 import { spawnDetached, killTree, formatElapsed, MAX_EXPLICIT_RUNNING } from '../shell-registry';
 import { CWD_SENTINEL, ENV_SENTINEL, stripAnsi, stripSentinelLines } from './shell-text';
+import { forgetOnCallExit } from '../askpass/admin-forget';
 // Why re-exported: harness-tools-core.test.ts and other callers import
 // stripAnsi from here; moving the implementation into shell-text.ts (so the
 // ShellRegistry can use it without an import cycle) must not move the import
@@ -34,6 +35,11 @@ const MAX_TIMEOUT_MS = 600_000;
  *  fight ctx.shellCwd, which already owns directory persistence exclusively. */
 const ENV_PERSIST_DENYLIST = new Set([
   'PWD', 'OLDPWD', 'SHLVL', '_', 'RANDOM', 'SECONDS', 'LINENO', 'PPID', 'BASH', 'BASHPID',
+  // admin-password design §2.3/§11 task 5: never persisted, so a command
+  // that `export`s over these to poison a LATER call's askpass wiring
+  // cannot make that override outlive its own call — see spawnEnv's own
+  // comment for why overriding them for THIS command's own process is fine.
+  'SUDO_ASKPASS', 'YOUCODED_ASKPASS_SOCKET', 'YOUCODED_ASKPASS_RUNTIME',
 ]);
 
 /** A command whose first word is `sleep` is never handed off (spec §4.1):
@@ -416,7 +422,14 @@ function bashDescription(): string {
     // sits until the timeout hands it to the background, and nothing ever
     // answers it.
     'A command that might prompt for input hangs: pass its non-interactive flag ' +
-    '(`-y`, `--yes`, `--non-interactive`, or the tool\'s equivalent) whenever a command could ask a question.'
+    '(`-y`, `--yes`, `--non-interactive`, or the tool\'s equivalent) whenever a command could ask a question. ' +
+    // admin-password design §8: what the model needs to know about sudo —
+    // that it WORKS (unlike before this feature), who types the password,
+    // and the two things never to do (both would leak the password to the
+    // model's own stdout, or bypass the app's own verification entirely).
+    '`sudo` works: the user types their admin password in a card inside the app itself, never in this ' +
+    'output — do not pass a password, `-S`, or `-A`, and do not set `SUDO_ASKPASS` yourself. ' +
+    '`doas`, `su`, `pkexec`, and `run0` are refused; use `sudo` instead.'
   );
 }
 
@@ -493,6 +506,35 @@ export const BashTool = defineTool({
     // process.env (identical before/after) never crosses into shellEnv.
     const shellEnvIn = ctx.shellEnv ?? {};
     const spawnEnv: NodeJS.ProcessEnv = { ...process.env, ...shellEnvIn, NO_COLOR: '1', FORCE_COLOR: '0' };
+    // Defence in depth (admin-password design §2.3, §11 task 5): these
+    // control what code runs inside ANY node process this shell starts —
+    // including, if the askpass helper's own `env -i` isolation ever had a
+    // gap, the helper itself. Dropped unconditionally, for every Bash call.
+    delete spawnEnv.NODE_OPTIONS;
+    delete spawnEnv.NODE_REPL_EXTERNAL_MODULE;
+    delete spawnEnv.ELECTRON_RUN_AS_NODE;
+    // NODE_V8_COVERAGE is NOT a plain `delete` (verified empirically,
+    // Node 26): when the APP's own process has real coverage collection
+    // active, `child_process.spawn` force-re-adds this ONE variable to the
+    // child's environment whenever the given `env` object omits it —
+    // deleting it here is therefore silently undone by Node itself. Setting
+    // it to an explicit empty string IS respected (Node only overrides an
+    // ABSENT key), which is what actually keeps it out of the child's env.
+    spawnEnv.NODE_V8_COVERAGE = '';
+    // admin-password design §2.3: applied AFTER shellEnvIn so a
+    // `persistent_env`-carried value from an earlier call can never point
+    // these elsewhere (diffPersistableEnv's own denylist is the other half
+    // of that guarantee). A command CAN still override them for itself
+    // (`SUDO_ASKPASS=x sudo -A …`) — that only means its own helper runs and
+    // the app is never asked; nothing leaks. Absent entirely when the app's
+    // AskpassServer never started (self-test failed, Windows, macOS off):
+    // sudo then simply fails as it did before this feature existed.
+    if (ctx.adminPasswordEnv) Object.assign(spawnEnv, ctx.adminPasswordEnv);
+    // admin-password design §6/§11 task 5: every return below that means
+    // "this call is over and nothing was ever spawned for it" wipes a held
+    // up-front password rather than leave it to survive past its own call
+    // — a cheap no-op unless askUpFront actually ran for this toolCallId.
+    const wipeAdminUpfront = () => ctx.adminPasswordService?.wipeUpfront(ctx.toolCallId ?? 'unknown');
     let launch = shell;
     if (process.env.YOUCODED_LUNA_EXPERIMENT === '1') {
       const script = process.env.LUNA_SHELL_JAIL_SCRIPT;
@@ -500,6 +542,7 @@ export const BashTool = defineTool({
       // WHY: a model-controlled persisted shell env must not swap the trusted
       // fixture root or bypass the same wrapper in background execution.
       if (process.platform !== 'linux' || !script || !path.isAbsolute(script) || !root || !path.isAbsolute(root)) {
+        wipeAdminUpfront();
         return { text: 'Luna experiment shell isolation is unavailable.', isError: true };
       }
       spawnEnv.LUNA_FIXTURE_ROOT = root;
@@ -520,9 +563,11 @@ export const BashTool = defineTool({
     // finished notice arrives on its own at the next idle boundary.
     if (args.run_in_background) {
       if (args.persistent_env) {
+        wipeAdminUpfront();
         return { text: 'Bash rejected: persistent_env cannot be combined with run_in_background — a background command never reports its environment back. Drop one of the two.', isError: true };
       }
       if (!ctx.shells) {
+        wipeAdminUpfront();
         return { text: 'Bash rejected: background execution is not available in this session.', isError: true };
       }
       const started = ctx.shells.start({
@@ -530,11 +575,16 @@ export const BashTool = defineTool({
         shellCmd: launch.cmd, shellArgs: launch.args, env: spawnEnv,
       });
       if (!started.ok) {
+        wipeAdminUpfront(); // nothing was spawned — ShellRegistry never got a chance to
         if (started.reason === 'cap') {
           return { text: `${MAX_EXPLICIT_RUNNING} background commands are already running (${started.running.join(', ')}). Stop one with KillShell before starting another.`, isError: true };
         }
         return { text: `Failed to start shell: ${started.detail} (shell=${shell.cmd}; cwd=${startCwd})`, isError: true };
       }
+      // Started successfully: ShellRegistry.register() just ran (and, when
+      // this call was already granted a password, seeded `admin: true`
+      // from RunningCalls.hasGranted) — the up-front hold, if any, survives
+      // for ShellRegistry.onExit to wipe on THIS run's own eventual exit.
       return {
         text: `Started in the background (shell id ${started.run.shellId}). You'll be told when it finishes. BashOutput reads new output (or lists runs); KillShell stops it. Running now: ${started.runningExplicit} of ${MAX_EXPLICIT_RUNNING}.`,
       };
@@ -563,8 +613,17 @@ export const BashTool = defineTool({
           env: spawnEnv,
         });
       } catch (e: any) {
+        wipeAdminUpfront(); // nothing was spawned
         resolve({ text: `Failed to start shell: ${e?.message ?? e} (shell=${shell.cmd}; cwd=${startCwd})`, isError: true });
         return;
+      }
+      // admin-password design §2.3/§11 task 5: registered for the foreground
+      // path here — a hand-off (the timeout branch below) removes the
+      // close/error listeners BEFORE ctx.shells.adopt() re-registers the
+      // SAME pid into the SAME RunningCalls, so registration correctly
+      // survives the hand-off rather than needing a separate carry-over.
+      if (ctx.runningCalls && child.pid) {
+        void ctx.runningCalls.registerPid(child.pid, { sessionId: ctx.sessionId, toolCallId: ctx.toolCallId ?? 'unknown' });
       }
       // Bounded head + rolling tail + an UNCONDITIONAL byte counter.
       //
@@ -1000,15 +1059,33 @@ export const BashTool = defineTool({
       ctx.signal.addEventListener('abort', onAbort, { once: true });
       // If the signal already fired before we attached (once:true won't replay), kill now.
       if (ctx.signal.aborted) onAbort();
+      // admin-password design §2.3/§5/§6/§11 task 5: the ONLY two listeners
+      // that mean "this foreground call's own root pid is truly done" —
+      // removed wholesale by the hand-off branch above BEFORE adopt(), so
+      // this unregister/forget/wipe never double-fires once ownership moves
+      // to ShellRegistry (its own onExit does the equivalent there).
+      const onCallExit = () => {
+        if (ctx.runningCalls && child.pid) {
+          ctx.runningCalls.unregister(child.pid);
+          forgetOnCallExit(ctx.runningCalls, ctx.toolCallId ?? 'unknown');
+        }
+        wipeAdminUpfront();
+      };
       // Async spawn failure (the path Windows takes for a bad cwd): name the
       // shell + cwd actually used, not just Node's bare `spawn <cmd> <CODE>` —
       // same diagnosability contract as the sync catch above.
-      child.on('error', (err) => finish(`Failed to start shell: ${err.message} (shell=${shell.cmd}; cwd=${startCwd})\n`, true));
+      child.on('error', (err) => {
+        onCallExit();
+        finish(`Failed to start shell: ${err.message} (shell=${shell.cmd}; cwd=${startCwd})\n`, true);
+      });
       // WHY no exit-code prefix here anymore: the metadata line above now states
       // `exit N` for every result, so a leading "(exit code N)" duplicated the
       // same fact in two places. The timeout/abort handlers keep their prefixes —
       // those are messages, not exit codes.
-      child.on('close', (code) => finish('', code !== 0, code));
+      child.on('close', (code) => {
+        onCallExit();
+        finish('', code !== 0, code);
+      });
     });
   },
 });

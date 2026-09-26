@@ -21,7 +21,10 @@ import type { ProcReader, PidHandle } from './proc-info';
 import { MAC_ENABLED } from './proc-info';
 import type { RunningCalls } from './running-calls';
 
-export type VerifyReason =
+// knip: not exported — nothing outside this file names VerifyReason/VerifyOk/
+// VerifyFail directly; only the VerifyResult union (still exported below) and
+// VerifyDeps cross the module boundary.
+type VerifyReason =
   | 'peer-unresolvable'
   | 'macos-disabled'
   | 'proc-read-failed'
@@ -55,7 +58,7 @@ export type VerifyReason =
    *  caller that doesn't pass a signal. */
   | 'aborted';
 
-export interface VerifyOk {
+interface VerifyOk {
   ok: true;
   /** The genuine sudo process that is P's parent. */
   sudoPid: number;
@@ -65,6 +68,10 @@ export interface VerifyOk {
   sudoArgv: string[];
   /** The RunningCalls root pid this chain resolved to. */
   callRoot: number;
+  /** The EXACT path this chain validated as the genuine setuid sudo (item 2)
+   *  — never a PATH lookup. Task 5's forget step (design §5) runs `-K`
+   *  against this path, never anything re-derived from PATH. */
+  sudoExePath: string;
   /** Basename of the script sudo's own parent is running, set only when
    *  sudo's parent is NOT itself the call root (design §2.2: an
    *  intermediate script/subshell sits between the approved call and this
@@ -73,7 +80,7 @@ export interface VerifyOk {
   via?: string;
 }
 
-export interface VerifyFail {
+interface VerifyFail {
   ok: false;
   reason: VerifyReason;
 }
@@ -331,7 +338,7 @@ export async function verifyAskpassPeer(pid: number, deps: VerifyDeps): Promise<
           return { ok: false, reason: 'starttime-changed-mid-check' };
         }
 
-        return { ok: true, sudoPid, sudoArgv, callRoot, via };
+        return { ok: true, sudoPid, sudoArgv, callRoot, via, sudoExePath };
       } finally {
         closeAll([callRootPin]);
       }

@@ -162,23 +162,38 @@ function stripSudoOptionsFromArgv(rest: string[]): string[] {
   return argv;
 }
 
-/** admin-password-service.ts (design §2.4/§3 item 5): builds the password
- *  card's command text directly from a REAL sudo process's own argv (already
- *  read fresh from /proc/<sudo>/cmdline by verify.ts) — the up-front ask's
- *  counterpart to `visibleSudoLines` below, which reads shell TEXT instead of
- *  a live process. Same option-stripping rule (`stripSudoOptionsFromArgv`),
- *  applied after dropping the `sudo` word itself (argv[0], by basename —
- *  sudo's own argv[0] is whatever path invoked it, e.g. `/usr/bin/sudo`).
- *  Display only: joins with single spaces and single-quotes any argument
+/** admin-password-service.ts (design §2.4/§3 item 5, §11 task 5): the argv
+ *  sudo will actually run for a REAL sudo process's own argv (already read
+ *  fresh from /proc/<sudo>/cmdline by verify.ts) — `sudo` itself (argv[0], by
+ *  basename — sudo's own argv[0] is whatever path invoked it, e.g.
+ *  `/usr/bin/sudo`) and its own options stripped. This is the up-front ask's
+ *  match key (task 5): compared directly against a `visibleSudoLines` entry
+ *  (which strips the SAME way, starting from shell text instead of a live
+ *  process) to tell "the approved sudo line" from a hidden one elsewhere in
+ *  the same call. */
+export function sudoRealArgv(sudoArgv: string[]): string[] {
+  const rest = sudoArgv.length > 0 && baseName(sudoArgv[0]) === 'sudo' ? sudoArgv.slice(1) : sudoArgv;
+  return stripSudoOptionsFromArgv(rest);
+}
+
+/** Display only: joins with single spaces and single-quotes any argument
  *  containing whitespace, never re-parsed as shell syntax, never shown the
  *  raw argv a hostile arg could otherwise use to fake a different-looking
- *  command. */
-export function displayCommandFromSudoArgv(sudoArgv: string[]): string {
-  const rest = sudoArgv.length > 0 && baseName(sudoArgv[0]) === 'sudo' ? sudoArgv.slice(1) : sudoArgv;
-  const stripped = stripSudoOptionsFromArgv(rest);
-  return stripped
+ *  command. Shared by `displayCommandFromSudoArgv` (a real sudo process's
+ *  argv) and the up-front card (an already-stripped `visibleSudoLines`
+ *  entry) — task 5. */
+export function displayCommandFromArgv(argv: string[]): string {
+  return argv
     .map((a) => (/\s/.test(a) ? `'${a.replace(/'/g, "'\\''")}'` : a))
     .join(' ');
+}
+
+/** admin-password-service.ts (design §2.4/§3 item 5): builds the password
+ *  card's command text directly from a REAL sudo process's own argv — the
+ *  up-front ask's counterpart to `visibleSudoLines` below, which reads shell
+ *  TEXT instead of a live process. */
+export function displayCommandFromSudoArgv(sudoArgv: string[]): string {
+  return displayCommandFromArgv(sudoRealArgv(sudoArgv));
 }
 
 /** The argv sudo will actually run in each sudo simple-command inside
