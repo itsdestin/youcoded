@@ -65,3 +65,33 @@ describe('listNativeComments — reading a real .xlsx inside a project', () => {
     expect(q3Note?.text).toContain('West is Priya');
   });
 });
+
+describe('listNativeComments — fallback (no projectRoot) source-file gate (post-T3 review, F1 blocker)', () => {
+  // Gate 2 of the F1 fix: `resolveSourceFilePath`'s own no-projectRoot branch
+  // resolves ANY absolute path with no containment at all (it exists to serve
+  // §1.4's hashed loose-file *sidecar* lookup, which never exposes a file's
+  // content) — reading actual .docx/.xlsx BYTES through it must instead reuse
+  // the same authority the artifacts binary viewers use (`authorizeBytesRead`,
+  // read-binary-access.ts), never trust an arbitrary caller-named path.
+  //
+  // RED-BEFORE-GREEN: against the pre-fix commit (58ee463df) this whole
+  // describe block fails — the first case resolves ok:true and actually reads
+  // the untracked file's comments, because no gate existed at all.
+  it('refuses an untracked absolute .docx path with no projectRoot, even though the file is real and readable', async () => {
+    const loose = path.join(root, 'untracked.docx');
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), loose);
+    const result = await listNativeComments('docx', { path: loose }); // no projectRoot at all
+    expect(result).toEqual({ ok: false, error: 'path-not-tracked' });
+  });
+
+  it('the same path with projectRoot supplied is unaffected by Gate 2 — it is judged by the ordinary in-project containment check instead', async () => {
+    // Sanity that Gate 2 only applies to the NO-projectRoot fallback: the
+    // identical relative path, with a projectRoot, still reads normally (this
+    // is the pre-existing "reading a real .docx inside a project" case run
+    // once more here to pin that the new gate did not also start refusing it).
+    await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'in-project.docx'));
+    const result = await listNativeComments('docx', { path: 'docs/in-project.docx', projectRoot: root });
+    expect(result.ok).toBe(true);
+  });
+});

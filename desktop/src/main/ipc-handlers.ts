@@ -5205,6 +5205,11 @@ export function registerIpcHandlers(
   registerDocCommentsHandlers(ipcMain, {
     getAllWebContents: () => webContents.getAllWebContents(),
     remoteBroadcast: (msg) => remoteServer?.broadcast(msg),
+    // F1 fix: a live session's cwd counts as a "known" projectRoot too (same
+    // "records" carve-out remote-server.ts's own sessionRoots() already
+    // grants) — a file opened via an unregistered session's drawer must keep
+    // working, not just closes accepted for saved folders/indexed projects.
+    sessionRoots: () => sessionManager.listSessions().filter(s => s.status !== 'destroyed').map(s => s.cwd),
   });
 
   // A crashed/closed renderer never sends unwatch — drop its refs on destroy so

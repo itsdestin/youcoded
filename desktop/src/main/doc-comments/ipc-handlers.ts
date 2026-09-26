@@ -28,6 +28,7 @@ import {
 } from './doc-comments-watcher';
 import { DOC_COMMENTS_IPC } from './ipc-channels';
 import { nativeFormatFor, refuseNativeMutation, listNativeComments } from './doc-comments-dispatch';
+import { refuseUnknownProjectRoot } from './doc-comments-gate';
 import type { CommentAuthor, CommentSelector } from '../../shared/doc-comments-types';
 
 export interface DocCommentsHandlerDeps {
@@ -38,21 +39,38 @@ export interface DocCommentsHandlerDeps {
   /** A WS-connected remote browser gets the same push (review 2, F6) — absent
    *  in tests/a build with no remote server running. */
   remoteBroadcast?: (msg: { type: string; payload: unknown }) => void;
+  /** Every currently-live session's cwd (mirrors remote-server.ts's own
+   *  `sessionRoots()` / "records" mode) — a session's file drawer can hand
+   *  this feature a raw session cwd that was never added as a saved folder or
+   *  indexed project (`useActiveProject.ts`'s synthetic-project fallback,
+   *  design §1.4), so the projectRoot gate below (F1 fix) must accept those
+   *  too, not just saved/indexed roots, or every unregistered open session's
+   *  comments would start refusing. Optional/defaulted to `[]` so existing
+   *  callers (and tests) that don't wire a session manager keep working —
+   *  same "a couple of plain functions" testability goal as the rest of
+   *  `deps`. */
+  sessionRoots?: () => readonly string[];
 }
 
 function optStr(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
 
-/** `String(undefined)` is the literal text "undefined", which the store then
- *  resolves and refuses/mismatches the SAME honest way any other string
- *  would (`path-outside-project` if it lands outside the root,
- *  `comment-not-found` if the id it's paired with doesn't exist there) —
- *  there is no separate "field missing" code path to keep honest, and a
- *  caller that omits a required field gets a typed refusal, never a thrown
- *  TypeError. */
-function reqStr(v: unknown): string {
-  return typeof v === 'string' ? v : String(v);
+/** F2 fix (post-T3 build review): a required field that's missing or the
+ *  wrong type now refuses with a distinct, honest `missing-field` error —
+ *  the OLD `reqStr` coerced via `String(v)`, so a missing `path`/`id`/`text`
+ *  silently became the literal string "undefined", which the store then
+ *  quietly resolved/mismatched as if it were a real (if nonsensical) value.
+ *  Returns `null` for "missing"; every call site below turns that into
+ *  `missingField(name)` before doing anything else. */
+function reqStr(v: unknown): string | null {
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+type MissingFieldRefusal = { ok: false; error: 'missing-field'; field: string };
+
+function missingField(field: string): MissingFieldRefusal {
+  return { ok: false, error: 'missing-field', field };
 }
 
 export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, deps: DocCommentsHandlerDeps): void {
@@ -64,12 +82,26 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     deps.remoteBroadcast?.({ type: DOC_COMMENTS_IPC.CHANGED, payload });
   });
 
+  // F1 fix (post-T3 build review, blocker): every channel below refuses an
+  // unrecognized `projectRoot` BEFORE calling into the store at all — the
+  // store's own containment check only proves `path` resolves inside
+  // WHATEVER root it's given, so an unvetted `projectRoot` (e.g. '/' or
+  // $HOME) made that check a no-op. `refuseUnknownProjectRoot` is the one
+  // shared gate (`doc-comments-gate.ts`) remote-server.ts's docComments cases
+  // reuse too, so desktop and remote can never disagree about which roots are
+  // "known".
+  const gateProjectRoot = (projectRoot: string | undefined) =>
+    refuseUnknownProjectRoot(projectRoot, deps.sessionRoots?.() ?? []);
+
   // Word/Excel comments live INSIDE the file (§1.1) — no sidecar exists for
   // these two extensions, so list() dispatches to T10/T12's own readers
   // instead of the sidecar store. Every OTHER extension is unaffected.
   ipcMain.handle(DOC_COMMENTS_IPC.LIST, async (_e: IpcMainInvokeEvent, payload: any) => {
     const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
     const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
     const format = nativeFormatFor(filePath);
     if (format) return listNativeComments(format, { path: filePath, projectRoot });
     return listComments({ path: filePath, projectRoot });
@@ -77,16 +109,22 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
 
   ipcMain.handle(DOC_COMMENTS_IPC.ADD, async (_e: IpcMainInvokeEvent, payload: any) => {
     const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
     // Writing INTO a .docx/.xlsx (T11/T13) has not landed yet — refuse
     // honestly rather than silently writing a sidecar nobody reads back for
     // this file, or a no-op that looks like success.
     const refused = refuseNativeMutation(filePath);
     if (refused) return refused;
+    const text = reqStr(payload?.text);
+    if (text === null) return missingField('text');
     return addComment({
       path: filePath,
-      projectRoot: optStr(payload?.projectRoot),
+      projectRoot,
       selector: payload?.selector as CommentSelector,
-      text: reqStr(payload?.text),
+      text,
       author: payload?.author as CommentAuthor,
     });
   });
@@ -98,49 +136,75 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
   // .docx/.xlsx target, same reasoning as add above.
   ipcMain.handle(DOC_COMMENTS_IPC.REPLY, async (_e: IpcMainInvokeEvent, payload: any) => {
     const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
     const refused = refuseNativeMutation(filePath);
     if (refused) return refused;
+    const id = reqStr(payload?.id);
+    if (id === null) return missingField('id');
+    const text = reqStr(payload?.text);
+    if (text === null) return missingField('text');
     return replyToComment({
       path: filePath,
-      projectRoot: optStr(payload?.projectRoot),
-      id: reqStr(payload?.id),
-      text: reqStr(payload?.text),
+      projectRoot,
+      id,
+      text,
       author: payload?.author as CommentAuthor,
     });
   });
 
   ipcMain.handle(DOC_COMMENTS_IPC.RESOLVE, async (_e: IpcMainInvokeEvent, payload: any) => {
     const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
     const refused = refuseNativeMutation(filePath);
     if (refused) return refused;
+    const id = reqStr(payload?.id);
+    if (id === null) return missingField('id');
     return resolveComment({
       path: filePath,
-      projectRoot: optStr(payload?.projectRoot),
-      id: reqStr(payload?.id),
+      projectRoot,
+      id,
       by: payload?.by as CommentAuthor,
     });
   });
 
   ipcMain.handle(DOC_COMMENTS_IPC.REOPEN, async (_e: IpcMainInvokeEvent, payload: any) => {
     const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
     const refused = refuseNativeMutation(filePath);
     if (refused) return refused;
+    const id = reqStr(payload?.id);
+    if (id === null) return missingField('id');
     return reopenComment({
       path: filePath,
-      projectRoot: optStr(payload?.projectRoot),
-      id: reqStr(payload?.id),
+      projectRoot,
+      id,
       by: payload?.by as CommentAuthor,
     });
   });
 
   ipcMain.handle(DOC_COMMENTS_IPC.MOVE, async (_e: IpcMainInvokeEvent, payload: any) => {
     const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
     const refused = refuseNativeMutation(filePath);
     if (refused) return refused;
+    const id = reqStr(payload?.id);
+    if (id === null) return missingField('id');
     return moveComment({
       path: filePath,
-      projectRoot: optStr(payload?.projectRoot),
-      id: reqStr(payload?.id),
+      projectRoot,
+      id,
       newSelector: payload?.newSelector as CommentSelector,
     });
   });
@@ -151,7 +215,12 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
   // (project-watcher.ts / git-watcher.ts).
   const watchedSenders = new Set<number>();
   ipcMain.handle(DOC_COMMENTS_IPC.WATCH, async (e: IpcMainInvokeEvent, payload: any) => {
-    const target = await resolveWatchTarget({ path: reqStr(payload?.path), projectRoot: optStr(payload?.projectRoot) });
+    const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
+    const target = await resolveWatchTarget({ path: filePath, projectRoot });
     if (!target.ok) return target;
     const senderId = e.sender.id;
     if (!watchedSenders.has(senderId)) {
@@ -165,7 +234,12 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
   });
 
   ipcMain.handle(DOC_COMMENTS_IPC.UNWATCH, async (e: IpcMainInvokeEvent, payload: any) => {
-    const target = await resolveWatchTarget({ path: reqStr(payload?.path), projectRoot: optStr(payload?.projectRoot) });
+    const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
+    const target = await resolveWatchTarget({ path: filePath, projectRoot });
     if (target.ok) unwatchComments(target.target, e.sender.id);
     return { ok: true };
   });

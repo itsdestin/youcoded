@@ -24,6 +24,7 @@ import {
 } from './doc-comments/doc-comments-store';
 import { watchComments, unwatchComments, dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
 import { nativeFormatFor, refuseNativeMutation, listNativeComments } from './doc-comments/doc-comments-dispatch';
+import { refuseUnknownProjectRoot } from './doc-comments/doc-comments-gate';
 // Shared cap so a local folder's description (set via a remote browser client)
 // can't drift from the synced registry's limit — same constant project-registry.ts
 // and ipc-handlers.ts use.
@@ -2214,9 +2215,22 @@ export class RemoteServer {
       // (review 2, F6: remote is NOT the same gap as Android). reply/resolve/
       // reopen/move all carry `path`, containment-checked identically to
       // add's (review 3, F1).
+      //
+      // F1 fix (post-T3 build review, blocker): every case below refuses an
+      // unrecognized `projectRoot` via the SAME shared gate desktop's
+      // doc-comments/ipc-handlers.ts uses (`doc-comments-gate.ts`'s
+      // `refuseUnknownProjectRoot`) BEFORE calling into the store — a remote
+      // client's payload is exactly as untrusted as a native-tool/MCP
+      // caller's, and the store's own containment check only proves `path`
+      // resolves inside WHATEVER root it's given, never that the root itself
+      // is real. `this.sessionRoots()` is the same "records"-mode carve-out
+      // already used elsewhere on this class, so an unregistered but
+      // currently-open session's own comments keep working.
       case 'docComments:list': {
         const filePath = String(payload?.path ?? '');
         const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
         // Word/Excel comments live INSIDE the file (§1.1) — dispatch to
         // T10/T12's own readers instead of the sidecar store, the SAME
         // by-extension decision ipc-handlers.ts's desktop surface makes.
@@ -2228,11 +2242,14 @@ export class RemoteServer {
       }
       case 'docComments:add': {
         const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
         this.respond(client.ws, type, id, await addComment({
           path: filePath,
-          projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          projectRoot,
           selector: payload?.selector,
           text: String(payload?.text ?? ''),
           author: payload?.author,
@@ -2241,11 +2258,14 @@ export class RemoteServer {
       }
       case 'docComments:reply': {
         const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
         this.respond(client.ws, type, id, await replyToComment({
           path: filePath,
-          projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          projectRoot,
           id: String(payload?.id ?? ''),
           text: String(payload?.text ?? ''),
           author: payload?.author,
@@ -2254,11 +2274,14 @@ export class RemoteServer {
       }
       case 'docComments:resolve': {
         const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
         this.respond(client.ws, type, id, await resolveComment({
           path: filePath,
-          projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          projectRoot,
           id: String(payload?.id ?? ''),
           by: payload?.by,
         }));
@@ -2266,11 +2289,14 @@ export class RemoteServer {
       }
       case 'docComments:reopen': {
         const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
         this.respond(client.ws, type, id, await reopenComment({
           path: filePath,
-          projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          projectRoot,
           id: String(payload?.id ?? ''),
           by: payload?.by,
         }));
@@ -2278,11 +2304,14 @@ export class RemoteServer {
       }
       case 'docComments:move': {
         const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
         this.respond(client.ws, type, id, await moveComment({
           path: filePath,
-          projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
+          projectRoot,
           id: String(payload?.id ?? ''),
           newSelector: payload?.newSelector,
         }));
@@ -2290,10 +2319,10 @@ export class RemoteServer {
       }
       case 'docComments:watch': {
         try {
-          const target = await resolveWatchTarget({
-            path: String(payload?.path ?? ''),
-            projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
-          });
+          const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+          const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+          if (gated) { this.respond(client.ws, type, id, gated); break; }
+          const target = await resolveWatchTarget({ path: String(payload?.path ?? ''), projectRoot });
           if (!target.ok) { this.respond(client.ws, type, id, target); break; }
           this.respond(client.ws, type, id, await watchComments(target.target, this.docCommentsSubscriberId(client)));
         } catch (err: any) {
@@ -2303,10 +2332,10 @@ export class RemoteServer {
       }
       case 'docComments:unwatch': {
         try {
-          const target = await resolveWatchTarget({
-            path: String(payload?.path ?? ''),
-            projectRoot: typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined,
-          });
+          const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+          const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+          if (gated) { this.respond(client.ws, type, id, gated); break; }
+          const target = await resolveWatchTarget({ path: String(payload?.path ?? ''), projectRoot });
           if (target.ok && client.docCommentsWatchId !== undefined) unwatchComments(target.target, client.docCommentsWatchId);
           this.respond(client.ws, type, id, { ok: true });
         } catch (err: any) {

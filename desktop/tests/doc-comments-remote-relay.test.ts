@@ -54,8 +54,17 @@ vi.mock('http', async () => {
   return { default: { createServer }, createServer };
 });
 
-function mockSessionManager(): any {
-  return Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []) });
+// F1 fix (post-T3 build review, blocker): remote-server.ts's docComments
+// cases now refuse an unrecognized projectRoot via the SAME gate desktop's
+// ipc-handlers.ts uses, with a live session's cwd (this.sessionRoots(),
+// sourced from sessionManager.listSessions()) counting as "known" — mirrors
+// design §1.4's useActiveProject.ts precedent. `cwds` lets each test register
+// whichever temp dir it uses as `root` so existing "legitimate path" cases
+// keep working under the new gate.
+function mockSessionManager(cwds: string[] = []): any {
+  return Object.assign(new EventEmitter(), {
+    listSessions: vi.fn(() => cwds.map((cwd) => ({ cwd, status: 'active' }))),
+  });
 }
 
 function mockHookRelay(): any {
@@ -75,7 +84,7 @@ describe('docComments over remote access', () => {
 
   it('list/add work over the WS surface, the same main-process store desktop windows use', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager(), mockHookRelay(), mockRemoteConfig());
+    const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
     const sent: any[] = [];
     const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
     const client = { id: 'phone-a', ws };
@@ -96,7 +105,7 @@ describe('docComments over remote access', () => {
     await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
     await fs.promises.copyFile(path.join(fixturesDir, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));
     const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager(), mockHookRelay(), mockRemoteConfig());
+    const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
     const sent: any[] = [];
     const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
     const client = { id: 'phone-a', ws };
@@ -114,7 +123,7 @@ describe('docComments over remote access', () => {
 
   it('refuses a ../../etc/passwd-shaped path over the WS surface, same as desktop (F3/F1)', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager(), mockHookRelay(), mockRemoteConfig());
+    const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
     const sent: any[] = [];
     const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
     await server.handleMessage({ id: 'phone-a', ws }, JSON.stringify({
@@ -126,7 +135,7 @@ describe('docComments over remote access', () => {
   it('a WS-connected browser that called docComments:watch gets an UNPROMPTED push on a comment change (review 2, F6)', async () => {
     __resetDocCommentsWatcherForTest();
     const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager(), mockHookRelay(), mockRemoteConfig());
+    const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
     // In production, ipc-handlers.ts's registerDocCommentsHandlers wires this
     // SAME module-level watcher's emit callback (once, at app start) to
     // include `remoteServer?.broadcast` alongside the webContents fan-out —
@@ -165,5 +174,78 @@ describe('docComments over remote access', () => {
     expect(pushed).toBe(true);
     const evt = sent.find((s) => s.type === 'docComments:changed');
     expect(evt.payload).toEqual({ path: 'docs/live.md' });
+  });
+
+  describe('projectRoot gate over the WS surface (post-T3 build review, F1 — blocker)', () => {
+    // RED-BEFORE-GREEN: against the pre-fix commit (58ee463df) every case
+    // here resolves ok:true (or a store-level error unrelated to the root)
+    // instead of refusing.
+    it('refuses "/" as projectRoot the same way desktop IPC does', async () => {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      // Deliberately NO session registered for '/' — a forged root must not
+      // pass just because SOME session is live.
+      const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
+      const sent: any[] = [];
+      const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+      await server.handleMessage({ id: 'phone-a', ws }, JSON.stringify({
+        type: 'docComments:add', id: 'req-1',
+        payload: { path: 'docs/plan.md', projectRoot: '/', selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1' } }, text: 'x', author: 'user' },
+      }));
+      expect(sent[0].payload).toEqual({ ok: false, error: 'unknown-project-root' });
+    });
+
+    it('refuses an unregistered temp directory that is not this client’s live session root', async () => {
+      const forged = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-remote-forged-'));
+      try {
+        const { RemoteServer } = await import('../src/main/remote-server');
+        // The session manager knows about `root`, not `forged` — a phone
+        // naming a directory no live session actually runs in must refuse,
+        // exactly design §8's "every root a phone names is checked" rule.
+        const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
+        const sent: any[] = [];
+        const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+        await server.handleMessage({ id: 'phone-a', ws }, JSON.stringify({
+          type: 'docComments:list', id: 'req-1', payload: { path: 'docs/plan.md', projectRoot: forged },
+        }));
+        expect(sent[0].payload).toEqual({ ok: false, error: 'unknown-project-root' });
+      } finally {
+        await fs.promises.rm(forged, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses watch/unwatch for an unknown projectRoot too', async () => {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
+      const sent: any[] = [];
+      const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+      const client = { id: 'phone-a', ws };
+      await server.handleMessage(client, JSON.stringify({
+        type: 'docComments:watch', id: 'req-1', payload: { path: 'docs/plan.md', projectRoot: '/' },
+      }));
+      expect(sent[0].payload).toEqual({ ok: false, error: 'unknown-project-root' });
+      await server.handleMessage(client, JSON.stringify({
+        type: 'docComments:unwatch', id: 'req-2', payload: { path: 'docs/plan.md', projectRoot: '/' },
+      }));
+      expect(sent[1].payload).toEqual({ ok: false, error: 'unknown-project-root' });
+    });
+  });
+
+  describe('fallback (no projectRoot) source-file gate over the WS surface (F1 blocker, Gate 2)', () => {
+    it('refuses an untracked absolute .docx path with no projectRoot over remote, same as desktop', async () => {
+      const fixturesDir = path.join(__dirname, 'fixtures', 'doc-comments');
+      const loose = path.join(root, 'untracked.docx');
+      await fs.promises.copyFile(path.join(fixturesDir, 'launch-brief.docx'), loose);
+      const { RemoteServer } = await import('../src/main/remote-server');
+      // No projectRoot in the payload at all — the fallback path — so the
+      // session-cwd gate above never even runs; Gate 2 (authorizeBytesRead)
+      // is what must refuse this.
+      const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
+      const sent: any[] = [];
+      const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+      await server.handleMessage({ id: 'phone-a', ws }, JSON.stringify({
+        type: 'docComments:list', id: 'req-1', payload: { path: loose },
+      }));
+      expect(sent[0].payload).toEqual({ ok: false, error: 'path-not-tracked' });
+    });
   });
 });

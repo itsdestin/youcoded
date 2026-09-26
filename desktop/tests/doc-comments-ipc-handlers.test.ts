@@ -43,7 +43,7 @@ function fakeEvent(senderId = 1) {
 
 describe('registerDocCommentsHandlers', () => {
   let root: string;
-  let deps: { getAllWebContents: () => any[]; sent: any[] };
+  let deps: { getAllWebContents: () => any[]; sent: any[]; sessionRoots: () => string[] };
 
   beforeEach(async () => {
     root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-ipc-'));
@@ -51,6 +51,13 @@ describe('registerDocCommentsHandlers', () => {
     deps = {
       sent,
       getAllWebContents: () => [{ isDestroyed: () => false, send: (channel: string, payload: any) => sent.push({ channel, payload }) }],
+      // F1 fix (post-T3 build review, blocker): every handler now refuses an
+      // unrecognized projectRoot before touching the store — `root` here is a
+      // bare mkdtemp() dir, never a saved folder or indexed project, so every
+      // EXISTING test in this file needs it to count as a "known" root via the
+      // live-session-cwd carve-out (design §1.4's useActiveProject.ts
+      // precedent), exactly the way a real desktop window would supply it.
+      sessionRoots: () => [root],
     };
   });
   afterEach(async () => {
@@ -154,16 +161,78 @@ describe('registerDocCommentsHandlers', () => {
     await expect(ipcMain.call(DOC_COMMENTS_IPC.MOVE, { ...args, newSelector: CELL_SELECTOR })).resolves.toEqual({ ok: true });
   });
 
-  it('a caller that omits path gets a typed refusal, never a throw', async () => {
-    // No separate "field missing" branch: `payload.path` missing coerces to
-    // the literal string "undefined" (reqStr), which the store then resolves
-    // and refuses/mismatches the same honest way any other string would —
-    // here it lands IN the project (a plausible-looking but nonexistent
-    // relative path) and is refused as comment-not-found, never a crash.
+  it('a caller that omits path gets a distinct missing-field refusal, never a throw or a coerced "undefined" string (F2)', async () => {
+    // F2 fix (optional, post-T3 build review): `reqStr` used to coerce a
+    // missing field via `String(undefined)` — the literal text "undefined" —
+    // which the store then resolved as if it were a real (if nonsensical)
+    // path. It now refuses honestly before ever reaching the store.
     const ipcMain = fakeIpcMain();
     registerDocCommentsHandlers(ipcMain as any, deps);
     await expect(ipcMain.call(DOC_COMMENTS_IPC.REPLY, { projectRoot: root, id: 'c-x', text: 'x', author: 'user' }))
-      .resolves.toEqual({ ok: false, error: 'comment-not-found' });
+      .resolves.toEqual({ ok: false, error: 'missing-field', field: 'path' });
+  });
+
+  it('a caller that supplies path but omits id gets a missing-field refusal for id (F2)', async () => {
+    const ipcMain = fakeIpcMain();
+    registerDocCommentsHandlers(ipcMain as any, deps);
+    await expect(ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, { path: 'docs/plan.md', projectRoot: root, by: 'user' }))
+      .resolves.toEqual({ ok: false, error: 'missing-field', field: 'id' });
+  });
+
+  describe('projectRoot gate (post-T3 build review, F1 — blocker)', () => {
+    // RED-BEFORE-GREEN: against the pre-fix commit (58ee463df) every case in
+    // this block resolves ok:true (or a store-level error unrelated to the
+    // root) instead of refusing — the store's own containment check only
+    // proves `path` resolves inside WHATEVER root it is given, so it never
+    // caught a forged root at all.
+    it('refuses "/" as projectRoot on every one of the six mutation/list channels', async () => {
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      const calls: Array<[string, any]> = [
+        [DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: '/' }],
+        [DOC_COMMENTS_IPC.ADD, { path: 'docs/plan.md', projectRoot: '/', selector: CELL_SELECTOR, text: 'x', author: 'user' }],
+        [DOC_COMMENTS_IPC.REPLY, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', text: 'x', author: 'user' }],
+        [DOC_COMMENTS_IPC.RESOLVE, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', by: 'user' }],
+        [DOC_COMMENTS_IPC.REOPEN, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', by: 'user' }],
+        [DOC_COMMENTS_IPC.MOVE, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', newSelector: CELL_SELECTOR }],
+      ];
+      for (const [channel, payload] of calls) {
+        const result = await ipcMain.call(channel, payload);
+        expect(result, `${channel} did not refuse projectRoot: '/'`).toEqual({ ok: false, error: 'unknown-project-root' });
+      }
+    });
+
+    it('refuses a temp directory that was never registered as a project (not "/", still unknown)', async () => {
+      const forged = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-ipc-forged-'));
+      try {
+        const ipcMain = fakeIpcMain();
+        registerDocCommentsHandlers(ipcMain as any, deps);
+        const result = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+          path: 'docs/plan.md', projectRoot: forged, selector: CELL_SELECTOR, text: 'x', author: 'user',
+        });
+        expect(result).toEqual({ ok: false, error: 'unknown-project-root' });
+      } finally {
+        await fs.promises.rm(forged, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses watch/unwatch for an unknown projectRoot too', async () => {
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.WATCH, { path: 'docs/plan.md', projectRoot: '/' }))
+        .resolves.toEqual({ ok: false, error: 'unknown-project-root' });
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.UNWATCH, { path: 'docs/plan.md', projectRoot: '/' }))
+        .resolves.toEqual({ ok: false, error: 'unknown-project-root' });
+    });
+
+    it('a legitimate projectRoot (this suite’s own live-session-cwd temp dir) keeps working — the gate only refuses UNKNOWN roots', async () => {
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+        path: 'docs/plan.md', projectRoot: root, selector: CELL_SELECTOR, text: 'legit', author: 'user',
+      });
+      expect(added).toEqual({ ok: true, id: expect.any(String) });
+    });
   });
 
   it('broadcasts docComments:changed to every webContents, un-filtered', async () => {

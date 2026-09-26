@@ -21,8 +21,19 @@ import path from 'path';
 import { readDocxComments, type DocxReadResult } from './docx-comments';
 import { readXlsxComments, type XlsxReadResult } from './xlsx-comments';
 import { resolveSourceFilePath, type Refusal } from './doc-comments-store';
+import { authorizeBytesRead } from '../artifacts/read-service';
 
 export type NativeFormat = 'docx' | 'xlsx';
+
+/** F1 fix (post-T3 build review, blocker): the no-`projectRoot` fallback in
+ *  `resolveSourceFilePath` resolves and returns ANY absolute path the caller
+ *  names, with no containment of its own — that fallback is deliberately open
+ *  for the JSON *sidecar* location (§1.4: "no containment check applies here:
+ *  there is no root to escape, only a hash of wherever the caller says the
+ *  file is"), which never exposes the target file's own content. Reading
+ *  actual file BYTES to parse as docx/xlsx is a materially different
+ *  operation, so it refuses here instead. */
+export type UntrackedSourceRefusal = { ok: false; error: 'path-not-tracked' };
 
 /** Extension-based dispatch decision — the ONE place that decides "does this
  *  path have its comments inside the file itself." */
@@ -49,9 +60,26 @@ export function refuseNativeMutation(filePath: string): ({ ok: false; error: 'no
 export async function listNativeComments(
   format: NativeFormat,
   args: { path: string; projectRoot?: string }
-): Promise<DocxReadResult | XlsxReadResult | Refusal | { ok: false; error: 'read-failed' }> {
+): Promise<DocxReadResult | XlsxReadResult | Refusal | UntrackedSourceRefusal | { ok: false; error: 'read-failed' }> {
   const resolved = await resolveSourceFilePath(args);
   if (!resolved.ok) return resolved;
+  // Gate 2 (F1 fix): only reachable when `args.projectRoot` was NOT supplied —
+  // when it WAS, `resolveSourceFilePath` already ran `resolveSourceFilePath`'s
+  // `projectRoot`-bearing branch, and by the time any caller reaches this
+  // function that root has ALREADY been checked against the app's known
+  // roots (doc-comments-gate.ts's `refuseUnknownProjectRoot`, run by both
+  // ipc-handlers.ts and remote-server.ts before this dispatch is ever
+  // reached), so its containment is real. With no `projectRoot` there is no
+  // project to have vetted at all, so the resolved absolute path is only
+  // trusted for a raw byte read when it's one of the same paths the artifacts
+  // binary viewers already trust for exactly this: a project root, or a
+  // tracked external artifact / explicit user-opened file
+  // (`authorizeBytesRead`, `read-binary-access.ts`'s own authority) — never
+  // an arbitrary caller-named absolute path.
+  if (!args.projectRoot) {
+    const auth = await authorizeBytesRead(resolved.absolutePath);
+    if (!auth.ok) return { ok: false, error: 'path-not-tracked' };
+  }
   let bytes: Buffer;
   try {
     bytes = await fs.readFile(resolved.absolutePath);
