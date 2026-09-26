@@ -31,28 +31,13 @@ function extractCwd(lineText: string): string | null {
   } catch { return null; }
 }
 
-// WHY (perf/main-thread-async-reads, Task 2): every read in this file ran on
-// fs.*Sync — the Resume Browser calls into firstCwd/r1CwdForDir once per
-// project slug on every browse (session-browser.ts), so a large
-// ~/.claude/projects tree froze the main thread for the whole scan. Bounded
-// head read — R2 never needs more than the first lines, and some
-// transcripts are >13MB.
-async function headText(filePath: string): Promise<string | null> {
-  let fh: fs.promises.FileHandle | null = null;
-  try {
-    fh = await fs.promises.open(filePath, 'r');
-    const buf = Buffer.alloc(HEAD_BYTES);
-    const { bytesRead } = await fh.read(buf, 0, HEAD_BYTES, 0);
-    return buf.toString('utf8', 0, bytesRead);
-  } catch { return null; }
-  // WHY .catch on close: a rejection thrown inside `finally` REPLACES the
-  // function's return value. An uncaught close failure would turn a successful
-  // read into a throw that climbs firstCwd -> r1CwdForDir -> resolveSlugToPath,
-  // which session-browser.ts awaits outside any try — so the whole Resume
-  // Browser listing would reject and show nothing. The old sync code returned
-  // null here; a failed close must stay invisible, never cost the listing.
-  finally { await fh?.close().catch(() => {}); }
-}
+// WHY chunked (2026-09-26): this read a fixed 512 KB head and decoded ALL of it
+// to a string, though the cwd is almost always within the first few lines. The
+// launch-time slug repair calls it for every transcript (~3,300 on a big
+// history): profiled at ~1.1 s of string decoding alone, part of a ~9 s repair.
+// Reading 16 KB at a time and stopping at the first match scans the same lines
+// in the same order — same 512 KB / 200-line bounds — without the waste.
+const HEAD_CHUNK_BYTES = 16 * 1024;
 
 /** R2 — session origin.
  *  `platform` is a test seam: the foreign-cwd filter is platform-relative
@@ -62,14 +47,47 @@ async function headText(filePath: string): Promise<string | null> {
  *  otherwise a POSIX fixture silently only tests correctly on POSIX runners
  *  (this exact gap turned 4 tests wrong on the Windows CI leg). */
 export async function firstCwd(filePath: string, platform: NodeJS.Platform = process.platform): Promise<string | null> {
-  const head = await headText(filePath);
-  if (head === null) return null;
-  const lines = head.split('\n').slice(0, R2_SCAN_CAP);
-  for (const l of lines) {
-    const cwd = extractCwd(l);
-    if (cwd && !isForeignCwd(cwd, platform)) return cwd;
-  }
-  return null;
+  const accept = (line: string): string | null => {
+    const cwd = extractCwd(line);
+    return cwd && !isForeignCwd(cwd, platform) ? cwd : null;
+  };
+  let fh: fs.promises.FileHandle | null = null;
+  try {
+    fh = await fs.promises.open(filePath, 'r');
+    let pending = Buffer.alloc(0);
+    let pos = 0;
+    let lines = 0;
+    while (pos < HEAD_BYTES && lines < R2_SCAN_CAP) {
+      const want = Math.min(HEAD_CHUNK_BYTES, HEAD_BYTES - pos);
+      const chunk = Buffer.alloc(want);
+      const { bytesRead } = await fh.read(chunk, 0, want, pos);
+      if (bytesRead === 0) break;
+      pos += bytesRead;
+      pending = pending.length ? Buffer.concat([pending, chunk.subarray(0, bytesRead)]) : chunk.subarray(0, bytesRead);
+      // Split on the newline BYTE: 0x0A never occurs inside a multi-byte UTF-8
+      // character, so a line is only decoded once it is complete.
+      let start = 0;
+      let nl: number;
+      while (lines < R2_SCAN_CAP && (nl = pending.indexOf(0x0a, start)) !== -1) {
+        lines++;
+        const cwd = accept(pending.toString('utf8', start, nl));
+        if (cwd) return cwd;
+        start = nl + 1;
+      }
+      pending = pending.subarray(start);
+    }
+    // The text after the last newline (end of file, or cut off at HEAD_BYTES)
+    // is still a line to the old split('\n') — scan it the same way.
+    if (lines < R2_SCAN_CAP && pending.length) return accept(pending.toString('utf8'));
+    return null;
+  } catch { return null; }
+  // WHY .catch on close: a rejection thrown inside `finally` REPLACES the
+  // function's return value. An uncaught close failure would turn a successful
+  // read into a throw that climbs firstCwd -> r1CwdForDir -> resolveSlugToPath,
+  // which session-browser.ts awaits outside any try — so the whole Resume
+  // Browser listing would reject and show nothing. A failed close must stay
+  // invisible, never cost the listing.
+  finally { await fh?.close().catch(() => {}); }
 }
 
 /** Every cwd in the file — full read; used by R1's exhaustive tier. */

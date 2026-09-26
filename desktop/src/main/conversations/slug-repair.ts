@@ -402,9 +402,12 @@ export async function repairRecordsAndSpace(
     const rec = await store.get('claude', sessionId);
     const recordOk = rec && rec.projectName === bucketName && rec.originalPath === P;
     // Space copies across ALL buckets for this session:
-    const copies = buckets
-      .map(b => path.join(lane, b, `${sessionId}.jsonl`))
-      .filter(p => fs.existsSync(p));
+    // WHY async (2026-09-26): one existence check per bucket per session —
+    // ~99 buckets × a few hundred sessions on a big history — was ~0.1-0.17 s
+    // of synchronous stat inside the launch repair's measured app-wide freeze.
+    const candidates = buckets.map(b => path.join(lane, b, `${sessionId}.jsonl`));
+    const present = await Promise.all(candidates.map(p => fs.promises.access(p).then(() => true, () => false)));
+    const copies = candidates.filter((_, i) => present[i]);
     // Fix (final review, CRITICAL 2): convergence must be a true fixed point,
     // not just "zero copies anywhere". The old skip only fired when there
     // were literally no space copies at all, so a HEALTHY session — record

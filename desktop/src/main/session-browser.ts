@@ -12,6 +12,7 @@ import { ccProjectSlug, nativeStoreSlug, CC_SLUG_MAX } from './slug-encoding';
 import type { NativeSessionListEntry } from './harness/session-store';
 import { r1CwdForDir } from './transcript-cwd';
 import { perfMark } from './perf-marks';
+import { createScanCache, type ScanCache } from './scan-cache';
 
 // Numbers each Resume scan so overlapping scans' perf marks can be paired.
 let browseScanSeq = 0;
@@ -408,6 +409,25 @@ export async function readSessionTranscriptMeta(jsonlPath: string, wantTitle: bo
 type MetaEntry = { size: number; mtimeMs: number; wantTitle: boolean; meta: Promise<SessionTranscriptMeta> };
 const metaCache = new Map<string, MetaEntry>();
 
+// WHY a disk layer too (2026-09-26): the in-memory cache above dies with the
+// process, so the first Resume open after every launch re-read all ~1,100
+// transcripts (the open people notice). Same size + modified time = same answer.
+// Only real Claude Code transcripts under ~/.claude/projects are remembered —
+// never a test's temp tree. See scan-cache.ts.
+type DiskMeta = { wantTitle: boolean; meta: SessionTranscriptMeta };
+let diskMeta: ScanCache<DiskMeta> = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'transcript-meta.json'), 1);
+const isRealTranscript = (p: string) => p.startsWith(PROJECTS_DIR + path.sep);
+const failedMeta = (m: SessionTranscriptMeta) => m.fallbackTitle === null && m.lastTimestampMs === null && m.lastModelId === null;
+
+async function readMetaThroughDisk(jsonlPath: string, stat: { size: number; mtimeMs: number }, wantTitle: boolean): Promise<SessionTranscriptMeta> {
+  const d = await diskMeta.get(jsonlPath, stat);
+  if (d && (d.wantTitle || !wantTitle)) return d.meta;
+  const meta = await readSessionTranscriptMeta(jsonlPath, wantTitle);
+  // Same rule as the memory layer: a failed read (all nulls) is never kept.
+  if (!failedMeta(meta)) diskMeta.set(jsonlPath, stat, { wantTitle, meta });
+  return meta;
+}
+
 export function readSessionTranscriptMetaCached(
   jsonlPath: string, stat: { size: number; mtimeMs: number }, wantTitle: boolean,
 ): Promise<SessionTranscriptMeta> {
@@ -416,11 +436,11 @@ export function readSessionTranscriptMetaCached(
   if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs && (hit.wantTitle || !wantTitle)) return hit.meta;
   const entry: MetaEntry = {
     size: stat.size, mtimeMs: stat.mtimeMs, wantTitle,
-    meta: readSessionTranscriptMeta(jsonlPath, wantTitle),
+    meta: isRealTranscript(jsonlPath) ? readMetaThroughDisk(jsonlPath, stat, wantTitle) : readSessionTranscriptMeta(jsonlPath, wantTitle),
   };
   metaCache.set(jsonlPath, entry);
   void entry.meta.then((m) => {
-    const failed = m.fallbackTitle === null && m.lastTimestampMs === null && m.lastModelId === null;
+    const failed = failedMeta(m);
     // Only drop OUR entry — a newer read may have replaced it meanwhile.
     if (failed && metaCache.get(jsonlPath) === entry) metaCache.delete(jsonlPath);
   });
@@ -429,9 +449,13 @@ export function readSessionTranscriptMetaCached(
 
 function pruneTranscriptMetaCache(seen: Set<string>) {
   for (const k of metaCache.keys()) if (!seen.has(k)) metaCache.delete(k);
+  diskMeta.prune(seen);
 }
 
-export function __clearTranscriptMetaCacheForTests() { metaCache.clear(); }
+export function __clearTranscriptMetaCacheForTests() {
+  metaCache.clear();
+  diskMeta = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'transcript-meta.json'), 1);
+}
 
 /**
  * Scans all project directories for JSONL transcript files.
