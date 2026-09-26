@@ -50,7 +50,7 @@ describe('ErrorState — the shapes that already ship', () => {
     expect(screen.getByRole('button', { name: 'Diagnose with the assistant' }).className)
       .toContain('bg-accent');
     expect(screen.getByRole('button', { name: 'Report bug' }).className)
-      .toContain('border-edge-dim');
+      .toMatch(/(^| )border-edge( |$)/); // outlined (secondary) button — full-strength outline since 2026-09-26
   });
 });
 
@@ -71,7 +71,7 @@ describe('ErrorState — what the widening adds', () => {
     // last, at the right-hand end of the row.
     expect(names).toEqual(['Report bug', 'Retry']);
     expect(screen.getByRole('button', { name: 'Retry' }).className).toContain('bg-accent');
-    expect(screen.getByRole('button', { name: 'Report bug' }).className).toContain('border-edge-dim');
+    expect(screen.getByRole('button', { name: 'Report bug' }).className).toMatch(/(^| )border-edge( |$)/); // outlined (secondary) button — full-strength outline since 2026-09-26
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     fireEvent.click(screen.getByRole('button', { name: 'Report bug' }));
     expect(onRetry).toHaveBeenCalledTimes(1);

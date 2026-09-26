@@ -103,7 +103,7 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
   // tiny amber title on Setup Complete as hard to read.
   const text = (
     <>
-      {title && <div className={`text-xs font-medium mb-0.5 ${t.title}`}>{title}</div>}
+      {title && <div className={`text-xs font-medium ${children ? 'mb-0.5' : ''} ${t.title}`.trim()}>{title}</div>}
       {children && <div className={`text-xs ${t.body}`}>{children}</div>}
     </>
   );
@@ -118,7 +118,11 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
           one-word column. `items-start` keeps the buttons level with the
           title, and they never move when the body grows (e.g. Show details
           opening below the summary — Destin, 2026-09-16). */}
-      <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+      {/* WHY items-center when there is no body (Destin, fix batch 2 review C-6): a
+          title-only notice ("Download interrupted" + Delete/Resume) sat at the top
+          edge beside the taller buttons and read as not vertically centred. With a
+          body, items-start still keeps the buttons level with the title. */}
+      <div className={`flex flex-wrap ${children ? 'items-start' : 'items-center'} gap-x-3 gap-y-2`}>
         <div className="flex-1 min-w-48">{text}</div>
         <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>
       </div>
