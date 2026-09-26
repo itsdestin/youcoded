@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
 import { Toggle } from './SettingsPanel';
-import { Dialog, SettingRow } from './ui';
+import { Dialog, SectionLabel, SettingRow } from './ui';
 import { formatVersionLine } from '../../shared/version-line';
 
 // Shared About popup for Desktop and Android settings. Previously this was an
@@ -101,7 +101,11 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
           <div className="text-3xs text-fg-muted">{versionLine}</div>
           {/* Disclaimer — identical on both platforms */}
           <section className="space-y-1.5">
-            <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Disclaimer</h3>
+            {/* WHY SectionLabel reading (fix batch 2, 2026-09-26): a label over a
+                section of READING text is the small grey label, normal case, with a
+                soft underline under its words (decisions.md "Labels over reading
+                sections", final#F-1 — About's Disclaimer is the guide's example). */}
+            <SectionLabel reading>Disclaimer</SectionLabel>
             <p className="text-2xs text-fg-dim leading-relaxed">
               YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic.
             </p>
@@ -121,7 +125,7 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
               games line were added by accounts Phase 2 (wording approved by
               Destin 2026-07-09). */}
           <section className="space-y-1.5">
-            <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Privacy</h3>
+            <SectionLabel reading>Privacy</SectionLabel>
             {platform === 'desktop' ? (
               <>
                 <p className="text-2xs text-fg-dim leading-relaxed">
@@ -186,7 +190,7 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
 
           {/* Licenses — platform-specific intro + lib list */}
           <section className="space-y-1.5">
-            <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Licenses</h3>
+            <SectionLabel reading>Licenses</SectionLabel>
             {platform === 'desktop' ? (
               <>
                 <p className="text-2xs text-fg-dim leading-relaxed">
@@ -223,7 +227,7 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
               settings (ModelProvidersPopup, StatusBar); on Android the shim routes
               it to an ACTION_VIEW intent, so the same code serves both platforms. */}
           <section className="space-y-1.5">
-            <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Policies</h3>
+            <SectionLabel reading>Policies</SectionLabel>
             <p className="text-2xs text-fg-dim leading-relaxed flex flex-wrap gap-x-4">
               <button
                 type="button"

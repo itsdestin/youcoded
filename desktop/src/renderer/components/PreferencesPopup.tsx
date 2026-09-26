@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Dialog, Toggle, TextInput, Textarea, LoadingState, RadioGroup, SegmentedTabs, SettingRow } from './ui';
+import { Button, Dialog, Toggle, TextInput, Textarea, LoadingState, RadioGroup, SegmentedTabs, SectionLabel, SettingRow } from './ui';
 
 // Native replacement for Claude Code's /config TUI. Reads/writes fields in
 // ~/.claude/settings.json via the settings:* IPC bridge.
@@ -123,9 +123,10 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
           <>
             {/* Permission default */}
             <section>
-              <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                Default Permission Mode
-              </h3>
+              {/* WHY SectionLabel, sentence case (fix batch 2, 2026-09-26): the design
+                  guide's small label — 12px, grey, normal case, no spaced-out
+                  capitals (decisions.md "Heading ladder"). Same for the three below. */}
+              <SectionLabel className="mb-2">Default permission mode</SectionLabel>
               {/* Change 39: native radios → the Radio primitive inside a
                   RadioGroup (one tab stop + arrow-key nav via roving tabindex).
                   The row stays fully clickable; the Radio is the visual mark. */}
@@ -152,9 +153,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
 
             {/* Editor mode */}
             <section>
-              <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                Editor Mode
-              </h3>
+              <SectionLabel className="mb-2">Editor mode</SectionLabel>
               {/* K3: <=4 short options with no description -> segmented. */}
               <SegmentedTabs
                 variant="contained"
@@ -170,11 +169,9 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
 
             {/* Output style */}
             <section>
-              <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                Output Style
-              </h3>
+              <SectionLabel className="mb-2">Output style</SectionLabel>
               {/* Shared FIELD surface (change 20) — was its own rounded/px-3 py-1.5
-                  recipe. The uppercase <label> above has no htmlFor, so the field
+                  recipe. The label above has no htmlFor, so the field
                   carries its own accessible name. */}
               <TextInput
                 value={prefs.outputStyle}
@@ -210,9 +207,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
 
             {/* System prompt */}
             <section>
-              <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                System Prompt
-              </h3>
+              <SectionLabel className="mb-2">System prompt</SectionLabel>
               {/* Same FIELD surface as the input above (change 20). resize-none was
                   already the behavior here and is the Textarea default. */}
               <Textarea

@@ -8,7 +8,7 @@ import type { LoadedTheme } from '../themes/theme-types';
 import { themePreviewSrc } from '../themes/builtin/previews';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../themes/theme-engine';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Select, Toggle, SettingRow } from './ui';
+import { Button, Select, Toggle, SectionLabel, SettingRow } from './ui';
 
 // Plain-language explainer for the Appearance popup. Shown when the user taps
 // the (i) icon in the popup header — see ThemeScreen's `showInfo` state.
@@ -187,7 +187,9 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
         {/* Theme grid — pencil on each card opens the per-theme edit view.
             Cycle membership moved to the status bar widget editor. */}
         <div>
-          <p className="text-4xs text-fg-muted uppercase tracking-wider mb-2">Favorited Themes</p>
+          {/* WHY SectionLabel (fix batch 2, 2026-09-26): the guide's small label —
+              12px grey, normal case; was 9px spaced-out capitals. Same for Glass and Terminal below. */}
+          <SectionLabel className="mb-2">Favorited themes</SectionLabel>
           {/* data-guide-anchor: the first-run tour's "make it yours" stop rings the grid. */}
           <div className="grid grid-cols-2 gap-2" data-guide-anchor="theme-grid">
             {gridThemes.map(t => {
@@ -502,7 +504,7 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
             are greyed when Reduce Visual Effects is on (the engine forces blur:0). */}
         {(hasWallpaper || hasGradient) && (
           <div>
-            <p className="text-4xs text-fg-muted uppercase tracking-wider mb-2">Glass</p>
+            <SectionLabel className="mb-2">Glass</SectionLabel>
             {reducedEffects && (
               <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
                 Reduce Visual Effects is active — blur is disabled. Opacity still applies.
@@ -550,7 +552,7 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
             those values) or when there's no wallpaper to blur. */}
         {canTuneTerminalOpacity && (
           <div>
-            <p className="text-4xs text-fg-muted uppercase tracking-wider mb-2">Terminal</p>
+            <SectionLabel className="mb-2">Terminal</SectionLabel>
             {canTuneTerminalFilter && reducedEffects && (
               <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
                 Reduce Visual Effects is active — wallpaper blur is disabled. Opacity + brightness still apply.

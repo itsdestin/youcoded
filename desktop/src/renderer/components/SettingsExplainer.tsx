@@ -1,4 +1,4 @@
-import { Tooltip } from './ui';
+import { SectionLabel, Tooltip } from './ui';
 /**
  * SettingsExplainer.tsx — the explainer payload, and nothing else.
  *
@@ -51,11 +51,16 @@ export default function SettingsExplainer({ intro, sections }: Props) {
 
       {sections.map((section, i) => (
         <section key={i}>
-          {/* h3, matching K1 — the dialog title is h2, so an h3 here announces
-              as its child rather than its sibling. */}
-          <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
+          {/* h3 (SectionLabel renders one), matching K1 — the dialog title is h2,
+              so an h3 here announces as its child rather than its sibling.
+              WHY SectionLabel reading (fix batch 2, 2026-09-26): these head
+              sections of READING text ("About Permissions", the Remote Access and
+              Sync explainers), so they are the guide's small label, normal case,
+              with the soft underline — no spaced-out capitals (decisions.md
+              "Labels over reading sections", final#F-1). */}
+          <SectionLabel reading className="mb-2">
             {section.heading}
-          </h3>
+          </SectionLabel>
           {section.paragraphs?.map((p, j) => (
             <p key={j} className="text-xs text-fg-2 leading-relaxed mb-2 last:mb-0">{p}</p>
           ))}
