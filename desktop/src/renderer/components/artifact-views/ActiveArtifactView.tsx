@@ -20,6 +20,7 @@ import { isRemoteMode } from '../../platform';
 // beside Edit) and calls toggleComments().
 import { CommentsActionsInPaneContext } from '../comments/CommentsPaneFrame';
 import { CodeCommentsRail } from '../comments/CodeCommentsRail';
+import { requestThreadAgain } from '../comments/CommentsMargin';
 import { useDocComments } from '../../state/doc-comments-store';
 import { useNarrowByRef } from '../../hooks/use-container-narrow';
 // Round 3: Comments mode needs margin-card room the drawer's DEFAULT width
@@ -664,10 +665,13 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   const openComments = useCallback((commentId?: string) => {
     if (commentId) {
       if (pathComments.find((c) => c.id === commentId)?.resolved) setPathShowResolved(true);
+      // An explicit click is always honoured once; only REMOUNTS are ignored
+      // (CommentsMargin's HANDLED_THREADS).
+      requestThreadAgain(artifact.path);
       setFocusThreadId(commentId);
     }
     setCommentsMode('comments');
-  }, [pathComments, setPathShowResolved]);
+  }, [pathComments, setPathShowResolved, artifact.path]);
 
   // Round 3 (item 6): Comments mode needs the margin's card width; the
   // drawer's DEFAULT ~480px pane (SessionDrawer's --right-pane-width) has

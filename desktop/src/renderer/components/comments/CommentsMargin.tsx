@@ -115,6 +115,14 @@ interface Props {
   openThreadId?: string;
 }
 
+/** The last thread request each file's margin acted on — outlives remounts. */
+const HANDLED_THREADS = new Map<string, string>();
+/** A fresh, explicit request (a click on a highlight or chip) — always acted
+ *  on once, even for the same thread as last time. */
+export function requestThreadAgain(path: string): void {
+  HANDLED_THREADS.delete(path);
+}
+
 export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Props) {
   // WHY read from the shared store, not a prop: CommentsPaneFooter owns the
   // "Show resolved" toggle's UI and the header's count reads the same store,
@@ -136,6 +144,37 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   // or mid maximize/minimize) gets a small popover by the marker instead —
   // the sheet spanning the whole desktop window was never an approved design.
   const phone = useNarrowViewport();
+  // A desktop marker popover is portaled to <body> and positioned once, so
+  // it would outlive or drift from the rail it points at (Destin, 2026-09-26:
+  // "random floating comments after closing or resizing" the file pane).
+  // Anything that moves, resizes or hides the rail closes it; switching out
+  // of the marker rail closes any thread left open.
+  useEffect(() => {
+    if (!openId || phone) return;
+    const rail = marginRef.current;
+    const close = () => setOpenId(null);
+    let first = true;
+    const ro = rail ? new ResizeObserver(() => { if (first) { first = false; return; } close(); }) : null;
+    if (rail) ro!.observe(rail);
+    // Dragging the pane wider/narrower resizes the document, not the rail.
+    let firstContent = true;
+    const content = containerRef.current;
+    const contentRo = content ? new ResizeObserver(() => { if (firstContent) { firstContent = false; return; } close(); }) : null;
+    if (content) contentRo!.observe(content);
+    // Scrolling the popover's own long thread must not close it.
+    const onScroll = (e: Event) => {
+      if (!(e.target as Element | null)?.closest?.('[data-marker-popover]')) close();
+    };
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      ro?.disconnect();
+      contentRo?.disconnect();
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [openId, phone]);
+  useEffect(() => { if (!narrow) setOpenId(null); }, [narrow]);
   // activeId = whatever the pointer is on (card or highlight); selectedId =
   // the thread last clicked, which stays lit until another is picked
   // (round 13: "clicking a comment should focus the relevant highlight").
@@ -164,16 +203,23 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps -- jump reads marks via closure; marks is the trigger
   }, [marks]);
 
-  // Opens a thread ONCE per request. WHY the ref (Destin, 2026-09-26: a comment
-  // "popup thing when i maximize/minimize the file window a few times"): this
-  // used to re-run whenever `narrow` flipped, so every resize across the
-  // marker-rail breakpoint re-opened the last-focused comment on its own.
-  const handledThreadRef = useRef<string | null>(null);
+  // Opens a thread ONCE per request. WHY (Destin, 2026-09-26: a comment
+  // "popup thing when i maximize/minimize the file window", then "random
+  // floating comments after closing or resizing"): the request used to stay
+  // set, so every re-run — `narrow` flipping, or this component REMOUNTING
+  // when the pane crossed the rail breakpoint or reopened — replayed it and
+  // popped the last comment up with nothing to anchor to. The ref guards
+  // re-runs, and HANDLED_THREADS (module-level, per file) survives a remount.
   useEffect(() => {
-    if (!openThreadId || handledThreadRef.current === openThreadId || !marks.has(openThreadId)) return;
-    handledThreadRef.current = openThreadId;
+    if (!openThreadId || HANDLED_THREADS.get(path) === openThreadId || !marks.has(openThreadId)) return;
+    HANDLED_THREADS.set(path, openThreadId);
     focusThread(openThreadId);
-    if (narrow) { setOpenAnchor(null); setOpenId(openThreadId); }
+    if (narrow) {
+      // Anchor to the thread's own marker when it is on screen.
+      const marker = marginRef.current?.querySelector<HTMLElement>(`[data-marker-id="${openThreadId}"]`);
+      setOpenAnchor(marker ? marker.getBoundingClientRect() : null);
+      setOpenId(openThreadId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- jump/marks/narrow read via closure; openThreadId (+ marks becoming ready) is the real trigger
   }, [openThreadId, marks]);
 
@@ -228,6 +274,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
             <button
               key={c.id}
               type="button"
+              data-marker-id={c.id}
               onClick={(e) => { setOpenAnchor(e.currentTarget.getBoundingClientRect()); setOpenId(c.id); }}
               aria-label={`${c.resolved ? 'Resolved comment' : 'Comment'}: ${c.cell ?? c.quote}`}
               className={`absolute left-1.5 coarse-hit w-6 h-6 rounded-full border flex items-center justify-center text-2xs
@@ -344,7 +391,7 @@ function MarkerPopover({ anchor, onClose, children }: { anchor: DOMRect | null; 
     return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onDown); };
   }, [onClose]);
   return (
-    <div ref={ref} className="fixed" style={{ left, top, width: POPOVER_W, zIndex: POPOVER_Z }}>
+    <div ref={ref} data-marker-popover className="fixed" style={{ left, top, width: POPOVER_W, zIndex: POPOVER_Z }}>
       <OverlayPanel layer={4} className="p-2 max-h-3/4 overflow-auto" style={{ zIndex: 'auto', borderRadius: 'var(--radius-lg)' }}>
         {children}
       </OverlayPanel>
