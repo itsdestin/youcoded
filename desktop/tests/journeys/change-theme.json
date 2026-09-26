@@ -29,7 +29,7 @@
       "do": "click",
       "target": {
         "role": "button",
-        "label": "Midnight",
+        "label": "Cr\u00e8me",
         "nth": 1
       }
     },
@@ -48,7 +48,7 @@
     },
     {
       "do": "expect",
-      "text": "Midnight"
+      "text": "Cr\u00e8me"
     }
   ]
 }
