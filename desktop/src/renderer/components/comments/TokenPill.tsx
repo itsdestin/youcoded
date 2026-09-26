@@ -26,12 +26,9 @@ interface Props {
   onJump?: (ref: ComposeRef) => void;
   /** 'on-accent' inside the sent user bubble (bg-accent). */
   tone?: 'default' | 'on-accent';
-  /** One line of a batch list (UserMessage): may wrap inside the bubble
-   *  instead of running past it — a note label is up to 60 characters. */
-  listed?: boolean;
 }
 
-export function TokenPill({ ref_, onJump, tone = 'default', listed = false }: Props) {
+export function TokenPill({ ref_, onJump, tone = 'default' }: Props) {
   // Chat chips too: they light up their message (chat-ref-highlight.ts).
   const clickable = !!onJump;
   const base = tone === 'on-accent' ? 'var(--on-accent)' : 'var(--accent)';
@@ -41,7 +38,7 @@ export function TokenPill({ ref_, onJump, tone = 'default', listed = false }: Pr
   const [hover, setHover] = useState(false);
   return (
     <span
-      className={`rounded-sm px-1 py-0.5 select-none ${listed ? 'max-w-full' : 'whitespace-nowrap'} ${tone === 'on-accent' ? 'text-on-accent' : 'text-fg'}`}
+      className={`rounded-sm px-1 py-0.5 select-none whitespace-nowrap ${tone === 'on-accent' ? 'text-on-accent' : 'text-fg'}`}
       style={{
         backgroundColor: `color-mix(in srgb, ${base} ${hover ? 36 : 22}%, transparent)`,
         boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${base} 50%, transparent)`,

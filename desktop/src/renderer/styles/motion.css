@@ -171,6 +171,7 @@
   background-color: color-mix(in srgb, color-mix(in oklab, var(--accent) 74%, var(--on-accent)) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
 .layer-surface .bg-accent:active:not(:disabled),
-.glass-overlay .bg-accent:active:not(:disabled) {
+.glass-overlay .bg-accent:active:not(:disabled),
+[data-wallpaper] .solid-accent.bg-accent:active:not(:disabled) {
   background-color: color-mix(in oklab, var(--accent) 80%, var(--panel));
 }

@@ -1306,7 +1306,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                 // Lined up with the cards' measured edges (ActiveArtifactView,
                 // rounds 11/15) — right with or without a scrollbar.
                 <div className="absolute z-20 pointer-events-none" style={{ right: commentsState.actionsRight, width: commentsState.actionsWidth, bottom: commentsState.actionsBottom }}>
-                  <CommentsFloatingActions path={active.path} />
+                  {/* After sending, leave Comments mode so the chat — and the
+                      message just sent — is in view; in the (auto-)expanded
+                      pane the send happened out of sight and the button
+                      "doesn't seem clickable" (review deck R-5). */}
+                  <CommentsFloatingActions path={active.path} beforeSend={() => editRef.current?.toggleComments()} />
                 </div>
               )}
               {active && (
@@ -1355,7 +1359,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       <button
                         type="button"
                         onClick={() => editRef.current?.saveEdit()}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
+                        className="solid-accent flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
                       >
                         <Ic name="check" size={15} />
                         Save
@@ -1365,7 +1369,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                     <button
                       type="button"
                       onClick={() => { editRef.current?.startEdit(); setListOpen(false); }}
-                      className="flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
+                      className="solid-accent flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
                     >
                       <Ic name="editdoc" size={15} />
                       Edit

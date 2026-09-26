@@ -11,10 +11,10 @@
 import { Button } from '../ui/Button';
 import { MenuIcon } from '../context-menu/menu-icons';
 import { basenameOf, useDocComments } from '../../state/doc-comments-store';
-import { genRefId, truncateQuote, type ComposeRef } from '../context-menu/compose-ref';
+import { genRefId, type ComposeRef } from '../context-menu/compose-ref';
 
 /** Puts every open comment on `path` into the composer as pills and sends. */
-function useSendOpenComments(path: string, beforeSend?: () => void) {
+function useSendOpenComments(path: string, beforeSend?: () => void, sendVia?: (lead: string, refs: ComposeRef[]) => void) {
   const { comments } = useDocComments(path);
   const open = comments.filter((c) => !c.resolved);
   const send = () => {
@@ -22,26 +22,28 @@ function useSendOpenComments(path: string, beforeSend?: () => void) {
     // Each open comment becomes a pill carrying its OWN note as the label
     // (no wall of text) and its id, so a click on the sent pill jumps
     // straight back to that thread (compose-ref.ts's dispatchJumpToRef).
-    const refs: ComposeRef[] = open.map((c): ComposeRef => ({
+    // ONE summary chip for the whole set (review deck R-5, Destin: "one
+    // chip per comment is probably not the way to go"). It names the count
+    // and the file; hovering lights up every highlight it covers, clicking
+    // opens the comment panel on the first. The comments themselves reach
+    // the assistant through its comment tools (real build), not the chip.
+    const fileName = basenameOf(path);
+    const refs: ComposeRef[] = [{
       id: genRefId(),
       kind: 'doc',
       path,
-      fileName: basenameOf(path),
-      commentId: c.id,
-      quote: c.quote,
-      cell: c.cell,
-      sheet: c.sheet,
-      // 60, not the default 28: these chips render one per line in the sent
-      // bubble (UserMessage groups a batch), so there is room to read the note.
-      label: `“${truncateQuote(c.text.trim() || c.quote, 60)}”`,
-    }));
-    // Short and plain (Destin, polish pass: "a short plain lead sentence").
-    const lead = `Please work through ${open.length === 1 ? 'my comment' : `my ${open.length} comments`} on ${basenameOf(path)}:`;
+      fileName,
+      commentId: open[0].id,
+      commentIds: open.map((c) => c.id),
+      label: `${open.length} ${open.length === 1 ? 'comment' : 'comments'} · ${fileName}`,
+    }];
+    const lead = 'Please work through';
     // WHY a window event, not a prop: these buttons live in the file viewer,
     // the composer lives in InputBar — siblings several layers apart with no
     // shared ancestor built for this. build-menu.ts's "Ask about this" uses
     // the same pattern. This calls the composer's OWN normal send path — it
     // is not a second way to deliver a message.
+    if (sendVia) { sendVia(lead, refs); return; }
     const dispatch = () => window.dispatchEvent(new CustomEvent('youcoded:compose-send-comments', { detail: { lead, refs } }));
     if (!beforeSend) { dispatch(); return; }
     // From a screen with no composer (Projects): go back to the chat first,
@@ -53,8 +55,8 @@ function useSendOpenComments(path: string, beforeSend?: () => void) {
   return { openCount: open.length, send };
 }
 
-export function CommentsFloatingActions({ path, beforeSend }: { path: string; beforeSend?: () => void }) {
-  const { openCount, send } = useSendOpenComments(path, beforeSend);
+export function CommentsFloatingActions({ path, beforeSend, sendVia }: { path: string; beforeSend?: () => void; sendVia?: (lead: string, refs: ComposeRef[]) => void }) {
+  const { openCount, send } = useSendOpenComments(path, beforeSend, sendVia);
   const askTitle = openCount === 0
     ? 'No open comments to ask about'
     : `Ask your assistant to work through ${openCount === 1 ? 'the open comment' : `the ${openCount} open comments`}`;
@@ -73,7 +75,8 @@ export function CommentsFloatingActions({ path, beforeSend }: { path: string; be
         disabled={openCount === 0}
         title={askTitle}
         onClick={send}
-        className="pointer-events-auto w-full"
+        // solid-accent: opaque on wallpaper themes (review deck R-5).
+        className="solid-accent pointer-events-auto w-full"
       >
         <MenuIcon name="ask" />
         Ask Your Assistant

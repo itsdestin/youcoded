@@ -1270,6 +1270,11 @@ body[data-mode="buddy-chat"] #theme-bg {
 [data-wallpaper] .bg-accent {
   background-color: color-mix(in srgb, var(--accent) calc(var(--bubble-opacity, 1) * 100%), transparent);
 }
+/* Floating action buttons (the file pane's Edit/Save, Ask Your Assistant)
+   stay SOLID on wallpaper themes — the rule above is for chat bubbles, and a
+   see-through button read as disabled (Destin, review deck R-5, 2026-09-26). */
+[data-wallpaper] .solid-accent.bg-accent:not(:hover) { background-color: var(--accent); }
+[data-wallpaper] .solid-accent.bg-accent:hover { background-color: color-mix(in oklab, var(--accent) 90%, var(--panel)); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Overlay layer system — standardized scrim, surface, and shadow treatment

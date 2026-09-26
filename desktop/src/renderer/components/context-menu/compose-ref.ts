@@ -41,6 +41,10 @@ export interface ComposeRef {
    *  Comments mode's "Send to assistant") rather than a fresh selection —
    *  lets a click jump straight to that thread's highlight. */
   commentId?: string;
+  /** Ask Your Assistant's ONE summary chip for every open comment on a file
+   *  (review deck R-5: one chip per comment was too much) — hovering it
+   *  lights up all of their highlights. */
+  commentIds?: string[];
 }
 
 // U+2983 / U+2984 LEFT/RIGHT WHITE CURLY BRACKET — chosen because neither

@@ -15,6 +15,7 @@
 // use-quote-marks.ts wraps into the same text.
 import { useEffect, type RefObject } from 'react';
 import { findQuote, cellSelector } from './use-quote-marks';
+import { commentsForPath } from '../../state/doc-comments-store';
 import { takePendingJump, type ComposeRef } from '../context-menu/compose-ref';
 import { revealSheet } from './sheet-reveal';
 
@@ -26,7 +27,21 @@ export const FLASH_MS = 1800;
 const PENDING_RETRY_MS = 150;
 const PENDING_TRIES = 30;
 
-function rangeFor(root: HTMLElement, ref: ComposeRef): Range | null {
+function rangeFor(root: HTMLElement, ref: ComposeRef): Range | Range[] | null {
+  // Ask Your Assistant's summary chip covers several comments: one range each
+  // (review deck R-5).
+  if (ref.commentIds?.length && ref.path) {
+    const ids = new Set(ref.commentIds);
+    const ranges = commentsForPath(ref.path)
+      .filter((c) => ids.has(c.id))
+      .map((c) => singleRange(root, { ...ref, commentIds: undefined, quote: c.quote, cell: c.cell, sheet: c.sheet }))
+      .filter((r): r is Range => !!r);
+    return ranges.length ? ranges : null;
+  }
+  return singleRange(root, ref);
+}
+
+function singleRange(root: HTMLElement, ref: ComposeRef): Range | null {
   if (ref.cell) {
     const cellEl = root.querySelector(cellSelector(ref));
     if (!cellEl) return null;
@@ -48,11 +63,11 @@ function rangeFor(root: HTMLElement, ref: ComposeRef): Range | null {
 }
 
 // Guarded: an engine without the API simply shows no highlight.
-export function paint(name: string, range: Range | null): void {
+export function paint(name: string, range: Range | Range[] | null): void {
   const reg = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights;
   const HighlightCtor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
   if (!reg || !HighlightCtor) return;
-  if (range) reg.set(name, new HighlightCtor(range));
+  if (range) reg.set(name, new HighlightCtor(...(Array.isArray(range) ? range : [range])));
   else reg.delete(name);
 }
 
@@ -65,8 +80,8 @@ export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>,
   useEffect(() => {
     let flashTimer: number | null = null;
     let pendingTimer: number | null = null;
-    const flash = (range: Range) => {
-      scrollToRange(range);
+    const flash = (range: Range | Range[]) => {
+      scrollToRange(Array.isArray(range) ? range[0] : range);
       paint(FLASH_NAME, range);
       if (flashTimer) window.clearTimeout(flashTimer);
       flashTimer = window.setTimeout(() => paint(FLASH_NAME, null), FLASH_MS);
