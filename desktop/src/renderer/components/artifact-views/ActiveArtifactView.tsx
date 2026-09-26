@@ -606,6 +606,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // it — Comments mode hides resolved by default, and jumping to a thread
   // nobody can see would look like the link did nothing.
   const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(artifact.path);
+  // The Comments button's number counts OPEN comments only — "Comments 4"
+  // with two already resolved read as four things still waiting on you.
+  const openCount = pathComments.filter((c) => !c.resolved).length;
   // Rounds 11 + 15: measure where the comment cards actually are. The host
   // positions its floating buttons from this view's right edge, and the
   // cards' distance from that edge depends on the pane's framing, its
@@ -656,8 +659,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     // the same 640px pane width narrowPane measures here; the code rail is
     // always full width.
     const paneVisible = commentsMode === 'comments' && showComments && (showCodeRail || !narrowPane);
-    onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: pathComments.length, paneVisible, ...paneGeom });
-  }, [showComments, showCodeRail, narrowPane, commentsMode, pathComments.length, paneGeom, onCommentsStateChange]);
+    onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: openCount, paneVisible, ...paneGeom });
+  }, [showComments, showCodeRail, narrowPane, commentsMode, openCount, paneGeom, onCommentsStateChange]);
   const openComments = useCallback((commentId?: string) => {
     if (commentId) {
       if (pathComments.find((c) => c.id === commentId)?.resolved) setPathShowResolved(true);

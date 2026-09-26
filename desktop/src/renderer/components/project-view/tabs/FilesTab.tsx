@@ -1249,7 +1249,8 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
           <ChatIcon className="w-3.5 h-3.5" />
           Comments
           {/* G-19: a count is the label plus a muted numeral. */}
-          <span className="text-fg-muted">{commentsState.count}</span>
+          {/* Open comments only; no "0" once all are resolved (as in the drawer). */}
+          {commentsState.count > 0 && <span className="text-fg-muted">{commentsState.count}</span>}
         </button>
       )}
       {editState.isEditable && (editState.editing ? (
