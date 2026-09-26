@@ -340,3 +340,22 @@ describe('Always-allow on a deny-listed tool', () => {
     });
   });
 });
+
+// Never fail silently: when YouCoded turned down an admin password request, the
+// command's saved result carries a marked line, and the card explains it plainly.
+describe('a refused admin password request', () => {
+  afterEach(() => { cleanup(); });
+  const bash = (response: string): ToolCallState => ({
+    toolUseId: 'tool-r', toolName: 'Bash', input: { command: 'sudo whoami' }, status: 'failed', response,
+  } as unknown as ToolCallState);
+
+  it('shows the plain explanation when the result carries the refusal line', () => {
+    render(<ChatProvider><ToolCard tool={bash("sudo: no password was provided\n[YouCoded] The admin password request was refused because it could not be verified as coming from the system's sudo (reason: parent-not-sudo).")} sessionId="s1" /></ChatProvider>);
+    expect(screen.getByTestId('admin-refused-note')).toHaveTextContent("YouCoded couldn't confirm this password request came from your computer's admin program");
+  });
+
+  it('shows nothing extra for an ordinary failed sudo', () => {
+    render(<ChatProvider><ToolCard tool={bash('sudo: a password is required')} sessionId="s1" /></ChatProvider>);
+    expect(screen.queryByTestId('admin-refused-note')).toBeNull();
+  });
+});

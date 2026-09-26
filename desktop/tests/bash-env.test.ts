@@ -276,3 +276,23 @@ describe('Bash description — reflects the settled AdminCapability (F1)', () =>
     expect(resumed).not.toContain('the user types their admin password in a card');
   });
 });
+
+// Never fail silently: a password request YouCoded turned down for this call
+// leaves one plain line in the command's result (the card keys on it too).
+describe('Bash result — explains a refused admin password request', () => {
+  it('appends the refusal line when the service holds one for this call, and only once', async () => {
+    let held: string | undefined = 'parent-not-sudo';
+    const service = { wipeUpfront: vi.fn(), takeRefusal: vi.fn(() => { const r = held; held = undefined; return r; }) };
+    const ctx = makeCtx({ toolCallId: 'tool-refused', adminPasswordService: service });
+    const r = await BashTool.execute({ command: 'echo done' }, ctx);
+    expect(r.text).toContain('[YouCoded] The admin password request was refused');
+    expect(r.text).toContain('(reason: parent-not-sudo)');
+    expect(service.takeRefusal).toHaveBeenCalledWith('tool-refused');
+  });
+
+  it('adds nothing when no request was refused', async () => {
+    const service = { wipeUpfront: vi.fn(), takeRefusal: vi.fn(() => undefined) };
+    const r = await BashTool.execute({ command: 'echo done' }, makeCtx({ toolCallId: 't', adminPasswordService: service }));
+    expect(r.text).not.toContain('[YouCoded]');
+  });
+});

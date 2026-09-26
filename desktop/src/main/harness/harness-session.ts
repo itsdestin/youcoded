@@ -320,7 +320,7 @@ export interface HarnessSessionOpts {
    *  call exit. Absent when the app's AskpassServer never started (self-
    *  test failed, Windows, macOS off) — the up-front ask is then simply
    *  skipped and sudo fails as it did before this feature existed. */
-  adminPasswordService?: Pick<AdminPasswordServiceLike, 'askUpFront' | 'wipeUpfront'>;
+  adminPasswordService?: Pick<AdminPasswordServiceLike, 'askUpFront' | 'wipeUpfront'> & Partial<Pick<AdminPasswordServiceLike, 'takeRefusal'>>;
 }
 // The opts second arg carries per-turn model construction hints. `serialToolCalls`
 // (Task 10 / spec §4.2) tells the local-engine factory to inject

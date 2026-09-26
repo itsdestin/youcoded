@@ -318,7 +318,7 @@ export interface ToolContext {
    *  unless an up-front password was held and never consumed). The session
    *  layer (harness-session.ts) is what calls `askUpFront` itself, before
    *  this context object even exists for a given call. */
-  adminPasswordService?: Pick<AdminPasswordServiceLike, 'wipeUpfront'>;
+  adminPasswordService?: Pick<AdminPasswordServiceLike, 'wipeUpfront'> & Partial<Pick<AdminPasswordServiceLike, 'takeRefusal'>>;
 }
 
 /** What a tool omitted from its own result, and how to see more.

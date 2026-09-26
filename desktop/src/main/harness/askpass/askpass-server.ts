@@ -63,6 +63,14 @@ function closePin(pin: PidHandle | null): void {
   }
 }
 
+/** Emitted after a refusal whose Bash call could be identified. */
+export interface AskpassRefusedEvent {
+  toolCallId: string;
+  sessionId: string;
+  /** A reason code — never an environment value or anything secret. */
+  reason: string;
+}
+
 export interface AskpassAskEvent {
   askId: string;
   sudoPid: number;
@@ -540,11 +548,13 @@ export class AskpassServer extends EventEmitter {
         );
       } catch {
         this.writeRefusal(socket);
+        void this.reportRefusal(cred.pid, 'verify-timeout');
         return;
       }
       if (!result.ok) {
         log('WARN', 'AskpassServer', 'refused askpass connection', { reason: result.reason });
         this.writeRefusal(socket);
+        void this.reportRefusal(cred.pid, result.reason);
         return;
       }
       if (helperStartTimeBeforeHarden === null) {
@@ -608,6 +618,7 @@ export class AskpassServer extends EventEmitter {
       const tracerPidAfter = await this.reader.tracerPid(cred.pid);
       if (tracerPidAfter !== 0) {
         this.writeRefusal(socket);
+        void this.reportRefusal(cred.pid, 'traced');
         return;
       }
       const startTimeAfter = await this.reader.startTime(cred.pid);
@@ -626,6 +637,7 @@ export class AskpassServer extends EventEmitter {
         if (environAfterHarden !== null) {
           log('WARN', 'AskpassServer', 'refused: helper did not actually become non-dumpable');
           this.writeRefusal(socket);
+          void this.reportRefusal(cred.pid, 'not-hardened');
           return;
         }
       }
@@ -672,6 +684,30 @@ export class AskpassServer extends EventEmitter {
       this.emit('ask', event);
     } finally {
       if (!pinOwnedByPending) closePin(helperPin);
+    }
+  }
+
+  /** Never fail silently (Destin, 2026-09-26): after a refusal, find which
+   *  registered Bash call the helper belongs to (walk up its ancestors, the
+   *  same way verify.ts does) and emit 'refused' so the command's result can
+   *  say what happened. Best-effort and informational only — it grants
+   *  nothing — but a recycled root pid still must not match, so the stored
+   *  start time is compared against a fresh read. */
+  private async reportRefusal(pid: number, reason: string): Promise<void> {
+    try {
+      let p: number | null = pid;
+      for (let i = 0; i < 64 && p !== null && p > 1; i++) {
+        const entry = this.config.runningCalls.lookup(p);
+        if (entry) {
+          if ((await this.reader.startTime(p)) !== entry.startTime) return;
+          const event: AskpassRefusedEvent = { toolCallId: entry.toolCallId, sessionId: entry.sessionId, reason };
+          this.emit('refused', event);
+          return;
+        }
+        p = await this.reader.ppid(p);
+      }
+    } catch {
+      // Informational only — a failed lookup just means no note.
     }
   }
 

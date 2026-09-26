@@ -18,7 +18,7 @@
 
 import { EventEmitter } from 'events';
 import type { PermissionBroker, PasswordAskRequest } from './permission-broker';
-import type { AskpassServer, AskpassAskEvent } from './askpass/askpass-server';
+import type { AskpassServer, AskpassAskEvent, AskpassRefusedEvent } from './askpass/askpass-server';
 import { displayCommandFromSudoArgv, displayCommandFromArgv, sudoRealArgv } from './tools/admin-command';
 
 /** Structural contract other modules (native-session-host.ts, tests) code
@@ -47,6 +47,11 @@ export interface AdminPasswordServiceLike {
    *  sudo it was meant for never actually ran, or the call was killed
    *  before it did). A cheap no-op when nothing is held for `toolCallId`. */
   wipeUpfront(toolCallId: string): void;
+  /** Never fail silently (2026-09-26): the reason code of a refused password
+   *  request for this call, if any, consumed on read — the Bash tool appends
+   *  a plain line to the command's result so the assistant (and, through the
+   *  saved result, the card) can say what happened. */
+  takeRefusal(toolCallId: string): string | undefined;
 }
 
 /** Narrow, structural (design §5/§7, §11 task 5) — the only two RunningCalls
@@ -104,6 +109,7 @@ interface AdminPasswordBrokerLike {
 interface AdminPasswordAskpassLike {
   on(event: 'ask', cb: (e: AskpassAskEvent) => void): unknown;
   on(event: 'withdrawn', cb: (askId: string) => void): unknown;
+  on(event: 'refused', cb: (e: AskpassRefusedEvent) => void): unknown;
   deliver(askId: string, password: Buffer): boolean;
   refuse(askId: string): boolean;
 }
@@ -179,6 +185,11 @@ export class AdminPasswordService extends EventEmitter implements AdminPasswordS
   // the pending signal for that wrong delivery outright.
   private readonly acceptanceTimers = new Map<number, NodeJS.Timeout>();
 
+  /** toolCallId -> reason code of a refused request (first one wins). Taken
+   *  by takeRefusal() when the call's result is written, so it never grows
+   *  past the calls still running. */
+  private readonly refusals = new Map<string, string>();
+
   constructor(deps: AdminPasswordServiceDeps) {
     super();
     this.broker = deps.broker;
@@ -189,6 +200,9 @@ export class AdminPasswordService extends EventEmitter implements AdminPasswordS
 
     this.askpass.on('ask', (event: AskpassAskEvent) => this.onAsk(event));
     this.askpass.on('withdrawn', (askId: string) => this.onWithdrawn(askId));
+    this.askpass.on('refused', (e: AskpassRefusedEvent) => {
+      if (!this.refusals.has(e.toolCallId)) this.refusals.set(e.toolCallId, e.reason);
+    });
     // The broker's OWN cancellation paths (cancelSession/cancelAll — Stop,
     // Skip, session close, app quit) remove a password ask without going
     // through this service at all; PasswordResolved is how we learn about
@@ -390,6 +404,12 @@ export class AdminPasswordService extends EventEmitter implements AdminPasswordS
 
   /** design §6/§11 task 5 — see AdminPasswordServiceLike.wipeUpfront's own
    *  doc. */
+  takeRefusal(toolCallId: string): string | undefined {
+    const reason = this.refusals.get(toolCallId);
+    this.refusals.delete(toolCallId);
+    return reason;
+  }
+
   wipeUpfront(toolCallId: string): void {
     const hold = this.upfrontByToolCallId.get(toolCallId);
     if (!hold) return;

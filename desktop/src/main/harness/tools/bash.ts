@@ -19,6 +19,7 @@ import { spawnDetached, killTree, formatElapsed, MAX_EXPLICIT_RUNNING } from '..
 import { CWD_SENTINEL, ENV_SENTINEL, stripAnsi, stripSentinelLines } from './shell-text';
 import { forgetOnCallExit } from '../askpass/admin-forget';
 import { getSettledAdminCapability } from '../admin-capability';
+import { adminRefusedModelLine } from '../../../shared/admin-password-copy';
 // Why re-exported: harness-tools-core.test.ts and other callers import
 // stripAnsi from here; moving the implementation into shell-text.ts (so the
 // ShellRegistry can use it without an import cycle) must not move the import
@@ -1006,7 +1007,12 @@ export const BashTool = defineTool({
         // everything below it should be interpreted, so it goes above it.
         // `notice` carries a leading \n for the trailing position; strip it here.
         const leadNotice = notice ? notice.replace(/^\n/, '') + '\n\n' : '';
-        const text = (leadNotice + combined + shellCwdMiss + envNotice).trim() + `\n[${meta.join(' · ')}]`;
+        // Never fail silently (2026-09-26): if YouCoded turned down a password
+        // request from this command, say so in the result the assistant reads —
+        // the card finds this same line in the saved result and explains it.
+        const refusedReason = ctx.adminPasswordService?.takeRefusal?.(ctx.toolCallId ?? 'unknown');
+        const refusedNote = refusedReason ? `\n${adminRefusedModelLine(refusedReason)}` : '';
+        const text = (leadNotice + combined + shellCwdMiss + envNotice + refusedNote).trim() + `\n[${meta.join(' · ')}]`;
         const payload: ToolResultPayload & { truncated: boolean; outputPath?: string; timedOut: boolean; handedOffTo?: string } = {
           text,
           isError,

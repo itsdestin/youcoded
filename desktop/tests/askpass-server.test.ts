@@ -6,7 +6,7 @@
 // this server run in the SAME process, so the kernel's own SO_PEERCRED
 // genuinely reports `process.pid` for every connection here, which is also
 // what proves the startup self-test (peer-cred.ts's `selfTest`) for real.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -339,6 +339,42 @@ describe('AskpassServer: refusals before an ask is ever raised', () => {
     const reply = await client.nextLine();
     expect(JSON.parse(reply)).toEqual({ ok: false });
     expect(askFired).toBe(false);
+
+    client.destroy();
+    await server.stop();
+  });
+
+  it('after a refusal, names the Bash call it belonged to so the command can explain it', async () => {
+    const { server, runningCalls, setVerifyResult } = await startTestServer();
+    setVerifyResult({ ok: false, reason: 'parent-not-setuid' });
+    // The kernel peer is this test process; register it as a call root with the
+    // start time the healthy reader reports, as bash.ts would for a real call.
+    runningCalls.register(process.pid, 4242, { sessionId: 'sess-9', toolCallId: 'tool-9' });
+    const refused: unknown[] = [];
+    server.on('refused', (e) => refused.push(e));
+
+    const client = new TestClient(server.socketPath!);
+    await client.connect();
+    client.send({ v: 2 });
+    expect(JSON.parse(await client.nextLine())).toEqual({ ok: false });
+    await vi.waitFor(() => expect(refused).toEqual([{ toolCallId: 'tool-9', sessionId: 'sess-9', reason: 'parent-not-setuid' }]));
+
+    client.destroy();
+    await server.stop();
+  });
+
+  it('after a refusal from an unregistered process, reports nothing (no call to explain it on)', async () => {
+    const { server, setVerifyResult } = await startTestServer();
+    setVerifyResult({ ok: false, reason: 'parent-not-setuid' });
+    const refused: unknown[] = [];
+    server.on('refused', (e) => refused.push(e));
+
+    const client = new TestClient(server.socketPath!);
+    await client.connect();
+    client.send({ v: 2 });
+    expect(JSON.parse(await client.nextLine())).toEqual({ ok: false });
+    await new Promise((r) => setImmediate(r));
+    expect(refused).toEqual([]);
 
     client.destroy();
     await server.stop();

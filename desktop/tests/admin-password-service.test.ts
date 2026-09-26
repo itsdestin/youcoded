@@ -456,3 +456,15 @@ describe('AdminPasswordService — the "accepted" signal', () => {
     }
   });
 });
+
+describe('AdminPasswordService — remembers a refused request for its call', () => {
+  it('hands the first refusal reason to takeRefusal once, then forgets it', () => {
+    const askpass = new FakeAskpass();
+    const service = new AdminPasswordService({ broker: new FakeBroker(), askpass });
+    askpass.emit('refused', { toolCallId: 'bash-7', sessionId: 's1', reason: 'parent-not-sudo' });
+    askpass.emit('refused', { toolCallId: 'bash-7', sessionId: 's1', reason: 'traced' });
+    expect(service.takeRefusal('bash-7')).toBe('parent-not-sudo');
+    expect(service.takeRefusal('bash-7')).toBeUndefined();
+    expect(service.takeRefusal('other')).toBeUndefined();
+  });
+});
