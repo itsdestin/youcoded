@@ -4,6 +4,7 @@ import { Scrim, OverlayPanel, CONTENT_Z, type OverlayLayer } from '../overlays/O
 import { CloseButton } from './CloseButton';
 import { useScrollFade } from '../../hooks/useScrollFade';
 import { ScreenMark } from '../../shoot-mode';
+import { useEscClose } from '../../hooks/use-esc-close';
 
 /**
  * D1 — the one dialog shell.
@@ -212,6 +213,13 @@ export function Dialog({
   // to them now would silently drop the fades on every migrated dialog.
   // Declared before the early return -- hooks must run unconditionally.
   const scrollRef = useScrollFade<HTMLDivElement>();
+  // Escape (and Android Back) does what a click outside does: onClose. WHY here
+  // (2026-09-26): it was left to each caller, and ten dialogs never registered —
+  // Escape did nothing, or closed the panel UNDER the dialog and left the dialog
+  // up (Donate, Assistant settings, Create a page…). A caller with its own
+  // layered Escape keeps it: the caller renders this Dialog, so its entry
+  // registers after this one and sits on top of the stack.
+  useEscClose(open, onClose);
 
   if (!open) return null;
 
