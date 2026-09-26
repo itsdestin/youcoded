@@ -1,0 +1,8 @@
+/* Design-guide review (2026-09-26): OUTLINED BUTTONS, STRONGER OUTLINE. On
+   glassy wallpaper themes (Meadow Mist) the outlined button's border
+   (--edge-dim, ~50% opacity) nearly vanishes, so "outlined" reads as bare text.
+   This uses --edge (full strength) on buttons only. Workbench-only:
+   ?proposal=secondary-stronger. */
+@layer proposal {
+button.border-edge-dim { border-color: var(--edge) !important; }
+}
