@@ -50,6 +50,14 @@ describe('SpecialistAskBlock — copy', () => {
     expect(screen.queryByTestId('nested-ask-held')).toBeNull();
   });
 
+  it('names the specialist and why Full Auto stopped a risky command in the nested card', () => {
+    renderBlock({ input: { command: 'git push origin main' }, denyListed: true, permissionMode: 'full-auto' });
+    expect(screen.getByText('Stopped before pushing code')).toBeTruthy();
+    expect(screen.getByText(/specialist Wren requested this command/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Allow outside edits for this session' })).toBeNull();
+  });
+
   it('external (outside-the-folder) ask says the helper has to ask every time — and offers no Always Allow', () => {
     renderBlock({ external: true });
     expect(screen.getByText(/outside the project folder/i).textContent).toBe(

@@ -21,6 +21,20 @@ describe('childAskRouter', () => {
     expect(BUDGET_ASK_TOOL_NAMES).not.toContain('max_steps');
   });
 
+  it('carries the parent Full Auto mode on specialist safety stops', async () => {
+    const broker = new PermissionBroker();
+    const emitted: any[] = [];
+    broker.on('hook-event', (e) => emitted.push(e));
+    const router = childAskRouter({
+      broker, parentId: 'parent-1', childId: 'child-1', agentType: 'worker', title: 'W',
+      parentToolCallId: 'tc-1', permissionMode: () => 'full-auto',
+    });
+    const pending = router({ sessionId: 'child-1', toolName: 'Bash', toolInput: { command: 'git push origin main' }, denyListed: true });
+    expect(firstPayload(emitted).permissionMode).toBe('full-auto');
+    broker.respond(firstPayload(emitted)._requestId, { behavior: 'deny' });
+    await pending;
+  });
+
   it('a routed ask reaches the broker under the PARENT sessionId with the specialist payload', async () => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];

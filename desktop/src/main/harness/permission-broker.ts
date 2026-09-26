@@ -86,6 +86,8 @@ export interface AskDecision {
    *  the destructive deny-list. Always populated on a resolved ask; defaults to
    *  the narrow option. */
   grantScope?: GrantScope;
+  /** Memory-only consent to outside-folder file edits; never a stored permission rule. */
+  allowExternalEditsForSession?: boolean;
   /** A HUMAN answered "no" on a card — set ONLY by respond() below, which is
    *  the only path a person's decision travels (renderer and remote WS
    *  clients both land there), on ANY real deny it produces. The driver reads it on interactive asks: a dismissed
@@ -119,6 +121,8 @@ interface PendingAsk {
   /** The CHILD that raised a routed ask (see AskRequest.raisedBy) — read only
    *  by cancelSession, so a child's teardown also clears its own ask. */
   raisedBy?: string;
+  /** Only this ask shape may mint an ephemeral outside-edit grant. */
+  canGrantExternalEdits: boolean;
   resolve: (d: AskDecision) => void;
   /** The exact PermissionRequest this ask emitted, minus its timestamp, kept so
    *  the heartbeat re-announces something byte-identical. Rebuilding it from
@@ -180,6 +184,10 @@ export class PermissionBroker extends EventEmitter {
       const entry: PendingAsk = {
         sessionId: req.sessionId,
         raisedBy: req.raisedBy,
+        // WHY: the renderer supplies a choice, not authority to expand a grant.
+        // Only a main assistant's Full Auto Write/Edit outside-folder ask can do so.
+        canGrantExternalEdits: req.external === true && req.permissionMode === 'full-auto'
+          && !req.raisedBy && (req.toolName === 'Write' || req.toolName === 'Edit'),
         resolve,
         announcement,
       };
@@ -275,7 +283,12 @@ export class PermissionBroker extends EventEmitter {
     const grantScope: GrantScope = decision.grantScope === 'wide' ? 'wide' : 'exact';
     // Stamp a human "no" so the driver can tell it from a policy refusal (see
     // AskDecision.dismissed).
-    const resolved: AskDecision = { behavior, always, grantScope, ...(behavior === 'deny' ? { dismissed: true } : {}), ...(updatedInput ? { updatedInput } : {}) };
+    const resolved: AskDecision = {
+      behavior, always, grantScope,
+      ...(behavior === 'allow' && entry.canGrantExternalEdits && decision.allowExternalEditsForSession === true
+        ? { allowExternalEditsForSession: true } : {}),
+      ...(behavior === 'deny' ? { dismissed: true } : {}), ...(updatedInput ? { updatedInput } : {}),
+    };
 
     this.removeEntry(requestId, entry);
     entry.resolve(resolved);

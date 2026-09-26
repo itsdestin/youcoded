@@ -49,6 +49,8 @@ export interface ChildAskRouterDeps {
    *  onto the routed ask's `specialist` payload so the renderer can nest the
    *  ask row under the right specialist card instead of just labelling it. */
   parentToolCallId: string;
+  /** Read live: a parent may switch modes while a specialist is running. */
+  permissionMode?: () => AskRequest['permissionMode'];
   /** Task 11 (closes a review finding): called when the parent answers a
    *  routed ask with "Always allow". Optional so a test that doesn't care
    *  about persistence can omit it; the real wiring (native-session-host.ts's
@@ -78,6 +80,9 @@ export function childAskRouter(deps: ChildAskRouterDeps): NonNullable<HarnessSes
       ...req,
       sessionId: deps.parentId,
       raisedBy: deps.childId,
+      // WHY: without the parent's live mode a Full Auto specialist safety stop
+      // appears as an unexplained generic Yes/No permission question.
+      ...(deps.permissionMode ? { permissionMode: deps.permissionMode() } : {}),
       specialist: { childId: deps.childId, agentType: deps.agentType, title: deps.title, parentToolCallId: deps.parentToolCallId },
     });
     // "Always allow" on a routed ask (Task 11 — the dropped-decision finding):

@@ -40,10 +40,59 @@ const renderCard = (tool: ToolCallState) =>
   render(<ChatProvider><ToolCard tool={tool} sessionId="s1" /></ChatProvider>);
 
 describe('full-auto safety stop', () => {
-  it('renders Run it / Skip it / Always Allow with the per-family copy', () => {
+  it('explains an outside-folder edit and asks before granting all outside folders for this session', async () => {
+    renderCard(stopTool({ toolName: 'Edit', input: { file_path: '/tmp/other/code.ts' }, denyListed: false, external: true }));
+    expect(screen.getByText('Stopped before editing outside this project')).toBeTruthy();
+    expect(screen.getByText(/Full auto still stops here/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Allow for This Session' }));
+    expect(respondToPermission).not.toHaveBeenCalled();
+    expect(screen.getByText(/all outside folders/i)).toBeTruthy();
+    expect(screen.getByText(/specialists/i)).toBeTruthy();
+    expect(screen.getByText(/resum/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Confirm and edit' }).classList.contains('bg-green-400/60')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(respondToPermission).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Allow for This Session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm and edit' }));
+    await waitFor(() => expect(respondToPermission).toHaveBeenCalledTimes(1));
+    expect(respondToPermission.mock.calls[0][1]).toEqual({ decision: { behavior: 'allow' }, allowExternalEditsForSession: true });
+  });
+
+  it('uses the standard blue Always Allow color on outside edits and push safety stops', () => {
+    const colors = (button: HTMLElement) => [...button.classList].filter((name) => /^(bg-|hover:bg-|text-blue)/.test(name));
+    renderCard(stopTool({ permissionMode: 'ask' }));
+    const standard = colors(screen.getByRole('button', { name: 'Always Allow' }));
+    expect(standard).toContain('bg-blue-600/60');
+    cleanup();
+    renderCard(stopTool({ toolName: 'Write', input: { file_path: '/tmp/other/code.ts' }, denyListed: false, external: true }));
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(colors(screen.getByRole('button', { name: 'Allow for This Session' }))).toEqual(standard);
+    cleanup();
+    renderCard(stopTool());
+    expect(colors(screen.getByRole('button', { name: 'Always Allow' }))).toEqual(standard);
+  });
+
+  it('explains a specialist safety stop in Full Auto and never offers the outside edit grant', () => {
+    renderCard(stopTool({ specialist: { childId: 'child-1', agentType: 'worker', title: 'Wanda' } }));
+    expect(screen.getByText(/specialist/i)).toBeTruthy();
+    expect(screen.getByText(/Full auto still stops here/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Allow for This Session' })).toBeNull();
+  });
+
+  it('explains a specialist repeated-call stop in Full Auto', () => {
+    renderCard(stopTool({ toolName: 'doom_loop', input: { repeated: 'Edit' }, denyListed: false,
+      specialist: { childId: 'child-1', agentType: 'worker', title: 'Wanda' } }));
+    expect(screen.getAllByText(/repeating/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
+  });
+
+  it('renders Run it / Deny / Always Allow with the per-family copy', () => {
     renderCard(stopTool());
     expect(screen.getByRole('button', { name: 'Run it' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Skip it' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Always Allow' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^yes$/i })).toBeNull();
     expect(screen.getByText('Stopped before pushing code')).toBeTruthy();
@@ -65,7 +114,7 @@ describe('full-auto safety stop', () => {
     expect(screen.queryByRole('button', { name: 'Run it' })).toBeNull();
   });
 
-  it('Run it sends a plain allow; Skip it sends a deny — labels change, decisions do not', async () => {
+  it('Run it sends a plain allow; Deny sends a deny — labels change, decisions do not', async () => {
     renderCard(stopTool());
     fireEvent.click(screen.getByRole('button', { name: 'Run it' }));
     await waitFor(() => expect(respondToPermission).toHaveBeenCalledTimes(1));
@@ -74,7 +123,7 @@ describe('full-auto safety stop', () => {
     cleanup();
     respondToPermission.mockClear();
     renderCard(stopTool());
-    fireEvent.click(screen.getByRole('button', { name: 'Skip it' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
     await waitFor(() => expect(respondToPermission).toHaveBeenCalledTimes(1));
     expect(respondToPermission.mock.calls[0][1]).toEqual({ decision: { behavior: 'deny' } });
   });
@@ -106,10 +155,10 @@ describe('full-auto safety stop', () => {
 // The removal-target floor (harness rm-target.ts) forces a stop no saved grant
 // can skip, so the band must not offer a grant it could never honour.
 describe('full-auto stop for a removal the floor always asks about', () => {
-  it('shows Run it / Skip it and no Always Allow', () => {
+  it('shows Run it / Deny and no Always Allow', () => {
     renderCard(stopTool({ input: { command: 'rm -rf ~' }, floorStop: 'removal' }));
     expect(screen.getByRole('button', { name: 'Run it' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Skip it' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Always Allow' })).toBeNull();
     expect(screen.getByText('Stopped before deleting files')).toBeTruthy();
   });

@@ -91,6 +91,17 @@ describe('fixture replay', () => {
     expect(typeof text.uuid).toBe('string');
   });
 
+  it('replays a Full Auto outside-edit permission with its mode and external reason', () => {
+    const raw = [
+      '{"type":"tool_use","id":"e1","name":"Edit","input":{"file_path":"/tmp/notes.md"}}',
+      '{"type":"permission_request","tool_use_id":"e1","requestId":"native-e1","permissionMode":"full-auto","external":true}',
+    ].join('\n');
+    const r = loadFixture('outside-edit', raw);
+    const req = r.actions.find((a) => a.type === 'PERMISSION_REQUEST') as any;
+    expect(req).toMatchObject({ permissionMode: 'full-auto', external: true });
+    expect((r.blocks.find((b) => b.kind === 'tool') as any)?.tool).toMatchObject({ permissionMode: 'full-auto', external: true });
+  });
+
   // A seeded user message is CONFIRMED, not left pending — a pending bubble is held
   // at the timeline's tail, which drew every fixture's question below its answer.
   it('draws the user message above the reply to it', () => {
