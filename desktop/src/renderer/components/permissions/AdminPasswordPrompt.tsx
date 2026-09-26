@@ -103,9 +103,6 @@ export function AdminPasswordPrompt({ ask, onSubmit }: {
           {shown ? <EyeOffIcon className="w-3.5 h-3.5" /> : <EyeIcon className="w-3.5 h-3.5" />}
         </Button>
       </InputGroup>
-      <p className="text-3xs text-fg-muted leading-relaxed">
-        Used once for this step, then erased. It's never saved, and the assistant never sees it.
-      </p>
       {/* Same status-colour carve-out as PermissionButtons (spec §11, change 61);
           full width per G-28. */}
       <button

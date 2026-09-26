@@ -1082,6 +1082,10 @@ export interface ShellRunView {
   /** True when the command was moved to the background at its time limit
    *  rather than started there — the card says so. */
   detached?: boolean;
+  /** Something this command started is still running with admin rights (it
+   *  passed the admin password card). The card keeps a "Running as admin"
+   *  strip with Stop in view until it ends (admin-password design, Q-still-running). */
+  admin?: boolean;
   startedAt: number;
   endedAt?: number;
   /** The last lines of output so far (the full log lives at logPath). */

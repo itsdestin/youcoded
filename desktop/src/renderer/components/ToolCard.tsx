@@ -21,6 +21,7 @@ import { asString } from '../utils/tool-input';
 // status-bar chip colors, so the footer band can never drift from the chip.
 import { fullAutoStopCopy, floorAskNote, adminStopCopy } from './permissions/deny-list-copy';
 import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
+import { AdminRunStrip } from './permissions/AdminRunStrip';
 import { PERMISSION_DISPLAY } from './StatusBar';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
@@ -1620,6 +1621,9 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
           the computer password (design 2026-09-25). */}
       {tool.status === 'running' && tool.passwordAsk && (
         <AdminPasswordPrompt ask={tool.passwordAsk} />
+      )}
+      {tool.shellRun?.status === 'running' && tool.shellRun.admin && (
+        <AdminRunStrip run={tool.shellRun} sessionId={sessionId} />
       )}
 
       {/* Expanded details — per-tool parsed views, raw fallback otherwise.

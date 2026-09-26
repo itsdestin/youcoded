@@ -61,7 +61,7 @@ const CATALOG: CatalogSection[] = [
     title: 'Admin password',
     description: 'An admin (sudo) command: approval, the password card, wrong tries, and a script asking partway through.',
     kind: 'tools',
-    names: ['bash-sudo-awaiting-approval', 'bash-sudo-awaiting-approval-fullauto', 'bash-sudo-password', 'bash-sudo-password-wrong', 'bash-sudo-password-last-try', 'bash-script-password-midway'],
+    names: ['bash-sudo-awaiting-approval', 'bash-sudo-awaiting-approval-fullauto', 'bash-sudo-password', 'bash-sudo-password-wrong', 'bash-sudo-password-last-try', 'bash-script-password-midway', 'bash-sudo-running-as-admin'],
   },
   {
     title: 'Chatsearch cards',

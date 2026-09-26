@@ -429,7 +429,7 @@ export function loadFixture(
           run: {
             toolUseId: parsed.tool_use_id, shellId: parsed.shellId ?? 'sh-1',
             status: parsed.status ?? 'running', exitCode: parsed.exitCode,
-            stopReason: parsed.stopReason, detached: parsed.detached === true,
+            stopReason: parsed.stopReason, detached: parsed.detached === true, admin: parsed.admin === true || undefined,
             startedAt, endedAt: parsed.ranForMs != null ? startedAt + parsed.ranForMs : undefined,
             tail: parsed.tail ?? '', logPath: parsed.logPath ?? '/tmp/youcoded-harness-bash-output/s1/bash-1.txt',
           },

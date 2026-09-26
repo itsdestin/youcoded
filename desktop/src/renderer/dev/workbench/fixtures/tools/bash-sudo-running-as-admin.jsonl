@@ -1,0 +1,3 @@
+{"type": "tool_use", "id": "toolu_01AdminBg", "name": "Bash", "input": {"command": "sudo ollama serve", "description": "Start the local model server", "run_in_background": true}}
+{"tool_use_id": "toolu_01AdminBg", "type": "tool_result", "content": "Started in the background (shell id sh-9c1e). You'll be told when it finishes; use BashOutput to read new output, KillShell to stop it.", "is_error": false}
+{"type": "shell_run", "tool_use_id": "toolu_01AdminBg", "shellId": "sh-9c1e", "status": "running", "admin": true, "startedAgoMs": 734000, "tail": "time=2026-09-26T07:40:12 level=INFO msg=\"Listening on 127.0.0.1:11434\"", "logPath": "/tmp/youcoded-harness-bash-output/s1/bash-1790400000-9c1e.txt"}
