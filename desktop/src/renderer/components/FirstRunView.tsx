@@ -9,6 +9,7 @@ import { StatusStrip } from './ui/StatusStrip';
 import { ApiKeySetup } from './first-run/ApiKeySetup';
 import { LocalModelSetup } from './first-run/LocalModelSetup';
 import type { KeyService } from './first-run/recognise-key';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // The ChatGPT kill switch (design §6): main sets `chatgpt.supported` false
 // under YOUCODED_CHATGPT=0, and the button must vanish with it — a button whose
@@ -260,6 +261,8 @@ interface FirstRunViewProps {
 }
 
 export default function FirstRunView({ onComplete }: FirstRunViewProps) {
+  // Photo-only build: the step comes from the `?firstRun=` switch, so opening is a no-op.
+  useScreenOpen('first-run', () => {});
   const [state, setState] = useState<FirstRunState | null>(null);
 
   // First launch has no user theme — lock the screen to Creme so the app's
@@ -375,6 +378,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
 
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-canvas text-fg">
+      {state && <ScreenMark name="first-run" />}
       <h1 className="text-4xl font-semibold tracking-tight mb-6 text-fg">YouCoded</h1>
 
       {launching ? (

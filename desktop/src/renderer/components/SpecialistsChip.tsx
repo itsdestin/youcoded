@@ -9,6 +9,7 @@ import { friendlyToolDisplay } from './ToolCard';
 import { Dialog, Tooltip } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
+import { useScreenOpen } from '../shoot-mode';
 
 /**
  * Specialists 1c — the status-bar chip (spec §6 "attention, not vigilance")
@@ -27,6 +28,7 @@ import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
 export default function SpecialistsChip({ sessionId }: { sessionId: string | null | undefined }) {
   const summary = useSpecialistSummary(sessionId ?? undefined);
   const [open, setOpen] = useState(false);
+  useScreenOpen('chat/specialists', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   useEscClose(open, () => setOpen(false));
   if (summary.helpers.length === 0) return null;
 
@@ -66,6 +68,7 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
       </Tooltip>
       {open && (
         <Dialog
+          screen="chat/specialists"
           open
           title={Noun}
           onClose={() => setOpen(false)}

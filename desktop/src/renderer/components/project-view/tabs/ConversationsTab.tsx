@@ -21,6 +21,7 @@ import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 // this tab has no "new conversation" callback (ProjectView passes only the
 // list and the preview opener; New Conversation lives on the hero above).
 import { EmptyState } from '../../ui';
+import { useScreenOpen } from '../../../shoot-mode';
 
 interface ConversationsTabProps {
   // Lifted, cached list from ProjectView. null = still loading for this project.
@@ -62,6 +63,8 @@ const ConversationRow = React.memo(function ConversationRow({ session: c, tagsBy
 function ConversationsTabImpl({ conversations, onOpenPreview }: ConversationsTabProps) {
   const loading = conversations === null;
   const rows = conversations ?? [];
+  // Photo-only build: `shoot` opens the first conversation's preview.
+  useScreenOpen('projects/conversations/preview', () => { if (rows[0]) onOpenPreview(rows[0]); });
   // Loaded once for the whole list (one shared store); each card only looks
   // tags up in it. refreshOnMount: opening the tab re-reads in the background so
   // a tag made or renamed on another device (a sync pull sends no push) shows up

@@ -713,3 +713,44 @@ describe('ModelPicker recommended-models bands', () => {
       .toBeNull();
   });
 });
+
+// ── The inline layout (the Model & Effort dialog) ────────────────────────────
+/**
+ * Two bugs `explore` found on 2026-09-26 in the Model & Effort dialog, which hosts this
+ * picker with `layout="inline"` above its Effort buttons and Fast mode switch:
+ * 1. Pressing any other control in the dialog counted as "a click outside the picker" and
+ *    collapsed the list; the dialog shrank, the button left the pointer before the release,
+ *    and the click was lost — every first click in the dialog did nothing.
+ * 2. "Filter and sort" opened nothing: its popover was positioned only after finding the
+ *    dropdown trigger, which the inline layout never draws.
+ */
+describe('ModelPicker — inline layout', () => {
+  beforeEach(() => {
+    (globalThis as any).window.claude = {
+      providers: { list: vi.fn().mockResolvedValue([]), catalog: vi.fn().mockResolvedValue([]) },
+      models: { onDownloadProgress: () => () => {} },
+    };
+  });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+
+  const host = () => render(
+    <div>
+      <ModelPicker value={{ runtime: 'claude', alias: 'sonnet' }} onSelect={() => {}} includeClaude defaultOpen layout="inline" />
+      <button type="button">Low</button>
+    </div>,
+  );
+
+  it('pressing another control in the dialog leaves the list open', async () => {
+    host();
+    const search = await screen.findByLabelText('Search all models');
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Low' }));
+    expect(search).toBeInTheDocument();
+    expect(screen.getByLabelText('Search all models')).toBe(search);
+  });
+
+  it('"Filter and sort" opens its filters', async () => {
+    host();
+    fireEvent.click(await screen.findByRole('button', { name: 'Filter and sort' }));
+    expect(await screen.findByText('Source')).toBeInTheDocument();
+  });
+});

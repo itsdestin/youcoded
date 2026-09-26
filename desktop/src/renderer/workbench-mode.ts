@@ -14,6 +14,8 @@
 // production build, so Vite folds every branch below to dead code — nothing in
 // here can fire in Electron or the Android WebView.
 
+declare const __SHOOT__: boolean;
+
 /** True in ANY document the workbench boots — including the PRODUCTION site build.
  *
  *  WHY this exists next to `isWorkbenchMode()`, which looks almost identical:
@@ -41,8 +43,13 @@ export function isWorkbenchDocument(): boolean {
 
 /** True only inside the UI Workbench (`bash scripts/run-workbench.sh`). */
 export function isWorkbenchMode(): boolean {
+  // WHY the photo-only build too: `shoot` photographs a packaged copy, and the
+  // screens behind this predicate (the terminal's canned screen, voice input,
+  // page connections) came out blank there. `__SHOOT__` is a build-time literal
+  // (vite.config.ts) that is false in the app AND the landing page's demo, so
+  // this still folds to `false` in both.
   // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
-  if (!import.meta.env.DEV) return false;
+  if (!(import.meta.env.DEV || (typeof __SHOOT__ !== 'undefined' && __SHOOT__))) return false;
   if (typeof location === 'undefined') return false;
   return new URLSearchParams(location.search).get('mode') === 'workbench';
 }
