@@ -1,0 +1,547 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   "FLOAT" chrome — every control floats on its own (chrome-style: 'float')
+
+   Destin, 2026-07-19 and 2026-09-01; designed over review decks 2026-09-20..23
+   (docs/active/design/2026-09-20-minimalist-chrome/ in the workspace). The ask:
+   keep the bare minimum — header controls, session switcher, quick chips,
+   message box, status chips — "with no backgrounds and no wrapping chrome",
+   each control rising out of the wallpaper on its own.
+
+   THE RULE OF THIS MODE: every WRAPPER (header band, bottom bars) loses its
+   surface, and every CONTROL wears one shared light surface: a faint frosted
+   fill, a hairline edge and a soft drop. That is the whole difference from
+   'floating', which lifts the three BARS as cards and leaves their controls flat.
+
+   ISOLATION: every rule here is gated on [data-chrome-style='float'] (set on
+   <body> only when a theme selects this style, or by the workbench's
+   ?chrome=float). Existing themes and chrome styles are untouched — guarded by
+   tests/float-chrome-pops.test.ts ("every rule is gated").
+
+   WHY A SEPARATE FILE: globals.css is at its line-budget ceiling, and this mode
+   is self-contained. The one rule that stays in globals.css is the
+   `.chrome-glass` override, because that element's clip-path lives there.
+
+   WHY SO MUCH !important: the theme engine injects its own glass rules at run
+   time (unlayered, after this file), and the controls carry Tailwind fills
+   (bg-panel, bg-inset, bg-accent). This style has to win over both.
+
+   ELEMENT HOOKS (a class the component carries so a rule can name it):
+     .quick-chip, .quick-chip-edit  QuickChips.tsx
+     .status-chip                   tags/SessionTagsChip.tsx (a nested status chip)
+     .caption-buttons               HeaderBar.tsx (minimize / maximize / close)
+     .session-dot[data-status]      SessionStrip.tsx
+     .header-controls-left/-right   HeaderBar.tsx (both header shapes)
+     .chat-edge-fade                ChatEdgeFade.tsx
+   Wallpaper-derived colours (--wallpaper-header-ink, --wallpaper-status-*,
+   --control-ink) come from hooks/use-wallpaper-header-ink.ts, which runs only
+   while this style is active.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Wrappers lose their surface ─────────────────────────────────────────────
+   `display: block` rather than a full takeover: the wrapper stays in flow, so
+   the measured chrome heights, the bottom-float offsets and the terminal insets
+   that read them all keep working. */
+[data-chrome-style='float'] .chrome-wrapper {
+  display: block;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+[data-chrome-style='float'] .header-bar,
+[data-chrome-style='float'] .input-bar-container,
+[data-chrome-style='float'] .status-bar {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  /* A theme with input-style 'floating' frosts these three bands; here only
+     the controls inside them are glass. */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  /* The composer is inside .input-bar-container; without this its radius would
+     still clip the attachments strip that shares the flow. */
+  overflow: visible !important;
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+}
+/* The chrome scrollers lose their edge-fade masks: a mask here reads as a
+   smudge, and it would clip the controls' drop shadows. */
+[data-chrome-style='float'] .session-strip {
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+}
+/* Header groups (the Files, Games, window-button pills) lose their fill;
+   each button inside wears the shared surface instead. */
+[data-chrome-style='float'] .header-bar > .header-controls-left > div,
+[data-chrome-style='float'] .header-bar > .header-controls-right > div {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  overflow: hidden;
+}
+/* Minimize / maximize / close are three separate chips with no shared
+   container (Destin, 2026-09-23); the group's clip would cut their shadows. */
+[data-chrome-style='float'] .header-bar .caption-buttons {
+  background: transparent !important;
+  overflow: visible !important;
+  gap: 4px;
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────────
+   Only the composer narrows; the clear bottom wrapper still spans the viewport
+   so its measured height, keyboard lift and message fade stay put. Overflowing
+   chips centre safely (long lists still scroll from their start). */
+[data-chrome-style='float'] .input-bar-container {
+  width: min(calc(100% - 32px), 920px);
+  /* !important: input-style 'floating' themes (Devil's Garden, Golden
+     Sunbreak) set an 8px 12px margin that pinned the narrowed composer left. */
+  margin-inline: auto !important;
+}
+/* Phone widths (the app's one 640px breakpoint): the 16px-a-side inset cost a
+   390px screen enough width that a three-line message wrapped to four and its
+   first line scrolled out of the box (phone check, 2026-09-24). Full width, so
+   the box is exactly as wide as in every other style (its own inner padding
+   already keeps it 8px off each edge). */
+@media (max-width: 639.98px) {
+  [data-chrome-style='float'] .input-bar-container {
+    width: 100%;
+  }
+}
+[data-chrome-style='float'] .input-bar-container > .relative > .flex {
+  justify-content: safe center;
+}
+[data-chrome-style='float'] .status-bar {
+  justify-content: center;
+}
+/* The status editor has ml-auto in all other chrome styles; remove it here or
+   it splits a centred row into left-aligned chips and a right-aligned pencil. */
+[data-chrome-style='float'] .status-bar > button:last-of-type {
+  margin-left: 0;
+}
+/* HeaderBar's reservation measures each direct child's offsetWidth. Without
+   shrink-0 the wide toggle reported a 94px shell around 115px of controls and
+   its clip cut 19px off the Terminal button. */
+[data-chrome-style='float'] .header-bar .wide-view-toggle {
+  flex-shrink: 0;
+}
+
+/* ── The header floats over the transcript ───────────────────────────────────
+   No header band: Destin rejected every full-width veil (it hid the
+   wallpaper). The header sits over the full-height transcript, which passes
+   beneath it and fades locally (.chat-edge-fade). z-index keeps its controls
+   above that fade. */
+[data-chrome-style='float'] .chrome-wrapper:not(.chrome-wrapper--bottom) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 15;
+}
+[data-chrome-style='float'] .chat-scroll:not(.chat-scroll--below-find-row) {
+  /* WHY: moving the scrollport down to the measured header bottom clipped
+     messages before they could slide beneath its buttons. Keep it full-height,
+     but reserve that same measured space for the first message at rest. */
+  margin-top: 0;
+  padding-top: calc(var(--top-chrome-bottom, 40px) + 4px);
+}
+/* A masked scrollport is a backdrop root: its bubble filters could no longer
+   sample the wallpaper. Instead a stationary, viewport-aligned copy of the theme
+   background sits ABOVE the unmasked transcript, and only that copy is masked.
+   Canvas behind it preserves a translucent wallpaper's original opacity. */
+.chat-edge-fade { display: none; }
+[data-chrome-style='float'] .chat-edge-fade {
+  /* Where a message has fully faded, measured up from the window's bottom
+     edge. Destin, 2026-09-24: messages should "fully disappear right between
+     the bottom of the input bar and top of the status bar chips" (the 6px gap,
+     35px to 29px up), then "just a smidge lower" — so 27px, at the status
+     buttons' top edge. Anchored to the bottom edge, NOT the top of the bottom
+     controls, so a message box that grows taller with typed lines does not
+     drag the fade up with it. The 12px fade runs over the message box's
+     lowest edge. Fixed pixels: the status row's height does not change on
+     desktop; the on-screen keyboard is covered by --vvp-offset. */
+  --float-fade-end: 27px;
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: var(--canvas);
+  -webkit-mask-image: linear-gradient(to bottom, black calc(var(--top-chrome-bottom, 40px) - 8px), transparent calc(var(--top-chrome-bottom, 40px) + 12px),
+    transparent calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end) - 12px),
+    black calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end)));
+  mask-image: linear-gradient(to bottom, black calc(var(--top-chrome-bottom, 40px) - 8px), transparent calc(var(--top-chrome-bottom, 40px) + 12px),
+    transparent calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end) - 12px),
+    black calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end)));
+}
+[data-chrome-style='float'] .chat-edge-fade[data-below-find-row='true'] {
+  /* The find/status lane already clears the header; it must not fade. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0,
+    transparent calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end) - 12px),
+    black calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end)));
+  mask-image: linear-gradient(to bottom, transparent 0,
+    transparent calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end) - 12px),
+    black calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end)));
+}
+[data-chrome-style='float'] .chat-edge-fade__wallpaper,
+[data-chrome-style='float'] .chat-edge-fade__pattern {
+  position: absolute;
+  inset: 0;
+}
+
+/* ── One surface for every control ───────────────────────────────────────────
+   Destin, 2026-09-23 (deck minimalist-unified-surface): the header buttons,
+   session switcher, quick chips and their edit button, status chips and their
+   edit button, the window buttons AND the message box share ONE light surface.
+   The edge is an inset ring, not a border, so no control changes size.
+   The 16% is FIXED, deliberately not the theme's --panels-opacity: the
+   faintness is the style (a theme's panel opacity, often 0.5+, would turn the
+   controls back into solid chips). The big sheets below DO follow it, because
+   they carry reading text. Integration review 2026-09-24, I7. */
+[data-chrome-style='float'] :is(
+  .header-bar > .header-controls-left > button:not(.session-strip),
+  .header-bar > .header-controls-left > div:not(.wide-view-toggle) > button,
+  .header-bar > .header-controls-right > div > button,
+  .header-bar .wide-view-toggle,
+  .session-strip,
+  .quick-chip, .quick-chip-edit,
+  .status-bar > button, .status-bar .status-chip,
+  .input-bar-container form
+) {
+  background: color-mix(in srgb, var(--inset) 16%, transparent) !important;
+  border-color: transparent !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--edge) 40%, transparent), 0 4px 12px -5px rgba(0, 0, 0, .24) !important;
+}
+/* These four keep a 1px (invisible) border so they measure the same whether or
+   not their Tailwind classes carry one — the message box's form has none. */
+[data-chrome-style='float'] :is(.input-bar-container form, .quick-chip, .status-bar > button, .session-strip) {
+  border-width: 1px;
+  border-style: solid;
+}
+/* THE FROST (every backdrop-filter this style uses) is NOT in this file: it is
+   injected by themes/theme-engine.ts (FLOAT_CHROME_GLASS), inside the same
+   stylesheet as every other glass surface. That stylesheet is written only
+   while the theme has a wallpaper/gradient, "Reduced effects" is off and the
+   blur slider is above zero — so all three turn this style's frost off too
+   (integration review 2026-09-24, I5/I6). Everything else here is the
+   surface WITHOUT frost, which is what those settings leave. */
+/* Header controls keep their badge/indicator positioning inside themselves. */
+[data-chrome-style='float'] :is(
+  .header-bar > .header-controls-left > button,
+  .header-bar > .header-controls-left > div:not(.wide-view-toggle) > button,
+  .header-bar > .header-controls-right > div > button,
+  .header-bar .wide-view-toggle,
+  .session-strip
+) {
+  position: relative;
+  isolation: isolate;
+}
+
+/* ── Hover and press ─────────────────────────────────────────────────────── */
+@media (hover: hover) {
+  [data-chrome-style='float'] :is(
+    .header-bar > .header-controls-left > button:not(.session-strip):not([aria-pressed='true']),
+    .header-bar > .header-controls-left > div:not(.wide-view-toggle) > button:not([aria-pressed='true']),
+    .header-bar > .header-controls-right > div > button:not(.bg-accent):not(.caption-buttons > button:last-child),
+    .quick-chip, .quick-chip-edit,
+    .status-bar > button, .status-bar .status-chip
+  ):hover:not(:disabled) {
+    background: color-mix(in srgb, var(--inset) 30%, transparent) !important;
+  }
+  /* The chat/terminal toggle's own two segments keep a light wash. */
+  [data-chrome-style='float'] .header-bar .wide-view-toggle > button:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--fg) 7%, transparent);
+  }
+  [data-chrome-style='float'] .header-bar button:hover:not(:disabled) {
+    filter: brightness(1.1);
+  }
+}
+[data-chrome-style='float'] .header-bar .wide-view-toggle > button:active:not(:disabled) {
+  background-color: color-mix(in srgb, var(--fg) 13%, transparent);
+}
+[data-chrome-style='float'] .header-bar button:active:not(:disabled) {
+  filter: brightness(.92);
+}
+/* Close keeps its red hover over the chip surface. */
+[data-chrome-style='float'] .header-bar .caption-buttons > button:last-child:is(:hover, :active),
+[data-chrome-style='float'] .header-bar .caption-buttons > button:last-child:is(:hover, :active) > svg {
+  background: rgb(239 68 68) !important;
+  color: white !important;
+}
+[data-chrome-style='float'] .header-bar .caption-buttons > button:last-child:is(:hover, :active) > svg {
+  background: none !important;
+}
+
+/* ── Selected: a solid bright pill ───────────────────────────────────────────
+   Selected Files / Games and the selected Chat/Terminal segment. The accent
+   fill is a solid block the light surface erased, and a faint glass pill did not
+   read as "on". Destin picked the solid bright pill (deck
+   minimalist-themes-selected, S-1): the one nearly solid element in the header,
+   with a firmer shadow and the icon in the theme's main text colour. */
+[data-chrome-style='float'] .header-bar > .header-controls-right > div > button.bg-accent,
+[data-chrome-style='float'] .header-bar .wide-view-toggle-indicator,
+/* The open screen's own button on Projects / Pages (and a focused pinned
+   page) is the same kind of "you are here" — the same pill. */
+[data-chrome-style='float'] .header-bar > .header-controls-left button[aria-pressed='true']:not(.wide-view-toggle *) {
+  background: color-mix(in srgb, var(--panel) 85%, transparent) !important;
+  box-shadow: inset 0 0 0 1px var(--edge), 0 2px 8px -2px rgba(0, 0, 0, .42) !important;
+}
+[data-chrome-style='float'] .header-bar > .header-controls-right > div > button.bg-accent,
+[data-chrome-style='float'] .header-bar > .header-controls-right > div > button.bg-accent > svg,
+[data-chrome-style='float'] .header-bar .wide-view-toggle button[aria-pressed='true'],
+[data-chrome-style='float'] .header-bar .wide-view-toggle button[aria-pressed='true'] > svg,
+[data-chrome-style='float'] .header-bar > .header-controls-left button[aria-pressed='true']:not(.wide-view-toggle *),
+[data-chrome-style='float'] .header-bar > .header-controls-left button[aria-pressed='true']:not(.wide-view-toggle *) > svg {
+  color: var(--fg) !important;
+}
+/* Session Files' count uses `bg-accent`, which is translucent on some packs;
+   over a see-through button it went white-on-pale (1.05:1). The badge alone
+   gets an opaque accent. */
+[data-chrome-style='float'] .header-bar [aria-label='Session Files']:not(.bg-accent) > span {
+  background-color: var(--accent);
+}
+
+/* ── Header text and icons over the wallpaper ────────────────────────────── */
+/* A pixel of shadow in the theme's own page colour keeps labels legible and
+   disappears against a light wallpaper instead of ringing the glyph. */
+[data-chrome-style='float'] .header-bar > .header-controls-left > button:not(.session-strip),
+[data-chrome-style='float'] .header-bar > .header-controls-left > div > button,
+[data-chrome-style='float'] .header-bar > .header-controls-right > div > button {
+  text-shadow: 0 1px 2px color-mix(in srgb, var(--canvas) 85%, transparent);
+}
+/* Each glyph gets a quiet same-colour halo. The session strip is excluded: the
+   halo also ringed its status dots, which Destin wants bare (2026-09-23). */
+[data-chrome-style='float'] .header-bar button:not(.bg-accent):not(.session-strip *) {
+  filter: drop-shadow(0 0 2px color-mix(in srgb, currentColor 24%, transparent));
+}
+/* One wallpaper-derived icon tint across the header, only when the sampler
+   produced one; accent states, badges and the selected segment keep theirs. */
+[data-wallpaper] [data-chrome-style='float'] .header-bar button[data-wallpaper-control-ink]:not(.bg-accent):not(.text-amber-700):not(.text-accent):not([aria-pressed='true']) > svg {
+  color: var(--wallpaper-header-ink);
+}
+/* A worded header button (Projects / Pages' "Back to chat · Esc") takes the
+   same ink for its words; the key hint stays quieter. Badges (a span with its
+   own fill) keep their colours. */
+[data-wallpaper] [data-chrome-style='float'] .header-bar > .header-controls-right > div > button[data-wallpaper-control-ink]:not(.bg-accent) > span:not([class*='bg-']) {
+  color: var(--wallpaper-header-ink);
+}
+[data-wallpaper] [data-chrome-style='float'] .header-bar > .header-controls-right > div > button[data-wallpaper-control-ink]:not(.bg-accent) > span:is(.text-fg-muted, .text-fg-faint) {
+  opacity: .7;
+}
+
+/* ── Session switcher ────────────────────────────────────────────────────── */
+/* The selected session lets more wallpaper through; its label keeps the
+   theme's muted text. */
+[data-chrome-style='float'] .session-strip [data-session-id].bg-panel {
+  background-color: color-mix(in srgb, var(--panel) 26%, transparent);
+  border-color: color-mix(in srgb, var(--fg) 20%, transparent);
+}
+/* Status dots: no glow, ring or backing (Destin, 2026-09-23). Idle's inline
+   half-opacity is lifted so it does not vanish into the wallpaper. */
+[data-chrome-style='float'] .session-strip .session-dot[data-status='gray'] {
+  opacity: 0.85 !important;
+}
+/* On a wallpaper, each dot's colour is tuned to what is behind it: same hue and
+   saturation, a small nudge in lightness only (wallpaper-header-ink.ts →
+   tuneDot), so red stays vibrant red. */
+[data-wallpaper] [data-chrome-style='float'] .header-bar[data-wallpaper-ink] .session-strip .session-dot[data-wallpaper-dot-ink] {
+  background-color: var(--wallpaper-status-gray) !important;
+  box-shadow: none;
+}
+[data-wallpaper] [data-chrome-style='float'] .header-bar[data-wallpaper-ink] .session-strip .session-dot[data-wallpaper-dot-ink][data-status='red'] { background-color: var(--wallpaper-status-red) !important; }
+[data-wallpaper] [data-chrome-style='float'] .header-bar[data-wallpaper-ink] .session-strip .session-dot[data-wallpaper-dot-ink][data-status='green'] { background-color: var(--wallpaper-status-green) !important; }
+[data-wallpaper] [data-chrome-style='float'] .header-bar[data-wallpaper-ink] .session-strip .session-dot[data-wallpaper-dot-ink][data-status='blue'] { background-color: var(--wallpaper-status-blue) !important; }
+[data-wallpaper] [data-chrome-style='float'] .header-bar[data-wallpaper-ink] .session-strip .session-dot[data-wallpaper-dot-ink][data-status='amber'] { background-color: var(--wallpaper-status-amber) !important; }
+[data-wallpaper] [data-chrome-style='float'] .header-bar[data-wallpaper-ink] .session-strip .session-dot[data-wallpaper-dot-ink][data-status='gray'] {
+  opacity: 1 !important;
+  animation: none !important;
+}
+/* The inline breathe animation bottoms at 0.3; these dots get a 0.8 floor.
+   Keeps the low-cost stepped timing. */
+@keyframes wallpaper-status-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.8; }
+}
+[data-wallpaper] [data-chrome-style='float'] .header-bar[data-wallpaper-ink] .session-strip .session-dot[data-wallpaper-dot-ink]:not([data-status='gray']) {
+  animation: wallpaper-status-breathe 2s steps(8) infinite !important;
+}
+/* The breathing override is !important, so both reduced-motion preferences need
+   equally strong, later gates. */
+[data-wallpaper][data-reduced-effects] [data-chrome-style='float'] .header-bar[data-wallpaper-ink] .session-strip .session-dot[data-wallpaper-dot-ink]:not([data-status='gray']) {
+  animation: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-wallpaper] [data-chrome-style='float'] .header-bar[data-wallpaper-ink] .session-strip .session-dot[data-wallpaper-dot-ink]:not([data-status='gray']) {
+    animation: none !important;
+  }
+}
+
+/* ── Bottom text over the wallpaper ──────────────────────────────────────────
+   The hook sets --control-ink and data-bottom-ink on EACH bottom control from
+   the wallpaper right behind it. Only the theme's plain text colours are
+   swapped; a meaningful colour is kept — the model and permission chips set
+   theirs inline (style="color: …"); an inline THEME grey (var(--fg…), e.g.
+   NORMAL) is still plain text and is swapped. Tag dots use their own classes. */
+[data-chrome-style='float'] :is(.quick-chip, .quick-chip-edit, .status-bar .status-chip)[data-bottom-ink],
+[data-chrome-style='float'] .status-bar > button[data-bottom-ink]:is(:not([style*='color']), [style*='color: var(--fg']),
+[data-chrome-style='float'] :is(.status-bar > button[data-bottom-ink]:is(:not([style*='color']), [style*='color: var(--fg']), .status-bar .status-chip[data-bottom-ink]) :is(.text-fg, .text-fg-2, .text-fg-muted, .text-fg-dim),
+[data-chrome-style='float'] .input-bar-container form[data-bottom-ink] :is(textarea, button:not([class^='bg-']):not([class*=' bg-'])) {
+  color: var(--control-ink) !important;
+}
+[data-chrome-style='float'] .input-bar-container form[data-bottom-ink] textarea::placeholder {
+  color: color-mix(in srgb, var(--control-ink) 70%, transparent) !important;
+}
+
+/* ── Session menu and scroll bars ─────────────────────────────────────────────
+   Destin, 2026-09-24: the session menu should have "the opacity and such" of
+   the session switcher and header buttons, and the scroll bars should match.
+   The menu takes the switcher's exact surface; the class is its own
+   (SessionStrip.tsx) so the app's other pop-up menus keep theirs. */
+[data-chrome-style='float'] .session-menu.glass-overlay {
+  border-color: transparent !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--edge) 40%, transparent), 0 8px 24px -10px rgba(0, 0, 0, .3) !important;
+}
+/* The menu's see-through fill (24%) and its selected row come WITH its frost,
+   from theme-engine.ts (FLOAT_CHROME_GLASS): without a blur — a flat theme,
+   "Reduced effects", a zero blur slider — a 24% fill left the chat behind it
+   sharp through the rows, so the menu keeps the app's normal overlay there. */
+/* The session list's edge fade. .scroll-fade paints a solid --panel gradient
+   over the rows' ends, which on this see-through menu read as a dark band.
+   Here the rows themselves fade to clear, like messages under the controls
+   (R7-1: "make this fade/scroll effect match the new effect we're using
+   elsewhere"). The painted pseudos carry matching negative margins, so hiding
+   them moves nothing. No row in this list has a blur of its own, so masking
+   the list costs no glass. */
+[data-chrome-style='float'] .session-menu .scroll-fade::before,
+[data-chrome-style='float'] .session-menu .scroll-fade::after {
+  display: none;
+}
+[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-top='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 28px);
+}
+[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-bottom='true'] {
+  -webkit-mask-image: linear-gradient(to top, transparent 0, black 28px);
+  mask-image: linear-gradient(to top, transparent 0, black 28px);
+}
+[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-top='true'][data-fade-bottom='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
+}
+
+/* Scroll bars: the same light see-through fill with a hairline edge, instead of
+   the theme's solid grey bar. Tokens, so every scroll bar (including the
+   terminal's drawn thumb) follows. */
+[data-chrome-style='float'] {
+  --scrollbar-thumb: color-mix(in srgb, var(--inset) 45%, transparent);
+  --scrollbar-hover: color-mix(in srgb, var(--inset) 70%, transparent);
+}
+/* The fill is restated (not just the tokens): a theme's own custom_css can
+   paint the thumb directly — Golden Sunbreak draws a solid gold bar. The
+   float selector outranks a bare ::-webkit-scrollbar-thumb. */
+[data-chrome-style='float'] ::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--edge) 55%, transparent);
+}
+[data-chrome-style='float'] ::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+}
+
+/* ═══ Beyond the chat: side pane, Projects, Pages, terminal ════════════════
+   Destin, 2026-09-23: these "match the transparent/blurred background styling
+   used elsewhere in this new theme/chrome style". Each large surface becomes a
+   floating SHEET — the message box's recipe (faint fill, hairline ring, soft
+   drop, heavy frost) — with the solid layers inside it cleared so the frost is
+   what you see. One variable, so the sheet's density is one number.
+   DENSITY: the controls' 16% fill left a file list's dark text unreadable over a
+   dark stretch of wallpaper, so a sheet takes the chat messages' density — the
+   theme's own panels-opacity, which every theme already tunes for reading. */
+[data-chrome-style='float'] {
+  --float-sheet-fill: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
+  --float-sheet-ring: inset 0 0 0 1px color-mix(in srgb, var(--edge) 40%, transparent);
+  --float-sheet-drop: 0 8px 24px -10px rgba(0, 0, 0, .3);
+}
+
+/* ── Session Files / Games pane ─────────────────────────────────────────────
+   Floats clear of the header and the chips (the gaps 'floating' uses) instead
+   of butting against the invisible bars. */
+[data-chrome-style='float'] .framed-shell > .drawer-pane {
+  margin-top: calc(var(--top-chrome-bottom, 3rem) + 6px);
+  margin-bottom: calc(var(--bottom-chrome-height, 5rem) + 6px);
+  margin-right: 8px;
+  background-color: var(--float-sheet-fill) !important;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--float-sheet-ring), var(--float-sheet-drop);
+}
+/* Its frost is ONE blur for the whole pane (theme-engine.ts), its rows and
+   cards below get none: a filter per repeated card is the paint bug
+   react-renderer.md warns about. */
+/* The pane's own interior layers were solid --inset; clear them. */
+[data-chrome-style='float'] .drawer-pane :is(.drawer-aside, .game-panel) {
+  background-color: transparent !important;
+}
+/* Cards and fields inside the pane wear the controls' light surface. */
+[data-chrome-style='float'] .drawer-pane :is(.bg-well, .bg-inset, .bg-panel):not(.game-panel):not(.drawer-aside) {
+  background-color: color-mix(in srgb, var(--inset) 22%, transparent) !important;
+  border-color: color-mix(in srgb, var(--edge) 45%, transparent) !important;
+}
+
+/* ── Projects and Pages ─────────────────────────────────────────────────────
+   A screen is a solid sheet in every other style. Here the sheet clears to the
+   wallpaper and its panes become floating sheets; its band is already a
+   .header-bar, so its buttons pick up the header's floating surface. The chat
+   column under the screen is hidden so the frost samples the wallpaper, not the
+   chat (visibility, not display: it keeps its layout and the terminal's size). */
+[data-chrome-style='float'] .screen-view {
+  background-color: transparent !important;
+}
+[data-chrome-style='float'] [data-screen-open='true'] {
+  visibility: hidden;
+}
+[data-chrome-style='float'] .screen-view .screen-body {
+  --frame-edge: 8px;
+  padding-top: 6px;
+}
+[data-chrome-style='float'] .screen-pane {
+  background-color: var(--float-sheet-fill) !important;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--float-sheet-ring), var(--float-sheet-drop);
+}
+/* Cards on a screen (the project hero, file tiles, the search field): the
+   light surface, no blur of their own. */
+[data-chrome-style='float'] .screen-pane :is(.bg-panel, .bg-inset, .bg-well, .bg-canvas) {
+  background-color: color-mix(in srgb, var(--inset) 22%, transparent) !important;
+  border-color: color-mix(in srgb, var(--edge) 45%, transparent) !important;
+}
+
+/* ── Terminal ───────────────────────────────────────────────────────────────
+   The terminal already sits on a pre-blurred copy of the wallpaper (painted
+   once — no live blur), full-bleed behind the header. Here it becomes an inset
+   floating sheet like the others. Desktop only: on phones the message box stays
+   under the terminal and the terminal's box is sized by the app, so it keeps
+   today's look. The inset is theme-driven, never view-driven, so the terminal
+   is one size in both views (a resize would make the PTY re-emit its buffer). */
+html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scroll {
+  top: calc(var(--top-chrome-bottom, 3rem) + 6px) !important;
+  left: 8px !important;
+  right: 8px !important;
+  bottom: 8px !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--float-sheet-ring), var(--float-sheet-drop);
+  /* The grid fills the card edge to edge. Its old insets were measured from the
+     window, and any inset here leaves an untinted strip between the card's
+     edge and the tinted grid (Destin, 2026-09-24: "notice the gaps"). The
+     breathing room comes from padding on .xterm below instead, which sits
+     inside the tinted grid and which xterm's fit step subtracts. */
+  --terminal-top-inset: 0px;
+  --terminal-side-inset: 0px;
+  --terminal-bottom-inset: 0px;
+}
+html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scroll .xterm {
+  padding: 8px 6px 6px 10px;
+}
+/* Keep the blurred wallpaper copy aligned with the real wallpaper: stretch it
+   back out to the window edges the card was pulled in from. */
+html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scroll > .terminal-wallpaper {
+  inset: calc(-1 * (var(--top-chrome-bottom, 3rem) + 6px)) -8px -8px -8px !important;
+}

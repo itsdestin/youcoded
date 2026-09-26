@@ -77,6 +77,24 @@ describe('IPC channel consistency', () => {
   const preloadIpc = ipcConstants(preloadSource, /const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
   const typesIpc = ipcConstants(typesSource, /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
 
+  test('handoff channels explicitly refuse Android-local while both desktop transports expose them', () => {
+    const kotlin = readSource('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+    const host = readSource('src', 'main', 'remote-server.ts');
+    const shim = readSource('src', 'renderer', 'remote-shim.ts');
+    // WHY: a missing Android branch returns unsupported by default, but explicit refusal pins the intent.
+    for (const [name, action] of Object.entries({ HANDOFF_BEGIN: 'begin', HANDOFF_STATUS: 'status',
+      HANDOFF_WAIT: 'wait', HANDOFF_RETRY: 'retry', HANDOFF_SAVED_COPY: 'saved-copy', HANDOFF_FORCE: 'force',
+      HANDOFF_CANCEL: 'cancel', HANDOFF_CREATE_PARAMS: 'create-params' })) {
+      const channel = `handoff:${action}`;
+      expect(preloadIpc.get(name)).toBe(channel);
+      expect(typesIpc.get(name)).toBe(channel);
+      expect(kotlin).toContain(`"${channel}"`);
+      expect(host).toContain(`case '${channel}':`);
+      expect(shim).toContain(`invoke('${channel}'`);
+    }
+    expect(kotlin).toMatch(/"handoff:create-params"\s*->\s*\{[\s\S]*?put\("unsupported", true\)/);
+  });
+
   // Without this, every assertion below passes vacuously the moment one of the
   // two extractions stops matching — which has happened here before.
   test('both IPC maps were actually parsed', () => {
@@ -381,6 +399,43 @@ describe('native:retry channel parity', () => {
       'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
     ));
     expect(src).toContain(`"${CHANNEL}"`);
+  });
+});
+
+// session:menu-lock — the one-device-at-a-time lease for answering a Claude Code
+// menu by verified navigation (main/menu-answer-lock.ts). WHY every surface is
+// pinned here (2026-09-24): the constant check above only compares preload with
+// shared/types.ts. If remote-server or Kotlin dropped the case, a phone's lock ask
+// would get `unsupported` — and a desktop window and a phone could then both type
+// arrows and Enter into one startup dialog, combining into an answer neither
+// person chose (e.g. trusting a folder). The desktop IPC handler and the remote
+// host must also share the ONE host instance, or each would grant its own lease.
+describe('session:menu-lock channel parity', () => {
+  const CHANNEL = 'session:menu-lock';
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+
+  it('is declared in shared/types.ts and preload.ts under the same constant', () => {
+    expect(read('src', 'shared', 'types.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
+    expect(read('src', 'main', 'preload.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
+  });
+  it('is invoked by preload.ts', () => {
+    expect(read('src', 'main', 'preload.ts')).toMatch(/ipcRenderer\.invoke\(IPC\.SESSION_MENU_LOCK\b/);
+  });
+  it('is handled in ipc-handlers.ts by the shared host lock', () => {
+    expect(read('src', 'main', 'ipc-handlers.ts')).toMatch(/ipcMain\.handle\(IPC\.SESSION_MENU_LOCK,[^\n]*menuAnswerLock\.handle\(/);
+  });
+  it('is invoked by remote-shim.ts', () => {
+    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`invoke('${CHANNEL}'`);
+  });
+  it('is handled in remote-server.ts by the shared host lock', () => {
+    expect(read('src', 'main', 'remote-server.ts')).toMatch(/case 'session:menu-lock':[^\n]*menuAnswerLock\.handle\(/);
+  });
+  it('is handled by SessionService.kt (Android)', () => {
+    const src = readSourceFile(path.join(
+      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
+    ));
+    expect(src).toMatch(/"session:menu-lock"\s*->/);
   });
 });
 
@@ -919,7 +974,7 @@ describe('native runtime capability parity', () => {
 
 describe('native:*/provider:* channel parity', () => {
   const NEW_TYPES = [
-    'native:send', 'native:interrupt', 'native:set-binding', 'native:set-permission-mode',
+    'native:send', 'native:interrupt', 'native:set-binding', 'native:switch-model', 'native:set-permission-mode',
     // Task 14 — read-side mode fetch that seeds the chip on create/resume.
     'native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:sessions-list',
     'native:get-context-preferences', 'native:set-context-preferences',
@@ -932,6 +987,7 @@ describe('native:*/provider:* channel parity', () => {
   const CHANNEL_TO_CONST: Record<string, string> = {
     'native:send': 'IPC.NATIVE_SEND', 'native:interrupt': 'IPC.NATIVE_INTERRUPT',
     'native:set-binding': 'IPC.NATIVE_SET_BINDING', 'native:set-permission-mode': 'IPC.NATIVE_SET_PERMISSION_MODE',
+    'native:switch-model': 'IPC.NATIVE_SWITCH_MODEL',
     'native:get-permission-mode': 'IPC.NATIVE_GET_PERMISSION_MODE',
     'native:get-context-preferences': 'IPC.NATIVE_GET_CONTEXT_PREFERENCES',
     'native:set-context-preferences': 'IPC.NATIVE_SET_CONTEXT_PREFERENCES',
@@ -1058,6 +1114,109 @@ describe('custom tags + notes channel parity', () => {
       expect(sessionService).toContain(ch);
     });
   }
+});
+
+// Welcome back (design 2026-09-24 §3, plan T2): the per-install "sessions open
+// at last shutdown" list. HAND-WRITTEN parity block (design §6) — the
+// automatic check only diffs preload.ts against shared/types.ts (review 2 D7),
+// so it can't see remote-shim.ts, remote-server.ts or SessionService.kt drift.
+// Desktop-only (S-phone): remote-server.ts and SessionService.kt must always
+// answer as if nothing is offered, never carry the real store.
+describe('session:reopen-list / session:forget-reopen channel parity (Welcome back)', () => {
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+  const preload = read('src', 'main', 'preload.ts');
+  const remoteShim = read('src', 'renderer', 'remote-shim.ts');
+  const remoteServer = read('src', 'main', 'remote-server.ts');
+  const ipcHandlers = read('src', 'main', 'ipc-handlers.ts');
+  const kotlin = read('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+
+  it('preload.ts declares both channel strings and exposes both methods', () => {
+    expect(preload).toContain("'session:reopen-list'");
+    expect(preload).toContain("'session:forget-reopen'");
+    expect(preload).toMatch(/reopenList:.*ipcRenderer\.invoke\(IPC\.SESSION_REOPEN_LIST\)/s);
+    expect(preload).toMatch(/forgetReopen:.*ipcRenderer\.invoke\(IPC\.SESSION_FORGET_REOPEN/s);
+  });
+
+  it('remote-shim.ts invokes both channels', () => {
+    expect(remoteShim).toContain("invoke('session:reopen-list')");
+    expect(remoteShim).toContain("invoke('session:forget-reopen'");
+  });
+
+  it('ipc-handlers.ts awaits the store\'s ready promise for both handlers', () => {
+    expect(ipcHandlers).toMatch(/ipcMain\.handle\(IPC\.SESSION_REOPEN_LIST,/);
+    expect(ipcHandlers).toMatch(/ipcMain\.handle\(IPC\.SESSION_FORGET_REOPEN,/);
+    expect(ipcHandlers).toContain('await welcomeBackStore.ready');
+  });
+
+  it('remote-server.ts (a phone never shows this screen) answers []/{ok:true}', () => {
+    expect(remoteServer).toContain("case 'session:reopen-list'");
+    expect(remoteServer).toContain("case 'session:forget-reopen'");
+    // Scoped to the case body, not the whole file — a bare "id, []" match
+    // elsewhere would pass vacuously.
+    const reopenBlock = remoteServer.slice(remoteServer.indexOf("case 'session:reopen-list'"), remoteServer.indexOf("case 'session:forget-reopen'"));
+    expect(reopenBlock).toContain('this.respond(client.ws, type, id, []);');
+    const forgetBlock = remoteServer.slice(remoteServer.indexOf("case 'session:forget-reopen'"), remoteServer.indexOf("case 'session:forget-reopen'") + 300);
+    expect(forgetBlock).toContain('this.respond(client.ws, type, id, { ok: true });');
+  });
+
+  it('SessionService.kt (Android never shows this screen) answers []/{ok:true}', () => {
+    expect(kotlin).toContain('"session:reopen-list" ->');
+    expect(kotlin).toContain('"session:forget-reopen" ->');
+    expect(kotlin).toMatch(/"session:reopen-list" ->[\s\S]{0,200}?org\.json\.JSONArray\(\)/);
+    expect(kotlin).toMatch(/"session:forget-reopen" ->[\s\S]{0,200}?JSONObject\(\)\.put\("ok", true\)/);
+  });
+});
+
+// Welcome back (design 2026-09-24 §4, plan T3): the in-app quit warning.
+// HAND-WRITTEN parity block (design §6, same reason as the reopen-list block
+// above) — the automatic check only diffs preload.ts against shared/types.ts.
+// Electron-only (design §3: "window.claude.window is the documented
+// Electron-only namespace... so the close pair lives there and needs no
+// shim/Android twin") — unlike session:reopen-list, this trio must be ABSENT
+// from remote-shim.ts and SessionService.kt, not answered there.
+describe('window:close-request / window:answer-close / window:close-request-cancelled parity (Welcome back)', () => {
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+  const preload = read('src', 'main', 'preload.ts');
+  const sharedTypes = read('src', 'shared', 'types.ts');
+  const remoteShim = read('src', 'renderer', 'remote-shim.ts');
+  const ipcHandlers = read('src', 'main', 'ipc-handlers.ts');
+  const main = read('src', 'main', 'main.ts');
+  const kotlin = read('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+
+  it('preload.ts and shared/types.ts carry byte-identical channel strings', () => {
+    for (const [name, channel] of [
+      ['WINDOW_CLOSE_REQUEST', 'window:close-request'],
+      ['WINDOW_ANSWER_CLOSE', 'window:answer-close'],
+      ['WINDOW_CLOSE_REQUEST_CANCELLED', 'window:close-request-cancelled'],
+    ] as const) {
+      expect(preload).toContain(`${name}: '${channel}'`);
+      expect(sharedTypes).toContain(`${name}: '${channel}'`);
+    }
+  });
+
+  it('preload.ts exposes the pair on window.claude.window, not a shared namespace', () => {
+    expect(preload).toMatch(/onCloseRequest:.*ipcRenderer\.on\(IPC\.WINDOW_CLOSE_REQUEST/s);
+    expect(preload).toMatch(/answerClose:.*ipcRenderer\.invoke\(IPC\.WINDOW_ANSWER_CLOSE/s);
+    expect(preload).toMatch(/onCloseRequestCancelled:.*ipcRenderer\.on\(IPC\.WINDOW_CLOSE_REQUEST_CANCELLED/s);
+  });
+
+  it('main.ts pushes the request/cancelled pair and handles the answer', () => {
+    expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST');
+    expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST_CANCELLED');
+    expect(main).toMatch(/ipcMain\.handle\(IPC\.WINDOW_ANSWER_CLOSE,/);
+    // ipc-handlers.ts owns every OTHER window:* handler (WINDOW_CLOSE,
+    // WINDOW_GET_ID, ...) — this one is registered in main.ts instead because
+    // it must reach the module-scope closeRequests manager, not a per-window
+    // BrowserWindow the way the rest of that file's handlers do.
+    expect(ipcHandlers).not.toContain('WINDOW_ANSWER_CLOSE');
+  });
+
+  it('is absent from remote-shim.ts and SessionService.kt — Electron-only, no shim/Android twin', () => {
+    for (const channel of ['window:close-request', 'window:answer-close', 'window:close-request-cancelled']) {
+      expect(remoteShim).not.toContain(channel);
+      expect(kotlin).not.toContain(channel);
+    }
+  });
 });
 
 // Local llama.cpp engine (Plan B, Task 9). The engine:* IPC surface must carry
@@ -1338,6 +1497,7 @@ describe('native:* channel parity', () => {
     'native:clear',
     'native:invoke-skill',
     'native:set-binding',
+    'native:switch-model',
     'native:set-permission-mode',
     'native:get-permission-mode',
     'native:sessions-list',
@@ -2166,5 +2326,57 @@ describe('Sign in with ChatGPT - the wiring that has no other guard', () => {
     // installer there leaves the user with no way forward at all.
     expect(main.slice(Math.max(0, i - 400), i), 'markSetupCompleted() must run before forceStep(AUTHENTICATE)')
       .toContain('markSetupCompleted()');
+  });
+});
+
+// YouCoded Pages Phase 2 — connections, keys and `pages:fetch`.
+//
+// A channel has FIVE surfaces (.claude/rules/ipc-bridge.md), and remote-server.ts
+// is the one that gets forgotten because everything else is exercised by simply
+// running the desktop app. A page's approval screen is reachable from a phone,
+// so a missing case there would leave Allow doing nothing at all over remote.
+describe('pages:* Phase 2 channel parity', () => {
+  const PHASE_2 = [
+    'pages:approve', 'pages:remove-connection', 'pages:refresh',
+    'pages:saved-keys', 'pages:delete-saved-key', 'pages:fetch',
+  ];
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+
+  it('every type is declared in shared/types.ts and preload.ts, which cannot import it', () => {
+    const shared = read('src', 'shared', 'types.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    for (const t of PHASE_2) {
+      expect(shared, t).toContain(`'${t}'`);
+      expect(preload, t).toContain(`'${t}'`);
+    }
+  });
+
+  it('every type is handled by the desktop IPC handlers', () => {
+    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    for (const t of PHASE_2) {
+      // ipc-handlers registers through the IPC.* constant, so the constant NAME
+      // is what to look for — resolved from the spelling preload declares.
+      const name = new RegExp(`(PAGES_[A-Z_]+): '${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`).exec(preload)?.[1];
+      expect(name, `no IPC constant is named for ${t}`).toBeTruthy();
+      expect(handlers, t).toContain(`IPC.${name}`);
+    }
+  });
+
+  it('every type is invoked by the remote shim AND answered by the remote host', () => {
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    const server = read('src', 'main', 'remote-server.ts');
+    for (const t of PHASE_2) {
+      expect(shim, t).toContain(`invoke('${t}'`);
+      expect(server, t).toContain(`case '${t}':`);
+    }
+  });
+
+  it('main, not the renderer, is where a pasted key from a phone is refused', () => {
+    // "No keys on the phone" was a renderer rule until design review 1 finding
+    // 13. The remote host must mark its caller remote, and the desktop handler
+    // must not — otherwise either every phone can paste a key, or no desktop can.
+    expect(read('src', 'main', 'remote-server.ts')).toMatch(/\.approve\([\s\S]{0,200}?remote: true/);
+    expect(read('src', 'main', 'ipc-handlers.ts')).toMatch(/pagesService\.approve\([\s\S]{0,200}?remote: false/);
   });
 });

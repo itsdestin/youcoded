@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { useOnScreen } from '../state/on-screen-context';
 
 // One clock for every on-screen seconds counter (simplification audit W19).
 //
@@ -70,7 +71,20 @@ const getNow = () => now;
  * `active` — pass the component's own "still counting" condition so a
  * finished card unsubscribes. Inactive callers get the last reading and never
  * re-render for it; they should be reading their own end timestamp instead.
+ *
+ * Also stands still inside a chat that is not on screen (OnScreenContext).
  */
 export function useSecondsTick(active: boolean): number {
-  return useSyncExternalStore(active ? subscribe : subscribeNever, getNow, getNow);
+  // WHY (2026-09-23): every open session keeps its chat mounted, so a running
+  // command's clock in a background tab re-rendered its card every second for
+  // nobody. Such a counter unsubscribes until its chat is shown again.
+  const onScreen = useOnScreen();
+  const counting = active && onScreen;
+  // A counter that starts (or comes back on screen) while NO clock is running
+  // would otherwise draw its first frame from a reading taken whenever the clock
+  // last ran — possibly minutes old — and jump a frame later once subscribing
+  // refreshes it. Freshen the reading first. Safe during render: with no clock
+  // running, no counter on screen is showing the old value.
+  if (counting && timerId === null && !document.hidden) now = Date.now();
+  return useSyncExternalStore(counting ? subscribe : subscribeNever, getNow, getNow);
 }

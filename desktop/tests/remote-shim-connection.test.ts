@@ -802,6 +802,93 @@ describe('remote-shim — overlapping connections', () => {
     });
   });
 
+  // The Android app's saved computers live in its own runtime, but while it is paired its one
+  // connection talks to the computer, which has no such list. Removing a computer then answered
+  // "done" and changed nothing: the pairing (address and password) stayed on the phone.
+  describe('an Android app paired to a computer edits the saved computers on the phone', () => {
+    async function paired() {
+      await setup({ protocol: 'file:', search: '?bridgeToken=bt&bridgePort=9901' });
+      const pairing = shim.connectToHost('desk', 9900, 'pw');
+      for (let i = 0; i < 200 && FakeWebSocket.instances.length === 0; i++) await new Promise((r) => setImmediate(r));
+      const desk = latest();
+      desk.open();
+      desk.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await pairing;
+      return desk;
+    }
+
+    it('removing a computer goes to the phone’s own runtime, which answers it', async () => {
+      const desk = await paired();
+      const removing = claude().android.removePairedDevice('desk', 9900);
+      const local = latest();
+      expect(local).not.toBe(desk);
+      expect(local.url).toBe('ws://localhost:9901');
+      local.open();
+      expect(local.sentOf('auth')).toEqual([{ type: 'auth', token: 'bt' }]);
+      local.receive({ type: 'auth:ok', platform: 'android' });
+      const [req] = local.sentOf('android:remove-paired-device');
+      expect(req.payload).toEqual({ host: 'desk', port: 9900 });
+      local.receive({ type: 'android:remove-paired-device:response', id: req.id, payload: true });
+      await expect(removing).resolves.toBe(true);
+      expect(local.readyState).not.toBe(FakeWebSocket.OPEN);     // the short connection is closed
+      expect(desk.sentOf('android:remove-paired-device')).toHaveLength(0);
+      expect(claude().session.canSend()).toBe(true);             // the computer connection is untouched
+    });
+
+    it('the list and a save reach the phone too', async () => {
+      await paired();
+      const listing = claude().android.getPairedDevices();
+      const local = latest();
+      local.open();
+      local.receive({ type: 'auth:ok', platform: 'android' });
+      const [req] = local.sentOf('android:get-paired-devices');
+      local.receive({ type: 'android:get-paired-devices:response', id: req.id, payload: { devices: [{ host: 'desk', port: 9900 }] } });
+      await expect(listing).resolves.toEqual({ devices: [{ host: 'desk', port: 9900 }] });
+
+      const saving = claude().android.savePairedDevice({ name: 'Desk', host: 'desk', port: 9900, password: 'pw' });
+      const local2 = latest();
+      local2.open();
+      local2.receive({ type: 'auth:ok', platform: 'android' });
+      const [save] = local2.sentOf('android:save-paired-device');
+      local2.receive({ type: 'android:save-paired-device:response', id: save.id, payload: true });
+      await expect(saving).resolves.toBe(true);
+    });
+
+    it('a phone runtime that never answers fails the call instead of pretending it worked', async () => {
+      await paired();
+      const removing = claude().android.removePairedDevice('desk', 9900);
+      latest().fireClose(1006);
+      await expect(removing).rejects.toThrow();
+    });
+  });
+
+  // The computer tells every client `platform: 'desktop'`. A phone browser adopted it and so
+  // was never treated as a touch device: its terminal took typing through xterm's own hidden
+  // box (the soft keyboard and scrolling misbehaved). The DEVICE decides; the host's word
+  // stays for a mouse-first screen, so a laptop browser behaves as it always has.
+  describe('the platform a browser reports after signing in', () => {
+    async function signInWithPointer(coarse: boolean) {
+      await setup();
+      g.matchMedia = (q: string) => ({ matches: coarse && q === '(pointer: coarse)' });
+      delete g.__PLATFORM__;
+      const p = shim.connect('pw', false);
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await p;
+    }
+    afterEach(() => { delete g.matchMedia; delete g.__PLATFORM__; });
+
+    it('a phone (touch first) is a touch browser, not the computer it talks to', async () => {
+      await signInWithPointer(true);
+      expect(g.__PLATFORM__).toBe('browser');
+    });
+
+    it('a mouse-first browser keeps what the computer said', async () => {
+      await signInWithPointer(false);
+      expect(g.__PLATFORM__).toBe('desktop');
+    });
+  });
+
   describe('an older connection attempt cannot disturb a newer one', () => {
     it('"Enter password instead", then the old attempt gets through: still connected, still able to send', async () => {
       await setup();

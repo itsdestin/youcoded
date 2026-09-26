@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
+import { EventEmitter } from 'events';
 import os from 'os';
 import path from 'path';
 import { SubagentIndex } from '../src/main/subagent-index';
@@ -169,7 +170,7 @@ describe('SubagentWatcher', () => {
     expect(emitted).toHaveLength(1); // no duplicate emit
   });
 
-  it('getHistory yields all events from all subagent files for replay', () => {
+  it('getHistory yields all events from all subagent files for replay', async () => {
     writeMeta(subagentsDir, 'abc', 'Find bug', 'Explore');
     appendLine(subagentsDir, 'abc', toolUseLine('u1', 'toolu_X', 'Read', { file_path: '/a' }));
     writeMeta(subagentsDir, 'def', 'Other', 'Plan');
@@ -179,7 +180,7 @@ describe('SubagentWatcher', () => {
     historyIndex.recordParentAgentToolUse('toolu_P1', 'Find bug', 'Explore');
     historyIndex.recordParentAgentToolUse('toolu_P2', 'Other', 'Plan');
 
-    const events = watcher.getHistory(historyIndex);
+    const events = await watcher.getHistory(historyIndex);
     expect(events.length).toBe(2);
     const byTool: Record<string, TranscriptEvent> = {};
     for (const e of events) byTool[e.data.toolName!] = e;
@@ -215,6 +216,100 @@ describe('SubagentWatcher', () => {
     expect(emitted[0].data.parentAgentToolUseId).toBe('toolu_parent');
     expect(emitted[1].data.parentAgentToolUseId).toBe('toolu_parent');
     expect(emitted[0].data.agentId).toBe('abc');
+  });
+
+  // ---- Blocking-call batch B1 (2026-09-24): the scan and replay are async ----
+
+  it('getHistory never touches a blocking fs call, and a missing directory is an empty replay', async () => {
+    writeMeta(subagentsDir, 'abc', 'Find bug', 'Explore');
+    appendLine(subagentsDir, 'abc', toolUseLine('u1', 'toolu_X', 'Read', { file_path: '/a' }));
+    const historyIndex = new SubagentIndex();
+    historyIndex.recordParentAgentToolUse('toolu_P1', 'Find bug', 'Explore');
+    const sync = [vi.spyOn(fs, 'readFileSync'), vi.spyOn(fs, 'readdirSync'), vi.spyOn(fs, 'existsSync')];
+    try {
+      expect(await watcher.getHistory(historyIndex)).toHaveLength(1);
+      for (const spy of sync) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of sync) spy.mockRestore();
+    }
+    const gone = new SubagentWatcher({ sessionId: 's', subagentsDir: path.join(tmpRoot, 'nope'), index, emit: () => undefined });
+    expect(await gone.getHistory(new SubagentIndex())).toEqual([]);
+  });
+
+  it('getHistory binds same-description helpers in directory order, even though reads run in parallel', async () => {
+    // Two helpers share a description: binding is FIFO over parents in the
+    // order the directory lists the files — exactly the sync version's order.
+    for (const id of ['a1', 'a2', 'a3']) {
+      writeMeta(subagentsDir, id, 'Same task', 'Explore');
+      appendLine(subagentsDir, id, toolUseLine(`u-${id}`, `toolu_${id}`, 'Read', { file_path: `/${id}` }));
+    }
+    const order = fs.readdirSync(subagentsDir).filter(n => n.endsWith('.jsonl')).map(n => n.slice(6, -6));
+    const historyIndex = new SubagentIndex();
+    for (const p of ['P1', 'P2', 'P3']) historyIndex.recordParentAgentToolUse(p, 'Same task', 'Explore');
+    const events = await watcher.getHistory(historyIndex);
+    expect(events.map(e => e.data.agentId)).toEqual(order);
+    expect(events.map(e => e.data.parentAgentToolUseId)).toEqual(['P1', 'P2', 'P3']);
+  });
+
+  it('overlapping directory scans coalesce: a burst of triggers is one scan plus one rerun', async () => {
+    watcher.start();
+    await vi.waitFor(() => expect((watcher as any).scanInFlight).toBeNull(), { timeout: SETTLE_MS });
+    const readdir = vi.spyOn(fs.promises, 'readdir');
+    try {
+      for (let i = 0; i < 20; i++) watcher.kickScan(); // e.g. 20 appended lines → 20 dir events
+      await vi.waitFor(() => expect((watcher as any).scanInFlight).toBeNull(), { timeout: SETTLE_MS });
+      expect(readdir.mock.calls.length).toBeLessThanOrEqual(2);
+      expect(readdir.mock.calls.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it('stop() while a scan is in flight tracks nothing and leaves no watch behind', async () => {
+    writeMeta(subagentsDir, 'late', 'Late', 'Explore');
+    appendLine(subagentsDir, 'late', toolUseLine('u-l', 'toolu_L', 'Read', { file_path: '/l' }));
+    index.recordParentAgentToolUse('toolu_parent_l', 'Late', 'Explore');
+    const watchSpy = vi.spyOn(fs, 'watch');
+    try {
+      watcher.start(); // scan starts (async readdir)…
+      watcher.stop();  // …and the session closes before it lands
+      await wait(100); // negative assertion — a fixed settle is correct here
+      expect(watcher.trackedCount()).toBe(0);
+      expect(emitted).toEqual([]);
+      // Only the directory watch start() attaches synchronously — no per-helper watch.
+      expect(watchSpy.mock.calls.every(c => c[0] === subagentsDir)).toBe(true);
+    } finally {
+      watchSpy.mockRestore();
+    }
+  });
+
+  it('a helper whose parent was recorded while its first read was in flight still emits (no lost output)', async () => {
+    // The race the async scan widened: tracked with no parent → first read in
+    // flight → the parent's Agent tool_use lands and flushAllPending() finds
+    // an EMPTY buffer → the read then buffers the lines. Before the fix nothing
+    // flushed them again, so the helper's output never showed.
+    writeMeta(subagentsDir, 'race', 'Race task', 'Explore');
+    appendLine(subagentsDir, 'race', toolUseLine('u-r', 'toolu_R', 'Read', { file_path: '/r' }));
+    const realOpen = fs.promises.open;
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (...args: Parameters<typeof realOpen>) => {
+      await gate;
+      return realOpen(...args);
+    }) as typeof realOpen);
+    try {
+      watcher.start();
+      await vi.waitFor(() => expect(watcher.trackedCount()).toBe(1), { timeout: SETTLE_MS });
+      await vi.waitFor(() => expect(openSpy).toHaveBeenCalled(), { timeout: SETTLE_MS }); // read is in flight
+      index.recordParentAgentToolUse('toolu_parent_r', 'Race task', 'Explore');
+      watcher.flushAllPending(); // what TranscriptWatcher does — nothing buffered yet
+      release();
+      await vi.waitFor(() => expect(emitted.map(e => e.data.toolUseId)).toEqual(['toolu_R']), { timeout: SETTLE_MS });
+      expect(emitted[0].data.parentAgentToolUseId).toBe('toolu_parent_r');
+    } finally {
+      release();
+      openSpy.mockRestore();
+    }
   });
 });
 
@@ -335,7 +430,7 @@ describe('SubagentWatcher timer lifecycle', () => {
     }, { timeout: SETTLE_MS });
   });
 
-  it('settleByParent stops the file poll but keeps fs.watch delivering late writes', async () => {
+  it('settleByParent releases the helper\'s own watch and poll, and a late write still arrives via the directory watch', async () => {
     fs.mkdirSync(subagentsDir, { recursive: true });
     writeMeta(subagentsDir, 'done', 'Finished task', 'claude');
     index.recordParentAgentToolUse('toolu_parent_done', 'Finished task', 'claude');
@@ -353,16 +448,53 @@ describe('SubagentWatcher timer lifecycle', () => {
       Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
     }
 
+    expect(watcher.hasActiveWatch('done')).toBe(true);
     await watcher.settleByParent('toolu_parent_done');
     expect(watcher.hasActivePoll('done')).toBe(false);
+    // Perf (many tabs): a finished helper no longer holds its own fs.watch —
+    // every helper ever spawned used to keep one until the session closed.
+    expect(watcher.hasActiveWatch('done')).toBe(false);
+    // The entry stays (offset only) so a re-scan never replays it from byte 0.
+    expect(watcher.trackedCount()).toBe(1);
 
-    // Late write after settle must still arrive (fs.watch stays attached —
-    // the settle only removes the belt-and-suspenders stat poll).
+    // Late write after settle must still arrive — the session's directory
+    // watch sees the write and drains the settled helper's file.
     const before = emitted.length;
     appendLine(subagentsDir, 'done', toolUseLine('u-d2', 'toolu_D2', 'Grep', { pattern: 'x' }));
     // fs.watch delivery of an external append — the old 20x50ms (1s) ceiling was
     // far under macOS FSEvents coalescing latency on a loaded runner.
     await vi.waitFor(() => expect(emitted.length).toBeGreaterThan(before), { timeout: WATCH_MS });
+  });
+
+  it('a directory re-scan after settle does not replay the settled helper', async () => {
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    writeMeta(subagentsDir, 'once', 'Once task', 'claude');
+    index.recordParentAgentToolUse('toolu_parent_once', 'Once task', 'claude');
+    appendLine(subagentsDir, 'once', toolUseLine('u-o1', 'toolu_O1', 'Read', { file_path: '/o' }));
+    watcher.start();
+    await vi.waitFor(() => expect(emitted.length).toBe(1), { timeout: SETTLE_MS });
+    await watcher.settleByParent('toolu_parent_once');
+    watcher.kickScan(); // re-scans the directory
+    await wait(100);
+    expect(emitted.length).toBe(1);
+    expect(watcher.hasActiveWatch('once')).toBe(false);
+  });
+
+  it('stop() (session close) releases every helper entry, settled or not', async () => {
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    writeMeta(subagentsDir, 'a1', 'Task one', 'claude');
+    writeMeta(subagentsDir, 'a2', 'Task two', 'claude');
+    index.recordParentAgentToolUse('toolu_parent_a1', 'Task one', 'claude');
+    index.recordParentAgentToolUse('toolu_parent_a2', 'Task two', 'claude');
+    appendLine(subagentsDir, 'a1', toolUseLine('u-a1', 'toolu_A1', 'Read', { file_path: '/a' }));
+    appendLine(subagentsDir, 'a2', toolUseLine('u-a2', 'toolu_A2', 'Read', { file_path: '/b' }));
+    watcher.start();
+    await vi.waitFor(() => expect(emitted.length).toBe(2), { timeout: SETTLE_MS });
+    await watcher.settleByParent('toolu_parent_a1');
+    expect(watcher.trackedCount()).toBe(2);
+    watcher.stop();
+    expect(watcher.trackedCount()).toBe(0);
+    expect(watcher.hasActiveWatch('a2')).toBe(false);
   });
 
   it('settleByParent for an unknown parent is a harmless no-op', async () => {
@@ -447,7 +579,7 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('a directory whose fs.watch cannot be attached falls back to the polls', () => {
+  it('a directory whose fs.watch cannot be attached falls back to the polls', async () => {
     setPlatform('linux');
     fs.mkdirSync(subagentsDir, { recursive: true });
     writeMeta(subagentsDir, 'nw', 'No watch', 'claude');
@@ -455,7 +587,54 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
     appendLine(subagentsDir, 'nw', toolUseLine('u-nw', 'toolu_NW', 'Read', { file_path: '/nw' }));
     vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('EMFILE'); });
     watcher.start();
+    // The helper is tracked by the async directory scan (B1), so its file poll
+    // arms a tick after start().
+    await vi.waitFor(() => expect(watcher.hasActivePoll('nw')).toBe(true), { timeout: SETTLE_MS });
     expect(vi.getTimerCount()).toBe(2); // directory poll + this helper's file poll
-    expect(watcher.hasActivePoll('nw')).toBe(true);
+  });
+
+  // A settled helper has no watch of its own, and a directory re-scan skips
+  // files it already tracks — so on the poll paths below, only the poll's
+  // drain of settled helpers reads output a background helper writes after
+  // its parent's tool result. Without it that output was silently lost.
+  it('with the directory watch failed, a settled helper\'s late write still arrives via the directory poll', async () => {
+    setPlatform('linux');
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    writeMeta(subagentsDir, 'lf', 'Late fallback', 'claude');
+    index.recordParentAgentToolUse('toolu_parent_lf', 'Late fallback', 'claude');
+    appendLine(subagentsDir, 'lf', toolUseLine('u-lf1', 'toolu_LF1', 'Read', { file_path: '/lf' }));
+    vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('EMFILE'); });
+    watcher.start();
+    await vi.waitFor(() => expect(emitted.length).toBe(1), { timeout: SETTLE_MS });
+    await watcher.settleByParent('toolu_parent_lf');
+    expect(watcher.hasActivePoll('lf')).toBe(false);
+
+    appendLine(subagentsDir, 'lf', toolUseLine('u-lf2', 'toolu_LF2', 'Grep', { pattern: 'x' }));
+    await vi.advanceTimersByTimeAsync(5000); // one directory-poll tick
+    await vi.waitFor(() => expect(emitted.map(e => e.data.toolUseId)).toContain('toolu_LF2'), { timeout: SETTLE_MS });
+    expect(emitted).toHaveLength(2); // drained once, not replayed
+  });
+
+  it('on Windows, a settled helper\'s late write the directory watch never reported arrives via the safety-net poll', async () => {
+    setPlatform('win32');
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    writeMeta(subagentsDir, 'lw', 'Late windows', 'claude');
+    index.recordParentAgentToolUse('toolu_parent_lw', 'Late windows', 'claude');
+    appendLine(subagentsDir, 'lw', toolUseLine('u-lw1', 'toolu_LW1', 'Read', { file_path: '/lw' }));
+    // Watches attach fine but never fire — a dropped Windows notification.
+    vi.spyOn(fs, 'watch').mockImplementation(() => {
+      const w = new EventEmitter() as unknown as fs.FSWatcher;
+      (w as any).close = () => undefined;
+      return w;
+    });
+    watcher.start();
+    await vi.waitFor(() => expect(emitted.length).toBe(1), { timeout: SETTLE_MS });
+    await watcher.settleByParent('toolu_parent_lw');
+    expect(watcher.hasActiveWatch('lw')).toBe(false);
+
+    appendLine(subagentsDir, 'lw', toolUseLine('u-lw2', 'toolu_LW2', 'Grep', { pattern: 'y' }));
+    await vi.advanceTimersByTimeAsync(5000); // one safety-net tick
+    await vi.waitFor(() => expect(emitted.map(e => e.data.toolUseId)).toContain('toolu_LW2'), { timeout: SETTLE_MS });
+    expect(emitted).toHaveLength(2);
   });
 });

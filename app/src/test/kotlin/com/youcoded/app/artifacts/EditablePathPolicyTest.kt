@@ -36,6 +36,19 @@ class EditablePathPolicyTest {
     }
 
     @Test
+    fun recordTrustMatchesTheSharedFixture() {
+        val text = javaClass.classLoader!!
+            .getResourceAsStream("artifacts/editable-path-policy-cases.json")!!
+            .bufferedReader().readText()
+        val cases = JSONObject(text).getJSONArray("recordPrivate")
+        for (i in 0 until cases.length()) {
+            val o = cases.getJSONObject(i)
+            val path = o.getString("path")
+            assertEquals(o.getBoolean("private"), EditablePathPolicy.privateForRecordTrust(path), "recordPrivate for $path")
+        }
+    }
+
+    @Test
     fun readBinaryDenyIncludesDotenv() {
         // isSensitivePath is the read-binary deny-list: sensitive set PLUS dotenv
         // (unlike protectedReadPath, which exempts dotenv for the edit flow).

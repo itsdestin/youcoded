@@ -510,6 +510,7 @@ describe('native resume', () => {
         expect.anything(), expect.anything(), expect.anything(),
         'native',
         { providerId: 'ulid-openrouter', modelId: 'gpt-5' },
+        'Native Chat',
       );
     });
 
@@ -537,6 +538,7 @@ describe('native resume', () => {
         expect.anything(), expect.anything(), expect.anything(),
         'native',
         { providerId: 'ulid-anthropic', modelId: 'claude-x' },
+        'Native Chat',
       );
     });
 
@@ -992,5 +994,37 @@ describe('preview panel', () => {
       await waitFor(() => expect(screen.getByRole('button', { name: 'Resume Session' })).toBeInTheDocument());
       expect((window as any).claude.chatsearch.read).not.toHaveBeenCalled();
     });
+  });
+});
+
+// Destin, 2026-09-25: the first Resume open "can seemingly load indefinitely".
+// A spinner alone never says whether anything is still happening; past a few
+// seconds the list says it is still loading and offers a fresh try.
+describe('ResumeBrowser — a slow load says so', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('shows nothing extra at first, "still loading" + Try again after 6 s, and Try again asks again', async () => {
+    vi.useFakeTimers();
+    const browse = vi.fn(() => new Promise(() => {}));        // never answers
+    (window as any).claude = {
+      session: { browse, setFlag: vi.fn(), setTag: vi.fn(), setNote: vi.fn() },
+      tags: { list: vi.fn().mockResolvedValue([]) },
+      providers: { catalog: vi.fn().mockResolvedValue([]), list: vi.fn().mockResolvedValue([]) },
+      on: {},
+    };
+    render(<ResumeBrowser open={true} onClose={() => {}} onResume={() => {}} defaultModel="sonnet" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5900); });
+    expect(screen.queryByText(/Still loading/)).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(screen.getByText('Still loading — this is taking longer than usual.')).toBeInTheDocument();
+
+    const callsBefore = browse.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(browse.mock.calls.length).toBe(callsBefore + 1);
+    // The wait starts over: the line goes away until another 6 s pass.
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(screen.queryByText(/Still loading/)).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(screen.getByText(/Still loading/)).toBeInTheDocument();
   });
 });

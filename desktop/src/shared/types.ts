@@ -69,6 +69,19 @@ export interface PortableModelRef {
 // Task 11 (cancel/edit queued messages): the 'queued' arm carries the host-
 // minted queueId (NativeSessionHost.send()'s randomUUID()) so the renderer can
 // target this exact entry later with native:queue-remove.
+/** Why a native Bash ask was forced below every stored rule, so no saved grant
+ *  could ever skip it (and the card offers no "Always allow"):
+ *  - 'removal': the command would remove the workspace, home folder, disk root
+ *    or a system folder (harness/tools/rm-target.ts); 'removal-if-empty': only
+ *    if a variable in the path is empty; 'removal-unknown': the folder is a
+ *    command's output or reached by a cd the text cannot follow;
+ *  - 'secret-path': the command reads a secret or credential file — the same
+ *    list the file tools refuse (harness/tools/bash-secret-paths.ts);
+ *    'secret-maybe': it could (a glob, a find with no usable filter).
+ *  The card's wording comes from this, so it never claims more than the check
+ *  knows (review N11). */
+export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe';
+
 export type NativeSendResult =
   | { status: 'sent' }
   | { status: 'queued'; queueId: string }
@@ -77,7 +90,19 @@ export type NativeSendResult =
   // created, 'starting' is one that has not finished starting yet (a big local
   // model can take a minute to load). One code for both is what told Destin a
   // brand-new session was "no longer running" — see NativeSessionHost.startingSends.
-  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' };
+  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' | 'compacting' };
+
+/** U11 — the model picker's native switch (`native:switch-model`). 'needs-summary'
+ *  means nothing changed yet: the chat is too long for the chosen model and the
+ *  renderer asks before summarizing. Every failure leaves the current model. */
+export type NativeSwitchFailure =
+  | 'not-live' | 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed'
+  | 'interrupted' | 'cannot-fit' | 'too-small' | 'error';
+export type NativeSwitchResult =
+  // `summarized`: a summary committed first, so its marker ends the chat's card.
+  | { status: 'switched'; summarized?: true }
+  | { status: 'needs-summary' }
+  | { status: 'failed'; reason: NativeSwitchFailure; detail?: string };
 
 export interface SessionInfo {
   id: string;
@@ -100,6 +125,9 @@ export interface SessionInfo {
   harnessId?: string;
   /** Model alias the session was started with (e.g. 'claude-sonnet-4-6') */
   model?: string;
+  /** The saved conversation this session resumed, when it resumed one. Lets a
+   *  pending handoff tab recognise its own session's creation push exactly. */
+  resumeSessionId?: string;
   /** Native runtime only: which KIND of provider the bound model runs on
    *  ('chatgpt' | 'openrouter' | 'local-engine' | …), as main already resolves
    *  it in conversations/portable-model.ts.
@@ -117,7 +145,24 @@ export interface SessionInfo {
    *  Consumed once by InputBar on first render after session switch; cleared via
    *  a consumed-set ref so it never re-fires on re-renders. */
   initialInput?: string;
+  /** Claude Code session that has NOT yet run its first hook — it is still on
+   *  its startup dialogs (trust, bypass, MCP approval). The HOST knows this; a
+   *  window or phone that connects mid-startup must not assume "already
+   *  running" and open the chat box onto a live dialog (dev-instance finding,
+   *  2026-09-24). Absent = started (older hosts). */
+  awaitingStart?: boolean;
 }
+
+// A refused resume creates no session. Keep it distinct from both startup
+// errors and offline access (which may still produce a real SessionInfo).
+export type SessionCreateResult = (SessionInfo & { reused?: true }) | { status: 'lease-denied'; device?: string };
+
+// WHY: only admitted attempts carry a real session; saved-copy is explicit consent, not confirmation.
+export type HandoffAttemptResult =
+  | { id: string; status: 'waiting' | 'incomplete' | 'cancelled' | 'failed'; cause?: string;
+      holder?: { deviceId: string; device: string } }
+  | { id: string; status: 'admitted'; source: 'confirmed' | 'saved-copy'; session: SessionInfo };
+export type HandoffCreateParams = { name: string; cwd: string; skipPermissions: boolean; resumeSessionId: string; provider: 'claude' | 'native'; model?: string; binding?: { providerId: string; modelId: string }; cols?: number; rows?: number; preset?: string };
 
 export interface HookEvent {
   type: string;
@@ -189,7 +234,26 @@ export type TranscriptEventType =
   // reducer and attribute the child's model to the parent. Bookkeeping only — it
   // never enters the timeline and never enters model history (history-rebuild.ts's
   // default branch drops it).
-  | 'subagent-usage';
+  | 'subagent-usage'
+  // Claude Code only: a background helper/command ended — parsed from its
+  // <task-notification>. The launching card's tool result is only "launched",
+  // so this is the ONLY signal the work is over (2026-09-24). Carries
+  // `data.backgroundTask`, and `data.toolUseId` when Claude Code names the call.
+  | 'background-task';
+
+/** A Claude Code background task's end state, as its <task-notification> says.
+ *  Claude Code writes 'completed' | 'failed' | 'killed' | 'stopped'; 'killed'
+ *  (the user or the model stopped it) is folded into 'stopped' here. */
+type CcBackgroundStatus = 'running' | 'completed' | 'failed' | 'stopped';
+
+/** See ToolCallState.ccBackground. `result` is a helper's final report;
+ *  `summary` is Claude Code's one-line account of how it ended. */
+export interface CcBackgroundRun {
+  taskId: string;
+  status: CcBackgroundStatus;
+  summary?: string;
+  result?: string;
+}
 
 /**
  * Opaque-to-the-renderer handle for "the page before this one". `offset` is the
@@ -222,17 +286,17 @@ export interface PageCursor {
 /** One page of conversation history, oldest -> newest within the page. */
 export interface TranscriptPageResult {
   events: TranscriptEvent[];
-  /** The handle for the NEXT (older) page; null when hasMore is false. */
-  cursor: PageCursor | null;
+  /** Handle for the next older page. */ cursor: PageCursor | null;
   hasMore: boolean;
+  /** Native page is idle. */ reconcileInterrupted?: boolean;
+  /** CC tool calls before the pre-spawn cutoff; new calls on this page stay live. */ reconcileInterruptedToolIds?: string[];
   /**
    * "I could not locate this session's transcript", as distinct from "you have
    * reached the beginning of the conversation" — which is what an empty page
    * with hasMore:false otherwise means, and which the renderer treats as final.
    *
    * These two were the same answer until 2026-09-07, so a transcript that was
-   * merely not locatable YET (a just-resumed CC session before its hook lands,
-   * a session whose process has exited, the buddy floater) permanently ended
+   * not locatable YET (resume before CC's hook, process exit, buddy) permanently ended
    * the conversation's scroll-back in that window. A caller must RETRY on this,
    * never record it. Absent means the answer is real.
    */
@@ -262,6 +326,19 @@ export interface TranscriptEvent {
     stopReason?: string;
     /** Edit/MultiEdit tool-result payloads carry structuredPatch hunks. */
     structuredPatch?: StructuredPatchHunk[];
+    /** Claude Code tool-result only: this call started work that keeps going
+     *  in the background (an Agent's `agentId`, or a Bash command's
+     *  `backgroundTaskId`), so the result is a launch receipt, not the outcome.
+     *  The outcome arrives later as a 'background-task' event. */
+    backgroundTaskId?: string;
+    /** Claude Code SendMessage tool-result only: the finished helper it resumed
+     *  (`toolUseResult.resumedAgentId`) — that helper's card works again. */
+    resumedTaskId?: string;
+    /** 'background-task' only: which task(s) ended and how. `taskIds` is a list
+     *  because Claude Code reports several orphaned commands in one notice on
+     *  resume. `result` is a helper's final report; `summary` is Claude Code's
+     *  one-line description ("Agent \"X\" finished", "... (exit code 0)"). */
+    backgroundTask?: { taskIds: string[]; status: Exclude<CcBackgroundStatus, 'running'>; summary?: string; result?: string };
     /** Native user-message events: absolute composer attachment paths, persisted so
      *  resume can re-read the pixels (events carry no binary). #290 follow-up fix 2. */
     attachments?: string[];
@@ -492,6 +569,22 @@ export interface TranscriptEvent {
      * unchanged.
      */
     autoCompaction?: boolean;
+    /** Native compact-summary only: the user-message event opening the kept
+     *  tail's turn (null = unknown). Its PRESENCE tells the renderer this
+     *  compaction kept a tail, so only entries above that message dim. */
+    retainedFromUuid?: string | null;
+    /** Persisted coalesced-part UUID/range witness; no duplicate text or private metadata. */
+    deltaReferences?: Array<{ eventUuid: string; start: number; end: number }>;
+    /** Native compact-summary portable checkpoint; references cite persisted parts. */
+    compactionRecord?: {
+      v: 1;
+      generation: number;
+      sourceRevision: number;
+      /** Hash of the source transcript plus the claimed cut; no copied text. */
+      sourceDigest?: string;
+      resumeFrom: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+      coveredThrough: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+    };
     /** `skill-invoked` only (M3 item 1). `skillId` is the resolved, qualified id
      *  (wecoded-themes-plugin:theme-builder); `body` is the SKILL.md text that
      *  enters model history on rebuild and is deliberately NOT rendered;
@@ -585,6 +678,7 @@ export type SubagentSegment =
       requestId?: string;
       denyListed?: boolean;
       external?: boolean;
+      floorStop?: FloorStop;
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
@@ -752,11 +846,23 @@ export interface ToolCallState {
   /** Native broker only: winning rule came from the destructive deny-list →
    *  the "Always allow" button shows a consequence-gated confirm. Task 13. */
   denyListed?: boolean;
+  /** A Claude Code ask whose hook socket died while Claude Code's own menu may
+   *  still be on screen ('hook-closed' expiry). The card STAYS awaiting-approval
+   *  so the session dot and the send gates keep holding — the bug this fixes was
+   *  the card flipping to 'failed' so the session looked idle while Claude Code
+   *  was still blocked. requestId is cleared (the socket is gone). Settled by
+   *  the tool's transcript result, the prompt detector's menu-gone rule, or
+   *  Dismiss (PERMISSION_CARD_RESOLVED). */
+  expired?: true;
   /** Native broker only: the ask was forced by a path outside the session
    *  folder → the "Always allow" button is HIDDEN. The engine forces an ask on
    *  every external path and never consults the stored rules there, so a
    *  remembered rule could not fire. Spec 2026-08-11, finding 3. */
   external?: boolean;
+  /** Native broker only: the ask was forced by a floor below every stored rule
+   *  → the "Always allow" button is HIDDEN (for the same reason as `external`)
+   *  and Full auto's stop band names which floor. See FloorStop. */
+  floorStop?: FloorStop;
   /** Native broker only: the session's permission mode when the ask fired.
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */
@@ -805,6 +911,16 @@ export interface ToolCallState {
   subagentSegments?: SubagentSegment[];
   agentType?: string;
   agentId?: string;
+  /**
+   * Claude Code only: this call started work that outlives it — an Agent
+   * (every CC Agent call runs in the background as of 2026-09) or a Bash
+   * `run_in_background` command. Its tool result is only the launch receipt,
+   * so `status: 'complete'` alone read "done" the instant the helper started.
+   * This record is the work's real state: 'running' from the receipt until the
+   * 'background-task' notice says how it ended. The CC counterpart of
+   * `specialistRun` / `shellRun` below, and drives the card the same way.
+   */
+  ccBackground?: CcBackgroundRun;
   /**
    * Native specialists (1c): the live run record for the hire THIS Task call
    * started, keyed to the card by parentToolCallId. Drives the card's real
@@ -1444,8 +1560,8 @@ export interface BuddyApi {
   // preload, remote-shim, and renderer callers all agree on one contract.
   /** Fire-and-forget: mascot renderer signals drag release (edge-snap check). */
   dragEnded(): void;
-  /** Restore + focus the main window, switching to the buddy's viewed session. */
-  openMain(): Promise<void>;
+  /** Restore + focus main; a buddy resume is re-resolved through main's admission flow. */
+  openMain(request?: { resume: string }): Promise<void>;
   /** Hide the buddy for this app run only (preference stays enabled). */
   dismiss(): Promise<void>;
   getStatus(): Promise<{ dismissed: boolean; visible: boolean }>;
@@ -1610,6 +1726,15 @@ export interface IntegrationInfo {
 export const IPC = {
   // Renderer -> Main
   SESSION_CREATE: 'session:create',
+  // WHY: pending handoff is not a started session; keep its actions off session:create.
+  HANDOFF_BEGIN: 'handoff:begin',
+  HANDOFF_STATUS: 'handoff:status',
+  HANDOFF_WAIT: 'handoff:wait',
+  HANDOFF_RETRY: 'handoff:retry',
+  HANDOFF_SAVED_COPY: 'handoff:saved-copy',
+  HANDOFF_FORCE: 'handoff:force',
+  HANDOFF_CANCEL: 'handoff:cancel',
+  HANDOFF_CREATE_PARAMS: 'handoff:create-params',
   SESSION_DESTROY: 'session:destroy',
   SESSION_INPUT: 'session:input',
   SESSION_RESIZE: 'session:resize',
@@ -1716,6 +1841,7 @@ export const IPC = {
   SESSION_HISTORY: 'session:history',
   // Mark/unmark a session flag (complete, priority, helpful, …)
   SESSION_SET_FLAG: 'session:set-flag',
+  SESSION_MENU_LOCK: 'session:menu-lock',
   // Broadcast when session metadata changes (carries a flag + value)
   SESSION_META_CHANGED: 'session:meta-changed',
   // Custom session tags (registry CRUD + application) and per-session notes.
@@ -1733,6 +1859,10 @@ export const IPC = {
   SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
   SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
   SESSION_GET_META: 'session:get-meta', // (sessionId) → { tags, note, supported }
+  // Welcome back (design 2026-09-24 §3): the per-install "open at last
+  // shutdown" list. Desktop-only — Android always answers []/{ok:true}.
+  SESSION_REOPEN_LIST: 'session:reopen-list',     // () → string[] (conversation ids)
+  SESSION_FORGET_REOPEN: 'session:forget-reopen', // (ids: string[]) → { ok: true }
   TAGS_LIST: 'tags:list',
   TAGS_CREATE: 'tags:create',           // (label, color)
   TAGS_UPDATE: 'tags:update',           // (id, { label?, color?, archived? })
@@ -1758,6 +1888,13 @@ export const IPC = {
   // Repositions macOS traffic lights so they sit inside the floating chrome's
   // rounded header; null restores OS default. Called from theme-engine.
   WINDOW_SET_TRAFFIC_LIGHT_POS: 'window:set-traffic-light-pos',
+  // Welcome back's in-app quit warning (design §4, plan T3). Electron-only
+  // (window.claude.window) — no remote-shim/Android twin, same as the other
+  // WINDOW_* entries above: a phone or browser tab never owns a desktop
+  // session for this to ask about.
+  WINDOW_CLOSE_REQUEST: 'window:close-request',                       // Main -> Renderer (push): {requestId, sessions}
+  WINDOW_ANSWER_CLOSE: 'window:answer-close',                         // Renderer -> Main: {requestId, close, reopen?}
+  WINDOW_CLOSE_REQUEST_CANCELLED: 'window:close-request-cancelled',   // Main -> Renderer (push): {requestId}
   // Zoom controls
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',
@@ -1986,6 +2123,8 @@ export const IPC = {
   NATIVE_CLEAR: 'native:clear',
   NATIVE_INVOKE_SKILL: 'native:invoke-skill',
   NATIVE_SET_BINDING: 'native:set-binding',
+  // U11: fit-checked switch from the model picker (NativeSwitchResult).
+  NATIVE_SWITCH_MODEL: 'native:switch-model',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   // Read the session's current native permission mode. Seeds the StatusBar chip
   // on create/resume so a fresh Coder session shows AUTO EDIT (not the default ASK).
@@ -2047,6 +2186,13 @@ export const IPC = {
   PAGES_SET_PINNED: 'pages:set-pinned',
   PAGES_SET_DATA: 'pages:set-data',
   PAGES_CHANGED: 'pages:changed',
+  // ---- Phase 2: connections, keys and the one door out of a page ----
+  PAGES_APPROVE: 'pages:approve',
+  PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
+  PAGES_REFRESH: 'pages:refresh',
+  PAGES_SAVED_KEYS: 'pages:saved-keys',
+  PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
+  PAGES_FETCH: 'pages:fetch',
   // ---- Remembered "Always allow" rules (M5 2a: permissions management UI) ----
   // list = every project's stored grants; remove/remove-project revoke them.
   // Keyed by PROJECT SLUG, not cwd — permissions.json never stored the cwd for

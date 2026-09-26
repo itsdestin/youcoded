@@ -12,6 +12,7 @@ import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { LoadingState, ErrorState } from '../ui/states';
 import { RemoteFileCard } from './RemoteFileCard';
+import { describeReadError } from './read-error-copy';
 import { isRemoteMode } from '../../platform';
 
 /** Absolute on-disk path of an artifact — the same join SessionDrawer and
@@ -47,6 +48,8 @@ function saveErrorMessage(res: any): string {
   if (err === 'needs-confirm') {
     return 'Editing this file needs an explicit confirmation. Leave and re-enter edit mode to confirm.';
   }
+  // A `../` record refused at save time says the same as when it is opened.
+  if (err === 'outside-projects' || err === 'not-in-home-project' || err === 'record-unreadable') return describeReadError(err, res?.code);
   return `Save failed: ${String(err ?? 'unknown error')}`;
 }
 
@@ -83,6 +86,10 @@ export interface ArtifactContentInfo {
    *  partial-view banner. Does NOT gate saving; size does (Stage 2B). */
   truncated?: boolean;
   sizeBytes?: number;
+  /** Where the host judged a `../` record to be (read-service.ts). The record
+   *  still holds a relative location until the repair rewrites it, and the
+   *  byte viewers read by absolute path — so they use this instead (F3). */
+  resolvedPath?: string;
 }
 
 /** Read-lifecycle state for the active artifact's content. Fix for the
@@ -104,7 +111,9 @@ export type ArtifactContentState =
   // rides with it: over remote access a too-large answer carries the file's real
   // size so the phone can show "24.0 MB · PDF" with a Download button rather
   // than a bare error (RemoteFileCard).
-  | { phase: 'error'; message: string; code?: string; sizeBytes?: number };
+  // `resolvedPath`: where the host judged a `../` record to be, on a too-large
+  // answer — the phone's Download asks for that file (re-review C5).
+  | { phase: 'error'; message: string; code?: string; sizeBytes?: number; resolvedPath?: string };
 
 export interface ActiveArtifactViewProps {
   artifact: ArtifactRecord;
@@ -147,9 +156,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // Resolve the absolute path depending on artifact kind. Forward slashes
   // throughout — a backslash projectRoot + '/' + relative path yields a mixed-
   // separator string that looks broken in copy-path/reveal on Windows.
-  const absolutePath = artifact.kind === 'internal'
+  const absolutePath = contentInfo?.resolvedPath ?? (artifact.kind === 'internal'
     ? `${projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${artifact.path.replace(/\\/g, '/')}`
-    : (artifact.absolutePath ?? artifact.path);
+    : (artifact.absolutePath ?? artifact.path));
 
   // Renderer MIRROR of the D5 write policy — main enforces the real boundary
   // in artifacts:save; this only hides the Edit affordance so the UI never
@@ -258,10 +267,19 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // banner with the disk version. `by` is deliberately ignored: a 'user' save
   // from another window needs exactly the same handling as an 'external' write.
   const dirty = editing && content !== null && draft !== content;
+  // WHY a ref: the watcher below used to list dirty/draft/content (and the host
+  // callbacks) as effect deps, so EVERY keystroke in the editor tore the IPC
+  // subscription down and built a new one. It now subscribes once per file and
+  // reads these through the ref. The handler snapshots the ref when the change
+  // event ARRIVES — the same moment the old per-render closure's values were
+  // current — so what an external change does is unchanged.
+  const watchRef = useRef({ dirty, draft, content, onContentChange, onDiskRead });
+  watchRef.current = { dirty, draft, content, onContentChange, onDiskRead };
   useEffect(() => {
     // artifacts.onChanged is optional — gracefully skip if IPC not wired yet
     const unsubFn = (window.claude as any).artifacts?.onChanged?.((evt: any) => {
       if (evt.projectRoot !== projectRoot || evt.artifactId !== artifact.id) return;
+      const { dirty, draft, content, onContentChange, onDiskRead } = watchRef.current;
       if (evt.kind === 'remove') return; // orphan handling is the host's concern
       // These files render from their own bytes, never from `content`. Asking
       // artifacts:get here would re-open the text path we just closed -- and its
@@ -286,7 +304,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       });
     });
     return typeof unsubFn === 'function' ? unsubFn : undefined;
-  }, [artifact.id, projectRoot, artifact.path, dirty, draft, content, onContentChange, onDiskRead]);
+  }, [artifact.id, projectRoot, artifact.path]);
 
   // ── Edit lifecycle callbacks (passed down to MarkdownView as controlled props) ──
   const handleStartEdit = useCallback(() => {
@@ -544,7 +562,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     // A phone asked for a file over its preview ceiling. Not an error to retry —
     // the host answered honestly with the size — so the card offers Download
     // (questions deck 2026-09-10, Q-6/Q-8).
-    return <RemoteFileCard path={absoluteArtifactPath(projectRoot, artifact)} sizeBytes={readState.sizeBytes} reason="too-large" projectRoot={projectRoot} artifactId={artifact.id} />;
+    return <RemoteFileCard path={readState.resolvedPath ?? absoluteArtifactPath(projectRoot, artifact)} sizeBytes={readState.sizeBytes} reason="too-large" projectRoot={projectRoot} artifactId={artifact.id} />;
   }
   if (!editing && readState.phase === 'error') {
     // The REAL failure with a Retry — never mapped to "no longer on disk"

@@ -62,3 +62,24 @@ describe('detectLinuxInstallKind', () => {
     expect(asked).toEqual([]);
   });
 });
+
+// The async twin the update check awaits: it must answer exactly as the sync
+// version does, so moving off spawnSync changes nothing the user can see.
+describe('detectLinuxInstallKindAsync answers like the blocking version', () => {
+  const EXEC_PATH = '/opt/YouCoded/youcoded';
+  const asyncOwner = (who: string | null) => async (cmd: string) => (cmd === who ? 0 : 1);
+  it.each([['pacman', 'pacman'], ['dpkg', 'deb'], ['rpm', 'rpm'], [null, 'unknown']] as const)(
+    'owner %s → %s', async (who, kind) => {
+      const { detectLinuxInstallKindAsync } = await import('../src/main/linux-install-kind');
+      expect(await detectLinuxInstallKindAsync({ platform: 'linux', execPath: EXEC_PATH, exists: () => true, envAppImage: '', run: asyncOwner(who) })).toBe(kind);
+      expect(detectLinuxInstallKind({ platform: 'linux', execPath: EXEC_PATH, exists: () => true, envAppImage: '', run: (cmd) => (cmd === who ? 0 : 1) })).toBe(kind);
+    });
+
+  it('an AppImage wins before any package manager is asked', async () => {
+    const { detectLinuxInstallKindAsync } = await import('../src/main/linux-install-kind');
+    const asked: string[] = [];
+    const kind = await detectLinuxInstallKindAsync({ platform: 'linux', envAppImage: '/x.AppImage', exists: () => true, run: async (cmd) => { asked.push(cmd); return 0; } });
+    expect(kind).toBe('appimage');
+    expect(asked).toEqual([]);
+  });
+});

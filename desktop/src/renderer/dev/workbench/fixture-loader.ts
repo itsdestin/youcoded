@@ -130,6 +130,20 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+        // …then the transcript's confirmation, as a live session receives it. WHY
+        // (2026-09-24): USER_PROMPT alone leaves the bubble PENDING, and the reducer
+        // keeps pending bubbles at the timeline's tail (appendAbovePending) — so every
+        // seeded conversation drew its user message BELOW the replies to it. Found
+        // when the workbench started taking the themes' preview screenshots.
+        const confirm: ChatAction = {
+          type: 'TRANSCRIPT_USER_MESSAGE',
+          sessionId,
+          uuid: `fixture-user-${actions.length}`,
+          text: parsed.text,
+          timestamp: FIXTURE_T0 + actions.length * 1000,
+        };
+        state = chatReducer(state, confirm);
+        actions.push(confirm);
       } else if (parsed.type === 'turn_complete') {
         // Without this a seeded conversation is frozen MID-TURN: the thinking
         // chip ("Contemplating…") and the stop button stay up forever, which
@@ -344,6 +358,27 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'permission_expired') {
+        // WHY: the KEPT card (PERMISSION_EXPIRED 'hook-closed') — the hook socket
+        // died but Claude Code's own menu may still be live, so the card stays
+        // awaiting-approval with `expired`, no requestId, and "Dismiss — I
+        // answered in the terminal". Nothing else in the workbench produces
+        // that state, so a fixture line has to. Follows a permission_request
+        // line for the same tool_use_id and swaps its block IN PLACE (the
+        // reducer returns a new tool object; the earlier block is a snapshot).
+        const action: ChatAction = {
+          type: 'PERMISSION_EXPIRED',
+          sessionId,
+          requestId: parsed.requestId,
+          reason: parsed.reason ?? 'hook-closed',
+        };
+        state = chatReducer(state, action);
+        actions.push(action);
+        const tool = state.get(sessionId)?.toolCalls.get(parsed.tool_use_id);
+        if (tool) {
+          const idx = blocks.findIndex((b) => b.kind === 'tool' && b.tool.toolUseId === parsed.tool_use_id);
+          if (idx !== -1) blocks[idx] = { kind: 'tool', tool };
+        }
       } else if (parsed.type === 'subagent_permission_request') {
         // Specialists 1c: a CHILD's routed ask. Nests under the parent Task
         // card (specialist.parentToolCallId) — the reducer binds it to the

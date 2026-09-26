@@ -108,7 +108,9 @@ export function childAskRouter(deps: ChildAskRouterDeps): NonNullable<HarnessSes
     // `git push`, whose bashGrantOptions is empty). `specialist` is merged in
     // here, not inside the shared builder — that function has no concept of
     // a specialist key; it's the same one a root session's ask reuses as-is.
-    if (decision.behavior === 'allow' && decision.always && !BUDGET_ASK_TOOL_NAMES.has(req.toolName)) {
+    // `floorStop` (a floor below every rule): the card offered no grant, and
+    // one stored anyway could never skip the floor — so nothing is remembered.
+    if (decision.behavior === 'allow' && decision.always && !req.floorStop && !BUDGET_ASK_TOOL_NAMES.has(req.toolName)) {
       const rule = rememberedRuleFor(req.toolName, req.subject, decision.grantScope);
       if (rule) deps.remember?.({ ...rule, specialist: deps.agentType });
     }

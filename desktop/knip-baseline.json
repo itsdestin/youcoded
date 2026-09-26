@@ -1,5 +1,5 @@
 {
-  "//": "Ceilings for knip's warning-level categories, enforced by scripts/knip-ratchet.js (`npm run knip`). A change may not push either count above its number; when a cleanup brings one down, lower the number in the same commit. Never raise one — delete the unused export instead.",
-  "exports": 136,
-  "types": 189
+  "//": "Ceilings for knip's warning-level categories, enforced by scripts/knip-ratchet.js (`npm run knip`). A change may not push either count above its number; when a cleanup brings one down, lower the number in the same commit. Never raise one \u2014 delete the unused export instead. (2026-09-21: exports 136\u2192135, one unused export deleted below the old ceiling; types stays 189 \u2014 three new unused claim types were deleted rather than raised, ClaimType is consumed via inline import())",
+  "exports": 134,
+  "types": 184
 }

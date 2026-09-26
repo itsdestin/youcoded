@@ -133,22 +133,16 @@ press enter to confirm`;
       }
     });
 
-    it('falls back to relative DOWN steps plus a SEPARATE submit write when options carry no number', () => {
-      // Only reachable for a menu whose option lines have no digit, which CC has
-      // never produced (the parser requires a numeric prefix to see an option at
-      // all) — so this is the hand-built / future-proofing path.
+    it('gives a menu with no printed numbers verified-navigation buttons, never a blind keystroke', () => {
       const buttons = menuToButtons({
         id: 'test',
         title: 'Test',
         options: ['a', 'b', 'c'],
         selectedIndex: 2,
       });
-
-      // Relative steps from the parsed cursor, wrapping — these menus wrap.
-      expect(buttons[0].input).toBe(DOWN.repeat(1)); // 2 -> 0
-      expect(buttons[1].input).toBe(DOWN.repeat(2)); // 2 -> 1
-      expect(buttons[2].input).toBe('');             // already there
-      expect(buttons.every((b) => b.submitInput === '\r')).toBe(true);
+      expect(buttons.map((b) => b.pick?.index)).toEqual([0, 1, 2]);
+      expect(new Set(buttons.map((b) => b.pick?.signature)).size).toBe(1);
+      expect(buttons.every((b) => b.input === '' && b.submitInput === undefined)).toBe(true);
     });
 
     it('is independent of where the cursor sits for numbered menus', () => {
@@ -422,5 +416,35 @@ Pick a follow-up:
       // Should strip the numbering
       expect(menu.options).toEqual(['as is', 'from summary']);
     });
+  });
+});
+
+describe('parseInkSelect with a wrapped option label', () => {
+  it('joins the wrapped line to its option and keeps the options after it', async () => {
+    // Real screen from the app's terminal (CC 2.1.281, 80 columns): option 2
+    // wraps onto a second line. Before the join, the menu ended at that line —
+    // "No" vanished and option 2 was cut mid-sentence.
+    const fs = await import('fs');
+    const path = await import('path');
+    const text = fs.readFileSync(path.join(__dirname, 'fixtures', 'plan-menu', 'app-screen-cc-2.1.281-write-permission-80col.txt'), 'utf8');
+    const menu = parseInkSelect(text)!;
+    expect(menu.options).toEqual([
+      'Yes',
+      'Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)',
+      'No',
+    ]);
+    expect(menu.optionNumbers).toEqual([1, 2, 3]);
+    expect(menuToButtons(menu).map((b) => b.input)).toEqual(['1', '2', '3']);
+  });
+
+  it('joins a wrapped option that sits ABOVE the cursor', () => {
+    const menu = parseInkSelect([
+      ' Do you want to proceed?',
+      '   1. Yes, and do the long thing that wraps onto',
+      '      a second line',
+      ' ❯ 2. No',
+    ].join('\n'))!;
+    expect(menu.options).toEqual(['Yes, and do the long thing that wraps onto a second line', 'No']);
+    expect(menu.selectedIndex).toBe(1);
   });
 });

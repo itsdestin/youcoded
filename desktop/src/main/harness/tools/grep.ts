@@ -4,8 +4,8 @@ import { rgPath as bundledRgPath } from '@vscode/ripgrep';
 import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
-import { defineTool } from './registry';
-import { resolveP, toPosix, shellCwdMissHint } from './guards';
+import { defineTool, SEARCH_TIMEOUT_MS } from './registry';
+import { resolveP, toPosix, shellCwdMissHint, lunaPathRefused } from './guards';
 import { CREDENTIAL_EXCLUDE_GLOBS } from './credential-paths';
 import type { ResultBounds } from './types';
 
@@ -259,7 +259,9 @@ export const GrepTool = defineTool({
     type: z.string().min(1).optional().describe('Search only files of this ripgrep type, e.g. "ts", "js", "py", "rust", "md" (ripgrep --type). Use `glob` for anything not in ripgrep\'s built-in type list.'),
     multiline: z.boolean().optional().describe('Let the pattern span lines: `.` also matches a newline (ripgrep -U --multiline-dotall). Default: one line at a time.'),
   }).strict(), // .strict(): an unknown parameter is an error the model can fix, never silently dropped (ledger D-2)
-  caps: { maxChars: 30_000, maxLines: 250 },
+  // timeoutMs: see SEARCH_TIMEOUT_MS (registry.ts) — the 2026-08-26 4-hour hang
+  // in a Google Drive mount; on expiry rg is SIGKILLed via the derived signal.
+  caps: { maxChars: 30_000, maxLines: 250, timeoutMs: SEARCH_TIMEOUT_MS },
   // Static fallback for composeNotice's no-bounds branch (Task 19): this is the
   // MEASURED common case, not a rare edge — a one-file, 400-match, content-mode
   // search never sets `bounds` (nothing was dropped at the FILE/match level),
@@ -320,6 +322,7 @@ export const GrepTool = defineTool({
     // Hoisted so the exit-2 error message (below) can name the exact path that
     // failed, instead of a context-free "ripgrep error".
     const resolvedTarget = resolveP(args.path ?? '.', ctx.cwd);
+    if (lunaPathRefused(resolvedTarget)) return { text: 'Grep rejected: path is outside the Luna experiment fixture.', isError: true };
     // WHY a relative target: rg echoes back whatever form it was given, so an
     // absolute target made Grep print absolute paths while Glob printed relative
     // ones — the same file, two shapes, unpipeable between tools (2026-08-01

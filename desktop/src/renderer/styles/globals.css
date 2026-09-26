@@ -2,6 +2,7 @@
 @import "./buddy.css";
 @import "./mascot.css";
 @import "./motion.css";
+@import "./float-chrome.css";
 
 @source "../../";
 
@@ -707,7 +708,9 @@ body[data-mode="buddy-chat"] #theme-bg {
      REAL scrollHeight/scrollTop (not a hardcoded offset), auto-scroll
      picks this padding change up for free — verified, no JS change needed
      there. */
-  padding-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--vvp-offset, 0px));
+  /* Freshness is another measured float, not a taller input bar. Reserve its
+     footprint so the last message rests above it even while it is syncing. */
+  padding-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--vvp-offset, 0px));
 }
 
 /* Inset the scrollbar track so it stops below the header and above the
@@ -716,12 +719,16 @@ body[data-mode="buddy-chat"] #theme-bg {
    travel range matches the content's actual scrollable area. */
 .chat-scroll::-webkit-scrollbar-track {
   margin-top: var(--top-chrome-height, 2.5rem);
-  margin-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--vvp-offset, 0px));
+  margin-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--vvp-offset, 0px));
 }
 
 /* Bottom chrome (input + status bars) — mirrors header pattern.
    Absolutely positioned so chat messages scroll behind the chrome.
    React toggles .bottom-float based on view mode. */
+/* Touch terminal view: bottom chrome in the layout but above .chrome-glass, or
+   its key row is invisible in framed themes (2026-09-24; terminal-touch-bottom-chrome test). */
+.bottom-docked { position: relative; z-index: 20; }
+
 .bottom-float {
   position: absolute;
   bottom: 0;
@@ -764,10 +771,16 @@ body[data-mode="buddy-chat"] #theme-bg {
   bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + 0.75rem + var(--vvp-offset, 0px));
 }
 
-/* Task 12: docked strip for queued (not-yet-sent) messages. Unlike
-   .model-status-strip / .jump-to-bottom (which float above the WHOLE
-   framed-shell, in ChatView's outer absolute container), this is a sibling of
-   .chat-scroll INSIDE .chat-pane (position: relative) — see the DOM-choice
+/* WHY this status floats in the CHAT pane rather than the input frame: it
+   follows the model-loading/queued-message stack, including the soft keyboard. */
+.handoff-freshness-toast {
+  bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + 0.75rem + var(--vvp-offset, 0px));
+  z-index: 10;
+}
+
+/* Task 12: docked strip for queued (not-yet-sent) messages. Like the model
+   and freshness floats, this is a sibling of .chat-scroll INSIDE .chat-pane
+   (position: relative) — unlike jump-to-bottom in the outer root. See the DOM-choice
    comment at its render site in ChatView.tsx. Same --bottom-chrome-height
    offset math so it clears the real InputBar (a sibling of ChatView,
    positioned by App.tsx's chrome-wrapper--bottom) regardless of scroll.
@@ -796,14 +809,21 @@ body[data-mode="buddy-chat"] #theme-bg {
 [data-reduced-effects] .wide-view-toggle-label {
   transition-duration: 0ms;
 }
+/* WHY: the Files drawer's list (.drawer-list) slides by animating width, a layout
+   property; both gates now snap it too. Unlayered, so it beats Tailwind's duration-200. */
+[data-reduced-effects] .drawer-list {
+  transition-duration: 0ms;
+}
 @media (prefers-reduced-motion: reduce) {
   .wide-view-toggle-indicator {
     transition-duration: 0ms;
   }
+  .drawer-list,
   .wide-view-toggle-label {
     transition-duration: 0ms;
   }
 }
+
 
 /* Indeterminate progress bar (llama-server gives no load %). A highlight sweeps
    across the track. Reduced-effects users get a static filled track instead. */
@@ -2148,6 +2168,25 @@ pre.yc-code code {
 [data-chrome-style='floating'] .chrome-glass,
 [data-input-style='floating'] .chrome-glass {
   display: none;
+}
+
+/* 'float' chrome deliberately does NOT take the `display: none` above.
+   `display: none` does not stop the element PAINTING here: the browser promotes
+   an element carrying a clip-path to its own stacking context, and in the
+   workbench it leaked a visible hairline down the right edge of the window
+   (measured 2026-09-20). It also has to stay in the tree, because chrome-glass
+   owns the `--top-chrome-bottom` / `--bottom-chrome-height` custom properties
+   that the header veil and every chat float read.
+   Instead the donut simply stops painting: the same clip-path with all four
+   strips collapsed onto the top edge. Nothing is drawn, nothing is promoted,
+   and no variable the rest of the layout depends on moves.
+   The rest of this mode is in styles/float-chrome.css. */
+[data-chrome-style='float'] .chrome-glass,
+[data-chrome-style='float'] .app-mockup .chrome-glass {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  clip-path: polygon(0 0, 100% 0, 100% 0, 0 0);
 }
 
 /* When a right pane (artifact drawer OR game pane) is open, the chat

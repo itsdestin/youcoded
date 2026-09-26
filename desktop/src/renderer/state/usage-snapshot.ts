@@ -97,6 +97,24 @@ export interface UsageSnapshotSession {
    *  keep quoting the pre-compaction window, and the two surfaces would once
    *  again disagree about the same session. */
   contextUsedOverride?: number | null;
+  /** The host's "what the assistant was given" record — carries the CURRENT
+   *  model's window (re-pushed on a model swap). See nativeContextWindow. */
+  sessionContext?: { contextWindowTokens?: number | null } | null;
+}
+
+/** The context window a native session's gauge divides by: the CURRENT model's,
+ *  from the session-context record, falling back to the window the last turn
+ *  ran in.
+ *
+ *  WHY (roadmap: the chip kept the OLD model's window after a swap or resume):
+ *  the turn's own `contextLength` describes the model that turn ran on, so
+ *  after swapping a 1M model for a small local one the chip read "97%
+ *  remaining" on a window the very next message overflows. The host re-pushes
+ *  the record the moment the model changes (native-session-host
+ *  republishWindow), so it is the fresher of the two. One helper so the bar
+ *  and the /usage card cannot disagree about it. */
+export function nativeContextWindow(session: UsageSnapshotSession | undefined): number | null {
+  return session?.sessionContext?.contextWindowTokens || selectNativeUsage(session)?.contextLength || null;
 }
 
 export interface UsageSnapshotInput {
@@ -171,7 +189,7 @@ export function buildUsageSnapshot(input: UsageSnapshotInput): UsageSnapshot | n
   // same selected live-or-completed usage. Two surfaces, one formula: a native
   // session at 61% used to show a pill on the bar and NO context row on the card.
   const nativeUsage = isNative ? selectNativeUsage(session) : null;
-  const nativeChips = selectNativeStatusChips(nativeUsage, nativeUsage?.contextLength, session?.contextUsedOverride);
+  const nativeChips = selectNativeStatusChips(nativeUsage, isNative ? nativeContextWindow(session) : null, session?.contextUsedOverride);
 
   // `totals` is now present for EVERY session (it used to be native-only), and
   // a brand-new session's is emptyTotals() — all zeros. Its mere existence is

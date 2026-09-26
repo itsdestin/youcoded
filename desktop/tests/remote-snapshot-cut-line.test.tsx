@@ -215,6 +215,25 @@ describe('the phone flushes ITS pending batch before applying a hydrate', () => 
     expect(s.currentTurnId).not.toBeNull();
     expect(textOf(store)).toEqual(['first answer', 'second, still going']);
   });
+
+  it('a compacted host snapshot keeps one marker, current occupancy and a live turn after hydration', () => {
+    const { store, batcher } = mount();
+    const rewrite: ChatAction = { type: 'NATIVE_HISTORY_REWRITTEN', sessionId: 's1', uuid: 'summary-event',
+      contextUsedTokens: 1_200, usage: { inputTokens: 8_000, outputTokens: 400, cacheReadTokens: 0, cacheCreationTokens: 0 } };
+    const marker: ChatAction = { type: 'COMPACTION_COMPLETE', sessionId: 's1', markerId: 'compact-done-summary-event',
+      auto: true, beforeContextTokens: 9_000, afterContextTokens: 1_200 };
+    const start: ChatAction = { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: 's1', uuid: 'prompt-1',
+      text: 'keep going', timestamp: 1 };
+    const host = snapshotFrom([{ type: 'SESSION_INIT', sessionId: 's1' }, start, rewrite, marker]);
+    for (const event of [start, rewrite, marker]) batcher.push(event);
+    act(() => { applyChatHydrate(store.dispatch, host); });
+    act(() => { runFrames(); });
+    const session = store.getSession('s1');
+    expect(session.isThinking).toBe(true);
+    expect(session.contextUsedOverride).toBe(1_200);
+    expect(session.totals.inputTokens).toBe(8_000);
+    expect(session.timeline.filter(e => e.kind === 'system-marker' && e.marker.id === 'compact-done-summary-event')).toHaveLength(1);
+  });
 });
 
 describe('the phone reports what its apply kept', () => {

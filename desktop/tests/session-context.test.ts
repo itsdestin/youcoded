@@ -118,6 +118,47 @@ describe('what the assistant was given', () => {
     expect(host.sessionContextText('never-opened', 'project')).toEqual({ error: 'not-live' });
   });
 
+  // The chip and the panel's "Context window" row kept the OLD model's window
+  // after a swap until a turn finished on the new one.
+  it('a model swap re-pushes the record with the new model and its window, and nothing else', async () => {
+    const windowFor = async (b: any) => ({ contextLength: b.modelId === 'small' ? 8192 : 1_000_000, totalSlots: null });
+    const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, windowFor as any, async () => null, async () => null);
+    const pushed: any[] = [];
+    h.on('session-context', (e: any) => pushed.push(e.context));
+    await h.create({ sessionId: 's-swap', cwd: root, binding: { providerId: 'openrouter', modelId: 'big' } });
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0].contextWindowTokens).toBe(1_000_000);
+
+    await h.setBinding('s-swap', { providerId: 'openrouter', modelId: 'small' });
+    expect(pushed).toHaveLength(2);
+    expect(pushed[1]).toEqual({ ...pushed[0], modelLabel: 'small', contextWindowTokens: 8192 });
+
+    // Re-applying the same model changes nothing, so nothing is re-pushed.
+    await h.setBinding('s-swap', { providerId: 'openrouter', modelId: 'small' });
+    expect(pushed).toHaveLength(2);
+    await h.destroyAll();
+  });
+
+  // The after-turn slot refresh (a local model's real n_ctx replacing the
+  // start-time guess) changes the window too, so it must re-push the record the
+  // same way a picker swap does — or the chip keeps the guessed window.
+  it('the after-turn slot refresh re-pushes the record with the real window', async () => {
+    let window = 4096;
+    const windowFor = async () => ({ contextLength: window, totalSlots: null });
+    const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, windowFor as any, async () => null, async () => null);
+    const pushed: any[] = [];
+    h.on('session-context', (e: any) => pushed.push(e.context));
+    await h.create({ sessionId: 's-slots', cwd: root, binding: { providerId: 'openrouter', modelId: 'local' } });
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0].contextWindowTokens).toBe(4096);
+
+    window = 32768; // the engine's real reading, once a turn has loaded the model
+    await (h as any).refreshLocalSlots('s-slots', (h as any).live.get('s-slots'));
+    expect(pushed).toHaveLength(2);
+    expect(pushed[1]).toEqual({ ...pushed[0], contextWindowTokens: 32768 });
+    await h.destroyAll();
+  });
+
   it('a session still opens when the context cannot be described', async () => {
     // The record is an explanation; a chat that will not start is a broken app.
     // Proven by making the one thing that reads the disk throw.

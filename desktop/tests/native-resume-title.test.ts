@@ -3,7 +3,8 @@
 // regenerates — so before this module, resuming an already-named native
 // session left its header pill stuck on 'Resuming…' forever.
 import { describe, it, expect, vi } from 'vitest';
-import { reapplyStoredTitle, type ResumeTitleDeps } from '../src/main/native-resume-title';
+import { reapplyStoredTitle, nameForTitleCheck, createProvisionalTitles, type ResumeTitleDeps } from '../src/main/native-resume-title';
+import { buildNamingPrompt } from '../src/main/session-namer';
 
 function mkDeps(overrides: Partial<ResumeTitleDeps> = {}): ResumeTitleDeps {
   return {
@@ -57,5 +58,64 @@ describe('reapplyStoredTitle', () => {
     // still pass if a future edit made the default stored title a placeholder,
     // short-circuiting before onTitle — a vacuous green.
     expect(deps.onTitle).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Destin, 2026-09-02: a conversation that never got a title shows the first
+// message's opening words on the pill — the same name its Resume Browser row
+// shows — instead of 'Resuming…' until the next completed turn.
+describe('reapplyStoredTitle — no stored title', () => {
+  it('falls back to the opening words, marked provisional', async () => {
+    const deps = mkDeps({
+      getStoredTitle: vi.fn(async () => undefined),
+      getOpeningTitle: vi.fn(async () => 'help me refactor the auth module'),
+    });
+    expect(await reapplyStoredTitle(deps, 's1')).toBe('help me refactor the auth module');
+    expect(deps.onTitle).toHaveBeenCalledWith('s1', 'help me refactor the auth module', { provisional: true });
+  });
+
+  it('a real stored title still wins and is not provisional', async () => {
+    const getOpeningTitle = vi.fn(async () => 'raw words');
+    const deps = mkDeps({ getOpeningTitle });
+    await reapplyStoredTitle(deps, 's1');
+    expect(deps.onTitle).toHaveBeenCalledWith('s1', 'Fixing The Login Bug');
+    expect(getOpeningTitle).not.toHaveBeenCalled();
+  });
+
+  it('plants nothing when the conversation has no opening words either', async () => {
+    const deps = mkDeps({ getStoredTitle: vi.fn(async () => 'Untitled'), getOpeningTitle: vi.fn(async () => undefined) });
+    expect(await reapplyStoredTitle(deps, 's1')).toBeNull();
+    expect(deps.onTitle).not.toHaveBeenCalled();
+  });
+});
+
+describe('nameForTitleCheck', () => {
+  it('hides the provisional opening words from the has-a-title check', () => {
+    expect(nameForTitleCheck('raw words', 'raw words')).toBeUndefined();
+  });
+  it('lets any other live name through, including one that replaced the provisional words', () => {
+    expect(nameForTitleCheck('Refactoring Auth', 'raw words')).toBe('Refactoring Auth');
+    expect(nameForTitleCheck('Refactoring Auth', undefined)).toBe('Refactoring Auth');
+  });
+});
+
+// Review F5: the namer's review prompt used to receive the provisional opening
+// words as the "current name" and was told to keep them.
+describe('createProvisionalTitles', () => {
+  it('the namer is given no current name while the pill shows provisional words', () => {
+    const titles = createProvisionalTitles();
+    titles.mark('s1', 'help me refactor the auth module');
+    const current = titles.forNamer('s1', 'help me refactor the auth module');
+    expect(current).toBe('');
+    expect(buildNamingPrompt({ first: 'help me refactor the auth module', recent: [], current })).not.toMatch(/current name/i);
+  });
+
+  it('a real name that replaced the provisional words is passed on, and kept', () => {
+    const titles = createProvisionalTitles();
+    titles.mark('s1', 'raw words');
+    expect(titles.forNamer('s1', 'Refactoring Auth')).toBe('Refactoring Auth');
+    expect(buildNamingPrompt({ first: 'x', recent: [], current: titles.forNamer('s1', 'Refactoring Auth') })).toMatch(/The current name is "Refactoring Auth"/);
+    expect(titles.forTitleCheck('s1', 'raw words')).toBeUndefined();
+    expect(titles.forTitleCheck('s2', 'raw words')).toBe('raw words');
   });
 });

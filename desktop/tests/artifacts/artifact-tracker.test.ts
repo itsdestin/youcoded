@@ -29,6 +29,75 @@ describe('artifactReducer', () => {
     expect(next.sessionArtifacts['s1']).toEqual([sampleArtifact]);
   });
 
+  describe('a list refresh never orphans the open file', () => {
+    // A file opened straight from a chat path is shown as an on-disk
+    // (discovered) record whose id is its relative path. The session's list
+    // does not contain it until something records it; before this, the next
+    // refresh dropped it and the pane fell back to the file list.
+    const discovered: ArtifactRecord = { ...sampleArtifact, id: 'docs/plan.md', path: 'docs/plan.md', versions: [], discovered: true } as ArtifactRecord;
+    const tracked: ArtifactRecord = { ...sampleArtifact, id: 'art_9', path: 'docs/plan.md' };
+    const other: ArtifactRecord = { ...sampleArtifact, id: 'art_2', path: 'other.md' };
+    const opened = (rec: ArtifactRecord) => {
+      let s = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACT_UPSERTED', sessionId: 's1', artifact: rec });
+      s = artifactReducer(s, { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: rec.id });
+      return s;
+    };
+
+    it('keeps the open record when the refreshed list does not have it', () => {
+      const next = artifactReducer(opened(discovered), { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
+      expect(next.activeArtifactBySession['s1']).toBe('docs/plan.md');
+      expect(next.sessionArtifacts['s1'].map((a) => a.id)).toEqual(['art_2', 'docs/plan.md']);
+    });
+
+    it('follows the open file to its new id when the refresh lists it under one', () => {
+      // The first write by the assistant gives the file a permanent id.
+      const next = artifactReducer(opened(discovered), { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other, tracked] });
+      expect(next.activeArtifactBySession['s1']).toBe('art_9');
+      expect(next.sessionArtifacts['s1'].map((a) => a.id)).toEqual(['art_2', 'art_9']);
+    });
+
+    it('keeps a just-delivered file selected when an older refresh lands after it', () => {
+      // A reply delivers a file: auto-open records and selects it while the
+      // tool tracker's debounced refresh — started before the record existed —
+      // is still in flight. That refresh used to orphan the selection, and the
+      // panel opened on the list instead of the file.
+      const delivered: ArtifactRecord = { ...sampleArtifact, id: 'art_new', path: 'out/report.html' };
+      const next = artifactReducer(opened(delivered), { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
+      expect(next.activeArtifactBySession['s1']).toBe('art_new');
+      expect(next.sessionArtifacts['s1'].some((a) => a.id === 'art_new')).toBe(true);
+    });
+
+    it('lets go of an open file another window removed, once a refresh has listed it before', () => {
+      // Listed by a refresh, then gone from the next one: removed elsewhere.
+      let st = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [tracked, other] });
+      st = artifactReducer(st, { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: 'art_9' });
+      const next = artifactReducer(st, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
+      expect(next.sessionArtifacts['s1'].map((a) => a.id)).toEqual(['art_2']);
+    });
+
+    it('never swaps the open outside file for another with the same name', () => {
+      // An outside record's `path` is only its file name.
+      const mine: ArtifactRecord = { ...sampleArtifact, id: 'ext_A', kind: 'external', path: 'plan.md', absolutePath: '/a/plan.md' };
+      const theirs: ArtifactRecord = { ...sampleArtifact, id: 'ext_B', kind: 'external', path: 'plan.md', absolutePath: '/b/plan.md' };
+      let st = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [mine] });
+      st = artifactReducer(st, { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: 'ext_A' });
+      const next = artifactReducer(st, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [theirs] });
+      expect(next.activeArtifactBySession['s1']).toBe('ext_A');
+    });
+
+    it('is a plain replacement when nothing is open', () => {
+      const s = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACT_UPSERTED', sessionId: 's1', artifact: discovered });
+      const next = artifactReducer(s, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
+      expect(next.sessionArtifacts['s1']).toEqual([other]);
+    });
+
+    it('is a plain replacement when the open record is still listed', () => {
+      const next = artifactReducer(opened(tracked), { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [tracked, other] });
+      expect(next.activeArtifactBySession['s1']).toBe('art_9');
+      expect(next.sessionArtifacts['s1']).toEqual([tracked, other]);
+    });
+  });
+
   // The loading state for a tapped file (2026-09-11): while the lookup runs the
   // drawer said "Nothing here yet", contradicting the file just tapped. The
   // pending name lives here; every way a lookup can end clears it.
@@ -176,5 +245,68 @@ describe('git review', () => {
       const s = open();
       expect(s.gitReviewBySession['s2']).toBeUndefined();
     });
+  });
+});
+
+// Perf, 2026-09-23: a closed session's entries were never freed, so a day of
+// opening and closing tabs kept every closed session's file list and drawer
+// flags in memory until restart. App dispatches SESSION_REMOVED where it drops
+// a session (session:destroyed, removeSessionLocally).
+describe('SESSION_REMOVED', () => {
+  const ref = (id: string) => ({ provider: 'claude' as const, id, title: 'T', lastActive: 'now' });
+  // Every per-session record holds an entry for the closing session 'gone', the
+  // surviving session 'kept' and Project View's own 'project-view' key.
+  const populated = () => {
+    let s = initialArtifactState;
+    for (const sid of ['gone', 'kept', 'project-view']) {
+      s = artifactReducer(s, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: sid, artifacts: [sampleArtifact] });
+      s = artifactReducer(s, { type: 'SET_SESSION_CWD', sessionId: sid, cwd: '/p' });
+      s = artifactReducer(s, { type: 'DRAWER_OPENED', sessionId: sid });
+      s = artifactReducer(s, { type: 'ACTIVE_ARTIFACT_SET', sessionId: sid, artifactId: 'art_1' });
+      s = artifactReducer(s, { type: 'GIT_REVIEW_OPENED', sessionId: sid });
+      s = artifactReducer(s, { type: 'PILL_RESOLVE_STARTED', sessionId: sid, name: 'x' });
+      s = artifactReducer(s, { type: 'PILL_RESOLVE_FAILED', sessionId: sid, message: 'no' });
+      s = artifactReducer(s, { type: 'SESSION_PREVIEW_SET', sessionId: sid, provider: 'claude', id: 'conv-gone', title: 'T' });
+      s = artifactReducer(s, { type: 'SESSION_REFERENCED', sessionId: sid, ref: ref('conv-gone') });
+    }
+    return s;
+  };
+  const PER_SESSION = [
+    'sessionArtifacts', 'sessionCwd', 'pillError', 'pillPending', 'drawerOpenBySession',
+    'activeArtifactBySession', 'gitReviewBySession', 'activeSessionPreviewBySession',
+    'referencedSessionsBySession',
+  ] as const;
+
+  it('deletes the session\'s key from all nine per-session records', () => {
+    const s = artifactReducer(populated(), { type: 'SESSION_REMOVED', sessionId: 'gone' });
+    for (const field of PER_SESSION) {
+      expect(Object.keys(s[field]), field).not.toContain('gone');
+    }
+  });
+
+  it('the nine are every per-session record the state has (a new one must be added to the case)', () => {
+    const recordFields = Object.entries(initialArtifactState)
+      .filter(([k, v]) => v && typeof v === 'object' && k !== 'projectArtifacts')
+      .map(([k]) => k)
+      .sort();
+    expect(recordFields).toEqual([...PER_SESSION].sort());
+  });
+
+  it('leaves other sessions and Project View untouched — including previews that name the same conversation', () => {
+    const before = populated();
+    const s = artifactReducer(before, { type: 'SESSION_REMOVED', sessionId: 'gone' });
+    for (const field of PER_SESSION) {
+      expect(s[field]['kept'], field).toBe(before[field]['kept']);
+      expect(s[field]['project-view'], field).toBe(before[field]['project-view']);
+    }
+    // The referenced list names CONVERSATIONS, not tabs: 'kept' can still
+    // preview the conversation even though the tab that made it closed.
+    expect(s.referencedSessionsBySession['kept'].map((r) => r.id)).toEqual(['conv-gone']);
+    expect(s.activeSessionPreviewBySession['kept']?.id).toBe('conv-gone');
+  });
+
+  it('returns the same state when the session had no entries (no reader wakes)', () => {
+    const before = populated();
+    expect(artifactReducer(before, { type: 'SESSION_REMOVED', sessionId: 'never-seen' })).toBe(before);
   });
 });

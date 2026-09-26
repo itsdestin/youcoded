@@ -5,6 +5,7 @@ import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyl
 import { isRemoteMode } from '../platform';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
+import { applyLookOverrides, parseLookOverrides, type LookOverrides } from '../themes/look-overrides';
 import { clampDrawerWidth, applyDrawerWidthVar, DRAWER_WIDTH_KEY, DEFAULT_DRAWER_WIDTH,
          applyGameWidthVar, GAME_WIDTH_KEY, DEFAULT_GAME_WIDTH, gameWidthForOpen } from './drawer-width';
 
@@ -39,23 +40,14 @@ const SHOW_DELETED_ARTIFACTS_KEY = 'youcoded-show-deleted-artifacts';
 // ('tokens'). Purely presentational — the color band is driven by the same
 // percentage in BOTH modes, so green/amber/red never changes meaning.
 const CONTEXT_DISPLAY_KEY = 'youcoded-context-display';
-const GLASS_OVERRIDES_KEY = 'youcoded-glass-overrides';
+// WHY a new key and not the old 'youcoded-glass-overrides': per-theme glass tweaks were
+// retired (Destin, 2026-09-24 — one global override instead), and dropped rather than
+// migrated. The old key and the old `glassOverrides` field in youcoded-appearance.json are
+// simply never read again.
+const LOOK_OVERRIDES_KEY = 'youcoded-look-overrides';
 const DEFAULT_THEME = 'midnight';
 const DEFAULT_CYCLE = ['midnight', 'dark'];
 
-/** Per-theme glass overrides for non-user themes (community/builtin).
- *  User themes write directly to the theme file instead. */
-export type GlassOverrides = {
-  'panels-blur'?: number;
-  'panels-opacity'?: number;
-  'bubble-blur'?: number;
-  'bubble-opacity'?: number;
-  // Terminal transparency sliders (see TerminalView + theme-engine). Kept in the
-  // same override bag as glass — same persistence, same per-slug scoping.
-  'terminal-opacity'?: number;
-  'terminal-blur'?: number;
-  'terminal-brightness'?: number;
-};
 /** How the StatusBar context pill renders the window: '45% Remaining' vs
  *  '35.2k / 64k'. Both are colored by the same percentage. */
 export type ContextDisplay = 'percent' | 'tokens';
@@ -113,9 +105,12 @@ interface ThemeContextValue {
   activeTheme: LoadedTheme;
   bgStyle: Record<string, string> | null;
   patternStyle: Record<string, string> | null;
-  /** Update a glass override for a non-user theme (community/builtin).
-   *  Overrides persist per-slug so switching themes preserves the user's preference. */
-  setGlassOverride: (slug: string, field: string, value: number) => void;
+  /** The user's global look choices, laid over every theme (look-overrides.ts).
+   *  An absent field means "Theme's choice". */
+  lookOverrides: LookOverrides;
+  /** Replace the whole set — callers spread the current value to change one field,
+   *  and delete a field to hand it back to the theme. */
+  setLookOverrides: (next: LookOverrides) => void;
   /** Re-read user themes from disk. Call after install/uninstall so the
    *  context's userThemes list stays in sync (the active-theme fallback
    *  effect then auto-resets to the default if the active slug vanished). */
@@ -136,7 +131,7 @@ const ThemeContext = createContext<ThemeContextValue>({
   gamePaneWidth: DEFAULT_GAME_WIDTH, setGamePaneWidth: () => {}, resetGamePaneWidth: () => {},
   applyGameDefaultWidth: () => {},
   allThemes: BUILTIN_THEMES, activeTheme: BUILTIN_THEMES[0], bgStyle: null, patternStyle: null,
-  setGlassOverride: () => {},
+  lookOverrides: {}, setLookOverrides: () => {},
   reloadUserThemes: async () => {},
 });
 
@@ -151,9 +146,18 @@ function getStoredJSON<T>(key: string, fallback: T): T {
  *  window broadcast so ThemeProvider in other windows applies the change
  *  live (no reload). The broadcast is a no-op on single-window hosts. */
 function persistAppearance(prefs: Record<string, any>) {
+  writeAppearance(prefs);
+  broadcastAppearance(prefs);
+}
+function writeAppearance(prefs: Record<string, any>) {
   try { (window as any).claude?.appearance?.set(prefs); } catch {}
+}
+function broadcastAppearance(prefs: Record<string, any>) {
   try { (window as any).claude?.appearance?.broadcast?.(prefs); } catch {}
 }
+
+/** How often, at most, a Look-slider drag is written to disk (trailing). */
+export const LOOK_PERSIST_MS = 300;
 
 function applyFont(font: string) {
   document.documentElement.style.setProperty('--font-sans', font);
@@ -307,11 +311,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const [userThemes, setUserThemes] = useState<LoadedTheme[]>([]);
   const [userThemesLoaded, setUserThemesLoaded] = useState(false);
-  // Glass overrides for non-user themes — keyed by theme slug, persisted to
-  // localStorage and disk so users can tweak community/builtin glass values
-  // without modifying the theme file they don't own.
-  const [glassOverrides, setGlassOverrides] = useState<Record<string, GlassOverrides>>(
-    () => getStoredJSON(GLASS_OVERRIDES_KEY, {} as Record<string, GlassOverrides>)
+  // The user's global look overrides. Seeded from the localStorage mirror so the
+  // first paint already wears them (the disk copy lands a tick later, below).
+  const [lookOverrides, setLookOverridesState] = useState<LookOverrides>(
+    () => parseLookOverrides(getStoredJSON(LOOK_OVERRIDES_KEY, {})),
   );
 
   // All themes including _preview (for engine lookup) — memoized to stabilize references
@@ -352,22 +355,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
   useEffect(() => () => { selectionGeneration.current++; }, []);
 
-  // Merge glass overrides into the active theme for non-user themes.
-  // User themes write glass values directly to the theme file. For solid
-  // themes the sliders are disabled (see ThemeScreen.tsx) so overrides
-  // wouldn't normally be written — but we keep the override values in
-  // place so if a user later upgrades a solid theme to a wallpaper theme
-  // their saved glass values survive. Fix: dropped the solid-background
-  // guard that used to discard overrides for non-image backgrounds.
-  const activeTheme = useMemo(() => {
-    const overrides = glassOverrides[activeSlug];
-    if (!overrides || activeThemeRaw.source === 'user') return activeThemeRaw;
-    const base = activeThemeRaw.background ?? ({ type: 'solid', value: '' } as const);
-    return {
-      ...activeThemeRaw,
-      background: { ...base, ...overrides },
-    };
-  }, [activeThemeRaw, activeSlug, glassOverrides]);
+  // The theme as the user sees it: its own choices, with any global override on top.
+  // WHY every source (user themes too): the override is the user's, not the theme's —
+  // a theme they built still follows it. The user-theme EDITOR must therefore read the
+  // raw theme from allThemes, never this, or saving a tweak would bake the override
+  // into their theme file (ThemeScreen's editingTheme).
+  const activeTheme = useMemo(
+    () => applyLookOverrides(activeThemeRaw, lookOverrides),
+    [activeThemeRaw, lookOverrides],
+  );
 
   // Fallback if active theme was uninstalled (slug no longer in allThemes).
   // Guard: skip until user themes have loaded, otherwise a valid community/user
@@ -452,10 +448,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           setContextDisplayState(mode);
           try { localStorage.setItem(CONTEXT_DISPLAY_KEY, mode); } catch {}
         }
-        // Load per-theme glass overrides from disk (same pattern as theme/cycle)
-        if (prefs.glassOverrides && typeof prefs.glassOverrides === 'object') {
-          setGlassOverrides(prefs.glassOverrides);
-          try { localStorage.setItem(GLASS_OVERRIDES_KEY, JSON.stringify(prefs.glassOverrides)); } catch {}
+        // Global look overrides (same pattern as theme/cycle). `in`, not truthiness:
+        // an empty object is a real answer — "everything back to Theme's choice".
+        if ('lookOverrides' in prefs) {
+          const look = parseLookOverrides(prefs.lookOverrides);
+          setLookOverridesState(look);
+          try { localStorage.setItem(LOOK_OVERRIDES_KEY, JSON.stringify(look)); } catch {}
         }
       } catch {}
     };
@@ -498,9 +496,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         setContextDisplayState(mode);
         try { localStorage.setItem(CONTEXT_DISPLAY_KEY, mode); } catch {}
       }
-      if (prefs.glassOverrides && typeof prefs.glassOverrides === 'object') {
-        setGlassOverrides(prefs.glassOverrides);
-        try { localStorage.setItem(GLASS_OVERRIDES_KEY, JSON.stringify(prefs.glassOverrides)); } catch {}
+      if ('lookOverrides' in prefs) {
+        // WHY: a peer's edit is newer than our throttled, not-yet-written one
+        // (the peer persists the whole object itself), so writing ours later
+        // would put an older value on disk.
+        pendingLookWrite.current = null;
+        const look = parseLookOverrides(prefs.lookOverrides);
+        setLookOverridesState(look);
+        try { localStorage.setItem(LOOK_OVERRIDES_KEY, JSON.stringify(look)); } catch {}
       }
     });
     return () => { try { unsub?.(); } catch {} };
@@ -690,16 +693,48 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     persistAppearance({ contextDisplay: v });
   }, []);
 
-  // Update a glass field for a non-user theme. Persists per-slug so the
-  // user's glass preferences survive theme switches and app restarts.
-  const setGlassOverride = useCallback((slug: string, field: string, value: number) => {
-    setGlassOverrides(prev => {
-      const next = { ...prev, [slug]: { ...prev[slug], [field]: value } };
-      try { localStorage.setItem(GLASS_OVERRIDES_KEY, JSON.stringify(next)); } catch {}
-      persistAppearance({ glassOverrides: next });
-      return next;
-    });
+  // One global set, persisted whole (disk merges top-level keys, so a partial
+  // object would leave a cleared field behind).
+  //
+  // WHY the disk write is throttled (perf B11, 2026-09-24, carried over from the
+  // per-theme glass sliders this replaced): a Look slider calls this on EVERY tick
+  // of a drag, and `appearance:set` does a blocking read-merge-write of
+  // appearance.json on the main process — which freezes every window for each
+  // tick. The on-screen change (state, localStorage and the live broadcast to
+  // other windows) stays per-tick and instant; only the disk write waits, at most
+  // once per LOOK_PERSIST_MS, always carrying the LATEST value, and is flushed at
+  // once on unmount / window close so the final position is never lost.
+  const pendingLookWrite = useRef<LookOverrides | null>(null);
+  const lookWriteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushLookWrite = useCallback(() => {
+    if (lookWriteTimer.current !== null) { clearTimeout(lookWriteTimer.current); lookWriteTimer.current = null; }
+    const pending = pendingLookWrite.current;
+    pendingLookWrite.current = null;
+    if (pending) writeAppearance({ lookOverrides: pending });
   }, []);
+  const setLookOverrides = useCallback((next: LookOverrides) => {
+    const clean = parseLookOverrides(next);
+    setLookOverridesState(clean);
+    try { localStorage.setItem(LOOK_OVERRIDES_KEY, JSON.stringify(clean)); } catch {}
+    broadcastAppearance({ lookOverrides: clean });
+    pendingLookWrite.current = clean;
+    // Trailing throttle: the first tick arms the timer, later ticks only
+    // replace the pending value, so a long drag writes every ~300 ms.
+    if (lookWriteTimer.current === null) {
+      lookWriteTimer.current = setTimeout(flushLookWrite, LOOK_PERSIST_MS);
+    }
+  }, [flushLookWrite]);
+  // WHY: a window closed (or the provider unmounted) mid-throttle must still
+  // write the last value. pagehide covers closes where beforeunload is skipped.
+  useEffect(() => {
+    window.addEventListener('beforeunload', flushLookWrite);
+    window.addEventListener('pagehide', flushLookWrite);
+    return () => {
+      window.removeEventListener('beforeunload', flushLookWrite);
+      window.removeEventListener('pagehide', flushLookWrite);
+      flushLookWrite();
+    };
+  }, [flushLookWrite]);
 
   const cycleTheme = useCallback(() => {
     // WHY: cycling (including leaving preview) is a newer choice than an in-flight peer read.
@@ -742,7 +777,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     drawerWidth, setDrawerWidth, resetDrawerWidth,
     gamePaneWidth, setGamePaneWidth, resetGamePaneWidth, applyGameDefaultWidth,
     allThemes, activeTheme, bgStyle, patternStyle,
-    setGlassOverride, reloadUserThemes,
+    lookOverrides, setLookOverrides, reloadUserThemes,
   }), [activeSlug, setTheme, cycleTheme, cycleList, setCycleList, font,
        reducedEffects, setReducedEffects, themeApplied, showTimestamps, setShowTimestamps,
        showTurnMetadata, setShowTurnMetadata,
@@ -752,7 +787,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
        // render but close over nothing stale (clamp reads window at call time),
        // so listing them would defeat the memo for no correctness gain.
        drawerWidth, gamePaneWidth,
-       allThemes, activeTheme, bgStyle, patternStyle, setGlassOverride, reloadUserThemes]);
+       allThemes, activeTheme, bgStyle, patternStyle, lookOverrides, setLookOverrides, reloadUserThemes]);
 
   return (
     <ThemeContext.Provider value={value}>

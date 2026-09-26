@@ -28,6 +28,7 @@ import { latestUnresolvedError, deriveSyncBoxState, oversizeNotice, type SyncSta
 import { deviceActivityLabel, relativeMs } from './device-activity-label';
 import { summarizeSpaceSyncError } from './sync-space-error-summary';
 import { plainMessage } from '../utils/ipc-error';
+import { HANDOFF_EXPLANATION } from './takeover-dialog-copy';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -71,11 +72,19 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       ],
     },
     {
+      // WHY (lease-handoff deck Q-5, 2026-09-21): the only place handoff rules
+      // appeared was the takeover dialog itself — mid-task. Destin chose a
+      // short paragraph here over a full section.
+      heading: 'Using the same conversation on two devices',
+      paragraphs: [HANDOFF_EXPLANATION],
+    },
+    {
       heading: 'If something looks off',
       bullets: [
         { term: "Sync won't turn on", text: 'It needs GitHub. If you see a "GitHub CLI / not signed in" message, connect GitHub and try again.' },
         { term: '"No Internet Connection"', text: 'Check your WiFi or cellular and try again.' },
-        { term: 'A conflict note appeared', text: 'Two devices edited the same file — YouCoded kept both, saving the other device\'s version as a "(from …)" copy next to yours.' },
+        // WHY: give a filename cue without promising a deleted file remains.
+        { term: 'A conflict note appeared', text: 'Conflicting changes were saved in separate files. Look for “(from …)” in their names. They appear in the same folder as the affected file.' },
         { term: 'Something seems stuck', text: 'Open Sync Log and look for ERROR or WARN lines.' },
       ],
     },
@@ -860,8 +869,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     // otherwise stay non-committal — we genuinely don't know why it failed, and
     // guessing a cause here would be a misleading error.
     if (!res?.ok) return res?.error || 'Could not remove this device.';
-    // ok:true is not proof the row is gone: removeDevice skips a file it can't
-    // delete (a locked or permission-denied handle on Windows) and still resolves.
+    // ok:true is not proof the row is gone: a peer's sync can bring a conflict
+    // copy back right after the delete (a locked file now fails as ok:false).
     // Trust the refetch over the answer — but say nothing about a cause we can't see.
     if (after.some(d => d.id === id)) return 'This device is still listed. The remove did not take.';
     return null;
@@ -1322,8 +1331,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     <div className="border-t border-edge-dim px-3 py-2.5 space-y-2">
                       {conflict && (
                         <p className="text-xs text-amber-700">
-                          Some files had conflicting edits — the other device's copy was kept alongside yours
-                          (look for "(from …)" files).
+                          Conflicting changes were saved in separate files. Look for “(from …)” in their names.
                         </p>
                       )}
                       {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}

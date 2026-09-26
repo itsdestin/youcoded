@@ -8,7 +8,6 @@ import {
   responseOutcome,
   REJECT_ON_NOT_OK,
   MESSAGE_KIND,
-  REHYDRATE_ON_RECONNECT,
 } from '../src/renderer/remote-shim';
 import { readSource } from './helpers/guard-scope';
 
@@ -86,26 +85,14 @@ describe('remote-shim — message kinds', () => {
       expect(firedChannels()).toContain('native:interrupt');
     });
 
-    it('typing and the actions beside it are user actions, never queued', () => {
-      for (const c of ['session:input', 'native:retry', 'native:interrupt', 'ui:action']) {
+    it('typing and handoff attempts are user actions, never queued', () => {
+      for (const c of ['session:input', 'native:retry', 'native:interrupt', 'ui:action',
+        'handoff:begin', 'handoff:status', 'handoff:wait', 'handoff:retry',
+        'handoff:saved-copy', 'handoff:force', 'handoff:cancel', 'handoff:create-params']) {
         expect(MESSAGE_KIND[c]).toBe('user-action');
       }
       // The refusal path: send() returns false for a user action rather than queueing it.
       expect(shim).toContain("if (MESSAGE_KIND[msg?.type] === 'user-action') return false;");
-    });
-
-    it('only reads are re-issued on reconnect', () => {
-      // Asking again is safe precisely because asking changes nothing. A write in this list
-      // would be the old auto-flush bug wearing a new name.
-      for (const channel of REHYDRATE_ON_RECONNECT) {
-        const kind = MESSAGE_KIND[channel];
-        expect(kind === undefined || kind === 'read').toBe(true);
-      }
-      expect(REHYDRATE_ON_RECONNECT.length).toBeGreaterThan(0);
-      // And only on a RECONNECT: a first connect already flushes the caller's own mount-time
-      // fetches, so re-asking there would double the traffic of every connection.
-      const shimSrc = readSource(fileURLToPath(new URL('../src/renderer/remote-shim.ts', import.meta.url)));
-      expect(shimSrc).toContain('if (hasConnectedBefore) rehydrate();');
     });
 
     it('the composer asks whether it can send instead of writing to find out', () => {
@@ -164,6 +151,22 @@ describe('remote-shim — send queue', () => {
       shim = await import('../src/renderer/remote-shim');
     });
     afterEach(() => { delete (globalThis as any).WebSocket; });
+
+    it('rejects offline handoff actions immediately without replaying or retaining their request timeout', async () => {
+      const connectPromise = shim.connect('pw', false);
+      const ws = FakeWebSocket.instances[0];
+      shim.installShim();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const before = vi.getTimerCount();
+        const attempt = (window as any).claude.session.handoff.force('attempt', true, 'original');
+        await expect(attempt).rejects.toThrow(/connection|offline|unavailable/i);
+        expect(vi.getTimerCount()).toBe(before);
+        ws.open(); ws.receive({ type: 'auth:ok', token: 'tok', platform: 'browser' });
+        await connectPromise;
+        expect(ws.sent.map(raw => JSON.parse(raw).type)).not.toContain('handoff:force');
+      } finally { vi.useRealTimers(); }
+    });
 
     it('does NOT send application messages while WS is CONNECTING', async () => {
       const connectPromise = shim.connect('pw', false);

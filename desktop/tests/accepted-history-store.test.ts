@@ -3,8 +3,20 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { AcceptedHistoryStore, type AcceptedHistoryProposal } from '../src/main/harness/accepted-history-store';
-import { imageCollapsedToolResultText, prunedToolResultText } from '../src/main/harness/compaction';
+import { imageCollapsedToolResultText, isAppGenerated, markAppGenerated, summaryProvenanceNote, prunedToolResultText } from '../src/main/harness/compaction';
 import type { PersistedEventReference } from '../src/main/harness/session-store';
+
+// Pass-through fs whose sync reads are RECORDED while `watch.on` is set — how the
+// B8 test proves publish()/restore() make no blocking read (vi.spyOn cannot patch
+// the module namespace the store imports).
+const watch = vi.hoisted(() => ({ on: false, calls: [] as string[] }));
+vi.mock('fs', async (orig) => {
+  const real = await orig() as typeof import('fs');
+  const wrap = <T extends (...args: any[]) => any>(name: string, fn: T) =>
+    ((...args: any[]) => { if (watch.on) watch.calls.push(`${name}(${String(args[0])})`); return fn(...args); }) as T;
+  const patched = { ...real, readFileSync: wrap('readFileSync', real.readFileSync), statSync: wrap('statSync', real.statSync) };
+  return { ...patched, default: patched };
+});
 
 const sessionId = 'private-session';
 const binding = 'chatgpt\u0000gpt-5\u0000account-hash\u00007';
@@ -104,8 +116,8 @@ describe('AcceptedHistoryStore', () => {
       expect((fs.statSync(store.manifestPath(sessionId)).mode & 0o077)).toBe(0);
     }
 
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }))
-      .toEqual({ ok: true, messages: proposal().messages, eventUuids: ['u1', 'r1', 'a1'], revision });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }))
+      .toEqual({ ok: true, messages: proposal().messages, messageOrigins: [['u1'], null], eventUuids: ['u1', 'r1', 'a1'], revision });
   });
 
   it('returns the recorded transformation so a restored session keeps its summary anchor', async () => {
@@ -122,11 +134,14 @@ describe('AcceptedHistoryStore', () => {
       ] as any,
       transformation: { kind: 'summary', summaryEventUuid: 'c1' },
     });
+    expect(restored.messages.map(isAppGenerated)).toEqual([true, true]);
+    expect(summaryProvenanceNote(restored.messages)).toContain('"SKILL_BODY SKILL_ARGS"');
     expect(sidecar()).not.toContain('SUMMARY_BODY');
     expect(sidecar()).not.toContain('SKILL_BODY');
     expect(restored).toEqual({
       ok: true,
       eventUuids: ['c1', 's1'],
+      messageOrigins: [['c1'], ['s1']],
       revision: store.currentRevision(sessionId),
       transformation: { kind: 'summary', summaryEventUuid: 'c1' },
       messages: [
@@ -134,6 +149,34 @@ describe('AcceptedHistoryStore', () => {
         { role: 'user', content: 'SKILL_BODY\n\nSKILL_ARGS' },
       ],
     });
+  });
+
+  it('does not bind a retained repeated message to an earlier retired identical anchor', async () => {
+    const old = { type: 'user-message', sessionId, uuid: 'before', data: { text: 'repeat' } };
+    const kept = { type: 'user-message', sessionId, uuid: 'after', data: { text: 'repeat' } };
+    const marker = { type: 'compact-summary', sessionId, uuid: 'sum', data: { summary: 'memory',
+      compactionRecord: { v: 1, generation: 1, sourceRevision: 2,
+        resumeFrom: refFor(kept), coveredThrough: refFor(old) } } };
+    const events = [old, kept, marker];
+    writeTranscript(events);
+    const restored = await roundTrip({ references: events.map(refFor),
+      messages: [{ role: 'user', content: '[Earlier conversation summary]\nmemory' },
+        { role: 'user', content: 'repeat' }] as any,
+      transformation: { kind: 'summary', summaryEventUuid: 'sum' },
+    });
+    expect(restored.ok).toBe(true);
+    expect(restored.messageOrigins).toEqual([['sum'], ['after']]);
+  });
+
+  it('refuses to republish a legacy summary when its accepted list still contains an older identical marker', async () => {
+    const earlier = { type: 'compact-summary', sessionId, uuid: 'old-summary', data: { summary: 'same' } };
+    const current = { type: 'compact-summary', sessionId, uuid: 'new-summary', data: { summary: 'same' } };
+    writeTranscript([earlier, current]);
+    const result = await roundTrip({ references: [earlier, current].map(refFor),
+      messages: [{ role: 'user', content: '[Earlier conversation summary]\nsame' }] as any,
+      transformation: { kind: 'summary', summaryEventUuid: 'new-summary' },
+    });
+    expect(result).toEqual({ ok: false, reason: 'unreferenced-history' });
   });
 
   it('rebuilds merged assistant text and an interrupted partial string from consecutive anchors', async () => {
@@ -152,7 +195,7 @@ describe('AcceptedHistoryStore', () => {
     expect(sidecar()).toContain('"kind":"concat"');
     expect(sidecar()).not.toContain('answer');
     expect(sidecar()).not.toContain('moretext');
-    expect(restored).toEqual({ ok: true, messages, eventUuids: ['a1', 'a2', 'a3', 'a4'], revision: store.currentRevision(sessionId) });
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [['a1', 'a2'], ['a3', 'a4']], eventUuids: ['a1', 'a2', 'a3', 'a4'], revision: store.currentRevision(sessionId) });
   });
 
   it('rejects a reference set that covers only part of a persisted assistant part', async () => {
@@ -168,7 +211,7 @@ describe('AcceptedHistoryStore', () => {
     const revision = await store.invalidate(sessionId, 'history-mutation');
     const bad = proposal({ revision, messages: [{ role: 'assistant', content: [{ type: 'text', text: 'abandoned' }] }] as any });
     await expect(store.publish(bad)).resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
   });
 
   it('keeps the parallel-call wrapper argument string and nothing else: no per-call input, no tool output', async () => {
@@ -196,7 +239,7 @@ describe('AcceptedHistoryStore', () => {
     const marked = markerPaths(JSON.parse(sidecar()), 'WRAPPER_ARGUMENT_MARKER');
     expect(marked.length).toBe(2);
     expect(marked.map(p => p.slice(-3).join('.'))).toEqual(['openai.parallelToolCall.input', 'openai.parallelToolCall.input']);
-    expect(restored).toEqual({ ok: true, messages, eventUuids: ['t1', 't2'], revision: store.currentRevision(sessionId) });
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [null, null], eventUuids: ['t1', 't2'], revision: store.currentRevision(sessionId) });
   });
 
   it('publishes an empty-summary reasoning part with no transcript reference and restores it byte-for-byte', async () => {
@@ -221,7 +264,7 @@ describe('AcceptedHistoryStore', () => {
       kind: 'empty', field: 'reasoning-text',
       providerOptions: { openai: { itemId: 'rs_empty', reasoningEncryptedContent: 'EMPTY_SUMMARY_SENTINEL' } },
     });
-    expect(restored).toEqual({ ok: true, messages, eventUuids: ['u1', 'a1'], revision: store.currentRevision(sessionId) });
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [['u1'], null], eventUuids: ['u1', 'a1'], revision: store.currentRevision(sessionId) });
   });
 
   it('lets ONLY reasoning be empty, and only with allowlisted metadata', async () => {
@@ -301,7 +344,7 @@ describe('AcceptedHistoryStore', () => {
       { kind: 'event', uuid: 'u-next', field: 'user-text' },
     ]);
     expect(sidecar()).not.toContain('REAL_USER_TEXT');
-    expect(restored).toEqual({ ok: true, messages, eventUuids: ['u-empty', 'u-real', 'u-next'], revision: store.currentRevision(sessionId) });
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [['u-real'], ['u-next']], eventUuids: ['u-empty', 'u-real', 'u-next'], revision: store.currentRevision(sessionId) });
   });
 
   it('accepts references that tile one persisted part and rejects a gap or an overlap', async () => {
@@ -312,7 +355,7 @@ describe('AcceptedHistoryStore', () => {
       ({ eventUuid: `delta-${start}-${end}`, anchorUuid: 'a1', type: 'assistant-text' as any, partId: 'text-0', start, end });
 
     await expect(roundTrip({ references: [ref(0, 3), ref(3, 5)], messages: messages as any }))
-      .resolves.toEqual({ ok: true, messages, eventUuids: ['a1'], revision: store.currentRevision(sessionId) });
+      .resolves.toEqual({ ok: true, messages, messageOrigins: [['a1']], eventUuids: ['a1'], revision: store.currentRevision(sessionId) });
     await expect(roundTrip({ references: [ref(0, 2), ref(3, 5)], messages: messages as any }))
       .resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
     await expect(roundTrip({ references: [ref(0, 3), ref(2, 5)], messages: messages as any }))
@@ -336,10 +379,11 @@ describe('AcceptedHistoryStore', () => {
       fs.writeFileSync(store.manifestPath(sessionId), JSON.stringify(manifest));
       return store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
     };
-    expect(tamper(m => { m.messages[0].role = 'root'; })).toEqual({ ok: false, reason: 'malformed' });
-    expect(tamper(m => { m.transformation = { kind: 'summary' }; })).toEqual({ ok: false, reason: 'malformed' });
-    expect(tamper(m => { m.transformation = { kind: 'rewritten' }; })).toEqual({ ok: false, reason: 'malformed' });
-    expect(tamper(m => { m.messages[0].content = { kind: 'event', uuid: 'u1', field: 'tool-call' }; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await tamper(m => { m.messages[0].role = 'root'; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await tamper(m => { m.messages[0].appGenerated = true; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await tamper(m => { m.transformation = { kind: 'summary' }; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await tamper(m => { m.transformation = { kind: 'rewritten' }; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await tamper(m => { m.messages[0].content = { kind: 'event', uuid: 'u1', field: 'tool-call' }; })).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('re-reads a tool-delivered image by path and refuses a changed one', async () => {
@@ -357,10 +401,62 @@ describe('AcceptedHistoryStore', () => {
       ] },
     }] }];
     const restored = await roundTrip({ references: events.map(refFor), messages: messages as any });
-    expect(restored).toEqual({ ok: true, messages, eventUuids: ['t2'], revision: store.currentRevision(sessionId) });
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [['t2']], eventUuids: ['t2'], revision: store.currentRevision(sessionId) });
 
     fs.writeFileSync(image, Buffer.from('pixels-v2'));
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'image-mismatch' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'image-mismatch' });
+  });
+
+  it('publish and restore of an image-bearing history make no synchronous file read (blocking-calls B8)', async () => {
+    // WHY: publish() runs at every turn boundary and restore() on every Resume;
+    // both used to stat/read attachments, tool images and the transcript with
+    // *Sync calls, freezing every window. The attachment AND two tool images
+    // here also exercise publish's describe → read-missing → describe-again loop.
+    const a = path.join(root, 'a.png');
+    const b = path.join(root, 'b.png');
+    const c = path.join(root, 'c.png');
+    fs.writeFileSync(a, Buffer.from('pixels-a'));
+    fs.writeFileSync(b, Buffer.from('pixels-b'));
+    fs.writeFileSync(c, Buffer.from('pixels-c'));
+    const events: Fixture[] = [
+      { type: 'user-message', sessionId, uuid: 'u-img', data: { text: 'look', attachments: [a] } },
+      { type: 'tool-result', sessionId, uuid: 't2', data: { toolUseId: 'call_1', toolName: 'Read', toolResult: 'here', images: [b, c] } },
+    ];
+    writeTranscript(events);
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'file', mediaType: 'image/png', data: fs.readFileSync(a) }] },
+      { role: 'tool', content: [{
+        type: 'tool-result', toolCallId: 'call_1', toolName: 'Read',
+        output: { type: 'content', value: [
+          { type: 'text', text: 'here' },
+          { type: 'file', mediaType: 'image/png', data: { type: 'data', data: fs.readFileSync(b) } },
+          { type: 'file', mediaType: 'image/png', data: { type: 'data', data: fs.readFileSync(c) } },
+        ] },
+      }] },
+    ];
+    const revision = await store.invalidate(sessionId, 'history-mutation');   // memoises currentRevision's one sync read
+    watch.calls = [];
+    watch.on = true;
+    try {
+      await expect(store.publish(proposal({ references: events.map(refFor), messages: messages as any, revision }))).resolves.toEqual({ ok: true });
+      const restored = await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      expect(restored).toEqual({ ok: true, messages, messageOrigins: [null, ['t2']], eventUuids: ['u-img', 't2'], revision });
+      watch.on = false;
+      expect(watch.calls).toEqual([]);
+    } finally {
+      watch.on = false;
+    }
+  });
+
+  it('restore waits for a publish already queued for the session, so it never reads half of one (B8)', async () => {
+    // WHY: restore() became async. Off the per-session chain, a publish could
+    // land between its fence read and its manifest read. On the chain, a
+    // restore issued while a publish is in flight sees the finished publish.
+    const revision = await store.invalidate(sessionId, 'history-mutation');
+    const publishing = store.publish(proposal({ revision }));
+    const restoring = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+    await expect(publishing).resolves.toEqual({ ok: true });
+    await expect(restoring).resolves.toMatchObject({ ok: true, revision });
   });
 
   it('recomputes pruned and image-collapsed tool results from the untouched event text', async () => {
@@ -381,23 +477,91 @@ describe('AcceptedHistoryStore', () => {
     expect(sidecar()).toContain('"imageCollapsed":true');
     expect(sidecar()).not.toContain('LONG_TOOL_OUTPUT');
     expect(sidecar()).not.toContain('see this');
-    expect(restored).toEqual({ ok: true, messages, eventUuids: ['t1', 't2'], revision: store.currentRevision(sessionId), transformation: { kind: 'pruned' } });
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [null], eventUuids: ['t1', 't2'], revision: store.currentRevision(sessionId), transformation: { kind: 'pruned' } });
 
     // A keep-length the event text cannot support is a corrupt manifest, not a shorter result.
     const manifest = JSON.parse(sidecar());
     manifest.messages[0].content.parts[0].pruned.keepChars = long.length + 1;
     fs.writeFileSync(store.manifestPath(sessionId), JSON.stringify(manifest));
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('keeps injected user strings as bounded literals and refuses an oversized one', async () => {
     const steer = '<steer>\nhurry up\n</steer>';
     const restored = await roundTrip({ messages: [...proposal().messages, { role: 'user', content: steer }] as any });
-    expect(restored).toEqual({ ok: true, messages: [...proposal().messages, { role: 'user', content: steer }], eventUuids: ['u1', 'r1', 'a1'], revision: store.currentRevision(sessionId) });
+    expect(restored).toEqual({ ok: true, messages: [...proposal().messages, { role: 'user', content: steer }], messageOrigins: [['u1'], null, null], eventUuids: ['u1', 'r1', 'a1'], revision: store.currentRevision(sessionId) });
 
     const oversized = 'x'.repeat(64 * 1024 + 1);
     await expect(roundTrip({ messages: [{ role: 'user', content: oversized }] as any }))
       .resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
+  });
+
+  it('preserves literal rule origin across exact restores and republishes without inferring origin from human text', async () => {
+    const rule = '<project-rule source=".claude/rules/api.md">\nAlways validate input.\n</project-rule>';
+    const appRule = markAppGenerated({ role: 'user', content: rule } as const);
+    const humanRule = { role: 'user', content: rule } as const;
+    const restored = await roundTrip({ messages: [...proposal().messages, appRule, humanRule] as any });
+    expect(restored.ok).toBe(true);
+    expect(JSON.parse(sidecar()).messages.slice(-2)).toEqual([
+      { role: 'user', content: { kind: 'literal', value: rule }, appGenerated: true },
+      { role: 'user', content: { kind: 'literal', value: rule } },
+    ]);
+    expect(isAppGenerated(restored.messages.at(-2))).toBe(true);
+    expect(isAppGenerated(restored.messages.at(-1))).toBe(false);
+    expect(summaryProvenanceNote(restored.messages.slice(-2)).match(/the message beginning/g)).toHaveLength(1);
+    // The private marker belongs in the sidecar, not the provider-visible message.
+    expect(JSON.stringify(restored.messages.slice(-2))).toBe(JSON.stringify([appRule, humanRule]));
+    const again = await roundTrip({ messages: restored.messages });
+    expect(again.ok).toBe(true);
+    expect(isAppGenerated(again.messages.at(-2))).toBe(true);
+    expect(isAppGenerated(again.messages.at(-1))).toBe(false);
+  });
+
+  it('does not spend a real human anchor on an earlier identical app rule', async () => {
+    const rule = '<project-rule source="x">same words</project-rule>';
+    const human: Fixture = { type: 'user-message', sessionId, uuid: 'human-rule', data: { text: rule } };
+    writeTranscript([human]);
+    const messages = [markAppGenerated({ role: 'user', content: rule } as const), { role: 'user', content: rule }];
+    const restored = await roundTrip({ references: [refFor(human)], messages: messages as any });
+    expect(restored.ok).toBe(true);
+    expect(JSON.parse(sidecar()).messages).toEqual([
+      { role: 'user', content: { kind: 'literal', value: rule }, appGenerated: true },
+      { role: 'user', content: { kind: 'event', uuid: 'human-rule', field: 'user-text' } },
+    ]);
+    expect(isAppGenerated(restored.messages[0])).toBe(true);
+    expect(isAppGenerated(restored.messages[1])).toBe(false);
+    expect(summaryProvenanceNote(restored.messages).match(/the message beginning/g)).toHaveLength(1);
+    expect(restored.eventUuids).toEqual(['human-rule']);
+    const again = await roundTrip({ references: [refFor(human)], messages: restored.messages });
+    expect(again.ok).toBe(true);
+    expect(JSON.parse(sidecar()).messages[1].content).toEqual({ kind: 'event', uuid: 'human-rule', field: 'user-text' });
+    expect(isAppGenerated(again.messages[0])).toBe(true);
+    expect(isAppGenerated(again.messages[1])).toBe(false);
+  });
+
+  it('keeps transcript-backed app messages as references rather than literals', async () => {
+    const events: Fixture[] = [
+      { type: 'skill-invoked', sessionId, uuid: 'skill', data: { body: 'skill instructions' } },
+      { type: 'compact-summary', sessionId, uuid: 'summary', data: { summary: 'previous work' } },
+      { type: 'user-message', sessionId, uuid: 'injected', data: { text: 'helper report', injected: 'specialist-report' } },
+    ];
+    writeTranscript(events);
+    const messages = [
+      markAppGenerated({ role: 'user', content: 'skill instructions' } as const),
+      markAppGenerated({ role: 'user', content: '[Earlier conversation summary]\nprevious work' } as const),
+      markAppGenerated({ role: 'user', content: 'helper report' } as const),
+    ];
+    const restored = await roundTrip({ references: events.map(refFor), messages: messages as any });
+    expect(restored.ok).toBe(true);
+    expect(JSON.parse(sidecar()).messages.map((m: any) => m.content)).toEqual([
+      { kind: 'event', uuid: 'skill', field: 'skill-text' },
+      { kind: 'event', uuid: 'summary', field: 'summary-text' },
+      { kind: 'event', uuid: 'injected', field: 'user-text' },
+    ]);
+    expect(sidecar()).not.toContain('skill instructions');
+    expect(sidecar()).not.toContain('previous work');
+    expect(sidecar()).not.toContain('helper report');
+    expect(restored.messages.every(isAppGenerated)).toBe(true);
   });
 
   it('fences late publication, binding mismatch, transcript advance, malformed and oversized state', async () => {
@@ -405,19 +569,19 @@ describe('AcceptedHistoryStore', () => {
     await store.publish({ ...proposal(), revision: first });
     await store.invalidate(sessionId, 'context-clear');
     await expect(store.publish({ ...proposal(), revision: first })).resolves.toEqual({ ok: false, reason: 'stale-generation' });
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
 
     const next = await store.invalidate(sessionId, 'history-mutation');
     await store.publish({ ...proposal(), revision: next });
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding: `${binding}-other`, assemblyDigest })).toEqual({ ok: false, reason: 'binding-mismatch' });
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest: 'assembly-v2' })).toEqual({ ok: false, reason: 'assembly-mismatch' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding: `${binding}-other`, assemblyDigest })).toEqual({ ok: false, reason: 'binding-mismatch' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest: 'assembly-v2' })).toEqual({ ok: false, reason: 'assembly-mismatch' });
     fs.appendFileSync(transcript, `${JSON.stringify({ type: 'user-message', sessionId, uuid: 'u2', data: { text: 'later' } })}\n`);
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'transcript-advanced' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'transcript-advanced' });
 
     fs.writeFileSync(store.manifestPath(sessionId), '{bad');
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
     fs.writeFileSync(store.manifestPath(sessionId), Buffer.alloc(16 * 1024 * 1024 + 1));
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'oversized' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'oversized' });
   });
 
   it('invalidates an older checkpoint before oversized/failed replacement and survives failed unlink', async () => {
@@ -430,17 +594,17 @@ describe('AcceptedHistoryStore', () => {
     const flood = Array.from({ length: 300 }, () => ({ role: 'user', content: 'x'.repeat(60_000) }));
     await expect(store.publish(proposal({ revision: second, messages: flood as any })))
       .resolves.toEqual({ ok: false, reason: 'oversized' });
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
 
     let writes = 0;
     const failing = new AcceptedHistoryStore(path.join(root, 'electron-user-data'), { beforeRename: () => { if (++writes > 1) throw new Error('disk'); } });
     const third = await failing.invalidate(sessionId, 'history-mutation');
     await expect(failing.publish({ ...proposal(), revision: third })).resolves.toEqual({ ok: false, reason: 'write-failed' });
-    expect(failing.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
+    expect(await failing.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
 
     const unlinkFailing = new AcceptedHistoryStore(path.join(root, 'electron-user-data'), { unlink: () => { throw new Error('busy'); } });
     await expect(unlinkFailing.remove(sessionId)).resolves.toEqual({ ok: false, reason: 'unlink-failed' });
-    expect(unlinkFailing.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
+    expect(await unlinkFailing.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
   });
 
   it('validates user attachment bytes and removes orphan sidecars when the real transcript disappears', async () => {
@@ -450,10 +614,10 @@ describe('AcceptedHistoryStore', () => {
     writeTranscript(events);
     const messages = [{ role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'file', mediaType: 'image/png', data: fs.readFileSync(image) }] }];
     const restored = await roundTrip({ references: events.map(refFor), messages: messages as any });
-    expect(restored).toEqual({ ok: true, messages, eventUuids: ['u-img'], revision: store.currentRevision(sessionId) });
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [null], eventUuids: ['u-img'], revision: store.currentRevision(sessionId) });
 
     fs.writeFileSync(image, Buffer.from('pixels-v2'));
-    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'image-mismatch' });
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'image-mismatch' });
 
     fs.rmSync(transcript);
     await store.cleanupOrphans();
@@ -492,7 +656,7 @@ describe('AcceptedHistoryStore', () => {
       ] as any })).resolves.toEqual({ ok: true });
       expect(store.reader.stats).toEqual({ full: 1, incremental: 1 });
       // restore() reads the whole file and compares its digest to the manifest's.
-      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      const restored = await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
       expect(restored.ok).toBe(true);
       expect((restored as any).eventUuids).toEqual(['u1', 'r1', 'a1', 'u2', 'a2']);
     });
@@ -503,7 +667,7 @@ describe('AcceptedHistoryStore', () => {
       fs.writeFileSync(transcript, [JSON.stringify({ v: 1, sessionId, title: 'renamed later' }), ...base.map(e => JSON.stringify(e)), ''].join('\n'));
       await expect(publishFresh()).resolves.toEqual({ ok: true });
       expect(store.reader.stats).toEqual({ full: 2, incremental: 0 });
-      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+      expect((await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).ok).toBe(true);
     });
 
     it('a transcript that shrank is re-read in full', async () => {
@@ -512,7 +676,7 @@ describe('AcceptedHistoryStore', () => {
       writeTranscript(base); // back to the shorter file
       await expect(publishFresh()).resolves.toEqual({ ok: true });
       expect(store.reader.stats).toEqual({ full: 2, incremental: 0 });
-      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+      expect((await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).ok).toBe(true);
     });
 
     it('a duplicate uuid appended later still fails the publish', async () => {
@@ -526,11 +690,11 @@ describe('AcceptedHistoryStore', () => {
       fs.appendFileSync(transcript, '{"type":"user-message","sessionId":"' + sessionId + '","uuid":"u2","data":{"te');
       await expect(publishFresh()).resolves.toEqual({ ok: true });
       // The manifest's digest must be of the WHOLE file, torn tail included.
-      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+      expect((await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).ok).toBe(true);
       fs.appendFileSync(transcript, 'xt":"more"}}\n');
       await expect(publishFresh()).resolves.toEqual({ ok: true });
       expect(store.reader.stats.full).toBe(1);
-      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      const restored = await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
       expect(restored.ok).toBe(true);
     });
 
@@ -548,7 +712,7 @@ describe('AcceptedHistoryStore', () => {
         { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
       ] as any })).resolves.toEqual({ ok: true });
       expect(store.reader.stats).toEqual({ full: 1, incremental: 1 });
-      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      const restored = await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
       expect(restored.ok).toBe(true);
       expect((restored as any).eventUuids).toEqual(['u1', 'r1', 'a1', 'u2', 'a2']);
       // The cached prefix survives the junk line: a third publish is incremental again.

@@ -79,3 +79,28 @@ describe('useSecondsTick', () => {
     expect(read(r.container)).toEqual([0]);
   });
 });
+
+import { OnScreenContext } from '../src/renderer/state/on-screen-context';
+
+// Every open session keeps its chat mounted; a running command's clock in a
+// background tab used to redraw its card every second for nobody.
+describe('useSecondsTick in a chat that is not on screen', () => {
+  const pane = (onScreen: boolean, startedAt: number) => (
+    <OnScreenContext.Provider value={onScreen}><Counter startedAt={startedAt} /></OnScreenContext.Provider>
+  );
+
+  it('does not tick while its chat is hidden, and is right the moment it is shown', () => {
+    const t0 = Date.now();
+    const r = render(pane(true, t0));
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(read(r.container)).toEqual([2]);
+
+    r.rerender(pane(false, t0));
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => { vi.advanceTimersByTime(40_000); });
+
+    r.rerender(pane(true, t0));
+    expect(read(r.container)).toEqual([42]);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+});

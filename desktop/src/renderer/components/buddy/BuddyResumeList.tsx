@@ -71,6 +71,8 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
   /** The lease gate's question, rendered inline — the buddy has no modal layer. */
   const [takeover, setTakeover] = useState<{ device: string; phase: TakeoverDialogPhase } | null>(null);
   const takeoverResolveRef = useRef<((choice: boolean) => void) | null>(null);
+  // Closing the list is a decline, not a suspended handoff that can resume later.
+  useEffect(() => () => { takeoverResolveRef.current?.(false); }, []);
 
   const [defaultAlias, setDefaultAlias] = useState('sonnet');
   const [defaultDangerous, setDefaultDangerous] = useState(false);
@@ -135,16 +137,20 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
     setError(null);
     setWarning(null);
     try {
-      const proceed = await runLeaseTakeoverGate({
-        claudeSessionId: s.sessionId,
-        askTakeover,
-        onWarn: setWarning,
-      });
-      if (!proceed) { setResuming(null); return; }
-
       const native = picked.runtime === 'native';
       if (native) persistLastBinding({ providerId: picked.providerId, modelId: picked.modelId });
-      const info = await (window.claude.session.create as any)(buildSessionCreateArgs({
+      const info = await runLeaseTakeoverGate({
+        claudeSessionId: s.sessionId,
+        askTakeover,
+        onHandoff: async () => {
+          // WHY: buddy has no full-size read/draft tab; hand the selected
+          // conversation to the main window's approved pending flow instead.
+          await window.claude.buddy.openMain({ resume: s.sessionId });
+          onCancel();
+        },
+        onWarn: setWarning,
+        // The backend owns the claim through startup; this surface only retries.
+        open: () => window.claude.session.create(buildSessionCreateArgs({
         // The RESUMING_* constants, not a bare literal: main's title feeder has
         // to RECOGNISE these as placeholders or auto-titling stays blocked for
         // the whole resumed conversation (shared/session-title.ts).
@@ -155,15 +161,9 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
         skipPermissions: defaultDangerous,
         binding: native ? { providerId: picked.providerId, modelId: picked.modelId } : null,
         resumeSessionId: s.sessionId,
-      }));
-      if (!info?.id) {
-        // Non-committal: the exact cause isn't known on this side, and main
-        // emits its own session-error for the refusal cases (which DO return an
-        // id, so they don't land here). See docs/error-message-standards.md.
-        setError("Couldn't resume this conversation.");
-        setResuming(null);
-        return;
-      }
+        })),
+      });
+      if (!info) { setResuming(null); return; }
       onResumed(info.id);
     } catch {
       setError("Couldn't resume this conversation.");
@@ -181,8 +181,8 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
           <p className="text-3xs text-fg-muted" style={{ margin: 0, lineHeight: 1.45 }}>{copy.consequence}</p>
         )}
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button variant="secondary" size="sm" onClick={() => answerTakeover(false)}>Never mind</Button>
-          <Button variant="primary" size="sm" className="flex-1" onClick={() => answerTakeover(true)}>Take over</Button>
+          <Button variant="secondary" size="sm" onClick={() => answerTakeover(false)}>{takeover.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}</Button>
+          <Button variant="primary" size="sm" className="flex-1" onClick={() => answerTakeover(true)}>{takeover.phase === 'claim-denied' ? 'Try again' : 'Take over'}</Button>
         </div>
       </div>
     );

@@ -22,6 +22,16 @@ declare global {
       /** Dev-instance label (run-dev.sh --label). null in the built app and on remote. */
       devLabel?: string | null;
       session: {
+        handoff: {
+          begin: (conversationId: string, provider: 'claude' | 'native', create?: import('../../shared/types').HandoffCreateParams) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          status: (id: string) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          wait: (id: string) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          retry: (id: string) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          savedCopy: (id: string, consent: boolean) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          force: (id: string, consent: boolean, expectedHolderId: string) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          cancel: (id: string) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          setCreateParams: (id: string, create: import('../../shared/types').HandoffCreateParams) => Promise<import('../../shared/types').HandoffAttemptResult>;
+        };
         create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; model?: string; provider?: 'claude' | 'native'; resumeSessionId?: string; binding?: { providerId: string; modelId: string } }) => Promise<any>;
         destroy: (sessionId: string) => Promise<boolean>;
         list: () => Promise<any[]>;
@@ -32,6 +42,10 @@ declare global {
         respondToPermission: (requestId: string, decision: object) => Promise<boolean>;
         browse: () => Promise<any[]>;
         loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) => Promise<any>;
+        // Welcome back (design 2026-09-24 §3): conversation ids open at the
+        // last shutdown.
+        reopenList: () => Promise<string[]>;
+        forgetReopen: (ids: string[]) => Promise<{ ok: boolean }>;
       };
       skills: {
         list: () => Promise<import('../../shared/types').SkillEntry[]>;
@@ -339,7 +353,7 @@ declare global {
         // a bare boolean so a refusal can be explained to the user rather than
         // swallowed — `reason` is one of turn-in-flight | nothing-to-compact |
         // summary-failed | not-live | error.
-        compact: (sessionId: string) => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
+        compact: (sessionId: string, focus?: string) => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
         // M3 item 2: /clear as a context BARRIER — appends a marker so the model
         // stops seeing prior turns; the on-disk log is never rewritten.
         clear: (sessionId: string) => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
@@ -349,6 +363,9 @@ declare global {
         // turn-in-flight | not-live | queue-full | error.
         invokeSkill: (sessionId: string, skill: string, args?: string) => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
         setBinding: (sessionId: string, binding: { providerId: string; modelId: string }) => Promise<boolean>;
+        // U11: switch only if the chat fits the chosen model; otherwise
+        // 'needs-summary' (nothing changed) until called with summarize=true.
+        switchModel: (sessionId: string, binding: { providerId: string; modelId: string }, summarize?: boolean) => Promise<import('../../shared/types').NativeSwitchResult>;
         // Per-session native permission mode (StatusBar chip, Task 13). Returns
         // the APPLIED mode — authoritative; the chip renders the return value.
         setPermissionMode: (sessionId: string, mode: 'ask' | 'auto-edit' | 'full-auto') => Promise<'ask' | 'auto-edit' | 'full-auto'>;
@@ -520,7 +537,7 @@ declare global {
         leaseQuery?: (claudeSessionId: string) => Promise<{ held: boolean; device?: string; deviceId?: string; self?: boolean; source?: string }>;
         // 'undeliverable': the hub had no delivery path (holder never asked) —
         // distinct from 'timeout' (asked, no answer within the poll budget).
-        leaseTakeover?: (claudeSessionId: string) => Promise<{ outcome: 'acquired' | 'timeout' | 'error' | 'undeliverable' }>;
+        leaseTakeover?: (claudeSessionId: string) => Promise<{ outcome: 'ready' | 'timeout' | 'error' | 'undeliverable' }>;
         leaseForce?: (claudeSessionId: string) => Promise<{ ok: boolean }>;
         // Device registry (Plan 2b spec §10a): the "Your devices" list. Optional so
         // remote / older Android builds without the handler still typecheck — every

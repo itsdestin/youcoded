@@ -1,8 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 import { parseTranscriptLine } from './transcript-watcher';
-import { SubagentIndex } from './subagent-index';
+import { SubagentIndex, SubagentMeta } from './subagent-index';
 import { TranscriptEvent } from '../shared/types';
+
+/** `agent-<id>.jsonl` — a helper's transcript (not its .meta.json). */
+function isAgentJsonl(name: string): boolean {
+  return name.endsWith('.jsonl') && name.startsWith('agent-');
+}
+function agentIdOf(name: string): string {
+  return name.slice('agent-'.length, -'.jsonl'.length);
+}
 
 interface PerFileState {
   agentId: string;
@@ -21,8 +29,14 @@ interface PerFileState {
   seenUuids: Set<string>;
   watcher: fs.FSWatcher | null;
   pollTimer: ReturnType<typeof setInterval> | null;
+  // True once the parent's tool-result for this helper has landed and its
+  // final read ran. WHY (perf, many tabs): a settled helper no longer holds its
+  // own fs.watch — every helper ever spawned used to keep one open until the
+  // whole session closed. The entry itself stays (offset + meta only) so a
+  // directory re-scan never re-tracks the file from byte 0 and replays it.
+  settled: boolean;
   // Fix 5: cache meta on first read so deliver() never re-reads from disk
-  meta: { description: string; agentType: string };
+  meta: SubagentMeta;
 }
 
 export interface SubagentWatcherOptions {
@@ -62,6 +76,11 @@ export class SubagentWatcher {
   private dirPollTimer: ReturnType<typeof setInterval> | null = null;
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
+  // Directory-scan serialization (see scanDirectory). `generation` bumps on
+  // stop() so a scan still in flight tracks nothing for a closed session.
+  private scanInFlight: Promise<void> | null = null;
+  private rescanQueued = false;
+  private generation = 0;
 
   constructor(opts: SubagentWatcherOptions) {
     this.sessionId = opts.sessionId;
@@ -73,7 +92,9 @@ export class SubagentWatcher {
   start(): void {
     if (this.started) return;
     this.started = true;
-    this.scanDirectory(); // synchronous replay of any existing files
+    // Replay of any existing files. Async (B1): the helpers are tracked a tick
+    // later; their lines were always delivered asynchronously anyway.
+    void this.scanDirectory();
     this.attachDirWatcher();
     // The prune timer is armed lazily by deliver() on the first buffered event.
   }
@@ -81,6 +102,9 @@ export class SubagentWatcher {
   stop(): void {
     if (!this.started) return;
     this.started = false;
+    this.generation++;
+    this.scanInFlight = null;
+    this.rescanQueued = false;
     if (this.dirWatcher) { this.dirWatcher.close(); this.dirWatcher = null; }
     if (this.dirPollTimer) { clearInterval(this.dirPollTimer); this.dirPollTimer = null; }
     if (this.pruneTimer) { clearInterval(this.pruneTimer); this.pruneTimer = null; }
@@ -94,28 +118,42 @@ export class SubagentWatcher {
   }
 
   /**
-   * Full-history replay. Called by TranscriptWatcher.getHistory() so a
-   * detach/re-dock or remote-access replay can rebuild nested state.
+   * Subagent replay for one history page. Called by readTranscriptPage
+   * (transcript-page.ts) on every conversation open, scroll-up and buddy open.
    *
    * Takes a REQUIRED `index` parameter — the caller supplies a fresh,
    * throwaway SubagentIndex primed with the parent Agent tool_uses from
-   * the current replay. The live `this.index` is NEVER consulted, so
+   * the current page. The live `this.index` is NEVER consulted, so
    * replay can safely run alongside an active start() without corrupting
    * live correlation.
+   *
+   * WHY async (2026-09-24, blocking-call batch B1): this listed the directory,
+   * read every helper's .meta.json and then every bound helper's whole
+   * transcript with *Sync calls, per page — with many helpers, every window
+   * froze on each scroll-up. Reads now run in parallel off the main thread;
+   * BINDING still happens in directory order (two helpers with the same
+   * description bind to parents in that order) and events come out in that
+   * same order, so the page is identical to what the sync version built.
    */
-  getHistory(index: SubagentIndex): TranscriptEvent[] {
-    if (!fs.existsSync(this.subagentsDir)) return [];
-    const events: TranscriptEvent[] = [];
-    for (const name of fs.readdirSync(this.subagentsDir)) {
-      if (!name.endsWith('.jsonl') || !name.startsWith('agent-')) continue;
-      const agentId = name.slice('agent-'.length, -'.jsonl'.length);
-      const meta = this.readMeta(agentId);
-      if (!meta) continue;
+  async getHistory(index: SubagentIndex): Promise<TranscriptEvent[]> {
+    let names: string[];
+    try { names = await fs.promises.readdir(this.subagentsDir); } catch { return []; }
+    const agentIds = names.filter(isAgentJsonl).map(agentIdOf);
+    const metas = await Promise.all(agentIds.map((id) => this.readMeta(id)));
+    const bound: { agentId: string; parentToolUseId: string }[] = [];
+    agentIds.forEach((agentId, i) => {
+      const meta = metas[i];
+      if (!meta) return;
       const parentToolUseId = index.bindSubagent(agentId, meta);
-      if (!parentToolUseId) continue;
-      const jsonlPath = path.join(this.subagentsDir, name);
-      let raw: string;
-      try { raw = fs.readFileSync(jsonlPath, 'utf8'); } catch { continue; }
+      if (parentToolUseId) bound.push({ agentId, parentToolUseId });
+    });
+    // Only helpers whose parent is on this page are read at all.
+    const raws = await Promise.all(bound.map(({ agentId }) =>
+      fs.promises.readFile(path.join(this.subagentsDir, `agent-${agentId}.jsonl`), 'utf8').catch(() => null)));
+    const events: TranscriptEvent[] = [];
+    bound.forEach(({ agentId, parentToolUseId }, i) => {
+      const raw = raws[i];
+      if (raw == null) return;
       for (const line of raw.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
@@ -124,7 +162,7 @@ export class SubagentWatcher {
           events.push(this.stamp(ev, parentToolUseId, agentId));
         }
       }
-    }
+    });
     return events;
   }
 
@@ -177,26 +215,38 @@ export class SubagentWatcher {
       // Dir just appeared — retire the bootstrap poll and upgrade to
       // fs.watch (+ the safety-net poll on Windows; attachDirWatcher decides).
       if (this.dirPollTimer) { clearInterval(this.dirPollTimer); this.dirPollTimer = null; }
-      this.scanDirectory();
+      void this.scanDirectory();
       this.attachDirWatcher();
       return;
     }
-    this.scanDirectory();
+    void this.scanDirectory();
   }
 
   /**
    * Called by TranscriptWatcher when a tool-result lands: if it completes a
    * parent Agent tool call, that subagent's transcript is done growing — do
    * one final read (bytes written between the last watch/poll tick and the
-   * result), then stop the belt-and-suspenders stat poll. fs.watch stays
-   * attached so an unexpected late write still delivers; without this settle,
-   * a session that ran 50 subagents held 50 stat-poll timers forever.
+   * result), then release the helper's own fs.watch AND its safety-net stat
+   * poll. Without this settle, a session that ran 50 subagents held 50
+   * watches (and, on Windows, 50 stat-poll timers) until it closed.
+   *
+   * WHY releasing the watch is safe: an unexpected late write still arrives.
+   * The session's DIRECTORY watch (which lives as long as the session) fires
+   * for writes to any file inside it, and onDirEvent() drains a settled
+   * helper's file when its name comes through — one stat + read per actual
+   * write, nothing while the file is quiet. When the directory watch is NOT
+   * healthy (it failed and a directory poll stands in, or Windows' safety-net
+   * poll catches a dropped notification), that poll drains settled helpers
+   * too (drainSettled). The session's own close (stop()) releases every
+   * entry, settled or not.
    */
   async settleByParent(parentToolUseId: string): Promise<void> {
     for (const state of this.perFile.values()) {
       if (this.index.lookup(state.agentId) !== parentToolUseId) continue;
       try { await this.readNewLines(state); } catch { /* file may be gone */ }
+      state.settled = true;
       if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+      if (state.watcher) { state.watcher.close(); state.watcher = null; }
     }
   }
 
@@ -205,26 +255,91 @@ export class SubagentWatcher {
     return !!this.perFile.get(agentId)?.pollTimer;
   }
 
+  /** Test-only: whether an agent file still holds its own fs.watch. */
+  hasActiveWatch(agentId: string): boolean {
+    return !!this.perFile.get(agentId)?.watcher;
+  }
+
+  /** Test-only: how many helper entries this session is tracking. */
+  trackedCount(): number {
+    return this.perFile.size;
+  }
+
   // ---- internals ----
 
-  private readMeta(agentId: string): { description: string; agentType: string } | null {
+  // WHY async (B1): read per helper on every history page and on every
+  // directory scan. A missing file is the same `null` the old existsSync gave.
+  private async readMeta(agentId: string): Promise<SubagentMeta | null> {
     const metaPath = path.join(this.subagentsDir, `agent-${agentId}.meta.json`);
-    if (!fs.existsSync(metaPath)) return null;
     try {
-      const raw = fs.readFileSync(metaPath, 'utf8');
+      const raw = await fs.promises.readFile(metaPath, 'utf8');
       const obj = JSON.parse(raw);
       if (typeof obj?.description !== 'string' || typeof obj?.agentType !== 'string') return null;
-      return { description: obj.description, agentType: obj.agentType };
+      // toolUseId: the exact parent card — see SubagentIndex.bindSubagent.
+      return {
+        description: obj.description, agentType: obj.agentType,
+        ...(typeof obj.toolUseId === 'string' && obj.toolUseId ? { toolUseId: obj.toolUseId } : {}),
+      };
     } catch { return null; }
   }
 
-  private scanDirectory(): void {
-    if (!fs.existsSync(this.subagentsDir)) return;
-    for (const name of fs.readdirSync(this.subagentsDir)) {
-      if (!name.endsWith('.jsonl') || !name.startsWith('agent-')) continue;
-      const agentId = name.slice('agent-'.length, -'.jsonl'.length);
-      this.trackSubagent(agentId);
-    }
+  /** The directory watch fired. New helper files are picked up by the scan;
+   *  a write to an already-SETTLED helper (which no longer has its own watch —
+   *  see settleByParent) is drained here so a late line is never lost. */
+  private onDirEvent(filename: string | Buffer | null): void {
+    void this.scanDirectory();
+    if (!filename) return;
+    const name = filename.toString();
+    if (!isAgentJsonl(name)) return;
+    const state = this.perFile.get(agentIdOf(name));
+    if (state?.settled) this.readNewLines(state).catch(() => undefined);
+  }
+
+  /**
+   * List the directory and start tracking any helper not yet tracked.
+   *
+   * WHY async + single-flight (2026-09-24, blocking-call batch B1): on Linux the
+   * directory watch fires for EVERY line an active helper appends, and each
+   * fire ran a readdirSync (+ a sync .meta.json read per new helper) on the
+   * main thread. Now one scan runs at a time; triggers that land meanwhile
+   * coalesce into ONE rerun (the readNewLines pattern), so two scans can never
+   * both track the same helper. `generation` fences a scan that is still in
+   * flight when stop() runs: it tracks nothing afterwards (no watch leaked on
+   * a closed session). Helpers are tracked in directory order, as before —
+   * binding order matters when two share a description.
+   */
+  private scanDirectory(): Promise<void> {
+    if (this.scanInFlight) { this.rescanQueued = true; return this.scanInFlight; }
+    const gen = this.generation;
+    // Declared first so the finally below can compare against it (it only
+    // runs after the first await, by which point `run` is assigned).
+    let run: Promise<void> | null = null;
+    run = (async () => {
+      try {
+        do {
+          this.rescanQueued = false;
+          await this.scanOnce(gen);
+        } while (this.rescanQueued && gen === this.generation);
+      } finally {
+        if (this.scanInFlight === run) this.scanInFlight = null;
+      }
+    })();
+    this.scanInFlight = run;
+    return run;
+  }
+
+  private async scanOnce(gen: number): Promise<void> {
+    let names: string[];
+    try { names = await fs.promises.readdir(this.subagentsDir); } catch { return; }
+    if (gen !== this.generation) return;
+    const fresh = names.filter(isAgentJsonl).map(agentIdOf).filter((id) => !this.perFile.has(id));
+    if (fresh.length === 0) return;
+    const metas = await Promise.all(fresh.map((id) => this.readMeta(id)));
+    if (gen !== this.generation) return; // stop() ran during the reads
+    fresh.forEach((agentId, i) => {
+      const meta = metas[i];
+      if (meta) this.trackSubagent(agentId, meta);
+    });
   }
 
   private attachDirWatcher(): void {
@@ -237,7 +352,7 @@ export class SubagentWatcher {
       return;
     }
     try {
-      this.dirWatcher = fs.watch(this.subagentsDir, () => this.scanDirectory());
+      this.dirWatcher = fs.watch(this.subagentsDir, (_evt, filename) => this.onDirEvent(filename));
       this.dirWatcher.on('error', () => {
         if (this.dirWatcher) { this.dirWatcher.close(); this.dirWatcher = null; }
         this.startDirPoll();
@@ -261,7 +376,7 @@ export class SubagentWatcher {
       if (!this.started) return;
       if (fs.existsSync(this.subagentsDir)) {
         if (this.dirPollTimer) { clearInterval(this.dirPollTimer); this.dirPollTimer = null; }
-        this.scanDirectory();
+        void this.scanDirectory();
         this.attachDirWatcher();
       }
     }, 5000);
@@ -275,8 +390,22 @@ export class SubagentWatcher {
     // that failed), so it can afford to be slow.
     this.dirPollTimer = setInterval(() => {
       if (!this.started) return;
-      this.scanDirectory();
+      void this.scanDirectory();
+      this.drainSettled();
     }, 5000);
+  }
+
+  /** Read any late output from helpers that already SETTLED. WHY: a settled
+   *  helper has no watch of its own (settleByParent), and scanDirectory() skips
+   *  files it already tracks — so when this directory poll is running (the
+   *  directory watch failed, or it is Windows' safety net for dropped
+   *  notifications), this is the only thing that still reads a background
+   *  helper that keeps writing after its parent's tool result. readNewLines is
+   *  one async stat per helper and returns at once when the file hasn't grown. */
+  private drainSettled(): void {
+    for (const state of this.perFile.values()) {
+      if (state.settled) this.readNewLines(state).catch(() => undefined);
+    }
   }
 
   /** Age out pending buffered events every 5 s so a lingering unbound helper
@@ -294,10 +423,8 @@ export class SubagentWatcher {
     }, 5000);
   }
 
-  private trackSubagent(agentId: string): void {
+  private trackSubagent(agentId: string, meta: SubagentMeta): void {
     if (this.perFile.has(agentId)) return;
-    const meta = this.readMeta(agentId);
-    if (!meta) return;
     const jsonlPath = path.join(this.subagentsDir, `agent-${agentId}.jsonl`);
     const metaPath = path.join(this.subagentsDir, `agent-${agentId}.meta.json`);
     // Fix 1 + 5: removed `bound` field; meta is cached on state so deliver()
@@ -313,6 +440,7 @@ export class SubagentWatcher {
       seenUuids: new Set(),
       watcher: null,
       pollTimer: null,
+      settled: false,
       meta,
     };
     this.perFile.set(agentId, state);
@@ -333,6 +461,9 @@ export class SubagentWatcher {
       });
       state.watcher.on('error', () => {
         if (state.watcher) { state.watcher.close(); state.watcher = null; }
+        // A settled helper needs no stand-in poll — the directory watch
+        // covers its rare late write (see settleByParent).
+        if (state.settled) return;
         this.startFilePoll(state);
       });
       // Same platform rule as the directory poll (audit W8): a safety-net stat
@@ -441,7 +572,14 @@ export class SubagentWatcher {
     }
     // Not bound yet — buffer for eventual flush using cached meta.
     this.index.bufferPendingEvent(state.agentId, state.meta, ev);
-    this.armPruneTimer();
+    // WHY flush right away (B1, 2026-09-24): the parent's Agent tool_use may
+    // have been recorded — and its flushAllPending() already run — AFTER this
+    // helper was tracked but BEFORE its first read landed. Nothing would flush
+    // again until an unrelated Agent call, so the helper's output sat unseen.
+    // The async directory scan widened that gap; tryFlushPending binds only
+    // if a matching parent exists and emits the buffer in order, else no-op.
+    this.flushPendingFor(state.agentId);
+    if (!this.index.lookup(state.agentId)) this.armPruneTimer();
   }
 
   private stamp(ev: TranscriptEvent, parentAgentToolUseId: string, agentId: string): TranscriptEvent {

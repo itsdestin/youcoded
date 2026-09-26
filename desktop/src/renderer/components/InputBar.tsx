@@ -18,7 +18,7 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { dispatchSlashCommand, type ViewMode } from '../state/slash-command-dispatcher';
 import { runNativeSlashAction, routeSlashResult } from '../state/native-slash-actions';
 import type { UsageSnapshot } from '../state/chat-types';
-import { hasPendingInteraction } from '../state/pty-input-gate';
+import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
@@ -50,6 +50,11 @@ export interface InputBarHandle {
   // the required check-then-act sequence; see task-11-report.md.
   /** True when the composer currently holds a non-empty (trimmed) draft. */
   hasDraft: () => boolean;
+  /** Read the unsent draft before a pending tab is rebound to an admitted writer. */
+  readDraft: (sessionId?: string) => string;
+  readDraftPayload: (sessionId?: string) => { text: string; attachments: string[] };
+  /** Carry text and attachments to an admitted session without submitting either. */
+  transferDraft: (fromId: string, toId: string) => void;
   /** Replace the composer's content with `text` and focus it. Caller must call
    *  hasDraft() first — this does not check emptiness itself. */
   fillDraft: (text: string) => void;
@@ -58,6 +63,8 @@ export interface InputBarHandle {
 interface Props {
   sessionId: string;
   disabled?: boolean;
+  /** Keep the draft editable while refusing every submit path during a freshness check. */
+  sendBlocked?: boolean;
   minimal?: boolean;
   compact?: boolean;                // NEW: hides QuickChips for buddy chat
   view?: ViewMode;                  // Current view mode — forwarded to dispatcher (e.g. /config behaves differently in terminal view)
@@ -86,6 +93,8 @@ interface Props {
    *  Consumed exactly once per session ID via a consumed-set ref — safe to
    *  receive as a prop without triggering repeated fills on re-renders. */
   initialInput?: string;
+  /** File paths handed to a newly admitted detached window, never autosent. */
+  initialAttachments?: string[];
   /** Runtime backend of the active session. Native sessions have no PTY, so the
    *  send path routes through native:send instead of the PTY paste machinery. */
   provider?: 'claude' | 'native';
@@ -125,6 +134,11 @@ function fileNameFromPath(p: string): string {
 // typed during startup is HELD and delivered rather than refused at all, so this
 // branch is only reached when ten are already waiting.
 function sendFailureCopy(result: NativeSendResult | undefined): string {
+  // WHY: the host refuses sends during manual compaction rather than falsely
+  // acknowledging one it cannot deliver; tell the user when to retry.
+  if (result?.status === 'failed' && result.reason === 'compacting') {
+    return 'Conversation is compacting. Wait for it to finish, then send your message.';
+  }
   if (result?.status === 'failed' && result.reason === 'queue-full') {
     return 'Send queue is full (10 messages waiting). Wait for the current turn to finish.';
   }
@@ -147,7 +161,7 @@ function sendFailureCopy(result: NativeSendResult | undefined): string {
   return 'The message could not be sent.';
 }
 
-const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, provider }, ref) {
+const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
 
@@ -335,7 +349,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // (which would be a side-effect against shared state).
   const consumedPrefillIds = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!initialInput?.trim() || consumedPrefillIds.current.has(sessionId)) return;
+    if ((!initialInput?.trim() && !initialAttachments?.length) || consumedPrefillIds.current.has(sessionId)) return;
     consumedPrefillIds.current.add(sessionId);
     // Bound the set to prevent unbounded growth over long app lifetimes.
     // Oldest entries can't be re-triggered because their session IDs are
@@ -344,15 +358,19 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       const oldest = consumedPrefillIds.current.values().next().value;
       if (oldest !== undefined) consumedPrefillIds.current.delete(oldest);
     }
-    setText(initialInput);
+    setText(initialInput ?? '');
+    // WHY: detach transfers only file paths, not stale window-local objects;
+    // rebuild the same attachment chips without turning them into a send.
+    if (initialAttachments?.length) setAttachments(initialAttachments.map((path) =>
+      ({ path, name: fileNameFromPath(path), isImage: isImagePath(path) })));
     // Focus the textarea so the user can review / edit / submit immediately.
     requestAnimationFrame(() => {
       if (inputRef.current) {
         inputRef.current.focus();
-        inputRef.current.setSelectionRange(initialInput.length, initialInput.length);
+        inputRef.current.setSelectionRange((initialInput ?? '').length, (initialInput ?? '').length);
       }
     });
-  }, [sessionId, initialInput]);
+  }, [sessionId, initialInput, initialAttachments]);
 
   // Ref to always-current send function so the global keydown handler
   // (which only depends on [disabled]) can call it without stale closures
@@ -367,6 +385,22 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     // Task 11: read the LIVE DOM value (not the `text` state closure) — mirrors
     // send()'s currentText read above, same stale-closure rationale.
     hasDraft: () => (inputRef.current?.value ?? text).trim().length > 0,
+    readDraft: (id = sessionId) => id === sessionId ? (inputRef.current?.value ?? text) : (draftsRef.current.get(id)?.text ?? ''),
+    readDraftPayload: (id = sessionId) => {
+      const draft = id === sessionId
+        ? { text: inputRef.current?.value ?? text, attachments }
+        : draftsRef.current.get(id);
+      return { text: draft?.text ?? '', attachments: draft?.attachments.map((a) => a.path) ?? [] };
+    },
+    transferDraft: (fromId, toId) => {
+      // WHY: draft storage is keyed to the visible tab, not the provider's
+      // conversation ID. Admission changes that key without sending anything.
+      const draft = fromId === sessionId
+        ? { text: inputRef.current?.value ?? text, attachments }
+        : draftsRef.current.get(fromId);
+      if (draft) draftsRef.current.set(toId, draft);
+      draftsRef.current.delete(fromId);
+    },
     // Mirrors the initialInput prefill effect above (setText + focus + caret
     // at the end) so an edited queued message gets the same "ready to review/
     // send" placement.
@@ -436,9 +470,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // Shift+Tab) and have no touch equivalent, so keeping focus costs nothing.
   //
   // Fix: this used to test isAndroid() alone, which missed a phone browser on
-  // remote access — the host sends platform:'desktop' in auth:ok, so the shim
-  // sets __PLATFORM__='desktop' and the device reports as neither 'android'
-  // nor 'browser'. Feature-detect a coarse pointer instead of trusting the
+  // remote access — at the time the shim adopted the host's platform:'desktop'
+  // from auth:ok, so the device reported as neither 'android' nor 'browser'
+  // (a touch-first browser reports 'browser' now; a mouse-first one still
+  // 'desktop'). Feature-detect a coarse pointer instead of trusting the
   // platform string: it's the actual question being asked, and it correctly
   // keeps idle-blur ON for a desktop browser connecting remotely (real
   // keyboard, shortcuts useful, no soft keyboard to dismiss).
@@ -581,7 +616,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               sendRef.current(true);
             });
           } else {
-            onToast?.('Your assistant is waiting for your response — answer the prompt first.');
+            // Names the blocker (a card in the chat vs a terminal prompt) — one
+            // shared sentence with App.tsx's refusals (pty-input-gate.ts).
+            onToast?.(pendingInteractionRefusalCopy(pendingInteractionKind(session)));
           }
           return false;
         }
@@ -802,7 +839,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     // A refused send (pending prompt gate, disabled session) keeps the draft
     // in the input bar so the user's text isn't lost. `force` is the "Send
     // anyway" override, which re-enters here past the gate (see sendMessage).
-    if (!sendMessage(currentText, attachments, force)) return;
+    // WHY guard here, not only on the button: Enter, form submit, global keys,
+    // and the pending-prompt retry all reach this path. No override grants freshness.
+    if (sendBlocked || !sendMessage(currentText, attachments, force)) return;
     // The message has gone, so the dictation behind it goes too. Without this,
     // sending mid-sentence sent the unsettled GREY words along with it AND left
     // them in the box, and the next thing the engine said re-typed the whole
@@ -819,7 +858,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     onCloseDrawer?.();
     // Reset height after clearing
     if (inputRef.current) inputRef.current.style.height = 'auto';
-  }, [text, attachments, sendMessage, onCloseDrawer, sessionId]);
+  }, [text, attachments, sendMessage, sendBlocked, onCloseDrawer, sessionId]);
 
   // Keep sendRef pointing at the latest send so the global keydown handler
   // (which can't depend on send without thrashing the listener) stays current
@@ -827,6 +866,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (sendBlocked) return;
     if (minimal && sessionId) {
       const val = inputRef.current?.value ?? text;
       // pty-worker auto-splits text+\r with a 600ms gap so Enter isn't
@@ -1084,6 +1124,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
                 // blocked send. A guard inside send() would silently turn both
                 // of those into a stop — a button that says Send and doesn't.
                 if (voiceListening) { void voice.stop(); return; }
+                // WHY the touch-terminal Enter path bypasses send(): keep the
+                // same freshness fence even when the user changes view.
+                if (sendBlocked) return;
                 if (minimal && sessionId) {
                   // WHY ask canSend first (error inventory 2026-09-10, false message 6):
                   // this branch sent and cleared unconditionally. Over remote access
@@ -1202,7 +1245,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             type="submit"
             size="icon"
             aria-label="Send message"
-            disabled={disabled || (!minimal && !text.trim() && attachments.length === 0)}
+            disabled={disabled || sendBlocked || (!minimal && !text.trim() && attachments.length === 0)}
             className="shrink-0 disabled:opacity-30"
           >
             <svg className="w-4 h-4 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

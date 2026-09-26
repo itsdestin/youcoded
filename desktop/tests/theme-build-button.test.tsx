@@ -72,3 +72,38 @@ describe('ThemeScreen build button', () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+// Roadmap (themes, bug 5 of the 2026-07-19 input-migration family): a particle
+// preset not in the list showed as unset ("Select…") and was lost on the next
+// pick. The theme's own value is now offered as-is, so it stays selected.
+describe('particleSelectOptions', () => {
+  it('keeps an unlisted preset as a choice, exactly as written', async () => {
+    const { particleSelectOptions } = await import('../src/renderer/components/ThemeScreen');
+    const opts = particleSelectOptions('sakura');
+    expect(opts.map((o) => o.value)).toEqual(['none', 'rain', 'dust', 'ember', 'snow', 'custom', 'sakura']);
+    expect(opts.at(-1)).toEqual({ value: 'sakura', label: 'sakura' });
+  });
+  it('adds nothing for a listed preset or no preset', async () => {
+    const { particleSelectOptions } = await import('../src/renderer/components/ThemeScreen');
+    expect(particleSelectOptions('snow')).toHaveLength(6);
+    expect(particleSelectOptions(undefined)).toHaveLength(6);
+    expect(particleSelectOptions('')).toHaveLength(6);
+  });
+});
+
+describe('particle Select renders an unlisted preset as selected', () => {
+  it('shows "sakura", not the empty "Select…" placeholder', async () => {
+    const { particleSelectOptions } = await import('../src/renderer/components/ThemeScreen');
+    const { Select } = await import('../src/renderer/components/ui/Select');
+    render(<Select options={particleSelectOptions('sakura')} value="sakura" onChange={() => {}} aria-label="Particles" />);
+    const trigger = screen.getByLabelText('Particles');
+    expect(trigger.textContent).toContain('sakura');
+    expect(trigger.textContent).not.toContain('Select…');
+  });
+  it('before the fix (listed options only) the same value rendered as the placeholder', async () => {
+    const { particleSelectOptions } = await import('../src/renderer/components/ThemeScreen');
+    const { Select } = await import('../src/renderer/components/ui/Select');
+    render(<Select options={particleSelectOptions('snow')} value="sakura" onChange={() => {}} aria-label="Particles" />);
+    expect(screen.getByLabelText('Particles').textContent).toContain('Select…');
+  });
+});

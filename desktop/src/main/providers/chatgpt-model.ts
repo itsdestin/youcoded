@@ -143,6 +143,13 @@ export function transformParams(
     // value isn't undefined. Found 2026-09-07 chasing a "Bad Request" the
     // user hit on the very first message sent through this provider.
     maxOutputTokens: undefined,
+    // WHY: the ChatGPT backend picks which server (and so which cache) serves a
+    // request from the `session-id` header, not the body's prompt_cache_key —
+    // codex-rs client.rs: "ChatGPT derives cache affinity from the Responses
+    // session-id header". Codex, OpenCode, pi and Hermes all send it; without
+    // it our follow-up turns hit the cache 13/20 vs OpenCode's 18/20 (Luna
+    // repeat test, 2026-09-23). x-client-request-id mirrors it, as in Codex.
+    ...(cacheKey ? { headers: { ...params.headers, 'session-id': cacheKey, 'x-client-request-id': cacheKey } } : {}),
     providerOptions: { ...params.providerOptions, openai: openai as never },
   };
 }

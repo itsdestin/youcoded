@@ -16,15 +16,16 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
-import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
+import type { TranscriptEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
-import { rebuildHistory } from './history-rebuild';
+import { rebuildHistoryWithOrigins, restorePortableHistory } from './history-rebuild';
+import { compactionSourceDigest } from './compaction-record';
 import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
-import { SessionStore, type NativeSessionListEntry } from './session-store';
+import { SessionStore, validatedDeltaReferences, type NativeSessionListEntry } from './session-store';
 import { PermissionBroker } from './permission-broker';
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
@@ -52,7 +53,7 @@ import { truncateOutput, composeNotice } from './tools/truncate';
 import { APPROX_CHARS_PER_TOKEN } from './message-size';
 import { fitInjection, fitProjectInstructions } from './injection/injection-budget';
 import { frameSkillInvocation } from './skills/skill-invocation';
-import { buildTriggerIndex } from './injection/path-triggers';
+import { buildTriggerIndex, type TriggerIndex } from './injection/path-triggers';
 import { costForUsage, isFreePricing, type ModelPricing } from './pricing';
 import { log } from '../logger';
 // Same import PermissionStore uses, for the same reason: the project slug MUST
@@ -139,7 +140,7 @@ export const SUBAGENT_DISPLAY_TYPES = new Set<TranscriptEvent['type']>(['tool-us
  * stallWarning countdown, or a toolPreparing notice all fail this — none
  * carries data.text — and stay child-only.
  */
-export function isSubagentDisplayEvent(e: TranscriptEvent): boolean {
+function isSubagentDisplayEvent(e: TranscriptEvent): boolean {
   return SUBAGENT_DISPLAY_TYPES.has(e.type)
     || (e.type === 'assistant-thinking' && typeof e.data.text === 'string' && e.data.text.length > 0);
 }
@@ -293,11 +294,27 @@ interface LiveEntry {
   // is the same discipline McpLease applies inside the manager (where the
   // equivalent bug WAS reachable and is mutation-tested).
   mcpLease?: McpLease;
+  // True from quiesce() until the session is destroyed (or endQuiesce() after a
+  // takeover that did not go ahead). send() refuses meanwhile — see quiesce() (0).
+  quiescing?: boolean;
+  // The "What the assistant was given" record last pushed for this session, so a
+  // model swap can re-push it with the new model's window (republishWindow).
+  sessionContext?: SessionContext;
   // Per-session append serialization: each transcript event extends this chain
   // (append(prev).then(next)) so the SessionStore contract (serialized appends)
   // holds. Starts resolved; a failed append is logged but never breaks the
   // chain (a later append must still run).
   appendChain: Promise<void>;
+  // The commit promise resolves only when its already-appended marker has been
+  // adopted and forwarded. Teardown/swap must not detach that listener mid-commit.
+  compactionGeneration: number;
+  committing?: { uuid: string; started: boolean; settled: Promise<void>; done: () => void };
+  // WHY: the chain deliberately recovers after an append failure, but that generation
+  // can never certify a complete final transcript even if dispose later succeeds.
+  handoffPersistenceFailed?: boolean;
+  // A specialist retains the actual parent generation, not a reusable session id.
+  handoffParentEntry?: LiveEntry;
+  handoffChildDrains?: Set<Promise<void>>;
   // M1 send queue: FIFO of user messages that arrived while a turn was in
   // flight. Drained one at a time by runTurns; dropped with the entry on destroy.
   // Task 11 (cancel/edit queued messages): each entry carries a host-minted id
@@ -311,6 +328,10 @@ interface LiveEntry {
   // True from dispatch until runTurns finishes the last queued turn. Host-owned
   // (HarnessSession's in-flight state is private); safe because Node is single-threaded.
   inFlight: boolean;
+  // Manual compaction holds the session's abort controller without starting a
+  // turn. Distinguish it so a send is explicitly refused, never acknowledged
+  // and later dropped by the session's re-entrancy guard.
+  compacting?: boolean;
   // Awaitable handle on the CURRENT drain (the dispatched turn + any queued
   // follow-ups it drains). Set by send() at dispatch; resolves when runTurns
   // exits (runTurns try/catches its send() so this never rejects). undefined
@@ -375,6 +396,7 @@ function skillLabel(id: string): string {
 
 export class NativeSessionHost extends EventEmitter {
   private live = new Map<string, LiveEntry>();
+  private restoredCompactionGeneration = new WeakMap<HarnessSession, number>();
   // Reverse index: modelId → sessionIds currently bound to it. The ONLY
   // session→model usage tracking in the app. Drives "unload a model when no
   // session is using it" (#1) — when a model's set empties, onModelReleased
@@ -936,9 +958,9 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
     const title = header.title ?? record.title;
 
-    const gitSnapshot = await gitSnapshotAsync(workDir);
+    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(workDir), buildTriggerIndex(workDir)]);
     const session = this.buildSpecialistSession(
-      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot,
+      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot, triggers,
     );
     // Cold state rebuilt from the child's OWN transcript — seedHistory resets
     // readRegistry + todos too (the same reset-on-resume contract root
@@ -1576,6 +1598,9 @@ export class NativeSessionHost extends EventEmitter {
     // Held after Stop (see LiveEntry.holdDeliveries): the report stays queued
     // and rides in with the user's next message instead of waking the model.
     if (entry.holdDeliveries) return;
+    // Nor while a takeover winds the session down (quiesce): the report stays
+    // queued rather than waking the model past the flush.
+    if (entry.quiescing) return;
     entry.inFlight = true;
     entry.running = new Promise<void>((resolve) => {
       setImmediate(() => { void this.runTurns(parentId, entry, IDLE_PASS).then(resolve, resolve); });
@@ -2559,6 +2584,7 @@ export class NativeSessionHost extends EventEmitter {
       const windowUnchanged = r.contextLength === entry.session.contextWindowTokens;
       if (capUnchanged && windowUnchanged) return;
       entry.session.setBinding(binding, r.contextLength, r.profile, r.pricing, r.free);
+      this.republishWindow(sessionId, entry);
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'could not re-read the local engine\u2019s slot count after the turn — helper cap unchanged', { sessionId, error: String((err as any)?.message ?? err) });
     }
@@ -2572,7 +2598,7 @@ export class NativeSessionHost extends EventEmitter {
    *  `profile` is accepted here so Task 6 can add a prompt variant without another
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
-  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
+  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string, triggers: TriggerIndex): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
     return {
       // G-1: this session's background-command registry, host-owned.
       shells: this.shellsFor(sessionId),
@@ -2586,10 +2612,10 @@ export class NativeSessionHost extends EventEmitter {
       // resolved at least once for this cwd.
       specialistRoster: this.specialistCatalog.roster(cwd),
       // Project rules + nested project instructions, indexed ONCE per session
-      // (M3 item 3). Built here rather than in the session because it is
-      // filesystem state scoped to the session's cwd, and re-statting the tree
-      // per tool call would be a real cost on a large repo.
-      triggers: buildTriggerIndex(cwd),
+      // (M3 item 3), by the host: filesystem state scoped to the session's cwd.
+      // Callers await buildTriggerIndex beside the git line (async since B8,
+      // 2026-09-24 — the walk used to freeze every window) and pass it in.
+      triggers,
       // Task 10 (plan 1b): the ONE root a ROOT session is allowed to Read
       // without an external_directory ask — this PROJECT's
       // sessions/<slug>/specialist-reports/ subdirectory, the exact place
@@ -2916,6 +2942,78 @@ export class NativeSessionHost extends EventEmitter {
       { sessionId, reason, phase });
   }
 
+  /** The portable checkpoint is the compact-summary line itself. Return the RAW
+   * append result to the harness; only the chain's copy swallows rejections. */
+  private commitCompaction(sessionId: string, session: HarnessSession,
+    proposal: Parameters<NonNullable<HarnessSessionOpts['commitCompaction']>>[0]): Promise<TranscriptEvent> {
+    const entry = this.live.get(sessionId);
+    if (!entry || entry.session !== session || entry.committing) return Promise.reject(new Error('stale-compaction'));
+    const generation = entry.compactionGeneration;
+    const identityFor = this.continuation.continuationIdentityFor;
+    let identity: string | undefined;
+    try { identity = identityFor?.(session.binding); } catch { return Promise.reject(new Error('identity-unavailable')); }
+    let done!: () => void;
+    const settled = new Promise<void>(resolve => { done = resolve; });
+    const pending = { uuid: proposal.event.uuid, started: false, settled, done };
+    entry.committing = pending;
+    const operation = entry.appendChain.then(async () => {
+      const flushed = await this.store.flushReferences(sessionId, proposal.eventUuids);
+      if (!flushed.ok) throw new Error(flushed.reason);
+      const byUuid = new Map(flushed.references.map(ref => [ref.eventUuid, ref]));
+      const resumeFrom = byUuid.get(proposal.resumeFromEventUuid);
+      const coveredThrough = byUuid.get(proposal.coveredThroughEventUuid);
+      // WHY: bind the cut and summary to the exact on-disk source prefix. A
+      // shifted valid-looking pointer must not silently retire extra turns.
+      const sourceEvents = await this.store.readEventsAsync(sessionId, entry.cwd);
+      // Validate the exact live generation at the LAST point before append.
+      // After append starts it wins: a late Stop must not strand a durable record.
+      let currentIdentity: string | undefined;
+      try { currentIdentity = identityFor?.(session.binding); } catch { throw new Error('identity-unavailable'); }
+      if (!resumeFrom || !coveredThrough || this.live.get(sessionId) !== entry
+          || entry.session !== session || entry.compactionGeneration !== generation
+          || session.acceptedHistory().revision !== proposal.sourceRevision || currentIdentity !== identity) {
+        throw new Error('stale-compaction');
+      }
+      const record = { v: 1 as const, generation: generation + 1,
+        sourceRevision: proposal.sourceRevision, resumeFrom, coveredThrough };
+      const event: TranscriptEvent = {
+        ...proposal.event,
+        data: { ...proposal.event.data, compactionRecord: {
+          ...record, sourceDigest: compactionSourceDigest(sourceEvents, String(proposal.event.data.summary ?? ''), record),
+        } } as TranscriptEvent['data'],
+      };
+      // Advance only for a candidate that actually reaches the append point.
+      // A later candidate under this live entry gets a distinct generation.
+      entry.compactionGeneration = generation + 1;
+      pending.started = true;
+      await this.store.append(entry.cwd, event);
+      return event;
+    });
+    // A failed append must reach the harness unchanged, but never poison future
+    // events. On success, wire()/wireChildLive() completes the gate at emission.
+    entry.appendChain = operation.then(() => {}, err => {
+      if (entry.committing === pending) entry.committing = undefined;
+      // WHY: same latch as every other failed append (handoff) — but only when
+      // the write itself started. A stale candidate rejected before appending
+      // left the transcript complete, so it must not block a handoff.
+      if (pending.started) {
+        entry.handoffPersistenceFailed = true;
+        if (entry.handoffParentEntry) entry.handoffParentEntry.handoffPersistenceFailed = true;
+      }
+      done();
+      log('ERROR', 'NativeSessionHost', 'compaction append failed', { sessionId, error: String(err) });
+    });
+    return operation;
+  }
+
+  private compactionMarkerForwarded(entry: LiveEntry, event: TranscriptEvent): boolean {
+    const pending = entry.committing;
+    if (!pending || pending.uuid !== event.uuid || event.type !== 'compact-summary') return false;
+    entry.committing = undefined;
+    pending.done();
+    return true;
+  }
+
   /**
    * Publish one immutable accepted-history proposal (cache Stage 4).
    *
@@ -2972,44 +3070,68 @@ export class NativeSessionHost extends EventEmitter {
     const store = this.continuationStore();
     // Off the main thread (2026-09-16 C2 review): this ran on every Resume
     // click and read the whole transcript synchronously. (restore() below
-    // still reads it once more, synchronously, to verify the checkpoint's
-    // digest — filed as a follow-up in the plan.)
+    // reads it once more to verify the checkpoint's digest — also async since
+    // 2026-09-24, blocking-calls B8.)
     const persisted = await this.store.readEventsAsync(sessionId, cwd);
+    // WHY: the portable record also needs pre-reopen event references even when
+    // there is no private continuation sidecar to restore or publish.
+    this.store.hydrateReferences(sessionId, persisted);
+    const rebuilt = rebuildHistoryWithOrigins(persisted, readImageFromDisk);
+    const portable = restorePortableHistory(persisted, readImageFromDisk,
+      reason => this.logContinuation(sessionId, `portable-${reason}`, 'restore'));
+    if (portable) this.restoredCompactionGeneration.set(session, portable.generation);
     if (store) {
-      // WHY hydrate: `references` is in-memory, so every accepted uuid from a
-      // previous process is unknown to this one. Without this the session's
-      // NEXT publication fails 'unknown-reference' and a reopened conversation
-      // could never become durable again.
-      this.store.hydrateReferences(sessionId, persisted);
       let identity: string | undefined;
       try { identity = this.continuation.continuationIdentityFor!(session.binding); }
       catch { this.logContinuation(sessionId, 'identity-unavailable', 'restore'); }
       if (identity !== undefined) {
-        const restored = store.restore({
+        const restored = await store.restore({
           sessionId, transcriptPath: this.store.transcriptPath(sessionId, cwd),
           binding: identity, assemblyDigest: session.assemblyDigest(),
         });
         if (restored.ok) {
+          // WHY: old summary sidecars may cite a retired identical message.
+          // Their exact provider history may be used, but a portable cut needs
+          // a matching, validated public record and event-backed suffix.
+          const summaryMatches = restored.transformation?.kind !== 'summary' ||
+            restored.transformation.summaryEventUuid === portable?.eventUuids[0];
+          const active = new Set(portable?.eventUuids ?? []);
+          if (portable) for (const event of persisted) if (active.has(event.uuid)) {
+            for (const delta of validatedDeltaReferences(event) ?? []) active.add(delta.eventUuid);
+          }
+          const messageOrigins = restored.transformation?.kind === 'summary'
+            ? restored.messageOrigins.map(origin => summaryMatches && origin?.every(uuid => active.has(uuid)) ? origin : null)
+            : restored.messageOrigins;
           session.seedHistory(restored.messages, {
             eventUuids: restored.eventUuids, revision: restored.revision,
             transformation: restored.transformation, continuationBinding: identity,
+            messageOrigins,
           });
           return;
         }
         this.logContinuation(sessionId, restored.reason, 'restore');
       }
     }
+    // WHY: the private exact snapshot is optional. The public checkpoint has
+    // its own persisted cut, and is safe across binding/prompt changes.
+    if (portable) {
+      session.seedHistory(portable.messages, {
+        eventUuids: portable.eventUuids, messageOrigins: portable.origins,
+        transformation: { kind: 'summary', summaryEventUuid: portable.eventUuids[0] },
+      });
+      return;
+    }
     // Ordinary reconstruction (spec §2.5), seeded with every persisted uuid
     // after the last context-clear barrier so a session that has no checkpoint
     // — a cross-device transcript, a fallback, an app that predates this —
     // still becomes durable at its very next publication.
-    session.seedHistory(rebuildHistory(persisted, readImageFromDisk), { eventUuids: persistedUuidsAfterLastClear(persisted) });
+    session.seedHistory(rebuilt.messages, { eventUuids: persistedUuidsAfterLastClear(persisted), messageOrigins: rebuilt.origins });
   }
 
   /** Subscribe a freshly-built HarnessSession: forward its events to the
    *  renderer immediately, and enqueue each on the session's append chain. */
   private wire(sessionId: string, cwd: string, session: HarnessSession, mcpLease?: McpLease): void {
-    const entry: LiveEntry = { session, cwd, appendChain: Promise.resolve(), queue: [], inFlight: false, mcpLease };
+    const entry: LiveEntry = { session, cwd, appendChain: Promise.resolve(), compactionGeneration: this.restoredCompactionGeneration.get(session) ?? 0, queue: [], inFlight: false, mcpLease };
     this.live.set(sessionId, entry);
     this.retainModel(sessionId, session.binding.modelId); // ref-count this model
     // Persist "Always allow" decisions for THIS session's project. The session
@@ -3022,12 +3144,16 @@ export class NativeSessionHost extends EventEmitter {
     session.on('transcript-event', (event: TranscriptEvent) => {
       // (1) Forward NOW — not gated on the disk write (see module header).
       this.emit('transcript-event', event);
+      // A committed summary was already appended on this chain. Never write
+      // its UUID twice; release teardown/swap only after forwarding the marker.
+      if (this.compactionMarkerForwarded(entry, event)) return;
       // (2) Persist on the per-session chain so appends stay serialized.
       entry.appendChain = entry.appendChain
         .then(() => this.store.append(cwd, event))
         .catch((err) => {
           // Swallow so one failed append can't wedge the chain — the next
-          // event's append must still run.
+          // event's append must still run. Handoff retains the failure on THIS entry.
+          entry.handoffPersistenceFailed = true;
           log('ERROR', 'NativeSessionHost', 'append failed', {
             sessionId, type: event.type, error: String(err),
           });
@@ -3045,7 +3171,8 @@ export class NativeSessionHost extends EventEmitter {
     // session must still open if either fails. A missing line is a missing
     // explanation; a thrown one is a chat that never starts.
     try {
-      this.emit('session-context', { sessionId, context: this.buildSessionContext(cwd, session) });
+      entry.sessionContext = this.buildSessionContext(cwd, session);
+      this.emit('session-context', { sessionId, context: entry.sessionContext });
     } catch (err) {
       log('ERROR', 'NativeSessionHost', 'could not describe the session context', { sessionId, error: String(err) });
     }
@@ -3105,6 +3232,29 @@ export class NativeSessionHost extends EventEmitter {
       tools: inv.toolNames,
       droppedMcpServers: inv.droppedMcpServers,
     };
+  }
+
+  /** Re-push the session-context record after a model swap, with the NEW
+   *  model's name and window.
+   *
+   *  WHY (roadmap: the context chip kept the OLD model's window after a swap or
+   *  resume): the record was pushed once at wire(), and the chip read its window
+   *  off the last finished turn — so swapping a 1M model for a small local one
+   *  left "97% remaining" on screen until a turn completed on the new model,
+   *  and the panel's "Context window" row and small-window warning never
+   *  updated at all. The renderer now reads the window from this record first.
+   *
+   *  Only the model and window are patched: everything else in the record
+   *  describes what the session was given AT START (the instruction file's fit
+   *  is fixed then — setBinding does not re-apply it), so rebuilding it here
+   *  would describe a trim that never happened. */
+  private republishWindow(sessionId: string, entry: LiveEntry): void {
+    const prev = entry.sessionContext;
+    if (!prev) return;
+    const next: SessionContext = { ...prev, modelLabel: entry.session.binding.modelId, contextWindowTokens: entry.session.contextWindowTokens };
+    if (next.modelLabel === prev.modelLabel && next.contextWindowTokens === prev.contextWindowTokens) return;
+    entry.sessionContext = next;
+    this.emit('session-context', { sessionId, context: next });
   }
 
   /** One file's text for the panel, fetched when the user opens its row.
@@ -3185,7 +3335,7 @@ export class NativeSessionHost extends EventEmitter {
     await this.specialistCatalog.ensureFresh(opts.cwd);
     // The <env> git line, read off the main thread before anything is built
     // (2026-09-16 C3). Never throws (a non-repo answers a fixed string).
-    const gitSnapshot = await gitSnapshotAsync(opts.cwd);
+    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(opts.cwd), buildTriggerIndex(opts.cwd)]);
     // Acquire this session's MCP servers (Task 6) BEFORE constructing the
     // session, so mcpServers is available for the very first buildAiTools().
     const mcpLease = await this.acquireMcp(opts.sessionId);
@@ -3193,7 +3343,7 @@ export class NativeSessionHost extends EventEmitter {
     let session: HarnessSession;
     try {
       // Fix pass 1 / Finding 3: this whole block is fallible synchronous work
-      // (toolWiring() calls assembleSystemPrompt(), buildTriggerIndex()) that
+      // (toolWiring() calls assembleSystemPrompt()) that
       // runs AFTER the mcp acquire() above but BEFORE wire() ever registers
       // this id in `this.live`. destroy() early-returns for a non-live id, so
       // a throw here — with no catch — would strand the acquired MCP hold
@@ -3202,8 +3352,9 @@ export class NativeSessionHost extends EventEmitter {
       // unchanged (never guess/replace a cause — error-message-standards.md).
       session = new HarnessSession(
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
+          commitCompaction: proposal => this.commitCompaction(opts.sessionId, session, proposal),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot) },
+          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot, triggers) },
         this.modelFactory,
       );
     } catch (err) {
@@ -3281,13 +3432,12 @@ export class NativeSessionHost extends EventEmitter {
     takenNames.add(name);
 
     // Build the session BEFORE writing the header: everything inside
-    // buildSpecialistSession is fallible synchronous work (buildTriggerIndex
-    // walks the tree), and a throw after the header write would leave a
-    // session file on disk for a child that never existed. The git line is
-    // awaited first, off the main thread (C3) — it never throws.
-    const gitSnapshot = await gitSnapshotAsync(workDir);
+    // buildSpecialistSession is fallible synchronous work, and a throw after
+    // the header write would leave a session file on disk for a child that
+    // never existed. The git line (C3) and trigger walk (B8) are awaited first.
+    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(workDir), buildTriggerIndex(workDir)]);
     const session = this.buildSpecialistSession(
-      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot,
+      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot, triggers,
     );
 
     // `title` was drawn earlier (before this session was built — see that
@@ -3336,13 +3486,15 @@ export class NativeSessionHost extends EventEmitter {
     // ring up real money through a metered specialist (spec §5).
     pricing: ModelPricing | null, free: boolean,
     parentToolCallId: string, preset: ResolvedPreset, parent: LiveEntry,
-    // The child's <env> git line, awaited by the caller off the main thread (C3).
-    gitSnapshot: string,
+    // The child's <env> git line and trigger index, awaited by the caller off the main thread (C3, B8).
+    gitSnapshot: string, triggers: TriggerIndex,
   ): HarnessSession {
     const allowed = new Set(specialist.allowedTools);
-    return new HarnessSession(
+    let session: HarnessSession;
+    session = new HarnessSession(
       {
         sessionId: childId, cwd: workDir, binding, contextLength, profile, pricing, free,
+        commitCompaction: proposal => this.commitCompaction(childId, session, proposal),
 // WHY: specialist work is bounded by its narrow tool set, parent-managed
         // lifecycle controls, and the delegation spawn backstop—not an arbitrary
         // per-child action count, so root limits never flow into a child.
@@ -3373,7 +3525,7 @@ export class NativeSessionHost extends EventEmitter {
         // state, not conversation state, so it does not violate the cold start —
         // and a Worker that edits files under rules the parent would have obeyed
         // must obey them too.
-        triggers: buildTriggerIndex(workDir),
+        triggers,
         // SKILL SUPPRESSION (cold-start contract): an explicit EMPTY catalog, not
         // an omission. syncSkillTool falls back to createSkillCatalog() — the full
         // installed catalog — whenever opts.skillCatalog is undefined, and it
@@ -3440,6 +3592,7 @@ export class NativeSessionHost extends EventEmitter {
       },
       this.modelFactory,
     );
+    return session;
   }
 
   /** Shared live-map wiring for a specialist child (new or resumed, Task 6) —
@@ -3457,8 +3610,9 @@ export class NativeSessionHost extends EventEmitter {
     parentId: string, childId: string, workDir: string, session: HarnessSession, binding: ModelBinding, parentToolCallId: string,
   ): void {
     const entry: LiveEntry = {
-      session, cwd: workDir, appendChain: Promise.resolve(), queue: [], inFlight: false,
+      session, cwd: workDir, appendChain: Promise.resolve(), compactionGeneration: this.restoredCompactionGeneration.get(session) ?? 0, queue: [], inFlight: false,
       parentSessionId: parentId,
+      handoffParentEntry: this.live.get(parentId),
     };
     this.live.set(childId, entry);
     this.retainModel(childId, binding.modelId);
@@ -3466,6 +3620,8 @@ export class NativeSessionHost extends EventEmitter {
     if (!siblings) { siblings = new Set(); this.childrenOf.set(parentId, siblings); }
     siblings.add(childId);
     session.on('transcript-event', (event: TranscriptEvent) => {
+      // A compact-summary emitted after its durable commit is display-only here.
+      if (this.compactionMarkerForwarded(entry, event)) return;
       // (1) PERSISTENCE — on the child's OWN chain, to the child's own JSONL,
       // with the ORIGINAL event (child sessionId) untouched. Same serialization
       // contract as wire()'s append, same swallow-and-log so one failed append
@@ -3475,6 +3631,11 @@ export class NativeSessionHost extends EventEmitter {
       entry.appendChain = entry.appendChain
         .then(() => this.store.append(workDir, event))
         .catch((err) => {
+          // WHY: this chain recovers for later events, but neither this child nor
+          // its captured parent generation can certify a complete handoff again.
+          // Retain the parent latch after childrenOf deregisters completed children.
+          entry.handoffPersistenceFailed = true;
+          if (entry.handoffParentEntry) entry.handoffParentEntry.handoffPersistenceFailed = true;
           log('ERROR', 'NativeSessionHost', 'child append failed', {
             sessionId: childId, type: event.type, error: String(err),
           });
@@ -3663,8 +3824,8 @@ export class NativeSessionHost extends EventEmitter {
     // structurally — this acquire() mints its own lease, and the outgoing
     // destroy() can only release the lease on the LiveEntry it captured. See
     // McpLease in mcp-manager.ts.
-    // The <env> git line, off the main thread, before the session is built (C3).
-    const gitSnapshot = await gitSnapshotAsync(cwd);
+    // The <env> git line + trigger index, off the main thread, before the session is built (C3, B8).
+    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(cwd), buildTriggerIndex(cwd)]);
     const mcpLease = await this.acquireMcp(sessionId);
     const mcpServers = mcpLease?.servers;
     const harness = header.stepGuard === undefined
@@ -3682,8 +3843,9 @@ export class NativeSessionHost extends EventEmitter {
       session = new HarnessSession(
         // `binding` (not header.binding) — same override reason as above.
         { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
+          commitCompaction: proposal => this.commitCompaction(sessionId, session, proposal),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot) },
+          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot, triggers) },
         this.modelFactory,
       );
       // Full history rebuild (spec §2.5): rebuildHistory reconstructs the assistant
@@ -3751,6 +3913,13 @@ export class NativeSessionHost extends EventEmitter {
       }
       return { status: 'failed', reason: 'not-live' };
     }
+    // A takeover is winding this session down (quiesce): a message now would run
+    // a whole turn here after the handoff began. 'not-live' because the session
+    // is being stopped on this device; the renderer keeps the draft.
+    if (entry.quiescing) return { status: 'failed', reason: 'not-live' };
+    // WHY: a manual summary uses the same session as a turn but has no queue
+    // drainer; reporting 'sent' or 'queued' here would lose that message.
+    if (entry.compacting) return { status: 'failed', reason: 'compacting' };
     if (entry.inFlight) {
       if (entry.queue.length >= SEND_QUEUE_LIMIT) return { status: 'failed', reason: 'queue-full' };
       // Task 11: mint a stable id per queued entry so the renderer can target
@@ -4250,18 +4419,31 @@ export class NativeSessionHost extends EventEmitter {
    *  turn would corrupt the tool-call/result pairing the whole driver depends on.
    *  The session's own re-entrancy guard is the backstop, but refusing here means
    *  the user gets a real explanation instead of a thrown error. */
-  async compact(sessionId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  async compact(sessionId: string, focus?: string, targetContextLength?: number): Promise<{ ok: true } | { ok: false; reason: string }> {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
-    if (entry.inFlight || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
-    const result = await entry.session.compactNow();
-    // Cache Stage 4: compaction is a history-only mutation — no new turn will
-    // arrive to publish it, so the checkpoint is refreshed here or never.
-    // UNCONDITIONAL, including on a not-ok return: compactNow prunes BEFORE it
-    // can fail on 'nothing-to-compact' / 'summary-failed', so a refusal still
-    // leaves a rewritten history that the old checkpoint no longer describes.
-    this.publishAcceptedHistory(sessionId, entry, 'compaction');
-    return result;
+    // Being wound down for a takeover (quiesce): would append past the flush.
+    // (Combined branch: checked before master's compaction guards, same as send.)
+    if (entry.quiescing) return { ok: false, reason: 'not-live' };
+    if (entry.inFlight || entry.compacting || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
+    // WHY: claim the idle session synchronously, before compactNow awaits a
+    // provider. A simultaneous send must receive a refusal, not a false 'sent'
+    // acknowledgement for a turn the session's re-entrancy guard will drop.
+    entry.compacting = true;
+    try {
+      const result = await entry.session.compactNow(focus, targetContextLength);
+      // Failed candidates do not rewrite history or publish a checkpoint.
+      if (result.ok) this.publishAcceptedHistory(sessionId, entry, 'compaction');
+      return result;
+    } finally {
+      entry.compacting = false;
+      // WHY: a report queued while the summary held the idle slot has no
+      // runTurns tail to wake it; give pending deliveries an idle pass now.
+      if (this.live.get(sessionId) === entry &&
+          (this.pendingDeliveryParents.has(sessionId) || (this.pendingHostNotices.get(sessionId)?.length ?? 0) > 0)) {
+        this.kickIdleDeliveryPass(sessionId);
+      }
+    }
   }
 
   /** User-initiated /clear for a native session (M3 item 2) — a context BARRIER,
@@ -4270,13 +4452,14 @@ export class NativeSessionHost extends EventEmitter {
   clear(sessionId: string): { ok: true } | { ok: false; reason: string } {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
-    if (entry.inFlight || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
+    // Being wound down for a takeover (quiesce): would append past the flush.
+    // (Combined branch: checked before master's compaction guards, same as send.)
+    if (entry.quiescing) return { ok: false, reason: 'not-live' };
+    // WHY: /clear during an active summary cannot mutate history; never publish
+    // a clear checkpoint for a refusal from the session's abort-controller guard.
+    if (entry.inFlight || entry.compacting || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
     const result = entry.session.clearHistory();
-    // Cache Stage 4: /clear is the sharpest history-only mutation there is —
-    // the synchronous fence inside publishAcceptedHistory is what stops a
-    // publication from the turn BEFORE the clear landing after it. Same
-    // unconditional reasoning as compact() above.
-    this.publishAcceptedHistory(sessionId, entry, 'clear');
+    if (result.ok) this.publishAcceptedHistory(sessionId, entry, 'clear');
     return result;
   }
 
@@ -4295,9 +4478,13 @@ export class NativeSessionHost extends EventEmitter {
   async invokeSkill(sessionId: string, skill: string, args?: string): Promise<{ ok: true } | { ok: false; reason: string; detail?: string }> {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
+    // Being wound down for a takeover (quiesce): a turn now would run past the flush.
+    if (entry.quiescing) return { ok: false, reason: 'not-live' };
     // Same refusal discipline as compact/clear: queueing this would land the
     // instructions after work that was started without them.
-    if (entry.inFlight || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
+    // WHY: skill dispatch acknowledges before its deferred turn runs. A manual
+    // summary owns the session in that interval; refuse instead of losing it.
+    if (entry.inFlight || entry.compacting || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
 
     let loaded;
     try {
@@ -4336,7 +4523,7 @@ export class NativeSessionHost extends EventEmitter {
         body,
         // NOT passed to runSkill: frameSkillInvocation already placed them last
         // inside `body`. Passing them here too would repeat the user's words.
-        skillPath: loaded.file,
+        skillPath: loaded.file, cut: fitted.truncated, // a cut body must not count as loaded
       }));
     });
     return { ok: true };
@@ -4380,6 +4567,7 @@ export class NativeSessionHost extends EventEmitter {
     // it (spec pending-ask ruling). Also expires the renderer's approval cards.
     // ownOnly: a background helper's routed ask survives Stop, like the helper.
     this.broker.cancelSession(sessionId, { ownOnly: true });
+    if (entry) entry.compactionGeneration++; // cancels a candidate BEFORE append starts
     entry?.session.interrupt();
     // Stop means quiet until the user speaks again (LiveEntry.holdDeliveries).
     // Root sessions only: a child's own deliveries go to its parent, not to it.
@@ -4426,6 +4614,15 @@ export class NativeSessionHost extends EventEmitter {
   async quiesce(sessionId: string): Promise<void> {
     const entry = this.live.get(sessionId);
     if (!entry) return;
+    // (0) Refuse new sends from here until the session is DESTROYED. WHY: every
+    // await below — and the takeover's flush to the space and lease release
+    // after this returns — is a window in which a send() used to be accepted
+    // and ran a whole turn on this device after the handoff began (M2 final
+    // review; the flush-window half found by the 2026-09-23 review). A send
+    // issued in the same tick BEFORE this call is unaffected: step (2) still
+    // catches and aborts it. Only a takeover that does NOT go ahead lifts it,
+    // through endQuiesce().
+    entry.quiescing = true;
     entry.queue.length = 0;                        // (1) no post-flush turn can start
     // (1b) Tear down specialist children before quiescing this session: a
     // running child keeps appending to ITS file and keeps the parent's Task call
@@ -4440,10 +4637,47 @@ export class NativeSessionHost extends EventEmitter {
     await this.drain(sessionId);                    // (5) flush already-enqueued appends
   }
 
+  /** Lift quiesce()'s send refusal — ONLY for a takeover that did not finish
+   *  (the session is staying on this device after all). A completed takeover
+   *  destroys the session instead, so the refusal never needs lifting there. */
+  endQuiesce(sessionId: string): void {
+    const entry = this.live.get(sessionId);
+    if (entry) entry.quiescing = false;
+  }
+
   /** Mid-session model swap (next turn uses the new binding). */
+  /**
+   * U11 — the model picker's switch. A chat that fits the chosen model switches
+   * exactly like setBinding. One that does not is NOT switched: the first call
+   * answers 'needs-summary' so the renderer can ask; a second call with
+   * `summarize` runs one summary on the CURRENT model, sized so the result fits
+   * the new one, and switches only if that commits. Every failure leaves the
+   * session on its current model with its history as it was.
+   */
+  async switchModel(sessionId: string, binding: ModelBinding, summarize = false): Promise<NativeSwitchResult> {
+    const entry = this.live.get(sessionId);
+    if (!entry) return { status: 'failed', reason: 'not-live' };
+    const { contextLength } = await this.resolveContextAndProfile(binding);
+    if (this.live.get(sessionId) !== entry) return { status: 'failed', reason: 'not-live' };
+    const fit = entry.session.fitForWindow(contextLength);
+    if (fit === 'too-small') return { status: 'failed', reason: 'too-small' };
+    if (fit === 'needs-summary') {
+      if (!summarize) return { status: 'needs-summary' };
+      const compacted = await this.compact(sessionId, undefined, contextLength ?? undefined);
+      if (!compacted.ok) return { status: 'failed', reason: compacted.reason as NativeSwitchFailure };
+      return (await this.setBinding(sessionId, binding)) ? { status: 'switched', summarized: true } : { status: 'failed', reason: 'not-live' };
+    }
+    return (await this.setBinding(sessionId, binding)) ? { status: 'switched' } : { status: 'failed', reason: 'not-live' };
+  }
+
   async setBinding(sessionId: string, binding: ModelBinding): Promise<boolean> {
     const entry = this.live.get(sessionId);
     if (!entry) return false;
+    // Cancel an unstarted commit; if append has begun, let its marker be
+    // adopted before changing the model/identity it was built against.
+    if (!entry.committing?.started) entry.compactionGeneration++;
+    else await entry.committing.settled;
+    if (this.live.get(sessionId) !== entry) return false;
     const oldModelId = entry.session.binding.modelId;
     // Re-resolve BOTH context + profile on a swap: a cloud → small-local swap
     // (or vice versa) crosses capability tiers, so the driver must pick up the
@@ -4451,6 +4685,7 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(binding);
     entry.session.setBinding(binding, contextLength, profile, pricing, free);
     entry.refreshSlotsAfterTurn = slotsUnknown;
+    this.republishWindow(sessionId, entry);
     // Cache Stage 4: a model swap changes the assembled prefix (and, for a
     // ChatGPT account swap, the identity the ciphertext was accepted under),
     // so the old checkpoint must be fenced now rather than left eligible.
@@ -4462,6 +4697,13 @@ export class NativeSessionHost extends EventEmitter {
       this.releaseModel(sessionId, oldModelId);
     }
     return true;
+  }
+
+  /** The Resume Browser's name for a live session (header title, else its
+   *  opening words) — see SessionStore.openingTitle. */
+  async openingTitle(sessionId: string): Promise<string | undefined> {
+    const entry = this.live.get(sessionId);
+    return entry ? this.store.openingTitle(sessionId, entry.cwd) : undefined;
   }
 
   getBinding(sessionId: string): ModelBinding | null {
@@ -4602,7 +4844,9 @@ export class NativeSessionHost extends EventEmitter {
   isIdle(sessionId: string): boolean {
     const entry = this.live.get(sessionId);
     if (!entry) return false;
-    return !entry.inFlight && entry.queue.length === 0;
+    // WHY: a manual summary has no inFlight turn, but owns the same session;
+    // background delivery must wait until its rewrite is settled.
+    return !entry.inFlight && !entry.compacting && entry.queue.length === 0;
   }
 
   /** Await this session's pending appends — a real "flush the queue" affordance
@@ -4663,8 +4907,25 @@ export class NativeSessionHost extends EventEmitter {
         this.ledger.updateUnlessCompleted(parentCwd, sessionId, childId, { status: 'interrupted', endedAt: Date.now() })
           .catch((e) => log('ERROR', 'NativeSessionHost', 'failed to record an interrupted delegation', { childId, parentId: sessionId, error: String(e) }));
       }
+      const child = this.live.get(childId);
       await this.destroy(childId);
+      // WHY: a child append failure can be swallowed by its own chain; the
+      // parent's handoff cannot certify a complete delegated run in that case.
+      if (child?.handoffPersistenceFailed && child.handoffParentEntry)
+        child.handoffParentEntry.handoffPersistenceFailed = true;
     }
+  }
+
+  /** Capture the generation and its actual store path before teardown removes it.
+   * Ordinary destroy is not evidence; only this captured generation can attest. */
+  captureHandoffWriter(sessionId: string): { transcriptPath: string; projectCwd: string; persisted: () => boolean } | null {
+    const entry = this.live.get(sessionId);
+    if (!entry) return null;
+    return {
+      transcriptPath: this.store.transcriptPath(sessionId, entry.cwd),
+      projectCwd: entry.cwd,
+      persisted: () => this.live.get(sessionId) !== entry && !entry.handoffPersistenceFailed,
+    };
   }
 
   /** Graceful teardown of one session. No-op for unknown ids (so the
@@ -4678,12 +4939,39 @@ export class NativeSessionHost extends EventEmitter {
    *   2. await the appendChain — drain appends already enqueued before step 1.
    *   3. store.dispose() — flush the buffered open streaming part.
    *   4. drop the map entry. */
-  async destroy(sessionId: string, opts: { keepShells?: boolean } = {}): Promise<void> {
+  private readonly destroying = new Map<string, Promise<void>>();
+  destroy(sessionId: string, opts: { keepShells?: boolean } = {}): Promise<void> {
+    // WHY: the explicit handoff stop and session-exit callback can race across
+    // destroyChildrenOf's await. Share one drain/dispose, never dispose twice.
+    const pending = this.destroying.get(sessionId);
+    if (pending) return pending;
+    const parentEntry = this.live.get(sessionId)?.handoffParentEntry;
+    const task = this.destroyEntry(sessionId, opts);
+    this.destroying.set(sessionId, task);
+    // WHY: deregistration precedes the child append drain. Parent teardown
+    // must still await that captured child generation before claiming proof.
+    if (parentEntry) {
+      const drains = parentEntry.handoffChildDrains ??= new Set();
+      drains.add(task);
+      void task.finally(() => drains.delete(task)).catch(() => {});
+    }
+    void task.finally(() => { if (this.destroying.get(sessionId) === task) this.destroying.delete(sessionId); }).catch(() => {});
+    return task;
+  }
+
+  private async destroyEntry(sessionId: string, opts: { keepShells?: boolean } = {}): Promise<void> {
     // Capture the entry SYNCHRONOUSLY, before the child cascade below awaits —
     // the MCP release at the bottom of this method depends on tearing down the
     // generation this call captured (see the comment there), and that property
     // must survive the new await, not just the ones that were already here.
     const entry = this.live.get(sessionId);
+    // Before append, teardown wins by invalidating this generation. Once an
+    // append has started, keep the harness listener alive until it adopts and
+    // forwards the durable marker; removing it earlier strands the checkpoint.
+    if (entry) {
+      if (entry.committing?.started) await entry.committing.settled;
+      else entry.compactionGeneration++;
+    }
     // A session torn down while it was still starting has nowhere to deliver a
     // held message, so drop it here rather than leave it stranded in memory.
     this.endStarting(sessionId);
@@ -4692,6 +4980,7 @@ export class NativeSessionHost extends EventEmitter {
     // parent's own entry is already gone (a double destroy, or a teardown
     // racing one).
     await this.destroyChildrenOf(sessionId);
+    if (entry?.handoffChildDrains?.size) await Promise.all([...entry.handoffChildDrains]);
     // G-1 (D2): closing the conversation kills its background commands and
     // says so on the card. The holder-takeover and session-exit paths pass
     // keepShells — the conversation is still open, just somewhere else — and
@@ -4724,7 +5013,14 @@ export class NativeSessionHost extends EventEmitter {
     const modelId = entry.session.binding.modelId; // capture before teardown
     entry.session.destroy();             // abort stream + remove our listener → no new appends
     await entry.appendChain;             // drain already-enqueued appends
-    await this.store.dispose(sessionId); // flush the buffered open part
+    try { await this.store.dispose(sessionId); } // flush the buffered open part
+    catch (error) {
+      // WHY: a completed child is already absent from childrenOf here. Carry
+      // its failed teardown into the captured parent generation before rethrow.
+      entry.handoffPersistenceFailed = true;
+      if (entry.handoffParentEntry) entry.handoffParentEntry.handoffPersistenceFailed = true;
+      throw error;
+    }
     this.live.delete(sessionId);
     // Fix (Task 4 fix pass 3): drop any in-memory fallback reports still
     // queued for this parent. They can only ever be delivered by THIS

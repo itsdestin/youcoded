@@ -26,13 +26,24 @@
 // Its own file, not shared/types.ts, so the bridge shape is found in one place
 // and types.ts stays inside its line budget (review of Plan B, 2026-09-17).
 
-import type { SessionMetaResult } from './types';
+import type { SessionMetaResult, HandoffAttemptResult, HandoffCreateParams } from './types';
 
 /** A listener handle as the bridges return it — pass it back to `off()`. */
 type BridgeHandler = (...args: any[]) => void;
 
 /** window.claude.session — every member both bridges must implement. */
 interface SessionBridge {
+  // WHY: shared UI must see the same attempt API on both bridges, including Android's honest refusal.
+  handoff: {
+    begin(conversationId: string, provider: 'claude' | 'native', create?: HandoffCreateParams): Promise<HandoffAttemptResult>;
+    status(id: string): Promise<HandoffAttemptResult>;
+    wait(id: string): Promise<HandoffAttemptResult>;
+    retry(id: string): Promise<HandoffAttemptResult>;
+    savedCopy(id: string, consent: boolean): Promise<HandoffAttemptResult>;
+    force(id: string, consent: boolean, expectedHolderId: string): Promise<HandoffAttemptResult>;
+    cancel(id: string): Promise<HandoffAttemptResult>;
+    setCreateParams(id: string, create: HandoffCreateParams): Promise<HandoffAttemptResult>;
+  };
   create(opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string; provider?: 'claude' | 'native'; model?: string }): Promise<unknown>;
   destroy(sessionId: string): Promise<unknown>;
   list(): Promise<unknown>;
@@ -48,9 +59,18 @@ interface SessionBridge {
   switch(sessionId: string): Promise<unknown>;
   noteSelected(sessionId: string | null): void;
   setFlag(sessionId: string, flag: string, value: boolean): Promise<unknown>;
+  /** Per-session lock for answering a menu by verified navigation (one device at a time). */
+  menuLock(sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean>;
   setTag(sessionId: string, tagId: string, value: boolean): Promise<unknown>;
   setNote(sessionId: string, note: string): Promise<unknown>;
   getMeta(sessionId: string): Promise<SessionMetaResult>;
+  // Welcome back (design 2026-09-24 §3): conversation ids open at the last
+  // shutdown. Desktop-only feature (Android answers []/{ok:true} instead of
+  // exposing this at all), but the SHARED bridge still carries it — a remote
+  // browser's preload-equivalent (remote-shim) implements it too; the
+  // renderer is what skips calling it off-desktop (App.tsx, T4).
+  reopenList(): Promise<string[]>;
+  forgetReopen(ids: string[]): Promise<{ ok: boolean }>;
 }
 
 /** window.claude.on — the push subscriptions both bridges must implement.

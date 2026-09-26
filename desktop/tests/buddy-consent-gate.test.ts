@@ -53,10 +53,16 @@ vi.mock('../src/main/kwin-helper', () => ({
   installHelper: vi.fn(async () => ({ ok: true })),
   removeHelper: vi.fn(async () => ({ ok: true })),
   syncHelperOnLaunch: vi.fn(async () => {}),
+  setExperimentKwinDisabled: vi.fn(),
   helperPluginId: vi.fn(() => 'youcodedbuddyhelper-test'),
 }));
 
 type Gate = typeof import('../src/main/ipc-handlers');
+
+// The first import of ipc-handlers.ts pulls in most of main: it ran past the
+// suite's 30 s hook budget inside a full run on 2026-09-23 (32 cores, load
+// average 77 from parallel suites). A one-time cost, so it gets its own budget.
+const IPC_HANDLERS_FIRST_IMPORT_BUDGET_MS = 120_000;
 
 /** A fresh module registry, so the cached status starts empty in each test. */
 async function freshGate(): Promise<Gate> {
@@ -69,7 +75,7 @@ describe('BUDDY_SHOW consent gate — when the buddy is refused', () => {
   // up — so these share one module. Only the test that exercises the remembered
   // answer needs a registry of its own.
   let gate: Gate;
-  beforeAll(async () => { gate = await freshGate(); });
+  beforeAll(async () => { gate = await freshGate(); }, IPC_HANDLERS_FIRST_IMPORT_BUDGET_MS);
   beforeEach(() => { helperStatusMock.mockReset(); });
 
   it('refuses when a helper is needed and it is not running', () => {

@@ -14,6 +14,8 @@ import { log } from '../logger';
 import { NativeHome } from '../native-home';
 import type { ConversationRecord, PortableModelRef } from './store-core';
 import { mirrorIn, materializeOut } from './transcript-mirror';
+import { publishHandoffTranscript, importHandoffTranscript, type Publication, type FreshnessCheck } from './handoff-transcript';
+import type { TransferContext } from './handoff-receipt';
 import { reconcile } from './reconciler';
 // Fix (fork hold): read from the leaf module, NOT from ./slug-repair — that
 // module imports getConversationStore from THIS file, so importing it back
@@ -24,6 +26,7 @@ import { ccProjectSlug, nativeStoreSlug } from '../slug-encoding';
 import { onSyncSpacesEvent, syncSpacesSyncNow, syncSpacesSyncNowAwaited, getManagedRoots } from '../sync-spaces/service';
 import { readFolders } from '../saved-folders';
 import { resolveLocalProject } from './resolve-local-project';
+import { perfMark } from '../perf-marks';
 import type { TranscriptEvent, SessionProvider } from '../../shared/types';
 import type { SpaceSyncEvent } from '../sync-spaces/types';
 
@@ -248,6 +251,7 @@ export function stopConversationStore(): void {
   for (const t of pendingActivity.values()) clearTimeout(t);
   pendingActivity.clear();
   sessions.clear();
+  handoffPins.clear(); // restarting the store invalidates pending admission owners
   // Fix (review, MINOR): this module is a true singleton (idempotent restart
   // calls this first — see startConversationStore's comment) — a pause left
   // dangling from a PRIOR store's slug-repair run (or a caller that paused
@@ -378,6 +382,18 @@ function localJsonlPath(cwd: string, sessionId: string, sessionProvider: Session
 // building so a foreign/corrupt provider string can't reach fs.join with an
 // unexpected segment. Defaults to 'claude' (today's only real bucket besides
 // 'native').
+// WHY: a pending exact import and its startup must fence late ordinary materialize
+// commits, not just the handoff import. The owner releases only after startup.
+const handoffPins = new Map<string, symbol>();
+export function pinHandoffDestination(id: string): { release: () => void; active: () => boolean } | null {
+  if (handoffPins.has(id)) return null;
+  const token = Symbol(id); handoffPins.set(id, token);
+  return {
+    release: () => { if (handoffPins.get(id) === token) handoffPins.delete(id); },
+    active: () => handoffPins.get(id) === token,
+  };
+}
+
 function asSessionProvider(provider: string): SessionProvider {
   return provider === 'native' ? 'native' : 'claude';
 }
@@ -657,6 +673,13 @@ async function materializeSweep(): Promise<void> {
   // Fix: quiesced for the slug repair — see pauseSweeps' WHY. Return before
   // any I/O; resumeSweeps() re-fires this exact call once the pause lifts.
   if (pauseDepth > 0) { materializePending = true; return; }
+  // WHY a wrapper: the sweep has several early exits; timing the whole body
+  // from one place keeps the perf marks honest without touching its logic.
+  perfMark('bg:materialize:start');
+  try { await materializeSweepBody(); } finally { perfMark('bg:materialize:done'); }
+}
+
+async function materializeSweepBody(): Promise<void> {
   // Capture the store (review fix 3): stop() mid-sweep nulls the module field,
   // and every use below an await would otherwise become a swallowed TypeError.
   const s = store;
@@ -712,7 +735,7 @@ async function materializeSweep(): Promise<void> {
     // exit, so an ended session stays guarded until restart — fine for 2a
     // because mirrorIn keeps the space current from the fresher local side; a
     // noteSessionEnded refinement lands with leases in 2b.
-    if (sessions.has(rec.id)) continue;
+    if (sessions.has(rec.id) || handoffPins.has(rec.id)) continue;
     const local = resolveLocalProject(rec, managed, saved);
     if (!local) continue;
     try {
@@ -725,7 +748,7 @@ async function materializeSweep(): Promise<void> {
       await materializeOut({
         spaceTranscriptPath: src,
         localJsonlPath: localJsonlPath(local, rec.id, sessionProvider),
-        shouldCommit: () => !sessions.has(rec.id),
+        shouldCommit: () => !sessions.has(rec.id) && !handoffPins.has(rec.id),
       });
     } catch { /* per-record isolation — one bad copy must not abort the sweep */ }
   }
@@ -742,7 +765,8 @@ export function noteSessionEnded(claudeSessionId: string): void {
   if (!store) return;
   // The targeted materialize is gated on the local transcript being quiescent
   // (CC may still be flushing) and never full-scans — see materializeOne.
-  void materializeOne(claudeSessionId, ctx?.cwd).catch(() => { /* never reject in main */ });
+  if (!handoffPins.has(claudeSessionId))
+    void materializeOne(claudeSessionId, ctx?.cwd).catch(() => { /* never reject in main */ });
 }
 
 // Targeted equivalent of materializeSweep for ONE session: resolve its local
@@ -761,7 +785,7 @@ export async function materializeOne(id: string, cwd?: string): Promise<void> {
   // Fix (fork hold): a surfaced fork must be frozen out of this direction
   // until a human resolves it — see heldForkIds' WHY in slug-repair-state.ts.
   // Checked before any I/O (quiescence wait, project resolution) below.
-  if (heldForkIds().has(id)) {
+  if (heldForkIds().has(id) || handoffPins.has(id)) {
     // Fix (review, MINOR): a takeover attempt silently doing nothing against
     // a held session was undiagnosable — this line makes it visible that the
     // no-op was the hold, not a bug.
@@ -830,7 +854,7 @@ export async function materializeOne(id: string, cwd?: string): Promise<void> {
     // WHY shouldCommit: same gap as materializeSweep above — a resume
     // (takeover.ts:220 resumes right after this call) can land between the
     // check above and the rename.
-    await materializeOut({ spaceTranscriptPath: src, localJsonlPath: localPath, shouldCommit: () => !sessions.has(id) });
+    await materializeOut({ spaceTranscriptPath: src, localJsonlPath: localPath, shouldCommit: () => !sessions.has(id) && !handoffPins.has(id) });
   } catch { /* grow-only copy failed — startup sweep catches up */ }
 }
 
@@ -849,6 +873,78 @@ async function waitForQuiescence(localPath: string): Promise<boolean> {
     await new Promise((r) => setTimeout(r, QUIESCE_PROBE_MS));
   }
   return false;
+}
+
+// Task 3 supplies the captured watcher/host path AND its project cwd and a
+// proven stop + mapping predicate. publishHandoffTranscript binds that project
+// to this freshly fetched record's local originalPath and mirror lane; this
+// seam cannot infer finality or project identity from ordinary flush/cwd guesses.
+export async function publishStoppedHandoff(
+  context: TransferContext,
+  writer: { provider: TransferContext['provider']; sessionId: string; transcriptPath: string; projectCwd: string },
+  stopped: () => boolean,
+  currentWriter: () => boolean,
+): Promise<Publication> {
+  const s = store;
+  if (!s || heldForkIds().has(context.sessionId)) return { status: 'incomplete', reason: 'store or fork unavailable' };
+  const record = await s.get(context.provider, context.sessionId).catch(() => null);
+  if (!record) return { status: 'incomplete', reason: 'record absent' };
+  return publishHandoffTranscript({ context, writer, stopped, currentWriter, record,
+    conversationsRoot: s.root(), personalRoot: path.dirname(s.root()),
+    runtimeRoot: context.provider === 'native' ? path.join(new NativeHome(nativeHomeRootOpt).root, 'sessions') : projectsDir,
+    resolveRecord: () => s.get(context.provider, context.sessionId),
+  });
+}
+
+// WHY: a published local receipt is not delivery. Bound the existing Personal
+// transport after publication; the requester independently confirms its bytes.
+export async function syncPublishedHandoff(): Promise<void> {
+  await syncSpacesSyncNowAwaited('personal', HANDOFF_SYNC_TIMEOUT_MS);
+}
+
+// WHY: the resumed runtime must consume the project Task 2 validated; untrusted
+// caller cwd cannot select another transcript after its import was confirmed.
+export async function resolveHandoffProject(context: TransferContext): Promise<string | null> {
+  const s = store;
+  if (!s || heldForkIds().has(context.sessionId) || sessions.has(context.sessionId)) return null;
+  const record = await s.get(context.provider, context.sessionId).catch(() => null);
+  if (!record || record.id !== context.sessionId || record.provider !== context.provider) return null;
+  const managed = new Map<string, string>((getManagedRoots()?.listProjects() ?? []).map((p) => [p.name, p.path]));
+  let saved: Array<{ path: string }> = [];
+  try { saved = readFolders(); } catch { /* no saved folders */ }
+  const project = resolveLocalProject(record, managed, saved);
+  return project && fs.existsSync(project) ? project : null;
+}
+
+export async function resolveSavedHandoffProject(context: TransferContext): Promise<string | null> {
+  const project = await resolveHandoffProject(context);
+  if (!project) return null;
+  // WHY: a native resume with a supplied binding can otherwise silently create
+  // a blank writer under the old id when its saved transcript is missing.
+  const file = localJsonlPath(project, context.sessionId, context.provider);
+  try { return fs.lstatSync(file).isFile() ? project : null; } catch { return null; }
+}
+
+// Task 4 owns the pin for the entire import + runtime startup. A different
+// owner cannot use this method to replace an already live transcript.
+export async function importConfirmedHandoff(context: TransferContext, pinActive: () => boolean, mayCommit: () => boolean): Promise<FreshnessCheck> {
+  const s = store;
+  if (!s || heldForkIds().has(context.sessionId) || !handoffPins.has(context.sessionId) || !pinActive())
+    return { status: 'incomplete', reason: 'store, fork or pin unavailable' };
+  const record = await s.get(context.provider, context.sessionId).catch(() => null);
+  if (!record || sessions.has(context.sessionId)) return { status: 'incomplete', reason: 'record absent or writer live' };
+  const managed = new Map<string, string>((getManagedRoots()?.listProjects() ?? []).map((p) => [p.name, p.path]));
+  let saved: Array<{ path: string }> = [];
+  try { saved = readFolders(); } catch { /* no saved folders */ }
+  const projectPath = resolveLocalProject(record, managed, saved);
+  if (!projectPath || !fs.existsSync(projectPath)) return { status: 'incomplete', reason: 'project missing' };
+  const allowed = () => handoffPins.has(context.sessionId) && !sessions.has(context.sessionId) &&
+    !heldForkIds().has(context.sessionId) && pinActive() && mayCommit();
+  return importHandoffTranscript({ context, record, conversationsRoot: s.root(), personalRoot: path.dirname(s.root()),
+    runtimeRoot: context.provider === 'native' ? path.join(new NativeHome(nativeHomeRootOpt).root, 'sessions') : projectsDir,
+    destination: localJsonlPath(projectPath, context.sessionId, context.provider), projectPath, mayCommit: allowed,
+    resolveRecord: () => s.get(context.provider, context.sessionId),
+  });
 }
 
 // Holder-side takeover step 4-5 (Plan 2b Task 8): after the holder interrupts,
@@ -909,7 +1005,10 @@ function runReconcile(): void {
   // surfaced fork must be frozen out of the local->space direction too; see
   // heldForkIds' WHY in slug-repair-state.ts.
   const heldForks = heldForkIds();
-  reconcile({
+  // WHY: the startup reconcile (and the copies it queues) is detached, so the
+  // perf rig can only see how long it runs — and what it overlaps — by marks.
+  perfMark('bg:reconcile:start');
+  void reconcile({
     projectsDir, topicsDir, store: s, device, knownFolders,
     // Production mirror closure: the reconciler stays free of transcript-mirror
     // + the Conversations root. Best-effort — a throw here must not abort the scan.
@@ -932,5 +1031,7 @@ function runReconcile(): void {
         .then(() => mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: dest }))
         .catch(() => { /* best-effort */ });
     },
-  }).catch(() => { /* reconciler failure must never break startup (carry-forward 2) */ });
+  }).catch(() => { /* reconciler failure must never break startup (carry-forward 2) */ })
+    .then(() => { perfMark('bg:reconcile:scan-done'); return reconcileMirrorTail; })
+    .then(() => perfMark('bg:reconcile:copies-done'));
 }

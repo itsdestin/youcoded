@@ -16,6 +16,7 @@ import CompactingCard from '../CompactingCard';
 import ThinkingIndicator from '../ThinkingIndicator';
 import { useTheme } from '../../state/theme-context';
 import { useEntryFolding } from '../../hooks/use-entry-folding';
+import { findArchiveBoundary, archivedTooltip } from '../../state/archive-boundary';
 
 interface Props {
   sessionId: string | null;
@@ -180,11 +181,31 @@ export function BubbleFeed({ sessionId }: Props) {
             result: event.data.toolResult || '',
             isError: event.data.isError || false,
             structuredPatch: event.data.structuredPatch,
+            backgroundTaskId: event.data.backgroundTaskId,
+            resumedTaskId: event.data.resumedTaskId,
             // Route subagent tool_result into the parent Agent card's
             // subagentSegments — see assistant-text comment above.
             parentAgentToolUseId: event.data.parentAgentToolUseId,
             agentId: event.data.agentId,
           });
+          break;
+        case 'background-task':
+          // Claude Code: background work a card launched has ended — the only
+          // signal that it did (its tool result was just the launch receipt).
+          // Three mirrors: App.tsx, BubbleFeed.tsx, transcript-page-actions.ts.
+          if (event.data.backgroundTask) {
+            batchDispatch({
+              type: 'TRANSCRIPT_BACKGROUND_TASK',
+              sessionId: event.sessionId,
+              uuid: event.uuid,
+              toolUseId: event.data.toolUseId,
+              taskIds: event.data.backgroundTask.taskIds,
+              status: event.data.backgroundTask.status,
+              summary: event.data.backgroundTask.summary,
+              result: event.data.backgroundTask.result,
+              parentAgentToolUseId: event.data.parentAgentToolUseId,
+            });
+          }
           break;
         case 'turn-complete':
           // Forward per-turn metadata so the buddy reducer stamps stopReason,
@@ -312,6 +333,7 @@ export function BubbleFeed({ sessionId }: Props) {
               // Forward summary so buddy's marker matches main window's expandable behavior.
               ...(event.data.summary ? { summary: event.data.summary } : {}),
               ...(event.data.autoCompaction ? { auto: true } : {}),
+              ...(event.data.retainedFromUuid !== undefined ? { retainedFromUuid: event.data.retainedFromUuid } : {}),
             });
           }
           break;
@@ -353,7 +375,9 @@ export function BubbleFeed({ sessionId }: Props) {
           if (!page) { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
           const decision = decideFirstPage(page, attempt);
           if (decision === 'accept') {
-            dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+            // WHY: the buddy has its own reducer, so it must apply the same recovery verdict as App.
+            dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore,
+              reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
             return;
           }
           if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
@@ -524,14 +548,10 @@ export function BubbleFeed({ sessionId }: Props) {
           {(() => {
             // Fade entries above the most recent compaction marker — Claude's
             // context no longer includes them, consistent with main ChatView.
-            let lastCompactIdx = -1;
-            for (let i = state.timeline.length - 1; i >= 0; i--) {
-              const e = state.timeline[i];
-              if (e.kind === 'system-marker' && e.marker.variant === 'compact') {
-                lastCompactIdx = i;
-                break;
-              }
-            }
+            // WHY the shared helper: a native compaction keeps a recent tail
+            // above its marker, and only archive-boundary.ts knows to stop the
+            // fade there. Compact-only, as before: the buddy never faded /clear.
+            const lastCompactIdx = findArchiveBoundary(state.timeline, ['compact']).index;
             return state.timeline.map((entry, idx) => {
               const isPreCompaction = lastCompactIdx >= 0 && idx < lastCompactIdx;
               let key: string;
@@ -605,7 +625,7 @@ export function BubbleFeed({ sessionId }: Props) {
                   ref={folding.registerEntry}
                   data-entry-key={key!}
                   className={`timeline-entry${isPreCompaction ? ' opacity-60 transition-opacity' : ''}`}
-                  title={isPreCompaction ? "Archived by compaction — not in Claude's active context" : undefined}
+                  title={isPreCompaction ? archivedTooltip('compact') : undefined}
                   style={folded && foldHeight ? { height: foldHeight } : undefined}
                 >
                   {folded && foldHeight ? null : content}

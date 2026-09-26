@@ -12,14 +12,15 @@
 // Personal pages and project pages are grouped under eyebrows (G-7) rather
 // than filtered, so a person sees both at once and the project name on each
 // card says which folder owns it (scope §1: explicit source bindings).
-import React, { useEffect } from 'react';
-import { useArtifact } from '../../state/ArtifactContext';
+import React, { useEffect, useState } from 'react';
+import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, CloseButton, LoadingState, ErrorState, Tooltip } from '../ui';
 import type { PageSummary } from '../../../shared/pages-types';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
+import { PageConnectionsDialog } from './page-connections';
 
 interface PagesViewProps {
   /** Starts the creator: a new conversation that builds a page. Owned by
@@ -31,12 +32,14 @@ interface PagesViewProps {
 }
 
 export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
-  const { state, dispatch } = useArtifact();
-  const open = state.pagesViewOpen;
+  // Narrow selector (perf, 2026-09-23): redraws only when the library opens or closes.
+  const dispatch = useArtifactDispatch();
+  const open = useArtifactSelector((s) => s.pagesViewOpen);
   useEscClose(open, () => dispatch({ type: 'PAGES_VIEW_CLOSED' }));
   const { pages, loaded, failed } = usePages();
   // Fresh list on every open (see refreshPages).
   useEffect(() => { if (open) void refreshPages(); }, [open]);
+  const [connectionsFor, setConnectionsFor] = useState<string | null>(null);
   if (!open) return null;
 
   const close = () => dispatch({ type: 'PAGES_VIEW_CLOSED' });
@@ -50,6 +53,8 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
     byProject.set(p.home.name, list);
   }
   const pinnedCount = pages.filter((p) => p.pinned).length;
+  // By id, so the dialog follows the live list when a connection is removed.
+  const connectionsPage = pages.find((p) => p.id === connectionsFor) ?? null;
 
   return (
     // z-50: above the page view (z-40) it opens from.
@@ -60,11 +65,9 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
           Manage pages
         </h2>
         <div className="flex-1" />
-        {pages.length > 0 && (
-          <Button variant="primary" size="sm" onClick={onMakePage} className="shrink-0">
-            Make a page
-          </Button>
-        )}
+        <Button variant="primary" size="sm" onClick={onMakePage} className="shrink-0">
+          Make a page
+        </Button>
         <Button
           variant="ghost"
           onClick={close}
@@ -90,23 +93,23 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
               onRetry={() => window.location.reload()}
             />
           )}
-          {loaded && !failed && pages.length === 0 && <PagesEmptyCard onMake={onMakePage} />}
           {loaded && !failed && personal.length > 0 && (
             <Section label="Personal">
               {personal.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onConnections={() => setConnectionsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           )}
           {loaded && !failed && [...byProject.entries()].map(([name, list]) => (
             <Section key={name} label={name}>
               {list.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onConnections={() => setConnectionsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           ))}
         </div>
       </main>
+      <PageConnectionsDialog page={connectionsPage} onClose={() => setConnectionsFor(null)} onConnect={(id) => { setConnectionsFor(null); openPage(id); }} />
     </div>
   );
 }
@@ -120,11 +123,12 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function PageCard({ page, onOpen, onEdit, pinFull }: { page: PageSummary; onOpen: () => void; onEdit: () => void; pinFull: boolean }) {
+function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: PageSummary; onOpen: () => void; onEdit: () => void; onConnections: () => void; pinFull: boolean }) {
   // The card is one button (open); the pin is a second control INSIDE it, so
   // it stops propagation. The pin is always visible — unlike a theme card's
   // favourite star it sits on text, not on a picture (guide §4.4).
   const cannotPin = !page.pinned && pinFull;
+  const connectionCount = page.connections?.length ?? 0;
   return (
     <div
       role="button"
@@ -169,45 +173,26 @@ function PageCard({ page, onOpen, onEdit, pinFull }: { page: PageSummary; onOpen
         <span>{page.home.kind === 'personal' ? 'Personal' : page.home.name}</span>
         <span aria-hidden="true" className="text-fg-faint">·</span>
         <span>Updated {relative(page.updatedAt)}</span>
+        {/* A quiet line, only on pages that reach outside (deck Q-manage: the
+            library stays calm; no badge on every card — deck Q-levels). */}
+        {connectionCount > 0 && (
+          <>
+            <span aria-hidden="true" className="text-fg-faint">·</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              data-page-connections-link
+              onClick={(e) => { e.stopPropagation(); onConnections(); }}
+            >
+              {connectionCount === 1 ? '1 connection' : `${connectionCount} connections`}
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-
-/** First-run: no pages at all. Same card species as ProjectsEmptyCard — plain
- *  words about what a page is, and exactly one thing to do. */
-function PagesEmptyCard({ onMake }: { onMake: () => void }) {
-  return (
-    <div className="flex-1 flex items-center justify-center max-sm:items-start px-2 py-8 min-h-0">
-      <div className="w-full max-w-xl bg-panel border border-edge rounded-lg p-5 sm:p-6 flex flex-col items-center text-center gap-4 sm:flex-row sm:items-start sm:text-left">
-        <span aria-hidden="true" className="shrink-0 inline-flex w-16 h-16 rounded-lg bg-inset border border-edge-dim items-center justify-center text-fg-dim">
-          <PagesIcon className="w-8 h-8" />
-        </span>
-        <div className="min-w-0 flex flex-col gap-3 items-center sm:items-start">
-          <div>
-            <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase mb-1">Pages</div>
-            <h3 className="text-base font-semibold text-fg leading-snug">Pages are little apps you describe</h3>
-          </div>
-          {/* Examples that intrigue, not the smallest things a page could be
-              (Destin, shell deck round 1, 2026-09-16). */}
-          <p className="text-sm text-fg-2 leading-relaxed">
-            Tell the assistant what you want — a calendar that pulls your accounts together, a
-            news feed built around your interests, an email browser that works your way, a
-            timesheet tracker for your team — and it builds a page that looks like the rest of
-            YouCoded and follows your theme.
-          </p>
-          <p className="text-sm text-fg-2 leading-relaxed">
-            Pin the ones you use most and they get their own button up top.
-          </p>
-          <Button variant="primary" onClick={onMake} className="w-full">
-            Make a page
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function relative(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();

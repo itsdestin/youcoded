@@ -2,7 +2,7 @@
 import React from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { ThemeProvider, useTheme } from '../src/renderer/state/theme-context';
+import { LOOK_PERSIST_MS, ThemeProvider, useTheme } from '../src/renderer/state/theme-context';
 import midnight from '../src/renderer/themes/builtin/midnight.json';
 
 const slug = 'devils-garden';
@@ -109,4 +109,65 @@ it('explicit refresh still resets an uninstalled active theme', async () => {
   await act(async () => { await main.result.current.reloadUserThemes(); });
   expect(main.result.current.theme).toBe('midnight');
   expect(persist).toHaveBeenCalledWith({ theme: 'midnight' });
+});
+
+// Perf B11 (2026-09-24): a Look-slider drag (Fine-tune glass, roundness) calls
+// setLookOverrides every tick, and each disk write blocks the main process. The
+// screen and peer windows update per tick; the disk write is a trailing throttle
+// that never loses the final value.
+const lookWrites = () => persist.mock.calls.filter(([p]) => 'lookOverrides' in p).map(([p]) => p.lookOverrides);
+const blur = (v: number) => ({ glass: 'custom' as const, glassCustom: { 'panels-blur': v } });
+it('a Look-slider drag updates live per tick but writes to disk at most once per throttle window, ending on the last value', async () => {
+  const main = mount(); await flush();
+  vi.useFakeTimers();
+  try {
+    broadcast.mockImplementation(() => {}); // real IPC excludes the origin window
+    for (let v = 1; v <= 10; v++) act(() => main.result.current.setLookOverrides(blur(v)));
+    // Live: every tick reached peers at once; nothing written yet.
+    expect(broadcast).toHaveBeenCalledTimes(10);
+    expect(broadcast).toHaveBeenLastCalledWith({ lookOverrides: blur(10) });
+    expect(lookWrites()).toEqual([]);
+    act(() => { vi.advanceTimersByTime(LOOK_PERSIST_MS); });
+    expect(lookWrites()).toEqual([blur(10)]);
+    // A long drag keeps saving every window, not only once it stops.
+    for (let v = 11; v <= 20; v++) {
+      act(() => main.result.current.setLookOverrides(blur(v)));
+      act(() => { vi.advanceTimersByTime(LOOK_PERSIST_MS / 5); });
+    }
+    act(() => { vi.advanceTimersByTime(LOOK_PERSIST_MS); });
+    const writes = lookWrites();
+    // 10 ticks over 2 throttle windows: the first write plus at most 3 more, not 10.
+    expect(writes.length).toBeLessThanOrEqual(4);
+    expect(writes.length).toBeGreaterThan(1);
+    expect(writes.at(-1)).toEqual(blur(20));
+    act(() => { vi.advanceTimersByTime(LOOK_PERSIST_MS * 5); });
+    expect(lookWrites().length).toBe(writes.length); // idle after the last write
+  } finally { vi.useRealTimers(); }
+});
+it.each(['unmount', 'beforeunload', 'pagehide'])('a pending Look write is flushed on %s', async how => {
+  const main = mount(); await flush();
+  vi.useFakeTimers();
+  try {
+    broadcast.mockImplementation(() => {});
+    act(() => main.result.current.setLookOverrides({ roundness: 0.4 }));
+    act(() => main.result.current.setLookOverrides({ roundness: 0.7 }));
+    expect(lookWrites()).toEqual([]);
+    if (how === 'unmount') main.unmount();
+    else window.dispatchEvent(new Event(how));
+    expect(lookWrites()).toEqual([{ roundness: 0.7 }]);
+    act(() => { vi.advanceTimersByTime(LOOK_PERSIST_MS * 2); });
+    expect(lookWrites()).toHaveLength(1); // the flush cancelled the timer
+  } finally { vi.useRealTimers(); }
+});
+it('a newer Look edit from a peer window cancels our older pending write', async () => {
+  const main = mount(); await flush();
+  vi.useFakeTimers();
+  try {
+    broadcast.mockImplementation(() => {});
+    act(() => main.result.current.setLookOverrides(blur(3)));
+    act(() => sync[0]({ lookOverrides: { ...blur(3), chromeStyle: 'float' } } as any));
+    act(() => { vi.advanceTimersByTime(LOOK_PERSIST_MS * 2); });
+    expect(lookWrites()).toEqual([]);
+    expect(main.result.current.lookOverrides.chromeStyle).toBe('float');
+  } finally { vi.useRealTimers(); }
 });

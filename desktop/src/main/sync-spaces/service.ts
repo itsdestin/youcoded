@@ -95,17 +95,26 @@ export function setSyncSpacesAuthStore(store: { getToken(): string | null } | nu
 
 // Route a lease op to the hub socket. Returns null when the hub is down (the
 // lease client treats null as "no answer" and falls back to its file / never-block).
-export function hubLeaseRequest(op: string, sessionId: string, deviceId: string): Promise<LeaseResult | null> {
+export function hubLeaseRequest(op: string, sessionId: string, deviceId: string, transferNonce?: string, expectedHolderId?: string): Promise<LeaseResult | null> {
   // Debug: takeover/lease failures are silent by design (never-block), which made
   // "takeover didn't happen" undiagnosable from logs (2026-07-23). Log every op +
   // whether the hub could answer — `null` here means the op had NO delivery path.
+  // Elapsed-ms (2026-09-21, deck Q-1 rider): claim-before-open leans on this round
+  // trip happening before a resume can show anything, so its real latency needs to
+  // be measurable on Destin's devices before that order is committed to.
   if (!hubSocket) {
     console.warn(`[lease] ${op} ${sessionId.slice(0, 8)}: hub socket absent (status=${hubStatus}) — no delivery path, answering null`);
     return Promise.resolve(null);
   }
-  return hubSocket.request(op, sessionId, deviceId).then(
-    (r) => { console.log(`[lease] ${op} ${sessionId.slice(0, 8)}: ${r ? `ok=${r.ok} holder=${r.holder?.deviceId?.slice(0, 8) ?? 'none'}` : 'null (hub gave no answer)'}`); return r; },
-    (e) => { console.warn(`[lease] ${op} ${sessionId.slice(0, 8)}: hub request failed: ${e?.message ?? e}`); throw e; },
+  const startedAt = Date.now();
+  // WHY: the exact caller-provided transfer nonce must survive this facade; a
+  // socket reqId only correlates replies, not a final transcript snapshot.
+  return (expectedHolderId !== undefined
+    ? hubSocket.request(op, sessionId, deviceId, undefined, expectedHolderId)
+    : transferNonce === undefined ? hubSocket.request(op, sessionId, deviceId)
+    : hubSocket.request(op, sessionId, deviceId, transferNonce)).then(
+    (r) => { console.log(`[lease] ${op} ${sessionId.slice(0, 8)}: ${r ? `ok=${r.ok} holder=${r.holder?.deviceId?.slice(0, 8) ?? 'none'}` : 'null (hub gave no answer)'} (${Date.now() - startedAt}ms)`); return r; },
+    (e) => { console.warn(`[lease] ${op} ${sessionId.slice(0, 8)}: hub request failed after ${Date.now() - startedAt}ms: ${e?.message ?? e}`); throw e; },
   );
 }
 
@@ -268,6 +277,11 @@ function activeSpaces() {
 // pull adopts origin/main (unborn local main → checkout -B main origin/main).
 async function materializeProject(entry: { name: string; repoName: string }): Promise<void> {
   if (!engine || !roots || !manager) return;
+  // WHY: the sync identity is the lowercased name, so a local folder whose
+  // name differs only by case already syncs this very repo. A second folder
+  // would sync into it too, mixing two trees (Linux allows both folders).
+  const lower = entry.name.toLowerCase();
+  if (roots.listProjects().some((p) => p.name !== entry.name && p.name.toLowerCase() === lower)) return;
   const e = engine;
   const url = await manager.ensureRemote({ id: `project:${entry.name}`, kind: 'project', root: '' });
   const created = roots.createProject(entry.name);
@@ -453,8 +467,17 @@ function teardownHub(): void {
 export async function stopSyncSpaces(): Promise<void> {
   if (backupTimer) clearInterval(backupTimer);
   teardownHub();
-  await engine?.stop();
-  engine = null;
+  try {
+    await engine?.stop();
+  } finally {
+    engine = null;
+    // WHY: SpaceManager writes sync-spaces.json asynchronously (2026-09-24,
+    // blocking-call batch B6). Without this flush, quitting within milliseconds
+    // of a change — e.g. turning sync off — could drop that write. In `finally`
+    // so a failing engine stop can't skip it; after stop() so the last-sync
+    // times recorded by syncs that finish during stop are included.
+    await manager?.flush().catch(() => {});
+  }
 }
 
 // Cheap SYNCHRONOUS "is sync on?" check. Reads the same enable flag
@@ -643,7 +666,26 @@ function backfillRegistry(): void {
   }
 }
 
+/** WHY: a project's name IS its sync identity, lowercased (repoNameForSpace).
+ *  Refuse, before anything is created, a name that would silently join another
+ *  project's online copy: one the user stopped syncing (stopping is permanent,
+ *  and the old files would pour into the new folder), or one that differs from
+ *  an existing project only by capital letters (the two would mix files). */
+function projectNameConflict(name: string): string | null {
+  if (!roots) return null;
+  const lower = name.toLowerCase();
+  const registry = readProjectRegistry(roots.personalRoot);
+  const stopped = registry.find((e) => e.state === 'stopped' && e.name.toLowerCase() === lower);
+  if (stopped) return `A project named "${stopped.name}" was stopped from syncing earlier. Choose a different name.`;
+  const clash = [...roots.listProjects().map((p) => p.name), ...registry.map((e) => e.name)]
+    .find((n) => n !== name && n.toLowerCase() === lower);
+  if (clash) return `A project named "${clash}" already exists. Names can't differ only by capital letters.`;
+  return null;
+}
+
 export async function syncSpacesCreateProject(name: string) {
+  const conflict = projectNameConflict(name);
+  if (conflict) return { ok: false as const, error: conflict };
   const result = roots!.createProject(name);
   if (result.ok) registerProject(name, result.path);
   if (result.ok && engine) {
@@ -667,6 +709,8 @@ export async function syncSpacesCreateProject(name: string) {
  *  content — kick an immediate syncSpace instead of waiting for the poll. */
 export async function syncSpacesImportProject(sourcePath: string, name: string, liveCwds: string[]) {
   if (!roots) return { ok: false as const, error: 'Sync is still starting up — try again in a moment' };
+  const conflict = projectNameConflict(name);
+  if (conflict) return { ok: false as const, error: conflict };
   const result = await importProjectFolder({
     sourcePath, name, liveCwds,
     projectsRoot: roots.projectsRoot,

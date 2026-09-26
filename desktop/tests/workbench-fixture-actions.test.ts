@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { loadFixture } from '../src/renderer/dev/workbench/fixture-loader';
 import { buildHydratePayload } from '../src/renderer/dev/workbench/seed-chat';
 import { deserializeChatState } from '../src/renderer/state/chat-types';
+import { chatReducer } from '../src/renderer/state/chat-reducer';
 
 const FIXTURE_ROOT = join(__dirname, '../src/renderer/dev/workbench/fixtures');
 
@@ -12,7 +13,7 @@ const FIXTURE_ROOT = join(__dirname, '../src/renderer/dev/workbench/fixtures');
  *  timeline with no error — which is exactly the failure this guards. */
 const KNOWN_KINDS = new Set([
   'text', 'user_message', 'turn_complete', 'assistant_text', 'tool_use', 'tool_result',
-  'permission_request',
+  'permission_request', 'permission_expired',
   // Specialists 1c: a child's stamped events, its routed ask, the run record
   // (a delivered steer rides on the run record's own `notes` — Task 10 — so
   // there is no separate line kind for it), and the folded background report.
@@ -68,6 +69,7 @@ describe('fixture replay', () => {
     const r = loadFixture('convo', CONVO);
     expect(r.actions.map((a) => a.type)).toEqual([
       'USER_PROMPT',
+      'TRANSCRIPT_USER_MESSAGE',
       'TRANSCRIPT_ASSISTANT_TEXT',
       'TRANSCRIPT_TOOL_USE',
       'TRANSCRIPT_TOOL_RESULT',
@@ -98,6 +100,20 @@ describe('fixture replay', () => {
     const req = r.actions.find((a) => a.type === 'PERMISSION_REQUEST') as any;
     expect(req).toMatchObject({ permissionMode: 'full-auto', external: true });
     expect((r.blocks.find((b) => b.kind === 'tool') as any)?.tool).toMatchObject({ permissionMode: 'full-auto', external: true });
+  });
+
+  // A seeded user message is CONFIRMED, not left pending — a pending bubble is held
+  // at the timeline's tail, which drew every fixture's question below its answer.
+  it('draws the user message above the reply to it', () => {
+    const r = loadFixture('convo', CONVO);
+    let state: any = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: 'sandbox' } as any);
+    for (const action of r.actions) state = chatReducer(state, action);
+    const timeline = state.get('sandbox')!.timeline;
+    const user = timeline.findIndex((e: any) => e.kind === 'user');
+    const reply = timeline.findIndex((e: any) => e.kind !== 'user');
+    expect(user).toBeGreaterThanOrEqual(0);
+    expect(user).toBeLessThan(reply);
+    expect((timeline[user] as any).pending).toBeFalsy();
   });
 
   it('still returns tool blocks for the existing tool fixtures', () => {
@@ -139,7 +155,7 @@ describe('shipped fixtures replay', () => {
   });
 
   it.each(fixtureFiles('conversations'))(
-    'conversation $name emits one action per dispatched line',
+    'conversation $name emits every action its lines dispatch',
     ({ name, raw }) => {
       const dispatched = raw.split('\n')
         .map((l) => l.trim()).filter(Boolean)
@@ -149,7 +165,9 @@ describe('shipped fixtures replay', () => {
         // by `?providerError=` replays (a session shows one failure card at a
         // time), so they are counted by the dedicated case below, not here.
         .filter((p) => p.optIn !== 'providerError')
-        .length;
+        // A user_message line dispatches TWO actions: the optimistic USER_PROMPT and
+        // the transcript's confirmation (fixture-loader.ts — else it stays pending).
+        .reduce((n, p) => n + (p.type === 'user_message' ? 2 : 1), 0);
       // includeStalled here so the count means what it says: EVERY dispatchable
       // line really was dispatched. The parked-turn line is opt-in at the
       // workbench level (see the default-off case below), not un-dispatchable.
@@ -173,13 +191,13 @@ describe('shipped fixtures replay', () => {
   it('skips the stalled line by DEFAULT — the workbench is not parked unless asked', () => {
     const r = loadFixture('stalled-fixture', STALLED_FIXTURE);
     expect(r.error).toBeUndefined();
-    expect(r.actions.map((a) => a.type)).toEqual(['USER_PROMPT', 'TRANSCRIPT_ASSISTANT_TEXT']);
+    expect(r.actions.map((a) => a.type)).toEqual(['USER_PROMPT', 'TRANSCRIPT_USER_MESSAGE', 'TRANSCRIPT_ASSISTANT_TEXT']);
   });
 
   it('replays the stalled line when includeStalled is set', () => {
     const r = loadFixture('stalled-fixture', STALLED_FIXTURE, undefined, { includeStalled: true });
     expect(r.actions.map((a) => a.type)).toEqual([
-      'USER_PROMPT', 'TRANSCRIPT_ASSISTANT_TEXT', 'TRANSCRIPT_THINKING_HEARTBEAT',
+      'USER_PROMPT', 'TRANSCRIPT_USER_MESSAGE', 'TRANSCRIPT_ASSISTANT_TEXT', 'TRANSCRIPT_THINKING_HEARTBEAT',
     ]);
   });
 
@@ -193,12 +211,12 @@ describe('shipped fixtures replay', () => {
   ].join('\n');
 
   it('skips every providerError line by default', () => {
-    expect(loadFixture('err', ERROR_FIXTURE).actions.map((a) => a.type)).toEqual(['USER_PROMPT']);
+    expect(loadFixture('err', ERROR_FIXTURE).actions.map((a) => a.type)).toEqual(['USER_PROMPT', 'TRANSCRIPT_USER_MESSAGE']);
   });
 
   it('replays only the providerError case asked for', () => {
     const acts = loadFixture('err', ERROR_FIXTURE, undefined, { providerError: 'b' }).actions;
-    expect(acts.map((a) => (a.type === 'NATIVE_SESSION_ERROR' ? a.message : a.type))).toEqual(['USER_PROMPT', 'B']);
+    expect(acts.map((a) => (a.type === 'NATIVE_SESSION_ERROR' ? a.message : a.type))).toEqual(['USER_PROMPT', 'TRANSCRIPT_USER_MESSAGE', 'B']);
   });
 });
 

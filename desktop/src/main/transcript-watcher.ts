@@ -67,6 +67,14 @@ export function parseTranscriptLine(
   // showed the message (Destin, 2026-09-11: "messages not always appearing in the same order on the
   // desktop and the remote client"). Measured on the 400 newest local transcripts: 84 typed, 1,218
   // background-task notices, and no ordinary user line repeating a queued message.
+  // A background task's end notice that arrived while Claude was mid-turn is
+  // recorded ONLY as a queued attachment (no user line follows it), so it has
+  // to be read here or that task's card spins forever (2026-09-24).
+  const queuedNotice = queuedTaskNotificationText(parsed);
+  if (queuedNotice !== null) {
+    return taskNotificationEvents(queuedNotice, sessionId, parsed.uuid || '');
+  }
+
   const queuedText = queuedPromptText(parsed);
   if (queuedText !== null) {
     if (!queuedText) return [];
@@ -133,6 +141,9 @@ export function parseTranscriptLine(
         const structuredPatch = Array.isArray(parsed.toolUseResult?.structuredPatch)
           ? parsed.toolUseResult.structuredPatch
           : undefined;
+        const backgroundTaskId = backgroundLaunchId(parsed.toolUseResult);
+        const resumed = parsed.toolUseResult?.resumedAgentId;
+        const resumedTaskId = typeof resumed === 'string' && resumed ? resumed : undefined;
         for (const block of content) {
           if (block.type === 'tool_result') {
             events.push({
@@ -146,6 +157,8 @@ export function parseTranscriptLine(
                 isError: block.is_error ?? false,
                 recordedAt,
                 ...(structuredPatch ? { structuredPatch } : {}),
+                ...(backgroundTaskId ? { backgroundTaskId } : {}),
+                ...(resumedTaskId ? { resumedTaskId } : {}),
               },
             });
           }
@@ -159,6 +172,10 @@ export function parseTranscriptLine(
       const raw = typeof content === 'string'
         ? content
         : extractTextFromBlocks(content);
+      // Background task end notices ride in as user lines (origin
+      // 'task-notification'). Their tags strip to nothing below, which used to
+      // drop them entirely — the only record that a background helper finished.
+      events.push(...taskNotificationEvents(raw, sessionId, uuid));
       const text = stripSystemTags(raw);
       if (!text) {
         // A slash command: Claude Code wraps it in command tags, which strip to nothing, so its
@@ -166,7 +183,7 @@ export function parseTranscriptLine(
         // marked, so the chat starts no turn for it: many commands get no reply, which is the
         // "stuck thinking" trap described on STRIP_ENTIRELY_RE below.
         const command = slashCommandText(raw);
-        if (!command) return []; // e.g. interrupted tool use placeholders
+        if (!command) return events; // a notice, or e.g. interrupted tool use placeholders
         events.push({ type: 'user-message', sessionId, uuid, timestamp, data: { text: command, slashCommand: true } });
         return events;
       }
@@ -345,6 +362,83 @@ function queuedPromptText(parsed: any): string | null {
   if (a.origin !== undefined && a.origin?.kind !== 'human') return '';
   const raw = typeof a.prompt === 'string' ? a.prompt : extractTextFromBlocks(a.prompt);
   return stripSystemTags(raw);
+}
+
+/** The raw text of a queued background-task notice, or null for any other line. */
+function queuedTaskNotificationText(parsed: any): string | null {
+  const a = parsed?.type === 'attachment' ? parsed.attachment : null;
+  if (!a || a.type !== 'queued_command' || a.commandMode !== 'task-notification') return null;
+  return typeof a.prompt === 'string' ? a.prompt : extractTextFromBlocks(a.prompt);
+}
+
+/** The id of the background work a Claude Code tool result only LAUNCHED:
+ *  an Agent's `agentId` when its status is 'async_launched' (every CC Agent
+ *  call measured on 2026-09-24), or a Bash command's `backgroundTaskId`. */
+function backgroundLaunchId(r: any): string | undefined {
+  if (!r || typeof r !== 'object') return undefined;
+  if (r.status === 'async_launched' && typeof r.agentId === 'string' && r.agentId) return r.agentId;
+  if (typeof r.backgroundTaskId === 'string' && r.backgroundTaskId) return r.backgroundTaskId;
+  return undefined;
+}
+
+const TASK_NOTIFICATION_RE = /<task-notification>([\s\S]*?)<\/task-notification>/g;
+
+/**
+ * One 'background-task' event per <task-notification> in `raw` that reports an
+ * end state. Notices without a status (a Monitor's streamed event) change no
+ * card and yield nothing. Shape measured on 2026-09-24 across 1,915 notices:
+ * <task-id> (one, or several for an orphan summary on resume), usually a
+ * <tool-use-id>, <status> completed|failed|killed|stopped, <summary>, and for
+ * a helper a <result> holding its final report. Mirrored in TranscriptWatcher.kt.
+ */
+function taskNotificationEvents(raw: string, sessionId: string, uuid: string): TranscriptEvent[] {
+  if (!raw || !raw.includes('<task-notification>')) return [];
+  const out: TranscriptEvent[] = [];
+  let i = 0;
+  for (const m of raw.matchAll(TASK_NOTIFICATION_RE)) {
+    const body = m[1];
+    const status = tagText(body, 'status');
+    const mapped = status === 'completed' ? 'completed'
+      : status === 'failed' ? 'failed'
+      : status === 'killed' || status === 'stopped' ? 'stopped'
+      : null;
+    if (!mapped) continue;
+    const taskIds = [...body.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)]
+      .map((t) => t[1].trim())
+      // Claude Code's own scan markers, not tasks (it says so in the notice).
+      .filter((id) => id && !id.startsWith('__'));
+    const toolUseId = tagText(body, 'tool-use-id');
+    if (taskIds.length === 0 && !toolUseId) continue;
+    // The report can itself contain tag-like text, so take everything up to
+    // the LAST closing tag rather than the first.
+    const rs = body.indexOf('<result>');
+    const re = body.lastIndexOf('</result>');
+    const result = rs !== -1 && re > rs ? body.slice(rs + '<result>'.length, re).trim() : undefined;
+    const summary = tagText(body, 'summary');
+    out.push({
+      type: 'background-task',
+      sessionId,
+      // Suffixed so two notices in one line stay distinct for uuid dedup.
+      uuid: i === 0 ? uuid : `${uuid}:${i}`,
+      timestamp: Date.now(),
+      data: {
+        ...(toolUseId ? { toolUseId } : {}),
+        backgroundTask: {
+          taskIds, status: mapped,
+          ...(summary ? { summary } : {}),
+          ...(result ? { result } : {}),
+        },
+      },
+    });
+    i++;
+  }
+  return out;
+}
+
+function tagText(body: string, tag: string): string | undefined {
+  const m = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(body);
+  const v = m?.[1].trim();
+  return v || undefined;
 }
 
 /** "/name args" from a slash-command line, or null when the line is not one. Mirrored in
@@ -567,11 +661,12 @@ export class TranscriptWatcher extends EventEmitter {
    * the reader, which would make transcript-watcher <-> transcript-page a
    * circular import (the reader needs parseTranscriptLine).
    */
-  pageSourceFor(desktopSessionId: string): { jsonlPath: string; subagentsDir: string; startOffset: number } | null {
+  pageSourceFor(desktopSessionId: string): { jsonlPath: string; subagentsDir: string; startOffset: number; cwd: string } | null {
     const session = this.sessions.get(desktopSessionId);
     if (!session) return null;
     return {
       jsonlPath: session.jsonlPath,
+      cwd: session.cwd, // hook's post-realpath cwd, paired to this exact watched file
       subagentsDir: path.join(path.dirname(session.jsonlPath), session.claudeSessionId, 'subagents'),
       startOffset: session.startOffset,
     };
@@ -610,55 +705,11 @@ export class TranscriptWatcher extends EventEmitter {
     }
   }
 
-  /**
-   * Return every TranscriptEvent parsed from disk for a currently-watched
-   * session. Used during ownership transfer: when a new window acquires a
-   * session via detach/re-dock, it calls this once through IPC to rebuild its
-   * reducer state from the JSONL (disk is the source of truth). Does not
-   * mutate watcher state — safe to call alongside live watching.
-   */
-  getHistory(desktopSessionId: string): TranscriptEvent[] {
-    const session = this.sessions.get(desktopSessionId);
-    if (!session) return [];
-    const events: TranscriptEvent[] = [];
-    // Fresh, throwaway index so replay doesn't corrupt live correlation.
-    const replayIndex = new SubagentIndex();
-    // Replay-side uuid dedup, mirroring the live path's semantics exactly:
-    // CC rewrites the same-uuid line as an assistant message grows, so
-    // repeated uuids skip assistant-text (first write wins) while tool-use /
-    // tool-result / turn-complete still emit (reducer Map.set absorbs them).
-    // Without this, every re-dock/replay rendered duplicate text segments.
-    const seenUuids = new Set<string>();
-    // A tally of its own: a replay walks the file from the top, so sharing the
-    // live tailer's in-flight tally would both double-count and reset it.
-    const replayUsage = emptyTurnUsageTally();
-    if (fs.existsSync(session.jsonlPath)) {
-      let raw: string;
-      try { raw = fs.readFileSync(session.jsonlPath, 'utf8'); }
-      catch { raw = ''; }
-      for (const line of raw.split('\n')) {
-        if (!line.trim()) continue;
-        const parsed = parseTranscriptLine(line, desktopSessionId, replayUsage);
-        if (parsed.length === 0) continue;
-        const lineUuid = parsed[0].uuid;
-        const isRepeat = !!lineUuid && seenUuids.has(lineUuid);
-        if (lineUuid) seenUuids.add(lineUuid);
-        for (const ev of parsed) {
-          if (isRepeat && ev.type === 'assistant-text') continue;
-          if (ev.type === 'tool-use' && ev.data.toolName === 'Agent') {
-            replayIndex.recordParentAgentToolUse(
-              ev.data.toolUseId!,
-              (ev.data.toolInput?.description as string) || '',
-              (ev.data.toolInput?.subagent_type as string) || '',
-            );
-          }
-          events.push(ev);
-        }
-      }
-    }
-    for (const ev of session.subagentWatcher.getHistory(replayIndex)) events.push(ev);
-    return events;
-  }
+  // (getHistory — a whole-transcript sync read + replay — was removed
+  // 2026-09-24, blocking-call batch B1. Its only caller was the
+  // TRANSCRIPT_REPLAY handler, which no renderer or Android build sends any
+  // more: history is paged by readTranscriptPage, and an ownership handoff uses
+  // SESSION_REPLAY_LIVE_STATE + TRANSCRIPT_PAGE.)
 
   // -------------------------------------------------------------------------
   // Internal
@@ -957,10 +1008,18 @@ export class TranscriptWatcher extends EventEmitter {
           // safety-net dir poll.
           session.subagentWatcher.kickScan();
         }
-        if (event.type === 'tool-result' && event.data.toolUseId) {
+        if (event.type === 'tool-result' && event.data.toolUseId && !event.data.backgroundTaskId) {
           // If this result completes a parent Agent tool call, that subagent
-          // is done writing — settle its file poll (fire-and-forget; no-op
-          // for non-Agent toolUseIds, fs.watch stays attached either way).
+          // is done writing — final read, then release its own watch + poll
+          // (fire-and-forget; no-op for non-Agent toolUseIds). A late write
+          // still arrives through the subagents directory watch.
+          // NOT for a background launch (2026-09-24): that result lands the
+          // moment the helper STARTS, so settling there dropped the watch of
+          // every helper still working — on Windows its activity then arrived
+          // only on the 5 s safety-net poll. Its end notice settles it instead.
+          void session.subagentWatcher.settleByParent(event.data.toolUseId);
+        }
+        if (event.type === 'background-task' && event.data.toolUseId) {
           void session.subagentWatcher.settleByParent(event.data.toolUseId);
         }
       }

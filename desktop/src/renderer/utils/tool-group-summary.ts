@@ -151,6 +151,9 @@ function isRunning(t: ToolCallState): boolean {
   // result is still unwinding. The ledger's terminal run status is authoritative
   // for that card, so it must clear the group spinner immediately.
   if (t.specialistRun) return t.specialistRun.status === 'running';
+  // A Claude Code background helper/command is still out there after its call
+  // returned (2026-09-24) — the headline reads "Running…", not "Ran…".
+  if (t.status === 'complete' && t.ccBackground?.status === 'running') return true;
   return t.status === 'running';
 }
 function isDone(t: ToolCallState): boolean {

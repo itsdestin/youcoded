@@ -212,3 +212,91 @@ describe('quantDescription', () => {
     expect(quantDescription('MXFP4_MOE')).toMatch(/native/i);
   });
 });
+
+// Roadmap (local-models, 2026-09-05): whole publishers were invisible in search.
+// Cause 1 — a DOT before the quant. Real listings, verbatim, measured 2026-09-23:
+// TheBloke/Llama-2-7B-Chat-GGUF (12 files, 0 offered) and
+// mradermacher/gemma-3-12b-it-GGUF (13 files, 0 offered — its projectors stay off).
+describe('dot before the quant (TheBloke, mradermacher)', () => {
+  const f = (path: string, size = 1) => ({ path, size, sha256: null });
+  it('parses <name>.<QUANT>.gguf', () => {
+    expect(parseGgufName('llama-2-7b-chat.Q4_K_M.gguf')).toEqual({
+      base: 'llama-2-7b-chat', quant: 'Q4_K_M', dynamic: false, part: null,
+    });
+    expect(parseGgufName('gemma-3-12b-it.IQ4_XS.gguf')?.quant).toBe('IQ4_XS');
+    // A dot INSIDE the model name is not a separator for the quant.
+    expect(parseGgufName('Llama-3.1-8B-Instruct-Q4_K_M.gguf')?.base).toBe('Llama-3.1-8B-Instruct');
+  });
+  it('offers every TheBloke quant', () => {
+    const names = ['Q2_K', 'Q3_K_L', 'Q3_K_M', 'Q3_K_S', 'Q4_0', 'Q4_K_M', 'Q4_K_S', 'Q5_0', 'Q5_K_M', 'Q5_K_S', 'Q6_K', 'Q8_0'];
+    const opts = groupQuantOptions(names.map((q) => f(`llama-2-7b-chat.${q}.gguf`)));
+    expect(opts.map((o) => o.quant).sort()).toEqual([...names].sort());
+  });
+  it('offers mradermacher quants and still keeps its dotted projectors off the list', () => {
+    const files = ['IQ4_XS', 'Q2_K', 'Q3_K_L', 'Q3_K_M', 'Q3_K_S', 'Q4_K_M', 'Q4_K_S', 'Q5_K_M', 'Q5_K_S', 'Q6_K', 'Q8_0']
+      .map((q) => f(`gemma-3-12b-it.${q}.gguf`))
+      .concat([f('gemma-3-12b-it.mmproj-Q8_0.gguf'), f('gemma-3-12b-it.mmproj-f16.gguf')]);
+    const opts = groupQuantOptions(files);
+    expect(opts).toHaveLength(11);
+    expect(opts.every((o) => !o.files.some((p) => /mmproj/.test(p)))).toBe(true);
+    expect(opts[0].visionFile?.path).toBe('gemma-3-12b-it.mmproj-f16.gguf');
+  });
+});
+
+// Cause 2 — lowercase quants, including Mungert's "double" quants (f16 output
+// tensors + q8_0 weights). Mungert/gemma-3-4b-it-gguf's real listing, verbatim
+// (2026-09-23): 24 .gguf files, 0 offered before this fix.
+describe('lowercase and double quants (Mungert)', () => {
+  const f = (path: string, size = 1) => ({ path, size, sha256: null });
+  const mungert = [
+    'gemma-3-4b-it-bf16-q8_0.gguf', 'gemma-3-4b-it-f16-q6_k.gguf', 'gemma-3-4b-it-f16-q8_0.gguf',
+    'google_gemma-3-4b-it-bf16-q8.gguf', 'google_gemma-3-4b-it-bf16.gguf', 'google_gemma-3-4b-it-f16-q8.gguf',
+    'google_gemma-3-4b-it-iq3_xs.gguf', 'google_gemma-3-4b-it-iq4_nl.gguf', 'google_gemma-3-4b-it-iq4_xs.gguf',
+    'google_gemma-3-4b-it-mmproj-bf16.gguf', 'google_gemma-3-4b-it-mmproj-f16.gguf', 'google_gemma-3-4b-it-mmproj-f32.gguf',
+    'google_gemma-3-4b-it-mmproj-q8.gguf', 'google_gemma-3-4b-it-q3_k_m.gguf', 'google_gemma-3-4b-it-q3_k_s.gguf',
+    'google_gemma-3-4b-it-q4_0.gguf', 'google_gemma-3-4b-it-q4_1.gguf', 'google_gemma-3-4b-it-q4_k_m.gguf',
+    'google_gemma-3-4b-it-q4_k_s.gguf', 'google_gemma-3-4b-it-q5_k_m.gguf', 'google_gemma-3-4b-it-q5_k_s.gguf',
+    'google_gemma-3-4b-it-q6_k_m.gguf', 'google_gemma-3-4b-it-q8.gguf', 'mmproj.gguf',
+  ];
+  it('keeps the quant exactly as the file writes it', () => {
+    expect(parseGgufName('google_gemma-3-4b-it-q4_k_m.gguf')).toEqual({
+      base: 'google_gemma-3-4b-it', quant: 'q4_k_m', dynamic: false, part: null,
+    });
+    expect(parseGgufName('gemma-3-4b-it-f16-q8_0.gguf')).toEqual({
+      base: 'gemma-3-4b-it', quant: 'f16-q8_0', dynamic: false, part: null,
+    });
+  });
+  it('offers all 19 model files as distinct options and none of the 5 projectors', () => {
+    const opts = groupQuantOptions(mungert.map((p) => f(p)));
+    expect(opts).toHaveLength(19);
+    expect(new Set(opts.map((o) => o.quant)).size).toBe(19);
+    expect(opts.some((o) => o.files.some((p) => /mmproj/.test(p)))).toBe(false);
+  });
+  it('describes a lowercase or double quant by its weight precision', () => {
+    expect(quantDescription('q4_k_m')).toBe(quantDescription('Q4_K_M'));
+    expect(quantDescription('f16-q8_0')).toBe(quantDescription('Q8_0'));
+    expect(quantDescription('bf16')).toBe(quantDescription('BF16'));
+    expect(quantDescription('iq3_xs')).toBe(quantDescription('IQ3_XS'));
+  });
+  it('still rejects files that are not model quants', () => {
+    expect(parseGgufName('mmproj.gguf')).toBeNull();
+    expect(parseGgufName('RVN-BF16-mtp.gguf')).toBeNull();
+    expect(parseGgufName('ggml-vocab-llama-bpe.gguf')).toBeNull();
+    expect(parseGgufName('imatrix.gguf')).toBeNull();
+  });
+});
+
+// Review finding F3 (2026-09-23): with dots accepted before the quant, an MTP
+// draft written with any separator parsed as an offerable quant.
+describe('MTP drafts are rejected whatever the separator', () => {
+  it.each([
+    'Model-mtp.Q8_0.gguf', 'Model.mtp.Q8_0.gguf', 'Model_mtp-Q8_0.gguf', 'mtp-Model-Q4_0.gguf',
+    'MTP/mtp-gemma-4-12B-it-Q4_0.gguf', 'RVN-IQ2_M-mtp.gguf', 'Model-MTP-Q8_0.gguf',
+  ])('%s', (name) => {
+    expect(parseGgufName(name)).toBeNull();
+  });
+  it('a name that merely contains the letters is still a model', () => {
+    expect(parseGgufName('smtp-helper-7b-Q4_K_M.gguf')?.quant).toBe('Q4_K_M');
+    expect(parseGgufName('model-mtpx-Q4_K_M.gguf')?.quant).toBe('Q4_K_M');
+  });
+});

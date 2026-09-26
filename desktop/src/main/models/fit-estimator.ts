@@ -367,8 +367,16 @@ export function availableMemoryBytes(probe: MemoryProbe = {}): number {
   return freemem();
 }
 
+/** How long `vm_stat` may take before we stop waiting and fall back to
+ *  os.freemem(). WHY (perf, 2026-09-24): this runs on the main thread on every
+ *  quant list and memory check, and had NO timeout — a wedged `vm_stat` would
+ *  have frozen every window with it. It normally answers in a few ms. The
+ *  fallback is the smaller number, so a timeout can only make a verdict MORE
+ *  cautious, never let a model through that would not fit. */
+export const VM_STAT_TIMEOUT_MS = 2_000;
+
 function defaultRunCommand(command: string, args: string[]): string {
-  return execFileSync(command, args, { encoding: 'utf8' });
+  return execFileSync(command, args, { encoding: 'utf8', timeout: VM_STAT_TIMEOUT_MS });
 }
 
 /**
@@ -415,6 +423,9 @@ export interface FitInputs {
    *  available memory are the SAME BYTES, and adding them would let a 150 GB
    *  model score as merely "tight" on a 121.5 GB machine. */
   poolIsDedicatedVram?: boolean;
+  /** True when the pool is a graphics chip's SHARE of system RAM (Apple
+   *  Silicon, an AMD APU — gpu-detector's `sharedMemory`). See estimateFit. */
+  poolIsShared?: boolean;
   /** Physical RAM. Only used to cap the split tier on a shared-memory machine —
    *  nothing can exceed what the machine physically has. */
   totalMemBytes?: number;
@@ -454,13 +465,26 @@ export function estimateFit(input: FitInputs): FitEstimate {
   // bytes, so the sum is capped at what the machine physically has — otherwise
   // 84 GiB of Vulkan pool + 74 GiB of free RAM would offer 158 GiB on a 121.5
   // GiB laptop. A discrete card really is extra memory, so it is not capped.
-  const splitCeiling = input.poolIsDedicatedVram || input.totalMemBytes === undefined
-    ? poolFree + input.availableBytes
-    : Math.min(poolFree + input.availableBytes, input.totalMemBytes);
+  const shared = input.poolIsShared === true && !input.poolIsDedicatedVram;
+  // WHY a separate shared-memory path (2026-09-23, Destin 2026-09-07: "count
+  // shared memory … check logic so counts aren't duplicated"). On a unified
+  // machine the graphics allowance and free RAM are the SAME bytes, so:
+  //  - the room a model has on the chip is the SMALLER of the two, never the
+  //    sum (a resident model is already missing from BOTH figures, so taking
+  //    the smaller of them subtracts it once, not twice);
+  //  - past that room the model spills onto the processor out of the same
+  //    physical memory, so the only hard ceiling is the machine's RAM —
+  //    exactly the ceiling a RAM-only machine already gets.
+  const room = shared ? Math.min(poolFree, input.availableBytes) : poolFree;
+  const splitCeiling = shared
+    ? Math.max(room, input.totalMemBytes ?? poolFree + input.availableBytes)
+    : input.poolIsDedicatedVram || input.totalMemBytes === undefined
+      ? poolFree + input.availableBytes
+      : Math.min(poolFree + input.availableBytes, input.totalMemBytes);
 
   const tierFor = (n: number): FitEstimate['fit'] => {
-    if (n <= poolFree * 0.9) return 'fits';
-    if (n <= poolFree) return 'tight';
+    if (n <= room * 0.9) return 'fits';
+    if (n <= room) return 'tight';
     if (n <= splitCeiling) return 'tight';
     return 'too-large';
   };

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, safeStorage, screen, shell, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, protocol, safeStorage, screen, shell, webContents } from 'electron';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
 // an uncaught exception that kills the whole main process — the app dies with
@@ -28,11 +28,14 @@ import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
 import { registerIpcHandlers, buddyShowRefusal, cachedBuddyHelperStatus, refreshBuddyHelperStatus, setBuddyHelperLostHandler } from './ipc-handlers';
 import { RemoteServer } from './remote-server';
+import { getFavorites as getGameFavorites, setFavorites as setGameFavorites, getIncognito as getGameIncognito, setIncognito as setGameIncognito } from './prefs-service';
 import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
+import { shouldAutoApprove } from './permission-auto-approve';
 import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionState, type AttentionSummary, type AttentionReport, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
+import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/handoff-draft';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
@@ -48,11 +51,13 @@ import type { FirstRunState } from '../shared/first-run-types';
 // file ipc-handlers' store uses (precedent: mcp-reconciler.ts) — one file, one
 // lock, two readers.
 import { ChatGptAuth } from './providers/chatgpt-auth';
+import { experimentGuardForProfile, openLunaAuthBrowser } from './providers/luna-request-guard';
 import { SecretsStore } from './providers/secrets-store';
 import { SyncService } from './sync-service';
 import { setSyncService, getSyncConfig } from './sync-state';
 // Cross-device sync spaces (spec 2026-07-03) — folder-based sync engine.
 import { startSyncSpaces, stopSyncSpaces, setSyncSpacesRemoteBroadcaster, setSyncSpacesAuthStore, hubLeaseRequest, setSyncSpacesLeaseEventListener, getManagedRoots, syncSpacesSyncNowAwaited } from './sync-spaces/service';
+import { loadSpaceBackupTargets } from './sync-spaces/backup-targets';
 import { createGithubClient, setGithubClient } from './github-client';
 // Plan 2b Task 8: conversation-lease lifecycle. The lease client coordinates
 // which device "holds" a conversation so two devices don't append to the same
@@ -75,6 +80,14 @@ import { stopProjectWatchers } from './artifacts/project-watcher';
 // One-time cleanup of the legacy sync-service's slug-symlink aggregation (Plan 2c).
 import { sweepProjectSymlinks } from './conversations/symlink-sweep';
 import { startTagRegistry } from './conversations/tag-registry-service';
+// Welcome back (design 2026-09-24 §1): the per-install "sessions open at last
+// shutdown" list. Its own file (userData, never synced) — see T1's WHY there.
+import { createWelcomeBackStore, type WelcomeBackStore } from './welcome-back-store';
+// Welcome back (design §4, plan T3): the in-app quit warning's request/answer
+// state machine. Extracted so it can be unit-tested without a BrowserWindow —
+// see close-request-manager.ts's header WHY.
+import { createCloseRequestManager, applyCloseAnswer } from './close-request-manager';
+import { randomUUID } from 'crypto';
 import { createAuthStore } from './marketplace-auth-store';
 import { registerMarketplaceApiHandlers } from './marketplace-api-handlers';
 import { reconcileInstalls } from './install-reconcile';
@@ -86,7 +99,7 @@ import { BuddyWindowManager } from './buddy-window-manager';
 import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
 // The KDE script that lets the buddy move itself on a Wayland desktop, and
 // the lookup that asks KDE how much of the screen the taskbar has taken.
-import { syncHelperOnLaunch } from './kwin-helper';
+import { syncHelperOnLaunch, setExperimentKwinDisabled } from './kwin-helper';
 import { WorkAreaResolver } from './buddy-work-area';
 import { excludeFromCapture, nativeCaptureExclusionAvailable } from './window-exclude-capture';
 import { cleanupStaleDownloads } from './update-installer';
@@ -182,9 +195,22 @@ let mainWindow: BrowserWindow | null = null;
 // the three-window manager is the only one, on every platform.
 let buddyManagerRef: BuddyWindowManager | null = null;
 let cleanupIpcHandlers: (() => Promise<void>) | null = null;
+// WHY: a window can close after registering IPC; cancel only that webContents' pending attempts.
+let cancelWindowHandoffs: (webContentsId: number) => void = () => {};
 // Sign in with ChatGPT: module scope only so runShutdown can dispose it (stops
 // the usage poll, closes a lingering sign-in listener). Assigned in createWindow.
 let chatgptAuth: ChatGptAuth | null = null;
+// Welcome back (design §1): constructed in app.whenReady() (below), before
+// createWindow() — module scope so registerIpcHandlers (called INSIDE
+// createWindow) and runShutdown's flush (below) can both reach it.
+let welcomeBackStore: WelcomeBackStore | undefined;
+// Welcome back (design §4): the in-app quit warning's pending-request
+// tracker. Module scope, constructed eagerly (unlike welcomeBackStore, it
+// touches no disk) so createAppWindow's close handler can close over it
+// however early a window is created.
+const closeRequests = createCloseRequestManager({
+  genId: () => randomUUID(),
+});
 // Plan 2b Task 8: the conversation-lease client + this install's device identity.
 // Constructed inside createWindow (before registerIpcHandlers) but referenced
 // again in the app-ready sync block, so they live at module scope. The holder
@@ -195,7 +221,7 @@ let deviceIdentity: { id: string } | null = null;
 // The per-MACHINE id backing the device registry — distinct from deviceIdentity
 // (per-INSTALL, for leases). null = no durable machine identity: register nothing.
 let machineIdentity: { id: string } | null = null;
-const holderTakeoverRef: { fn: (sessionId: string, from?: { deviceId: string; device: string }) => void } = { fn: () => {} };
+const holderTakeoverRef: { fn: (sessionId: string, from?: { deviceId: string; device: string }, transferNonce?: string) => void } = { fn: () => {} };
 const sessionManager = new SessionManager();
 
 // Multi-window ownership: maps sessionId -> windowId and tracks leader for
@@ -248,6 +274,9 @@ const hookRelay = new HookRelay(pipeName);
 // live permission/AskUserQuestion menu — typing into that menu presses Enter
 // on the highlighted option and silently answers the prompt (stray-Enter fix).
 sessionManager.setReloadPluginsGate((sessionId) => hookRelay.hasPendingPermission(sessionId));
+// An ask for a session this app does not own can never show a card: pass it
+// straight back to Claude Code's own prompt, undecided (hook-relay.ts).
+hookRelay.setSessionGate((sessionId) => sessionManager.hasSession(sessionId));
 const remoteConfig = new RemoteConfig();
 const skillProvider = new LocalSkillProvider();
 skillProvider.ensureMigrated();
@@ -318,6 +347,13 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
       if (!win.isDestroyed()) win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
     }
   },
+  // Welcome back (design §2): a phone/remote browser's own X on a session must
+  // untrack it here too — this WS host answers session:destroy independently
+  // of the desktop's SESSION_DESTROY IPC handler and never reaches it. Same
+  // lazy-closure-over-a-module-var pattern as `prepareCreate` above:
+  // welcomeBackStore is constructed later, in app.whenReady(), but this
+  // closure only runs when a remote client actually destroys a session.
+  untrackWelcomeBack: (id) => welcomeBackStore?.untrack(id),
 });
 
 // WHY push and not poll: a bind failure happens once, seconds after launch, and a panel
@@ -341,6 +377,14 @@ const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || `http://localhost:${VI
 // (dev2, feature-x, etc.) can't accidentally re-enable hook installation.
 // Must be called before app.whenReady().
 const DEV_PROFILE = process.env.YOUCODED_PROFILE;
+// WHY: reject unsafe experiment profiles before app.setPath or the built app's
+// userData lookup; doing this in createWindow would be too late to protect it.
+const LUNA_REQUEST_GUARD = experimentGuardForProfile(DEV_PROFILE, app.isPackaged,
+  process.env.YOUCODED_LUNA_EXPERIMENT, process.env.LUNA_GUARD_URL);
+// WHY: private HOME cannot isolate KWin's session bus, so the helper is off; and the tool
+// jails read this variable, so clear it unless the experiment is fully active (installed app).
+setExperimentKwinDisabled(Boolean(LUNA_REQUEST_GUARD));
+if (!LUNA_REQUEST_GUARD) delete process.env.YOUCODED_LUNA_EXPERIMENT;
 // Captured BEFORE the override below, so this is the BUILT app's userData dir even
 // in a dev instance — Electron derives it from the app name, so nothing here has to
 // hardcode 'youcoded' (a productName added to package.json would change it).
@@ -392,49 +436,6 @@ protocol.registerSchemesAsPrivileged([
   // renderer. Inline mascot rigs need the scheme in Chromium's CORS allowlist.
   { scheme: 'theme-asset', privileges: { bypassCSP: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
-
-// --- Permission override classification ---
-// In bypass mode, Claude Code still fires PermissionRequest for protected paths,
-// compound cd commands, and AskUserQuestion. These regexes classify each request
-// so the user's per-category overrides can selectively auto-approve them.
-
-const TITLE_HOOK_RE = /[>|].*[/\\]\.claude[/\\]topics[/\\]topic-/;
-const CONFIG_FILE_RE = /\.(bashrc|bash_profile|zshrc|zprofile|profile|gitconfig|gitmodules|ripgreprc)\b|\.mcp\.json|\.claude\.json/;
-const PROTECTED_DIR_RE = /[/\\]\.git[/\\]|[/\\]\.claude[/\\]/;
-const CD_REDIRECT_RE = /\bcd\b.*[>]/;
-const CD_GIT_RE = /\bcd\b.*\bgit\b/;
-
-type PermissionCategory =
-  | 'titleHook'
-  | 'protectedConfigFiles'
-  | 'protectedDirectories'
-  | 'compoundCdRedirect'
-  | 'compoundCdGit'
-  | 'unknown';
-
-function classifyPermission(toolName: string, toolInput?: Record<string, unknown>): PermissionCategory {
-  const cmd = (toolInput?.command as string) || '';
-  const filePath = (toolInput?.file_path as string) || '';
-  const target = cmd || filePath;
-
-  // Title hook — always auto-approved, checked first
-  if (toolName === 'Bash' && TITLE_HOOK_RE.test(cmd)) return 'titleHook';
-
-  // Compound cd patterns (Bash only) — check before path-based patterns
-  // because a single command can match both (e.g., cd /tmp && echo > .git/config)
-  if (toolName === 'Bash') {
-    if (CD_GIT_RE.test(cmd)) return 'compoundCdGit';
-    if (CD_REDIRECT_RE.test(cmd)) return 'compoundCdRedirect';
-  }
-
-  // Protected config files
-  if (CONFIG_FILE_RE.test(target)) return 'protectedConfigFiles';
-
-  // Protected directories (.git/, .claude/)
-  if (PROTECTED_DIR_RE.test(target)) return 'protectedDirectories';
-
-  return 'unknown';
-}
 
 // In-memory cache of user's permission overrides, loaded from defaults file
 // and updated by ipc-handlers.ts whenever defaults:set is called.
@@ -934,6 +935,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // (the registry ignores buddies) — while someone is on the phone nothing is focused.
   win.on('focus', () => windowRegistry.noteFocused(wid));
   win.on('closed', () => {
+    cancelWindowHandoffs(wid);
     // Drop attention reports contributed by this window so stale session
     // states from a closed window don't persist in the aggregated summary.
     attentionReports.delete(wid);
@@ -965,32 +967,62 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // prompt, closing a window silently kills every session it owns — which is
   // easy to do by accident and impossible to undo. A guard flag prevents the
   // prompt from re-firing after the user confirms.
+  //
+  // Welcome back (design §4, plan T3): this used to be a native
+  // dialog.showMessageBox. Destin's review-2 call (S-dialog) replaced it with
+  // an in-app prompt so it can also ask "bring these back next launch?" — a
+  // native dialog can't render the app's own switch. Main now ASKS the
+  // renderer (window:close-request) and awaits its answer
+  // (window:answer-close) instead of blocking on the OS dialog itself.
   let confirmedClose = false;
+  // The screen reloading or crashing takes an open quit prompt with it, and
+  // with no timeout nothing else would ever settle that request — every later
+  // X press would reuse it and the window could not be closed. Forget it, so
+  // the next press asks again.
+  // Main-frame, cross-document only: an embedded page (a preview iframe) or an
+  // in-page hash change must not take down a prompt someone is reading.
+  win.webContents.on('did-start-navigation', (details: { isMainFrame?: boolean; isSameDocument?: boolean }) => {
+    if (details?.isMainFrame && !details.isSameDocument) closeRequests.dropFor(wid);
+  });
+  win.webContents.on('render-process-gone', () => closeRequests.dropFor(wid));
   win.on('close', async (ev) => {
     // Buddy windows never own sessions (they only subscribe). Skip the
     // close-confirmation entirely so a floating widget never gets blocked
     // by a "kill sessions?" dialog that wouldn't make sense in that UI.
     if (opts?.buddy) return;
     if (confirmedClose) return;
+    // Whole-app quit wins over a pending prompt (design §4 step 5):
+    // settlePendingCloseRequests() (called at the top of shutdownApp(), which
+    // both before-quit and SIGTERM/SIGINT pass through) already resolved any
+    // request THIS window had pending, and runShutdown()'s destroyAll() is
+    // about to tear down every session anyway — a close event reaching here
+    // once shuttingDown is set must ask nothing and let the window close.
+    if (shuttingDown) return;
     const ownedSessions = windowRegistry.sessionsForWindow(wid);
     if (ownedSessions.length === 0) return; // no sessions — close freely
     ev.preventDefault();
-    const { response } = await dialog.showMessageBox(win, {
-      type: 'warning',
-      buttons: ['Cancel', 'Close & Kill Sessions'],
-      defaultId: 0,
-      cancelId: 0,
-      message: `This window has ${ownedSessions.length} active session${ownedSessions.length === 1 ? '' : 's'}.`,
-      detail: 'Closing the window will terminate these sessions. To preserve a session, drag its pill to another window first.',
+    const answer = await closeRequests.request(wid, ownedSessions.length, (push) => {
+      if (!win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST, push);
     });
-    if (response === 1) {
-      for (const sid of ownedSessions) {
-        sessionManager.destroySession(sid);
-        windowRegistry.releaseSession(sid);
-      }
-      confirmedClose = true;
-      win.close();
-    }
+    // A second close press while this was pending resolved the SAME promise
+    // for every concurrent invocation of this handler (design §4 step 4) — the
+    // first one through already ran the block below and set confirmedClose.
+    if (confirmedClose) return;
+    // Re-read ownership rather than reusing `ownedSessions`: the in-app prompt
+    // does not block the strip the way the old modal OS dialog did, so a
+    // session can be dragged into another window (or closed with its own X)
+    // while this one waits on an answer. Passing a STALE list into
+    // applyCloseAnswer would destroy/untrack a session that no longer belongs
+    // to this window — review finding, T3 (pinned by
+    // close-request-manager.test.ts's applyCloseAnswer suite).
+    const shouldClose = applyCloseAnswer(answer, windowRegistry.sessionsForWindow(wid), {
+      untrack: (sid) => welcomeBackStore?.untrack(sid),
+      destroySession: (sid) => sessionManager.destroySession(sid),
+      releaseSession: (sid) => windowRegistry.releaseSession(sid),
+    });
+    if (!shouldClose) return; // Cancel — leave the window open, ask again next press
+    confirmedClose = true;
+    if (!win.isDestroyed()) win.close();
   });
 
   return win;
@@ -1020,9 +1052,10 @@ function createWindow(firstRunManager?: FirstRunManager) {
   deviceIdentity = getDeviceIdentity(app.getPath('userData'));
   // Per-MACHINE id for the device registry, from the BUILT app's userData — so a
   // dev profile heartbeats the machine's real row instead of minting its own.
-  // In the built app this resolves the id getDeviceIdentity just wrote; in a dev
-  // profile it reads across to the built app's dir.
-  machineIdentity = getMachineIdentity(BUILT_APP_USER_DATA);
+  // In the built app this resolves the id getDeviceIdentity just wrote; ordinary
+  // dev profiles read across to the built app's dir. WHY: an opted-in Luna
+  // experiment must not read that live file or register the real machine row.
+  machineIdentity = LUNA_REQUEST_GUARD ? null : getMachineIdentity(BUILT_APP_USER_DATA);
   leaseClient = createLeaseClient({
     deviceId: deviceIdentity.id,
     deviceName: os.hostname(),
@@ -1045,7 +1078,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
     // than an unusable backup repo.
     leaseDir: () => path.join(app.getPath('userData'), 'Leases'),
     hubRequest: hubLeaseRequest,
-    onTakeoverRequest: (sid, from) => holderTakeoverRef.fn(sid, from),
+    onTakeoverRequest: (sid, from, transferNonce) => holderTakeoverRef.fn(sid, from, transferNonce),
   });
   // Nothing else ever deleted expired lease files — deleteLeaseFile only runs on a
   // clean release, so every crash/force-quit leaked one permanently (59 of 60 were
@@ -1084,7 +1117,10 @@ function createWindow(firstRunManager?: FirstRunManager) {
     userDataDir: app.getPath('userData'),
     secrets: new SecretsStore(app.getPath('userData')),
     appVersion: app.getVersion(),
-    openExternal: (url) => shell.openExternal(url),
+    // WHY: this isolated experiment's request ceiling must refuse a model
+    // dispatch before the provider fetch; never enable it in the built app.
+    beforeModelRequest: LUNA_REQUEST_GUARD,
+    openExternal: (url) => LUNA_REQUEST_GUARD ? openLunaAuthBrowser(url, process.env.LUNA_HOST_BROWSER_HOME ?? '') : shell.openExternal(url),
     // The object still exists under the kill switch (the launch check reads the
     // account file through it), but it must not talk to OpenAI: the poll
     // refreshes the token, and a rejected refresh deletes the saved sign-in.
@@ -1095,8 +1131,9 @@ function createWindow(firstRunManager?: FirstRunManager) {
   const ipcWiring = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, commandProvider, hookRelay, remoteConfig, remoteServer, windowRegistry,
     { client: leaseClient, setHolderTakeover: (fn) => { holderTakeoverRef.fn = fn; }, requester,
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
-    chatgptAuth);
+    chatgptAuth, welcomeBackStore);
   cleanupIpcHandlers = ipcWiring.cleanup;
+  cancelWindowHandoffs = (id) => ipcWiring.handoffAttempts?.cancelOwner(`window:${id}`);
   const hasUsableProvider = ipcWiring.hasUsableProvider;
 
   if (firstRunManager) {
@@ -1217,27 +1254,14 @@ function createWindow(firstRunManager?: FirstRunManager) {
       const toolInput = event.payload?.tool_input as Record<string, unknown> | undefined;
       const requestId = event.payload?._requestId as string;
 
-      // Never auto-approve AskUserQuestion — it needs actual user input
-      if (requestId && toolName !== 'AskUserQuestion') {
-        const category = classifyPermission(toolName, toolInput);
-
-        // Title hooks are always auto-approved (fire every few minutes)
-        if (category === 'titleHook') {
-          hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
-          return;
-        }
-
-        // Blanket approve-all override (restores old behavior)
-        if (permissionOverrides.approveAll) {
-          hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
-          return;
-        }
-
-        // Per-category overrides — approve if the user enabled this category
-        if (category !== 'unknown' && permissionOverrides[category]) {
-          hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
-          return;
-        }
+      // The whole decision lives in permission-auto-approve.ts (pure, tested).
+      // It NEVER allows AskUserQuestion or ExitPlanMode: both need the user's
+      // own answer, and Claude Code ignores a hook "allow" for them — an
+      // auto-allow there only removed the card while Claude Code's own menu
+      // stayed live with the send gate open (review 2026-09-23).
+      if (requestId && shouldAutoApprove(toolName, toolInput, permissionOverrides)) {
+        hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
+        return;
       }
     }
 
@@ -1256,12 +1280,18 @@ function createWindow(firstRunManager?: FirstRunManager) {
     }
   });
 
-  // Notify renderer when a permission request socket closes (timeout/killed)
-  hookRelay.on('permission-expired', (sessionId: string, requestId: string) => {
+  // Tell the renderer a held ask ended without a user decision, and WHY:
+  // 'app-timeout' (the app's own 2h hold answered with a deny) or
+  // 'hook-closed' (the far end went away; Claude Code's own menu may still be
+  // on screen, so the card keeps waiting). See hook-relay.ts.
+  hookRelay.on('permission-expired', (sessionId: string, requestId: string, reason?: string) => {
     const evt = {
       type: 'PermissionExpired',
       sessionId,
-      payload: { _requestId: requestId },
+      // _reason rides INSIDE the payload — no channel shape change, and an
+      // older remote client simply ignores it (and resolves the card, the
+      // safe default in chat-reducer.ts).
+      payload: { _requestId: requestId, _reason: reason },
       timestamp: Date.now(),
     };
     const ownerId = windowRegistry.getOwner(sessionId);
@@ -1275,6 +1305,17 @@ function createWindow(firstRunManager?: FirstRunManager) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC.HOOK_EVENT, evt);
     }
+  });
+}
+
+// Welcome back (design §4, plan T3): the renderer's answer to a
+// window:close-request push. One handler for every window — closeRequests
+// routes the answer to the right pending entry by requestId, so this needs no
+// per-window registration the way createAppWindow's own close listener does.
+function registerCloseRequestIpc() {
+  ipcMain.handle(IPC.WINDOW_ANSWER_CLOSE, (_evt, answer: { requestId: string; close: boolean; reopen?: boolean }) => {
+    if (!answer || typeof answer.requestId !== 'string') return;
+    closeRequests.answer(answer.requestId, { close: !!answer.close, reopen: answer.reopen });
   });
 }
 
@@ -1326,7 +1367,8 @@ function registerDetachIpc() {
   // Transfer a session from its current owner window to a target window.
   // Rejects if the source claim is stale (race protection). Emits ownership
   // events to both windows so renderers can update their reducers.
-  function transferOwnership(sessionId: string, srcWindowId: number, targetWindowId: number, freshWindow: boolean) {
+  function transferOwnership(sessionId: string, srcWindowId: number, targetWindowId: number, freshWindow: boolean,
+    draft?: DetachedHandoffDraft) {
     const info = sessionManager.getSession(sessionId);
     if (!info) return;
     // Stale (another event already moved it) → transferSession refuses and changes
@@ -1339,7 +1381,10 @@ function registerDetachIpc() {
     const src = windowFromWcId(srcWindowId);
     const tgt = windowFromWcId(targetWindowId);
     src?.webContents.send(IPC.SESSION_OWNERSHIP_LOST, { sessionId });
-    const payload = { sessionId, sessionInfo: info, freshWindow };
+    // WHY: only this newly admitted detach carries unsent composer state;
+    // never mutate the authoritative SessionInfo kept by SessionManager.
+    const payload = { sessionId, sessionInfo: draft
+      ? { ...info, initialInput: draft.text, initialAttachments: draft.attachments } : info, freshWindow };
     // A window that has not yet pulled (DETACH_CLAIM_PENDING) has no listener —
     // a send would be dropped on the floor. Queue for its pull instead.
     if (pendingAcquire.isReady(targetWindowId)) {
@@ -1360,10 +1405,13 @@ function registerDetachIpc() {
   // "Launch in new window" entry point and the direct-spawn fallback for drops
   // outside any window. Spawns a peer window at/near the cursor and hands it
   // ownership of the session.
-  ipcMain.on(IPC.WINDOW_OPEN_DETACHED, (evt, { sessionId }: { sessionId: string }) => {
+  ipcMain.on(IPC.WINDOW_OPEN_DETACHED, (evt, { sessionId, draft }: { sessionId: string; draft?: unknown }) => {
+    // A malformed optional draft must never be silently discarded by a move.
+    const safeDraft = draft === undefined ? undefined : validateHandoffDraft(draft);
+    if (draft !== undefined && !safeDraft) return;
     const { x, y } = screen.getCursorScreenPoint();
     const newWin = createAppWindow({ x: x - 60, y: y - 40, width: 900, height: 700 });
-    transferOwnership(sessionId, evt.sender.id, newWin.webContents.id, /*freshWindow*/ true);
+    transferOwnership(sessionId, evt.sender.id, newWin.webContents.id, /*freshWindow*/ true, safeDraft ?? undefined);
     maybeAutoCloseEmpty(evt.sender.id);
   });
 
@@ -1849,32 +1897,12 @@ void app.whenReady().then(async () => {
   }
   perfMark('main:chore:remote-server:done');
 
-  const FAVORITES_PATH = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-
-  function readGamePrefs(): Record<string, any> {
-    try { return JSON.parse(fs.readFileSync(FAVORITES_PATH, 'utf8')); }
-    catch { return {}; }
-  }
-  function writeGamePrefs(data: Record<string, any>): boolean {
-    try { fs.writeFileSync(FAVORITES_PATH, JSON.stringify(data, null, 2)); return true; }
-    catch { return false; }
-  }
-
-  ipcMain.handle('favorites:get', async () => readGamePrefs().favorites ?? []);
-
-  ipcMain.handle('favorites:set', async (_event, favorites: string[]) => {
-    const data = readGamePrefs();
-    data.favorites = favorites;
-    return writeGamePrefs(data);
-  });
-
-  ipcMain.handle('game:getIncognito', async () => readGamePrefs().incognito ?? false);
-
-  ipcMain.handle('game:setIncognito', async (_event, incognito: boolean) => {
-    const data = readGamePrefs();
-    data.incognito = incognito;
-    return writeGamePrefs(data);
-  });
+  // Game favorites + presence incognito: prefs-service.ts owns the file, shared with
+  // remote-server.ts so a phone gets the same answers (its copy had drifted).
+  ipcMain.handle('favorites:get', async () => getGameFavorites());
+  ipcMain.handle('favorites:set', async (_event, favorites: string[]) => setGameFavorites(favorites));
+  ipcMain.handle('game:getIncognito', async () => getGameIncognito());
+  ipcMain.handle('game:setIncognito', async (_event, incognito: boolean) => setGameIncognito(incognito));
 
   // Expose the system home directory to the renderer (async to avoid blocking)
   ipcMain.handle('get-home-path', () => os.homedir());
@@ -1882,7 +1910,7 @@ void app.whenReady().then(async () => {
   // Remove the default menu bar (File, Edit, View, Window, Help)
   Menu.setApplicationMenu(null);
 
-  // Perf lab: the FAVORITES_PATH setup, the five game/favorites/home-path
+  // Perf lab: the five game/favorites/home-path
   // ipcMain.handle registrations above and Menu.setApplicationMenu(null) all sat
   // inside the theme-protocol chore's measured window (each chore is measured as
   // mark[n] − mark[n−1]). This mark separates them from registerThemeProtocol().
@@ -1924,10 +1952,21 @@ void app.whenReady().then(async () => {
   // registerSocialHandlers and registerArcadeHandlers — not just the store.
   perfMark('main:chore:accounts:done');
 
+  // Welcome back (design §1): construct the store and begin the startup
+  // union-and-reset (this run's `open` folds into `offer`) before the window
+  // exists, so the answer is ready well before the renderer can ask for it.
+  // NOT awaited — `startup()`'s own `ready` promise is what every handler
+  // awaits (design §1, review 1 D5), so createWindow() below still runs
+  // synchronously with no dependency on this having finished
+  // (performance rule 1: the main process never blocks on a click or a boot step).
+  welcomeBackStore = createWelcomeBackStore(path.join(app.getPath('userData'), 'welcome-back.json'), fs.promises);
+  void welcomeBackStore.startup();
+
   perfMark('main:create-window:start');
   createWindow(isFirstRun ? firstRunManager : undefined);
   perfMark('main:create-window:done');
   registerDetachIpc();
+  registerCloseRequestIpc();
 
   // Buddy window position persistence — JSON file in userData so restarts
   // restore the mascot to where the user left it. Keyed by 'mascot' only:
@@ -2139,13 +2178,22 @@ void app.whenReady().then(async () => {
   ipcMain.handle(IPC.BUDDY_GET_STATUS, () => buddyManager.getStatus());
   // Restore + focus the main window, then ask it to switch to the buddy's
   // viewed session so the user lands in the same conversation (spec §4.2).
-  ipcMain.handle(IPC.BUDDY_OPEN_MAIN, () => {
+  ipcMain.handle(IPC.BUDDY_OPEN_MAIN, (_event, request?: { resume?: string }) => {
     // Same source of truth the buddyManager deps use for mainWindow.
     const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
-    if (!win) return;
+    if (!win) {
+      if (request?.resume) throw new Error('Main window unavailable for handoff.');
+      return;
+    }
     if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
+    // WHY: a buddy explicit handoff must enter main's pending read/draft flow;
+    // focusing its old writer would bypass freshness. Main re-reads the row.
+    if (typeof request?.resume === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(request.resume)) {
+      win.webContents.send(IPC.UI_ACTION_RECEIVED, { type: '_BUDDY_RESUME', sessionId: request.resume });
+      return;
+    }
     const sid = buddyManager.getViewedSession();
     if (sid) win.webContents.send(IPC.SESSION_FOCUS_REQUEST, sid);
   });
@@ -2320,7 +2368,7 @@ void app.whenReady().then(async () => {
   // holder-ack protocol (investigation Fix 4). Do not assume 'taken' => turn saved.
   setSyncSpacesLeaseEventListener((ev) => {
     if (ev.kind === 'takeover-request' || ev.kind === 'taken') {
-      leaseClient?.handleTakeoverRequest(ev.sessionId, ev.from);
+      leaseClient?.handleTakeoverRequest(ev.sessionId, ev.from, ev.transferNonce, ev.senderDeviceId);
     }
   });
   startSyncSpaces(
@@ -2329,14 +2377,9 @@ void app.whenReady().then(async () => {
       // system uses — drive + iCloud only (GitHub is sync, not backup; spec §11).
       // getSyncConfig is async and exposes the backends array as `.backends`
       // (each BackendInstance carries type-specific fields in `.config`).
-      const cfg = await getSyncConfig();
-      return (cfg?.backends ?? [])
-        .filter((b) => b.type === 'drive' || b.type === 'icloud')
-        .map((b) => b.type === 'drive'
-          ? { type: 'drive' as const, base: `${b.config?.rcloneRemote ?? 'gdrive'}:${b.config?.DRIVE_ROOT ?? 'Claude'}` }
-          // iCloud base is a local folder path — drop backends that never set one.
-          : { type: 'icloud' as const, base: b.config?.ICLOUD_PATH ?? '' })
-        .filter((t) => t.base.length > 0);
+      // WHY: paused destinations did not consent to automatic spaces snapshots;
+      // manual Upload now remains independently available in the sync panel.
+      return loadSpaceBackupTargets(getSyncConfig);
     },
     (m) => log('INFO', 'SyncSpaces', m),
     // Durable machineId → keys the hub's per-device sync-recency map (same id the
@@ -2380,10 +2423,14 @@ void app.whenReady().then(async () => {
   // caller-side note and pauseSweeps' WHY in conversations/service.ts).
   // .finally ALWAYS resumes, even if the repair throws, so a bad repair can't
   // leave sync mirroring silently disabled forever.
+  // WHY the bg: marks: the store start and slug repair run detached, after the
+  // window, so the chore marks above never saw them — yet on a big history the
+  // repair is the longest thing a launch does (logs: 16-24 s every launch).
+  perfMark('bg:conversation-store:start');
   startConversationStore({ pauseSweeps: true })
-    .then(() => runSlugRepair())   // idempotent; runs with the sweeps quiesced (spec §6)
+    .then(() => { perfMark('bg:slug-repair:start'); return runSlugRepair(); })   // idempotent; runs with the sweeps quiesced (spec §6)
     .catch(e => log('ERROR', 'Main', 'ConversationStore start / slug repair failed', { error: String(e) }))
-    .finally(() => resumeSweeps());
+    .finally(() => { perfMark('bg:slug-repair:done'); resumeSweeps(); });
 
   // One-time symlink sweep (Plan 2c): the legacy SyncService.aggregateConversations()/
   // rewriteProjectSlugs() (deleted this release) left ~hundreds of symlinks/junctions
@@ -2438,14 +2485,42 @@ void app.whenReady().then(async () => {
 // The idempotence guard is not defensive coding: before-quit fires again on the
 // second pass below, and window-all-closed can fire alongside it, so this WILL
 // be called more than once on a normal quit.
+// Welcome back (design §4 step 5): whole-app quit wins over any close prompt
+// still awaiting an answer. Called synchronously at the very top of
+// shutdownApp() — before any await — so it runs in the same tick `shuttingDown`
+// becomes non-null, for BOTH routes that reach shutdownApp (before-quit, and
+// SIGTERM/SIGINT which skip before-quit entirely). Settling resolves each
+// pending request as "keep tracked" (no untrack) and pushes
+// window:close-request-cancelled so the renderer drops its dialog instead of
+// describing a window that runShutdown() is about to tear down anyway.
+function settlePendingCloseRequests(): void {
+  closeRequests.settleAll((windowId, requestId) => {
+    const win = windowFromWcId(windowId);
+    if (win && !win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST_CANCELLED, { requestId });
+  });
+}
+
 let shuttingDown: Promise<void> | null = null;
 function shutdownApp(): Promise<void> {
   if (shuttingDown) return shuttingDown;
+  settlePendingCloseRequests();
   shuttingDown = runShutdown();
   return shuttingDown;
 }
 
 async function runShutdown(): Promise<void> {
+  // Welcome back (design §1): flush the in-flight write BEFORE any other
+  // teardown starts. runShutdown is the ONE function every exit route passes
+  // through — including SIGTERM/SIGINT, which skip before-quit entirely — so
+  // this is the only place that can guarantee a first-message track() or a
+  // last-second untrack() actually reaches disk before the process ends.
+  // Bounded to 1s (design §1): a wedged disk write must never hang quit, and
+  // an unflushed write just means that one session's offer is a run stale,
+  // not lost (the desktop-lifecycle `open` entry it came from is harmless).
+  await Promise.race([
+    welcomeBackStore?.flush() ?? Promise.resolve(),
+    new Promise<void>((r) => setTimeout(r, 1_000)),
+  ]).catch(() => {});
   // Capture the engine-stop promise: cleanup() starts llama-server teardown and we
   // must let it finish before app.quit(), else the engine outlives the app and keeps
   // the fixed port bound for the next instance to wrongly adopt (2026-07-20 fix).
@@ -2467,7 +2542,10 @@ async function runShutdown(): Promise<void> {
   // Stop the cross-device sync-spaces engine (clears its backup timer + watchers).
   // .catch, not try/catch: it's an async fn, so a failure arrives as a rejected
   // promise — the old `void` call left that rejection unhandled at quit.
-  stopSyncSpaces().catch(() => {});
+  // WHY captured (2026-09-24): stopSyncSpaces() now also flushes the sync state
+  // file's pending write (SpaceManager writes asynchronously). Joining the capped
+  // race below means turning sync off and quitting at once can't be lost.
+  const syncStopped = stopSyncSpaces().catch(() => {});
   // Stop the Conversation Store (Phase 2a) — unsubscribes the sync-spaces
   // listener, clears the periodic reconciler + pending debounce timers. Sync fn.
   try { stopConversationStore(); } catch {}
@@ -2490,7 +2568,7 @@ async function runShutdown(): Promise<void> {
   // flight lands, and a poll's read-modify-write cut off half-way is exactly the
   // torn account file the lock exists to prevent (review T4 F5). Same 4s cap.
   await Promise.race([
-    Promise.all([engineStopped, chatgptDisposed]),
+    Promise.all([engineStopped, chatgptDisposed, syncStopped]),
     new Promise<void>((r) => setTimeout(r, 4_000)),
   ]).catch(() => {});
 }

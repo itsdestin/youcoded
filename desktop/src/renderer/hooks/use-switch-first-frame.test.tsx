@@ -7,7 +7,7 @@
 // one before. A requestAnimationFrame, an observer or a timer in this path is the
 // bug coming back, and none of them run in these tests, so reintroducing one
 // turns the assertions below red.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useSwitchFirstFrame } from './use-switch-first-frame';
 
@@ -79,5 +79,23 @@ describe('useSwitchFirstFrame', () => {
     }
     renderHook(() => useSwitchFirstFrame(true, { current: scroller }, () => {}, () => {}));
     expect(reads).toBe(2);   // the one on screen, and the first one above it
+  });
+
+  it('does not collect every entry in the conversation to find the last ones', () => {
+    // querySelectorAll visits the whole conversation's markup to build its list,
+    // inside the click, even though the walk over it stops after a screenful.
+    const spans: Array<[number, number]> = [];
+    for (let i = 0; i < 1000; i++) spans.push([-100000 + i, -99999 + i]);
+    spans.push([600, 700]);
+    const { scroller, entries } = pane(spans);
+    // Chat rows after the entries that are not entries (the thinking line).
+    const thinking = document.createElement('div');
+    thinking.getBoundingClientRect = () => rect(710, 790);
+    scroller.appendChild(thinking);
+    const all = vi.spyOn(scroller, 'querySelectorAll');
+    renderHook(() => useSwitchFirstFrame(true, { current: scroller }, () => {}, () => {}));
+    expect(all).not.toHaveBeenCalled();
+    expect(entries[entries.length - 1].classList.contains('in-view')).toBe(true);
+    expect(thinking.classList.contains('in-view')).toBe(false);
   });
 });

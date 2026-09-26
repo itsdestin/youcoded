@@ -1,19 +1,12 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
-import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn } from '../state/chat-types';
-import UserMessage from './UserMessage';
-import SpecialistReportCard from './SpecialistReportCard';
+import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
-import AssistantTurnBubble from './AssistantTurnBubble';
 import ToolCard from './ToolCard';
-import PromptCard, { PromptCardButton } from './PromptCard';
-import { sendPromptInput } from '../state/prompt-input';
-import UsageCard from './UsageCard';
-import SystemMarker from './SystemMarker';
-import SkillInvocationCard from './SkillInvocationCard';
+import type { PromptCardButton } from './PromptCard';
+import ChatTimelineRow, { type TimelineRowActions } from './ChatTimelineRow';
+import { answerPrompt } from '../state/prompt-input';
 import { findArchiveBoundary } from '../state/archive-boundary';
-import CompactingCard from './CompactingCard';
-import CopyPicker from './CopyPicker';
 import ThinkingIndicator from './ThinkingIndicator';
 import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
@@ -23,18 +16,20 @@ import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
 import { useTheme } from '../state/theme-context';
+import ChatEdgeFade from './ChatEdgeFade';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
 import { useSwitchFirstFrame } from '../hooks/use-switch-first-frame';
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
 import { assistantName } from '../utils/assistant-name';
 import { ContentFindBar } from './ContentFindBar';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
+import { OnScreenContext } from '../state/on-screen-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
-import { Tooltip, StatusStrip, Button } from './ui';
+import { StatusStrip, Button } from './ui';
 import { helperAsksOf } from '../utils/specialist-cards';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
@@ -101,11 +96,13 @@ interface Props {
   conversationStatus?: 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
   /** Asks the host for a fresh copy — the strip's Refresh. */
   onRefreshConversation?: () => void;
+  /** Fake local-model state solely for the workbench width review; no engine. */
+  modelLoadingDemo?: boolean;
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
-  const state = useChatState(sessionId);
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation, modelLoadingDemo }: Props) {
+  const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
   // What the conversation strip shows: the live status, plus a 2.5 s "Up to
@@ -138,9 +135,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   //  • `reducedEffects` is folded in here rather than at the class, so the
   //    timer never even starts when the user has effects off.
   const arriving = useOneShotWindow(sessionActive) && sessionActive && !reducedEffects;
-  // Artifact drawer state — read from ArtifactContext so ChatView reacts to
-  // the drawer toggle without needing a prop threaded down from App.tsx.
-  const { state: artifactState, dispatch: artifactDispatch } = useArtifact();
+  // Artifact drawer state, read from the artifact store. WHY narrow selectors (perf,
+  // 2026-09-23): the whole state redrew every open chat on ANY session's file write.
+  const drawerOpen = useArtifactSelector((s) => s.drawerOpenBySession[sessionId] ?? false);
+  const drawerExpandedFlag = useArtifactSelector((s) => s.drawerExpanded);
+  const artifactDispatch = useArtifactDispatch();
   // Preview cards (SessionRefActions, deep in the chat tree) ask for a past
   // conversation by event. Mounted here — not in SessionDrawer, which is
   // unmounted until it opens — so it hears the very first Preview click.
@@ -148,10 +147,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // responds — see the WHY comment inside the hook (deliberately not
   // `visible`, which also depends on the chat/terminal toggle).
   useSessionPreviewListener(sessionId, sessionActive, artifactDispatch);
-  // Drawer open/closed is per-session — read this session's flag (absent → closed).
-  const drawerOpen = artifactState.drawerOpenBySession[sessionId] ?? false;
   // WHY drawerOpen &&: expand is app-wide, so ungated it hid every OTHER session's chat.
-  const drawerExpanded = drawerOpen && artifactState.drawerExpanded;
+  const drawerExpanded = drawerOpen && drawerExpandedFlag;
   // The game pane and artifact drawer share the framed-shell's right slot.
   // The game pane wins when both are somehow open (App also enforces mutual
   // exclusivity, so this is just a render-time safety net).
@@ -433,10 +430,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       }
       if (page) {
         unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
-        // Captured HERE, one statement before the prepend — not before the await,
-        // where a round-trip's worth of streaming could have moved everything.
+        // Capture just before prepend: streaming during the await may move the anchor.
         prependAnchorRef.current = captureScrollAnchor();
-        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+        // WHY: older pages can hold an orphaned tool; preserve main's recovery verdict.
+        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
       } else {
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
       }
@@ -594,15 +591,32 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // turn restarted the fold idle timer so folding could never fire. It made the
   // measured numbers WORSE than doing nothing (2026-08-28).
   const registerFold = folding.registerEntry;
+  // Live entry element per key, for the archived-entry hint, which sits beside
+  // its entry rather than wrapping it (TimelineEntryHint.tsx says why).
+  const entryElsRef = useRef(new Map<string, HTMLElement>());
+  const getEntryEl = useCallback((key: string) => entryElsRef.current.get(key), []);
   const attachEntry = useCallback((el: HTMLDivElement | null) => {
     const releaseBlur = observeEntry(el);
     const releaseFold = registerFold(el);
-    return () => { releaseBlur(); releaseFold(); };
+    const key = el?.dataset.entryKey;
+    if (el && key) entryElsRef.current.set(key, el);
+    return () => {
+      releaseBlur();
+      releaseFold();
+      if (key && entryElsRef.current.get(key) === el) entryElsRef.current.delete(key);
+    };
   }, [observeEntry, registerFold]);
 
   // Arrow key scrolling with acceleration when not typing
   const scrollSpeed = useRef(0);
   useEffect(() => {
+    // WHY gated on `visible` (2026-09-23): every open session keeps its ChatView
+    // mounted, and this listener sits on `window`, so ungated ONE ArrowUp ran it
+    // in every chat at once — scrolling each hidden chat and calling
+    // releaseStick() there, which un-pinned background chats from their newest
+    // message and re-rendered each of them for a button nobody could see. Only
+    // the chat on screen answers, the same rule as Ctrl+F below.
+    if (!visible) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(document.activeElement)) return;
       // A focused game board owns its own arrow keys. Without this the chat
@@ -642,8 +656,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp, true);
+      // A key held while the pane goes away would otherwise start the next
+      // visit at the accelerated speed.
+      scrollSpeed.current = 0;
     };
-  }, [releaseStick]);
+  }, [visible, releaseStick]);
 
   // Ctrl/Cmd+F opens the chat-history find bar. Only the visible ChatView
   // responds (one per session is mounted). Defers to the artifact drawer's own
@@ -690,6 +707,13 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // event) never reaches flick velocity, so discrete mouse scrolling stays
   // snappy — only a fast multi-event trackpad flick coasts.
   useEffect(() => {
+    // WHY gated on `visible` (2026-09-23): the glide-cancel below listens on
+    // `window` for every click and key, and every open session's ChatView is
+    // mounted — so each keystroke anywhere ran it once per open chat. A hidden
+    // pane takes no wheel input (pointer-events:none, inert), so it has nothing
+    // to glide or cancel; the listeners come back with the pane. Leaving the pane
+    // mid-glide stops that glide (cleanup below), which nobody can see.
+    if (!visible) return;
     const container = scrollContainerRef.current;
     if (!container) return;
 
@@ -836,7 +860,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       window.removeEventListener('keydown', cancelOnInput, true);
       stopMomentum();
     };
-  }, []);
+  }, [visible]);
 
   const handlePromptSelect = useCallback(
     (promptId: string, button: PromptCardButton, label: string, promptTitle?: string) => {
@@ -854,27 +878,25 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
           beforeContextTokens: null, // Resume doesn't have pre-compaction stats
         });
       }
-      // Send the keystroke(s) that pick this option in the live Ink menu — a bare
-      // option digit, or (fallback only) arrows plus a separately-written \r.
-      sendPromptInput(sessionId, button);
-      // Mark the prompt as completed in the UI
-      dispatch({
-        type: 'COMPLETE_PROMPT',
-        sessionId,
-        promptId,
-        selection: label,
-      });
+      // Pick this option in the live Ink menu (a digit, or verified navigation),
+      // then mark the card answered — only once Claude Code took it (answerPrompt).
+      return answerPrompt(sessionId, button, () => dispatch({ type: 'COMPLETE_PROMPT', sessionId, promptId, selection: label }));
     },
     [sessionId, dispatch],
   );
 
+  // Latest-handlers ref for the memoised timeline rows (renderer-lists.md): a
+  // row reads these at click time, so the row never needs a fresh callback
+  // prop — which would re-render every row on every streamed word — and a row
+  // that skipped rendering can never call a stale handler.
+  const rowActionsRef = useRef<TimelineRowActions>({ promptSelect: handlePromptSelect, dispatch });
+  rowActionsRef.current = { promptSelect: handlePromptSelect, dispatch };
+
   // Task 12 review fix (Important — float collision): .model-status-strip and
-  // .jump-to-bottom float in THIS component's OUTER absolute root (see their
-  // render sites below) sharing the same --bottom-chrome-height offset band
-  // as .queued-messages-strip — with the strip visible, they'd sit at the
-  // exact same height and overlap it. .chat-pane (the strip's own DOM parent)
-  // is NOT an ancestor of those two floats, so a var set there wouldn't reach
-  // them; this measures the strip's OWN rendered height and publishes
+  // .jump-to-bottom share .queued-messages-strip's offset band — they'd
+  // overlap it when visible. The model strip is chat-pane-local, but the jump
+  // button is in the outer root; publish the measured height to their common
+  // ancestor chatRootRef rather than only on .chat-pane. This publishes
   // --queued-strip-height on chatRootRef (the true common ancestor of all
   // three), and globals.css adds it into their bottom calc so they lift above
   // the strip instead of overlapping it — offset coordination, not z-index.
@@ -982,6 +1004,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // WHY: every open session's ChatView stays mounted, and waiting cards listen
     // for keys on `window` — only the chat on screen may answer them.
     <CardKeysLiveContext.Provider value={visible}>
+    {/* WHY: clocks inside this chat (thinking line, running-command seconds)
+        stand still while it is hidden — see on-screen-context.ts. */}
+    <OnScreenContext.Provider value={visible}>
     <div
       // Fix: previously toggled display:none/flex, which forced a full reflow of
       // both views on every chat↔terminal toggle (the #1 cause of visual jank
@@ -1040,12 +1065,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       <div className={`framed-shell${rightPaneOpen ? ' drawer-open' : ''}${drawerExpanded && !gameOpen ? ' drawer-expanded' : ''}`}>
         <div className="frame-edge" />
         <div className="chat-pane">
-          {/* Empty-state hint — absolutely centered in the chat-pane between the
-              top and bottom chrome. Uses --top-chrome-bottom (not the broken
-              h-full centering it replaces) so it clears a FLOATING header pill,
-              which sits below --top-chrome-height by its own margin; otherwise
-              the text tucked slightly behind the pill. Provider-aware: native
-              sessions must not be told to talk to a vendor's name. */}
+          {visible && <ChatEdgeFade belowFindRow={findOpen || !!stripStatus} />}
+          {/* Center the hint between measured chrome edges, clearing even a
+              floating header's extra margin. Use the actual provider name. */}
           {state.timeline.length === 0 && !state.isThinking && (
             <div
               // select-none: a hint, not content. Ctrl+A must not paint it
@@ -1152,138 +1174,63 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               // context reset (Destin, 2026-07-28).
               const { index: lastArchiveIdx, kind: archiveKind } = archiveBoundary;
               return state.timeline.map((entry, idx) => {
-                const isPreCompaction = lastArchiveIdx >= 0 && idx < lastArchiveIdx;
-              let key: string;
-              let content: React.ReactNode;
-              switch (entry.kind) {
-                case 'user':
-                  key = entry.message.id;
-                  // A host-injected user-role turn (a delivered specialist
-                  // report) is an EVENT for the assistant, not anyone's words —
-                  // a compact collapsed card, see SpecialistReportCard. MUST
-                  // mirror BubbleFeed.tsx.
-                  content = entry.injected ? (
-                    <SpecialistReportCard
-                      message={entry.message}
-                      injected={entry.injected}
-                      meta={entry.injectedMeta}
-                      sessionId={sessionId}
-                      showTimestamps={showTimestamps}
-                    />
-                  ) : (
-                    <UserMessage
-                      message={entry.message}
-                      sessionId={sessionId}
-                      showTimestamps={showTimestamps}
-                    />
-                  );
-                  break;
-                case 'assistant-turn': {
-                  const turn = state.assistantTurns.get(entry.turnId);
-                  // Shared gate (chat-types.ts): a segment-less turn renders
-                  // only when its abnormal stopReason gives the footer row
-                  // something to say — the empty_response fix.
-                  if (!shouldRenderAssistantTurn(turn)) return null;
-                  key = entry.turnId;
-                  content = (
-                    <AssistantTurnBubble
-                      turn={turn}
-                      toolGroups={state.toolGroups}
-                      toolCalls={state.toolCalls}
-                      sessionId={sessionId}
-                      provider={provider}
-                      showTimestamps={showTimestamps}
-                    />
-                  );
-                  break;
+                // Only the key and the "render nothing" gates live here; the
+                // row itself is ChatTimelineRow, memoised so a streamed word
+                // re-renders only the entry that changed (see its header).
+                let key: string;
+                let turn: AssistantTurn | undefined;
+                switch (entry.kind) {
+                  case 'user': key = entry.message.id; break;
+                  case 'assistant-turn':
+                    turn = state.assistantTurns.get(entry.turnId);
+                    // Shared gate (chat-types.ts): a segment-less turn renders
+                    // only when its abnormal stopReason gives the footer row
+                    // something to say — the empty_response fix.
+                    if (!shouldRenderAssistantTurn(turn)) return null;
+                    key = entry.turnId;
+                    break;
+                  case 'prompt':
+                    // Perf cycle 2: the "See previous messages" marker is retired —
+                    // older turns now stream in as the top of the list scrolls into
+                    // view. A timeline persisted by an OLDER build can still carry
+                    // one, so it is skipped rather than rendered as a dead prompt.
+                    if (entry.prompt.promptId === HISTORY_EXPAND_PROMPT_ID) return null;
+                    key = entry.prompt.promptId;
+                    break;
+                  // /cost and /usage snapshot — entryId is the stable key since the
+                  // same snapshot object is kept in state across re-renders.
+                  case 'usage-card': key = entry.snapshot.entryId; break;
+                  case 'system-marker': key = entry.marker.id; break;
+                  case 'skill-invocation':
+                  case 'compacting':
+                  case 'copy-picker':
+                    key = entry.id; break;
                 }
-                case 'prompt':
-                  // Perf cycle 2: the "See previous messages" marker is retired —
-                  // older turns now stream in as the top of the list scrolls into
-                  // view. A timeline persisted by an OLDER build can still carry
-                  // one, so it is skipped rather than rendered as a dead prompt.
-                  if (entry.prompt.promptId === HISTORY_EXPAND_PROMPT_ID) return null;
-                  key = entry.prompt.promptId;
-                  content = (
-                    <PromptCard
-                      prompt={entry.prompt}
-                      sessionId={sessionId}
-                      onSelect={(button, label) => handlePromptSelect(entry.prompt.promptId, button, label, entry.prompt.title)}
-                    />
-                  );
-                  break;
-                // /cost and /usage snapshot — entryId is the stable key since the
-                // same snapshot object is kept in state across re-renders.
-                case 'usage-card':
-                  key = entry.snapshot.entryId;
-                  content = <UsageCard snapshot={entry.snapshot} />;
-                  break;
-                // /clear and /compact dividers
-                case 'system-marker':
-                  key = entry.marker.id;
-                  content = <SystemMarker marker={entry.marker} />;
-                  break;
-                // /skill-name — a compact card, never the instructions themselves.
-                case 'skill-invocation':
-                  key = entry.id;
-                  content = (
-                    <SkillInvocationCard
-                      skillId={entry.skillId}
-                      displayName={entry.displayName}
-                      args={entry.args}
-                      skillPath={entry.skillPath}
-                      sessionId={sessionId}
-                    />
-                  );
-                  break;
-                // /compact spinner (and resume-from-summary)
-                case 'compacting':
-                  key = entry.id;
-                  content = <CompactingCard startedAt={entry.startedAt} />;
-                  break;
-                // /copy multi-block picker
-                case 'copy-picker': {
-                  key = entry.id;
-                  // Capture id in closure so the callbacks work after TS narrowing.
-                  const pickerId = entry.id;
-                  content = (
-                    <CopyPicker
-                      id={pickerId}
-                      options={entry.options}
-                      onCopy={(text, label) => {
-                        navigator.clipboard.writeText(text).catch(() => {});
-                        dispatch({ type: 'DISMISS_COPY_PICKER', sessionId, id: pickerId });
-                        // onToast would be nicer but ChatView doesn't have it — minimal UX for now
-                        void label;
-                      }}
-                      onDismiss={() => dispatch({ type: 'DISMISS_COPY_PICKER', sessionId, id: pickerId })}
-                    />
-                  );
-                  break;
-                }
-              }
-              // Folded: render the wrapper at exactly the height its body last
-              // occupied and omit the body. The wrapper stays in the DOM so the
-              // scroll height, the observers and captureScrollAnchor's
-              // `.timeline-entry` query all see an unchanged list.
-              const folded = folding.isFolded(key!);
-              const foldHeight = folded ? folding.heightOf(key!) : undefined;
-              return (
-                <Tooltip key={key!} text={isPreCompaction
-                    ? (archiveKind === 'clear'
-                      ? 'Cleared — still here to read, but not in Claude\'s context'
-                      : 'Archived by compaction — not in Claude\'s active context')
-                    : ''}>
-                <div
-                  ref={attachEntry}
-                  data-entry-key={key!}
-                  className={`timeline-entry in-view${isPreCompaction ? ' opacity-60 transition-opacity' : ''}`}
-                  style={folded && foldHeight ? { height: foldHeight } : undefined}
-                >
-                  {folded && foldHeight ? null : content}
-                </div>
-                </Tooltip>
-              );
+                // Folded rows pass their held height; an unfolded row passes
+                // undefined — a primitive either way, so the memo holds.
+                const foldHeight = folding.isFolded(key!) ? folding.heightOf(key!) : undefined;
+                const isAssistant = entry.kind === 'assistant-turn';
+                return (
+                  <ChatTimelineRow
+                    key={key!}
+                    entry={entry}
+                    entryKey={key!}
+                    turn={turn}
+                    // Assistant rows only: a new toolCalls Map (any tool event)
+                    // must not re-render marker and card rows.
+                    toolGroups={isAssistant ? state.toolGroups : undefined}
+                    toolCalls={isAssistant ? state.toolCalls : undefined}
+                    sessionId={sessionId}
+                    provider={provider}
+                    showTimestamps={showTimestamps}
+                    archived={lastArchiveIdx >= 0 && idx < lastArchiveIdx}
+                    archiveKind={archiveKind}
+                    foldHeight={foldHeight}
+                    attachEntry={attachEntry}
+                    getEntryEl={getEntryEl}
+                    actionsRef={rowActionsRef}
+                  />
+                );
               });
             })()}
             {/* Awaiting-approval tools (incl. AskUserQuestion) pop out as standalone
@@ -1392,8 +1339,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
           {/* Task 12: docked strip for queued messages — a sibling of
               .chat-scroll (NOT inside it), so it neither scrolls with the
               timeline nor lives in the outer absolute ChatView container
-              (unlike ModelLoadingBar/jump-to-bottom, which float above the
-              WHOLE framed-shell). .chat-pane is `position: relative`, so this
+              (where jump-to-bottom floats). .chat-pane is `position: relative`, so this
               anchors to ITS bottom edge via the same --bottom-chrome-height
               offset those two floating elements use to clear the real
               InputBar (which lives outside ChatView — see App.tsx's
@@ -1407,6 +1353,18 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             queuedMessages={state.queuedMessages}
             onCancel={onCancelQueued ? (queueId) => onCancelQueued(sessionId, queueId) : undefined}
             onEdit={onEditQueued ? (queueId, text) => onEditQueued(sessionId, queueId, text) : undefined}
+          />
+          {/* WHY mount the actual model floater in the chat column: when Files or
+              Games opens, outer-root centering would span the drawer as well. */}
+          <ModelLoadingBar
+            ref={modelStatusRef}
+            // Workbench-only sample; the normal model state still comes from chat.
+            modelState={modelLoadingDemo ? 'loading' : state.modelState}
+            modelInfo={modelLoadingDemo ? { modelId: 'Qwen3-8B-Q4_K_M.gguf', sizeBytes: 8 * 1024 ** 3 } : state.modelInfo}
+            loadedBytes={state.modelLoadedBytes}
+            everResident={state.modelEverResident}
+            isThinking={state.isThinking}
+            onReload={(modelId) => { void window.claude.models.load(modelId); }}
           />
         </div>
         {/* Right frame edge / divider + Session Drawer — only shown when open.
@@ -1444,20 +1402,6 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         <div className="frame-edge" />
       </div>
 
-      {/* Native local-model status: centered strip above the input — a loading
-          bar while the model (re)loads, or an "unloaded · Reload" prompt when it
-          slept. In the outer absolute div (like jump-to-bottom) so it floats
-          above the input chrome, unclipped. No-op for claude sessions. */}
-      <ModelLoadingBar
-        ref={modelStatusRef}
-        modelState={state.modelState}
-        modelInfo={state.modelInfo}
-        loadedBytes={state.modelLoadedBytes}
-        everResident={state.modelEverResident}
-        isThinking={state.isThinking}
-        onReload={(modelId) => { void window.claude.models.load(modelId); }}
-      />
-
       {/* Jump to bottom button — .jump-to-bottom class handles glassmorphism
          offset so the button appears above the frosted input bar.
          Positioned in the outer absolute div so it floats above the full
@@ -1481,6 +1425,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         sessionId={sessionId}
       />
     </div>
+    </OnScreenContext.Provider>
     </CardKeysLiveContext.Provider>
   );
 }

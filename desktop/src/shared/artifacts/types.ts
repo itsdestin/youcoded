@@ -39,6 +39,14 @@ export interface VersionEvent {
   // resumes idempotent needs a conversation-stable id threaded through the
   // record, LIST_SESSION and the drawer's per-session helpers — ROADMAP item.
   toolUseId?: string;
+  // The CONVERSATION this version belongs to, when it differs from the desktop
+  // session: a Claude Code session's own id (a `--resume` keeps it, while the
+  // desktop id above is fresh each launch). Optional and additive. LIST_SESSION
+  // matches it as well as sessionId, so a resumed Claude Code conversation's
+  // files list still holds what it touched before the resume — it used to show
+  // only the new turns. Versions written before this field existed have none.
+  // Mirrored in Android's SidecarSchema.kt VersionEvent.
+  conversationId?: string;
 }
 
 export interface ArtifactRecord {

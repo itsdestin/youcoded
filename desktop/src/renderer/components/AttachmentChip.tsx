@@ -17,12 +17,13 @@
 // The mock-up page renders THIS component for its section C so the page
 // cannot drift from what shipped; `imageSrc` exists so that page (a browser
 // tab, where file:// cannot load) and the tests can hand it a data URI.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button } from './ui/Button';
 import { FileKindIcon } from './project-view/icons';
 import { fileExtension, fileKind, previewKind } from '../../shared/artifacts/categorization';
 import { READ_HEAD_DEFAULT_BYTES, type ReadHeadResult } from '../../shared/read-head';
 import { MarkdownHeadPreview, MonoHeadPreview } from './HeadPreview';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 // ── Head cache ───────────────────────────────────────────────────────────────
 // Keyed by path; holds the in-flight promise so two chips for the same file
@@ -44,6 +45,12 @@ function readHead(path: string): Promise<ReadHeadResult> {
     p = typeof fn === 'function'
       ? fn(path, READ_HEAD_DEFAULT_BYTES).catch((e: unknown) => ({ ok: false as const, error: String(e) }))
       : Promise.resolve({ ok: false as const, error: 'fs.readHead unavailable' });
+    // WHY a failure leaves the cache: it was kept for the page's life, so a preview whose
+    // read was lost (a phone's connection dropping) stayed failed until the page reloaded
+    // (2026-09-11 phone pass sweep). Only a successful read is shared; a failed one is
+    // asked again by the next chip, or by this one after a remote reconnect.
+    const settled = p;
+    void settled.then((res) => { if (!res.ok && headCache.get(path) === settled) headCache.delete(path); });
     headCache.set(path, p);
   }
   return p;
@@ -54,6 +61,11 @@ type HeadState = { status: 'loading' } | { status: 'ready'; text: string } | { s
 /** The file head for a text-like preview. `enabled=false` never reads. */
 function useFileHead(path: string, enabled: boolean): HeadState {
   const [state, setState] = useState<HeadState>({ status: 'loading' });
+  // A failed preview reads again after a remote reconnect (see readHead's WHY).
+  const [retry, setRetry] = useState(0);
+  const failedRef = useRef(false);
+  failedRef.current = state.status === 'failed';
+  useOnRemoteReconnect(() => { if (failedRef.current) setRetry((n) => n + 1); });
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
@@ -62,7 +74,7 @@ function useFileHead(path: string, enabled: boolean): HeadState {
       setState(res.ok && res.text.trim().length > 0 ? { status: 'ready', text: res.text } : { status: 'failed' });
     });
     return () => { cancelled = true; };
-  }, [path, enabled]);
+  }, [path, enabled, retry]);
   return enabled ? state : { status: 'failed' };
 }
 

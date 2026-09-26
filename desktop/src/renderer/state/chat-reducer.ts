@@ -14,6 +14,7 @@ import {
 import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
+import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -52,6 +53,11 @@ function isCompactCommandEcho(text: string): boolean {
   return /^\/compact(\s|$)/.test(text.trim());
 }
 
+/** A message's text minus every space, tab and line break (see sameUserMessage). */
+function visibleText(s: string): string {
+  return s.replace(/\s+/g, '');
+}
+
 /**
  * Whether a transcript user line is the message a pending bubble drew: the exact text, or, for a
  * message sent with attachments, the same words once the bubble's attachment paths and Claude
@@ -61,12 +67,16 @@ function isCompactCommandEcho(text: string): boolean {
  */
 function sameUserMessage(message: { content: string; attachments?: string[] }, recorded: string): boolean {
   if (message.content === recorded) return true;
+  // WHY spacing is ignored (2026-09-23): CC can record a message with its spacing changed (a
+  // pasted tab swallowed as the Tab key), and an exact-only match drew the recorded copy at the
+  // top while the bubble stayed pinned below every reply. See docs/chat-reducer.md.
+  if (visibleText(message.content) === visibleText(recorded)) return true;
   const paths = message.attachments;
   if (!paths?.length) return false;
   const words = (s: string) => {
     let out = s;
     for (const p of paths) out = out.split(p).join(' ');
-    return out.replace(/\[Image #\d+\]/g, ' ').replace(/\s+/g, ' ').trim();
+    return visibleText(out.replace(/\[Image #\d+\]/g, ' '));
   };
   return words(message.content) === words(recorded);
 }
@@ -230,8 +240,15 @@ function placeToolInCurrentGroup(
   currentGroupId: string | null;
   currentTurnId: string;
 } {
-  const { assistantTurns, timeline, currentTurnId } = getOrCreateTurn(session);
-  const toolGroups = new Map(session.toolGroups);
+  // WHY no up-front copies (perf, 2026-09-23): a tool joining an open group or
+  // already placed changes neither assistantTurns nor toolGroups, so each Map is
+  // copied only on the branch that writes it — an unchanged Map keeps its identity.
+  const turnExists = !!session.currentTurnId && session.assistantTurns.has(session.currentTurnId);
+  const created = turnExists ? null : getOrCreateTurn(session);
+  let assistantTurns = created ? created.assistantTurns : session.assistantTurns;
+  const timeline = created ? created.timeline : session.timeline;
+  const currentTurnId = created ? created.currentTurnId : session.currentTurnId!;
+  let toolGroups = session.toolGroups;
   let currentGroupId = session.currentGroupId;
 
   // The watcher deliberately re-emits tool-use on repeated uuids (CC rewrites
@@ -251,10 +268,15 @@ function placeToolInCurrentGroup(
     // Already placed by an earlier emit of this same tool.
   } else if (currentGroupId && toolGroups.has(currentGroupId)) {
     const group = toolGroups.get(currentGroupId)!;
+    toolGroups = new Map(toolGroups);
     toolGroups.set(currentGroupId, { ...group, toolIds: [...group.toolIds, toolUseId] });
   } else {
     currentGroupId = nextGroupId();
+    toolGroups = new Map(toolGroups);
     toolGroups.set(currentGroupId, { id: currentGroupId, toolIds: [toolUseId] });
+    // A just-created turn's Map is already a private copy; an existing one is
+    // the session's own and must be copied before writing.
+    if (!created) assistantTurns = new Map(assistantTurns);
     const turn = assistantTurns.get(currentTurnId)!;
     assistantTurns.set(currentTurnId, {
       ...turn,
@@ -418,7 +440,12 @@ function endTurn(
       continue;
     }
     if (tool.status === 'running' || tool.status === 'awaiting-approval') {
-      toolCalls.set(id, { ...tool, status: 'failed', error: errorMessage });
+      // Also drop `expired`: a kept card (PERMISSION_EXPIRED 'hook-closed') is
+      // settled now, and a stale flag would let a later quiet
+      // PERMISSION_CARD_RESOLVED (Dismiss, the menu-gone rule) overwrite this
+      // real failure with 'complete'.
+      const { expired: _expired, ...rest } = tool;
+      toolCalls.set(id, { ...rest, status: 'failed', error: errorMessage });
     }
   }
   return {
@@ -883,12 +910,15 @@ function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState)
   copy.timeline.forEach((e, i) => {
     if (i <= lastKnown || e.kind !== 'user' || e.pending || e.injected) return;
     if (e.uuid && seen.has(e.uuid)) return;
-    unapplied.set(e.message.content, (unapplied.get(e.message.content) ?? 0) + 1);
+    const key = visibleText(e.message.content);
+    unapplied.set(key, (unapplied.get(key) ?? 0) + 1);
   });
+  // visibleText, like sameUserMessage: the copy holds CC's RECORDED text, spacing may differ.
   const consume = (text: string) => {
-    const n = unapplied.get(text) ?? 0;
+    const key = visibleText(text);
+    const n = unapplied.get(key) ?? 0;
     if (n <= 0) return false;
-    unapplied.set(text, n - 1);
+    unapplied.set(key, n - 1);
     return true;
   };
   const carried = prev.timeline.filter((e) => e.kind === 'user' && e.pending && !consume(e.message.content));
@@ -896,7 +926,58 @@ function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState)
   return { ...copy, timeline: carried.length ? [...copy.timeline, ...carried] : copy.timeline, queuedMessages };
 }
 
+/** A stall WARNING belongs to the amber 'stuck' state and nothing else.
+ *
+ *  WHY (roadmap: the amber "Still waiting" card and the "Retrying in 15s…"
+ *  countdown could flicker back and forth): only the heartbeat case writes
+ *  `stallWarning`, but a dozen cases write `attentionState: 'ok'` and leave it
+ *  set. ChatView shows ThinkingIndicator whenever the state is 'ok', and
+ *  ThinkingIndicator turns a leftover warning into the countdown — so an
+ *  unrelated update (a helper's permission card, a tool event) swapped the
+ *  amber card for a countdown the host never announced, and the next warning
+ *  swapped it back. Same shape as `stalledSince`: one rule at one place, not a
+ *  `stallWarning: null` line in every 'ok' writer (and the next one forgotten). */
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  let next = chatReducerCases(state, action);
+  const id = (action as { sessionId?: string }).sessionId;
+  if (next === state || !id) return next;
+  next = applyParkedSpecialistRuns(state, next, id);
+  const s = next.get(id);
+  if (!s || !s.stallWarning || s.attentionState === 'stuck') return next;
+  const fixed = new Map(next);
+  fixed.set(id, { ...s, stallWarning: null });
+  return fixed;
+}
+
+/** Hand every parked helper record whose card has now appeared to the normal
+ *  SPECIALIST_RUN_CHANGED case.
+ *
+ *  WHY (roadmap: after a reload a helper's card could come back with no notes):
+ *  a reload sends the history and the helper records separately, and the
+ *  history's tool events reach the reducer through a frame batcher while the
+ *  records are dispatched at once — so a record routinely arrived before the
+ *  Task card existed and was dropped. A finished helper never sends another,
+ *  so its notes and status never came back. The same happens when the card
+ *  sits on an older history page that loads later. Parking the record and
+ *  applying it when the card shows up closes both. Runs only when the
+ *  session's tool cards actually changed. */
+function applyParkedSpecialistRuns(prev: ChatState, next: ChatState, id: string): ChatState {
+  const s = next.get(id);
+  if (!s?.parkedSpecialistRuns?.size || prev.get(id)?.toolCalls === s.toolCalls) return next;
+  let out = next;
+  for (const [childId, run] of s.parkedSpecialistRuns) {
+    const current = out.get(id)!;
+    if (!findSpecialistCard(current.toolCalls, { parentToolCallId: run.parentToolCallId, childId })) continue;
+    const parked = new Map(current.parkedSpecialistRuns);
+    parked.delete(childId);
+    const unparked = new Map(out);
+    unparked.set(id, { ...current, parkedSpecialistRuns: parked.size ? parked : undefined });
+    out = chatReducerCases(unparked, { type: 'SPECIALIST_RUN_CHANGED', sessionId: id, run });
+  }
+  return out;
+}
+
+function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
   const next = new Map(state);
 
   switch (action.type) {
@@ -1062,7 +1143,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             promptId: action.promptId,
             title: action.title,
             description: action.description,
-            buttons: action.buttons,
+            buttons: action.buttons, defaultIndex: action.defaultIndex,
           },
         },
       );
@@ -1106,10 +1187,18 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       const hadInFlight = session.isThinking || session.activeTurnToolIds.size > 0;
-      if (action.exitCode === 0 && !hadInFlight) return state;
+      // Claude Code's background helpers and commands die with its process,
+      // and no notice will ever say so — without this their cards spin forever.
+      const toolCalls = stopRunningBackground(session.toolCalls, () => true);
+      if (action.exitCode === 0 && !hadInFlight) {
+        if (toolCalls === session.toolCalls) return state;
+        next.set(action.sessionId, { ...session, toolCalls });
+        return next;
+      }
       next.set(action.sessionId, {
         ...session,
-        ...endTurn(session),
+        toolCalls,
+        ...endTurn({ ...session, toolCalls }),
         // Override endTurn's 'ok' reset — this is the state we want to surface.
         attentionState: 'session-died',
       });
@@ -1724,8 +1813,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'NATIVE_TOOL_PREPARING': {
       const session = next.get(action.sessionId);
       if (!session) return state;
+      const existing = session.toolCalls.get(action.toolCallId);
+      // WHY decided before any copy (perf, 2026-09-23): this streams per argument
+      // chunk, and its no-op exits (card no longer preparing / unknown clear) used
+      // to copy whole Maps only to discard them. Same tests removePreparingTool and
+      // the progress branch below apply, made earlier.
+      if (existing && !existing.preparing) return state;
+      if (action.cleared && !existing) return state;
       const toolCalls = new Map(session.toolCalls);
-      const existing = toolCalls.get(action.toolCallId);
 
       if (action.cleared) {
         // Withdraw a card the stall retry abandoned. No-op unless the entry is
@@ -1839,9 +1934,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             // "Always allow" button on it, so losing it here would re-offer a
             // grant the engine can never honor.
             external: synTool.external,
+            floorStop: synTool.floorStop,
             // Carried so the full-auto safety-stop footer survives the
             // synthetic→real tool-id handover (spec 2026-08-12, M5 2b).
             permissionMode: synTool.permissionMode,
+            // A kept card (hook closed, Claude Code's menu possibly still up)
+            // must stay kept across the handover — without it the card has no
+            // requestId AND no flag: unanswerable and unresolvable.
+            expired: synTool.expired,
           });
           // Update the tool group to reference the real ID
           const toolGroups = new Map(session.toolGroups);
@@ -1902,13 +2002,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // ask over exactly as the synthetic-reclaim branch above does; every
       // other superseded card (no ask yet) still becomes a plain running tool.
       const superseded = toolCalls.get(action.toolUseId);
-      const carriedAsk = superseded?.status === 'awaiting-approval' && superseded.requestId
+      // A KEPT card (awaiting-approval + expired, requestId already cleared —
+      // PERMISSION_EXPIRED 'hook-closed') is carried too: the watcher re-emits
+      // tool-use for a line Claude Code rewrites, and resetting it to 'running'
+      // would reopen the send gates while Claude Code's menu may still be live.
+      const carriedAsk = superseded?.status === 'awaiting-approval' && (superseded.requestId || superseded.expired)
         ? {
             status: 'awaiting-approval' as const,
             requestId: superseded.requestId,
+            expired: superseded.expired,
             permissionSuggestions: superseded.permissionSuggestions,
             denyListed: superseded.denyListed,
             external: superseded.external,
+            floorStop: superseded.floorStop,
             permissionMode: superseded.permissionMode,
           }
         : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId };
@@ -1958,22 +2064,41 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
 
-      const toolCalls = new Map(session.toolCalls);
-      const existing = toolCalls.get(action.toolUseId);
+      const existing = session.toolCalls.get(action.toolUseId);
+      // WHY copied only when a card exists (perf, 2026-09-23): an orphan result
+      // changes nothing, so the session keeps its own toolCalls Map.
+      let toolCalls = session.toolCalls;
       if (existing) {
+        toolCalls = new Map(toolCalls);
         // Carry structuredPatch onto the tool state so DiffView can render
         // with absolute file line numbers (Claude Code ships it pre-computed).
         const patch = action.structuredPatch;
+        // A result settles the card, so `expired` goes: this is the normal way a
+        // KEPT card ends (the user answered Claude Code's menu in the terminal,
+        // the tool ran, its result landed here). A card is either kept
+        // (awaiting-approval + expired) or settled — never both.
+        const { expired: _settled, ...base } = existing;
         if (action.isError) {
           toolCalls.set(action.toolUseId, {
-            ...existing, status: 'failed', error: action.result,
+            ...base, status: 'failed', error: action.result,
             ...(patch ? { structuredPatch: patch } : {}),
           });
         } else {
+          // A background launch's result is only a receipt: the call finished,
+          // the WORK did not. The card stays 'complete' (endTurn must never
+          // fail it) and ccBackground carries the work's real state.
+          const bg = action.backgroundTaskId
+            ? ccBackgroundOnLaunch(session, action.toolUseId, action.backgroundTaskId, existing.ccBackground)
+            : undefined;
           toolCalls.set(action.toolUseId, {
-            ...existing, status: 'complete', response: action.result,
+            ...base, status: 'complete', response: action.result,
             ...(patch ? { structuredPatch: patch } : {}),
+            ...(bg ? { ccBackground: bg } : {}),
+            // The receipt names the helper; the card knows it before the
+            // helper's first line binds (and even if it never does).
+            ...(bg && existing.toolName === 'Agent' && !existing.agentId ? { agentId: action.backgroundTaskId } : {}),
           });
+          if (action.resumedTaskId) toolCalls = reopenResumedHelper(session, toolCalls, action.toolUseId, action.resumedTaskId);
         }
       }
 
@@ -1999,6 +2124,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...session, toolCalls, totals, lastActivityAt: Date.now(),
         attentionState: 'ok',
       });
+      return next;
+    }
+
+    case 'TRANSCRIPT_BACKGROUND_TASK': {
+      const session = next.get(action.sessionId);
+      const settled = session && applyBackgroundTaskEnd(session, action);
+      if (!settled) return state;
+      next.set(action.sessionId, settled);
       return next;
     }
 
@@ -2330,6 +2463,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             requestId: action.requestId,
             denyListed: action.denyListed,
             external: action.external,
+            floorStop: action.floorStop,
             permissionMode: action.permissionMode,
           };
           const target = inputIdx >= 0 ? inputIdx : nameIdx;
@@ -2386,6 +2520,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // true: a card whose ask was overwritten keeps the requestId while
       // reverting to 'running', which is exactly the stale binding the loop
       // directly below detects and clears.)
+      // WHY this pre-scan (perf, 2026-09-23): nearly every heartbeat (below) is the
+      // "already awaiting" no-op, so decide it BEFORE copying the whole toolCalls
+      // Map. Same outcome as the loop's early return, whose clears were discarded.
+      for (const tool of session.toolCalls.values()) {
+        if (tool.requestId === action.requestId && tool.status === 'awaiting-approval') return state;
+      }
       const toolCalls = new Map(session.toolCalls);
 
       // This action is REPEATABLE (2026-08-16): main re-announces every
@@ -2456,6 +2596,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           permissionSuggestions: action.permissionSuggestions,
           denyListed: action.denyListed,
           external: action.external,
+          floorStop: action.floorStop,
           permissionMode: action.permissionMode,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
@@ -2481,6 +2622,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           permissionSuggestions: action.permissionSuggestions,
           denyListed: action.denyListed,
           external: action.external,
+          floorStop: action.floorStop,
           permissionMode: action.permissionMode,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
@@ -2590,7 +2732,37 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // Matched by the kept id alone: a desktop window clears a resolution silently (no
         // note), and the expiry must reach that card too.
         const clearedByResolution = tool.status === 'running' && tool.resolvedRequestId === action.requestId;
+        if (heldHere && action.reason === 'hook-closed') {
+          // The hook's far end went away first (the relay's backstop, Claude Code
+          // killing the hook) — but Claude Code's OWN menu may still be on screen
+          // waiting. KEEP the card: it stays awaiting-approval so the session dot
+          // stays "needs you" and the send gates keep refusing to type into that
+          // menu. It loses its dead requestId and gains `expired`; the prompt
+          // detector's menu-gone rule, the transcript result or Dismiss settles
+          // it. (2026-07-30 permission-ask-timeout spec §2/§2a — the reported
+          // bug was this card flipping to 'failed', so the session looked idle
+          // while Claude Code was still blocked.) The reducer never reads the
+          // terminal itself.
+          toolCalls.set(id, { ...tool, requestId: undefined, expired: true });
+          break;
+        }
+        if (heldHere && action.reason === 'app-timeout') {
+          // The app's own 2h hold answered with a deny — say exactly that.
+          toolCalls.set(id, {
+            ...tool,
+            status: 'failed',
+            requestId: undefined,
+            answeredElsewhere: undefined,
+            resolvedRequestId: undefined,
+            error: 'No answer came in time, so YouCoded declined this request and Claude moved on.',
+          });
+          break;
+        }
         if (heldHere || clearedByResolution) {
+          // 'delivery-failed' or NO reason (the native broker's cancel, an older
+          // remote client): RESOLVE, never keep — native sessions have no
+          // terminal menu to fall back on, and a failed delivery means the
+          // socket is provably gone. Do not flip this default (spec §2c/§2d).
           toolCalls.set(id, {
             ...tool,
             status: 'failed',
@@ -2604,6 +2776,25 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         }
       }
 
+      next.set(action.sessionId, { ...session, toolCalls });
+      return next;
+    }
+
+    case 'PERMISSION_CARD_RESOLVED': {
+      // Quiet local settle of a KEPT card: its menu left the terminal (answered
+      // there, or through the plan card's keys) or the user clicked Dismiss.
+      // Only a still-awaiting kept card settles this way — a live ask goes
+      // through its buttons, and a card endTurn already failed must keep its
+      // real error.
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const tool = session.toolCalls.get(action.toolUseId);
+      if (!tool || !tool.expired || tool.status !== 'awaiting-approval') return state;
+      const toolCalls = new Map(session.toolCalls);
+      // 'complete' with no error: nothing failed. If the tool really runs, the
+      // transcript's result overwrites this with the true outcome.
+      const { expired: _resolved, ...rest } = tool;
+      toolCalls.set(action.toolUseId, { ...rest, status: 'complete' });
       next.set(action.sessionId, { ...session, toolCalls });
       return next;
     }
@@ -2679,16 +2870,24 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
     case 'SPECIALIST_RUN_CHANGED': {
       // Specialists 1c: the ledger record lands on the launching Task card.
-      // The card must already exist (the Task tool-use event precedes every
-      // ledger write, and replay splices child events after it) — a record for
-      // an unknown card is dropped, not parked, same as applySubagentEvent.
+      // A record for a card that is not on screen YET is PARKED (latest per
+      // helper) and applied when the card appears — see
+      // applyParkedSpecialistRuns for why dropping it lost a helper's notes.
       const session = next.get(action.sessionId);
       if (!session) return state;
       const cardId = findSpecialistCard(session.toolCalls, {
         parentToolCallId: action.run.parentToolCallId,
         childId: action.run.childId,
       });
-      if (!cardId) return state;
+      if (!cardId) {
+        const held = session.parkedSpecialistRuns?.get(action.run.childId);
+        // Same straggler rule as below: keep the newer of two stamped records.
+        if (held && held.seq !== undefined && action.run.seq !== undefined && action.run.seq <= held.seq) return state;
+        const parked = new Map(session.parkedSpecialistRuns);
+        parked.set(action.run.childId, action.run);
+        next.set(action.sessionId, { ...session, parkedSpecialistRuns: parked });
+        return next;
+      }
       const card = session.toolCalls.get(cardId)!;
       // Task 11 short-circuit: the delivery bookkeeping (claim / mark-
       // attempted / confirm / release) legitimately rewrites the ledger
@@ -2764,8 +2963,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'HISTORY_PAGE_LOADED': {
-      const session = next.get(action.sessionId);
-      if (!session) return state;
+      // WHY create rather than drop: a resumed session's first page can land
+      // BEFORE its SESSION_INIT. App applies SESSION_INIT from the
+      // session:created announcement at the next render, while the resume
+      // fetches the page at once — and returning `state` here threw the page
+      // away with no retry, so resumed sessions opened empty depending on which
+      // won (2026-09-24: 2 of 3 in one dev run). A page is only ever requested
+      // for a session this window is opening, so its state belongs here;
+      // SESSION_INIT is has()-guarded and leaves it intact when it follows.
+      const session = next.get(action.sessionId) ?? createSessionChatState();
 
       // Build this page's own timeline on a SCRATCH state by replaying its
       // events through the very same per-event cases the live path uses, then
@@ -2777,19 +2983,33 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // counters that only ever increase), so a prepended page can never collide
       // with what is already on screen even though it is OLDER.
       let scratch: ChatState = new Map();
-      // Seed the scratch state's seenUuids from the LIVE session so the
-      // per-event handlers' existing uuid dedup fires during the replay.
-      // Without this a message that is already on screen — one the user sent a
-      // moment ago, now also present in the transcript the page was read from —
-      // is rebuilt on the empty scratch and PREPENDED as a second bubble.
-      // (Caught by the perf rig's native-chat screenshot: two identical prompts.)
-      scratch.set(action.sessionId, { ...createSessionChatState(), seenUuids: new Set(session.seenUuids) });
+      // Seed from LIVE seenUuids so overlapping page and live events dedup;
+      // otherwise the scratch replay prepends a second copy of a prompt already on screen.
+      // ccBackgroundOutcomes: a newer page's "finished" notices must settle
+      // the cards this older page launches (see its field comment).
+      scratch.set(action.sessionId, {
+        ...createSessionChatState(), seenUuids: new Set(session.seenUuids),
+        ccBackgroundOutcomes: session.ccBackgroundOutcomes,
+      });
       for (const ev of action.events) {
         const pageAction = pageEventToAction(ev);
         if (pageAction) scratch = chatReducer(scratch, pageAction);
       }
-      const pageSess = scratch.get(action.sessionId)!;
-
+      // Reap on scratch BEFORE merging: live tool ids are not copied from history and must survive.
+      const replayed = scratch.get(action.sessionId)!;
+      const interrupted = action.reconcileInterrupted ? replayed.activeTurnToolIds : new Set(action.reconcileInterruptedToolIds ?? []);
+      const endedSess = interrupted.size
+        ? { ...replayed, ...endTurn({ ...replayed, activeTurnToolIds: interrupted }, 'Session was interrupted while this was running') }
+        : replayed;
+      // Background work launched before this Claude Code process started died
+      // with the old process: nothing will report on it, so it reads stopped.
+      // Only work with no recorded end — a notice anywhere already read wins.
+      const launchedBefore = action.reconcileInterrupted
+        ? () => true
+        : (id: string) => (action.reconcileInterruptedToolIds ?? []).includes(id);
+      const pageSess = action.reconcileInterrupted || action.reconcileInterruptedToolIds?.length
+        ? { ...endedSess, toolCalls: stopRunningBackground(endedSess.toolCalls, launchedBefore) }
+        : endedSess;
       next.set(action.sessionId, {
         ...session,
         timeline: [...pageSess.timeline, ...session.timeline],
@@ -2799,6 +3019,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         toolGroups: new Map([...pageSess.toolGroups, ...session.toolGroups]),
         assistantTurns: new Map([...pageSess.assistantTurns, ...session.assistantTurns]),
         seenUuids: new Set([...session.seenUuids, ...pageSess.seenUuids]),
+        ccBackgroundOutcomes: { ...pageSess.ccBackgroundOutcomes, ...session.ccBackgroundOutcomes },
         // Fold in what this page counted. session-totals' contract was "rebuilt
         // for free when a resumed session replays its record", which paging
         // broke — the scratch replay accumulates the page's usage and it would
@@ -2840,7 +3061,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         timeline: [...filtered, { kind: 'compacting', id: action.cardId, startedAt }],
-        compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens },
+        compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens,
+          ...(action.awaitsResult ? { awaitsResult: true } : {}) },
+      });
+      return next;
+    }
+
+    case 'COMPACTION_CANCELLED': {
+      const session = next.get(action.sessionId);
+      if (!session || !session.compactionPending) return state;
+      next.set(action.sessionId, {
+        ...session,
+        timeline: session.timeline.filter((e) => e.kind !== 'compacting'),
+        compactionPending: null,
       });
       return next;
     }
@@ -2861,6 +3094,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // the manual/CC path the guard still drops stale/spurious events (notably CC
       // resume-from-summary, which must NOT insert a marker).
       if (!session.compactionPending && !action.auto) return state; // Stale event — ignore
+      // WHY: live replay can deliver the same automatic summary again while the
+      // turn is still running. The marker's event ID is the dedupe authority.
+      if (session.timeline.some(e => e.kind === 'system-marker' && e.marker.id === action.markerId)) return state;
       // The harness's own figure wins where it exists: it is the only source a
       // NATIVE session has, and it measures the same window the chip does. The
       // compactionPending fallback is Claude Code's statusline reading, captured
@@ -2880,7 +3116,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const preserved = session.timeline.filter((e) => e.kind !== 'compacting');
       next.set(action.sessionId, {
         ...session,
-        ...endTurn(session),
+        // WHY: native auto compaction is a history rewrite inside the SAME
+        // turn; ending it here loses running tools and shows a false turn end.
+        // Manual /compact and Claude Code compaction still end their turns.
+        ...(action.auto ? {} : endTurn(session)),
         timeline: [
           ...preserved,
           {
@@ -2894,6 +3133,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
               // marker can click-to-expand inline. Absent on aborted/watchdog
               // completions (no summary available).
               ...(action.summary ? { summary: action.summary } : {}),
+              // WHY: lets the fade stop at the kept tail instead of the marker.
+              ...(action.retainedFromUuid !== undefined ? { retainedFromUuid: action.retainedFromUuid } : {}),
             },
           },
         ],

@@ -15,6 +15,7 @@ import React, { useRef } from 'react';
 import { CaptionButtons, MacTrafficLights, ProjectsButton, SettingsGearButton, showCaptionButtons } from './HeaderBar';
 import { PagesButton, PinnedPageButtons } from './pages/PagesButton';
 import { ON_INSET_CONTROL } from './header/control-states';
+import { useWallpaperHeaderInk } from '../hooks/use-wallpaper-header-ink';
 
 export interface ScreenBandProps {
   settingsOpen: boolean;
@@ -32,6 +33,10 @@ export interface ScreenBandProps {
 
 export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, active, title, onBack, backLabel = 'Back to chat' }: ScreenBandProps) {
   const headerRef = useRef<HTMLDivElement>(null);
+  // Float chrome only (a no-op elsewhere): the same wallpaper-derived icon tint
+  // as the chat header. The chat's bottom controls are hidden under a screen and
+  // belong to the chat header's own instance, so this one leaves them alone.
+  useWallpaperHeaderInk(headerRef, { inkBottom: false });
   return (
     <div
       ref={headerRef}
@@ -39,7 +44,10 @@ export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, sett
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <MacTrafficLights headerRef={headerRef} />
-      <div className="flex items-center gap-1 sm:gap-2">
+      {/* header-controls-left/-right: class hooks only, so the 'float' chrome
+          style (styles/float-chrome.css) gives these buttons the same floating
+          surface as the chat header's. No other style reads them. */}
+      <div className="header-controls-left flex items-center gap-1 sm:gap-2">
         <SettingsGearButton settingsOpen={settingsOpen} onToggleSettings={onToggleSettings} settingsBadge={settingsBadge} settingsDangerBadge={settingsDangerBadge} />
         <PagesButton active={active === 'pages'} />
         <ProjectsButton active={active === 'projects'} />
@@ -48,7 +56,7 @@ export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, sett
       <div className="flex items-center justify-center gap-2 min-w-0 px-3 text-sm font-medium text-fg">
         {title}
       </div>
-      <div className="flex items-center justify-end gap-1 sm:gap-2">
+      <div className="header-controls-right flex items-center justify-end gap-1 sm:gap-2">
         {/* Same inset pill and quiet text as the window buttons beside it
             (round 5: "should match styling of max/min/exit"). */}
         <div className="flex bg-inset rounded-md p-0.5">

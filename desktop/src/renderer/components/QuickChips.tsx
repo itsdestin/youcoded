@@ -73,7 +73,10 @@ export default function QuickChips({ onChipTap }: Props) {
           <button
             key={`${i}-${chip.label}`}
             onClick={() => onChipTap(chip)}
-            className={`shrink-0 ${chipHeight} px-2.5 rounded-md bg-panel border border-edge-dim text-2xs text-fg-2 hover:bg-inset hover:text-fg transition-colors`}
+            // `quick-chip` is the hook chrome-style: 'float' hangs its per-chip
+            // lift on (globals.css → "FLOAT chrome"). A class, not a token: the
+            // rule needs the element, and Tailwind has no way to name "the chip".
+            className={`quick-chip shrink-0 ${chipHeight} px-2.5 rounded-md bg-panel border border-edge-dim text-2xs text-fg-2 hover:bg-inset hover:text-fg transition-colors`}
           >
             {chip.label}
           </button>
@@ -83,7 +86,9 @@ export default function QuickChips({ onChipTap }: Props) {
         <Tooltip text="Edit quick chips">
         <button
           onClick={() => setEditorOpen(!editorOpen)}
-          className={`shrink-0 ${pencilSize} rounded-md bg-well border border-edge-dim text-fg-muted hover:bg-inset hover:text-fg transition-colors flex items-center justify-center`}
+          // `quick-chip-edit`: float chrome gives it the chips' own surface, as
+          // the status bar's edit button shares its chips' surface.
+          className={`quick-chip-edit shrink-0 ${pencilSize} rounded-md bg-well border border-edge-dim text-fg-muted hover:bg-inset hover:text-fg transition-colors flex items-center justify-center`}
         >
           <PencilIcon size={android ? 12 : 10} />
         </button>

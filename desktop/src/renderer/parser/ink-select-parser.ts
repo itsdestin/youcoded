@@ -44,6 +44,15 @@ const TITLE_OVERRIDES: Record<string, string> = {
   'select login method': 'Select Login Method',
   'dangerously-skip-permissions': 'Skip Permissions Warning',
   'skip all permission': 'Skip Permissions Warning',
+  // The bypass warning's own heading on CC 2.1.281 ("WARNING: Claude Code
+  // running in Bypass Permissions mode"). Neither key above appears in that
+  // dialog any more, which is part of why it never got a card (2026-09-24).
+  'running in bypass permissions mode': 'Skip Permissions Warning',
+  // Project MCP-server approval (a folder with .mcp.json, CC 2.1.281): "New MCP
+  // server found in this project: <name>" / "MCP servers may execute code or
+  // access system resources…". Without this the title fell to the generic
+  // heuristic — the body's last line, "more in the MCP documentation."
+  'mcp servers may execute code': 'New MCP Server Found',
   // Resume session prompt — shown when resuming a stale/large session
   'resuming from a summary': 'Resume Session',
   // Usage-limit prompt — shown when the user hits their plan's usage cap.
@@ -74,6 +83,15 @@ const OPTION_TITLE_OVERRIDES: Record<string, string> = {
   'yes, i trust this folder': TRUST_PROMPT_TITLE,
 };
 
+// Overrides keyed on the WHOLE option set, for dialogs whose single labels are
+// too generic to key on alone ("Yes, I accept" could belong to anything). The
+// bypass warning's heading wraps and its body runs longer than the title
+// lookback on a narrow terminal, so its option pair is the dependable anchor.
+// Keyed on the sorted, lower-cased labels joined with '|'.
+const OPTION_SET_TITLE_OVERRIDES: Record<string, string> = {
+  'no, exit|yes, i accept': 'Skip Permissions Warning',
+};
+
 export interface ParsedMenu {
   id: string;
   title: string;
@@ -84,17 +102,52 @@ export interface ParsedMenu {
    *  with `options`. This is what menuToButtons sends: typing the digit is the
    *  only cursor-independent way to pick an option (see menuToButtons). */
   optionNumbers?: (number | null)[];
+  /** Every line of the prompt's OWN box above the options — from the nearest
+   *  box rule, up to PROMPT_SCAN_LINES above (not the 15-line window the title
+   *  and description use). What a kept card binds against: a long Bash command
+   *  can wrap to many lines (kept-card-binding.ts). */
+  promptLines?: string[];
+  /** The first line of the prompt's own box ("Accessing workspace:", "New MCP
+   *  server found in this project: demo"), wrapped rows joined — the dialog's
+   *  real heading, which the generic startup card shows as its title. */
+  heading?: string;
+  /** True when Claude Code's dialog footer ("Enter to confirm · Esc to
+   *  cancel") sits under the options: a live dialog, not text that merely
+   *  looks like a list. */
+  dialog?: boolean;
+  /** Identity of the option set (labels in order, not the cursor). What a
+   *  verified-navigation answer re-checks before every keystroke. */
+  signature?: string;
 }
+
+/** How far above the options the prompt's box top is searched for. */
+const PROMPT_SCAN_LINES = 120;
 
 export interface PromptButton {
   label: string;
   input: string;
   /** A SECOND pty write, sent after `input` with a gap (see
-   *  state/prompt-input.ts), for the arrow-navigation fallback only. Arrows and
-   *  `\r` must never share one write — CC discards the arrows and acts on the
-   *  Enter alone (see menuToButtons). */
+   *  state/prompt-input.ts). Only ever set by an older build or by Android's
+   *  native detector; this parser no longer produces it (see menuToButtons). */
   submitInput?: string;
+  /** Answer by VERIFIED navigation instead of a fixed keystroke: the option at
+   *  `index` of the menu whose `signature` this is. Set for menus whose options
+   *  carry no printed number (CC 2.1.281's trust and bypass dialogs), where no
+   *  single keystroke picks an option. state/ink-menu-driver.ts moves the cursor
+   *  one arrow per write, confirms each move on screen, and sends Enter alone
+   *  only once the cursor sits on exactly this label. */
+  pick?: { signature: string; index: number };
 }
+
+/** Claude Code's dialog footer: "Enter to confirm · Esc to cancel" (trust,
+ *  bypass, MCP approval), "Space to select · Esc to reject all" (multi-select).
+ *  Measured on 2.1.281 (tests/fixtures/startup-dialogs/). */
+const DIALOG_FOOTER = /(enter to confirm|esc to (cancel|exit|reject)|space to select)/i;
+
+/** A checkbox row of a multi-select dialog ("[✔] demo"). Picking one means
+ *  toggling with Space and then confirming a separate row — not modelled, so
+ *  such a dialog is never turned into buttons (see parseUnnumbered). */
+const CHECKBOX_ROW = /^\[[ ✔✓x×]\]\s/;
 
 /** A horizontal rule / box border — the top edge of CC's prompt box, and the
  *  boundary between the prompt's own body and whatever the session printed
@@ -183,6 +236,14 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
   const selectedText = stripNumbering(selectorLine.replace(/^\s*[❯>]\s*/, '').trim());
   if (!selectedText) return null;
 
+  // CC 2.1.281 draws its trust, bypass and MCP-approval dialogs with NO
+  // numbers ("❯ No, exit" / "  Yes, I trust this folder"). The numbered walk
+  // below can never see those options, so they get their own, stricter reader
+  // (2026-09-24 — the reason new sessions sat on "Initializing session…").
+  if (numberOf(selectorLine.replace(/^\s*[❯>]\s*/, '').trim()) === null) {
+    return parseUnnumbered(lines, selectorIdx);
+  }
+
   // Determine the reference indentation for non-selected options.
   // Non-selected lines use spaces where ❯ appears on the selected line.
   // Example:  "  ❯ Yes"  ->  selected indent = 4 (after ❯ + space)
@@ -196,15 +257,31 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
   const optionNumbers: (number | null)[] = [];
   let selectedIndex = 0;
 
-  // Walk backward to find options above the selector
+  // A long option label that Claude Code wrapped continues on the next line(s),
+  // indented DEEPER than the option numbers and carrying no number of its own:
+  //    2. Yes, and switch to accept edits (auto-approve file edits and common file
+  //       commands) for this session (shift+tab)
+  //    3. No
+  // Treating that line as the end of the menu cut the label short AND lost every
+  // option after it — found 2026-09-23 when a kept permission card offered
+  // "Yes" and half of option 2, with no "No" (CC 2.1.281, 80 columns).
+  const isContinuation = (line: string) =>
+    !!line.trim() && !/^\s*\d+[.:]\s+/.test(line) && !/^\s*[❯>]/.test(line)
+    && indentOf(line) > referenceIndent + 2;
+
+  // Walk backward to find options above the selector. Continuation lines met on
+  // the way up belong to the option found ABOVE them.
+  let carry: string[] = [];
   for (let i = selectorIdx - 1; i >= 0; i--) {
     const trimmed = lines[i].trim();
     if (!trimmed) break;
+    if (isContinuation(lines[i])) { carry.unshift(trimmed); continue; }
     if (!isOptionLine(lines[i], referenceIndent)) break;
     // Don't include lines that look like titles (end with ? or :)
     if (/[?:]$/.test(trimmed) && !/^\d+[.:]\s+/.test(trimmed)) break;
-    options.unshift(stripNumbering(trimmed));
+    options.unshift([stripNumbering(trimmed), ...carry].join(' '));
     optionNumbers.unshift(numberOf(trimmed));
+    carry = [];
   }
 
   // Insert the selected option
@@ -214,10 +291,12 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
   // from the raw line rather than from the already-stripped label.
   optionNumbers.push(numberOf(selectorLine.replace(/^\s*[❯>]\s*/, '').trim()));
 
-  // Walk forward to find options below the selector
+  // Walk forward to find options below the selector (continuations join the
+  // option just above them).
   for (let i = selectorIdx + 1; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (!trimmed) break;
+    if (isContinuation(lines[i])) { options[options.length - 1] += ' ' + trimmed; continue; }
     if (!isOptionLine(lines[i], referenceIndent)) break;
     options.push(stripNumbering(trimmed));
     optionNumbers.push(numberOf(trimmed));
@@ -246,7 +325,198 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
   // session trade-off text: session age, token count, usage warning)
   const description = extractDescription(lines, firstOptionLine, title, bodyStart);
 
-  return { id, title, options, selectedIndex, description, optionNumbers };
+  let promptTop = Math.max(0, firstOptionLine - 15);
+  for (let i = firstOptionLine - 1; i >= Math.max(0, firstOptionLine - PROMPT_SCAN_LINES); i--) {
+    if (PROMPT_BOUNDARY.test(stripAnsi(lines[i]).trim())) { promptTop = i + 1; break; }
+  }
+  const promptLines = lines.slice(promptTop, firstOptionLine).map((l) => stripAnsi(l).replace(/\s+$/, ''));
+
+  const lastOptionLine = firstOptionLine + options.length - 1;
+  return {
+    id, title, options, selectedIndex, description, optionNumbers, promptLines,
+    heading: readHeading(lines, promptTop, firstOptionLine, 0),
+    dialog: hasFooterBelow(lines, lastOptionLine),
+    signature: signatureOf(options),
+  };
+}
+
+/** Identity of an option set — labels in order. */
+function signatureOf(options: string[]): string {
+  return options.join('␞');
+}
+
+/**
+ * Is Claude Code's dialog footer within a few non-empty lines under the options?
+ * (Continuation rows of a wrapped label sit between, so allow a short gap.)
+ */
+function hasFooterBelow(lines: string[], lastOptionLine: number): boolean {
+  let seen = 0;
+  for (let i = lastOptionLine + 1; i < lines.length && seen < 4; i++) {
+    const t = stripAnsi(lines[i]).trim();
+    if (!t) continue;
+    seen++;
+    if (DIALOG_FOOTER.test(t) && t.length < 100) return true;
+  }
+  return false;
+}
+
+/**
+ * Greedy word-wrap test: is `row` the wrapped remainder of `prevRow`? Ink moves
+ * a word to the next row only when it does not fit, so if the row's first word
+ * WOULD have fit after `prevRow` within `width`, the row cannot be a wrap.
+ * The 2 columns below `width` are 'ambiguous' — the dialog's right padding is
+ * not on screen — and callers treat ambiguous as "can't be sure".
+ */
+function wrapsInto(prevRow: string, row: string, width: number): 'yes' | 'no' | 'ambiguous' {
+  if (!width) return 'ambiguous';
+  const word = row.trim().split(/\s+/)[0] ?? '';
+  const need = prevRow.replace(/\s+$/, '').length + 1 + word.length;
+  if (need > width) return 'yes';
+  if (need <= width - 2) return 'no';
+  return 'ambiguous';
+}
+
+/**
+ * The first line of the prompt's box, with rows Claude Code wrapped onto the
+ * next line joined back ("New MCP server found in this" + "project: demo" on a
+ * 40-column terminal). `width` 0 = unknown: no joining.
+ */
+function readHeading(lines: string[], top: number, firstOptionLine: number, width: number): string | undefined {
+  let i = top;
+  while (i < firstOptionLine && !stripAnsi(lines[i]).trim()) i++;
+  if (i >= firstOptionLine) return undefined;
+  let heading = stripAnsi(lines[i]).trim();
+  let prevRow = stripAnsi(lines[i]);
+  for (let j = i + 1; j < firstOptionLine && width; j++) {
+    const row = stripAnsi(lines[j]);
+    if (!row.trim() || /[.:?!]$/.test(heading)) break;
+    if (wrapsInto(prevRow, row, width) === 'no') break;
+    heading += ' ' + row.trim();
+    prevRow = row;
+  }
+  return heading || undefined;
+}
+
+/**
+ * Read a dialog whose options carry NO printed number (CC 2.1.281: folder
+ * trust, bypass warning, single-server MCP approval — captured in
+ * tests/fixtures/startup-dialogs/). Much stricter than the numbered walk,
+ * because without digits almost any indented text could pass for an option:
+ *
+ *  • Claude Code's dialog FOOTER must sit under the options ("Enter to
+ *    confirm · Esc to cancel") and its box RULE above them — proof it is a
+ *    live dialog, not a quoted list in the conversation.
+ *  • An option row starts at EXACTLY the cursor row's label column. ("Security
+ *    guide" one column left of the options, and the footer, are not options.)
+ *  • A label too long for the terminal wraps onto the next row at that same
+ *    column, so every such row is tested with the greedy-wrap rule against the
+ *    dialog's width (its rule's length). If any row is too close to call, the
+ *    whole dialog is refused — a wrong split would put a button on screen that
+ *    matches no real option.
+ *  • Checkbox rows ("[✔] demo") are a multi-select dialog, which picks with
+ *    Space plus a separate confirm row; never modelled as buttons.
+ *
+ * Anything short of certain returns null. The safety net
+ * (readStartupDialog + usePromptDetector) then says "answer in terminal view".
+ */
+function parseUnnumbered(lines: string[], selectorIdx: number): ParsedMenu | null {
+  const selectorLine = stripAnsi(lines[selectorIdx]);
+  const m = /^(\s*)([❯>])(\s+)(\S.*)$/.exec(selectorLine);
+  if (!m) return null;
+  const labelCol = m[1].length + m[2].length + m[3].length;
+  const colOf = (l: string) => indentOf(l);
+
+  // Box rule above → the dialog's width, and the top of its body.
+  let top = -1;
+  let width = 0;
+  for (let i = selectorIdx - 1; i >= Math.max(0, selectorIdx - PROMPT_SCAN_LINES); i--) {
+    const t = stripAnsi(lines[i]).trim();
+    if (PROMPT_BOUNDARY.test(t)) { top = i + 1; width = t.length; break; }
+  }
+  if (top < 0) return null;
+
+  // Walk up to the first option row.
+  let first = selectorIdx;
+  for (let i = selectorIdx - 1; i >= top; i--) {
+    const l = stripAnsi(lines[i]);
+    if (!l.trim() || colOf(l) !== labelCol || /^\s*[❯>]/.test(l)) break;
+    first = i;
+  }
+
+  const rows: { text: string; lastRow: string; cursor: boolean }[] = [];
+  let last = selectorIdx;
+  for (let i = first; i < lines.length; i++) {
+    const raw = stripAnsi(lines[i]);
+    if (!raw.trim()) { if (rows.length && i > selectorIdx) break; continue; }
+    const isCursor = i === selectorIdx;
+    if (!isCursor && (colOf(raw) !== labelCol || DIALOG_FOOTER.test(raw))) break;
+    const text = isCursor ? m[4].trim() : raw.trim();
+    const prev = rows[rows.length - 1];
+    if (prev && !isCursor) {
+      const wrap = wrapsInto(prev.lastRow, raw, width);
+      if (wrap === 'ambiguous') return null;
+      if (wrap === 'yes') { prev.text += ' ' + text; prev.lastRow = raw; last = i; continue; }
+    }
+    rows.push({ text, lastRow: raw, cursor: isCursor });
+    last = i;
+  }
+
+  // The selected row's own label may have wrapped too — but a row that follows
+  // the cursor row and would have fit is the next option, handled above; one
+  // that wraps is merged above. Nothing more to do here.
+  const options = rows.map((r) => r.text);
+  const selectedIndex = rows.findIndex((r) => r.cursor);
+  if (options.length < 2 || selectedIndex < 0) return null;
+  if (options.some((o) => o.length > 200)) return null;
+  if (options.some((o) => CHECKBOX_ROW.test(o))) return null;
+  if (!hasFooterBelow(lines, last)) return null;
+
+  const firstOptionLine = first;
+  const title = extractTitle(lines, firstOptionLine, options, top, true);
+  const description = extractDescription(lines, firstOptionLine, title, top);
+  const promptLines = lines.slice(top, firstOptionLine).map((l) => stripAnsi(l).replace(/\s+$/, ''));
+  const id = 'menu_' + options.map((o) => o.slice(0, 10)).join('_')
+    .toLowerCase().replace(/[^a-z0-9_]/g, '');
+  return {
+    id,
+    title,
+    options,
+    selectedIndex,
+    description,
+    optionNumbers: options.map(() => null),
+    promptLines,
+    heading: readHeading(lines, top, firstOptionLine, width),
+    dialog: true,
+    signature: signatureOf(options),
+  };
+}
+
+/**
+ * Is Claude Code showing a dialog right now — its footer at the bottom of the
+ * screen — whatever its options look like? For the startup safety net: when a
+ * new session is waiting on a dialog this parser cannot turn into buttons (a
+ * multi-select, a layout nobody has seen yet), the app must say so at once
+ * rather than sit on "Initializing session…". Returns the dialog's heading, or
+ * null when no dialog footer is on screen.
+ */
+export function readStartupDialog(screenText: string): { heading: string } | null {
+  const lines = stripAnsi(screenText).split('\n');
+  // A full-screen read (Android's, or a buffer with blank rows below the
+  // dialog) ends in empty rows; the footer is near the last NON-empty one.
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  let footer = -1;
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 12); i--) {
+    const t = lines[i].trim();
+    if (DIALOG_FOOTER.test(t) && t.length < 100) { footer = i; break; }
+  }
+  if (footer < 0) return null;
+  let top = Math.max(0, footer - 40);
+  let width = 0;
+  for (let i = footer - 1; i >= Math.max(0, footer - 40); i--) {
+    const t = lines[i].trim();
+    if (PROMPT_BOUNDARY.test(t)) { top = i + 1; width = t.length; break; }
+  }
+  return { heading: readHeading(lines, top, footer, width) ?? '' };
 }
 
 /**
@@ -275,6 +545,7 @@ function extractTitle(
   firstOptionLine: number,
   options: string[] = [],
   bodyStart = Math.max(0, firstOptionLine - 10),
+  boxed = false,
 ): string {
   // Option-label overrides win: they don't depend on how far the prompt's body
   // text happens to sit above the menu (see OPTION_TITLE_OVERRIDES).
@@ -282,9 +553,15 @@ function extractTitle(
     const title = OPTION_TITLE_OVERRIDES[option.trim().toLowerCase()];
     if (title) return title;
   }
+  const setTitle = OPTION_SET_TITLE_OVERRIDES[options.map((o) => o.trim().toLowerCase()).sort().join('|')];
+  if (setTitle) return setTitle;
 
-  // Never look above the prompt's own box, and never further than 10 lines.
-  const searchStart = Math.max(bodyStart, firstOptionLine - 10);
+  // Never look above the prompt's own box, and never further than 10 lines —
+  // unless the box's top rule was actually found (`boxed`): then everything
+  // from it down IS the prompt's own text, and a long dialog on a narrow
+  // terminal (the bypass warning at 50 columns) pushes its heading well past
+  // 10 lines up.
+  const searchStart = boxed ? bodyStart : Math.max(bodyStart, firstOptionLine - 10);
   const nearbyText = lines.slice(searchStart, firstOptionLine).join(' ').toLowerCase();
 
   for (const [keyword, title] of Object.entries(TITLE_OVERRIDES)) {
@@ -356,31 +633,47 @@ function extractDescription(
  *
  * A bare digit selects AND submits in one byte, with no dependency on where the
  * cursor happens to be — verified on the /model menu, the real Resume Session
- * prompt, and the folder-trust prompt. It never sends `\r`, so there is nothing
- * for CC to collapse. `pty-worker.js` routes it down the passthrough path.
+ * prompt, and (up to CC 2.1.2xx) the folder-trust prompt. It never sends `\r`,
+ * so there is nothing for CC to collapse. `pty-worker.js` routes it down the
+ * passthrough path.
+ *
+ * A menu with NO printed numbers (CC 2.1.281's trust, bypass and MCP dialogs —
+ * where a typed digit does nothing at all, fixture `untrusted-digit-ignored`)
+ * gets `pick` buttons instead: no fixed keystroke, but the option's index in
+ * this exact option set, answered by state/ink-menu-driver.ts one verified
+ * arrow at a time. The old fallback here — "DOWN × steps from the cursor seen
+ * when the card appeared, then Enter" — was blind: if the cursor had moved
+ * since (a click in terminal view, a redraw) it confirmed the WRONG option,
+ * and on these dialogs the wrong option can mean trusting a folder.
  */
 export function menuToButtons(menu: ParsedMenu): PromptButton[] {
-  const DOWN = '\u001b[B';
-  const count = menu.options.length;
-
+  const signature = menu.signature ?? signatureOf(menu.options);
   return menu.options.map((label, index) => {
     const number = menu.optionNumbers?.[index] ?? null;
-
-    // Single-digit numbers cover every CC menu we have seen (the parser requires
-    // a numeric prefix to recognise an option line at all, so this is the path
-    // that actually runs).
     if (number !== null && number >= 1 && number <= 9) {
       return { label, input: String(number) };
     }
-
-    // Fallback for a menu whose options carry no usable digit: step DOWN from
-    // the cursor position parsed at SHOW_PROMPT time, then submit in a SEPARATE
-    // write (state/prompt-input.ts adds the gap). Relative DOWN steps are
-    // wrap-correct (fact 2 above), and the `\r` has to be its own write (fact 1) —
-    // split that way the arrows DO all land, measured 2026-07-26. Best-effort
-    // only: `selectedIndex` goes stale if the user arrows in the terminal view
-    // after the card appears.
-    const steps = (((index - menu.selectedIndex) % count) + count) % count;
-    return { label, input: DOWN.repeat(steps), submitInput: '\r' };
+    return { label, input: '', pick: { signature, index } };
   });
+}
+
+/**
+ * Buttons for a KEPT card (its hook socket died while Claude Code's menu may
+ * still be live — ToolCard's ExpiredApprovalActions), or null when that is not
+ * safe. Ported from PR #278 (2026-07-30 permission-ask-timeout spec §3).
+ *
+ * Only when EVERY row carries a printed number: a digit picks its row with no
+ * dependence on the cursor, while the arrow fallback depends on a cursor
+ * position nobody is keeping current for a dead card. Labels always come from
+ * THIS parse of the live screen — never matched to the old card by position.
+ * AskUserQuestion never rebinds: Claude Code's own UI for it is sequential and
+ * multi-select with a free-text row this card does not model. ExitPlanMode
+ * never reaches here — PlanApprovalCard keeps answering it by typing.
+ */
+export function rebindButtons(menu: ParsedMenu | null, toolName: string): PromptButton[] | null {
+  if (!menu) return null;
+  if (toolName === 'AskUserQuestion' || toolName === 'ExitPlanMode') return null;
+  const buttons = menuToButtons(menu);
+  if (buttons.some((b) => b.submitInput !== undefined || b.pick !== undefined)) return null;
+  return buttons;
 }
