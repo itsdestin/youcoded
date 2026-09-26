@@ -11,6 +11,10 @@ import { isPlaceholderModelId } from '../shared/model-ids';
 import { ccProjectSlug, nativeStoreSlug, CC_SLUG_MAX } from './slug-encoding';
 import type { NativeSessionListEntry } from './harness/session-store';
 import { r1CwdForDir } from './transcript-cwd';
+import { perfMark } from './perf-marks';
+
+// Numbers each Resume scan so overlapping scans' perf marks can be paired.
+let browseScanSeq = 0;
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -450,6 +454,11 @@ export async function listPastSessions(
   // tree. Production callers pass nothing and get the real projects folder.
   projectsDir: string = PROJECTS_DIR,
 ): Promise<PastSession[]> {
+  // WHY the marks: the first Resume open after launch can sit on a spinner for
+  // a long time on a big history; these split its time into the transcript
+  // scan and the store pass so the perf rig can say which part is slow.
+  const scanId = ++browseScanSeq;
+  perfMark('bg:browse:start', { scanId });
   let slugs: string[];
   try {
     const entries = await withRetry(() => fs.promises.readdir(projectsDir));
@@ -565,6 +574,7 @@ export async function listPastSessions(
   // a temp tree (subagent-exclusion.test.ts, this file's own cache tests) must
   // never wipe cache entries a concurrent production scan is relying on.
   if (projectsDir === PROJECTS_DIR) pruneTranscriptMetaCache(seenPaths);
+  perfMark('bg:browse:transcripts-done', { scanId, transcripts: seenPaths.size });
 
   // Deduplicate: aggregation symlinks/copies place project-specific .jsonl
   // files into the home slug for unified browsing. When the same sessionId
@@ -738,6 +748,7 @@ export async function listPastSessions(
   } catch { /* store unavailable — the legacy list stands alone */ }
 
   result.sort((a, b) => b.lastModified - a.lastModified);
+  perfMark('bg:browse:done', { scanId, rows: result.length });
   return result;
 }
 

@@ -13,6 +13,7 @@ import { readFolders } from '../saved-folders';
 import { getManagedRoots } from '../sync-spaces/service';
 import { getConversationStore } from './service';
 import { log } from '../logger';
+import { perfMark } from '../perf-marks';
 import { readState, writeState, defaultStateFile } from './slug-repair-state';
 
 export function uuidSet(filePath: string): Set<string> {
@@ -739,12 +740,14 @@ export async function runSlugRepair(overrides?: Partial<RepairOpts> & {
   // run in that sequence.
   const all: RepairFinding[] = [];
   try {
+    perfMark('bg:slug-repair:6.1:start');
     all.push(...await stageFns.repairHomeForks(opts));                    // 6.1
   } catch (e) {
     log('ERROR', 'SlugRepair', 'stage failed', { stage: '6.1 repairHomeForks', error: String(e) });
     quarantine.log(`ERROR stage 6.1 repairHomeForks failed: ${String(e)}`);
   }
   try {
+    perfMark('bg:slug-repair:6.2:start');
     all.push(...await stageFns.repairRecordsAndSpace({ ...opts, store, spaceRoot })); // 6.2
   } catch (e) {
     log('ERROR', 'SlugRepair', 'stage failed', { stage: '6.2 repairRecordsAndSpace', error: String(e) });
@@ -758,6 +761,7 @@ export async function runSlugRepair(overrides?: Partial<RepairOpts> & {
   // surviving wrong record right after a supervised run as a failure; check
   // again after one more launch.
   try {
+    perfMark('bg:slug-repair:6.3:start');
     all.push(...stageFns.repairOrphanDirs(opts));                         // 6.3
   } catch (e) {
     log('ERROR', 'SlugRepair', 'stage failed', { stage: '6.3 repairOrphanDirs', error: String(e) });
@@ -773,6 +777,9 @@ export async function runSlugRepair(overrides?: Partial<RepairOpts> & {
   // BEFORE incrementing, or a single launch could silently burn through
   // multiple deferrals at once and surface a session in fewer real runs than
   // the contract states.
+  // WHY: per-stage marks — a launch-time repair on a big history took ~9 s
+  // with one ~1 s freeze inside it (2026-09-26); these say which stage.
+  perfMark('bg:slug-repair:finalize:start');
   const deferredThisRun = new Set(all.filter(f => f.kind === 'deferred-live').map(f => f.sessionId));
   const forkSurfacedThisRun = new Set(all.filter(f => f.kind === 'fork-surfaced').map(f => f.sessionId));
   // Fix (review, IMPORTANT 2 — auto-release on absence of evidence): keyed by

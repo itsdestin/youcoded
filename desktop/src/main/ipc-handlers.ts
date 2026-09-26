@@ -90,6 +90,7 @@ import { tavilyBackend } from './harness/search/backends/tavily';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
 import { listPastSessions, loadHistory, readSessionTranscriptMeta } from './session-browser';
+import { perfMark } from './perf-marks';
 import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
 import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
@@ -1888,7 +1889,12 @@ export function registerIpcHandlers(
     // registry; passing it in (rather than session-browser.ts reading disk
     // itself) keeps NativeSessionHost the one source of truth for what native
     // sessions exist.
-    return listPastSessions(activeIds, await nativeHost.listAsync());
+    // WHY the marks: measured 2026-09-26, this native list is most of a first
+    // Resume open on a big history (it runs before listPastSessions starts).
+    perfMark('bg:browse:native-list:start');
+    const nativeEntries = await nativeHost.listAsync();
+    perfMark('bg:browse:native-list:done', { native: nativeEntries.length });
+    return listPastSessions(activeIds, nativeEntries);
   });
 
   ipcMain.handle(IPC.SESSION_HISTORY, async (
