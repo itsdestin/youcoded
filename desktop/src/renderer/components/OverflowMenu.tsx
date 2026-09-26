@@ -25,6 +25,7 @@ import { useAnchoredMenu } from '../hooks/useAnchoredMenu';
 import { useArtifactCount } from '../hooks/useArtifactCount';
 import { Tooltip } from './ui';
 import { FOCUS_RING } from './ui/Button';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 const MENU_WIDTH = 208; // w-52
 
@@ -55,6 +56,7 @@ export default function OverflowMenu({
   // Positioning + outside/Escape dismissal live in the shared hook, which the
   // project-view hero menu also uses.
   const { open, toggle, anchorRef, menuRef, pos, choose } = useAnchoredMenu<HTMLButtonElement>(MENU_WIDTH);
+  useScreenOpen('chat/overflow', () => { if (!open) toggle(); }); // photo-only build (a phone-width screen)
 
   // Any badge on a collapsed item has to surface on the ||| button itself,
   // otherwise collapsing the header silently swallows the notification that
@@ -168,6 +170,7 @@ export default function OverflowMenu({
           className="glass-overlay overlay-no-drag fixed w-52 bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden py-1"
           style={{ top: pos.top, left: pos.left }}
         >
+          <ScreenMark name="chat/overflow" />
           {rows.map(r => (
             <button
               key={r.key}

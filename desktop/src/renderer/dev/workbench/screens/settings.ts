@@ -21,7 +21,10 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/sound', 'dialog'),
   // Only a two-graphics-chip computer shows this row; `gpus=2` makes the practice app one.
   { ...settings('settings/performance', 'dialog'), params: { gpus: '2' } },
-  settings('settings/sync', 'dialog'),
+  settings('settings/sync', 'dialog', 'error-state'),
+  { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
+  { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
+  { ...settings('settings/sync#oversize', 'dialog', 'error-state'), params: { sync: 'oversize' } },
   settings('settings/remote', 'dialog'),
   settings('settings/help', 'dialog'),
   settings('settings/development', 'dialog'),

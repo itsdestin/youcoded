@@ -228,7 +228,8 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
         }`}
         style={{ maxHeight: '45vh' }}
       >
-        {open && <ScreenMark name="chat/skills" />}
+        {open && !searchMode && <ScreenMark name="chat/skills" />}
+        {open && searchMode && <ScreenMark name="chat/commands" />}
         {/* Grab handle */}
         <div className="flex justify-center py-2">
           <div className="w-8 h-1 rounded-full bg-fg-faint" />

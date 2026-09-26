@@ -30,6 +30,7 @@ export type AppScreenSetters = {
   openPagesView: () => void;
   openPagesLibrary: () => void;
   createPage: () => void;
+  openWelcomeForm: () => void;
   showTakeover: (phase: 'confirm' | 'force' | 'undeliverable' | 'claim-denied') => void;
 };
 
@@ -42,6 +43,9 @@ export function useAppScreens(s: AppScreenSetters): void {
   useScreenOpen('chat', () => s.setActiveView('chat'));
   // The welcome screen shows when there is no session (its entry uses the `empty` scenario).
   useScreenOpen('welcome', () => {});
+  useScreenOpen('welcome/new-session', s.openWelcomeForm);
+  // The drawer in its "/" state: the slash-command search, as typing / opens it.
+  useScreenOpen('chat/commands', () => s.openDrawer(true));
   // Straight to the prompt: the "don't ask again" setting would otherwise close the session.
   useScreenOpen('chat/close-session', () => { if (id) s.setClosePromptFor(id); });
   useScreenOpen('chat/skills', () => s.openDrawer(false));

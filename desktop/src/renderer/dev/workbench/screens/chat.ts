@@ -11,6 +11,8 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/close-session', 'dialog'),
   chat('chat/find', 'bar'),
   chat('chat/skills', 'drawer'),
+  chat('chat/commands', 'drawer'),
+  { ...chat('chat/overflow', 'menu', 'narrow'), viewport: { width: 390, height: 844 } },
   chat('chat/model-picker', 'dialog'),
   chat('chat/preferences', 'dialog'),
   chat('chat/resume', 'dialog'),
@@ -31,6 +33,7 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/menu/file', 'menu'),
   // No session at all: the first screen a new user sees.
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
+  { name: 'welcome/new-session', tags: ['view'], scenario: 'empty' },
   { name: 'projects', tags: ['view', 'projects'] },
   { name: 'marketplace', tags: ['view', 'marketplace'] },
   { name: 'library', tags: ['view', 'marketplace'] },

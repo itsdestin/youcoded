@@ -2007,6 +2007,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     renameDevice: async () => ({ ok: true }),
     removeDevice: async () => ({ ok: true }),
   };
+  // `?sync=<state>` — the Backup & Sync states the review plans used to patch in by hand:
+  // `ok` (every space synced), `auth-error` (GitHub sign-in expired), `oversize` (files
+  // too big to sync). The default stays the failing-sync state the panel already shows.
+  const syncSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('sync') : null;
+  if (syncSwitch) {
+    const base = syncSpaces.status;
+    (syncSpaces as { status: () => Promise<unknown> }).status = async () => {
+      const st = await base();
+      const events = st.recentEvents.filter((e: { type: string }) => e.type !== 'error');
+      if (syncSwitch === 'auth-error') return { ...st, recentEvents: [...events, { type: 'error', spaceId: 'personal', at: SYNC_NOW - 30_000, errorCode: 'github-auth', message: 'GitHub sign-in expired — reconnect your GitHub account in the Sync settings' }] };
+      if (syncSwitch === 'oversize') return { ...st, recentEvents: events, oversize: [{ spaceId: 'personal', files: ['Conversations/claude/transcripts/youcoded-dev/84ee31a9.jsonl', 'Conversations/claude/transcripts/youcoded-dev/b4c2255f.jsonl'] }], oversizeLimitMb: 50 };
+      return { ...st, recentEvents: events };
+    };
+  }
 
   // The LEGACY rclone half of Backup & Sync (Drive/iCloud/GitHub backends), which
   // SyncPanel reads alongside syncSpaces above.
