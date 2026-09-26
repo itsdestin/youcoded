@@ -53,7 +53,7 @@ const CATALOG: CatalogSection[] = [
     title: 'Failures & status variants',
     description: 'Failed, approval-gated, and background execution states.',
     kind: 'tools',
-    names: ['bash-awaiting-approval', 'bash-awaiting-approval-denylisted', 'bash-background-running', 'bash-background-finished', 'bash-background-failed', 'bash-background-stopped', 'bash-background-detached', 'bash-failed'],
+    names: ['edit-outside-full-auto', 'bash-push-full-auto', 'bash-awaiting-approval', 'bash-awaiting-approval-denylisted', 'bash-background-running', 'bash-background-finished', 'bash-background-failed', 'bash-background-stopped', 'bash-background-detached', 'bash-failed'],
   },
   {
     title: 'Chatsearch cards',

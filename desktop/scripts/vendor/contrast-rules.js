@@ -219,6 +219,17 @@
     // the inset bubble. TEXT_RULES checks fg-muted at full opacity; this keeps
     // the 60% case explicitly covered since alpha is applied at the call site.
     { name: 'fg-muted/60 on inset', tier: 'SOFT',    type: 'contrast',    fg: 'fg-muted',  bg: 'inset',   threshold: 2.0,  fgAlpha: 0.6, description: 'Timestamp text in assistant bubbles' },
+    // The Minimalist chrome (chrome-style "float"). Since 2026-09-24 ANY theme can
+    // be shown this way — the user picks it in Settings → Appearance → Layout — so
+    // every theme is measured, not only those that ship "float". Each control is a
+    // 16% inset fill with a 40% edge ring (the app's float-chrome.css). Text on it
+    // needs no rule of its own: the fill sits between canvas and inset, both of
+    // which TEXT_RULES already check, and over a wallpaper the app recolours that
+    // text from the pixels behind it. What nothing covered is whether the control
+    // is visible at all on a flat background. SOFT because the faintness is the
+    // style: the shipped themes measure 1.16–1.44 and Destin approved the lowest
+    // (Halftone, Midnight); 1.15 flags only a pack whose chips would vanish.
+    { name: 'float control outline vs canvas', tier: 'SOFT', type: 'contrast', fg: 'float-ring', bg: 'canvas', threshold: 1.15, description: 'Minimalist layout: each floating button must be visible on a flat background' },
   ];
 
   // ── Evaluation ────────────────────────────────────────────────────────────
@@ -408,6 +419,16 @@
           parsed.link = picked;
         }
       }
+    }
+
+    // ── Synthesize the Minimalist control's outline ──
+    // Mirrors float-chrome.css: surface = inset at 16% over canvas, ring = edge at
+    // 40% over that surface. Measured against canvas because that is what sits
+    // around the control on a flat theme. Not tokens — no pack can declare them.
+    if (parsed.inset && parsed.canvas && parsed.edge) {
+      const chip = alphaComposite(parsed.inset, parsed.canvas, 0.16);
+      const edge = parsed.edge.a < 1 ? alphaComposite(parsed.edge, chip, parsed.edge.a) : parsed.edge;
+      parsed['float-ring'] = alphaComposite(edge, chip, 0.4);
     }
 
     const results = { HARD: [], SURFACE: [], SOFT: [] };

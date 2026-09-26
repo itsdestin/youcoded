@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { sanitizeRigSvg } from './sanitize-rig-svg';
 import { DEFAULT_BUDDY_RIG } from './default-buddy-rig';
+import { bodyLoopAt, type BodyLoop } from './rig-body-loop';
 import {
-  POSES, LIMB_IDS, BLINK_CFG, FACE_FALLBACK, IDLE_LOOP_CLASS, parsePivot, defaultPivot,
+  POSES, LIMB_IDS, BLINK_CFG, FACE_FALLBACK, IDLE_BODY_LOOP, parsePivot, defaultPivot,
   stepSpring, isSettled, dragTargets, idleSway, waveSway,
   type PoseName, type FaceName, type SpringState, type RigPartId, type MotionStyle,
 } from './mascot-poses';
@@ -42,7 +43,6 @@ interface Parts {
 const SPRING_IDS = [...LIMB_IDS, 'rig-tail'] as const;
 type SpringId = (typeof SPRING_IDS)[number];
 
-const ALL_LOOP_CLASSES = ['rig-breathing', 'rig-bounce-loop', 'rig-float-loop', 'rig-sleep-loop', 'rig-fast-breath', 'rig-dizzy-sway'];
 
 /**
  * Renders a rigged mascot SVG and animates it (spec §3 + §5).
@@ -51,9 +51,9 @@ const ALL_LOOP_CLASSES = ['rig-breathing', 'rig-bounce-loop', 'rig-float-loop', 
  *   target = pose base + (drag trail while dragging, else motion-style idle
  *   sway + welcome wave). Pose changes ride the physics instead of a CSS
  *   transition, so everything composes and settles with overshoot.
- * - Motion styles: idle body loop on #rig-root (CSS keyframes in mascot.css,
- *   amplitude via --amp = intensity), per-style blink cadence, hyper
- *   spring-velocity twitches.
+ * - Motion styles: idle body loop on #rig-root (rig-body-loop.ts, drawn by
+ *   the same 30 fps update as the limbs; amplitude = intensity), per-style
+ *   blink cadence, hyper spring-velocity twitches.
  * - Curious-face pupils track the cursor.
  */
 export function MascotRig({
@@ -173,19 +173,19 @@ export function MascotRig({
     return partsRef.current;
   };
 
+  // Which body loop the 30 fps update draws on #rig-root (null = hold still).
+  // WHY not CSS keyframes (2026-09-26): a smooth CSS loop makes the browser draw
+  // at the panel's full refresh rate (180/s on Destin's screen) — measured as
+  // most of an idle welcome screen's graphics cost. See rig-body-loop.ts.
+  const bodyLoopRef = useRef<{ loop: BodyLoop; ms?: number } | null>(null);
   const applyLoopClass = (parts: Parts): void => {
     const { root } = parts;
-    const host = hostRef.current;
-    if (!root || !host) return;
-    root.classList.remove(...ALL_LOOP_CLASSES);
-    // --amp feeds the loop keyframes' amplitude (mascot.css).
-    host.style.setProperty('--amp', String(intensityRef.current));
-    if (reducedEffects) return;
+    if (!root) return;
     const p = poseRef.current;
-    if (p === 'dizzy') { root.classList.add('rig-dizzy-sway'); return; }
-    if (p.startsWith('peek')) return; // peeking bodies hold still — the grip carries the read
-    root.classList.add(IDLE_LOOP_CLASS[styleRef.current]);
-    if (styleRef.current === 'hyper') root.classList.add('rig-fast-breath');
+    bodyLoopRef.current = reducedEffects || p.startsWith('peek') // peeking bodies hold still — the grip carries the read
+      ? null
+      : p === 'dizzy' ? { loop: 'dizzy' } : IDLE_BODY_LOOP[styleRef.current];
+    if (!bodyLoopRef.current) { root.style.transform = ''; root.style.transformOrigin = ''; }
   };
 
   // ── Index after the SVG lands in the DOM (ensureParts also self-heals
@@ -380,6 +380,14 @@ export function MascotRig({
         const tx = transSpringsRef.current.get(`${id}:tx`)?.value ?? (pp.tx ?? 0);
         const ty = transSpringsRef.current.get(`${id}:ty`)?.value ?? (pp.ty ?? 0);
         el.style.transform = `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) rotate(${s.value.toFixed(2)}deg)`;
+      }
+      // The idle body loop rides this same update, so the mascot draws at this
+      // update's rate (30/s idle) rather than the panel's.
+      const loop = bodyLoopRef.current;
+      if (loop && parts.root) {
+        const b = bodyLoopAt(loop.loop, now, intensityRef.current, loop.ms);
+        parts.root.style.transformOrigin = b.origin;
+        parts.root.style.transform = b.transform;
       }
       // Velocity decay while a drag pauses mid-hold, so limbs relax.
       if (m.dragging) { m.vx *= 0.85; m.vy *= 0.85; }

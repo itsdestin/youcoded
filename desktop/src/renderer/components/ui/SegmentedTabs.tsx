@@ -100,7 +100,11 @@ export function SegmentedTabs({
             tabIndex={active ? 0 : -1}
             onClick={() => onChange(tab.id)}
             className={[
-              pill ? PILL_TAB_BASE : TAB_BASE,
+              // Contained tabs split the width evenly (flex-1), so side padding only sets
+              // the MINIMUM width — cutting it to px-1 lets five short words fit a 420px
+              // popup (Appearance's bubble/message-box strips, 2026-09-24) and changes
+              // nothing visible on the two-tab strips, whose text is centred anyway.
+              pill ? PILL_TAB_BASE : variant === 'contained' ? TAB_BASE.replace('px-3', 'px-1 min-w-0') : TAB_BASE,
               active ? TAB_ACTIVE : pill ? PILL_TAB_INACTIVE : TAB_INACTIVE,
               variant === 'contained' ? 'flex-1' : '',
             ]

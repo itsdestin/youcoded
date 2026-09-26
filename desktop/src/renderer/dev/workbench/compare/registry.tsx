@@ -87,6 +87,8 @@ import { SessionStripMotionDemo } from '../mockups/SessionStripMotion';
 // actual settle → breathe → wake. A sleep pose cannot be judged from a still —
 // two thirds of it is motion.
 import { BuddySleepDemo } from '../mockups/BuddySleep';
+// mascot-frame-rate: the REAL welcome mascot, old full-refresh loop vs the 30/s one.
+import { MascotFrameRateDemo } from '../mockups/MascotFrameRate';
 import { FriendlyMascots } from '../mockups/FriendlyMascots';
 import { RemoteSetupDemo } from '../mockups/RemoteSetup';
 // The REAL derivation the shipping card will use — a candidate that hardcoded
@@ -4552,6 +4554,24 @@ function PresentRefTable() {
 }
 
 const ALL_SURFACES: CompareSurface[] = [
+  {
+    id: 'mascot-frame-rate',
+    label: 'Mascot — frame rate',
+    question: 'Does the mascot moving 30 times a second look as good as the old full-refresh motion?',
+    frame: 'canvas',
+    // Welcome-screen size plus the style buttons; judged at his real size.
+    paneWidth: 260,
+    rounds: [
+      {
+        n: 1,
+        basis: "Destin, 2026-09-26: \"lets test at a lower framerate?\" — after measuring on his real screen that the idle welcome mascot kept the graphics chip ~36% busy (8% with it hidden). Until now: CSS keyframes, drawn at the panel's full refresh rate. 30 per second: the same keyframes, computed in MascotRig's own 30/s update (measured on his screen: ~12-17% busy, app CPU ~2/3 -> ~1/4 of a core). Same rig, same motion values; only the rate differs.",
+        candidates: [
+          { id: 'full-refresh', label: 'Until now', note: 'Smooth CSS loop — the screen redraws at its full rate (180/s on yours).', render: () => <MascotFrameRateDemo driver="css" /> },
+          { id: 'thirty', label: '30 per second', note: 'The same motion, drawn 30 times a second with the limbs.', render: () => <MascotFrameRateDemo driver="tick" /> },
+        ],
+      },
+    ],
+  },
   {
     id: 'buddy-sleep',
     label: 'Buddy — falling asleep',

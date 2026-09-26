@@ -1,3 +1,4 @@
+import type { NativePermissionMode } from '../../../shared/permission-types';
 import { MARKETPLACE_API_HOST } from '../../state/marketplace-api-client';
 import type { ChatGptAccountStatus } from '../../../shared/chatgpt-types';
 import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
@@ -492,6 +493,26 @@ function applyFailSwitch(impls: Record<string, Record<string, unknown>>): void {
   }
 }
 
+/** `?stall=session.browse` — the stall twin of `?fail=`: each named channel never
+ *  answers, so a spinner's long-wait state (Resume's "still loading", 2026-09-26)
+ *  can be photographed. Same nested-path rules as applyFailSwitch. */
+function applyStallSwitch(impls: Record<string, Record<string, unknown>>): void {
+  const raw = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('stall') : null;
+  if (!raw) return;
+  for (const path of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const parts = path.split('.');
+    if (parts.length < 2) continue;
+    let parent: Record<string, unknown> = impls;
+    for (const key of parts.slice(0, -1)) {
+      const current = parent[key];
+      const copy = current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
+      parent[key] = copy;
+      parent = copy;
+    }
+    parent[parts[parts.length - 1]] = () => new Promise(() => {});
+  }
+}
+
 /** `?update=available` — the status pill's update, which no scenario otherwise sends. */
 function updateStatusSwitch(): { current: string; latest: string; update_available: true; download_url: string } | null {
   if (typeof location === 'undefined' || new URLSearchParams(location.search).get('update') !== 'available') return null;
@@ -557,6 +578,7 @@ export function createMockShim(store: MockStore): Window['claude'] {
   // "Cannot read properties of undefined (reading 'find')". Driving the impl
   // keys means a new namespace works the moment it is written.
   applyFailSwitch(impls);
+  applyStallSwitch(impls);
   for (const ns of new Set([...NAMESPACES, ...Object.keys(impls)])) {
     bridge[ns] = withCatchAll(ns, impls[ns] ?? {});
   }
@@ -1753,6 +1775,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
 
   let contextPreferences: import('../../../shared/context-preferences').ContextPreferences = { openrouter: 'standard', chatgpt: 'standard' };
   let stepGuard: number | null = null;
+  const nativeModes = new Map<string, NativePermissionMode>();
+  const nativePermission = {
+    getPermissionMode: async (sessionId: string) => nativeModes.get(sessionId) ?? 'ask',
+    setPermissionMode: async (sessionId: string, mode: NativePermissionMode) => {
+      if (store.refuseWrites) return nativeModes.get(sessionId) ?? 'ask';
+      nativeModes.set(sessionId, mode);
+      return mode;
+    },
+  };
   const native: Ns<'native'> = {
     supported: true,
     getContextPreferences: async () => ({ ...contextPreferences }),
@@ -1761,6 +1792,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       contextPreferences = { ...contextPreferences, ...patch };
       return { ...contextPreferences };
     },
+    // Permission mode per native session. WHY (2026-09-24): with no entry here the
+    // catch-all proxy answered `[]`, which App.tsx reads as 'unknown' — so every
+    // native session in the workbench wore a red "PERMISSION UNKNOWN" chip no real
+    // session shows (seen in the themes' preview screenshots). A new session starts
+    // on 'ask', the preset default (main/harness/preset-registry.ts).
+    // getPermissionMode is in preload but not in the renderer's Window type (App.tsx
+    // reaches it through `as any`), so it is spread in rather than written here.
+    ...nativePermission,
     getStepGuard: async () => stepGuard,
     setStepGuard: async (value: number | null) => {
       if (store.refuseWrites) throw new Error('The workbench is refusing writes.');

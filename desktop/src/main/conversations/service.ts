@@ -26,6 +26,7 @@ import { ccProjectSlug, nativeStoreSlug } from '../slug-encoding';
 import { onSyncSpacesEvent, syncSpacesSyncNow, syncSpacesSyncNowAwaited, getManagedRoots } from '../sync-spaces/service';
 import { readFolders } from '../saved-folders';
 import { resolveLocalProject } from './resolve-local-project';
+import { perfMark } from '../perf-marks';
 import type { TranscriptEvent, SessionProvider } from '../../shared/types';
 import type { SpaceSyncEvent } from '../sync-spaces/types';
 
@@ -672,6 +673,13 @@ async function materializeSweep(): Promise<void> {
   // Fix: quiesced for the slug repair — see pauseSweeps' WHY. Return before
   // any I/O; resumeSweeps() re-fires this exact call once the pause lifts.
   if (pauseDepth > 0) { materializePending = true; return; }
+  // WHY a wrapper: the sweep has several early exits; timing the whole body
+  // from one place keeps the perf marks honest without touching its logic.
+  perfMark('bg:materialize:start');
+  try { await materializeSweepBody(); } finally { perfMark('bg:materialize:done'); }
+}
+
+async function materializeSweepBody(): Promise<void> {
   // Capture the store (review fix 3): stop() mid-sweep nulls the module field,
   // and every use below an await would otherwise become a swallowed TypeError.
   const s = store;
@@ -997,7 +1005,10 @@ function runReconcile(): void {
   // surfaced fork must be frozen out of the local->space direction too; see
   // heldForkIds' WHY in slug-repair-state.ts.
   const heldForks = heldForkIds();
-  reconcile({
+  // WHY: the startup reconcile (and the copies it queues) is detached, so the
+  // perf rig can only see how long it runs — and what it overlaps — by marks.
+  perfMark('bg:reconcile:start');
+  void reconcile({
     projectsDir, topicsDir, store: s, device, knownFolders,
     // Production mirror closure: the reconciler stays free of transcript-mirror
     // + the Conversations root. Best-effort — a throw here must not abort the scan.
@@ -1020,5 +1031,7 @@ function runReconcile(): void {
         .then(() => mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: dest }))
         .catch(() => { /* best-effort */ });
     },
-  }).catch(() => { /* reconciler failure must never break startup (carry-forward 2) */ });
+  }).catch(() => { /* reconciler failure must never break startup (carry-forward 2) */ })
+    .then(() => { perfMark('bg:reconcile:scan-done'); return reconcileMirrorTail; })
+    .then(() => perfMark('bg:reconcile:copies-done'));
 }

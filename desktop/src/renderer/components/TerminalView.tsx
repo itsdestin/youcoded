@@ -679,8 +679,12 @@ function TerminalView({ sessionId, visible }: Props) {
     >
       {visible && <ScreenMark name="chat/terminal" />}
       {terminalBg && (
+        // terminal-wallpaper: class hook only — the 'float' chrome style
+        // (float-chrome.css) re-aligns this layer when it floats the terminal
+        // as an inset card. No other style reads it.
         <div
           aria-hidden
+          className="terminal-wallpaper"
           style={{
             position: 'absolute',
             inset: 0,

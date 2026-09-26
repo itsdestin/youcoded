@@ -2,6 +2,7 @@
 @import "./buddy.css";
 @import "./mascot.css";
 @import "./motion.css";
+@import "./float-chrome.css";
 
 @source "../../";
 
@@ -2167,6 +2168,25 @@ pre.yc-code code {
 [data-chrome-style='floating'] .chrome-glass,
 [data-input-style='floating'] .chrome-glass {
   display: none;
+}
+
+/* 'float' chrome deliberately does NOT take the `display: none` above.
+   `display: none` does not stop the element PAINTING here: the browser promotes
+   an element carrying a clip-path to its own stacking context, and in the
+   workbench it leaked a visible hairline down the right edge of the window
+   (measured 2026-09-20). It also has to stay in the tree, because chrome-glass
+   owns the `--top-chrome-bottom` / `--bottom-chrome-height` custom properties
+   that the header veil and every chat float read.
+   Instead the donut simply stops painting: the same clip-path with all four
+   strips collapsed onto the top edge. Nothing is drawn, nothing is promoted,
+   and no variable the rest of the layout depends on moves.
+   The rest of this mode is in styles/float-chrome.css. */
+[data-chrome-style='float'] .chrome-glass,
+[data-chrome-style='float'] .app-mockup .chrome-glass {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  clip-path: polygon(0 0, 100% 0, 100% 0, 0 0);
 }
 
 /* When a right pane (artifact drawer OR game pane) is open, the chat

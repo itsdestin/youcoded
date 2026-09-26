@@ -821,6 +821,8 @@ export class HarnessSession extends EventEmitter {
    *  Mirrors shellCwd exactly — same "session runtime, resets on resume"
    *  contract, same reason (never persisted to the transcript). */
   private shellEnv: Record<string, string> | null = null;
+  /** Ephemeral, root-only approval across all outside folders; never serialized. */
+  private externalEditsAllowed = false;
   private retryDelays: number[];
   // Resolved capability profile (Task 5). Drives the doom-loop window + tool
   // attachment; re-assigned by setBinding on a mid-session model swap.
@@ -1005,6 +1007,7 @@ export class HarnessSession extends EventEmitter {
     this.todos.length = 0;
     this.shellCwd = null; // a resumed session starts back at the workspace root
     this.shellEnv = null; // same contract — a resumed session starts with a fresh env too
+    this.externalEditsAllowed = false; // consent never survives a resume
   }
 
   /** Everything a durable accepted-history checkpoint needs, taken atomically
@@ -3975,7 +3978,10 @@ export class HarnessSession extends EventEmitter {
         // and — because the ask is no longer synthetic — an "Always allow" on
         // one of those rule-driven asks is now a promise the engine can keep.
         if (!READ_ONLY_PATH_TOOLS.has(call.toolName)) {
-          externalAsk = true;   // external_directory → force an ask (writes only)
+          // WHY: this grant removes only the outside-folder toll. The normal
+          // permission decision still runs, and credential denies ran above.
+          externalAsk = !(this.externalEditsAllowed && !this.opts.isSpecialistChild
+            && (call.toolName === 'Write' || call.toolName === 'Edit'));
         }
       }
     }
@@ -4035,6 +4041,10 @@ export class HarnessSession extends EventEmitter {
       // was ever asked. Falls back to the real-decline copy
       // (still accurate for an actual respond({behavior:'deny'})).
       if (d.behavior !== 'allow') return { text: d.message ?? 'The user declined this action. Ask what they would like instead, or try a different approach.', isError: true };
+      // WHY: only the specific outside-file ask can authorize this memory-only
+      // exception. Child sessions never inherit it, even when sharing a parent.
+      if (externalAsk && !this.opts.isSpecialistChild && d.allowExternalEditsForSession === true
+        && (call.toolName === 'Write' || call.toolName === 'Edit')) this.externalEditsAllowed = true;
       // "Always allow" → emit a rule for the host to persist (PermissionStore).
       // Plain EventEmitter event, NOT a transcript event — the frozen emit
       // surface is untouched.
