@@ -52,9 +52,14 @@ describe('LocalModelRow', () => {
   beforeEach(() => { setupModelsMock(); });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-  it('an unfinished row wears the interrupted banner, shows real progress, and resumes by model id', async () => {
+  it('an unfinished row shows an interrupted notice with Resume and Delete inside it, real progress, and resumes by model id', async () => {
     render(<LocalModelRow model={unfinished} onRefresh={async () => {}} />);
-    expect(screen.getByText('Download interrupted')).toBeTruthy();
+    // The shared notice box, not a coloured strip: its options sit INSIDE it
+    // (decisions.md "Problem on a list item").
+    const notice = screen.getByText('Download interrupted').closest('.rounded-lg.border') as HTMLElement;
+    expect(notice.className).toContain('bg-amber-500/10');
+    expect(notice.contains(screen.getByText('Resume'))).toBe(true);
+    expect(notice.contains(screen.getByText('Delete'))).toBe(true);
     expect(screen.getByText('66% — 74.2 of 113.0 GB')).toBeTruthy();
     await act(async () => { fireEvent.click(screen.getByText('Resume')); });
     expect(window.claude.models.resume).toHaveBeenCalledWith('Half-UD-Q4_K_XL-00001-of-00004');
@@ -144,8 +149,8 @@ describe('LocalModelRow', () => {
 
   it('a live download shows a progress bar and Pause in place of Resume and Delete', () => {
     render(<LocalModelRow model={unfinished} progress={liveOf('downloading')} onRefresh={async () => {}} />);
-    expect(screen.getByText('Downloading')).toBeTruthy();          // the band carries the state word
-    expect(screen.getByText('70% — 79.2 of 113.0 GB · part 3 of 4')).toBeTruthy();
+    // The progress line carries the state word (the coloured band is gone).
+    expect(screen.getByText('Downloading · 70% — 79.2 of 113.0 GB · part 3 of 4')).toBeTruthy();
     expect(screen.getByLabelText('Download progress')).toBeTruthy();
     expect(screen.queryByText('Resume')).toBeNull();
     // WHY Delete is absent while bytes move: two stop-shaped buttons differing
@@ -157,14 +162,15 @@ describe('LocalModelRow', () => {
 
   it('an untraceable row offers no Resume, shows no percentage, and says what to do', () => {
     render(<LocalModelRow model={untraceable} onRefresh={async () => {}} />);
-    expect(screen.getByText('Damaged')).toBeTruthy();
     expect(screen.queryByText('Resume')).toBeNull();
     expect(screen.queryByText(/%/)).toBeNull();      // no total on disk = no honest percentage
     expect(screen.getByText('74.2 GB downloaded')).toBeTruthy();
-    // The way out lives behind the (i) rather than as a permanent paragraph
-    // under the least useful row — the trigger must still be reachable.
-    expect(screen.getByLabelText('Why this download is damaged')).toBeTruthy();
-    expect(screen.getByText('Delete')).toBeTruthy();
+    // A danger notice inside the card says what to do, in plain grey text, with
+    // Delete inside it — no red strip, no explanation hidden behind an (i).
+    const notice = screen.getByText('Damaged download').closest('.rounded-lg.border') as HTMLElement;
+    expect(notice.className).toContain('bg-destructive/10');
+    expect(notice.textContent).toMatch(/Find the model in search and download\s+it again/);
+    expect(notice.contains(screen.getByText('Delete'))).toBe(true);
   });
 
   it('the delete confirmation names the real number of bytes at stake', async () => {

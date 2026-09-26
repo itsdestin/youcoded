@@ -102,7 +102,8 @@ export default function LocalModelsSection({ embedded = false }: { embedded?: bo
   return (
     <section>
       {!embedded && (
-        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Local Models</h3>
+        // WHY SectionLabel (fix batch 2): the guide's small label, normal case.
+        <SectionLabel className="mb-2">Local models</SectionLabel>
       )}
 
       <div className="space-y-4">
@@ -498,8 +499,10 @@ export function RepoCard({
                 <span className={fitColor(chosen.fit.fit)}>{chosen.fit.label}</span>
               </p>
             )}
+            {/* Grey, not amber (fix batch 2): the guide keeps status colours out
+                of text; the Retry box opens when the row is expanded. */}
             {loadState === 'error' && quants === null && (
-              <p className="text-3xs text-amber-700 mt-0.5">Couldn't reach Hugging Face — expand to retry</p>
+              <p className="text-3xs text-fg-muted mt-0.5">Couldn't reach Hugging Face — expand to retry</p>
             )}
           </div>
           <svg className={`w-4 h-4 mt-0.5 text-fg-muted transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
@@ -596,78 +599,15 @@ function displayName(model: InstalledLocalModel): string {
   return name || model.id;
 }
 
-/** The banner strip across the top of a row that is not simply "finished".
- *  Three states on the app's own status palette (globals.css:291-294 — the
- *  THREE colours it holds constant across every theme): green = moving,
- *  amber = stopped but you can carry on, red = stopped and you can't.
- *
- *  SOLID fill with BLACK text, and both halves of that were measured, not
- *  guessed (2026-08-27):
- *    - The first version used a 15% tint with coloured text. On Creme that
- *      scored 1.07:1 and on Light 1.14:1 — the label was invisible on both
- *      light themes while reading 5.62:1 on Midnight. A translucent strip
- *      takes its final colour from the theme behind it, so no single text
- *      colour can be safe in all six; a solid strip can.
- *    - The second version used white text on `amber-700`, assuming Tailwind's
- *      #B45309 (5.02:1). It is NOT: globals.css:294 remaps --color-amber-700
- *      to #FF9800, where white scores 2.06:1 — still failing. Black on the
- *      app's three status colours scores 9.74 / 7.56 / 4.98, so black it is.
- *  Deliberately `red-400` rather than `bg-destructive`: this is a STATUS
- *  indicator, not a destructive-action surface, and --destructive is
- *  community-overridable with no contrast guard. */
-const ROW_BANNER = {
-  downloading: {
-    text: 'Downloading',
-    strip: 'bg-green-400 text-black',
-    border: 'border-green-400/40',
-  },
-  verifying: {
-    text: 'Verifying',
-    strip: 'bg-green-400 text-black',
-    border: 'border-green-400/40',
-  },
-  interrupted: {
-    text: 'Download interrupted',
-    strip: 'bg-amber-700 text-black',
-    border: 'border-amber-700/40',
-  },
-  damaged: {
-    text: 'Damaged',
-    strip: 'bg-red-400 text-black',
-    border: 'border-red-400/40',
-  },
-} as const;
-
-/** The band's outline: flat across the middle, then sweeping DOWN into each of
- *  the card's rounded corners so the two read as one shape.
- *
- *  The arc's ORIENTATION is the whole trick, and getting it backwards is what
- *  made the first attempt look like a blocky tab: each corner ellipse is centred
- *  at the INNER-BOTTOM of its wedge, so the arc leaves the flat run with a
- *  HORIZONTAL tangent (no step where they join) and meets the card's side edge
- *  with a VERTICAL one. Centring it at the outer corner instead flips both
- *  tangents and produces the notch.
- *
- *  Built from three mask layers rather than a drawn shape: a mask is
- *  colour-agnostic, so the three state colours stay ordinary background classes
- *  with their contrast untouched, and px-sized layers do not stretch with the
- *  panel the way an SVG scaled to width would.
- */
-const BAND_H = 11;   // flat thickness across the middle
-const BAND_SWEEP = 14;   // how far in from each end the curve starts
-const BAND_DEPTH = 6;    // how far the ends drop below the flat run
-
-const MASK = {
-  image: [
-    'linear-gradient(#000, #000)',
-    `radial-gradient(${BAND_SWEEP}px ${BAND_DEPTH}px at 100% 100%, transparent 99%, #000 100%)`,
-    `radial-gradient(${BAND_SWEEP}px ${BAND_DEPTH}px at 0 100%, transparent 99%, #000 100%)`,
-  ].join(', '),
-  size: `100% ${BAND_H}px, ${BAND_SWEEP}px ${BAND_DEPTH}px, ${BAND_SWEEP}px ${BAND_DEPTH}px`,
-  position: 'top left, bottom left, bottom right',
-  repeat: 'no-repeat',
-};
-
+/* The coloured banner strip that used to run across the top of a row that was
+ * not simply "finished" (green Downloading/Verifying, amber "Download
+ * interrupted", red "Damaged") — and the mask geometry that curved it into the
+ * card's corners — is GONE (fix batch 2, 2026-09-26). Destin: "these top
+ * banners are still unlike anything else in the app. it should match other
+ * existing warning/error styles" (fix batch 1, B1-3); decisions.md "Problem on
+ * a list item" (settings-pieces#P-4): the shared warning/error box INSIDE the
+ * item's card, the item's options inside that box, no coloured strips. A live
+ * download now says "Downloading"/"Verifying" in its progress line instead. */
 
 // Exported (named) so tests can pin each row state without booting the whole
 // LocalModelsSection (which needs the full models API mocked).
@@ -710,12 +650,13 @@ export function LocalModelRow({
   const total = live ? live.totalBytes : model.totalSizeBytes;
   const pct = percentOf(onDisk, total);
 
-  // Every state except "finished" wears a banner, so the row's condition reads
-  // before any number does. Only a complete model has none.
-  const banner = live
-    ? (live.state === 'verifying' ? ROW_BANNER.verifying : ROW_BANNER.downloading)
-    : model.status === 'unfinished' ? ROW_BANNER.interrupted
-    : model.status === 'untraceable' ? ROW_BANNER.damaged
+  // A stopped download is a PROBLEM on this item, shown as the shared notice box
+  // inside the card with the item's options in it (fix batch 2 — decisions.md
+  // P-4). Not while a download is live (it is moving again) or while the
+  // delete confirmation is up (that has its own box).
+  const problem: 'interrupted' | 'damaged' | null = live ? null
+    : model.status === 'unfinished' ? 'interrupted'
+    : model.status === 'untraceable' ? 'damaged'
     : null;
 
   // WHY a download's own failure is read from the progress stream: resume()
@@ -788,8 +729,13 @@ export function LocalModelRow({
   // under the model name (Destin, 2026-08-27): they describe the bar, so they
   // belong with it. A row with no bar has nothing to caption, and shows its size
   // under the name as before.
+  // WHY the state word leads the line (fix batch 2): the banner that used to
+  // name a live download ("Downloading" / "Verifying") is gone, so the line
+  // over the bar says it instead — same word, normal grey text.
+  const liveWord = live ? (live.state === 'verifying' ? 'Verifying' : 'Downloading') : null;
   const progressText = showBar
-    ? `${pct ?? 0}% — ${gbNum(onDisk)} of ${gb(total ?? 0)}`
+    ? (liveWord ? `${liveWord} · ` : '')
+      + `${pct ?? 0}% — ${gbNum(onDisk)} of ${gb(total ?? 0)}`
       + (live && live.parts > 1 ? ` · part ${live.currentPart} of ${live.parts}` : '')
     : null;
 
@@ -798,57 +744,9 @@ export function LocalModelRow({
     : `${gb(model.sizeBytes)} downloaded`;
 
   return (
-    <div className={`rounded-lg bg-inset/50 overflow-hidden ${banner ? `border ${banner.border}` : ''}`.trim()}>
-      {/* The banner names the state before any number is read — a stopped
-          download is the thing this screen exists to make obvious. */}
-      {/* An accent, not a surface (Destin, 2026-08-27): 9px type — the smallest
-          size the app defines, and arbitrary text-[Npx] is banned (globals.css:299)
-          — on 1px of padding with leading-none, so the band is about a third of
-          the header it started as.
-          The bottom edge runs FLAT across the width and rounds into the card's
-          corners only at the two ends. rounded-b-lg is the SAME 12px the card
-          itself uses (--radius-lg), so the band's ends echo the corner they sit
-          in rather than introducing a second, competing curve.
-          Two earlier shapes were built and rejected before this one: an ellipse
-          clip tapering to points (the ends floated in mid-air above the corners)
-          and its inverse, dipping into the corners (it read as a header again).
-          WHY a SOLID fill and not a fade-to-transparent: a translucent strip
-          takes its colour from the theme behind it, which is what made this
-          label score 1.07:1 on Creme. Rounding removes fill without diluting
-          it, so the contrast under the label is untouched. */}
-      {banner && (
-        <div
-          // The silhouette Destin tuned on 2026-08-27 (sweep 8 / depth 6 / flat 11,
-          // smoothed to a 14px sweep): FLAT across the middle, then curving DOWN
-          // into each corner so the band and the card's corner read as one shape.
-          //
-          // Three mask layers unioned: the flat strip down to 11px, plus an
-          // elliptical wedge at each bottom corner reaching 6px deeper. A MASK
-          // rather than a drawn shape because the mask is colour-agnostic — the
-          // three state colours stay ordinary background classes — and because
-          // px-sized layers do not stretch with the panel, which an SVG scaled to
-          // width would (the sweep would visibly distort on resize).
-          // border-radius cannot do this: it only ever cuts a corner off, and
-          // this corner has to bulge outward.
-          style={{
-            height: `${BAND_H + BAND_DEPTH}px`,
-            WebkitMaskImage: MASK.image, maskImage: MASK.image,
-            WebkitMaskSize: MASK.size, maskSize: MASK.size,
-            WebkitMaskPosition: MASK.position, maskPosition: MASK.position,
-            WebkitMaskRepeat: MASK.repeat, maskRepeat: MASK.repeat,
-          }}
-          // WHY normal case (fix batch 1 addendum, 2026-09-24 — Destin: local
-          // model download labels should match the rest of the app): the
-          // solid-fill/black-text geometry above stays exactly as measured
-          // (it already puts the status colour in the tint, not the text) —
-          // only the letter-spacing/uppercase, which the design guide retires
-          // everywhere, is dropped.
-          className={`px-3 pt-px text-4xs leading-none font-medium text-center ${banner.strip}`}
-        >
-          {banner.text}
-        </div>
-      )}
-
+    // No coloured border or strip any more (fix batch 2): every row is the same
+    // plain card; a problem shows as the notice box inside it, below.
+    <div className="rounded-lg bg-inset/50">
       <div className="px-3 pt-2 pb-2">
         <div className="flex items-center justify-between gap-3">
           <LocalBrandMark id={model.id} />
@@ -866,42 +764,37 @@ export function LocalModelRow({
             {subtitle && <p className="text-3xs text-fg-muted">{subtitle}</p>}
             {/* Its own line, in full — Destin, 2026-08-27 (A3). It is free to wrap;
                 the room came from the detail line above, which handed its state
-                word ("Downloading…") to the banner. */}
+                word ("Downloading…") to the progress line over the bar. */}
             {quality && <p className="text-3xs text-fg-muted">{quality}</p>}
             {/* S-3: "Add vision (0.9 GB)" — the projector this download never fetched.
                 One step: download it and move the model into its own folder so the
                 engine pairs the two. A text line under the name rather than a third
                 button: three buttons beside the name squeezed it to one letter at
                 the dialog's width (seen in the first workbench capture). */}
+            {/* WHY a small outlined Button (fix batch 2 — decisions.md "Follow-up
+                actions"): underlined text is only for a link inside a sentence,
+                never for an action. Still under the name, for the same reason. */}
             {model.status === 'complete' && model.vision === 'available' && !live && !confirming && (
-              <p className="text-3xs">
-                <button
-                  type="button"
-                  onClick={() => void addVision()}
-                  disabled={busy}
-                  className="underline text-fg-2 hover:text-fg disabled:opacity-50"
-                >
-                  {busy ? 'Adding vision…' : `Add vision${model.visionBytes ? ` (${gb(model.visionBytes)})` : ''}`}
-                </button>
-              </p>
+              <Button variant="secondary" size="sm" onClick={() => void addVision()} disabled={busy} className="mt-1">
+                {busy ? 'Adding vision…' : `Add vision${model.visionBytes ? ` (${gb(model.visionBytes)})` : ''}`}
+              </Button>
             )}
           </div>
-          {!confirming && (
+          {/* The row's own buttons at the right. A stopped download has none
+              here: its Resume/Delete moved INTO its notice box below. */}
+          {!confirming && !problem && (
             <div className="flex items-center gap-1.5 shrink-0">
+              {/* Outlined, not bare text (fix batch 2 — decisions.md "Secondary
+                  buttons", final#F-2: never bare text beside another button). */}
               {model.status === 'complete' && !live && (
                 <Button
-                  variant="ghost"
+                  variant="secondary"
                   size="sm"
                   onClick={() => setSettingsOpen((o) => !o)}
                   aria-expanded={settingsOpen}
                   aria-label={`Settings for ${displayName(model)}`}
                 >
                   Settings
-                </Button>
-              )}
-              {model.status === 'unfinished' && !live && (
-                <Button variant="secondary" size="sm" onClick={() => void resume()} disabled={busy}>
-                  Resume
                 </Button>
               )}
               {live ? (
@@ -930,17 +823,44 @@ export function LocalModelRow({
           </div>
         )}
 
-        {/* A damaged row is NOT a dead end — the way out lives behind the (i)
-            rather than as a permanent paragraph under the least useful row. */}
-        {model.status === 'untraceable' && !confirming && (
-          <div className="mt-1.5 flex items-center gap-1">
-            <AnchorTip label="Why this download is damaged" title="Damaged download" widthClass="w-72">
-              This download started before the app kept track of where downloads come from,
-              so it can&rsquo;t be resumed automatically. Find the model in search and download
-              it again — it will continue from where it stopped.
-            </AnchorTip>
-            <span className="text-3xs text-fg-muted">Why can&rsquo;t this be resumed?</span>
-          </div>
+        {/* WHY a notice box with the options inside it (fix batch 2, 2026-09-26
+            — decisions.md "Problem on a list item", settings-pieces#P-4): the
+            shared warning/error box sits INSIDE the item's card, its text grey,
+            and the item's own options (Resume, Delete) sit inside it at the
+            right — outlined Delete first, the filled Resume last. It replaces the
+            amber "Download interrupted" / red "Damaged" strips across the top of
+            the card. Delete stays danger-outline: it throws away downloaded
+            bytes. A failed Resume/Delete shows its reason in the same box.
+            The damaged explanation used to hide behind an (i) and a "Why can't
+            this be resumed?" line; it is the box's text now, so there is no
+            separate explanation link. */}
+        {problem && !confirming && (
+          <Callout
+            tone={problem === 'damaged' ? 'danger' : 'warning'}
+            className="mt-2"
+            title={problem === 'damaged' ? 'Damaged download' : 'Download interrupted'}
+            actions={(
+              <>
+                <Button variant="danger-outline" size="sm" onClick={() => setConfirming(true)} disabled={busy}>
+                  Delete
+                </Button>
+                {problem === 'interrupted' && (
+                  <Button size="sm" onClick={() => void resume()} disabled={busy}>
+                    Resume
+                  </Button>
+                )}
+              </>
+            )}
+          >
+            {problem === 'damaged' && (
+              <>
+                This download started before the app kept track of where downloads come from,
+                so it can&rsquo;t be resumed automatically. Find the model in search and download
+                it again — it will continue from where it stopped.
+              </>
+            )}
+            {error && <div className={problem === 'damaged' ? 'mt-1.5' : ''}>{error}</div>}
+          </Callout>
         )}
 
         {/* Consequence-gated removal — plain-language warning naming the real size. */}
@@ -963,10 +883,11 @@ export function LocalModelRow({
         )}
         {/* WHY Callout, not a bare red line (fix batch 1 addendum, 2026-09-24):
             explanatory failure text is the shared tinted box. No separate
-            Retry button is added — the Resume/Delete/Add vision control that
+            Retry button is added — the Delete/Add vision/Pause control that
             triggered this error is already visible on the row above, and is
-            the retry action. */}
-        {error && <Callout tone="danger" className="mt-1.5">{error}</Callout>}
+            the retry action. A stopped download's error is shown inside its
+            own notice box above instead (fix batch 2), not twice. */}
+        {error && !(problem && !confirming) && <Callout tone="danger" className="mt-1.5">{error}</Callout>}
 
         {/* Round 2 P-14 (Destin): the settings open in a small dialog on its own layer,
             not inline under the row. */}

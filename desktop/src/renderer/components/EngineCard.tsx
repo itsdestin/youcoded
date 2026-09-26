@@ -254,9 +254,14 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
     facts.push(`Engine ${status.installedVersion}`, BACKEND_WORDS[status.backend ?? ''] ?? status.backend ?? '');
     if (status.state === 'stopped') facts.push('starts on first message');
   }
-  const factLine = status.state === 'error'
+  // WHY the error is no longer the fact line (fix batch 2, 2026-09-26 —
+  // decisions.md "Errors and warnings in a setting", settings-pieces#P-2): a
+  // crashed engine is a problem ON this card, so it is the shared danger box
+  // inside the card (below) with its fix — Restart engine — inside that box.
+  const engineProblem = status.state === 'error'
     ? (status.errorMessage ?? 'Stopped after repeated crashes')
-    : facts.filter(Boolean).join(' · ');
+    : null;
+  const factLine = engineProblem ? '' : facts.filter(Boolean).join(' · ');
 
   const options = (status.backendOptions ?? []).filter((o) => o.backend !== status.backend);
   // Two shelves, not one list. A recommended build (CUDA) keeps its place in the
@@ -422,16 +427,6 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
             {busy ? 'Installing…' : 'Install'}
           </Button>
         )}
-        {status.state === 'error' && (
-          <Button
-            size="sm"
-            className="shrink-0"
-            disabled={busy}
-            onClick={() => run(() => window.claude.engine.restart())}
-          >
-            Restart engine
-          </Button>
-        )}
         {/* engine.install() always fetches the PINNED build and verify-boots it
             before it takes over, so the same call is both first install and
             upgrade — nothing new is needed in main. */}
@@ -446,6 +441,19 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
           </Button>
         )}
       </div>
+      {engineProblem && (
+        <Callout
+          tone="danger"
+          className="mt-2"
+          actions={(
+            <Button size="sm" disabled={busy} onClick={() => run(() => window.claude.engine.restart())}>
+              Restart engine
+            </Button>
+          )}
+        >
+          {engineProblem}
+        </Callout>
+      )}
       {busy && progress?.kind === 'download' && (
         <p className="mt-2 text-3xs text-fg-dim">
           Downloading… {mb(progress.receivedBytes)}{progress.totalBytes ? ` of ${mb(progress.totalBytes)}` : ''}
