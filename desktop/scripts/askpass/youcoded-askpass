@@ -31,14 +31,45 @@ ulimit -c 0
 # askpass.cjs needs nothing from the environment sudo handed us, trusted or
 # not. Trusting the environment for anything that feeds the verified helper
 # is exactly what review 1 (D1) says never to do.
-dir=$(dirname "$0")
+#
+# WHY ${0%/*} and not `dirname "$0"` (task-2 review, T2-2, High): `dirname`
+# is NOT a shell builtin — it's an external binary, looked up through
+# PATH, and at this exact point in the script PATH is STILL the
+# model's own unsanitised, inherited value (`env -i` hasn't run yet, on
+# purpose: it has to run last). A PATH entry planted ahead of the real
+# `dirname` (trivial — the model already has arbitrary shell execution)
+# would make $dir, and therefore the very file this script `exec`s as
+# "askpass.cjs", attacker-chosen, before ANY hardening (which lives
+# entirely inside askpass.cjs) has run. `${0%/*}` is POSIX parameter
+# expansion — a shell syntax construct, not a command, so nothing is
+# looked up through PATH at all. It strips the shortest trailing "/*"
+# from $0; if $0 has no "/" at all, the expansion leaves $0 unchanged
+# (nothing matched), which the `case` below turns into "the current
+# directory" — the same fallback `dirname` would have reported.
+dir=${0%/*}
+case $0 in
+  */*) ;;
+  *) dir=. ;;
+esac
 
-# WHY cd + pwd -P rather than a `realpath` binary: not every POSIX sh
-# environment ships `realpath` on PATH, but `cd` followed by `pwd -P` is a
-# builtin combination that resolves every symlink component (an AppImage
-# mount, a symlinked worktree checkout) down to the real physical
-# directory — this is what "realpath of dir" means below.
-dir=$(cd "$dir" && pwd -P)
+# WHY unset CDPATH before cd: CDPATH only redirects a `cd` given a
+# relative, non-"."/".."-prefixed argument — sudo always execs this
+# script by an absolute path so $dir is normally already absolute and
+# CDPATH can't apply, but nothing here should depend on remembering
+# that; unsetting it removes the possibility outright rather than
+# relying on an invariant elsewhere.
+unset CDPATH
+
+# WHY `cd -P -- "$dir" && pwd -P`, both POSIX SHELL BUILTINS (no PATH
+# lookup, same reasoning as the `${0%/*}` fix above) rather than a
+# `realpath` binary: not every POSIX sh environment ships `realpath` on
+# PATH, but `cd`+`pwd` are required builtins. `-P` on `cd` resolves every
+# symlink component (an AppImage mount, a symlinked worktree checkout)
+# as it changes directory, which is what "realpath of dir" means below;
+# `pwd -P` then reports that already-resolved physical path. `--` stops
+# a directory name that happens to start with `-` from being read as an
+# option.
+dir=$(cd -P -- "$dir" && pwd -P)
 
 # WHY exec, never a plain call: this must be the LAST process in the chain.
 # AskpassServer's identity check (design §3.1) reads the real executable,

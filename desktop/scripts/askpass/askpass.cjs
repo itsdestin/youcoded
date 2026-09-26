@@ -116,11 +116,20 @@ function hardenSelf() {
  * directly — a *Sync fs call is fine here: this is a one-shot standalone
  * script with no event loop to block, not code in src/main reached by a
  * click/IPC/timer (the main-process blocking-call ratchet does not apply).
+ *
+ * WHY `readStatus` is an injectable parameter, defaulted to the real read
+ * (task-2 review, T2-6): lets a test drive the TracerPid parsing/decision
+ * logic directly with fake status text, the same dependency-injection
+ * shape admin-command.ts uses for its own `platform` override — a plain
+ * default parameter, no behavior change for the one real caller (main()),
+ * which calls this with no argument. `vi.spyOn` on the shared `fs` module
+ * doesn't work here anyway: vitest's ESM handling makes `fs`'s own
+ * exports non-configurable ("Cannot redefine property: readFileSync").
  */
-function isTraced() {
+function isTraced(readStatus = () => fs.readFileSync('/proc/self/status', 'utf8')) {
   if (process.platform !== 'linux') return false;
   try {
-    const status = fs.readFileSync('/proc/self/status', 'utf8');
+    const status = readStatus();
     const match = status.match(/^TracerPid:\s*(\d+)/m);
     // No match at all means we couldn't confirm we're untraced — fail
     // closed rather than assume the best.
@@ -156,7 +165,17 @@ function main() {
     return;
   }
 
-  let received = Buffer.alloc(0);
+  // WHY one fixed-size buffer, filled in place, rather than the previous
+  // `received = Buffer.concat([received, chunk])` per `data` event
+  // (task-2 review, T2-7): `Buffer.concat` allocates a NEW buffer and
+  // copies into it every time, silently abandoning the previous
+  // `received` value (which may hold a prefix of the password) without
+  // ever zeroing it — only the FINAL buffer got `.fill(0)`'d. A single
+  // pre-allocated buffer, copied into with `chunk.copy(...)`, means there
+  // is at most one buffer holding wire bytes at any time, so `finish`'s
+  // `.fill(0)` actually covers everything this variable ever held.
+  const received = Buffer.alloc(MAX_LINE_BYTES);
+  let receivedLen = 0;
   let finished = false;
   let socket = null;
 
@@ -167,9 +186,22 @@ function main() {
   const finish = (code) => {
     if (finished) return;
     finished = true;
-    // Best-effort scrub: this Buffer is the only place raw wire bytes
-    // (which may include the password) sat as mutable memory we control.
+    // Best-effort scrub, NOT a complete one (task-2 review, T2-7 — this
+    // comment previously overstated coverage): `received` is the one
+    // buffer THIS code keeps around across `data` events, and zeroing it
+    // covers that. It does NOT cover every place a password byte briefly
+    // existed — each incoming `chunk` is a Buffer Node allocates per
+    // `data` event and we only copy out of it, never zero it once copied;
+    // and, once parsed, `reply.password` and everything derived from it
+    // (`.toString('utf8')`, `JSON.parse`) are ordinary immutable V8
+    // strings that plain JS has no API to zero at all (see the comment
+    // where the password is actually read out, below, which already
+    // states that limitation correctly). In practice the process exits
+    // via `process.exit()` a few lines after any of this runs, so V8's GC
+    // very likely never gets a chance to run first — but that is a
+    // favorable timing accident, not a guarantee this code makes.
     received.fill(0);
+    receivedLen = 0;
     if (socket) {
       try {
         socket.destroy();
@@ -191,12 +223,16 @@ function main() {
 
   socket.on('data', (chunk) => {
     if (finished) return;
-    received = Buffer.concat([received, chunk]);
-    if (received.length > MAX_LINE_BYTES) {
+    if (receivedLen + chunk.length > MAX_LINE_BYTES) {
       finish(1);
       return;
     }
-    const newline = received.indexOf(0x0a); // '\n'
+    chunk.copy(received, receivedLen);
+    receivedLen += chunk.length;
+    // Search only the bytes actually received so far — `subarray` is a
+    // VIEW over `received`, not a copy, so this adds no extra buffer to
+    // scrub later.
+    const newline = received.subarray(0, receivedLen).indexOf(0x0a); // '\n'
     if (newline === -1) return; // still short of one full line — keep waiting, still under the cap
 
     const lineBuf = received.subarray(0, newline);
@@ -245,4 +281,15 @@ function main() {
   socket.on('close', () => finish(1));
 }
 
-main();
+// WHY require.main === module: lets tests `require()` this file to reach
+// the pure functions below (isTraced, hardenSelf, requireKoffi — task-2
+// review T2-6) WITHOUT it immediately connecting to a socket or calling
+// process.exit() as a side effect of being loaded. Every real invocation
+// (the wrapper's `exec ... askpass.cjs`) runs this file as the process's
+// own entry point, where require.main === module is true, so production
+// behavior is unchanged — this only adds a way to import without running.
+if (require.main === module) {
+  main();
+}
+
+module.exports = { hardenSelf, isTraced, requireKoffi, main };
