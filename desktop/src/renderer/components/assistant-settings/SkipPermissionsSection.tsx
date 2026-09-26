@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, Checkbox, Dialog, SettingRow, Toggle } from '../ui';
+import { Button, ConsentRow, Dialog, SettingRow, Toggle } from '../ui';
 
 // Claude Code's one permission setting: the Skip Permissions switch. It lived
 // in SettingsPanel.tsx's Session Defaults popup; it is now the first block of
@@ -70,16 +70,14 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
             actions or running commands. You should be cautious when attempting to use this mode with
             Haiku- or Sonnet-class models.
           </p>
-          <div className="flex items-start gap-2 pt-1">
-            <span className="mt-0.5">
-              <Checkbox
-                checked={accepted}
-                onChange={setAccepted}
-                aria-label="I understand, and I use Skip Permissions at my own risk."
-              />
-            </span>
-            <span className="text-fg">I understand, and I use Skip Permissions at my own risk.</span>
-          </div>
+          {/* WHY ConsentRow (fix batch 2, 2026-09-26 — decisions.md "Consent
+              tick box", settings-pieces#P-6): the whole line is one tappable
+              box with the tick on the left, lighting up when ticked. It was a
+              bare 14px square beside the sentence — Destin: "the vibe is off"
+              (fix batch 1, B1-2). "Turn it on" below still waits for the tick. */}
+          <ConsentRow checked={accepted} onChange={setAccepted}>
+            I understand, and I use Skip Permissions at my own risk.
+          </ConsentRow>
           {/* WHY stacked, danger on top (fix batch 1, 2026-09-24): this is a
               `size="prompt"` (340px) dialog — a NARROW popup, so two buttons
               stack full width with the main action (here the destructive
