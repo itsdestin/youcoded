@@ -271,9 +271,18 @@ const SHELL_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'un
 
 /** Commands that run another command given as their arguments, with the flags
  *  of each that take a separate value, and how many plain arguments come
- *  before the wrapped command (`timeout 5 rm …` → 1). */
-const WRAPPERS: Record<string, { valueFlags: string[]; positionals?: number }> = {
-  sudo: { valueFlags: ['-u', '-g', '-C', '-h', '-p', '-U', '-D', '-r', '-t'] },
+ *  before the wrapped command (`timeout 5 rm …` → 1). Exported (admin-command.ts
+ *  review): the admin floor needs sudo's OWN value flags to strip them back out
+ *  of `visibleSudoLines` — long forms added (review, admin-password design §4)
+ *  because only the short letters were here before, so `sudo --user root cmd`
+ *  read `root` as the command sudo runs, not `cmd`. */
+export const WRAPPERS: Record<string, { valueFlags: string[]; positionals?: number }> = {
+  sudo: {
+    valueFlags: [
+      '-u', '-g', '-C', '-h', '-p', '-U', '-D', '-r', '-t',
+      '--user', '--group', '--close-from', '--host', '--prompt', '--role', '--type', '--other-user', '--chdir', '--chroot',
+    ],
+  },
   doas: { valueFlags: ['-u', '-C'] },
   command: { valueFlags: [] },
   builtin: { valueFlags: [] },
@@ -291,14 +300,19 @@ const WRAPPERS: Record<string, { valueFlags: string[]; positionals?: number }> =
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 /** Index of the word that is the actual command, skipping `FOO=bar`
- *  assignments, shell keywords and wrappers (with their own arguments). */
-export function commandIndex(words: Word[]): number {
+ *  assignments, shell keywords and wrappers (with their own arguments).
+ *  `stopBefore` (admin-command.ts): a set of command words to STOP at rather
+ *  than walk past, even though WRAPPERS lists them (WRAPPERS treats `sudo` as
+ *  transparent so rm-target/bash-secret-paths can see what it runs — the admin
+ *  floor needs the opposite: to see `sudo` itself as the command). */
+export function commandIndex(words: Word[], stopBefore?: Set<string>): number {
   let w = 0;
   for (;;) {
     const before = w;
     while (w < words.length && ASSIGNMENT.test(words[w].value)) w++;
     while (w < words.length && SHELL_KEYWORDS.has(words[w].value)) w++;
     const key = w < words.length ? baseName(words[w].value) : '';
+    if (stopBefore?.has(key)) return w;
     // Own-property lookup: a command named `constructor` must not find Object's.
     const wrapper = Object.hasOwn(WRAPPERS, key) ? WRAPPERS[key] : undefined;
     if (wrapper) {

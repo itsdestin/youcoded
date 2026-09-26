@@ -1169,6 +1169,92 @@ describe('HarnessSession — multi-step turn driver', () => {
     });
   });
 
+  // Admin-password design (docs/active/specs/2026-09-26-admin-password-technical-design.md
+  // §4): a Bash command that visibly runs `sudo` always asks — even under a
+  // saved "Always allow" or Full auto — because saying yes opens a password
+  // prompt inside the app. `doas`/`su`/`pkexec`/`run0` are refused outright:
+  // no card at all, because pkexec/run0 would raise the DESKTOP's own polkit
+  // dialog outside the app.
+  describe('the admin floor', () => {
+    const bashTool = () => fakeTool('Bash', {
+      schema: z.object({ command: z.string() }),
+      permissionSubject: (a: any) => a.command,
+    });
+    const oneBash = (command: string) => scriptedModel([
+      stream(toolCallChunk('c1', 'Bash', { command }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'ok'), finishChunk('stop')),
+    ]);
+    const run = async (command: string, decide: () => Promise<PermissionDecision>, answer: AskDecision = { behavior: 'allow', always: true }) => {
+      const bash = bashTool();
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => answer);
+      const session = new HarnessSession(makeOpts({ tools: [bash], decide, askUser }), async () => oneBash(command) as any);
+      const remembered: unknown[] = [];
+      session.on('remember-rule', (r) => remembered.push(r));
+      const events = collect(session);
+      await session.send('go');
+      return { askUser, remembered, ran: (bash as any).calls.length, events };
+    };
+
+    it('an admin ask hides Always allow (floorStop \'admin\')', async () => {
+      const { askUser, ran } = await run('sudo apt update', async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'admin', external: false });
+      expect(ran).toBe(1); // the person said yes, so it runs
+    });
+
+    it('a remembered Always-allow rule for `sudo x` does NOT skip the card', async () => {
+      // decide() returning 'allow' with no ask is exactly what a stored
+      // "Always allow" rule produces — the floor must still force a card and
+      // must still refuse to remember anything new (forcedAsk).
+      const { askUser, remembered, ran } = await run('sudo systemctl restart nginx', async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ floorStop: 'admin' });
+      expect(remembered).toEqual([]);
+      expect(ran).toBe(1);
+    });
+
+    it('Full auto still asks', async () => {
+      // Full auto's own decide() answers 'allow' with denyListed:true for a
+      // command on its list — the floor still turns it into an ask.
+      const { askUser, ran } = await run('sudo apt update', async () => ({ action: 'allow', denyListed: true }));
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'admin' });
+      expect(ran).toBe(1);
+    });
+
+    it('a no from the person stops the admin command', async () => {
+      const { ran } = await run('sudo apt update', async () => ALLOW, { behavior: 'deny' });
+      expect(ran).toBe(0);
+    });
+
+    it('never turns a deny rule into an ask', async () => {
+      const { askUser, ran } = await run('sudo apt update', async () => ({ action: 'deny', denyListed: false }));
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(0);
+    });
+
+    it('pkexec is denied without an ask', async () => {
+      const { askUser, ran, events } = await run('pkexec apt update', async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(0);
+      const res = events.find((e) => e.type === 'tool-result')!;
+      expect(res.data.isError).toBe(true);
+      expect(res.data.toolResult).toMatch(/pkexec can't be used here/);
+      expect(res.data.toolResult).toMatch(/use sudo instead/i);
+    });
+
+    it.each(['doas', 'su', 'run0'])('%s is denied without an ask too', async (word) => {
+      const { askUser, ran } = await run(`${word} apt update`, async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(0);
+    });
+
+    it('the admin floor beats the removal-target floor: `sudo rm -rf ~` shows the admin band', async () => {
+      const { askUser } = await run('sudo rm -rf ~', async () => ALLOW);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ floorStop: 'admin' });
+    });
+  });
+
   // M5 2c: the RENDERER never names a pattern — it sends a width selector and the
   // session re-derives from the tool call it already holds. A renderer that could
   // name its own pattern could grant itself anything, because remembered rules are

@@ -36,6 +36,7 @@ import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServic
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
 import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
+import { adminCommandVerdict } from './tools/admin-command';
 import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES } from './image-support';
 
@@ -3988,13 +3989,29 @@ export class HarnessSession extends EventEmitter {
     //     The secret-path floor (tools/bash-secret-paths.ts) works the same way
     //     for a command that names a file the file tools refuse (~/.ssh, .env…):
     //     Bash used to read those with no card at all (Destin, 2026-09-23, option B).
+    //     The admin floor (tools/admin-command.ts, admin-password design §4)
+    //     runs FIRST and takes precedence over both: it names the more serious
+    //     consequence (full control of the computer), so a command that both
+    //     removes a folder and runs sudo shows the admin band, not the removal
+    //     one. `doas`/`su`/`pkexec`/`run0` are refused outright — no ask at
+    //     all — because pkexec/run0 would raise the DESKTOP's own polkit dialog
+    //     (a system pop-up outside the app, wording we don't control), and
+    //     doas/su have no askpass hook this app can intercept.
     const bashCtx = { cwd: this.opts.cwd, shellCwd: this.shellCwd ?? undefined, home: os.homedir() };
     const isBash = call.toolName === 'Bash' && typeof subject === 'string';
-    const rmFloor = isBash ? destructiveRmVerdict(subject, bashCtx) : null;
-    const secretFloor = isBash && !rmFloor ? secretPathVerdict(subject, bashCtx) : null;
+    const adminVerdict = isBash ? adminCommandVerdict(subject) : null;
+    if (adminVerdict?.kind === 'refuse') {
+      // Denied below every rule, same as a deny-list hit — never logs the
+      // command, only which of the four words tripped it.
+      log('INFO', 'HarnessSession', 'the admin floor refused a command outright', { sessionId: this.opts.sessionId, word: adminVerdict.word });
+      return { text: `${adminVerdict.word} can't be used here: it would open a password window outside YouCoded. Use sudo instead — the user is asked for their password in the app.`, isError: true };
+    }
+    const isAdmin = adminVerdict?.kind === 'admin';
+    const rmFloor = isBash && !isAdmin ? destructiveRmVerdict(subject, bashCtx) : null;
+    const secretFloor = isBash && !isAdmin && !rmFloor ? secretPathVerdict(subject, bashCtx) : null;
     // The kind picks the card's wording, so it never claims more than the check knows.
-    const floorStop: FloorStop | undefined = rmFloor?.kind ?? secretFloor?.kind;
-    if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop, reason: rmFloor?.reason ?? `names ${secretFloor?.path}` });
+    const floorStop: FloorStop | undefined = isAdmin ? 'admin' : (rmFloor?.kind ?? secretFloor?.kind);
+    if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop, reason: isAdmin ? 'runs sudo' : (rmFloor?.reason ?? `names ${secretFloor?.path}`) });
 
     // 4. Configured decision. An external-directory path forces 'ask' regardless
     //    of rules; otherwise consult decide() (default: ask — never silent-allow).
