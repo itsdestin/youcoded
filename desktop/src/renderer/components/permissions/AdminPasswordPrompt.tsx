@@ -45,10 +45,17 @@ export function AdminPasswordPrompt({ ask, onSubmit, onSkip }: {
   return (
     <div className="px-3 py-2 space-y-2 border-t border-edge bg-inset/30" data-testid="admin-password-prompt">
       <div className="space-y-0.5">
-        <p className="text-xs font-medium text-fg-2">
-          {ask.via ? `${ask.via} needs your computer password` : 'Enter your computer password'}
+        {/* One heading for every case (UX review 1, U6); who is asking goes on
+            the line under it. */}
+        <p className="text-xs font-medium text-fg-2">Enter your computer password</p>
+        <p className="text-2xs text-fg-dim leading-relaxed">
+          {ask.via
+            // WHY the "only if you expected it" clause (UX review 1, U2): a
+            // script pausing to ask for admin partway through is exactly the
+            // shape of an attack, so the card says how to judge it.
+            ? `Partway through, ${ask.via} wants to run this with full control of your computer. Only type your password if you expected this step:`
+            : 'To run this with full control of your computer:'}
         </p>
-        <p className="text-2xs text-fg-dim leading-relaxed">To run this with full control of your computer:</p>
       </div>
       <p className="text-2xs leading-relaxed text-fg-2 bg-inset/70 px-2 py-1.5 rounded-sm break-all font-mono">
         {ask.command}
@@ -88,10 +95,12 @@ export function AdminPasswordPrompt({ ask, onSubmit, onSkip }: {
           Skip it
         </button>
       </form>
+      {/* Full-strength and medium weight so a wrong try is not skimmed past
+          as fine print (UX review 1, U7). */}
       {wrong && (
-        <p role="alert" className="text-2xs text-fg-2 leading-relaxed">
+        <p role="alert" className="text-2xs font-medium text-fg leading-relaxed">
           {ask.triesLeft === 1
-            ? "Wrong password. 1 try left. Another wrong one may lock admin commands for about 10 minutes."
+            ? "Wrong password. 1 try left. Another wrong one may lock you out of admin actions for about 10 minutes."
             : `Wrong password. ${ask.triesLeft} tries left.`}
         </p>
       )}
