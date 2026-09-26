@@ -29,6 +29,8 @@ export interface ComposeRef {
   /** doc kind — the selected text itself (capped), so hovering or clicking
    *  the chip can find and light up where it came from. */
   quote?: string;
+  /** chat kind — the timeline entry (ChatView data-entry-key) it came from. */
+  entryKey?: string;
   /** doc kind, spreadsheets — the cell ("C4") the reference points at. */
   cell?: string;
   /** doc kind, code/raw text — 1-indexed inclusive line range. */
@@ -106,10 +108,9 @@ const PENDING_JUMP_MS = 6000;
 
 /** Clicking a chip: jump to its source text, opening the file if needed. */
 export function jumpToRef(ref: ComposeRef, openFile?: (path: string) => Promise<void> | void): void {
-  if (ref.kind !== 'doc') return;
   const detail = { ref, handled: false };
   window.dispatchEvent(new CustomEvent('youcoded:jump-to-ref', { detail }));
-  if (!detail.handled && openFile && ref.path) {
+  if (!detail.handled && ref.kind === 'doc' && openFile && ref.path) {
     pendingJump = { ref, until: Date.now() + PENDING_JUMP_MS };
     void openFile(ref.path);
   }

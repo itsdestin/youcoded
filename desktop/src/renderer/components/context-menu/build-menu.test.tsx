@@ -244,22 +244,22 @@ describe('previewed-conversation right-click (spec §A3)', () => {
 
   it('the preview reference names the pill after the conversation title, not a generic "message" label', () => {
     const bubble = mountBubble({ scroll: 'preview', role: 'assistant', text: 'hello world', conversationId: 'conv-1', conversationTitle: 'Debugging sync' });
-    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '"Debugging sync" · "hello world"' });
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '“Debugging sync” · “hello world”' });
   });
 
   it('the live chat reference is generic (no preview marker to name)', () => {
     const bubble = mountBubble({ scroll: 'chat-scroll', role: 'assistant', text: 'hello world' });
-    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: 'message · "hello world"' });
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '“hello world”' });
   });
 
   it('a user bubble with no preview reads the same generic way', () => {
     const bubble = mountBubble({ scroll: 'chat-scroll', role: 'user', text: 'my question' });
-    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: 'message · "my question"' });
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '“my question”' });
   });
 
   it('a previewed user bubble still prefers the conversation title', () => {
     const bubble = mountBubble({ scroll: 'preview', role: 'user', text: 'my question', conversationId: 'conv-2', conversationTitle: 'Untitled thread' });
-    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '"Untitled thread" · "my question"' });
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '“Untitled thread” · “my question”' });
   });
 });
 
@@ -306,7 +306,7 @@ describe('app chrome is not copy material', () => {
 
   it('"Ask about this" on the prose quotes the message without the tool title, keeping the file name', () => {
     const { prose } = mountMessageWithChrome();
-    expect(referenceFor(prose)).toMatchObject({ kind: 'chat', label: 'message · "Edited app.ts"' });
+    expect(referenceFor(prose)).toMatchObject({ kind: 'chat', label: '“Edited app.ts”' });
   });
 
   it('whole-message Copy leaves chrome text out', async () => {

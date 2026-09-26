@@ -29,7 +29,8 @@ interface Props {
 }
 
 export function TokenPill({ ref_, onJump, tone = 'default' }: Props) {
-  const clickable = ref_.kind === 'doc' && !!onJump;
+  // Chat chips too: they light up their message (chat-ref-highlight.ts).
+  const clickable = !!onJump;
   const base = tone === 'on-accent' ? 'var(--on-accent)' : 'var(--accent)';
   // Hover lights up the source text in an open viewer (compose-ref.ts
   // "Chip ↔ source text") and deepens the chip's own fill to say "this does

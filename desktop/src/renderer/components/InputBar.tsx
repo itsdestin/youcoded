@@ -10,6 +10,7 @@ import { AttachmentChip } from './AttachmentChip';
 // "inline & conversational" mockup (session/comments-mock-c).
 import { makeDraftToken, splitDraftTokens, draftTokenRanges, expandDraftTokens, draftRef, dispatchRefHover, jumpToRef, type ComposeRef } from './context-menu/compose-ref';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
+import { installChatRefHighlight } from './context-menu/chat-ref-highlight';
 import { AttachIcon, CompassIcon } from './Icons';
 import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { StatusStrip } from './ui/StatusStrip';
@@ -593,6 +594,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // as well"). The mirror layer sits UNDER the textarea with pointer events
   // off, so the pointer is hit-tested against the chips' own rects here.
   const openFile = useOpenFilepath(sessionId);
+  // Chat-message chips light up their message (one global listener pair).
+  useEffect(() => installChatRefHighlight(), []);
   const [hoverChipKey, setHoverChipKey] = useState<string | null>(null);
   const chipKeyAt = useCallback((x: number, y: number): string | null => {
     const chips = mirrorContentRef.current?.querySelectorAll<HTMLElement>('[data-draft-chip]');

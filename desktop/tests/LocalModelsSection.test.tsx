@@ -296,14 +296,18 @@ async function openDialog() {
 }
 
 /** Mount the row with a stubbed models API and open its Settings dialog.
- *  `later`, when given, is what every fetch AFTER the first one answers — which
- *  is how a pending save landing in the background is driven. */
-async function openSettings(settings: StoredModelSettings, later?: StoredModelSettings) {
+ *  `later`, when given, is what fetches answer once the returned `land()` has
+ *  been called — which is how a pending save landing in the background is
+ *  driven. WHY a gate the test opens, not "every fetch after the first": the
+ *  poll runs every 50 ms here, so on a loaded machine the second fetch could
+ *  land before the test had even checked the BEFORE state, failing a correct
+ *  component (seen 2026-09-26 under a full verify run). */
+async function openSettings(settings: StoredModelSettings, later?: StoredModelSettings): Promise<() => void> {
   (globalThis as any).window = (globalThis as any).window ?? {};
-  let calls = 0;
+  let landed = false;
   (globalThis as any).window.claude = {
     models: {
-      settings: vi.fn(async () => (later && calls++ > 0 ? later : settings)),
+      settings: vi.fn(async () => (later && landed ? later : settings)),
       setSettings: vi.fn().mockResolvedValue(settings),
       delete: vi.fn().mockResolvedValue(true),
       downloadCancel: vi.fn().mockResolvedValue(true),
@@ -315,6 +319,7 @@ async function openSettings(settings: StoredModelSettings, later?: StoredModelSe
   // The dialog fetches asynchronously; nothing below is meaningful until the
   // settings have landed and the rows exist.
   await waitFor(() => expect(screen.getByText('Context length')).toBeTruthy());
+  return () => { landed = true; };
 }
 
 const LOAD_ERROR_TITLE = 'This model failed to load last time';
@@ -431,11 +436,12 @@ describe('fields main computes', () => {
       // Fetched once, it would sit there saying "Applies after the current reply"
       // for as long as it is open — the user closes it, reopens it, and concludes
       // the setting never stuck.
-      await openSettings(
+      const land = await openSettings(
         { ...SETTINGS, keepLoaded: true, pendingApply: true },
         { ...SETTINGS, keepLoaded: true },
       );
       expect(screen.getByText('Applies after the current reply.')).toBeTruthy();
+      land();
       await waitFor(
         () => expect(screen.queryByText('Applies after the current reply.')).toBeNull(),
         POLLED,
@@ -656,8 +662,9 @@ describe('fields main computes', () => {
     it('a load error that arrives while the dialog is open reaches the user', async () => {
       // Same staleness, other field: a model fails on its next request, and a
       // dialog that read main once would never say so.
-      await openSettings(SETTINGS, { ...SETTINGS, lastLoadError: 'error: out of memory' });
+      const land = await openSettings(SETTINGS, { ...SETTINGS, lastLoadError: 'error: out of memory' });
       expect(screen.queryByText(LOAD_ERROR_TITLE)).toBeNull();
+      land();
       await waitFor(
         () => expect(screen.getByText('error: out of memory')).toBeTruthy(),
         POLLED,

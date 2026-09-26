@@ -70,6 +70,11 @@ function readableText(root: Element): string {
   return text;
 }
 
+/** The chat timeline entry (ChatView's data-entry-key) a target sits in. */
+function entryKeyOf(el: Element): string | undefined {
+  return el.closest<HTMLElement>('[data-entry-key]')?.dataset.entryKey;
+}
+
 function closestBubble(el: Element): Element | null {
   return el.closest('.assistant-bubble, .user-bubble');
 }
@@ -282,7 +287,12 @@ function linkMenu(a: HTMLAnchorElement, target: HTMLElement): MenuEntry[] {
 function codeMenu(pre: HTMLElement, target: HTMLElement): MenuEntry[] {
   const code = pre.innerText.replace(/\n+$/, '');
   const firstLine = code.split('\n', 1)[0] ?? '';
-  const ref: ComposeRef = { id: genRefId(), kind: 'chat', label: `code · "${truncateQuote(firstLine, 24)}"` };
+  // quote + entryKey let the chip find and light up this block again
+  // (chat-ref-highlight.ts); curly quotes match the file chips' labels.
+  const ref: ComposeRef = {
+    id: genRefId(), kind: 'chat', label: `code · “${truncateQuote(firstLine, 24)}”`,
+    quote: code.slice(0, 2000), entryKey: entryKeyOf(target),
+  };
   return [
     { type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, disabled: !code, run: () => addReference(ref) },
     { type: 'item', id: 'copy-code', label: 'Copy code block', icon: 'code', disabled: !code, run: () => void copyText(code) },
@@ -399,10 +409,14 @@ function textMenu(target: HTMLElement): MenuEntry[] {
     // Preview-only: name which past conversation this quote came from, right
     // in the pill — a no-op in the live chat, where the label is just the quote.
     const previewRef = closestPreviewConversation(target);
+    // Curly-quoted like the file chips (Destin, 2026-09-24 chip rework).
     const label = previewRef
-      ? `"${previewRef.title || 'Untitled thread'}" · "${truncateQuote(quote, 20)}"`
-      : `message · "${truncateQuote(quote, 24)}"`;
-    const ref: ComposeRef = { id: genRefId(), kind: 'chat', label };
+      ? `“${previewRef.title || 'Untitled thread'}” · “${truncateQuote(quote, 20)}”`
+      : `“${truncateQuote(quote, 28)}”`;
+    // quote + entryKey let the chip light up this message again
+    // (chat-ref-highlight.ts) — Destin: hover/click worked for documents but
+    // "not for message text".
+    const ref: ComposeRef = { id: genRefId(), kind: 'chat', label, quote: quote.slice(0, 2000), entryKey: entryKeyOf(target) };
     entries.push({ type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, run: () => addReference(ref) });
   }
   entries.push(...textBasics(bubble));

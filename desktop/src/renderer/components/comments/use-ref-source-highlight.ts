@@ -17,9 +17,9 @@ import { useEffect, type RefObject } from 'react';
 import { findQuote } from './use-quote-marks';
 import { takePendingJump, type ComposeRef } from '../context-menu/compose-ref';
 
-const HOVER_NAME = 'ref-source-hover';
-const FLASH_NAME = 'ref-source-flash';
-const FLASH_MS = 1800;
+export const HOVER_NAME = 'ref-source-hover';
+export const FLASH_NAME = 'ref-source-flash';
+export const FLASH_MS = 1800;
 // A just-opened file renders its content asynchronously (bytes → parse →
 // render), so a pending jump retries until the text exists or it expires.
 const PENDING_RETRY_MS = 150;
@@ -47,7 +47,7 @@ function rangeFor(root: HTMLElement, ref: ComposeRef): Range | null {
 }
 
 // Guarded: an engine without the API simply shows no highlight.
-function paint(name: string, range: Range | null): void {
+export function paint(name: string, range: Range | null): void {
   const reg = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights;
   const HighlightCtor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
   if (!reg || !HighlightCtor) return;
@@ -55,7 +55,7 @@ function paint(name: string, range: Range | null): void {
   else reg.delete(name);
 }
 
-function scrollToRange(range: Range): void {
+export function scrollToRange(range: Range): void {
   const el = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
   el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
@@ -72,6 +72,9 @@ export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>,
     };
     const onHover = (e: Event) => {
       const ref = (e as CustomEvent<{ ref: ComposeRef | null }>).detail?.ref;
+      // A chat chip is chat-ref-highlight.ts's to paint — clearing here would
+      // wipe its highlight (both use the same highlight names).
+      if (ref && ref.kind !== 'doc') return;
       const root = contentRef.current;
       paint(HOVER_NAME, ref && root && ref.path === path ? rangeFor(root, ref) : null);
     };
