@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { AdminRefusedNote } from '../permissions/AdminRefusedNote';
 import { ToolCallState, type ShellRunView } from '../../../shared/types';
 import { UnifiedDiff, FILE_BOX_CHUNK } from '../diff/UnifiedDiff';
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
@@ -391,6 +392,8 @@ function ShellView({ tool, commandField, sessionId }: {
   return (
     <div className="space-y-2">
       {chips.length > 0 && <div className="flex items-center gap-1.5">{chips}</div>}
+      {/* Inside the details like any failed command's output — not pinned (Destin, review 5). */}
+      <AdminRefusedNote tool={tool} />
       <div className="relative group">
         <pre className="text-xs font-mono bg-canvas border border-edge rounded-sm px-2 py-1 pr-14 overflow-auto whitespace-pre-wrap break-all text-fg">
           {cmd || <span className="text-fg-muted italic">(no command)</span>}

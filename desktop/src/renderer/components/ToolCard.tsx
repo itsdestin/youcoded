@@ -22,7 +22,6 @@ import { asString } from '../utils/tool-input';
 import { fullAutoStopCopy, floorAskNote, adminStopCopy } from './permissions/deny-list-copy';
 import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
 import { AdminRunStrip } from './permissions/AdminRunStrip';
-import { AdminRefusedNote } from './permissions/AdminRefusedNote';
 import { PERMISSION_DISPLAY } from './StatusBar';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
@@ -1644,7 +1643,6 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
           }}
         />
       )}
-      <AdminRefusedNote tool={tool} />
       {tool.shellRun?.status === 'running' && tool.shellRun.admin && (
         <AdminRunStrip run={tool.shellRun} sessionId={sessionId} />
       )}

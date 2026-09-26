@@ -350,8 +350,11 @@ describe('a refused admin password request', () => {
     toolUseId: 'tool-r', toolName: 'Bash', input: { command: 'sudo whoami' }, status: 'failed', error,
   } as unknown as ToolCallState);
 
-  it('shows the plain explanation when the result carries the refusal line', () => {
+  it('shows the plain explanation inside the opened card, and not on the folded card', () => {
     render(<ChatProvider><ToolCard tool={bash("sudo: no password was provided\n[YouCoded] The admin password request was refused because it could not be verified as coming from the system's sudo (reason: parent-not-sudo).")} sessionId="s1" /></ChatProvider>);
+    // Folded like any failed command — nothing pinned on the header (review 5).
+    expect(screen.queryByTestId('admin-refused-note')).toBeNull();
+    fireEvent.click(screen.getByText('sudo whoami', { exact: false }).closest('button') ?? screen.getAllByRole('button')[0]);
     expect(screen.getByTestId('admin-refused-note')).toHaveTextContent("YouCoded couldn't confirm this password request came from your computer's admin program");
   });
 
