@@ -136,7 +136,7 @@ describe('Bash env — the sudo askpass variables', () => {
     expect(captured?.YOUCODED_ASKPASS_RUNTIME).toBeUndefined();
   });
 
-  it('drops NODE_OPTIONS / NODE_REPL_EXTERNAL_MODULE / NODE_V8_COVERAGE / ELECTRON_RUN_AS_NODE inherited from the app, for every call', async () => {
+  it('drops the app-only ELECTRON_RUN_AS_NODE and NODE_V8_COVERAGE but keeps the user\'s own NODE_OPTIONS settings', async () => {
     const saved = {
       NODE_OPTIONS: process.env.NODE_OPTIONS,
       NODE_REPL_EXTERNAL_MODULE: process.env.NODE_REPL_EXTERNAL_MODULE,
@@ -153,7 +153,9 @@ describe('Bash env — the sudo askpass variables', () => {
         { command: 'echo "[$NODE_OPTIONS][$NODE_REPL_EXTERNAL_MODULE][$NODE_V8_COVERAGE][$ELECTRON_RUN_AS_NODE]"' },
         ctx,
       );
-      expect(r.text).toContain('[][][][]');
+      // NODE_OPTIONS / NODE_REPL_EXTERNAL_MODULE pass through: they are the
+      // user's settings, and the helper is protected by env -i + verify.ts.
+      expect(r.text).toContain('[--require=/tmp/evil.js][/tmp/evil.js][][]');
     } finally {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete (process.env as Record<string, string | undefined>)[key];

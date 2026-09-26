@@ -540,12 +540,13 @@ export const BashTool = defineTool({
     // process.env (identical before/after) never crosses into shellEnv.
     const shellEnvIn = ctx.shellEnv ?? {};
     const spawnEnv: NodeJS.ProcessEnv = { ...process.env, ...shellEnvIn, NO_COLOR: '1', FORCE_COLOR: '0' };
-    // Defence in depth (admin-password design §2.3, §11 task 5): these
-    // control what code runs inside ANY node process this shell starts —
-    // including, if the askpass helper's own `env -i` isolation ever had a
-    // gap, the helper itself. Dropped unconditionally, for every Bash call.
-    delete spawnEnv.NODE_OPTIONS;
-    delete spawnEnv.NODE_REPL_EXTERNAL_MODULE;
+    // ELECTRON_RUN_AS_NODE is the app's own launch mode, never the user's —
+    // a leaked copy would turn any Electron app the command starts into
+    // plain node. NODE_OPTIONS / NODE_REPL_EXTERNAL_MODULE are deliberately
+    // KEPT (2026-09-26): they are the user's own settings (a memory limit in
+    // their shell profile, say), and the askpass helper doesn't need them
+    // gone — its wrapper runs under `env -i` and the server refuses any
+    // helper whose environment isn't exactly the allowlist (verify.ts).
     delete spawnEnv.ELECTRON_RUN_AS_NODE;
     // NODE_V8_COVERAGE is NOT a plain `delete` (verified empirically,
     // Node 26): when the APP's own process has real coverage collection
