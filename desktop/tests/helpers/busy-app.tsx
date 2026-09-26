@@ -51,7 +51,10 @@ export interface BusyApp {
   terminalRenders(id: string): number;
   /** Both subtrees, every session except `except`, summed. */
   otherTabRenders(...except: string[]): Record<string, number>;
-  resetCounts(): void;
+  /** Drains any real scheduler work still pending (see drainScheduledWork
+   *  below), THEN zeroes the counters — so a measurement window always opens
+   *  on a clean baseline instead of racing setup's own tail. */
+  resetCounts(): Promise<void>;
   /** ErrorBoundary catches since mount — a budget met by a crashed subtree proves nothing. */
   crashes(): string[];
   /** Listeners on window + document, net of removals, by event type, after
@@ -245,6 +248,41 @@ async function drive<T>(p: Promise<T>): Promise<T> {
   return p;
 }
 
+// ── draining the real scheduler ─────────────────────────────────────────────
+// WHY this exists (found 2026-09-26): a render React schedules at background/
+// idle priority (e.g. for a tab that just started "thinking" off-screen) is
+// NOT flushed by act()+fake timers — it runs on React's own scheduler, a REAL
+// MessageChannel macrotask, deliberately left un-faked (see FAKE_TIMERS above:
+// faking it would stop React itself). Under CPU contention that macrotask can
+// still be queued at the moment a test calls resetCounts() to open its next
+// measurement window; it then fires and commits DURING that window's wait(),
+// miscounted as a render the window's own action caused, instead of being
+// setup's own tail. Reproduced directly: looping
+// "hidden tabs that are thinking run no timer that redraws them" under heavy
+// CPU contention (12 parallel `vitest run`s + 40 CPU spin loops) failed this
+// exact assertion (1 stray render in each of the 2 hidden tabs) in 1 of 12
+// runs; 0 of 36 after this fix, under the same load. Raising the budget would
+// only hide the real bug the test exists to catch.
+//
+// `setImmediate` is a real Node macrotask and is never in FAKE_TIMERS, so it
+// always runs strictly after any MessageChannel task already queued —
+// awaiting one (inside act, so a commit it causes is applied and counted
+// immediately) forces that queued work to finish. Looping until the render
+// totals stop moving handles a chunk of work that reschedules another chunk
+// (React's own time-slicing).
+function totalRenders(): number {
+  let n = window.__appInnerProfile?.appInnerRenders ?? 0;
+  for (const m of Object.values(subtreeRenders)) for (const v of m.values()) n += v;
+  return n;
+}
+async function drainScheduledWork(): Promise<void> {
+  let last = -1;
+  for (let i = 0; i < 25 && totalRenders() !== last; i++) {
+    last = totalRenders();
+    await act(async () => { await new Promise<void>((resolve) => { setImmediate(resolve); }); });
+  }
+}
+
 // ── mounting ────────────────────────────────────────────────────────────────
 let seq = 0;
 const CWD = '/home/destin/busy-app';
@@ -317,7 +355,7 @@ export async function mountBusyApp({ sessions }: { sessions: number }): Promise<
     terminalRenders: (id) => subtreeRenders.terminal.get(id) ?? 0,
     otherTabRenders: (...except) => Object.fromEntries(
       sessionIds.filter((id) => !except.includes(id)).map((id) => [id, renders(id)])),
-    resetCounts: () => { resetSubtreeRenders(); window.__appInnerProfile?.reset(); },
+    resetCounts: async () => { await drainScheduledWork(); resetSubtreeRenders(); window.__appInnerProfile?.reset(); },
     crashes: () => [...crashes],
     listenersAfterOpening,
     bridgeCalls,
@@ -392,6 +430,6 @@ export async function mountBusyApp({ sessions }: { sessions: number }): Promise<
 
   await app.switchTo(sessionIds[0]);
   await wait(3000);
-  app.resetCounts();
+  await app.resetCounts();
   return app;
 }
