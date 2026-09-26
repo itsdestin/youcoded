@@ -33,8 +33,12 @@ function rangeFor(root: HTMLElement, ref: ComposeRef): Range | null {
     r.selectNodeContents(cellEl);
     return r;
   }
-  if (!ref.quote) return null;
-  const hit = findQuote(root, ref.quote);
+  // Chips sent before refs carried their quote only have the label
+  // (“truncated quote…”) — its text is still a prefix of the source, so
+  // search for that rather than doing nothing.
+  const quote = ref.quote ?? ref.label.replace(/^“|”$/g, '').replace(/…$/, '');
+  if (!quote.trim()) return null;
+  const hit = findQuote(root, quote);
   if (!hit) return null;
   const r = document.createRange();
   r.setStart(hit.start.node, hit.start.offset);
