@@ -45,6 +45,8 @@ node_modules
 desktop/dist/
 desktop/build/
 desktop/release/
+# run-dev.sh's "a dev window from this checkout is running" marker (explore --dev reads it)
+desktop/.dev-instances/
 # Gradle build output for the vendored Termux terminal-emulator module
 terminal-emulator-vendored/build/
 # Electron runtime debug logs — machine-specific, leak local paths
