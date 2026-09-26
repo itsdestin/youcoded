@@ -345,9 +345,15 @@
   /* Type scale below Tailwind's text-xs (12px). The renderer had ~538 raw
      `text-[11px]` / `text-[10px]` / `text-[9px]` sites; these name the three
      real sizes so the scale is enumerable and greppable. Same pixel values —
-     naming them is a no-op visually. New rule: no arbitrary `text-[Npx]`. */
+     naming them is a no-op visually. New rule: no arbitrary `text-[Npx]`.
+     WHY 3xs is 11px, not 10px (2026-09-26): Destin approved "smallest text
+     11px" on the real screens (ui-element-review-pieces#T-1/#T-2, decisions.md
+     "Smallest text"): nothing a user has to read is smaller than 11px. It keeps
+     its own name rather than being folded into 2xs so the ~460 sites stay
+     greppable if the step ever needs to move again. 4xs (9px) was not part of
+     that question and is unchanged. */
   --text-2xs: 11px;
-  --text-3xs: 10px;
+  --text-3xs: 11px;
   --text-4xs: 9px;
 
   /* 13px — the one real step Tailwind's scale is missing, sitting between

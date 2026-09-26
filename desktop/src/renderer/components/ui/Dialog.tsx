@@ -48,8 +48,10 @@ import { useScrollFade } from '../../hooks/useScrollFade';
  * and --font-mono are both Cascadia Mono, globals.css), so character advance is
  * a constant 0.6em and reading measure converts to exact pixels:
  *
- *     text-3xs 10px -> 6.0px/ch    text-xs 12px -> 7.2px/ch
+ *     text-3xs 11px -> 6.6px/ch    text-xs 12px -> 7.2px/ch
  *     text-2xs 11px -> 6.6px/ch    text-sm  14px -> 8.4px/ch
+ *     (3xs was 10px until 2026-09-26 — "smallest text 11px", decisions.md.
+ *     None of the widths below is derived from it, so none moves.)
  *
  * PROMPT 340 — floored by two action buttons side by side without wrapping.
  *   The widest real pair is "Close session" (13ch) + "Cancel": 13ch x 8.4 + 32px
