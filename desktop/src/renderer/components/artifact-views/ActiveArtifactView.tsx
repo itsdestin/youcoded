@@ -18,7 +18,7 @@ import { isRemoteMode } from '../../platform';
 // (the comment panel). Every host draws the Comments button itself (the file
 // drawer as a floating pill beside Edit, the Projects screen as a header tool
 // beside Edit) and calls toggleComments().
-import { CommentsActionsInPaneContext } from '../comments/CommentsPaneFrame';
+import { CommentsActionsInPaneContext, CommentsCloseContext } from '../comments/CommentsPaneFrame';
 import { CodeCommentsRail } from '../comments/CodeCommentsRail';
 import { requestThreadAgain } from '../comments/CommentsMargin';
 import { useDocComments } from '../../state/doc-comments-store';
@@ -188,7 +188,7 @@ export interface ActiveArtifactViewProps {
   /** The host has no floating button cluster (the Projects screen's file
    *  overlay): Ask Your Assistant then floats inside the comment panel, and
    *  `beforeAsk` runs before it sends (see CommentsActionsInPaneContext). */
-  commentsActionsInPane?: { beforeAsk?: () => void };
+  commentsActionsInPane?: React.ContextType<typeof CommentsActionsInPaneContext>;
   /** Host's Ctrl+F bar is open — forwarded so a viewer can move its own floating
    *  controls out from under it. */
   findBarOpen?: boolean;
@@ -662,6 +662,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     const paneVisible = commentsMode === 'comments' && showComments && (showCodeRail || !narrowPane);
     onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: openCount, paneVisible, ...paneGeom });
   }, [showComments, showCodeRail, narrowPane, commentsMode, openCount, paneGeom, onCommentsStateChange]);
+  // The comment panel's own × (review deck R-3).
+  const closeCommentsPane = useCallback(() => setCommentsMode('reading'), []);
   const openComments = useCallback((commentId?: string) => {
     if (commentId) {
       if (pathComments.find((c) => c.id === commentId)?.resolved) setPathShowResolved(true);
@@ -760,6 +762,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
 
   return (
     <CommentsActionsInPaneContext.Provider value={commentsActionsInPane ?? null}>
+    <CommentsCloseContext.Provider value={closeCommentsPane}>
     <div ref={rootRef} className="h-full flex flex-col relative">
       {/* Conflict banner — shown when the file changes on disk while the user
           has UNSAVED edits. Three actions: keep draft, accept the disk version,
@@ -869,6 +872,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         />
       )}
     </div>
+    </CommentsCloseContext.Provider>
     </CommentsActionsInPaneContext.Provider>
   );
 });
