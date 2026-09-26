@@ -9,7 +9,7 @@ import { FilepathToken } from './FilepathToken';
 // assistant" rides in message.content as an invisible marker (compose-ref.ts)
 // — decode it back into the SAME pill the composer showed, inline in the
 // sentence, so a reference reads identically before and after sending.
-import { splitComposeRefs, jumpToRef } from './context-menu/compose-ref';
+import { splitComposeRefs, jumpToRef, type ComposeRef } from './context-menu/compose-ref';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
 import { TokenPill } from './comments/TokenPill';
 
@@ -80,13 +80,39 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
   // composer's neutral pill (tuned for a panel background) would sit at low
   // contrast on it — same reasoning as Button's own on-accent variant.
   const body: React.ReactNode[] = [...attachmentPills];
-  splitComposeRefs(text).forEach((seg, i) => {
-    if (seg.type === 'ref') {
-      body.push(<TokenPill key={`ref-${seg.ref.id}-${i}`} ref_={seg.ref} onJump={(r) => jumpToRef(r, openFile)} tone="on-accent" />);
-    } else {
-      body.push(...renderProseSegment(seg.value, `s${i}-`));
+  const segs = splitComposeRefs(text);
+  const pill = (ref: ComposeRef, key: string, listed = false) => (
+    <TokenPill key={key} ref_={ref} onJump={(r) => jumpToRef(r, openFile)} tone="on-accent" listed={listed} />
+  );
+  // A batch from Ask Your Assistant (refs that name a comment thread, two or
+  // more in a row with only spaces between them) reads as a LIST — one
+  // comment per line — rather than chips wrapping mid-sentence. The sent
+  // text itself can't carry line breaks (outgoing-message.ts flattens them
+  // for the terminal), so the grouping happens here, at render.
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i];
+    if (seg.type === 'ref' && seg.ref.commentId) {
+      const run: ComposeRef[] = [seg.ref];
+      let j = i + 1;
+      while (j < segs.length) {
+        const gap = segs[j];
+        const next = gap?.type === 'text' && !gap.value.trim() ? segs[j + 1] : gap;
+        const step = gap?.type === 'text' && !gap.value.trim() ? 2 : 1;
+        if (next?.type === 'ref' && next.ref.commentId) { run.push(next.ref); j += step; } else break;
+      }
+      if (run.length > 1) {
+        body.push(
+          <span key={`batch-${i}`} className="flex flex-col items-start gap-1 my-1">
+            {run.map((r, k) => pill(r, `ref-${r.id}-${i}-${k}`, true))}
+          </span>,
+        );
+        i = j - 1;
+        continue;
+      }
     }
-  });
+    if (seg.type === 'ref') body.push(pill(seg.ref, `ref-${seg.ref.id}-${i}`));
+    else body.push(...renderProseSegment(seg.value, `s${i}-`));
+  }
 
   return (
     <div className="flex justify-end px-4 py-2">

@@ -31,9 +31,12 @@ function useSendOpenComments(path: string) {
       commentId: c.id,
       quote: c.quote,
       cell: c.cell,
-      label: `“${truncateQuote(c.text.trim() || c.quote)}”`,
+      // 60, not the default 28: these chips render one per line in the sent
+      // bubble (UserMessage groups a batch), so there is room to read the note.
+      label: `“${truncateQuote(c.text.trim() || c.quote, 60)}”`,
     }));
-    const lead = `Please go through ${open.length === 1 ? 'this comment' : `these ${open.length} comments`} on ${basenameOf(path)}:`;
+    // Short and plain (Destin, polish pass: "a short plain lead sentence").
+    const lead = `Please work through ${open.length === 1 ? 'my comment' : `my ${open.length} comments`} on ${basenameOf(path)}:`;
     // WHY a window event, not a prop: these buttons live in the file viewer,
     // the composer lives in InputBar — siblings several layers apart with no
     // shared ancestor built for this. build-menu.ts's "Ask about this" uses

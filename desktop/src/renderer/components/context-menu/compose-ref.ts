@@ -128,7 +128,8 @@ export function takePendingJump(path: string): ComposeRef | null {
 /** Truncates a quoted snippet for a pill label — single line, short. */
 export function truncateQuote(quote: string, max = 28): string {
   const oneLine = quote.replace(/\s+/g, ' ').trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+  // trimEnd: a cut that lands after a space would otherwise read "of …".
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine;
 }
 
 // ── Draft tokens: what the COMPOSER holds while you type ─────────────────
