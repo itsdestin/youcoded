@@ -21,7 +21,7 @@ import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PageConnectionsDialog } from './page-connections';
-import { ScreenMark } from '../../shoot-mode';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface PagesViewProps {
   /** Starts the creator: a new conversation that builds a page. Owned by
@@ -41,6 +41,9 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   // Fresh list on every open (see refreshPages).
   useEffect(() => { if (open) void refreshPages(); }, [open]);
   const [connectionsFor, setConnectionsFor] = useState<string | null>(null);
+  // Photo-only build: `shoot` opens a page's connections, or its editor (fixture pages).
+  useScreenOpen('pages/library/connections', () => setConnectionsFor('page-headlines'));
+  useScreenOpen('pages/library/edit', () => { const p = pages.find((x) => x.id === 'page-week-planner') ?? pages[0]; if (p) onEditPage(p); });
   if (!open) return null;
 
   const close = () => dispatch({ type: 'PAGES_VIEW_CLOSED' });
@@ -60,7 +63,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   return (
     // z-50: above the page view (z-40) it opens from.
     <div className="fixed inset-0 bg-canvas z-50 flex flex-col">
-      <ScreenMark name="pages" />
+      {loaded && <ScreenMark name="pages/library" />}
       <header className="flex items-center gap-3 px-4 py-2.5 border-b border-edge shrink-0">
         <h2 className="text-base font-semibold text-fg shrink-0 flex items-center gap-2">
           <PagesIcon className="w-4 h-4 text-fg-muted" />

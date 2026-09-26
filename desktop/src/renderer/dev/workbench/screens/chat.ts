@@ -32,7 +32,6 @@ export const CHAT: readonly ScreenEntry[] = [
   // No session at all: the first screen a new user sees.
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
   { name: 'projects', tags: ['view', 'projects'] },
-  { name: 'pages', tags: ['view', 'pages'] },
   { name: 'marketplace', tags: ['view', 'marketplace'] },
   { name: 'library', tags: ['view', 'marketplace'] },
   // Conversations on the practice sessions. wb-2 is the native-runtime session that the

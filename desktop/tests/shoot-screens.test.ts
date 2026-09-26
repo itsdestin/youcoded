@@ -50,7 +50,9 @@ describe('screen list ↔ useScreenOpen registrations', () => {
 
   it('every registered name is in the screen list', () => {
     // A leading underscore is a helper the driver calls (`_select-session`), not a screen.
-    const missing = [...registered.keys()].filter((n) => !n.startsWith('_') && !listed.map(base).includes(n));
+    // A parent that only opens its sub-pages (`pages/page` → pages/page/<id>) counts when one is listed.
+    const missing = [...registered.entries()].filter(([n, r]) => !n.startsWith('_') && !listed.map(base).includes(n)
+      && !(r.subpages && listed.some((l) => base(l).startsWith(n + '/')))).map(([n]) => n);
     expect(missing, 'add these to dev/workbench/screens/index.ts').toEqual([]);
   });
 

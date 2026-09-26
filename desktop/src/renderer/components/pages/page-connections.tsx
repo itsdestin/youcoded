@@ -366,7 +366,7 @@ export function PageConnectionsDialog({ page, onClose, onConnect }: { page: Page
   };
   const list = page?.connections ?? [];
   return (
-    <Dialog open={page !== null} onClose={onClose} layer={3} size="panel" title={page ? `${page.name} · connections` : ''}>
+    <Dialog screen="pages/library/connections" open={page !== null} onClose={onClose} layer={3} size="panel" title={page ? `${page.name} · connections` : ''}>
       <div className="flex flex-col gap-3">
         {list.length === 0 && <div className="text-sm text-fg-muted">This page reaches nothing outside itself.</div>}
         {list.map((c) => (

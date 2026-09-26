@@ -25,7 +25,9 @@ export type AppScreenSetters = {
   gamePanelOpen: boolean;
   toggleGamePanel: () => void;
   openProjects: () => void;
-  openPages: () => void;
+  openPagesView: () => void;
+  openPagesLibrary: () => void;
+  createPage: () => void;
 };
 
 export function useAppScreens(s: AppScreenSetters): void {
@@ -49,7 +51,9 @@ export function useAppScreens(s: AppScreenSetters): void {
   // The panel is a toggle: only press it when it is closed.
   useScreenOpen('chat/games', () => { if (!s.gamePanelOpen) s.toggleGamePanel(); });
   useScreenOpen('projects', s.openProjects);
-  useScreenOpen('pages', s.openPages);
+  useScreenOpen('pages', s.openPagesView);
+  useScreenOpen('pages/library', s.openPagesLibrary);
+  useScreenOpen('pages/create', s.createPage);
   useScreenOpen('marketplace', () => s.setActiveView('marketplace'));
   useScreenOpen('library', () => s.setActiveView('library'));
 }
