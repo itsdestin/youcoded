@@ -33,7 +33,7 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/menu/file', 'menu'),
   // No session at all: the first screen a new user sees.
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
-  { name: 'welcome/new-session', tags: ['view'], scenario: 'empty' },
+  { name: 'welcome/new-session', tags: ['view'], scenario: 'empty', sameAs: { name: 'welcome', why: 'a first-ever launch opens the form already' } },
   { name: 'projects', tags: ['view', 'projects'] },
   { name: 'marketplace', tags: ['view', 'marketplace'] },
   { name: 'library', tags: ['view', 'marketplace'] },
