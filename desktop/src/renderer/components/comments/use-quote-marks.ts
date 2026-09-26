@@ -22,7 +22,11 @@ const MARK_ATTR = 'data-comment-mark';
 // never draws, so it's added here as the disambiguating signal, not the
 // tint. `decoration-2`/`underline-offset-2`: thin enough to read as an
 // annotation mark, not a second bolder highlight.
-const MARK_OPEN = 'bg-accent/15 hover:bg-accent/25 rounded-sm cursor-pointer transition-colors underline decoration-2 decoration-accent/70 underline-offset-2';
+// text-inherit (theme pass, 2026-09-26): the browser's own <mark> style
+// paints the text BLACK (UA `color: MarkText`), which vanished on dark themes
+// — Halftone Dimension's highlighted sentences were near-invisible. The text
+// keeps the document's colour; only the tint and underline mark it.
+const MARK_OPEN = 'text-inherit bg-accent/15 hover:bg-accent/25 rounded-sm cursor-pointer transition-colors underline decoration-2 decoration-accent/70 underline-offset-2';
 const MARK_RESOLVED = 'bg-fg-muted/10 text-fg-muted rounded-sm cursor-pointer underline decoration-2 decoration-fg-muted/50 underline-offset-2';
 // Exported: both CommentsMargin (Comments mode) and ReadingHighlights
 // (Reading mode) toggle these on the SAME mark elements when linking a
