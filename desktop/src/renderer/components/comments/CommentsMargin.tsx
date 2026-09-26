@@ -14,8 +14,8 @@ import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { CloseButton } from '../ui/CloseButton';
 import { EmptyState } from '../ui/states';
 import { Button } from '../ui/Button';
-import { Toggle } from '../ui/Toggle';
 import { readPaneVariant } from './pane-variant';
+import { CommentsPaneFrame } from './CommentsPaneFrame';
 import { useDocComments, type DocComment } from '../../state/doc-comments-store';
 // Round 2: mark-wrapping moved to a shared hook — ReadingHighlights (Reading
 // mode) needs the identical highlight, and the two modes are mutually
@@ -286,29 +286,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
   // data-comments-pane: the framing's outer edge, measured by
   // ActiveArtifactView so Comments/Edit clear it.
   if (variant === 'combined') {
-    return (
-      // w-68 + p-2: the panel itself stays column's 256px wide, inset 8px on
-      // every side so its rounded corners (sheet) read as a panel.
-      <div ref={marginRef} className="w-68 shrink-0 p-2">
-        <div data-comments-pane className="h-full rounded-xl border border-edge bg-panel flex flex-col overflow-hidden">
-          {/* Title row (titled / Session Files; round 17 dropped its count —
-              Destin: "remove the number next to comments") with Show resolved as the
-              Resume browser's "Show Complete" switch — same label recipe and
-              the shared Toggle (ResumeBrowser.tsx). */}
-          <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-edge shrink-0">
-            <span className="font-semibold text-sm">Comments</span>
-            <div className="flex items-center gap-2">
-              {/* text-2xs, not Show Complete's text-3xs: G-5's 11px floor —
-                  the label carries information; the rest of the recipe
-                  (weight, case, tracking, muted) stays identical. */}
-              <label className="text-2xs font-medium text-fg-muted tracking-wider uppercase">Show Resolved</label>
-              <Toggle checked={showResolved} onChange={setShowResolved} aria-label="Show Resolved" />
-            </div>
-          </div>
-          <div className="flex-1 min-h-0 overflow-y-auto">{list}</div>
-        </div>
-      </div>
-    );
+    return <CommentsPaneFrame path={path} frameRef={marginRef}>{list}</CommentsPaneFrame>;
   }
   if (variant === 'sheet') {
     return (

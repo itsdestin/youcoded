@@ -159,9 +159,11 @@ function seedComments(): DocComment[] {
       id: 'seed-code-open',
       path: CODE_PATH,
       quote: 'stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;',
-      sourceLabel: `line 15 · ${basenameOf(CODE_PATH)}`,
-      startLine: 15,
-      endLine: 15,
+      // Line 14 is where this text actually sits in the ChatView.tsx fixture
+      // (15 was off by one — the card's line highlight exposed it).
+      sourceLabel: `line 14 · ${basenameOf(CODE_PATH)}`,
+      startLine: 14,
+      endLine: 14,
       text: 'Is 32px right on every pointer, or should this scale with line-height?',
       author: 'user',
       createdAt: now - HOUR,

@@ -26,6 +26,7 @@ import { languages } from '@codemirror/language-data';
 import { useTheme } from '../../state/theme-context';
 import { buildCmThemeExtensions } from './cm/cm-theme';
 import { registerEditorView, unregisterEditorView } from './cm/editor-registry';
+import { refLineHighlight, installCodeRefHighlight, flashPendingJump } from './cm/ref-line-highlight';
 import type { ArtifactViewProps } from './types';
 
 // Bottom scroll margin = the soft-keyboard overlay height. Read at call time
@@ -70,6 +71,8 @@ export function CodeEditorView({ path, content, editing = false, draft = '', onD
       comp.lang.of(langRef.current ?? []),
       comp.theme.of(buildCmThemeExtensions()),
       EditorView.scrollMargins.of(() => ({ bottom: vvpOffsetPx() })),
+      // Ask-about chips from this file light up their lines (ref-line-highlight.ts).
+      refLineHighlight,
       EditorView.updateListener.of((u) => {
         if (u.docChanged && editingRef.current) onDraftChangeRef.current?.(u.state.doc.toString());
       }),
@@ -86,6 +89,8 @@ export function CodeEditorView({ path, content, editing = false, draft = '', onD
     const view = new EditorView({ state: buildStateRef.current(''), parent: host });
     viewRef.current = view;
     registerEditorView(host, view);
+    installCodeRefHighlight();
+    const cancelPending = flashPendingJump(view, path);
     let dead = false;
     const base = path.split('/').pop() ?? path;
     const desc = LanguageDescription.matchFilename(languages, base);
@@ -98,6 +103,7 @@ export function CodeEditorView({ path, content, editing = false, draft = '', onD
     }
     return () => {
       dead = true;
+      cancelPending();
       unregisterEditorView(host);
       view.destroy();
       viewRef.current = null;

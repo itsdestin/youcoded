@@ -851,13 +851,12 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           </Suspense>
           </ViewerErrorBoundary>
         </div>
-        {/* CM6 virtualizes its DOM, so it gets the simpler non-scroll-synced
-            rail (CodeCommentsRail's own comment has the full WHY) rather than
-            MarkdownView's inline highlight-and-align margin — and, round 2,
-            only shows in Comments mode at all (Reading mode for code is just
-            the plain editor, full width, same as markdown). */}
+        {/* Code files: the same Comments panel, linked to LINES rather than
+            in-text highlights (CM6 virtualises its DOM — CodeCommentsRail's
+            own comment has the WHY). Comments mode only; Reading mode for code
+            is the plain editor, full width, same as markdown. */}
         {showCodeRail && commentsMode === 'comments' && (
-          <CodeCommentsRail path={artifact.path} onJumpToLine={(line) => revealLineIn(rootRef.current, line)} />
+          <CodeCommentsRail path={artifact.path} />
         )}
       </div>
       {/* Partial-view notice — floats over the BOTTOM of the doc pane, in the

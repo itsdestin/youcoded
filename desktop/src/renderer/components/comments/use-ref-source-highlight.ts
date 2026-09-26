@@ -75,8 +75,11 @@ export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>,
       // A chat chip is chat-ref-highlight.ts's to paint — clearing here would
       // wipe its highlight (both use the same highlight names).
       if (ref && ref.kind !== 'doc') return;
+      // Another file's chip — leave the highlight alone (a second open viewer
+      // of that file may be the one painting it).
+      if (ref && ref.path !== path) return;
       const root = contentRef.current;
-      paint(HOVER_NAME, ref && root && ref.path === path ? rangeFor(root, ref) : null);
+      paint(HOVER_NAME, ref && root ? rangeFor(root, ref) : null);
     };
     const onJump = (e: Event) => {
       const detail = (e as CustomEvent<{ ref?: ComposeRef; handled?: boolean }>).detail;
