@@ -143,6 +143,10 @@ describe('NativeSessionHost.attachAdminPassword — the real resolver feeding th
       execPath: process.execPath,
       helperScriptRealpath,
       runningCalls: host.runningCallsForAskpass(),
+      // test-suite-hygiene: real output goes to a temp dir, never the user's
+      // actual XDG_RUNTIME_DIR/youcoded/ — reuses `root` (already cleaned up
+      // in afterAll below) instead of a second temp dir to track.
+      socketDirOverride: path.join(root, 'askpass-socket'),
     });
     await server.start();
     expect(server.available).toBe(true); // the real peer-cred self-test, on this machine
@@ -168,10 +172,14 @@ describe('the real wrapper against a real AskpassServer (no sudo — refused at 
 
     const runningCalls = new RunningCalls();
     const captured: VerifyResult[] = [];
+    // test-suite-hygiene: this test's own temp dir, never the real default
+    // socket dir — cleaned up in the `finally` below alongside server.stop().
+    const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-admin-wiring-wrapper-'));
     const server = new AskpassServer({
       execPath: process.execPath,
       helperScriptRealpath,
       runningCalls,
+      socketDirOverride: socketDir,
       // Delegates to the REAL verifyAskpassPeer (real /proc reads) — only
       // observes the result, so this exercises the genuine chain end to
       // end, not a stub standing in for it.
@@ -213,6 +221,7 @@ describe('the real wrapper against a real AskpassServer (no sudo — refused at 
       }
     } finally {
       await server.stop();
+      fs.rmSync(socketDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
     }
   }, 15_000);
 });
@@ -223,6 +232,17 @@ describe('the real wrapper against a real AskpassServer (no sudo — refused at 
 // there. Fixed by type-checking on THIS hop, before nativeHost is ever
 // reached; these tests exercise the REAL registered ipcMain.handle callback.
 describe('native:submit-admin-password (IPC) — rejects a non-string/empty password without throwing', () => {
+  // `registerIpcHandlers` fire-and-forgets a REAL AskpassServer on linux
+  // (`void resolveAskpassPaths().then(async (paths) => { askpassServer = new
+  // AskpassServer(...); await askpassServer.start(); ... })`) with no
+  // `socketDirOverride` reachable from a caller and no handle this test
+  // could ever call `.stop()` on — these tests only care about the password
+  // handler's own validation, not that wiring, so rather than race a
+  // fire-and-forget chain against an env-var restore, `resolveAskpassPaths()`
+  // is made to return null deterministically (same trick the "returns null,
+  // never throws" test above uses): with no `getAppPath`, its try/catch
+  // resolves null, its caller logs and returns, and NO AskpassServer is ever
+  // constructed — never touching the real socket dir at all.
   async function buildHandlers() {
     const mockIpcMain = { handle: vi.fn(), on: vi.fn() };
     const sessionManager: any = new EventEmitter();
@@ -238,22 +258,29 @@ describe('native:submit-admin-password (IPC) — rejects a non-string/empty pass
     };
     const registry = new WindowRegistry();
 
-    // registerIpcHandlers itself is a plain function call, never memoized,
-    // so each test gets its own fresh set of ipcMain.handle registrations
-    // even though the module itself (with its module-scope side effects) is
-    // only ever evaluated once, on the first import.
-    const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
-      mockIpcMain as any,
-      sessionManager as any,
-      mainWindow as any,
-      skillProvider as any,
-      undefined as any, // commandProvider
-      undefined as any, // hookRelay
-      undefined as any, // remoteConfig
-      undefined as any, // remoteServer
-      registry as any,
-    );
+    const electron: any = await import('electron');
+    const originalGetAppPath = electron.app.getAppPath;
+    delete electron.app.getAppPath;
+    try {
+      // registerIpcHandlers itself is a plain function call, never memoized,
+      // so each test gets its own fresh set of ipcMain.handle registrations
+      // even though the module itself (with its module-scope side effects) is
+      // only ever evaluated once, on the first import.
+      const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
+      registerIpcHandlers(
+        mockIpcMain as any,
+        sessionManager as any,
+        mainWindow as any,
+        skillProvider as any,
+        undefined as any, // commandProvider
+        undefined as any, // hookRelay
+        undefined as any, // remoteConfig
+        undefined as any, // remoteServer
+        registry as any,
+      );
+    } finally {
+      electron.app.getAppPath = originalGetAppPath;
+    }
 
     const handler = (mockIpcMain.handle as any).mock.calls.find((c: any) => c[0] === IPC.NATIVE_SUBMIT_ADMIN_PASSWORD)[1];
     return handler as (event: unknown, payload: { requestId: string; password: unknown }) => Promise<boolean> | boolean;

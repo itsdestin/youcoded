@@ -214,6 +214,16 @@ export class AskpassServer extends EventEmitter {
       return;
     }
 
+    // Coordinator, 2026-09-26: a crashed app — or a test that started a real
+    // AskpassServer and never called stop() — leaves askpass-<pid>.sock
+    // behind forever; nothing else in this feature ever revisits an old
+    // pid's socket. This is the self-healing sweep: every real app start
+    // (and every test's start()) quietly cleans up whatever a PAST run left
+    // dead, in whatever directory it is itself using (real or a test's own
+    // temp dir alike). Never throws — a listing failure is logged and
+    // swallowed, matching this method's own contract.
+    await this.sweepDeadSockets(dir);
+
     // The socket path includes the app's own pid so a dev instance and a
     // live instance (or two dev instances) never collide (design §2.2).
     const socketPath = path.join(dir, `askpass-${process.pid}.sock`);
@@ -260,6 +270,43 @@ export class AskpassServer extends EventEmitter {
     }
 
     this._available = true;
+  }
+
+  /** Removes only entries named exactly `askpass-<pid>.sock` whose pid is
+   *  provably dead (`process.kill(pid, 0)` throws `ESRCH`) — an `EPERM`
+   *  (alive, owned by another user) or any live pid is left alone, and any
+   *  non-matching filename is never inspected. Async fs only (rule 1); a
+   *  directory-listing failure or a single entry's unlink race (another
+   *  sweep, or the file's own owner, already removed it) is swallowed, not
+   *  thrown — this is best-effort hygiene, never a reason to fail start(). */
+  private async sweepDeadSockets(dir: string): Promise<void> {
+    let entries: string[];
+    try {
+      entries = await fs.promises.readdir(dir);
+    } catch (err) {
+      log('WARN', 'AskpassServer', 'could not list socket directory for the dead-socket sweep', { error: String(err) });
+      return;
+    }
+    const SOCKET_NAME = /^askpass-(\d+)\.sock$/;
+    for (const name of entries) {
+      const match = SOCKET_NAME.exec(name);
+      if (!match) continue; // never touches anything but our own naming scheme
+      const pid = Number(match[1]);
+      let alive = true;
+      try {
+        process.kill(pid, 0);
+      } catch (err) {
+        // ESRCH: no such process — dead. Any other code (EPERM: exists,
+        // owned by someone else) must be treated as alive, never deleted.
+        alive = (err as NodeJS.ErrnoException).code !== 'ESRCH';
+      }
+      if (alive) continue;
+      try {
+        await fs.promises.unlink(path.join(dir, name));
+      } catch {
+        // Already gone — not this sweep's problem.
+      }
+    }
   }
 
   private async teardown(): Promise<void> {

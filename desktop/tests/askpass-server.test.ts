@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as net from 'net';
+import { spawn } from 'child_process';
 import { AskpassServer, type AskpassAskEvent } from '../src/main/harness/askpass/askpass-server';
 import { selfTest as peerCredSelfTest } from '../src/main/harness/askpass/peer-cred';
 import { RunningCalls } from '../src/main/harness/askpass/running-calls';
@@ -546,5 +547,107 @@ describe('AskpassServer: startup self-test (real, on Linux)', () => {
     const ok = await peerCredSelfTest(server.socketPath!);
     expect(ok).toBe(true);
     await server.stop();
+  });
+});
+
+// Coordinator, 2026-09-26: a crashed app, or a test that started a real
+// AskpassServer and never stopped it, left askpass-<pid>.sock files behind
+// with no owning process — 11 of them were found in Destin's real
+// $XDG_RUNTIME_DIR/youcoded/. start() now sweeps its own directory for
+// exactly that shape on every startup. This test runs the sweep ONLY
+// against `makeTempDir()`'s own temp dir (never the real default socket
+// dir), which is also what keeps it from ever touching a live dev
+// instance's real socket file.
+describe('AskpassServer: start() sweeps dead askpass-<pid>.sock files from its own directory', () => {
+  it('removes a dead pid\'s socket file, keeps a live pid\'s and an unrelated file untouched', async () => {
+    const dir = makeTempDir();
+
+    // A genuinely dead pid: spawn a trivial child and wait for it to exit —
+    // its pid number is then guaranteed to belong to no running process
+    // (modulo the same pid-reuse race every other pid check in this feature
+    // accepts as a residual risk, documented at the top of askpass-server.ts).
+    const deadChild = spawn(process.execPath, ['-e', '']);
+    const deadPid: number = await new Promise((resolve, reject) => {
+      deadChild.once('spawn', () => {
+        const pid = deadChild.pid;
+        if (pid === undefined) { reject(new Error('child never got a pid')); return; }
+        deadChild.once('close', () => resolve(pid));
+      });
+      deadChild.once('error', reject);
+    });
+
+    // A genuinely live pid, deliberately NOT this test process's own pid —
+    // proves the sweep checks the pid encoded in the FILENAME, not "am I
+    // the one about to claim this directory".
+    const liveChild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)']);
+    const livePid: number = await new Promise((resolve, reject) => {
+      liveChild.once('spawn', () => {
+        const pid = liveChild.pid;
+        if (pid === undefined) reject(new Error('child never got a pid'));
+        else resolve(pid);
+      });
+      liveChild.once('error', reject);
+    });
+
+    const deadSocketPath = path.join(dir, `askpass-${deadPid}.sock`);
+    const liveSocketPath = path.join(dir, `askpass-${livePid}.sock`);
+    const unrelatedPath = path.join(dir, 'not-a-socket.txt');
+    fs.writeFileSync(deadSocketPath, '');
+    fs.writeFileSync(liveSocketPath, '');
+    fs.writeFileSync(unrelatedPath, 'never touched — does not match the naming scheme');
+
+    const server = new AskpassServer({
+      execPath: '/fake/execPath',
+      helperScriptRealpath: '/fake/askpass.cjs',
+      runningCalls: new RunningCalls(),
+      reader: makeHealthyReader(),
+      platform: 'linux',
+      socketDirOverride: dir,
+    });
+
+    try {
+      await server.start();
+      expect(server.available).toBe(true);
+
+      expect(fs.existsSync(deadSocketPath)).toBe(false); // swept — dead pid
+      expect(fs.existsSync(liveSocketPath)).toBe(true); // kept — still alive
+      expect(fs.existsSync(unrelatedPath)).toBe(true); // never inspected
+    } finally {
+      await server.stop();
+      liveChild.kill();
+    }
+  });
+});
+
+// Guard, coordinator 2026-09-26: the source of the 11 leaked sockets was
+// test code constructing a real AskpassServer against the real default
+// dir. sweepDeadSockets() above is the last line of defense; this is the
+// first — a cross-file discipline check no type or runtime assertion can
+// express, since it has to look at every OTHER test file's source text.
+// Isolation is either direct (`socketDirOverride`) or, for a test that
+// triggers the real production wiring indirectly (no handle to the
+// internally-constructed server to pass an option to), redirecting
+// `XDG_RUNTIME_DIR` before the call.
+describe('AskpassServer: no test file constructs one without isolating its socket dir', () => {
+  it('every "new AskpassServer(" in tests/ shares its file with socketDirOverride or an XDG_RUNTIME_DIR override', () => {
+    const testsDir = path.resolve(__dirname);
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.name.endsWith('.test.ts') && !entry.name.endsWith('.test.tsx')) continue;
+        const contents = fs.readFileSync(full, 'utf8');
+        if (!contents.includes('new AskpassServer(')) continue;
+        if (!contents.includes('socketDirOverride') && !contents.includes('XDG_RUNTIME_DIR')) {
+          offenders.push(path.relative(testsDir, full));
+        }
+      }
+    };
+    walk(testsDir);
+    expect(offenders).toEqual([]);
   });
 });
