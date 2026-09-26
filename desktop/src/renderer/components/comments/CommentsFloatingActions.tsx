@@ -15,7 +15,7 @@ import { basenameOf, useDocComments } from '../../state/doc-comments-store';
 import { genRefId, truncateQuote, type ComposeRef } from '../context-menu/compose-ref';
 
 /** Puts every open comment on `path` into the composer as pills and sends. */
-function useSendOpenComments(path: string) {
+function useSendOpenComments(path: string, beforeSend?: () => void) {
   const { comments } = useDocComments(path);
   const open = comments.filter((c) => !c.resolved);
   const send = () => {
@@ -42,14 +42,20 @@ function useSendOpenComments(path: string) {
     // shared ancestor built for this. build-menu.ts's "Ask about this" uses
     // the same pattern. This calls the composer's OWN normal send path — it
     // is not a second way to deliver a message.
-    window.dispatchEvent(new CustomEvent('youcoded:compose-send-comments', { detail: { lead, refs } }));
+    const dispatch = () => window.dispatchEvent(new CustomEvent('youcoded:compose-send-comments', { detail: { lead, refs } }));
+    if (!beforeSend) { dispatch(); return; }
+    // From a screen with no composer (Projects): go back to the chat first,
+    // then send once it has drawn — sending into a hidden chat did nothing
+    // visible (polish pass, 2026-09-26).
+    beforeSend();
+    requestAnimationFrame(() => requestAnimationFrame(dispatch));
   };
   return { openCount: open.length, send };
 }
 
-export function CommentsFloatingActions({ path, withShowResolved = true }: { path: string; withShowResolved?: boolean }) {
+export function CommentsFloatingActions({ path, withShowResolved = true, beforeSend }: { path: string; withShowResolved?: boolean; beforeSend?: () => void }) {
   const { comments, showResolved, setShowResolved } = useDocComments(path);
-  const { openCount, send } = useSendOpenComments(path);
+  const { openCount, send } = useSendOpenComments(path, beforeSend);
   const resolvedCount = comments.filter((c) => c.resolved).length;
   const askTitle = openCount === 0
     ? 'No open comments to ask about'

@@ -8,9 +8,17 @@
 // data-comments-pane: the panel's outer edge, measured by ActiveArtifactView
 // so the floating Comments/Edit buttons clear it and Ask Your Assistant lines
 // up with the cards (the child list carries data-comments-list).
-import type { ReactNode, Ref } from 'react';
+import { createContext, useContext, type ReactNode, type Ref } from 'react';
 import { Toggle } from '../ui/Toggle';
 import { useDocComments } from '../../state/doc-comments-store';
+import { CommentsFloatingActions } from './CommentsFloatingActions';
+
+/** Set when the host has no floating button cluster of its own (the
+ *  Projects screen's file overlay): Ask Your Assistant then floats at the
+ *  bottom of this panel instead — the same place it sits in the file drawer,
+ *  where SessionDrawer positions it over the panel from outside. `beforeAsk`
+ *  runs first (the Projects screen closes itself so the chat is visible). */
+export const CommentsActionsInPaneContext = createContext<{ beforeAsk?: () => void } | null>(null);
 
 interface Props {
   path: string;
@@ -21,11 +29,12 @@ interface Props {
 
 export function CommentsPaneFrame({ path, children, frameRef }: Props) {
   const { showResolved, setShowResolved } = useDocComments(path);
+  const actionsInPane = useContext(CommentsActionsInPaneContext);
   return (
     // w-68 + p-2: the panel itself is 256px wide, inset 8px on every side so
     // its rounded corners read as a panel.
     <div ref={frameRef} className="w-68 shrink-0 p-2">
-      <div data-comments-pane className="h-full rounded-xl border border-edge bg-panel flex flex-col overflow-hidden">
+      <div data-comments-pane className="relative h-full rounded-xl border border-edge bg-panel flex flex-col overflow-hidden">
         {/* Title row with Show resolved as the Resume browser's "Show
             Complete" switch — same label recipe and the shared Toggle. */}
         <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-edge shrink-0">
@@ -39,6 +48,13 @@ export function CommentsPaneFrame({ path, children, frameRef }: Props) {
         {/* The list is its own scroller: cards are not tied to positions in
             the document, so scrolling the document must not carry them away. */}
         <div className="flex-1 min-h-0 overflow-y-auto">{children}</div>
+        {/* Floats over the list's bottom (no bar behind it, Destin round 5);
+            the list's pb-28 lets the last card scroll clear of it. */}
+        {actionsInPane && (
+          <div className="absolute inset-x-2 bottom-2">
+            <CommentsFloatingActions path={path} withShowResolved={false} beforeSend={actionsInPane.beforeAsk} />
+          </div>
+        )}
       </div>
     </div>
   );

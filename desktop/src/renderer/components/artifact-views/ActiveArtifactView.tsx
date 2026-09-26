@@ -15,9 +15,10 @@ import { RemoteFileCard } from './RemoteFileCard';
 import { describeReadError } from './read-error-copy';
 import { isRemoteMode } from '../../platform';
 // Doc comments (round 2, Destin): Reading mode (default) vs Comments mode
-// (the review bar + margin/rail) — CommentsModeToggle is the header control
-// that switches between them; the review bar only renders IN Comments mode.
-import { CommentsModeToggle } from '../comments/CommentsModeToggle';
+// (the comment panel). Every host draws the Comments button itself (the file
+// drawer as a floating pill beside Edit, the Projects screen as a header tool
+// beside Edit) and calls toggleComments().
+import { CommentsActionsInPaneContext } from '../comments/CommentsPaneFrame';
 import { CodeCommentsRail } from '../comments/CodeCommentsRail';
 import { useDocComments } from '../../state/doc-comments-store';
 import { useNarrowByRef } from '../../hooks/use-container-narrow';
@@ -180,10 +181,13 @@ export interface ActiveArtifactViewProps {
   controlsInHeader?: boolean;
   // Fires whenever editability / edit-mode changes so the host header can update.
   onEditStateChange?: (s: { isEditable: boolean; editing: boolean }) => void;
-  /** Fires when the Comments button's state changes. A host that passes this
-   *  draws the button in its own header; without it the viewer shows its own
-   *  toggle row (ProjectView). */
+  /** Fires when the Comments button's state changes; the host draws the
+   *  button (and the floating actions, unless commentsActionsInPane). */
   onCommentsStateChange?: (s: CommentsHeaderState) => void;
+  /** The host has no floating button cluster (the Projects screen's file
+   *  overlay): Ask Your Assistant then floats inside the comment panel, and
+   *  `beforeAsk` runs before it sends (see CommentsActionsInPaneContext). */
+  commentsActionsInPane?: { beforeAsk?: () => void };
   /** Host's Ctrl+F bar is open — forwarded so a viewer can move its own floating
    *  controls out from under it. */
   findBarOpen?: boolean;
@@ -191,7 +195,7 @@ export interface ActiveArtifactViewProps {
 
 export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifactViewProps>(function ActiveArtifactView({
   artifact, content, contentInfo, contentState, onRetryRead, projectRoot, projectId, projectName, sessionId, onContentChange, onDiskRead,
-  controlsInHeader = false, onEditStateChange, onCommentsStateChange, findBarOpen = false,
+  controlsInHeader = false, onEditStateChange, onCommentsStateChange, commentsActionsInPane, findBarOpen = false,
 }, ref) {
   // Legacy default: a caller that doesn't thread contentState keeps the OLD
   // semantics (null content = missing) rather than silently losing the
@@ -748,6 +752,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   }
 
   return (
+    <CommentsActionsInPaneContext.Provider value={commentsActionsInPane ?? null}>
     <div ref={rootRef} className="h-full flex flex-col relative">
       {/* Conflict banner — shown when the file changes on disk while the user
           has UNSAVED edits. Three actions: keep draft, accept the disk version,
@@ -808,20 +813,6 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           <UnifiedDiff oldStr={conflict.disk} newStr={draft} fill />
         </div>
       )}
-      {/* Comments toggle row — only for hosts that don't draw the button in
-          their own header (ProjectView). SessionDrawer passes
-          onCommentsStateChange and shows it in its icon row instead (round 4).
-          "Show resolved" and "Ask Your Assistant" live in the margin's footer
-          (CommentsPaneFooter), so this row is just the mode switch. */}
-      {showComments && !onCommentsStateChange && (
-        <div className="flex items-center gap-2 px-2 py-1.5 border-b border-edge bg-panel shrink-0">
-          <CommentsModeToggle
-            active={commentsMode === 'comments'}
-            count={pathComments.length}
-            onToggle={() => setCommentsMode((m) => (m === 'comments' ? 'reading' : 'comments'))}
-          />
-        </div>
-      )}
       <div className="flex-1 overflow-hidden flex">
         <div className="flex-1 min-w-0 h-full">
           {/* Boundary catches lazy chunk-load failures + viewer render crashes
@@ -871,5 +862,6 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         />
       )}
     </div>
+    </CommentsActionsInPaneContext.Provider>
   );
 });

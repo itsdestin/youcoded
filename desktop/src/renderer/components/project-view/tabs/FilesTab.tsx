@@ -25,7 +25,7 @@ import { dedupeContentHits, groupContentHits, capGroups, MAX_CONTENT_ROWS, type 
 import type { CentralIndexProject, ArtifactRecord } from '../../../../shared/artifacts/types';
 import { FOLDER_PAGE_SIZE, type FolderPage, type FolderSummary } from '../../../../shared/artifacts/folder-page';
 import { ActiveArtifactView } from '../../artifact-views/ActiveArtifactView';
-import type { ActiveArtifactHandle } from '../../artifact-views/ActiveArtifactView';
+import type { ActiveArtifactHandle, CommentsHeaderState } from '../../artifact-views/ActiveArtifactView';
 import { useArtifactContent } from '../../artifact-views/useArtifactContent';
 import { useUnsavedGuard } from '../../artifact-views/UnsavedChangesDialog';
 import { ArtifactThumbnail } from '../../ArtifactThumbnail';
@@ -124,7 +124,7 @@ function folderErrorMessage(error: string, detail: string | undefined, atRoot: b
 // Aliased: detail-tool-icons also exports a (different) FolderIcon used by the
 // Reveal button above.
 import { FolderIcon as FolderCardIcon, DocIcon, ImageIcon, SheetIcon, CodeGlyphIcon, GridViewIcon, ListViewIcon } from '../icons';
-import { ChevronIcon } from '../../Icons';
+import { ChevronIcon, ChatIcon } from '../../Icons';
 import { EmptyState, ErrorState } from '../../ui';
 
 // The rounded box the list-view rows sit in — the same container language the
@@ -1189,6 +1189,12 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   // it and mirror its edit state so the header can swap Edit ↔ Save/Cancel.
   const viewRef = useRef<ActiveArtifactHandle>(null);
   const [editState, setEditState] = useState({ isEditable: false, editing: false });
+  // Comments button state (doc comments polish pass): this screen puts its
+  // actions in the header tool row, so Comments sits there too, just left of
+  // Edit — the file drawer's "Comments next to Edit", in this screen's style.
+  const [commentsState, setCommentsState] = useState<CommentsHeaderState | null>(null);
+  // Stable, so the viewer's context value doesn't change every render.
+  const askInPane = useMemo(() => ({ beforeAsk: () => dispatch({ type: 'PROJECT_VIEW_CLOSED' }) }), [dispatch]);
   const [copied, setCopied] = useState(false);
 
   const filename = artifact.path.split('/').pop() ?? artifact.path;
@@ -1231,6 +1237,21 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   // Header tools: Edit ↔ Save/Cancel (only for editable formats) + Reveal + Copy.
   const tools = (
     <>
+      {commentsState?.available && !editState.editing && (
+        <button
+          type="button"
+          // Pressed = Comments mode is open: the stronger edge and text the
+          // neutral tool uses on hover, held (no second pressed-button style).
+          className={`${TOOL_BTN_NEUTRAL} aria-pressed:border-edge aria-pressed:text-fg`}
+          aria-pressed={commentsState.active}
+          onClick={() => viewRef.current?.toggleComments()}
+        >
+          <ChatIcon className="w-3.5 h-3.5" />
+          Comments
+          {/* G-19: a count is the label plus a muted numeral. */}
+          <span className="text-fg-muted">{commentsState.count}</span>
+        </button>
+      )}
       {editState.isEditable && (editState.editing ? (
         <>
           <button type="button" className={TOOL_BTN_ACCENT} onClick={() => viewRef.current?.saveEdit()}>
@@ -1315,6 +1336,10 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
           onDiskRead={applyDiskRead}
           controlsInHeader
           onEditStateChange={setEditState}
+          onCommentsStateChange={setCommentsState}
+          // Ask Your Assistant leaves Projects for the chat, where the
+          // message is sent and seen.
+          commentsActionsInPane={askInPane}
         />
       </div>
     </ProjectDetailOverlay>
