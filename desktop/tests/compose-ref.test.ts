@@ -199,6 +199,92 @@ describe('escaping (review 2, F7)', () => {
   });
 });
 
+describe('a path containing this grammar\'s own structural characters still round-trips exactly (T7 review, F1)', () => {
+  it('a quote mark inside the path does not hijack the closing quote or the file', () => {
+    const path = 'weird"name.md';
+    const ref: ComposeRef = { id: genRefId(), kind: 'doc', path, fileName: path, quote: 'hello', label: '“hello”' };
+    const decoded = decodeOne(marker(ref));
+    expect(decoded.path).toBe(path);
+    expect(decoded.quote).toBe('hello');
+  });
+
+  it('a quote mark immediately followed by an underscore in the path — the exact shape that used to hijack decoding into the wrong quote AND the wrong file — still resolves correctly', () => {
+    const path = 'evil"_hijacked.md';
+    const quote = 'the real quote';
+    const ref: ComposeRef = { id: genRefId(), kind: 'doc', path, fileName: path, quote, label: `“${quote}”` };
+    const decoded = decodeOne(marker(ref));
+    expect(decoded.path).toBe(path);
+    expect(decoded.quote).toBe(quote);
+  });
+
+  it('a path ending in a literal quote mark', () => {
+    const path = 'weird"';
+    const ref: ComposeRef = { id: genRefId(), kind: 'doc', path, fileName: path, quote: 'q', label: '“q”' };
+    const decoded = decodeOne(marker(ref));
+    expect(decoded.path).toBe(path);
+  });
+
+  it('a path containing a literal backslash', () => {
+    const path = 'notes\\legacy.md';
+    const ref: ComposeRef = { id: genRefId(), kind: 'doc', path, fileName: path, quote: 'q', label: '“q”' };
+    const decoded = decodeOne(marker(ref));
+    expect(decoded.path).toBe(path);
+  });
+
+  it('a quote ending in a literal backslash right before its own closing mark', () => {
+    const quote = 'the path is C:\\';
+    const ref: ComposeRef = { id: genRefId(), kind: 'doc', path: 'docs/x.md', fileName: 'x.md', quote, label: `“${truncateQuote(quote)}”` };
+    const decoded = decodeOne(marker(ref));
+    expect(decoded.quote).toBe(quote);
+    expect(decoded.path).toBe('docs/x.md');
+  });
+
+  it('an existing comment thread reference escapes its path the same way', () => {
+    const path = 'weird"_path.md';
+    const ref: ComposeRef = { id: genRefId(), kind: 'doc', commentId: 'c-99', path, fileName: path, quote: 'ship it', label: `“ship it” · ${path}` };
+    const decoded = decodeOne(marker(ref));
+    expect(decoded).toMatchObject({ commentId: 'c-99', path, quote: 'ship it' });
+  });
+});
+
+describe('an extension-less path shaped like a line-range or cell suffix is never misread as one (T7 review, F2)', () => {
+  it('a path ending in "_L<n>-<n>" with no real line range set decodes as plain path text', () => {
+    const path = 'notes/draft_L2-3';
+    const ref: ComposeRef = { id: genRefId(), kind: 'doc', path, fileName: path, quote: 'q', label: '“q”' };
+    const decoded = decodeOne(marker(ref));
+    expect(decoded.path).toBe(path);
+    expect(decoded.lineRange).toBeUndefined();
+  });
+
+  it('a path ending in "_cell_<ref>" with no real cell set decodes as plain path text', () => {
+    const path = 'x_cell_A1';
+    const ref: ComposeRef = { id: genRefId(), kind: 'doc', path, fileName: path, quote: 'q', label: '“q”' };
+    const decoded = decodeOne(marker(ref));
+    expect(decoded.path).toBe(path);
+    expect(decoded.cell).toBeUndefined();
+  });
+
+  it('a real line range still resolves on a path that also contains its own underscores', () => {
+    const ref: ComposeRef = {
+      id: genRefId(), kind: 'doc', path: 'my_notes_v2.ts', fileName: 'my_notes_v2.ts',
+      quote: 'const x = 1;', lineRange: [12, 18], label: 'lines 12-18 · my_notes_v2.ts',
+    };
+    const decoded = decodeOne(marker(ref));
+    expect(decoded.path).toBe('my_notes_v2.ts');
+    expect(decoded.lineRange).toEqual([12, 18]);
+  });
+
+  it('a real cell-with-sheet reference still resolves on a path that also contains its own underscores', () => {
+    const ref: ComposeRef = {
+      id: genRefId(), kind: 'doc', path: 'q3_budget.xlsx', fileName: 'q3_budget.xlsx',
+      cell: 'C4', sheet: 'Q3', quote: '42', label: 'Q3 · C4 · q3_budget.xlsx',
+    };
+    const decoded = decodeOne(marker(ref));
+    expect(decoded.path).toBe('q3_budget.xlsx');
+    expect(decoded).toMatchObject({ cell: 'C4', sheet: 'Q3' });
+  });
+});
+
 describe('wire-safety: readable text, no JSON, no PTY-hostile whitespace (review 1, F11/F12)', () => {
   it('contains no percent-encoding or JSON braces', () => {
     const ref: ComposeRef = { id: genRefId(), kind: 'doc', path: 'a/b.md', fileName: 'b.md', quote: 'hello', label: '“hello”' };

@@ -382,7 +382,11 @@ function addReply(id: string, author: CommentAuthor, text: string): void {
   });
 }
 
-function resolveComment(id: string, by: CommentAuthor): void {
+// Exported alongside `addComment`/`commentsForPath` — F3's tests (T7 review)
+// need to resolve a fixture comment directly, the same way `addComment`
+// already lets them create one, without going through `useDocComments`'s hook
+// wrapper just to reach a plain state mutation.
+export function resolveComment(id: string, by: CommentAuthor): void {
   publish({
     comments: snap.comments.map((c) =>
       c.id === id ? { ...c, resolved: true, resolvedBy: by, resolvedAt: Date.now() } : c,

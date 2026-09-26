@@ -25,7 +25,7 @@ import { ContextMenu } from '../context-menu/ContextMenu';
 import { buildContextMenu, type MenuEntry } from '../context-menu/build-menu';
 import { useQuoteMarks, ACTIVE_CLASSES, segmentsRect, cellSelector } from './use-quote-marks';
 import { useDocComments } from '../../state/doc-comments-store';
-import type { ComposeRef } from '../context-menu/compose-ref';
+import { isSummaryChipRef, type ComposeRef } from '../context-menu/compose-ref';
 
 // Hover-card open delay + a short close delay: a highlight answering on the
 // first pixel of hover would fire constantly while reading/scanning text;
@@ -180,16 +180,38 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
   // its thread — the same as clicking the highlight: Comments mode, focused
   // on it. A no-op unless this exact file is open (compose-ref.ts's
   // dispatchJumpToRef: there is no cross-file navigation here).
+  //
+  // F3 (T7 review): the Ask Your Assistant summary chip decodes with no
+  // `commentId` at all (§6.2 — the wire text never carries ids), so it used
+  // to fall straight through this listener and the panel never opened on
+  // click. Recognise that shape and open the panel focused on the first
+  // still-open comment on this path — the same "click a chip → jump to its
+  // thread" behaviour a single-comment chip already has, without needing ids
+  // on the wire. `detail.handled` is set ONLY when this listener actually
+  // opened something, so a summary chip for a file with nothing open (or a
+  // file that isn't this one) still falls through to `jumpToRef`'s
+  // `openFile` path for a genuinely closed file.
   useEffect(() => {
     const listener = (e: Event) => {
-      const commentId = (e as CustomEvent<{ ref?: ComposeRef }>).detail?.ref?.commentId;
-      if (!commentId) return;
-      if (!marks.has(commentId)) return;
-      onOpenComments(commentId);
+      const detail = (e as CustomEvent<{ ref?: ComposeRef; handled?: boolean }>).detail;
+      const ref = detail?.ref;
+      if (!detail || !ref || ref.path !== path) return;
+      if (ref.commentId) {
+        if (!marks.has(ref.commentId)) return;
+        detail.handled = true;
+        onOpenComments(ref.commentId);
+        return;
+      }
+      if (isSummaryChipRef(ref)) {
+        const firstOpen = comments.find((c) => !c.resolved);
+        if (!firstOpen) return;
+        detail.handled = true;
+        onOpenComments(firstOpen.id);
+      }
     };
     window.addEventListener('youcoded:jump-to-ref', listener);
     return () => window.removeEventListener('youcoded:jump-to-ref', listener);
-  }, [marks, onOpenComments]);
+  }, [marks, onOpenComments, comments, path]);
 
   // ── Selection → the SAME right-click menu (item 1) ──────────────────────
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenu | null>(null);

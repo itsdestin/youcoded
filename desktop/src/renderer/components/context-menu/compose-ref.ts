@@ -63,7 +63,7 @@ function baseName(p: string): string {
   return p.replace(/\\/g, '/').split('/').pop() || p;
 }
 
-// ── Wire format (build design §6.2, review 1 F11/F12, review 2 F2/F7) ─────
+// ── Wire format (build design §6.2, review 1 F11/F12, review 2 F2/F7, T7 review F1/F2) ─
 //
 // WHY this replaced `${OPEN}${encodeURIComponent(JSON.stringify(ref))}${CLOSE}`:
 // that produced unreadable percent-encoded JSON in the model's own turn (the
@@ -83,17 +83,40 @@ function baseName(p: string): string {
 // flows through chat messages today); only the syntax this file invents is
 // underscore-joined.
 //
-// Escaping (F7): a literal `"` inside a quote is written as `\"`. The parser
-// locates the closing quote as the LAST unescaped `"` immediately followed by
-// a recognized trailing token (`_` or the end of the payload) — never the
-// first `"` after the opening one, which would cut the quote short on any
-// embedded quote mark. An underscore inside a real path or quote is never
-// mistaken for a structural separator because every form below is located
-// structurally (fixed keywords, the quote's own `"` marks, a suffix anchored
-// at the END of the remaining text), never by splitting on `_`.
+// Escaping (F7, tightened by T7 review's F1/F2): a literal `\`, `"` is
+// backslash-escaped inside a QUOTE (`escapeQuote`); a PATH additionally
+// escapes its own literal `_` the same way (`escapePath`), because a path is
+// the one value this grammar also splits on `_` for an optional line/cell
+// suffix. `escapeText`'s single-pass `unescapeText` reverses either: every
+// backslash in an escaped string is there ONLY because it introduces the next
+// character literally, so replaying that rule left-to-right recovers the
+// original text exactly regardless of how many backslashes the original text
+// itself contained (T7 review, F1 test: a path containing `\`).
 //
-// Four forms (F2 added the 4th — the original 3-form draft broke every
-// shipped chat-message/code-block "Ask about this", a live, R15-covered
+// F1 (high, T7 review): the old `findClosingQuote` took the LAST unescaped `"`
+// followed by `_`/end, so a `"` legally present in a path (Linux/macOS allow
+// it) could sit right before a `_` and get picked as the closing quote
+// instead of the real one — decoding the wrong quote AND the wrong file. Two
+// independent fixes, both applied: (1) `findClosingQuote` now takes the FIRST
+// such `"`, matching where the true closing quote always is once the quote's
+// own contents are correctly escaped; (2) a path's own `"` (and `\`, and `_`)
+// are now escaped too, so a path can no longer contribute an unescaped `"` to
+// the payload at all — belt and suspenders, since either fix alone would have
+// closed the specific bug this review found, but only both together make every
+// path character structurally inert.
+//
+// F2 (medium, T7 review): `splitPathSuffix` used to run an END-anchored regex
+// over the raw (unescaped) remainder, so an extension-less path that itself
+// ends in something shaped like `_L2-3` or `_cell_A1` (e.g. `notes/draft_L2-3`)
+// was misread as a real line-range/cell suffix, truncating the path. Escaping
+// a path's own `_` (above) removes the ambiguity at the source:
+// `splitEscapedPathAndSuffix` scans the escaped remainder LEFT-TO-RIGHT for
+// the first UNESCAPED `_` — the path's own underscores are never unescaped,
+// so the only unescaped `_` that can exist is the real structural separator
+// `pathSuffix()` inserts (or none, meaning no suffix at all).
+//
+// Four forms (F2/review-2 added the 4th — the original 3-form draft broke
+// every shipped chat-message/code-block "Ask about this", a live, R15-covered
 // feature):
 //   1. doc quote (ephemeral, no comment):      "<quote>"_<path>[_L<a>-<b>|_cell_<C>[_<sheet>]]
 //   2. an existing comment thread:              comment_<commentId>_"<quote>"_<path>
@@ -102,19 +125,68 @@ function baseName(p: string): string {
 //      (deliberately a POINTER, not the comments themselves — see
 //      CommentsFloatingActions.tsx's own comment. A decoded summary chip
 //      therefore cannot recover which N comments it covered, only the count:
-//      the sent bubble's hover-all/click-to-thread on THIS one chip kind is a
-//      known, accepted trade-off of the frozen wire format, not a bug here —
-//      `jumpToRef` still opens the file itself via `ref.path`.)
+//      `use-ref-source-highlight.ts`'s `rangeFor` and `ReadingHighlights.tsx`'s
+//      jump listener recover "every currently open comment on `ref.path`"
+//      from the LIVE STORE instead — see those files, F3 — rather than from
+//      the wire text; `jumpToRef` still opens the file itself via `ref.path`
+//      when nothing local answers the hover/click.)
+//
+// `<path>` in forms 1/2/4 is always `escapePath(ref.path)` on the wire and
+// `unescapePath(...)` on the way back out.
+function escapeText(s: string, extra: RegExp): string {
+  // Order matters: escaping `\` FIRST means the later `extra` pass only ever
+  // matches characters that were literally in the original text (it can't
+  // accidentally re-touch a backslash this pass just inserted), which is what
+  // makes `unescapeText`'s single left-to-right pass an exact inverse.
+  return s.replace(/\\/g, '\\\\').replace(extra, (c) => `\\${c}`);
+}
+
+function unescapeText(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && i + 1 < s.length) {
+      out += s[i + 1];
+      i++;
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
 function escapeQuote(q: string): string {
-  return q.replace(/"/g, '\\"');
+  return escapeText(q, /"/g);
 }
 
 function unescapeQuote(q: string): string {
-  return q.replace(/\\"/g, '"');
+  return unescapeText(q);
+}
+
+// A path escapes its own `"` (F1 — never let a path's quote mark be read as
+// this payload's closing quote) AND its own `_` (F2 — never let a path's
+// underscore be read as this grammar's separator or an `_L…`/`_cell_…` suffix).
+function escapePath(p: string): string {
+  return escapeText(p, /[_"]/g);
+}
+
+function unescapePath(p: string): string {
+  return unescapeText(p);
+}
+
+/** True when the `"` at index `i` is escaped — preceded by an ODD run of
+ *  literal backslashes (an even run, including zero, means those backslashes
+ *  are themselves escaped/absent and this `"` is a real, structural mark). */
+function isEscapedAt(s: string, i: number): boolean {
+  let count = 0;
+  let j = i - 1;
+  while (j >= 0 && s[j] === '\\') { count++; j--; }
+  return count % 2 === 1;
 }
 
 /** `_cell_<C>[_<sheet>]` or `_L<start>-<end>`, whichever `ref` carries — the
- *  optional suffix after a doc quote's path (form 1). */
+ *  optional suffix after a doc quote's path (form 1). Inserted UNESCAPED
+ *  (real literal `_`s) — it always comes after an escaped path, whose own
+ *  `_`s can never be mistaken for it (F2, see `splitEscapedPathAndSuffix`). */
 function pathSuffix(ref: ComposeRef): string {
   if (ref.cell) return `_cell_${ref.cell}${ref.sheet ? `_${ref.sheet}` : ''}`;
   if (ref.lineRange) return `_L${ref.lineRange[0]}-${ref.lineRange[1]}`;
@@ -125,15 +197,15 @@ function encodeRefPayload(ref: ComposeRef): string {
   // Checked first: CommentsFloatingActions sets BOTH commentId and
   // commentIds on its one summary ref, and the summary form must win.
   if (ref.commentIds && ref.commentIds.length > 0 && ref.path) {
-    return `${ref.commentIds.length}_open_comments_${ref.path}_use_ReadFileComments_to_read_them`;
+    return `${ref.commentIds.length}_open_comments_${escapePath(ref.path)}_use_ReadFileComments_to_read_them`;
   }
   if (ref.commentId && ref.path) {
-    return `comment_${ref.commentId}_"${escapeQuote(ref.quote ?? '')}"_${ref.path}`;
+    return `comment_${ref.commentId}_"${escapeQuote(ref.quote ?? '')}"_${escapePath(ref.path)}`;
   }
   if (ref.kind === 'chat') {
     return `chat_${ref.entryKey ?? ''}_"${escapeQuote(ref.quote ?? '')}"`;
   }
-  return `"${escapeQuote(ref.quote ?? '')}"_${ref.path ?? ''}${pathSuffix(ref)}`;
+  return `"${escapeQuote(ref.quote ?? '')}"_${escapePath(ref.path ?? '')}${pathSuffix(ref)}`;
 }
 
 /** Encodes a ComposeRef as an inert plain-text marker (see the wire-format
@@ -144,18 +216,25 @@ function encodeRefMarker(ref: ComposeRef): string {
 
 const MARKER_RE = /⦃([^⦃⦄]*)⦄/g;
 
-/** Locates a payload's closing quote mark: the LAST `"` (index > 0, i.e. not
- *  the opening mark itself) that is NOT itself an escaped `\"` and is
- *  immediately followed by a recognized trailing token (`_`, or the end of
- *  the payload) — F7. Returns -1 for a malformed/hand-edited payload. */
+/** Locates a payload's closing quote mark: the FIRST `"` (index > 0, i.e. not
+ *  the opening mark itself) that is NOT itself escaped and is immediately
+ *  followed by a recognized trailing token (`_`, or the end of the payload).
+ *
+ *  WHY first, not last (F1, T7 review — was LAST until this fix): a path may
+ *  legally contain its own `"` (Linux/macOS allow it), and with `escapePath`
+ *  now escaping a path's own `"` too, no unescaped `"` can survive inside the
+ *  path region at all — but taking the FIRST match is kept anyway as the
+ *  structural guarantee: the real closing quote is always the first
+ *  unescaped one once the quote's own contents are correctly escaped, so this
+ *  no longer depends on every caller having escaped its path correctly.
+ *  Returns -1 for a malformed/hand-edited payload. */
 function findClosingQuote(payload: string): number {
-  let last = -1;
   for (let i = 1; i < payload.length; i++) {
-    if (payload[i] !== '"' || payload[i - 1] === '\\') continue;
+    if (payload[i] !== '"' || isEscapedAt(payload, i)) continue;
     const next = payload[i + 1];
-    if (next === undefined || next === '_') last = i;
+    if (next === undefined || next === '_') return i;
   }
-  return last;
+  return -1;
 }
 
 /** Reads a leading `"…"` off `payload` (which must start with `"`),
@@ -168,16 +247,38 @@ function extractQuote(payload: string): { quote: string; rest: string } | null {
   return { quote: unescapeQuote(payload.slice(1, end)), rest: payload.slice(end + 1) };
 }
 
-/** Splits `<path>[_L<start>-<end>|_cell_<C>[_<sheet>]]` — form 1's optional
- *  suffix. Anchored at the END of the remaining text (never found by
- *  blindly splitting on `_`), so an underscore inside a real path is never
- *  mistaken for the separator (F12's own reasoning, applied to decode). */
+/** Finds the boundary between an escaped path and this form's optional
+ *  structural suffix (`_L<a>-<b>` / `_cell_<C>[_<sheet>]`) — F2, T7 review.
+ *  `escapePath` escapes every literal `_` a real path contains, so scanning
+ *  left-to-right for the first UNESCAPED `_` finds the true separator (the
+ *  ONLY one `pathSuffix()` ever inserts unescaped) and never a literal
+ *  underscore — or an `_L…`/`_cell_…`-shaped run of one — sitting inside a
+ *  real filename (`notes/draft_L2-3`, `x_cell_A1`). No unescaped `_` at all
+ *  means the whole remainder is the path and there is no suffix. */
+function splitEscapedPathAndSuffix(rem: string): { escapedPath: string; suffix: string | null } {
+  for (let i = 0; i < rem.length; i++) {
+    if (rem[i] === '_' && !isEscapedAt(rem, i)) {
+      return { escapedPath: rem.slice(0, i), suffix: rem.slice(i + 1) };
+    }
+  }
+  return { escapedPath: rem, suffix: null };
+}
+
+/** Splits `<escaped-path>[_L<start>-<end>|_cell_<C>[_<sheet>]]` — form 1's
+ *  optional suffix — and unescapes the path back to its real characters. */
 function splitPathSuffix(rem: string): { path: string; lineRange?: [number, number]; cell?: string; sheet?: string } {
-  const cellMatch = /^(.*)_cell_([A-Za-z]+[0-9]+)(?:_(.*))?$/.exec(rem);
-  if (cellMatch) return { path: cellMatch[1], cell: cellMatch[2], sheet: cellMatch[3] || undefined };
-  const lineMatch = /^(.*)_L(\d+)-(\d+)$/.exec(rem);
-  if (lineMatch) return { path: lineMatch[1], lineRange: [Number(lineMatch[2]), Number(lineMatch[3])] };
-  return { path: rem };
+  const { escapedPath, suffix } = splitEscapedPathAndSuffix(rem);
+  const path = unescapePath(escapedPath);
+  if (suffix == null) return { path };
+  const cellMatch = /^cell_([A-Za-z]+[0-9]+)(?:_(.*))?$/.exec(suffix);
+  if (cellMatch) return { path, cell: cellMatch[1], sheet: cellMatch[2] || undefined };
+  const lineMatch = /^L(\d+)-(\d+)$/.exec(suffix);
+  if (lineMatch) return { path, lineRange: [Number(lineMatch[1]), Number(lineMatch[2])] };
+  // The unescaped `_` we split on wasn't actually followed by a recognized
+  // suffix shape — not something `encodeRefPayload` ever produces, but a
+  // hand-edited/malformed marker degrades to "the rest is all path" rather
+  // than losing text.
+  return { path: unescapePath(rem) };
 }
 
 /** Reverses `encodeRefPayload`. Returns null for anything that doesn't match
@@ -194,7 +295,7 @@ function decodeRefPayload(payload: string): ComposeRef | null {
   const summary = /^(\d+)_open_comments_(.+)_use_ReadFileComments_to_read_them$/.exec(payload);
   if (summary) {
     const count = Number(summary[1]);
-    const path = summary[2];
+    const path = unescapePath(summary[2]);
     if (path && count > 0) {
       const fileName = baseName(path);
       return {
@@ -217,7 +318,7 @@ function decodeRefPayload(payload: string): ComposeRef | null {
     const commentId = afterKind.slice(0, qStart);
     const parsed = extractQuote(afterKind.slice(qStart + 1));
     if (!commentId || !parsed || !parsed.rest.startsWith('_')) return null;
-    const path = parsed.rest.slice(1);
+    const path = unescapePath(parsed.rest.slice(1));
     if (!path) return null;
     const fileName = baseName(path);
     return {
@@ -285,6 +386,19 @@ export function splitComposeRefs(text: string): ComposeSegment[] {
   }
   if (last < text.length) parts.push({ type: 'text', value: text.slice(last) });
   return parts;
+}
+
+/** True for a decoded Ask Your Assistant summary chip (form 4) — F3, review
+ *  3. The wire format deliberately never carries `commentIds` (§6.2 — "the
+ *  comments themselves reach the assistant through its comment tools, not the
+ *  chip"), so a decode of it is the ONLY `kind: 'doc'` ref with a `path` and
+ *  no `quote`/`commentId`/`cell`/`lineRange` at all — every other decoded doc
+ *  form always sets `quote`. `use-ref-source-highlight.ts` and
+ *  `ReadingHighlights.tsx` use this to recover "every open comment on this
+ *  path" from the live store instead of from the (deliberately id-less) wire
+ *  text. */
+export function isSummaryChipRef(ref: ComposeRef): boolean {
+  return ref.kind === 'doc' && !!ref.path && !ref.quote && !ref.commentId && !ref.cell && !ref.lineRange;
 }
 
 // ── Chip ↔ source text (Destin, 2026-09-24: "i should be able to click the

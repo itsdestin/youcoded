@@ -16,7 +16,7 @@
 import { useEffect, type RefObject } from 'react';
 import { findQuote, cellSelector } from './use-quote-marks';
 import { commentsForPath } from '../../state/doc-comments-store';
-import { takePendingJump, type ComposeRef } from '../context-menu/compose-ref';
+import { takePendingJump, isSummaryChipRef, type ComposeRef } from '../context-menu/compose-ref';
 import { revealSheet } from './sheet-reveal';
 
 export const HOVER_NAME = 'ref-source-hover';
@@ -27,7 +27,10 @@ export const FLASH_MS = 1800;
 const PENDING_RETRY_MS = 150;
 const PENDING_TRIES = 30;
 
-function rangeFor(root: HTMLElement, ref: ComposeRef): Range | Range[] | null {
+// Exported for a direct test of the summary-chip hover fix (F3, T7 review) —
+// avoids needing a `CSS.highlights`/`Highlight` polyfill just to observe which
+// ranges this function computes.
+export function rangeFor(root: HTMLElement, ref: ComposeRef): Range | Range[] | null {
   // Ask Your Assistant's summary chip covers several comments: one range each
   // (review deck R-5).
   if (ref.commentIds?.length && ref.path) {
@@ -35,6 +38,18 @@ function rangeFor(root: HTMLElement, ref: ComposeRef): Range | Range[] | null {
     const ranges = commentsForPath(ref.path)
       .filter((c) => ids.has(c.id))
       .map((c) => singleRange(root, { ...ref, commentIds: undefined, quote: c.quote, cell: c.cell, sheet: c.sheet }))
+      .filter((r): r is Range => !!r);
+    return ranges.length ? ranges : null;
+  }
+  // F3 (T7 review): a SENT summary chip decodes with no `commentIds` at all —
+  // the wire format never carries ids (§6.2's own reasoning) — so the branch
+  // above never fires for it and hover used to highlight nothing. Recover
+  // "every currently open comment on this path" from the live store instead.
+  if (isSummaryChipRef(ref) && ref.path) {
+    const path = ref.path;
+    const ranges = commentsForPath(path)
+      .filter((c) => !c.resolved)
+      .map((c) => singleRange(root, { ...ref, quote: c.quote, cell: c.cell, sheet: c.sheet }))
       .filter((r): r is Range => !!r);
     return ranges.length ? ranges : null;
   }
