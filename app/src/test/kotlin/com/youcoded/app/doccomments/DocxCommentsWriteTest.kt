@@ -18,9 +18,11 @@ package com.youcoded.app.doccomments
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.file.Files
 import java.util.zip.ZipFile
+import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -63,6 +65,42 @@ private fun partText(file: File, entryName: String): String? {
 
 private const val W_NS_ATTR = """xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""""
 private const val W14_NS_ATTR = """xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""""
+
+/** F5 (T17 review, minor): every write test below calls this on its output
+ *  archive — a DOM-PARSE well-formedness check on every part a write could
+ *  touch, not just the field-level assertions `readDocxComments` gives us.
+ *  `readDocxComments` walks the DOM with `getElementsByTagName`, which is
+ *  perfectly happy with plenty of XML shapes; parsing each part fresh with a
+ *  strict `DocumentBuilder` (the same secure parser this module's OWN write
+ *  path already builds documents with) catches a mutation that produced
+ *  technically-walkable-by-this-code-but-not-well-formed markup — e.g. an
+ *  unescaped `&` slipped into `w:t` text, or an unbalanced element from a
+ *  `splitRunAtOffsets`/anchor bug — even though every other assertion in this
+ *  file would still pass. Parts that don't exist in a given fixture (e.g. no
+ *  `commentsExtended.xml` before the first resolve/reopen) are skipped, not
+ *  failed. */
+private fun assertPartsWellFormed(file: File) {
+    val partNames = listOf(
+        "word/document.xml",
+        "word/comments.xml",
+        "word/commentsExtended.xml",
+        "[Content_Types].xml",
+        "word/_rels/document.xml.rels",
+        "word/commentsIds.xml",
+        "word/commentsExtensible.xml",
+    )
+    ZipFile(file).use { zip ->
+        for (name in partNames) {
+            val entry = zip.getEntry(name) ?: continue
+            val bytes = zip.getInputStream(entry).use { it.readBytes() }
+            try {
+                DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(ByteArrayInputStream(bytes))
+            } catch (e: Exception) {
+                fail("$name is not well-formed XML after this write: ${e.message}")
+            }
+        }
+    }
+}
 
 /** Mirrors desktop's own `buildGappedIdsDocx` (docx-comments.test.ts) field
  *  for field: a hand-assembled real zip archive with two comments at ids 3
@@ -146,6 +184,8 @@ class DocxCommentsWriteTest {
         assertEquals("person:Priya Shah", untouched.author)
         assertTrue(untouched.resolved)
         assertTrue(untouched.text.contains("Is 30% realistic"))
+
+        assertPartsWellFormed(target) // F5
     }
 
     @Test
@@ -171,6 +211,8 @@ class DocxCommentsWriteTest {
         assertEquals(1, comments.size)
         assertEquals("person:Assistant", comments[0].author)
         assertEquals("First comment this file has ever had.", comments[0].text)
+
+        assertPartsWellFormed(target) // F5
     }
 
     @Test
@@ -201,6 +243,8 @@ class DocxCommentsWriteTest {
         val originalSel = original.selector
         assertTrue(originalSel is CommentSelector.Text)
         assertEquals("first half \nsecond half.", (originalSel as CommentSelector.Text).selector.exact)
+
+        assertPartsWellFormed(target) // F5
     }
 
     @Test
@@ -225,6 +269,8 @@ class DocxCommentsWriteTest {
         assertNotNull(original)
         val originalSel = original.selector as CommentSelector.Text
         assertEquals("Move 30% of weekly active users to the new app within six weeks of launch.", originalSel.selector.exact)
+
+        assertPartsWellFormed(target) // F5
     }
 
     @Test
@@ -243,6 +289,8 @@ class DocxCommentsWriteTest {
         )
         assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
         assertEquals("w-8", (result as DocxWriteResult.Ok).value) // existing ids are 3 and 7 — next is 8, not 2
+
+        assertPartsWellFormed(target) // F5
     }
 
     @Test
@@ -288,6 +336,8 @@ class DocxCommentsWriteTest {
         assertEquals("person:Marcus Lee", comment1.replies[0].author) // the ORIGINAL reply, unmoved
         assertEquals("person:You", comment1.replies[1].author)
         assertEquals("Sounds good, thanks both.", comment1.replies[1].text)
+
+        assertPartsWellFormed(target) // F5
     }
 
     @Test
@@ -315,6 +365,8 @@ class DocxCommentsWriteTest {
         assertEquals(DocxWriteResult.Ok(Unit), reopened)
         read = readDocxComments(target, "docs/spanning-comment.docx")
         assertTrue(read is DocxReadResult.Ok && !read.comments[0].resolved)
+
+        assertPartsWellFormed(target) // F5
     }
 
     @Test
@@ -336,6 +388,8 @@ class DocxCommentsWriteTest {
         assertNotNull(t1)
         assertFalse(t1.resolved)
         assertEquals(1, t1.replies.size)
+
+        assertPartsWellFormed(target) // F5
     }
 
     @Test
@@ -373,6 +427,8 @@ class DocxCommentsWriteTest {
         assertEquals(1, moved.replies.size)
         assertEquals("person:Marcus Lee", moved.replies[0].author)
         assertFalse(moved.resolved)
+
+        assertPartsWellFormed(target) // F5
     }
 
     @Test
@@ -479,6 +535,48 @@ class DocxCommentsWriteTest {
         assertTrue(backupPathSecond.readBytes().contentEquals(secondOriginal)) // rolled forward, not accumulated
     }
 
+    // ── F1 (T17 review, major/durability) — fsync before rename ────────────
+
+    @Test
+    fun `a failing fsync leaves the target byte-identical and never creates a backup`() = runTest {
+        // Proves ORDERING ("the sync call happens before the rename") the
+        // only way a JVM unit test can: fsync's real effect (durability
+        // across a crash) is invisible to a passing process, so this injects
+        // a FAILING fsync and confirms neither the rename nor the backup
+        // — both of which the real pipeline runs AFTER a successful sync —
+        // ever happened.
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val before = target.readBytes()
+        val backupPath = docxBackupPathFor(home, target.absolutePath)
+        val result = writeDocxMutation<Unit>(
+            target.absolutePath,
+            home,
+            mutate = { workCopy, outFile -> workCopy.copyTo(outFile, overwrite = true); DocxWriteResult.Ok(Unit) },
+            verify = { _, _, _ -> true },
+            syncFile = { throw java.io.IOException("simulated fsync failure") },
+        )
+        assertEquals(DocxWriteResult.Err(DocxWriteError.WRITE_FAILED), result)
+        assertTrue(target.readBytes().contentEquals(before)) // rename never ran
+        assertFalse(backupPath.exists()) // backup never ran either — sync runs before both
+    }
+
+    @Test
+    fun `a successful write still calls the real fsync (default parameter wired up)`() = runTest {
+        // The seam's DEFAULT argument is the real `FileChannel.force(true)`
+        // fsync (`defaultFsyncFile`) — this test calls the public
+        // add/reply/etc. entry points (which never pass their own
+        // `syncFile`) end to end, so a regression that silently drops the
+        // default wiring (e.g. an accidental `syncFile = {}` no-op default)
+        // would still leave every OTHER test in this file green. A real
+        // fsync against a real file never throws under normal conditions, so
+        // asserting the write still succeeds is the correct positive pin.
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val result = addDocxComment(target.absolutePath, "docs/launch-brief.docx", textSelector("30%"), "x", "user", home)
+        assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
+    }
+
     // ── concurrency ──────────────────────────────────────────────────────
 
     @Test
@@ -512,6 +610,8 @@ class DocxCommentsWriteTest {
         assertEquals(4, comments.size)
         assertTrue(comments.any { it.text == "First concurrent comment." })
         assertTrue(comments.any { it.text == "Second concurrent comment." })
+
+        assertPartsWellFormed(target) // F5
     }
 
     // ── OOXML wiring sanity (F17) ────────────────────────────────────────
@@ -530,6 +630,8 @@ class DocxCommentsWriteTest {
 
         val overrides = Regex("PartName=\"([^\"]+)\"").findAll(partText(target, "[Content_Types].xml")!!).map { it.groupValues[1] }.toSet()
         assertTrue(overrides.contains("/word/comments.xml"))
+
+        assertPartsWellFormed(target) // F5
     }
 
     @Test

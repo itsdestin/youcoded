@@ -64,8 +64,10 @@ import java.util.concurrent.ConcurrentHashMap
 import java.security.SecureRandom
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import javax.xml.transform.OutputKeys
 import javax.xml.transform.TransformerFactory
 import javax.xml.transform.dom.DOMSource
@@ -1421,6 +1423,38 @@ private fun docxLockFor(absolutePath: String): Mutex = docxWriteLocks.computeIfA
 /** Exported so a test can locate a specific write's backup file directly. */
 const val DOCX_BACKUP_SUFFIX = ".docx.bak"
 
+/** F1 (T17 implementation review, major/durability): the REAL fsync
+ *  `writeDocxMutation` defaults to — `FileChannel.force(true)` against an
+ *  already-closed-for-writing file, the SAME idiom `artifacts/CasWrite.kt`'s
+ *  own `casWrite`/`mutateFileUnderLock` already use for exactly this reason
+ *  (see that file's own header comment). A plain rename only reorders a
+ *  directory entry; without this, the bytes the new name points at may still
+ *  be sitting in a page-cache buffer the kernel hasn't flushed yet, so a
+ *  crash right after the rename can leave the real target file truncated. */
+private fun defaultFsyncFile(file: File) {
+    FileChannel.open(file.toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE).use { it.force(true) }
+}
+
+/** F1: best-effort fsync of a DIRECTORY, run AFTER the atomic replace —
+ *  durability of the rename's own directory-entry update, not the file's
+ *  bytes (those are already covered by `defaultFsyncFile` above, which runs
+ *  BEFORE the rename). "Where supported" per the finding: opening a
+ *  directory as a read-only `FileChannel` and forcing it is a POSIX-only
+ *  operation. Android's filesystem is always POSIX (ext4/f2fs), so this
+ *  normally succeeds, but it is wrapped in its own try/catch regardless —
+ *  this is defense in depth on top of an already-successful write, never a
+ *  gate a real failure here should be allowed to fail the whole operation
+ *  over. */
+private fun bestEffortFsyncDir(dir: File) {
+    try {
+        FileChannel.open(dir.toPath(), StandardOpenOption.READ).use { it.force(true) }
+    } catch (_: Exception) {
+        // Not fatal — see this function's own doc comment. The file-level
+        // fsync in `defaultFsyncFile` already guarantees the CONTENT survives
+        // a crash; this is one further layer for the rename itself.
+    }
+}
+
 /** One rolling backup per file — never one per write. The filename is a hash
  *  of the SOURCE file's own absolute path, never a timestamp, so the next
  *  write to the same file overwrites the previous backup rather than
@@ -1454,6 +1488,15 @@ internal suspend fun <T> writeDocxMutation(
     homeDir: File,
     mutate: (workCopy: File, outFile: File) -> DocxWriteResult<T>,
     verify: (outFile: File, value: T, originalFile: File) -> Boolean,
+    // F1 (T17 implementation review, major/durability): a seam, not a
+    // hardcoded call — defaults to the REAL fsync (`defaultFsyncFile` below,
+    // same `FileChannel.force(true)` idiom as artifacts/CasWrite.kt's own
+    // atomic write). A test proves "the sync call happens before the rename"
+    // by injecting a FAILING fsync here and checking the target/backup were
+    // never touched — a JVM unit test has no other way to observe fsync
+    // ordering, since fsync's only real effect is durability across a crash
+    // this process never experiences.
+    syncFile: (File) -> Unit = ::defaultFsyncFile,
 ): DocxWriteResult<T> {
     return docxLockFor(absolutePath).withLock {
         val target = File(absolutePath)
@@ -1485,6 +1528,24 @@ internal suspend fun <T> writeDocxMutation(
             val verified = try { verify(outFile, value, target) } catch (_: Exception) { false }
             if (!verified) return@withLock DocxWriteResult.Err(DocxWriteError.VERIFY_FAILED)
 
+            // F1 (T17 implementation review, major/durability): fsync the
+            // ALREADY-VERIFIED output's bytes BEFORE it ever replaces the
+            // real target, or even before the backup is taken. A bare
+            // `Files.move` only reorders a directory entry — it says nothing
+            // about whether the bytes the new name will point at are durable
+            // yet, so a crash between the rename returning and the OS's own
+            // lazy flush could leave the REAL document truncated (the
+            // failure mode this finding names). Ordered before the backup
+            // copy too, on purpose: a fsync fault must leave the target
+            // exactly as untouched as a verify fault does, never a state
+            // where a backup was written but the sync it depended on never
+            // happened.
+            try {
+                syncFile(outFile)
+            } catch (_: Exception) {
+                return@withLock DocxWriteResult.Err(DocxWriteError.WRITE_FAILED)
+            }
+
             // Step 1 (backup, §3.3): capture the pre-mutation bytes at a
             // stable, rolling, per-file path OUTSIDE any project, kept as a
             // standing safety net after success (never deleted).
@@ -1496,9 +1557,10 @@ internal suspend fun <T> writeDocxMutation(
                 return@withLock DocxWriteResult.Err(DocxWriteError.BACKUP_FAILED)
             }
 
-            // Atomic replace: the ALREADY-VERIFIED output takes the target's
-            // place — never a direct overwrite. Mirrors CasWrite.kt's own
-            // ATOMIC_MOVE-with-REPLACE_EXISTING-fallback shape.
+            // Atomic replace: the ALREADY-VERIFIED, ALREADY-FSYNCED output
+            // takes the target's place — never a direct overwrite. Mirrors
+            // CasWrite.kt's own ATOMIC_MOVE-with-REPLACE_EXISTING-fallback
+            // shape.
             try {
                 try {
                     Files.move(
@@ -1513,6 +1575,14 @@ internal suspend fun <T> writeDocxMutation(
             } catch (_: Exception) {
                 return@withLock DocxWriteResult.Err(DocxWriteError.WRITE_FAILED)
             }
+            // F1: best-effort fsync of the PARENT DIRECTORY too, so the
+            // rename's own directory-entry update is itself durable, not
+            // just the file's bytes — "where supported" per the finding:
+            // opening a directory as a FileChannel is a POSIX operation
+            // (always available on Android's ext4/f2fs), wrapped in its own
+            // try/catch so a filesystem/JVM that refuses it never fails a
+            // write that has already fully succeeded.
+            bestEffortFsyncDir(parentDir)
             DocxWriteResult.Ok(value)
         } finally {
             workCopy.delete()
