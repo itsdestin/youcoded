@@ -141,6 +141,12 @@ describe('splitMarkdownBlocks while a reply streams', () => {
   // CRLF). This is what found the per-block cut wrong, then CRLF read as a blank
   // line, then indented code's context: 8,000+ documents passed at every
   // character when this landed; 150 here keep it quick.
+  // Measured budget, not guessed (test-suite-hygiene): 13.4s run alone, but
+  // this is pure CPU work (150 docs × every-character re-parsing, no I/O, no
+  // timers) that competes for cores with every other worker under the full
+  // suite — a real run there hit 66.2s and tripped the shared 30s default,
+  // unrelated to any correctness change. 90s leaves comfortable headroom
+  // above that measured worst case.
   it('parses random documents exactly as the whole message, at every character', () => {
     const FRAGS = ['para text', 'more *words*', '# h', '#', '##x', '===', '---', '-', '- item', '  - nested', '1. one', '3) three', '> quote', '>', 'lazy', '```', '```js', '~~~', '    indented', '\t tab', '| a | b |', '| - | - |', '|---|', '<details>', '<summary>s</summary>', '</details>', '<div>', '</div>', '<!--', '-->', '***', '* star', '+ plus', '[x]: http://a', '[x]', '[^1]', 'http://example.com', '/tmp/a.txt', '  ', '', '', '', 'a  ', 'b\\', '<pre>', '</pre>', '* * *', '1.', '10. ten', '- [ ] task', 'Setext', '===', '  ```', '```  ', '> ```', '> - x', '   - three', '    - four', '<b>x</b>', '', '', '', '', '    code', '> ', '1) x', '- ', '* ', '```py', 'x | y', '--- | ---', '<details><summary>t</summary>', '[a][x]', '![i](p.png)', '  1. y', '    ', '\t- tabbed', '> > deep', '#     spaced', 'Title\n---'];
     let seed = 20260923;
@@ -157,7 +163,7 @@ describe('splitMarkdownBlocks while a reply streams', () => {
         expect(pieceForest(state), `prefix ${JSON.stringify(prefix)}`).toEqual(whole);
       });
     }
-  });
+  }, 90_000);
 });
 
 describe('advanceStream: the groups a growing message is drawn as', () => {

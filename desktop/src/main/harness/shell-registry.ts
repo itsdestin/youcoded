@@ -14,6 +14,8 @@ import { randomBytes } from 'crypto';
 import type { ShellRunView, ShellStopReason } from '../../shared/types';
 import { spillDirFor, sweepOldSpillFilesOnce } from './tools/spill-paths';
 import { ENV_SENTINEL, normalizeNewlines, stripAnsi, stripSentinelLines } from './tools/shell-text';
+import { RunningCalls } from './askpass/running-calls';
+import { forgetOnCallExit } from './askpass/admin-forget';
 
 /** Explicit background starts allowed at once (spec §3.6). Hand-offs never count (D5). */
 export const MAX_EXPLICIT_RUNNING = 5;
@@ -79,6 +81,15 @@ export interface ShellRun {
   stopReason?: ShellStopReason;
   /** Handed off at its time limit rather than started in the background. */
   detached: boolean;
+  /** admin-password design §7: true once a delivered password for this
+   *  call's admin sudo was ACCEPTED (no re-ask within ~1s) — cleared when
+   *  the run exits. Review fix T5-4: seeded ONLY from
+   *  `acceptedToolCallIds` (the "accepted" signal), NEVER from
+   *  RunningCalls.markGranted's bare delivery — a delivery that turns out
+   *  wrong must never show "Running as admin" for the window before sudo
+   *  re-asks. `acceptedToolCallIds` still covers the up-front-then-handed-
+   *  off race (acceptance can arrive before this run object even exists). */
+  admin: boolean;
   /** Counts toward the cap (D5). */
   explicit: boolean;
   /** The host queued the finished notice (set by the host, never here). */
@@ -235,11 +246,35 @@ export class ShellRegistry extends EventEmitter {
   private readonly readChains = new WeakMap<ShellRun, Promise<unknown>>();
   private readonly longRunNoticeMs: readonly number[];
 
+  private readonly runningCalls: RunningCalls;
+  /** admin-password design §6/§11 task 5: only `wipeUpfront` — see
+   *  ToolContext.adminPasswordService's own doc for why the tool layer and
+   *  this registry both only ever need that one method. */
+  private readonly wipeUpfront?: (toolCallId: string) => void;
+  /** admin-password design §7, review fix T5-4: toolCallIds whose password
+   *  was ACCEPTED (markAdmin's own signal), independent of whether a
+   *  ShellRun for that call exists yet — the "accepted" event and this
+   *  run's own registration can arrive in EITHER order (an up-front ask
+   *  accepted moments before a hand-off/background-start, or the reverse),
+   *  and `admin` must come from THIS Set either way, never from
+   *  RunningCalls' mere-delivery bookkeeping (which says nothing about
+   *  whether sudo actually accepted it). Cleared per-toolCallId on exit. */
+  private readonly acceptedToolCallIds = new Set<string>();
+
   /** `longRunNoticeMs` is a test seam — production callers pass nothing and
-   *  get LONG_RUN_NOTICE_MS. */
-  constructor(private readonly sessionId: string, opts: { longRunNoticeMs?: readonly number[] } = {}) {
+   *  get LONG_RUN_NOTICE_MS. `runningCalls`/`wipeUpfront` are optional so
+   *  every existing direct construction (shell-registry.test.ts and
+   *  friends) keeps working unchanged; real wiring (native-session-host.ts)
+   *  always supplies both, sharing the ONE RunningCalls instance
+   *  tools/bash.ts's own foreground spawn path registers into. */
+  constructor(
+    private readonly sessionId: string,
+    opts: { longRunNoticeMs?: readonly number[]; runningCalls?: RunningCalls; wipeUpfront?: (toolCallId: string) => void } = {},
+  ) {
     super();
     this.longRunNoticeMs = opts.longRunNoticeMs ?? LONG_RUN_NOTICE_MS;
+    this.runningCalls = opts.runningCalls ?? new RunningCalls();
+    this.wipeUpfront = opts.wipeUpfront;
   }
 
   get(shellId: string): ShellRun | undefined { return this.runs.get(shellId); }
@@ -310,9 +345,22 @@ export class ShellRegistry extends EventEmitter {
       shellId, toolUseId: spec.toolUseId, command: spec.command, cwd: spec.cwd, child: spec.child,
       logPath, logStream, tail: [], partial: '', lastReadBytes: 0, captureEnv: spec.captureEnv,
       startedAt: spec.startedAt, status: 'running', detached: flags.detached, explicit: flags.explicit,
+      // design §7, review fix T5-4: seeded true when this call's password
+      // was already ACCEPTED before this run object existed (an up-front
+      // ask, accepted, then a hand-off or an explicit background start of
+      // the SAME approved call) — from `acceptedToolCallIds`, never from a
+      // bare delivery (RunningCalls.hasGranted), which says nothing about
+      // whether sudo actually took it.
+      admin: this.acceptedToolCallIds.has(spec.toolUseId),
       reported: false, exited, resolveExited, logPending: 0, logWaiters: [], logDone: null, changeTimer: null,
       longRunTimers: [],
     };
+    // admin-password design §2.3: registered here for BOTH start() (a fresh
+    // spawn) and adopt() (bash.ts already registered this same pid — this
+    // simply overwrites with an equivalent entry, RunningCalls.register's
+    // own documented idempotence) rather than branching on `flags.detached`,
+    // so a future third caller of register() can never forget to.
+    if (spec.child.pid) void this.runningCalls.registerPid(spec.child.pid, { sessionId: this.sessionId, toolCallId: spec.toolUseId });
     // Still-running marks (LONG_RUN_NOTICE_MS): measured from the run's own
     // startedAt, so an adopted hand-off that already ran two minutes in the
     // foreground reaches its first mark three minutes from now, not five.
@@ -400,6 +448,16 @@ export class ShellRegistry extends EventEmitter {
   private onExit(run: ShellRun, code: number | null, signal: NodeJS.Signals | null): void {
     if (run.status !== 'running') return;
     run.endedAt = Date.now();
+    // admin-password design §2.3/§5/§6/§7: this run's own root pid no longer
+    // owns a live call — unregister it, run the forget step if this was the
+    // LAST granted call, wipe any up-front password this call's toolCallId
+    // was still holding but never consumed, and clear the admin flag (the
+    // strip disappears with the run — R12's "still running" framing).
+    if (run.child.pid) this.runningCalls.unregister(run.child.pid);
+    forgetOnCallExit(this.runningCalls, run.toolUseId);
+    this.wipeUpfront?.(run.toolUseId);
+    run.admin = false;
+    this.acceptedToolCallIds.delete(run.toolUseId);
     for (const t of run.longRunTimers.splice(0)) clearTimeout(t);
     if (run.stopReason) {
       run.status = 'stopped';
@@ -458,9 +516,43 @@ export class ShellRegistry extends EventEmitter {
     return {
       toolUseId: run.toolUseId, shellId: run.shellId, status: run.status,
       exitCode: run.exitCode, stopReason: run.stopReason, detached: run.detached,
+      admin: run.admin,
       startedAt: run.startedAt, endedAt: run.endedAt,
       tail: this.tailText(run, WIRE_TAIL_LINES), logPath: run.logPath,
     };
+  }
+
+  /** admin-password design §7: called from AdminPasswordService's
+   *  "accepted" signal (native-session-host.ts's `attachAdminPassword`
+   *  wiring). Review fix T5-4: records the acceptance into
+   *  `acceptedToolCallIds` UNCONDITIONALLY first — this is what lets a run
+   *  registered AFTER acceptance (the up-front-then-hand-off race) still
+   *  come up `admin: true` (see `register()`'s own seed) — then, if a run
+   *  already exists for `toolUseId`, flips it live. A no-op past the Set
+   *  write if no run exists yet (the common case: the command finished in
+   *  the foreground before ever reaching this registry) or it already
+   *  exited. */
+  markAdmin(toolUseId: string): void {
+    this.acceptedToolCallIds.add(toolUseId);
+    for (const run of this.runs.values()) {
+      if (run.toolUseId !== toolUseId || run.status !== 'running' || run.admin) continue;
+      run.admin = true;
+      this.emitChangeNow(run);
+    }
+  }
+
+  /** Code review F2: `onExit()` clears `acceptedToolCallIds` for a run that
+   *  actually registered here (background/hand-off) — but the COMMON case
+   *  (an ordinary approved sudo that runs and exits in the foreground) never
+   *  registers a `ShellRun` at all, per `markAdmin`'s own comment, so its
+   *  entry was never removed: one leaked `Set` entry per approved admin
+   *  command for the life of the session's `ShellRegistry`. tools/bash.ts
+   *  calls this directly on its OWN foreground exit paths (the same
+   *  `onCallExit` closure that already unregisters `RunningCalls` and wipes
+   *  an unconsumed up-front hold), so the accepted mark for a call that
+   *  never reached this registry is still cleared when that call ends. */
+  clearAccepted(toolUseId: string): void {
+    this.acceptedToolCallIds.delete(toolUseId);
   }
 
   /** New output since the last read (first read: everything so far). The log's

@@ -21,6 +21,8 @@ import { asString } from '../utils/tool-input';
 // status-bar chip colors, so the footer band can never drift from the chip.
 import { FullAutoStops, BROAD_ALLOW_COLORS } from './permissions/FullAutoStops';
 import { floorAskNote } from './permissions/deny-list-copy';
+import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
+import { AdminRunStrip } from './permissions/AdminRunStrip';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-user-link';
@@ -581,7 +583,11 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // Full-auto's only rule-based ask is a deny-list stop — swap the generic row
   // for the safety-stop footer the compare view settled (workbench surface
   // 'full-auto-ask', R1–R4). Every other combination keeps the row as-is.
-  const fullAutoStop = permissionMode === 'full-auto' && !!denyListed;
+  // An admin command gets the same stop band in EVERY mode (admin-password
+  // design, review R-1: "should match push/deletion prompt… no extra subtext
+  // below the buttons"). It never offers Always Allow (floorStop suppresses it).
+  const adminStop = floorStop === 'admin';
+  const fullAutoStop = (permissionMode === 'full-auto' && !!denyListed) || adminStop;
   // WHY: a forced outside-folder ask isn't deny-listed, but without its own
   // safety-stop copy Full Auto looks broken and offers no session-scoped choice.
   const externalStop = isNative && permissionMode === 'full-auto' && external === true
@@ -845,6 +851,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       kind={externalStop || confirmingExternal ? 'external' : budgetStop ? 'budget' : 'danger'}
       confirmingExternal={confirmingExternal} toolName={toolName} command={command}
       floorStop={floorStop} suppressAlwaysAllow={suppressAlwaysAllow}
+      adminOutsideFullAuto={adminStop && permissionMode !== 'full-auto'}
       specialistName={specialistName} folderName={folderName} responding={responding}
       focusIdx={focusIdx} buttonsRef={buttonsRef} pad={pad} ring={ring} unconfirmedNote={unconfirmedNote}
       onAllow={() => handleRespond({ decision: { behavior: 'allow' } })}
@@ -1585,6 +1592,36 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
           />
         );
       })()}
+
+      {/* The admin password card: this command's sudo is waiting for the
+          computer password (design 2026-09-25, status flip 2026-09-26 —
+          the card now reads 'awaiting-approval', same as a permission ask,
+          so it can't be mistaken for a still-running command). */}
+      {tool.status === 'awaiting-approval' && tool.passwordAsk && (
+        <AdminPasswordPrompt
+          ask={tool.passwordAsk}
+          onSubmit={async (password) => {
+            const requestId = tool.passwordAsk!.requestId;
+            const ok = await window.claude.native.submitAdminPassword(requestId, password);
+            // WHY dispatch on false: an expired ask has nothing left on the
+            // main side to send a PasswordResolved push for THIS device (the
+            // socket it would have delivered to is already gone) — say so
+            // locally instead of leaving the field disabled forever (design
+            // §2.6: "a card whose ask was withdrawn shows the ask as ended;
+            // no field"). A successful submit needs no local dispatch: main's
+            // own broker.withdraw() already broadcasts PasswordResolved to
+            // every device, this one included.
+            // sessionId is absent only in the workbench's standalone tool
+            // gallery (?view=tools), which never wires a real IPC call for
+            // this to matter — guarded rather than asserted so that view
+            // still renders.
+            if (!ok && sessionId) dispatch({ type: 'PASSWORD_RESOLVED', sessionId, requestId });
+          }}
+        />
+      )}
+      {tool.shellRun?.status === 'running' && tool.shellRun.admin && (
+        <AdminRunStrip run={tool.shellRun} sessionId={sessionId} />
+      )}
 
       {/* Expanded details — per-tool parsed views, raw fallback otherwise.
           Skill cards never render a body (the only response is the redundant

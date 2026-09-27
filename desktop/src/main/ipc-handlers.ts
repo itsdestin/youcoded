@@ -65,6 +65,8 @@ import { detectEndpoints } from './models/endpoint-detectors';
 import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
+import { adminCapabilityReady } from './harness/admin-capability';
+import { startAdminPassword } from './harness/admin-password-startup';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
@@ -370,6 +372,44 @@ export function buddyShowRefusal(status: HelperStatus | null): string | null {
   return status.reason ?? 'The buddy needs its KDE helper on this desktop, and the helper is not running.';
 }
 
+/** admin-password design §2.1/§11 tasks 5+review: the ONE resolver for both
+ *  askpass paths, so `SUDO_ASKPASS` (the wrapper) and `helperScriptRealpath`
+ *  (the verifier's argv[1] check, `askpass.cjs`) can never drift apart —
+ *  T5-1 shipped with SUDO_ASKPASS pointed at `askpass.cjs` directly (no
+ *  execute bit, no shebang: sudo's execve() of it fails outright, and even
+ *  fixing that by making askpass.cjs itself executable would silently
+ *  delete the wrapper's `env -i` scrub, the actual control against a
+ *  command-supplied `NODE_OPTIONS` reaching the verified helper — design
+ *  review 1, D1). `wrapperRealpath` is resolved as a SIBLING of
+ *  `helperScriptRealpath`'s own real directory (never re-derived from `base`
+ *  independently), so the two can never name files in different directories.
+ *  dev is the worktree files under `desktop/scripts/askpass/`
+ *  (`app.getAppPath()` is `desktop/` itself in dev, where `package.json`
+ *  lives); packaged is `process.resourcesPath/app.asar.unpacked/scripts/
+ *  askpass/` (electron-builder.yml's `asarUnpack: scripts/**\/*`). Returns
+ *  null (never throws) when either file genuinely isn't there — the caller
+ *  logs plainly and skips the whole feature, exactly like a failed
+ *  self-test (design §2.2: "no fallback to a self-reported pid").
+ *
+ *  T5-3: async (`fs.promises.realpath`) — a startup-only `fs.*Sync` call
+ *  needs no `main-blocking-calls.allowlist.json` entry (that list may only
+ *  shrink, `.claude/rules/performance.md` rule 1) when the async form is
+ *  just as easy at this one call site. */
+export async function resolveAskpassPaths(): Promise<{ helperScriptRealpath: string; wrapperRealpath: string } | null> {
+  const rel = path.join('scripts', 'askpass', 'askpass.cjs');
+  try {
+    // Test doubles for `app` (many suites construct a minimal fake) may
+    // lack `getAppPath`/`isPackaged` entirely — never let that throw before
+    // this feature has a chance to be genuinely unavailable, exactly like a
+    // missing file below.
+    const base = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', rel) : path.join(app.getAppPath(), rel);
+    const helperScriptRealpath = await fs.promises.realpath(base);
+    const wrapperRealpath = await fs.promises.realpath(path.join(path.dirname(helperScriptRealpath), 'youcoded-askpass'));
+    return { helperScriptRealpath, wrapperRealpath };
+  } catch {
+    return null;
+  }
+}
 
 export function registerIpcHandlers(
   ipcMain: IpcMain,
@@ -852,6 +892,14 @@ export function registerIpcHandlers(
     // host sees a cwd.
     // The window can close while admission or native startup is awaiting I/O.
     const checkWindow = () => { attemptCheck?.(); if (event?.sender.isDestroyed?.()) throw new Error('The window closed before this conversation opened.'); };
+    checkWindow();
+    // Task 1 (Destin, 2026-09-26): no session may exist before this
+    // machine's admin capability is settled — a session created in the
+    // first moments of app start would otherwise read the Bash
+    // description's placeholder default and keep it, byte-identical, for
+    // its own whole life (prompt cache). Resolves instantly once settled;
+    // pending only in the brief window right after app launch.
+    await adminCapabilityReady();
     checkWindow();
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
@@ -3059,6 +3107,11 @@ export function registerIpcHandlers(
     { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
   );
 
+  // admin-password: the password card's app-start wiring and its quit teardown
+  // (harness/admin-password-startup.ts). Always settles this machine's capability,
+  // which session creation below awaits.
+  const stopAdminPassword = startAdminPassword(nativeHost, resolveAskpassPaths);
+
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref
   // noteModelUsed persists — thin async wrapper around bindingToPortableModel
   // (portable-model.ts) closed over the live nativeHost/providerRegistry.
@@ -4846,6 +4899,22 @@ export function registerIpcHandlers(
     return hookRelay ? hookRelay.respond(requestId, decision) : false;
   });
 
+  // admin-password design §2.5: the card's Confirm button. `password` is never
+  // logged, echoed, or stored on this hop — it goes straight into
+  // nativeHost.submitAdminPassword() (AdminPasswordService.submit() under
+  // it), which converts it to a Buffer and hands it to the verified askpass
+  // socket without holding it beyond that call.
+  // T4-2 (review): a malformed/malicious payload's `password` is only typed
+  // as `string` at compile time — nothing upstream of this line actually
+  // checks it. A non-string reaching `Buffer.from(password, 'utf8')` inside
+  // submit() throws synchronously; Electron rejects the ipcMain.handle
+  // promise for that (no crash), but it's an unnecessary throw path a
+  // buggy/malicious renderer can trigger. Refused here instead, matching
+  // submit()'s own "unknown/expired requestId returns false" contract —
+  // never logs `password` (a non-string value included).
+  ipcMain.handle(IPC.NATIVE_SUBMIT_ADMIN_PASSWORD, (_event, { requestId, password }: { requestId: string; password: string }) =>
+    typeof password === 'string' && password.length > 0 ? nativeHost.submitAdminPassword(requestId, password) : false);
+
   // --- Settings → Development feature handlers (see dev-tools.ts) ---
 
   ipcMain.handle(IPC.DEV_LOG_TAIL, async (_event, maxLines: number) => {
@@ -5620,6 +5689,7 @@ export function registerIpcHandlers(
     // is synchronous and callers don't await it, so this mirrors the async
     // stopSyncSpaces() teardown pattern in main.ts window-all-closed.
     void nativeHost.destroyAll().catch(() => {});
+    stopAdminPassword(); // refuse open password asks; final forget sweep
     // Awaited by the caller: never leave an orphaned llama-server on quit.
     const engineStopped = engineManager.stopAll().catch(() => {});
     for (const watcher of topicWatchers.values()) {

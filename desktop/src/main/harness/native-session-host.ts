@@ -27,6 +27,9 @@ import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
 import { SessionStore, validatedDeltaReferences, type NativeSessionListEntry } from './session-store';
 import { PermissionBroker } from './permission-broker';
+import { AdminPasswordService, type AdminPasswordServiceLike } from './admin-password-service';
+import { RunningCalls } from './askpass/running-calls';
+import type { AskpassServer } from './askpass/askpass-server';
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
 import { getShell } from './tools/bash';
@@ -408,6 +411,42 @@ export class NativeSessionHost extends EventEmitter {
   // re-emitted on this host so ipc-handlers forwards them on the SAME channel
   // as native transcript events (which is the SAME channel CC hook events ride).
   private broker = new PermissionBroker();
+
+  // admin-password design §2.5/§11 task 5: null until app-start wiring
+  // (main's ipc-handlers.ts setup) calls attachAdminPassword() below, which
+  // builds the real AdminPasswordService around this SAME broker and calls
+  // setAdminPasswordService(). A settable field (not a constructor param)
+  // so ipc-handlers.ts/remote-server.ts can keep calling
+  // `nativeHost.submitAdminPassword(...)` — a STABLE reference — the whole
+  // time, rather than each holding their own snapshot of a value that gets
+  // set later.
+  private adminPasswordService: AdminPasswordServiceLike | null = null;
+
+  // admin-password design §2.3/§3/§11 task 5: unconditional (not gated on
+  // whether AskpassServer ever attaches) — a cheap, side-effect-free
+  // bookkeeping map every Bash call registers into regardless, shared by
+  // tools/bash.ts (foreground) and every session's own ShellRegistry
+  // (shellsFor, background/hand-off), and by the SAME instance
+  // attachAdminPassword() below hands to AskpassServer's own verification
+  // chain (verify.ts's ancestor walk reads THIS map).
+  private readonly runningCalls = new RunningCalls();
+
+  // admin-password design §2.4/§11 task 5: childId -> the bookkeeping
+  // resolveSpecialistChildFor() needs to route a specialist's OWN sudo (mid-
+  // command or up-front) to its parent's card, labelled like
+  // child-ask-router.ts labels a routed permission ask. Populated in
+  // buildSpecialistSession (the ONE place a child's askUser/childAskRouter
+  // is also built, so this can never drift from that routing), removed in
+  // destroy() alongside childrenOf de-registration (a child's own entry;
+  // never the parent's).
+  private readonly specialistMetaByChildId = new Map<string, { parentId: string; agentType: string; title: string; parentToolCallId: string }>();
+
+  // admin-password design §2.3/§11 task 5: set by attachAdminPassword() —
+  // null until then (or forever, on a platform/self-test failure), read
+  // LIVE by toolWiring()/buildSpecialistSession() at every session's
+  // creation, so a session created before app-start wiring finishes still
+  // gets the real vars once it IS attached.
+  private adminPasswordEnvValue: Record<string, string> | null = null;
 
   // Per-session permission mode (spec §2.4 layer 2). decide() reads this fresh
   // on every tool, so setPermissionMode() takes effect on the NEXT gated call
@@ -1636,7 +1675,17 @@ export class NativeSessionHost extends EventEmitter {
   private shellsFor(sessionId: string): ShellRegistry {
     const existing = this.shellRegistries.get(sessionId);
     if (existing) return existing;
-    const registry = new ShellRegistry(sessionId);
+    const registry = new ShellRegistry(sessionId, {
+      // admin-password design §2.3/§6/§7/§11 task 5: the SAME RunningCalls
+      // instance tools/bash.ts's own foreground spawn path registers into,
+      // and the SAME `wipeUpfront` the tool layer calls — kept as a bound
+      // closure (not the whole service) so a session created before
+      // attachAdminPassword() ever ran still reads whatever gets attached
+      // LATER, exactly like `adminPasswordService`'s own settable-field
+      // reasoning above.
+      runningCalls: this.runningCalls,
+      wipeUpfront: (toolCallId) => this.adminPasswordService?.wipeUpfront(toolCallId),
+    });
     // One event per change, straight to ipc-handlers' listener (same shape as
     // 'specialists-event'): sendForSession + remote buffer/broadcast live there.
     registry.on('change', (run: ShellRunView) => this.emit('shell-event', { sessionId, run } satisfies ShellEvent));
@@ -2309,6 +2358,91 @@ export class NativeSessionHost extends EventEmitter {
     return this.broker.pendingEventsFor(sessionId);
   }
 
+  /** admin-password design §11 task 5's assignment point — see
+   *  `adminPasswordService`'s own comment for why this is a settable field
+   *  rather than a constructor param. */
+  setAdminPasswordService(service: AdminPasswordServiceLike | null): void {
+    this.adminPasswordService = service;
+  }
+
+  /** admin-password design §11 task 5, item 1: the app-start wiring's ONE
+   *  entry point. Builds the real AdminPasswordService around THIS host's
+   *  own broker (private — nothing outside can construct one against it)
+   *  and its own specialist-child bookkeeping, wires its "accepted" signal
+   *  (design §7) into the right session's ShellRegistry, and calls
+   *  setAdminPasswordService(). Callers (ipc-handlers.ts) own AskpassServer
+   *  and RunningCalls' OWN start/stop lifecycle — this host only holds the
+   *  resulting AdminPasswordService and the SAME RunningCalls instance
+   *  (see `runningCallsForAskpass`) `askpass` was itself constructed
+   *  against. `sudoAskpassPath` is the value the caller has ALREADY
+   *  resolved for `SUDO_ASKPASS` (ipc-handlers.ts's `resolveAskpassPaths` —
+   *  the wrapper `youcoded-askpass`, never `askpass.cjs`, which is a
+   *  DIFFERENT file `askpass` itself already holds as its own
+   *  `helperScriptRealpath` for the verifier's argv[1] check; T5-1: the two
+   *  must never come from independent resolutions). */
+  attachAdminPassword(askpass: AskpassServer, sudoAskpassPath: string): AdminPasswordServiceLike {
+    const service = new AdminPasswordService({
+      broker: this.broker,
+      askpass,
+      runningCalls: this.runningCalls,
+      resolveSpecialistChild: (sessionId) => this.resolveSpecialistChildFor(sessionId),
+    });
+    service.on('accepted', ({ sessionId, toolCallId }: { sessionId: string; toolCallId: string }) => {
+      this.shellRegistries.get(sessionId)?.markAdmin(toolCallId);
+    });
+    this.setAdminPasswordService(service);
+    // design §2.3: the caller (ipc-handlers.ts) only calls this once
+    // `askpass.available` is true, so `socketPath` is guaranteed non-null
+    // here — see AskpassServer.start()'s own contract.
+    this.adminPasswordEnvValue = askpass.socketPath
+      ? {
+          SUDO_ASKPASS: sudoAskpassPath,
+          YOUCODED_ASKPASS_SOCKET: askpass.socketPath,
+          YOUCODED_ASKPASS_RUNTIME: process.execPath,
+        }
+      : null;
+    return service;
+  }
+
+  /** admin-password design §11 task 5, item 1: the ONE RunningCalls
+   *  instance this host's Bash/ShellRegistry machinery registers every call
+   *  root into — exposed so the app-start wiring can construct the (also
+   *  singular) AskpassServer against the SAME instance verify.ts's ancestor
+   *  walk must see. Used for nothing else outside that one wiring call. */
+  runningCallsForAskpass(): RunningCalls {
+    return this.runningCalls;
+  }
+
+  /** Test/diagnostic seam (task 5 review, T5-2) — the exact env
+   *  `attachAdminPassword()` last computed (null before/without a
+   *  successful attach). `toolWiring()`/`buildSpecialistSession()` read the
+   *  SAME private field live at session creation; this getter lets a test
+   *  assert on the real wiring's result without constructing a full
+   *  session. */
+  get adminPasswordEnv(): Record<string, string> | null {
+    return this.adminPasswordEnvValue;
+  }
+
+  /** admin-password design §2.4/§11 task 5: childId -> {parentId, agentType,
+   *  title, parentToolCallId} — see `specialistMetaByChildId`'s own comment.
+   *  Returns null for a root session (never in the map) or an id this host
+   *  has no such bookkeeping for. */
+  private resolveSpecialistChildFor(sessionId: string): { parentId: string; childId: string; agentType: string; title: string; parentToolCallId: string } | null {
+    const meta = this.specialistMetaByChildId.get(sessionId);
+    if (!meta) return null;
+    return { parentId: meta.parentId, childId: sessionId, agentType: meta.agentType, title: meta.title, parentToolCallId: meta.parentToolCallId };
+  }
+
+  /** native:submit-admin-password (design §2.5) on both the desktop IPC
+   *  handler and the remote WS case (contract R6) — never logs, never stores
+   *  `password` beyond this call; AdminPasswordService.submit() converts it
+   *  to a Buffer and zeroes it before this returns. `false` while task 5
+   *  hasn't wired a real service yet, and honestly for an unknown/expired
+   *  requestId once it has. */
+  submitAdminPassword(requestId: string, password: string): boolean {
+    return this.adminPasswordService?.submit(requestId, password) ?? false;
+  }
+
   /** Wire the "no session uses model X anymore" callback (→ engine unload). */
   setModelReleasedHandler(fn: (modelId: string) => void): void {
     this.onModelReleased = fn;
@@ -2598,10 +2732,20 @@ export class NativeSessionHost extends EventEmitter {
    *  `profile` is accepted here so Task 6 can add a prompt variant without another
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
-  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string, triggers: TriggerIndex): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
+  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string, triggers: TriggerIndex): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells' | 'runningCalls' | 'adminPasswordEnv' | 'adminPasswordService'> {
     return {
       // G-1: this session's background-command registry, host-owned.
       shells: this.shellsFor(sessionId),
+      // admin-password design §2.3/§11 task 5: the ONE process-wide
+      // RunningCalls instance — always present, cheap bookkeeping even when
+      // AskpassServer never attaches (nothing will ever be verified against
+      // an empty registry either way).
+      runningCalls: this.runningCalls,
+      // Spread so a session created before attachAdminPassword() ran gets
+      // ctx.adminPasswordEnv genuinely ABSENT (not `undefined`-valued) —
+      // same convention as `shells` above.
+      ...(this.adminPasswordEnvValue ? { adminPasswordEnv: this.adminPasswordEnvValue } : {}),
+      ...(this.adminPasswordService ? { adminPasswordService: this.adminPasswordService } : {}),
       tools: CORE_TOOLS,
       // Task 4 (plan 1c) — this project folder's roster, read live off the
       // catalog's in-memory state at every roster()/list()/resolve() call
@@ -3508,6 +3652,14 @@ export class NativeSessionHost extends EventEmitter {
         // G-1: children get their OWN registry; their runs die with the child
         // under 'conversation-closed' when destroyChildrenOf tears them down.
         shells: this.shellsFor(childId),
+        // admin-password design §2.3/§11 task 5: same three fields
+        // toolWiring() gives a root session — a specialist's OWN sudo call
+        // (mid-command or up-front) needs the identical registration/env/
+        // service, routed to the PARENT's card via resolveSpecialistChildFor
+        // (populated just below, once childId is known).
+        runningCalls: this.runningCalls,
+        ...(this.adminPasswordEnvValue ? { adminPasswordEnv: this.adminPasswordEnvValue } : {}),
+        ...(this.adminPasswordService ? { adminPasswordService: this.adminPasswordService } : {}),
         // COLD START (spec §1): the specialist body replaces the preset body, and
         // the <env> block describes the CHILD's work directory. Nothing from the
         // parent's conversation crosses over — the brief in the first user turn
@@ -3592,6 +3744,13 @@ export class NativeSessionHost extends EventEmitter {
       },
       this.modelFactory,
     );
+    // admin-password design §2.4/§11 task 5: registered here — the ONE place
+    // a child's own routing identity (parentId/agentType/title/
+    // parentToolCallId) is already all in scope, exactly what childAskRouter
+    // above was just built from — so resolveSpecialistChildFor can never
+    // drift from the SAME routing a permission ask already gets. Removed in
+    // destroy() alongside childrenOf de-registration.
+    this.specialistMetaByChildId.set(childId, { parentId, agentType: specialist.id, title, parentToolCallId });
     return session;
   }
 
@@ -5005,6 +5164,10 @@ export class NativeSessionHost extends EventEmitter {
     // De-register from the parent's child set (this session IS a child when
     // parentSessionId is set) so a destroyed child isn't chased again later.
     if (entry.parentSessionId) this.childrenOf.get(entry.parentSessionId)?.delete(sessionId);
+    // admin-password design §2.4/§11 task 5: this session's OWN routing
+    // entry (never the parent's) — a no-op for a root session, which was
+    // never in this map.
+    this.specialistMetaByChildId.delete(sessionId);
     // Resolve any pending asks for this session ('canceled') + expire their
     // cards BEFORE tearing down the stream — same rationale as interrupt(); a
     // loop paused on a permission await must unwind, and the promise must not

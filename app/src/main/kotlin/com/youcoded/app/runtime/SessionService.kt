@@ -4264,6 +4264,12 @@ class SessionService : Service() {
             // native harness, so this is the honest refusal; the phone stops a
             // DESKTOP command through the remote WebSocket path instead.
             "native:kill-shell",
+            // admin-password design §2.5/R19: sudo asks the DESKTOP's own
+            // AskpassServer for a password, so this is desktop-only like the
+            // rest of this block — a phone answers a DESKTOP session's card
+            // over the remote WebSocket path (native:submit-admin-password on
+            // remote-server.ts), never through Android's own native runtime.
+            "native:submit-admin-password",
             // "What the assistant was given" (2026-09-10). The context record
             // itself is PUSHED, and reaches a phone inside chat:hydrate over the
             // remote WebSocket — there is nothing to answer here. This is the

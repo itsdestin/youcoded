@@ -296,14 +296,30 @@ async function openDialog() {
 }
 
 /** Mount the row with a stubbed models API and open its Settings dialog.
- *  `later`, when given, is what every fetch AFTER the first one answers — which
- *  is how a pending save landing in the background is driven. */
-async function openSettings(settings: StoredModelSettings, later?: StoredModelSettings) {
+ *  `later`, when given, is what a fetch AFTER the first one answers — which is
+ *  how a pending save landing in the background is driven. The REAL poll this
+ *  dialog runs (`POLL.ms`, sped up for tests) fires on its own wall-clock
+ *  schedule — a test that needs to observe the FIRST value before the switch
+ *  cannot just count on "one poll tick hasn't happened yet", because under a
+ *  loaded machine several ticks can land before this function's own `waitFor`
+ *  below even resolves (measured: a real failure, not a theoretical one).
+ *  `holdLater: true` keeps every fetch answering the FIRST value, no matter
+ *  how many real ticks fire, until the returned `reveal()` is called — turning
+ *  "wait for a fixed amount of poll time" into "wait for the signal", per
+ *  test-suite-hygiene. Callers that don't need a specific intermediate state
+ *  (just eventual arrival of `later`) can ignore the return value entirely;
+ *  their behavior is unchanged (`holdLater` defaults to false). */
+async function openSettings(
+  settings: StoredModelSettings,
+  later?: StoredModelSettings,
+  opts?: { holdLater?: boolean },
+): Promise<{ reveal: () => void }> {
   (globalThis as any).window = (globalThis as any).window ?? {};
   let calls = 0;
+  const blocked = { current: !!opts?.holdLater };
   (globalThis as any).window.claude = {
     models: {
-      settings: vi.fn(async () => (later && calls++ > 0 ? later : settings)),
+      settings: vi.fn(async () => (later && calls++ > 0 && !blocked.current ? later : settings)),
       setSettings: vi.fn().mockResolvedValue(settings),
       delete: vi.fn().mockResolvedValue(true),
       downloadCancel: vi.fn().mockResolvedValue(true),
@@ -315,6 +331,7 @@ async function openSettings(settings: StoredModelSettings, later?: StoredModelSe
   // The dialog fetches asynchronously; nothing below is meaningful until the
   // settings have landed and the rows exist.
   await waitFor(() => expect(screen.getByText('Context length')).toBeTruthy());
+  return { reveal: () => { blocked.current = false; } };
 }
 
 const LOAD_ERROR_TITLE = 'This model failed to load last time';
@@ -431,11 +448,18 @@ describe('fields main computes', () => {
       // Fetched once, it would sit there saying "Applies after the current reply"
       // for as long as it is open — the user closes it, reopens it, and concludes
       // the setting never stuck.
-      await openSettings(
+      // holdLater: true — this test needs to actually OBSERVE the pending-apply
+      // text before it clears, which the real (sped-up-for-tests) poll cannot
+      // guarantee under load: several ticks can already have landed by the time
+      // the line below runs, skipping straight past the state this assertion
+      // means to catch (a real, measured flake — not a hypothetical one).
+      const { reveal } = await openSettings(
         { ...SETTINGS, keepLoaded: true, pendingApply: true },
         { ...SETTINGS, keepLoaded: true },
+        { holdLater: true },
       );
       expect(screen.getByText('Applies after the current reply.')).toBeTruthy();
+      reveal();
       await waitFor(
         () => expect(screen.queryByText('Applies after the current reply.')).toBeNull(),
         POLLED,

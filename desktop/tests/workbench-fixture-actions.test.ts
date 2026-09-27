@@ -35,6 +35,12 @@ const KNOWN_KINDS = new Set([
   // STARTING context (SESSION_CONTEXT → SessionContextBanner + SessionContextPopup).
   // No backend yet — MOCK_ONLY — but the line kind IS handled by the loader.
   'session_context',
+  // 'password_ask' (admin-password design): lays a PasswordAsk directly onto
+  // a tool's final block (fixture-loader.ts) so the admin password card is
+  // reviewable in the gallery. Same miss as 'shell_run' above — the loader
+  // already handled it, but this allowlist wasn't updated, leaving the
+  // branch red.
+  'password_ask',
 ]);
 
 function fixtureFiles(dir: string): Array<{ name: string; raw: string }> {
