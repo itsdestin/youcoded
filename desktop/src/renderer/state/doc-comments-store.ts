@@ -60,19 +60,25 @@ export interface DocComment {
   resolvedBy: CommentAuthor | null;
   resolvedAt: number | null;
   /** §2.3: whether the anchoring pass could still find this comment's text in
-   *  the file on disk. Only ever set by whatever computes real anchoring
-   *  (the DOM-aware pass in the file viewer, §2.2's `resolveSelector` — a
-   *  separate, not-yet-wired-in task) — this store only threads the field
-   *  through from `PersistedComment.status` (main never sets it either) so a
-   *  future caller/UI (T6's dedicated "text no longer found" treatment) has
-   *  somewhere to read it from. Always `undefined` today. */
+   *  the file on disk. `main` never sets this (`PersistedComment.status` is
+   *  always `undefined` over the wire) — it is set client-side, at list/read
+   *  time, by whatever component actually has the live DOM/document text to
+   *  re-anchor against: `use-quote-marks.ts` (markdown/docx/plain-text
+   *  highlights, §2.2's `resolveSelector`), `use-code-comment-anchors.ts`
+   *  (code files, the same `resolveSelector` run against the live CodeMirror
+   *  document), or the cell-presence check inside `use-quote-marks.ts` for a
+   *  spreadsheet (`resolveCellSelector`). Deliberately NOT set by
+   *  `fromPersisted` above — see `setCommentStatus`'s own WHY. */
   status?: 'anchored' | 'detached';
-  /** F1 fix (T5 review): the selector's disambiguation context, computed by
-   *  build-menu.ts at selection time and carried on the draft purely so
-   *  `persistNewComment` (below) can build the real `TextQuoteSelector` once
-   *  the debounced `docComments:add` actually fires. Never read by any
-   *  comment-rendering component — NOT part of the "same public shape" (§7)
-   *  contract other fields are, since nothing displays it. */
+  /** F1 fix (T5 review); T14 (§2.2/§2.3): the selector's disambiguation
+   *  context. For a still-pending draft it's computed by build-menu.ts at
+   *  selection time (see `persistNewComment` below); for an already-persisted
+   *  comment `fromPersisted` above threads it back OUT of the wire selector,
+   *  so `use-quote-marks.ts`/`use-code-comment-anchors.ts` can rebuild the
+   *  full `TextQuoteSelector` `resolveSelector` needs. Not part of the "same
+   *  public shape" (§7) contract other fields are (nothing DISPLAYS it), but
+   *  no longer dead weight either — the anchoring pass reads it on every
+   *  comment. */
   selectorPrefix?: string;
   selectorSuffix?: string;
   selectorOccurrence?: number;
@@ -125,11 +131,12 @@ function lastResolution(history: PersistedComment['history']): { by: CommentAuth
 function fromPersisted(p: PersistedComment): DocComment {
   const resolution = p.resolved ? lastResolution(p.history) : null;
   const cell = p.selector.kind === 'cell' ? p.selector.selector : undefined;
+  const textSel = p.selector.kind === 'text' ? p.selector.selector : undefined;
   const [startLine, endLine] = p.selector.kind === 'text' ? p.selector.lineHint ?? [] : [];
   return {
     id: p.id,
     path: p.path,
-    quote: p.selector.kind === 'text' ? p.selector.selector.exact : '',
+    quote: textSel?.exact ?? '',
     sourceLabel: sourceLabelFor(p.path, p.selector),
     startLine,
     endLine,
@@ -143,6 +150,16 @@ function fromPersisted(p: PersistedComment): DocComment {
     resolvedBy: resolution?.by ?? null,
     resolvedAt: resolution?.at ?? null,
     status: p.status,
+    // T14 fix (docs/active/specs/2026-09-26-doc-comments-build-design.md
+    // §2.2/§2.3): this used to be threaded through ONLY for a still-pending
+    // local draft (see the field's own comment below) — a comment that had
+    // already round-tripped through the server lost its prefix/suffix/
+    // occurrence entirely, so use-quote-marks.ts's real anchoring pass
+    // (resolveSelector) had nothing to disambiguate a repeated phrase with
+    // once the page reloaded or a `docComments:changed` refresh landed.
+    selectorPrefix: textSel?.prefix,
+    selectorSuffix: textSel?.suffix,
+    selectorOccurrence: textSel?.occurrence,
   };
 }
 
@@ -752,6 +769,30 @@ export function resolveComment(id: string, by: CommentAuthor): void {
     else rollback(id, before);
     setCommentError(id, describeError(res), () => resolveComment(id, by));
   });
+}
+
+/** T14 (§2.2/§2.3): the ONLY writer of `DocComment.status` — called by
+ *  `use-quote-marks.ts`/`use-code-comment-anchors.ts` once per anchoring
+ *  pass, for every comment they could resolve a verdict for. Deliberately
+ *  NOT part of `DocCommentsApi` (§7: "that interface does not change") —
+ *  this is an internal wiring detail between the viewer's DOM-aware
+ *  anchoring pass and the shared store, not something a comment component
+ *  itself decides to call.
+ *
+ *  Guards on the CURRENT value before calling `updateComment` (never inside
+ *  the updater) because `updateComment` unconditionally republishes a new
+ *  array for the key — an unguarded call would republish (and rerender every
+ *  consumer of that file's comments) on every single anchoring pass, even
+ *  when nothing changed, which is exactly the per-event-cost-growth
+ *  performance.md rule 4 exists to prevent. With the guard, a pass reaches a
+ *  fixed point after its own first publish (see the callers' own WHY on
+ *  render-storm safety) instead of looping. Never persisted (PersistedComment
+ *  comment's own WHY): purely a derived, client-side field, so this never
+ *  touches IPC. */
+export function setCommentStatus(id: string, status: 'anchored' | 'detached'): void {
+  const current = findComment(id);
+  if (!current || current.status === status) return;
+  updateComment(id, (c) => ({ ...c, status }));
 }
 
 function reopenComment(id: string): void {

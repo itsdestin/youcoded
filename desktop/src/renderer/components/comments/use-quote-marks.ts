@@ -7,7 +7,14 @@
 // simply calls this hook independently — never both at once, so there is no
 // double-wrap risk to guard against.
 import { useLayoutEffect, useState, type RefObject } from 'react';
-import type { DocComment } from '../../state/doc-comments-store';
+import { setCommentStatus, type DocComment } from '../../state/doc-comments-store';
+// T14 (docs/active/specs/2026-09-26-doc-comments-build-design.md §2.2/§2.3):
+// the real anchoring algorithm, shared with the main process and the MCP
+// script — swapped in below for the mockup's own `findQuote` search
+// (`findQuote` itself stays, exported, for use-ref-source-highlight.ts's
+// unrelated "Ask about this" chip flash, which was never part of this task).
+import { resolveSelector, resolveCellSelector, cellSelectorKey } from '../../../shared/doc-comments-anchor';
+import type { TextQuoteSelector, CellSelector } from '../../../shared/doc-comments-types';
 
 const MARK_ATTR = 'data-comment-mark';
 // Soft accent tint (G-8 reads this as the "selected span" case — the same
@@ -75,9 +82,15 @@ interface TextPoint { node: Text; offset: number }
  * it crosses a **bold** word, a link, a list item or a paragraph break, and
  * `selection.toString()` then carries newlines the DOM's text nodes don't
  * have (or vice versa). Stripping whitespace on both sides and walking a
- * character→node index makes those selections match. Mockup-grade anchoring;
- * the real build stores prefix/suffix context (Web Annotation's
- * TextQuoteSelector) so a repeated phrase lands on the right occurrence.
+ * character→node index makes those selections match.
+ *
+ * T14: this is no longer the comment-highlight anchor (see `markAll` below,
+ * which now resolves comments via `resolveSelector` against the SAME
+ * prefix/suffix/occurrence context build-menu.ts captured at save time).
+ * `findQuote` stays exported and unchanged for `use-ref-source-highlight.ts`'s
+ * "Ask about this" chip flash — a different, best-effort feature (highlight
+ * whatever still looks like the chip's quote) that was never part of this
+ * anchoring rewrite.
  */
 export function findQuote(root: HTMLElement, quote: string): { start: TextPoint; end: TextPoint } | null {
   const needle = quote.replace(/\s+/g, '');
@@ -136,9 +149,16 @@ function wrapSegments(root: HTMLElement, start: TextPoint, end: TextPoint, make:
  * quote spanning bold text, links or several paragraphs still highlights as
  * one comment. Returns every segment per comment; callers use `[0]` for
  * position/scrolling and wire hover/active state on all of them.
- * First-occurrence matching: a phrase that also appears earlier in the
- * document lands on that earlier copy (see findQuote's WHY). The card and
- * hover-card still render either way.
+ *
+ * T14 (§2.2/§2.3): the anchor for each text comment is
+ * `resolveSelector(fullText, sel)` — a repeated phrase resolves to whichever
+ * occurrence its `prefix`/`suffix` context actually matches, not always the
+ * first copy, and text that moved elsewhere in the document still highlights
+ * (see `doc-comments-anchor.ts`). A comment `resolveSelector` cannot find at
+ * all gets no mark and its `status` set to `'detached'` (via
+ * `setCommentStatus`) — the card and hover-card still render either way
+ * (`CommentsMargin.tsx`'s own "no mark" fallback); the dedicated "text no
+ * longer found" treatment is T6's, not this hook's.
  */
 export function useQuoteMarks(
   containerRef: RefObject<HTMLElement | null>,
@@ -169,6 +189,68 @@ export function useQuoteMarks(
   return marks;
 }
 
+/**
+ * Every character of `root`'s rendered text, alongside the exact DOM position
+ * (text node + offset) each one came from — the same "flatten every text
+ * node in document order" model build-menu.ts's `quoteContextAt` callers use
+ * to capture prefix/suffix/occurrence at SAVE time (`selectionOffsets`/
+ * `rangeTextOffsets`), so `resolveSelector`'s returned offsets land back on
+ * the exact same span it was captured from (T14's own consistency
+ * requirement). Unlike `findQuote` above, whitespace is NOT stripped here:
+ * `resolveSelector` does its own whitespace-collapsed comparison internally
+ * and returns offsets into the ORIGINAL (whitespace-included) text, so this
+ * array must index that same original text 1:1.
+ */
+function collectText(root: Node): { text: string; points: TextPoint[] } {
+  let text = '';
+  const points: TextPoint[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+    const s = n.data;
+    for (let i = 0; i < s.length; i++) {
+      text += s[i];
+      points.push({ node: n, offset: i });
+    }
+  }
+  return { text, points };
+}
+
+// Rule 6 (performance.md): bounds the one genuinely O(document-length) cost
+// this pass has — a pathological multi-megabyte file skips highlighting
+// entirely rather than allocating a same-length TextPoint array and running
+// resolveSelector's own (already individually bounded — doc-comments-
+// anchor.ts's MAX_SCORED_OCCURRENCES/EXACT_SAMPLE_CHARS) scoring over it. 2M
+// characters is far past any real note/plan/code file this feature targets.
+const MAX_ANCHOR_TEXT_CHARS = 2_000_000;
+
+/** The element whose flattened text is the SAME text `quoteContextAt`/
+ *  `resolveSelector` were given at save time (build-menu.ts's
+ *  `selectionOffsets`): 'raw' quotes the `<pre>`, 'rendered' quotes the whole
+ *  content column. One function so a future third text source can't
+ *  silently pick a different root than the one that captured its selector. */
+function textRootFor(root: HTMLElement): HTMLElement | null {
+  return root.getAttribute('data-artifact-source') === 'raw' ? root.querySelector('pre') : root;
+}
+
+/** §2.2: "a cell either is or isn't in the current sheet" — but XlsxView only
+ *  ever renders the ACTIVE sheet tab's cells into the DOM (`XlsxView.tsx`'s
+ *  `XlsxSheets`), so a comment on a DIFFERENT tab has no DOM evidence either
+ *  way right now. Returning `undefined` there leaves the comment's
+ *  last-known status alone instead of wrongly flipping it to 'detached'
+ *  every time another tab happens to be showing. */
+function cellStatus(root: HTMLElement, sel: CellSelector): 'anchored' | 'detached' | undefined {
+  const sheetEl = root.querySelector<HTMLElement>('[data-sheet]');
+  if (!sheetEl) return undefined;
+  const activeSheet = sheetEl.getAttribute('data-sheet') ?? undefined;
+  if (sel.sheet && sel.sheet !== activeSheet) return undefined;
+  const present = new Set<string>();
+  sheetEl.querySelectorAll<HTMLElement>('[data-cell]').forEach((el) => {
+    const addr = el.getAttribute('data-cell');
+    if (addr) present.add(cellSelectorKey({ type: 'CellSelector', cell: addr, sheet: sel.sheet }));
+  });
+  return resolveCellSelector(sel, present);
+}
+
 function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLElement[]> {
   // Undo the previous pass's marks first so re-highlighting never nests
   // <mark>s inside <mark>s as comments/content change.
@@ -182,26 +264,59 @@ function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLEle
   });
   root.normalize();
   const found = new Map<string, HTMLElement[]>();
+
+  // Cell comments (spreadsheets): §2.2's trivial presence check.
   for (const c of comments) {
-    if (c.cell) {
-      const td = root.querySelector<HTMLElement>(cellSelector(c));
-      if (!td) continue;
-      td.setAttribute(CELL_ATTR, '');
-      td.setAttribute('data-comment-id', c.id);
-      td.classList.add(...(c.resolved ? CELL_RESOLVED : CELL_OPEN).split(' '));
-      found.set(c.id, [td]);
-      continue;
+    if (!c.cell) continue;
+    const status = cellStatus(root, { type: 'CellSelector', cell: c.cell, sheet: c.sheet });
+    if (status) setCommentStatus(c.id, status);
+    const td = root.querySelector<HTMLElement>(cellSelector(c));
+    if (!td) continue;
+    td.setAttribute(CELL_ATTR, '');
+    td.setAttribute('data-comment-id', c.id);
+    td.classList.add(...(c.resolved ? CELL_RESOLVED : CELL_OPEN).split(' '));
+    found.set(c.id, [td]);
+  }
+
+  // Text comments (markdown/plain-text/docx): T14's real anchoring pass —
+  // resolveSelector against the SAME rendered-text model build-menu.ts used
+  // to capture prefix/suffix/occurrence when the comment was made, so a
+  // repeated phrase re-resolves to the exact copy it was made on (§2.3).
+  const textComments = comments.filter((c) => !c.cell && c.quote);
+  const textRoot = textComments.length ? textRootFor(root) : null;
+  if (textRoot) {
+    const { text, points } = collectText(textRoot);
+    if (text.length <= MAX_ANCHOR_TEXT_CHARS) {
+      for (const c of textComments) {
+        const sel: TextQuoteSelector = {
+          type: 'TextQuoteSelector',
+          exact: c.quote,
+          prefix: c.selectorPrefix ?? '',
+          suffix: c.selectorSuffix ?? '',
+          occurrence: c.selectorOccurrence ?? 0,
+        };
+        const resolved = resolveSelector(text, sel);
+        if (resolved === 'detached') {
+          // §2.3: no highlight for a detached comment — it stays in the
+          // list (CommentsMargin's own "no mark" fallback), just unmarked.
+          setCommentStatus(c.id, 'detached');
+          continue;
+        }
+        setCommentStatus(c.id, 'anchored');
+        const startPoint = points[resolved.start];
+        const lastPoint = points[resolved.end - 1];
+        if (!startPoint || !lastPoint) continue; // defensive: resolveSelector's own offsets are always in range
+        const endPoint: TextPoint = { node: lastPoint.node, offset: lastPoint.offset + 1 };
+        const segs = wrapSegments(textRoot, startPoint, endPoint, () => {
+          const mark = document.createElement('mark');
+          mark.setAttribute(MARK_ATTR, '');
+          mark.setAttribute('data-comment-id', c.id);
+          mark.className = c.resolved ? MARK_RESOLVED : MARK_OPEN;
+          return mark;
+        });
+        if (segs.length) found.set(c.id, segs);
+      }
     }
-    const hit = findQuote(root, c.quote);
-    if (!hit) continue;
-    const segs = wrapSegments(root, hit.start, hit.end, () => {
-      const mark = document.createElement('mark');
-      mark.setAttribute(MARK_ATTR, '');
-      mark.setAttribute('data-comment-id', c.id);
-      mark.className = c.resolved ? MARK_RESOLVED : MARK_OPEN;
-      return mark;
-    });
-    if (segs.length) found.set(c.id, segs);
   }
   return found;
 }

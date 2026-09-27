@@ -80,8 +80,12 @@ function flash(view: EditorView, range: [number, number]): void {
   flashTimer = window.setTimeout(() => { flashTimer = null; view.dispatch({ effects: setLit.of({ flash: null }) }); }, FLASH_MS);
 }
 
-/** The visible code editor showing `path`, if any. */
-function visibleEditorFor(path: string): EditorView | null {
+/** The visible code editor showing `path`, if any. Exported for T14's
+ *  `use-code-comment-anchors.ts` — CodeCommentsRail's own anchoring pass
+ *  needs the SAME live-editor lookup this module already does for chip
+ *  hover/click, so a comment's resolved lines and a chip's never disagree
+ *  about which mounted EditorView is "the" one for a path. */
+export function visibleEditorFor(path: string): EditorView | null {
   for (const el of document.querySelectorAll<HTMLElement>('[data-artifact-source="cm6"]')) {
     if (el.dataset.docPath === path && el.getClientRects().length > 0) return editorViewFor(el);
   }
