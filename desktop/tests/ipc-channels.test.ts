@@ -1352,6 +1352,13 @@ describe('docComments:* IPC parity', () => {
   const server = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
   const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
   const kotlin = fs.existsSync(kotlinPath) ? readSourceFile(kotlinPath) : null;
+  // F6 (T4 implementation review): the actual per-channel dispatch was
+  // extracted out of SessionService.kt's own `when` block into a pure,
+  // directly-unit-testable function (DocCommentsBridgeTest.kt is the Kotlin
+  // half of that same extraction) — SessionService.kt's own arm for these
+  // eight labels is now just plumbing that hands the message to it.
+  const bridgePath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/doccomments/DocCommentsBridge.kt');
+  const bridge = fs.existsSync(bridgePath) ? readSourceFile(bridgePath) : null;
 
   const channels: Array<[string, string]> = [
     ['docComments:list', 'DOC_COMMENTS_IPC.LIST'],
@@ -1408,27 +1415,43 @@ describe('docComments:* IPC parity', () => {
   });
 
   it('docComments:watch/:unwatch answer the SAME not-implemented-on-mobile shape as artifacts:watch-project, never the bare unsupported catch-all', () => {
-    if (!kotlin) return;
+    if (!bridge) return;
     // The exact JSON shape T4's own pinning-test row calls for: a typed,
     // explicit branch — {ok:false, error:'not-implemented-on-mobile'} — not
     // MessageRouter.buildUnsupportedResponse's {ok:false, unsupported:true}
     // no-branch-at-all catch-all (a different mechanism per ipc-bridge.md).
-    const watchBranch = kotlin.match(/"docComments:watch",\s*"docComments:unwatch"\s*->\s*\{[\s\S]*?\}\n/);
-    expect(watchBranch, 'docComments:watch/:unwatch branch not found in SessionService.kt').toBeTruthy();
+    // F6 moved this branch's body into DocCommentsBridge.kt's
+    // handleDocCommentsMessage — SessionService.kt's own combined `when` arm
+    // for all eight docComments:* labels is now just plumbing (see this
+    // describe block's own `bridge` comment above).
+    const watchBranch = bridge.match(/"docComments:watch",\s*"docComments:unwatch"\s*->\s*JSONObject\(\)[\s\S]*?\n/);
+    expect(watchBranch, 'docComments:watch/:unwatch branch not found in DocCommentsBridge.kt').toBeTruthy();
     expect(watchBranch![0]).toContain('"not-implemented-on-mobile"');
     expect(watchBranch![0]).not.toContain('unsupported');
   });
 
   it('docComments:list/add/reply/resolve/reopen/move are real Kotlin implementations on Android, not stubbed not-implemented-on-mobile', () => {
-    if (!kotlin) return;
-    for (const ch of ['docComments:list', 'docComments:add', 'docComments:reply', 'docComments:resolve', 'docComments:reopen', 'docComments:move']) {
-      const branch = kotlin.match(new RegExp(`"${ch}"\\s*->\\s*\\{[\\s\\S]{0,4000}?\\n            \\}\\n`));
-      expect(branch, `${ch} branch not found in SessionService.kt`).toBeTruthy();
-      // A real branch calls into the DocCommentsStore/DocCommentsDispatch
-      // Kotlin modules T4 added — a stub would instead answer a bare
-      // not-implemented-on-mobile with nothing else in the branch body.
-      expect(branch![0]).toContain('com.youcoded.app.doccomments');
-      expect(branch![0]).not.toBe(`"${ch}" -> {\n                msg.id?.let { bridgeServer.respond(ws, msg.type, it,\n                    org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }\n            }\n`);
+    if (!kotlin || !bridge) return;
+    // SessionService.kt's own combined arm hands every one of these eight
+    // labels to the real dispatch function (F6) — a stub would instead
+    // answer inline with nothing calling out to doccomments/.
+    expect(kotlin).toContain('com.youcoded.app.doccomments.handleDocCommentsMessage');
+    // The real per-type logic lives in DocCommentsBridge.kt now — each
+    // channel below must call its own real store/dispatch function, never
+    // just fall through to the bare not-implemented-on-mobile shape.
+    const realCallByChannel: Record<string, string> = {
+      'docComments:list': 'listNativeComments(',
+      'docComments:add': 'addComment(',
+      'docComments:reply': 'replyToComment(',
+      'docComments:resolve': 'resolveComment(',
+      'docComments:reopen': 'reopenComment(',
+      'docComments:move': 'moveComment(',
+    };
+    for (const [ch, realCall] of Object.entries(realCallByChannel)) {
+      const branch = bridge.match(new RegExp(`"${ch}"\\s*->\\s*\\{[\\s\\S]{0,2000}?\\n        \\}\\n`));
+      expect(branch, `${ch} branch not found in DocCommentsBridge.kt`).toBeTruthy();
+      expect(branch![0]).toContain(realCall);
+      expect(branch![0]).not.toContain('"not-implemented-on-mobile"');
     }
   });
 });

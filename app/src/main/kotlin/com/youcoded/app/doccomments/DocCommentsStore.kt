@@ -7,26 +7,35 @@
 // F1 — mirrored here field-for-field, not the weaker root-only shape),
 // and every read/mutation against that sidecar.
 //
-// WHY a plain in-process Mutex, not a port of cas-write.ts's cross-process
-// mkdir lock (§1.5 "Kotlin's own file-locking", §9.1 point 3): Android has
-// no second concurrent YouCoded process sharing this file the way desktop's
-// dev-instance-plus-built-app does (PITFALLS.md's cross-process hazard is
-// desktop-only) — a coroutine Mutex keyed by the sidecar's own canonical
-// path, plus a write-tmp-then-atomic-rename, is simpler and sufficient. The
-// map key is ALREADY the canonicalized `sidecarPath` `locateInProject`/
-// `locateFallback` compute (built from `realProjectRoot`, never the caller's
-// unresolved argument), so two differently-spelled aliases of the same
-// project (a symlink, a `..`-laden path) collapse onto the SAME Mutex without
-// needing §1.5's separate desktop lock-path-canonicalization fix — that fix
-// exists only because cas-write.ts derives its lock path from the RAW target
-// string; this module never does.
+// F1 (T4 implementation review, blocker — supersedes this module's original
+// "Android needs no cross-process lock" reasoning, corrected here and in
+// docs/active/specs/2026-09-26-doc-comments-build-design.md §1.5/§9.1): the
+// original WHY below assumed Android has no second concurrent process
+// sharing this file. That is wrong — the Claude Code MCP script (design
+// §9.1 point 2, §9.2) runs as a SEPARATE Termux `node` process on Android and
+// reads/mutates this exact same sidecar directly, with its own dependency-
+// free reimplementation of the mkdir-lock algorithm. A plain in-process
+// Mutex does nothing to exclude it. `mutateSidecar` below now goes through
+// `com.youcoded.app.artifacts.mutateFileUnderLock` — the SAME cross-process
+// mkdir-based lock desktop's `cas-write.ts` uses (same lock path naming,
+// same 30s stale-lock timeout) — so the Kotlin app, desktop's main process,
+// and the MCP script's own reimplementation all actually exclude each other.
+// The in-process Mutex stays in front as a fast, allocation-free path for the
+// overwhelmingly common case of zero cross-process contention — it never
+// replaces the mkdir lock, only avoids paying its syscall cost when nothing
+// outside this JVM is racing the same sidecar. The map key is ALREADY the
+// canonicalized `sidecarPath` `locateInProject`/`locateFallback` compute
+// (built from `realProjectRoot`, never the caller's unresolved argument), so
+// two differently-spelled aliases of the same project (a symlink, a
+// `..`-laden path) collapse onto the SAME Mutex AND the same mkdir lock path
+// without needing a separate lock-path-canonicalization fix of its own — that
+// fix exists on the TS/MCP side only because those derive their lock path
+// from the RAW target string; this module never does.
 package com.youcoded.app.doccomments
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
@@ -37,6 +46,11 @@ enum class DocCommentsError(val wire: String) {
     COMMENT_NOT_FOUND("comment-not-found"),
     SIDECAR_CORRUPT("sidecar-corrupt"),
     PATH_NOT_ABSOLUTE("path-not-absolute"),
+    // F1 (T4 implementation review): the cross-process mkdir lock's own
+    // timeout — mirrors desktop's doc-comments-store.ts 'lock-timeout' wire
+    // string exactly, reached when the MCP script (or a stuck prior holder)
+    // keeps the lock past mutateFileUnderLock's 3s wait.
+    LOCK_TIMEOUT("lock-timeout"),
 }
 
 sealed class StoreResult<out T> {
@@ -206,8 +220,8 @@ fun listComments(path: String, projectRoot: String?, homeDir: File): StoreResult
 }
 
 // ---------------------------------------------------------------------------
-// Mutations — every one goes through mutateSidecar (read-modify-write inside
-// a per-sidecar-path Mutex, atomic tmp-then-rename write), never a bare
+// Mutations — every one goes through mutateSidecar (an in-process Mutex fast
+// path in front of the real cross-process mkdir lock, F1), never a bare
 // read-then-write.
 // ---------------------------------------------------------------------------
 
@@ -219,51 +233,71 @@ private sealed class Apply<out T> {
     object NotFound : Apply<Nothing>()
 }
 
-private fun writeSidecarAtomic(target: File, content: String) {
-    target.parentFile?.mkdirs()
-    val tmp = File(target.parentFile, target.name + ".tmp")
-    tmp.writeText(content, Charsets.UTF_8)
-    try {
-        Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-    } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-        Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-    }
-}
-
+/**
+ * F1 (T4 implementation review, blocker): read-modify-write the sidecar
+ * through `com.youcoded.app.artifacts.mutateFileUnderLock` — the Kotlin port
+ * of desktop's cas-write.ts cross-process mkdir lock (same lock path naming,
+ * same 30s stale-lock timeout) — INSIDE the in-process Mutex fast path. The
+ * Mutex alone used to be the whole story; it still runs first (free once
+ * acquired, no syscall), but the mkdir lock underneath it is what actually
+ * excludes the Claude Code MCP script's separate Termux process (design
+ * §9.1/§9.2) from writing the SAME sidecar concurrently.
+ */
 private suspend fun <T> mutateSidecar(sidecarPath: String, apply: (CommentsSidecarFile) -> Apply<T>): StoreResult<T> {
     return lockFor(sidecarPath).withLock {
-        val file = File(sidecarPath)
-        // WHY a read failure on an EXISTING file refuses rather than falling
-        // back to an empty sidecar: silently treating "exists but unreadable"
-        // the same as "doesn't exist yet" would let this mutation WRITE a
-        // fresh, empty-plus-one-comment file over whatever couldn't be read —
-        // discarding history a corrupt-but-present file might still hold.
-        // Only a genuinely absent file gets the empty-sidecar default,
-        // mirroring desktop's own `mutateSidecar` (doc-comments-store.ts).
-        val current = if (!file.exists()) {
-            CommentsSidecarFile.empty()
-        } else {
-            val onDisk = try {
-                file.readText(Charsets.UTF_8)
-            } catch (_: java.io.IOException) {
-                return@withLock StoreResult.Err(DocCommentsError.SIDECAR_CORRUPT)
+        var outcome: StoreResult<T>? = null
+        val acquired = try {
+            com.youcoded.app.artifacts.mutateFileUnderLock(sidecarPath) { onDisk ->
+                // WHY a read failure on an EXISTING file refuses rather than
+                // falling back to an empty sidecar: silently treating "exists
+                // but unreadable" the same as "doesn't exist yet" would let
+                // this mutation WRITE a fresh, empty-plus-one-comment file
+                // over whatever couldn't be read — discarding history a
+                // corrupt-but-present file might still hold. Only a
+                // genuinely absent file (onDisk == null) gets the
+                // empty-sidecar default, mirroring desktop's own
+                // `mutateSidecar` (doc-comments-store.ts).
+                val current = if (onDisk == null) {
+                    CommentsSidecarFile.empty()
+                } else {
+                    CommentsSidecarFile.parse(onDisk) ?: run {
+                        outcome = StoreResult.Err(DocCommentsError.SIDECAR_CORRUPT)
+                        return@mutateFileUnderLock null
+                    }
+                }
+                when (val applied = apply(current)) {
+                    is Apply.NotFound -> {
+                        outcome = StoreResult.Err(DocCommentsError.COMMENT_NOT_FOUND)
+                        null
+                    }
+                    is Apply.Applied -> {
+                        outcome = StoreResult.Ok(applied.extra)
+                        applied.file.toJson().toString()
+                    }
+                }
             }
-            CommentsSidecarFile.parse(onDisk) ?: return@withLock StoreResult.Err(DocCommentsError.SIDECAR_CORRUPT)
+        } catch (_: java.io.IOException) {
+            // An EXISTING-but-unreadable sidecar (permissions, a torn read) —
+            // refuse here rather than let mutateFileUnderLock's own read
+            // exception propagate uncaught; same outcome the pre-F1
+            // in-process-only read path used to produce directly.
+            return@withLock StoreResult.Err(DocCommentsError.SIDECAR_CORRUPT)
         }
-        when (val applied = apply(current)) {
-            is Apply.NotFound -> StoreResult.Err(DocCommentsError.COMMENT_NOT_FOUND)
-            is Apply.Applied -> {
-                writeSidecarAtomic(file, applied.file.toJson().toString())
-                StoreResult.Ok(applied.extra)
-            }
-        }
+        if (!acquired) return@withLock StoreResult.Err(DocCommentsError.LOCK_TIMEOUT)
+        outcome ?: throw IllegalStateException(
+            "DocCommentsStore.mutateSidecar: mutateFileUnderLock resolved without invoking its mutate callback",
+        )
     }
 }
 
 private fun findComment(file: CommentsSidecarFile, id: String): PersistedComment? = file.comments.find { it.id == id }
 
+// F2 (T4 implementation review, major): carries `file.raw` forward so a
+// top-level unknown field on the sidecar's own JSON object (beside
+// `version`/`comments`) survives every mutation, mirroring desktop's own
+// `{ ...file, comments: [...] }` spread.
 private fun replaceComment(file: CommentsSidecarFile, id: String, next: PersistedComment): CommentsSidecarFile =
-    CommentsSidecarFile(file.version, file.comments.map { if (it.id == id) next else it })
+    CommentsSidecarFile(file.version, file.comments.map { if (it.id == id) next else it }, file.raw)
 
 /** Account-ready id (§1.2): a UUID, never a counter. */
 suspend fun addComment(
@@ -283,7 +317,8 @@ suspend fun addComment(
         createdAt = System.currentTimeMillis(), replies = emptyList(), resolved = false, history = emptyList(),
     )
     return mutateSidecar(sidecarPath) { file ->
-        Apply.Applied(CommentsSidecarFile(file.version, file.comments + comment), id)
+        // F2: preserve file.raw here too (a brand-new sidecar has none).
+        Apply.Applied(CommentsSidecarFile(file.version, file.comments + comment, file.raw), id)
     }
 }
 

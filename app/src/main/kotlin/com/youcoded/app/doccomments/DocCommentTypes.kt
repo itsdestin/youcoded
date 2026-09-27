@@ -13,6 +13,20 @@
 // from the TS reader — see `generate-docx-golden.mjs`'s own header for why),
 // so a future IPC wire-up (T4, out of this task's scope) can reuse this
 // mapping unchanged rather than inventing a second one.
+//
+// F2 (T4 implementation review, major): `fromJson`/`toJson` used to rebuild
+// every record field by field, silently dropping any key this Kotlin build
+// doesn't know about (a newer schema field, or one written by another of the
+// three-way JSON sidecar's implementations, design §9.1) — desktop avoids
+// this by spreading (`{ ...comment, replies: [...] }`), which keeps every
+// OTHER key untouched. `overlayJson` below is the same idea for org.json,
+// which has no object-spread operator: clone the record's ORIGINAL
+// `JSONObject` (kept as `raw`), then overlay only the fields this code
+// actually knows about. Applied at every level the design calls out: the
+// sidecar file itself, each `PersistedComment`, each `CommentReply`, and
+// each `ResolveEvent` (a `history` entry) — NOT the selector, which stays a
+// fully-typed, from-scratch shape (§2's anchoring pass owns its contents,
+// unlike the passive pass-through fields around it).
 package com.youcoded.app.doccomments
 
 import org.json.JSONArray
@@ -23,6 +37,24 @@ import org.json.JSONObject
  *  it beyond formatting for JSON (T16 is read-only; the write path (T17) is
  *  the one that constructs a 'user'/'assistant' value from scratch). */
 typealias CommentAuthor = String
+
+/**
+ * Clone `base` (or start empty when null — a brand-new record has nothing to
+ * preserve) and apply `block`'s overlay on top. F2 fix: mirrors desktop's own
+ * `{ ...record, field: newValue }` spread, so a field this Kotlin code
+ * doesn't know about survives a round trip through this reader/writer
+ * untouched instead of the old field-by-field rebuild silently dropping it.
+ * Goes through a string round trip rather than iterating `keys()` into a
+ * fresh `JSONObject` — org.json's `JSONObject` has no public copy
+ * constructor for "every key", and a string round trip is the simplest way
+ * to get an independent clone that never aliases `base` (a caller may still
+ * hold a reference to it elsewhere, e.g. `CommentsSidecarFile.raw`).
+ */
+private fun overlayJson(base: JSONObject?, block: JSONObject.() -> Unit): JSONObject {
+    val out = if (base != null) JSONObject(base.toString()) else JSONObject()
+    out.block()
+    return out
+}
 
 data class TextQuoteSelector(
     val exact: String,
@@ -109,12 +141,28 @@ data class CommentReply(
     val author: CommentAuthor,
     val text: String,
     val createdAt: Long,
+    // F2 (T4 implementation review, major): the reply's own original
+    // JSONObject, if it was read from disk — preserved so a reply carrying a
+    // field this Kotlin build predates (or one added by another of the
+    // three-way JSON sidecar's implementations, design §9.1) survives a
+    // round trip through THIS code untouched, mirroring desktop's own
+    // `{ ...reply }` spread. Excluded from `equals`/`hashCode` below —
+    // org.json's `JSONObject` has no structural `equals` of its own (it's
+    // reference equality), so two replies parsed from identical JSON text
+    // would otherwise compare UNEQUAL just because their `raw` objects are
+    // different instances.
+    val raw: JSONObject? = null,
 ) {
-    fun toJson(): JSONObject = JSONObject()
-        .put("id", id)
-        .put("author", author)
-        .put("text", text)
-        .put("createdAt", createdAt)
+    fun toJson(): JSONObject = overlayJson(raw) {
+        put("id", id)
+        put("author", author)
+        put("text", text)
+        put("createdAt", createdAt)
+    }
+
+    override fun equals(other: Any?): Boolean = other is CommentReply &&
+        id == other.id && author == other.author && text == other.text && createdAt == other.createdAt
+    override fun hashCode(): Int = java.util.Objects.hash(id, author, text, createdAt)
 
     companion object {
         fun fromJson(o: JSONObject): CommentReply = CommentReply(
@@ -122,19 +170,35 @@ data class CommentReply(
             author = o.optString("author", ""),
             text = o.optString("text", ""),
             createdAt = o.optLong("createdAt", 0L),
+            raw = o,
         )
     }
 }
 
 /** `'resolved' | 'reopened'`. */
-data class ResolveEvent(val by: CommentAuthor, val at: Long, val action: String) {
-    fun toJson(): JSONObject = JSONObject().put("by", by).put("at", at).put("action", action)
+data class ResolveEvent(
+    val by: CommentAuthor,
+    val at: Long,
+    val action: String,
+    // F2 — see CommentReply's own doc comment for why this exists and is
+    // excluded from equals/hashCode.
+    val raw: JSONObject? = null,
+) {
+    fun toJson(): JSONObject = overlayJson(raw) {
+        put("by", by)
+        put("at", at)
+        put("action", action)
+    }
+
+    override fun equals(other: Any?): Boolean = other is ResolveEvent && by == other.by && at == other.at && action == other.action
+    override fun hashCode(): Int = java.util.Objects.hash(by, at, action)
 
     companion object {
         fun fromJson(o: JSONObject): ResolveEvent = ResolveEvent(
             by = o.optString("by", ""),
             at = o.optLong("at", 0L),
             action = o.optString("action", ""),
+            raw = o,
         )
     }
 }
@@ -158,21 +222,32 @@ data class PersistedComment(
      *  sets or reads this — anchoring runs downstream in the WebView
      *  (§3.2a: "needs no Kotlin port at all"). */
     val status: String? = null,
+    // F2 — see CommentReply's own doc comment for why this exists and is
+    // excluded from equals/hashCode. A brand-new comment (addComment) has
+    // none; a comment read off disk carries its own original object so an
+    // unknown top-level field (e.g. one a newer schema adds) survives every
+    // reply/resolve/reopen/move this Kotlin code performs on it.
+    val raw: JSONObject? = null,
 ) {
-    fun toJson(): JSONObject {
-        val o = JSONObject()
-            .put("id", id)
-            .put("path", path)
-            .put("selector", selector.toJson())
-            .put("text", text)
-            .put("author", author)
-            .put("createdAt", createdAt)
-            .put("replies", JSONArray(replies.map { it.toJson() }))
-            .put("resolved", resolved)
-            .put("history", JSONArray(history.map { it.toJson() }))
-        if (status != null) o.put("status", status)
-        return o
+    fun toJson(): JSONObject = overlayJson(raw) {
+        put("id", id)
+        put("path", path)
+        put("selector", selector.toJson())
+        put("text", text)
+        put("author", author)
+        put("createdAt", createdAt)
+        put("replies", JSONArray(replies.map { it.toJson() }))
+        put("resolved", resolved)
+        put("history", JSONArray(history.map { it.toJson() }))
+        if (status != null) put("status", status) else remove("status")
     }
+
+    override fun equals(other: Any?): Boolean = other is PersistedComment &&
+        id == other.id && path == other.path && selector == other.selector && text == other.text &&
+        author == other.author && createdAt == other.createdAt && replies == other.replies &&
+        resolved == other.resolved && history == other.history && status == other.status
+    override fun hashCode(): Int =
+        java.util.Objects.hash(id, path, selector, text, author, createdAt, replies, resolved, history, status)
 
     companion object {
         /** Returns null for a record this reader can't make sense of (a
@@ -200,6 +275,7 @@ data class PersistedComment(
                 resolved = o.optBoolean("resolved", false),
                 history = history,
                 status = if (o.has("status") && !o.isNull("status")) o.optString("status") else null,
+                raw = o,
             )
         }
     }
@@ -209,10 +285,21 @@ data class PersistedComment(
  *  Android's half of T1/T4's on-disk contract. `version` exists from day one
  *  (matching desktop's own comment on `CommentsSidecarFile`) so a future
  *  schema change can migrate on read instead of needing a flag day. */
-data class CommentsSidecarFile(val version: Int = 1, val comments: List<PersistedComment>) {
-    fun toJson(): JSONObject = JSONObject()
-        .put("version", version)
-        .put("comments", JSONArray(comments.map { it.toJson() }))
+data class CommentsSidecarFile(
+    val version: Int = 1,
+    val comments: List<PersistedComment>,
+    // F2 — the sidecar's own original JSONObject, if read from disk, so a
+    // TOP-LEVEL unknown field (beside `version`/`comments`) survives every
+    // mutation. See CommentReply's own doc comment for why excluded below.
+    val raw: JSONObject? = null,
+) {
+    fun toJson(): JSONObject = overlayJson(raw) {
+        put("version", version)
+        put("comments", JSONArray(comments.map { it.toJson() }))
+    }
+
+    override fun equals(other: Any?): Boolean = other is CommentsSidecarFile && version == other.version && comments == other.comments
+    override fun hashCode(): Int = java.util.Objects.hash(version, comments)
 
     companion object {
         fun empty(): CommentsSidecarFile = CommentsSidecarFile(1, emptyList())
@@ -232,7 +319,7 @@ data class CommentsSidecarFile(val version: Int = 1, val comments: List<Persiste
                 val c = arr.optJSONObject(i) ?: return null
                 comments.add(PersistedComment.fromJson(c) ?: return null)
             }
-            return CommentsSidecarFile(1, comments)
+            return CommentsSidecarFile(1, comments, raw = obj)
         }
     }
 }

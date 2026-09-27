@@ -11,6 +11,25 @@
 // file straight to T16/T18's own `readDocxComments`/`readXlsxComments`
 // (`DocxComments.kt`/`XlsxComments.kt` — not edited by this task).
 //
+// F3 (T4 implementation review, major): `listNativeComments` used to call
+// those readers with NO exception boundary of its own. Both readers already
+// catch their two KNOWN throwing signals (an unsafe-XML DOCTYPE, a
+// decompression-bomb) — see their own doc comments — but a corrupt-but-
+// openable archive (valid ZIP central directory, malformed inner XML, a
+// truncated compressed entry, an unexpected structure) throws something
+// else entirely (SAXException, IOException from a bad deflate stream, a
+// parsing NPE/NumberFormatException…), which escaped BOTH readers uncaught,
+// then `SessionService.handleBridgeMessage`'s own `serviceScope.launch { }`
+// (no try/catch of its own), leaving the WebView's request unanswered
+// forever rather than refused. `listNativeComments` below now catches at
+// this dispatch boundary and returns a typed refusal — the SAME shape every
+// other refusal in this module already uses — distinguishing a genuine I/O
+// failure (permission denied, or the file vanishing between the containment
+// check and the read: `read-failed`, matching this module's own existing
+// code for an unreadable/missing file) from a corrupt archive's CONTENT
+// (everything else: `invalid-docx`/`invalid-xlsx`, the SAME wire code the
+// reader itself would have produced had `ZipFile` failed to open at all).
+//
 // WRITE (add/reply/resolve/reopen/move) is NOT yet real for `.docx`/`.xlsx`
 // on Android: T17 (Word write) and T19 (Excel write) — the Kotlin ports of
 // desktop's `addDocxComment`/`addXlsxComment` etc. — are separate, not-yet-
@@ -23,8 +42,6 @@
 // phone reports "not yet supported" rather than claiming success or hanging.
 package com.youcoded.app.doccomments
 
-import com.youcoded.app.artifacts.EditablePathPolicy
-import com.youcoded.app.artifacts.canonicalize
 import java.io.File
 
 enum class NativeFormat { DOCX, XLSX }
@@ -49,19 +66,31 @@ sealed class NativeListResult {
  * Kotlin code already has direct filesystem access, unlike a renderer that
  * needs `artifacts:read-binary` to get bytes at all).
  *
- * WHY the sensitive-path denylist stands in for desktop's `authorizeBytesRead`
- * when `projectRoot` is absent: desktop's fallback gate additionally checks
- * the path against a roots allowlist (saved folders/indexed projects/tracked
- * artifacts) before reading raw bytes with no project context at all. This
- * Kotlin bridge follows the SAME precedent Android's own `artifacts:read-binary`
- * handler already set for exactly this class of read (SessionService.kt, "The
- * desktop roots-allowlist half is NOT ported... the Android bridge is only
- * reachable from the local WebView (no remote server), so the deny-list is
- * the load-bearing part here") — the sensitive-path denylist
- * (`EditablePathPolicy.isSensitivePath`) is the load-bearing check for a
- * no-`projectRoot` native read on this platform, not a full roots allowlist.
+ * F4 (T4 implementation review, major/security — supersedes this function's
+ * original denylist-only design): a no-`projectRoot` native read used to
+ * check ONLY `EditablePathPolicy.isSensitivePath` — a DENYLIST of well-known
+ * secret locations, refusing nothing else. That was a stand-in for desktop's
+ * real authority (`authorizeBytesRead`, `read-service.ts`), not a match for
+ * it, and the gap widens as more native tools gain model-controlled path
+ * arguments (§1.5's own "a new tool surface must implement its own
+ * containment check, it inherits none" applies here too) — a caller naming
+ * ANY path outside the few denied segments read straight through. This now
+ * checks the SAME two-pass ALLOWLIST desktop's `evaluateBinaryRead`
+ * (`read-binary-access.ts`) uses instead, via `DocCommentsGate.kt`'s
+ * `allowUntrackedNativeRead` — the app's own known project roots (or a
+ * descendant of one) OR a path recorded as a tracked EXTERNAL artifact/
+ * manual include in one of those projects' own sidecars (a temp-dir
+ * spreadsheet the session drawer legitimately shows lives outside every
+ * root) — with the sensitive-path denylist kept as a FIRST-pass refusal even
+ * inside an otherwise-allowed root, exactly how `evaluateBinaryRead` orders
+ * its own two checks (defense in depth, not a replacement for one or the
+ * other). Deliberately excludes live session cwds, unlike
+ * `refuseUnknownProjectRoot`'s own roots — see `allowUntrackedNativeRead`'s
+ * own doc comment for why.
  *
- * F4 (implementation review) — threading contract: `readDocxComments`/
+ * A prior implementation review's own F4 — threading contract (unrelated to
+ * this T4 review's F4 above; finding numbers reset per review round):
+ * `readDocxComments`/
  * `readXlsxComments` (called below) are plain, BLOCKING, synchronous
  * functions — not `suspend` — and perform real file/zip I/O directly on the
  * calling thread. This is safe ONLY because of THIS function's own caller:
@@ -84,21 +113,44 @@ fun listNativeComments(format: NativeFormat, path: String, projectRoot: String?,
     if (resolved is StoreResult.Err) return NativeListResult.Err(resolved.error.wire)
     val absolutePath = (resolved as StoreResult.Ok).value
     if (projectRoot.isNullOrEmpty()) {
-        if (EditablePathPolicy.isSensitivePath(canonicalize(absolutePath, null))) {
+        // F4: allowlist (known roots + tracked/opened files), not a denylist
+        // — see this function's own doc comment above.
+        if (!allowUntrackedNativeRead(absolutePath, homeDir, File(homeDir, ".claude"))) {
             return NativeListResult.Err("path-not-tracked")
         }
     }
     val file = File(absolutePath)
     if (!file.exists()) return NativeListResult.Err("read-failed")
-    return when (format) {
-        NativeFormat.DOCX -> when (val r = readDocxComments(file, path)) {
-            is DocxReadResult.Ok -> NativeListResult.Ok(r.comments)
-            is DocxReadResult.Err -> NativeListResult.Err(r.error.name.lowercase().replace('_', '-'))
+    // F3: every reader call is now wrapped — see this function's own doc
+    // comment above for the read-failed vs. invalid/corrupt distinction.
+    return try {
+        when (format) {
+            NativeFormat.DOCX -> when (val r = readDocxComments(file, path)) {
+                is DocxReadResult.Ok -> NativeListResult.Ok(r.comments)
+                is DocxReadResult.Err -> NativeListResult.Err(r.error.name.lowercase().replace('_', '-'))
+            }
+            NativeFormat.XLSX -> when (val r = readXlsxComments(file, path)) {
+                is XlsxReadResult.Ok -> NativeListResult.Ok(r.comments)
+                is XlsxReadResult.Err -> NativeListResult.Err(r.error.name.lowercase().replace('_', '-'))
+            }
         }
-        NativeFormat.XLSX -> when (val r = readXlsxComments(file, path)) {
-            is XlsxReadResult.Ok -> NativeListResult.Ok(r.comments)
-            is XlsxReadResult.Err -> NativeListResult.Err(r.error.name.lowercase().replace('_', '-'))
-        }
+    } catch (_: SecurityException) {
+        NativeListResult.Err("read-failed")
+    } catch (_: java.io.FileNotFoundException) {
+        NativeListResult.Err("read-failed")
+    } catch (_: Exception) {
+        // Everything else (malformed XML, a truncated compressed entry, an
+        // unexpected structure a legitimate Word/Excel file never produces)
+        // is the archive's CONTENT being corrupt, not an I/O failure — the
+        // SAME wire code the reader itself would have returned had `ZipFile`
+        // failed to open at all. `Exception`, never `Throwable` — an OOM or
+        // stack overflow is a real crash this boundary should not mask.
+        NativeListResult.Err(
+            when (format) {
+                NativeFormat.DOCX -> DocxReadError.INVALID_DOCX.name.lowercase().replace('_', '-')
+                NativeFormat.XLSX -> XlsxReadError.INVALID_XLSX.name.lowercase().replace('_', '-')
+            },
+        )
     }
 }
 

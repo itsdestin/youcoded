@@ -30,6 +30,96 @@ data class CasResult(
 )
 
 /**
+ * Acquire the mkdir lock at [lockPath], blocking (real `Thread.sleep` retries —
+ * this whole module is the synchronous, non-suspend style `casWrite`
+ * established) until acquired or [LOCK_MAX_WAIT_MS] elapses. Shared by
+ * `casWrite` and `mutateFileUnderLock` below so both use IDENTICAL lock
+ * semantics — same mkdir-is-atomic primitive, same 30s stale-lock break —
+ * which matters once a SECOND caller (`mutateFileUnderLock`, added for F1,
+ * T4 doc-comments implementation review) needs to exclude not just other
+ * callers of `casWrite` but a wholly separate process racing the same file.
+ */
+private fun acquireLock(lockPath: Path): Boolean {
+    val start = System.currentTimeMillis()
+    while (true) {
+        try {
+            Files.createDirectory(lockPath)
+            return true // Lock acquired
+        } catch (e: java.nio.file.FileAlreadyExistsException) {
+            // Stale-lock heuristic: if the lock dir is older than LOCK_STALE_MS,
+            // the holding process likely crashed — break the lock and retry.
+            try {
+                val attrs = Files.readAttributes(lockPath, BasicFileAttributes::class.java)
+                val mtime = attrs.lastModifiedTime().toMillis()
+                if (System.currentTimeMillis() - mtime > LOCK_STALE_MS) {
+                    lockPath.toFile().deleteRecursively()
+                    continue
+                }
+            } catch (_: Exception) {
+                // Ignore stat errors — lock may have just been released
+            }
+            if (System.currentTimeMillis() - start > LOCK_MAX_WAIT_MS) {
+                return false
+            }
+            Thread.sleep(LOCK_RETRY_MS)
+        }
+    }
+}
+
+/**
+ * Read-modify-write [target] entirely INSIDE the mkdir lock — Kotlin port of
+ * desktop's `cas-write.ts` `mutateFileUnderLock` (F1, T4 doc-comments
+ * implementation review, blocker). This is the primitive for a file with no
+ * CAS version field of its own: a caller that reads outside the lock and
+ * writes back after loses an update from whoever wrote in between. Reuses
+ * [acquireLock] — the SAME lock path naming (`<target>.lock`) and 30s
+ * stale-lock timeout `casWrite` above already uses — so this app's own
+ * writers, desktop's `cas-write.ts` (a dev instance and the built app sharing
+ * `~/.claude`), and the Claude Code MCP script's own dependency-free
+ * reimplementation of this exact algorithm (design §9.1 point 2, §9.2) all
+ * exclude each other over the same file, not just callers inside one JVM.
+ *
+ * @param mutate receives the current on-disk content (null when the file
+ *               doesn't exist) and returns the new content, or null to skip
+ *               the write entirely — a failed lookup must never write
+ *               anything, not even an unchanged copy.
+ * @return false when the lock couldn't be acquired within the timeout.
+ */
+fun mutateFileUnderLock(target: Path, mutate: (String?) -> String?): Boolean {
+    Files.createDirectories(target.parent)
+    val lockPath = target.parent.resolve(target.fileName.toString() + ".lock")
+    if (!acquireLock(lockPath)) return false
+    try {
+        val onDisk: String? = try {
+            target.toFile().readText(Charsets.UTF_8)
+        } catch (e: java.io.FileNotFoundException) {
+            null
+        } catch (e: java.io.IOException) {
+            if (!target.toFile().exists()) null else throw e
+        }
+        val next = mutate(onDisk)
+        if (next != null) {
+            // Same atomic write shape as casWrite below: tmp → fsync → rename.
+            val tmp = target.parent.resolve(target.fileName.toString() + ".tmp")
+            tmp.toFile().writeText(next, Charsets.UTF_8)
+            FileChannel.open(tmp, StandardOpenOption.READ, StandardOpenOption.WRITE).use { ch -> ch.force(true) }
+            try {
+                Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+        return true
+    } finally {
+        lockPath.toFile().deleteRecursively()
+    }
+}
+
+/** Convenience overload accepting a String path (matches most call sites). */
+fun mutateFileUnderLock(target: String, mutate: (String?) -> String?): Boolean =
+    mutateFileUnderLock(File(target).toPath(), mutate)
+
+/**
  * Atomic write-then-rename with optional CAS check, protected by a
  * mkdir-based lock.
  *
@@ -62,30 +152,8 @@ fun casWrite(
 
     val lockPath = target.parent.resolve(target.fileName.toString() + ".lock")
 
-    // Acquire lock — retry up to LOCK_MAX_WAIT_MS
-    val start = System.currentTimeMillis()
-    while (true) {
-        try {
-            Files.createDirectory(lockPath)
-            break  // Lock acquired
-        } catch (e: java.nio.file.FileAlreadyExistsException) {
-            // Stale-lock heuristic: if the lock dir is older than LOCK_STALE_MS,
-            // the holding process likely crashed — break the lock and retry.
-            try {
-                val attrs = Files.readAttributes(lockPath, BasicFileAttributes::class.java)
-                val mtime = attrs.lastModifiedTime().toMillis()
-                if (System.currentTimeMillis() - mtime > LOCK_STALE_MS) {
-                    lockPath.toFile().deleteRecursively()
-                    continue
-                }
-            } catch (_: Exception) {
-                // Ignore stat errors — lock may have just been released
-            }
-            if (System.currentTimeMillis() - start > LOCK_MAX_WAIT_MS) {
-                return CasResult(committed = false, actualUpdatedAt = null)
-            }
-            Thread.sleep(LOCK_RETRY_MS)
-        }
+    if (!acquireLock(lockPath)) {
+        return CasResult(committed = false, actualUpdatedAt = null)
     }
 
     try {

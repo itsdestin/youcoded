@@ -1,9 +1,14 @@
 // Pins T4 of the doc-comments build (docs/active/specs/2026-09-26-doc-
 // comments-build-design.md §1.5, §1.6, §9.1 point 3): the plain-text
-// PersistedComment JSON sidecar store on Android — a plain in-process Mutex
-// plus atomic tmp-then-rename, mirroring desktop's `mutateFileUnderLock` in
-// spirit (§1.5 "Kotlin's own file-locking": Android has no second concurrent
-// process sharing this file, so it needs no cross-process mkdir-lock port).
+// PersistedComment JSON sidecar store on Android — an in-process Mutex fast
+// path in front of the REAL cross-process mkdir lock
+// (`com.youcoded.app.artifacts.mutateFileUnderLock`, F1, T4 implementation
+// review), the SAME lock protocol desktop's `cas-write.ts` uses, so this
+// store, desktop's main process, and the Claude Code MCP script's own
+// dependency-free reimplementation (design §9.1/§9.2) all exclude each other
+// over the same sidecar — see DocCommentsStore.kt's own header for the full
+// correction (this file's ORIGINAL header claimed Android needs no
+// cross-process lock at all; that was wrong).
 //
 // Fixture: app/src/test/resources/doc-comments/json-sidecar/thread.json —
 // copied VERBATIM from desktop/tests/fixtures/doc-comments/json-sidecar/
@@ -16,6 +21,7 @@ package com.youcoded.app.doccomments
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Test
 import java.io.File
@@ -285,5 +291,114 @@ class DocCommentsStoreTest {
         assertEquals("assistant", newReply.getString("author"))
         assertEquals("from android", newReply.getString("text"))
         assertEquals("c-fixture-0001-r2", newReply.getString("id"))
+    }
+
+    // ── F2 (T4 implementation review, major) — unknown fields survive ──────
+    @Test
+    fun `an Android reply and resolve preserve unknown top-level comment reply and history fields byte-equivalently`() = runTest {
+        val root = tempProjectRoot()
+        val sidecar = File(root, ".youcoded/comments/docs/plan.md.json")
+        sidecar.parentFile?.mkdirs()
+        // A sidecar carrying a field this Kotlin build doesn't know about at
+        // every level the design calls out: the FILE itself, a COMMENT, and
+        // one of its REPLIES — standing in for a newer schema field, or one
+        // written by desktop/the MCP script (the other two of the three-way
+        // JSON sidecar story, design §9.1).
+        val onDiskBefore = JSONObject()
+            .put("version", 1)
+            .put("syncedFromDevice", "pixel-9a") // unknown TOP-LEVEL field
+            .put(
+                "comments",
+                JSONArray().put(
+                    JSONObject()
+                        .put("id", "c-unknown-0001")
+                        .put("path", "docs/plan.md")
+                        .put("selector", TEXT_SELECTOR.toJson())
+                        .put("text", "Can we cut this?")
+                        .put("author", "user")
+                        .put("createdAt", 1758000000000L)
+                        .put("priority", "high") // unknown COMMENT field
+                        .put(
+                            "replies",
+                            JSONArray().put(
+                                JSONObject()
+                                    .put("id", "c-unknown-0001-r1")
+                                    .put("author", "assistant")
+                                    .put("text", "Agreed")
+                                    .put("createdAt", 1758000100000L)
+                                    .put("reactedWith", "👍"), // unknown REPLY field
+                            ),
+                        )
+                        .put("resolved", false)
+                        .put("history", JSONArray()),
+                ),
+            )
+        sidecar.writeText(onDiskBefore.toString())
+
+        assertEquals(
+            StoreResult.Ok(Unit),
+            replyToComment("docs/plan.md", root.path, "c-unknown-0001", "from android", "assistant", root),
+        )
+        assertEquals(
+            StoreResult.Ok(Unit),
+            resolveComment("docs/plan.md", root.path, "c-unknown-0001", "user", root),
+        )
+
+        val onDiskAfter = JSONObject(sidecar.readText())
+        // Top-level unknown field survived reply's/resolve's overlay.
+        assertEquals("pixel-9a", onDiskAfter.getString("syncedFromDevice"))
+        val mutatedComment = onDiskAfter.getJSONArray("comments").getJSONObject(0)
+        // Comment-level unknown field survived, even after two mutations.
+        assertEquals("high", mutatedComment.getString("priority"))
+        val mutatedReplies = mutatedComment.getJSONArray("replies")
+        assertEquals(2, mutatedReplies.length())
+        // The ORIGINAL reply's own unknown field survived being carried
+        // through two more mutations on a DIFFERENT part of the record.
+        assertEquals("👍", mutatedReplies.getJSONObject(0).getString("reactedWith"))
+        assertEquals("from android", mutatedReplies.getJSONObject(1).getString("text"))
+        assertEquals(1, mutatedComment.getJSONArray("history").length())
+        assertEquals("resolved", mutatedComment.getJSONArray("history").getJSONObject(0).getString("action"))
+
+        // And Kotlin's own reader still parses the result back out correctly
+        // — the unknown fields are extra, not corrupting.
+        val reparsed = CommentsSidecarFile.parse(onDiskAfter.toString())
+        assertNotNull(reparsed)
+        assertEquals(1, reparsed.comments.size)
+        assertEquals(true, reparsed.comments[0].resolved)
+    }
+
+    // ── F1 (T4 implementation review, blocker) — a real second process ─────
+    @Test
+    fun `a real second OS process holding the sidecar lock blocks the store writer until it releases`() = runTest {
+        val root = tempProjectRoot()
+        val sidecarPath = File(root, ".youcoded/comments/docs/plan.md.json")
+        sidecarPath.parentFile?.mkdirs()
+        val lockDir = File(sidecarPath.path + ".lock")
+        val releasedMarker = File(root, "released.marker")
+        // A plain `sh` child — no JVM, standing in for the Claude Code MCP
+        // script's own dependency-free reimplementation of this SAME
+        // mkdir-lock algorithm (design §9.1 point 2) — mkdir's the SAME lock
+        // directory DocCommentsStore's cross-process lock uses, holds it for
+        // a while, drops a marker right before releasing it, then releases.
+        val proc = ProcessBuilder(
+            "sh", "-c",
+            "mkdir -p '${lockDir.parentFile!!.path}' && mkdir '${lockDir.path}' && sleep 0.4 " +
+                "&& touch '${releasedMarker.path}' && rmdir '${lockDir.path}'",
+        ).start()
+        val waitStart = System.currentTimeMillis()
+        while (!lockDir.isDirectory) {
+            assertTrue(System.currentTimeMillis() - waitStart < 2000, "child process never created the lock dir")
+            Thread.sleep(5)
+        }
+
+        val result = addComment("docs/plan.md", root.path, TEXT_SELECTOR, "after the foreign lock releases", "user", root)
+        proc.waitFor()
+
+        assertTrue(result is StoreResult.Ok, "expected Ok, got $result")
+        // The real assertion: the store's writer did not proceed until the
+        // foreign process had ALREADY dropped the marker on its way to
+        // releasing the lock — waiting on the actual signal, never a fixed
+        // sleep or a wall-clock-duration guess.
+        assertTrue(releasedMarker.exists(), "the store's writer returned before the foreign process released its lock")
     }
 }

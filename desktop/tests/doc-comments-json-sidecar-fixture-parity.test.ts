@@ -114,4 +114,80 @@ describe('shared JSON sidecar fixture — desktop reads the same shape Android w
     expect(typeof newReply.createdAt).toBe('number');
     expect(newReply.id).toBe('c-fixture-0001-r2');
   });
+
+  // F2 (T4 doc-comments implementation review, major): Android's
+  // fromJson/toJson used to rebuild every record field by field, silently
+  // dropping any key it didn't know about — fixed by keeping the original
+  // JSONObject and overlaying changes (DocCommentTypes.kt's `overlayJson`).
+  // This test reads a sidecar shaped exactly like what ANDROID'S OWN FIX
+  // would now produce after a reply+resolve against a file that started with
+  // unknown fields at every level the fix covers (top-level, a comment, a
+  // reply) — proving desktop's real listComments()/replyToComment() (which
+  // already preserves unknown fields via spreads) accepts that result
+  // unchanged, so a sidecar either platform writes stays readable, and
+  // MUTATED further, by the other.
+  it("desktop reads an Android-written result that carries unknown fields, and its own mutation keeps them", async () => {
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
+    // Shape Android's DocCommentsStore/DocCommentTypes overlay would produce:
+    // every FIELD this design defines is present (proving Android's writer
+    // never drops a known field either), PLUS unknown fields at the
+    // top level, on the comment, and on one of its replies.
+    const androidWritten = {
+      version: 1,
+      syncedFromDevice: 'pixel-9a',
+      comments: [
+        {
+          id: 'c-fixture-0001',
+          path: 'docs/plan.md',
+          selector: {
+            kind: 'text',
+            selector: {
+              type: 'TextQuoteSelector',
+              exact: 'cut the onboarding step',
+              prefix: 'we should probably ',
+              suffix: ' before shipping',
+              occurrence: 0,
+            },
+          },
+          text: 'Can we cut this?',
+          author: 'person:Priya Shah',
+          createdAt: 1758000000000,
+          priority: 'high',
+          replies: [
+            { id: 'c-fixture-0001-r1', author: 'user', text: 'Agreed, cutting it.', createdAt: 1758000100000, reactedWith: '👍' },
+            { id: 'c-fixture-0001-r2', author: 'assistant', text: 'from android', createdAt: 1758000300000 },
+          ],
+          resolved: true,
+          history: [{ by: 'user', at: 1758000200000, action: 'resolved' }],
+        },
+      ],
+    };
+    await fs.promises.writeFile(sidecarPath, JSON.stringify(androidWritten));
+
+    const listed = await listComments({ path: 'docs/plan.md', projectRoot: root });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    expect(listed.comments).toHaveLength(1);
+    expect(listed.comments[0]).toMatchObject({ id: 'c-fixture-0001', resolved: true });
+
+    const replied = await replyToComment({
+      path: 'docs/plan.md',
+      projectRoot: root,
+      id: 'c-fixture-0001',
+      text: 'from desktop too',
+      author: 'assistant',
+    });
+    expect(replied).toEqual({ ok: true });
+
+    const onDisk = JSON.parse(await fs.promises.readFile(sidecarPath, 'utf8'));
+    // Desktop's own mutation preserved every unknown field Android wrote,
+    // even the ones on parts of the record this mutation never touched.
+    expect(onDisk.syncedFromDevice).toBe('pixel-9a');
+    const comment = onDisk.comments[0];
+    expect(comment.priority).toBe('high');
+    expect(comment.replies).toHaveLength(3);
+    expect(comment.replies[0].reactedWith).toBe('👍');
+    expect(comment.replies[2].text).toBe('from desktop too');
+  });
 });

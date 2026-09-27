@@ -79,4 +79,74 @@ class DocCommentsGateTest {
         assertTrue(refuseUnknownProjectRoot(sessionCwd.path, home, java.io.File(home, ".claude")))
         assertFalse(refuseUnknownProjectRoot(sessionCwd.path, home, java.io.File(home, ".claude"), listOf(sessionCwd.path)))
     }
+
+    // ── F4 (T4 implementation review, major/security) — allowUntrackedNativeRead ──
+
+    @Test
+    fun `a path outside every known root with nothing tracking it is refused, not silently allowed`() {
+        val home = tempHome()
+        val outside = Files.createTempDirectory("ycd-doccomments-untracked-").toFile().apply { deleteOnExit() }
+        val file = java.io.File(outside, "f.docx").apply { writeText("x") }
+        // Before F4 this path would have been ALLOWED — it matches nothing on
+        // the old denylist. That was the vulnerability this fix closes.
+        assertFalse(allowUntrackedNativeRead(file.path, home, java.io.File(home, ".claude")))
+    }
+
+    @Test
+    fun `a path under a known project root is allowed`() {
+        val home = tempHome()
+        val project = Files.createTempDirectory("ycd-doccomments-root-").toFile().apply { deleteOnExit() }
+        WorkingDirStore(home).add(WorkingDir(label = "P", path = project.path))
+        val file = java.io.File(project, "f.docx").apply { writeText("x") }
+        assertTrue(allowUntrackedNativeRead(file.path, home, java.io.File(home, ".claude")))
+    }
+
+    @Test
+    fun `a sensitive path is refused even when it sits inside an otherwise-known root`() {
+        val home = tempHome()
+        val project = Files.createTempDirectory("ycd-doccomments-root2-").toFile().apply { deleteOnExit() }
+        WorkingDirStore(home).add(WorkingDir(label = "P", path = project.path))
+        val sshDir = java.io.File(project, ".ssh").apply { mkdirs() }
+        val file = java.io.File(sshDir, "id_rsa.docx").apply { writeText("x") }
+        assertFalse(allowUntrackedNativeRead(file.path, home, java.io.File(home, ".claude")))
+    }
+
+    @Test
+    fun `a live session cwd is NOT enough on its own — allowUntrackedNativeRead excludes session roots`() {
+        val home = tempHome()
+        // allowUntrackedNativeRead never receives extraSessionRoots at all
+        // (unlike refuseUnknownProjectRoot) — a live session's own cwd must
+        // NOT vouch for a raw-bytes read the way it vouches for a
+        // projectRoot, per the phone-can-start-a-session-anywhere reasoning
+        // this function's own doc comment cites.
+        val sessionCwd = Files.createTempDirectory("ycd-doccomments-session2-").toFile().apply { deleteOnExit() }
+        val file = java.io.File(sessionCwd, "f.docx").apply { writeText("x") }
+        assertFalse(allowUntrackedNativeRead(file.path, home, java.io.File(home, ".claude")))
+    }
+
+    @Test
+    fun `a tracked external artifact is allowed even though it lives outside every known root`() {
+        val home = tempHome()
+        val claudeDir = java.io.File(home, ".claude")
+        val project = Files.createTempDirectory("ycd-doccomments-tracked-project-").toFile().apply { deleteOnExit() }
+        WorkingDirStore(home).add(WorkingDir(label = "P", path = project.path))
+        val outside = Files.createTempDirectory("ycd-doccomments-tracked-outside-").toFile().apply { deleteOnExit() }
+        val externalFile = java.io.File(outside, "report.xlsx").apply { writeText("x") }
+
+        com.youcoded.app.artifacts.appendVersion(
+            projectRoot = project.path,
+            projectId = "proj-tracked",
+            projectName = "P",
+            input = com.youcoded.app.artifacts.AppendVersionInput(
+                path = com.youcoded.app.artifacts.canonicalize(externalFile.path, null),
+                kind = "external",
+                absolutePath = com.youcoded.app.artifacts.canonicalize(externalFile.path, null),
+                sessionId = "s1",
+                type = "read",
+                author = "user",
+            ),
+        )
+
+        assertTrue(allowUntrackedNativeRead(externalFile.path, home, claudeDir))
+    }
 }

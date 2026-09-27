@@ -27,8 +27,11 @@
 // supplies its OWN live session cwds; this module never discovers them.
 package com.youcoded.app.doccomments
 
+import com.youcoded.app.artifacts.EditablePathPolicy
+import com.youcoded.app.artifacts.ReadResult
 import com.youcoded.app.artifacts.canonicalize
 import com.youcoded.app.artifacts.listProjects
+import com.youcoded.app.artifacts.readSidecar
 import com.youcoded.app.config.WorkingDirStore
 import java.io.File
 
@@ -79,4 +82,53 @@ fun refuseUnknownProjectRoot(
     if (projectRoot.isNullOrEmpty()) return false
     val known = knownRoots(homeDir, claudeDir, extraSessionRoots)
     return realForms(projectRoot).none { known.contains(it) }
+}
+
+/**
+ * F4 (T4 implementation review, major/security): the allowlist a
+ * no-`projectRoot` native (`.docx`/`.xlsx`) read now checks — replacing that
+ * read's own former denylist-only design (see `DocCommentsDispatch.kt`'s
+ * `listNativeComments`, whose doc comment has the full before/after
+ * reasoning). Mirrors desktop's two-pass `evaluateBinaryRead`
+ * (`read-binary-access.ts`):
+ *
+ *  1. Refuse a well-known secret location OUTRIGHT, even one that happens to
+ *     sit under an otherwise-allowed root (`EditablePathPolicy.isSensitivePath`
+ *     — the SAME denylist this read used to rely on alone, kept as a
+ *     first-pass check, not replaced).
+ *  2. Otherwise allow only a path that is itself (or a descendant of) one of
+ *     the app's own known project roots, OR one recorded as a tracked
+ *     EXTERNAL artifact / manual include in ANY of those projects' own
+ *     `.youcoded/artifacts.json` sidecars — desktop's own comment on this
+ *     second pass explains why it exists: "a temp-dir xlsx the session
+ *     drawer legitimately shows lives outside every root."
+ *
+ * Deliberately excludes live session cwds, unlike `refuseUnknownProjectRoot`
+ * above (which DOES fold them in via `extraSessionRoots`) — mirrors
+ * desktop's OWN `knownRoots()` as used INSIDE `authorizeBytesRead`
+ * specifically (not the broader one `doc-comments-gate.ts`'s
+ * `refuseUnknownProjectRoot` uses), whose own comment says why: "a phone can
+ * start a session in any folder, and a by-path read there handed out every
+ * file in it." `absolutePath` need not be pre-canonicalized — every
+ * comparison below goes through `realForms` itself, same as
+ * `refuseUnknownProjectRoot`.
+ */
+fun allowUntrackedNativeRead(absolutePath: String, homeDir: File, claudeDir: File): Boolean {
+    val forms = realForms(absolutePath)
+    if (forms.any { EditablePathPolicy.isSensitivePath(it) }) return false
+    val roots = knownRoots(homeDir, claudeDir, emptyList())
+    if (forms.any { f -> roots.any { r -> f == r || f.startsWith(r + File.separator) } }) return true
+    for (root in roots) {
+        val sidecar = when (val r = readSidecar(root)) {
+            is ReadResult.Ok -> r.sidecar
+            else -> continue
+        }
+        for (a in sidecar.artifacts) {
+            if (a.kind == "external" && a.absolutePath != null && realForms(a.absolutePath).any { forms.contains(it) }) return true
+        }
+        for (inc in sidecar.manualIncludes) {
+            if (realForms(inc.path).any { forms.contains(it) }) return true
+        }
+    }
+    return false
 }

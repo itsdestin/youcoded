@@ -929,23 +929,14 @@ class SessionService : Service() {
 
     // ── Document comments (docComments:*) shared plumbing — T4 of the
     // doc-comments build (docs/active/specs/2026-09-26-doc-comments-build-
-    // design.md §1.5, §1.6). Every real channel's `when` branch below needs
-    // the SAME "is this projectRoot one the app recognizes" gate before
-    // touching the store at all (mirrors desktop's doc-comments-gate.ts,
-    // reused identically by every channel rather than re-derived per branch)
-    // — factored here once rather than six times.
+    // design.md §1.5, §1.6). The actual dispatch logic (the "is this
+    // projectRoot known" gate plus every list/add/reply/resolve/reopen/move
+    // branch) lives in `com.youcoded.app.doccomments.handleDocCommentsMessage`
+    // (DocCommentsBridge.kt) — extracted out of this Service's own `when`
+    // block (F6, T4 implementation review) so it can be driven directly by a
+    // JVM unit test with no running Service. Only `homeDir` needs a live
+    // Service to compute (`bootstrap?.homeDir`).
     private fun docCommentsHomeDir(): File = bootstrap?.homeDir ?: filesDir
-
-    private fun docCommentsGateRefused(projectRoot: String?): Boolean {
-        val homeDir = docCommentsHomeDir()
-        val claudeDir = File(homeDir, ".claude")
-        // A live session's own cwd counts as a known root too (§1.4's
-        // synthetic-project fallback) — mirrors remote-server.ts's own
-        // sessionRoots(), so a file opened from an unregistered session's
-        // drawer doesn't start refusing.
-        val sessionRoots = sessionRegistry.sessions.value.values.map { it.cwd.absolutePath }
-        return com.youcoded.app.doccomments.refuseUnknownProjectRoot(projectRoot, homeDir, claudeDir, sessionRoots)
-    }
 
     private suspend fun handleBridgeMessage(
         ws: org.java_websocket.WebSocket,
@@ -4193,238 +4184,26 @@ class SessionService : Service() {
             // watch/unwatch stay `not-implemented-on-mobile` for every file
             // type — a general "no FileObserver-based push" gap (§1.6),
             // unrelated to reopen-1's promise about read/add/reply/resolve.
-            "docComments:list" -> {
-                val filePath = msg.payload.optString("path", "")
-                if (filePath.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "path")) }
-                    return@handleBridgeMessage
-                }
-                val projectRoot = msg.payload.optString("projectRoot", "").ifEmpty { null }
-                if (docCommentsGateRefused(projectRoot)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "unknown-project-root")) }
-                    return@handleBridgeMessage
-                }
+            //
+            // F6 (T4 implementation review): the actual per-type dispatch
+            // (field validation, the projectRoot gate, every store call, the
+            // exact response envelope) lives in
+            // `com.youcoded.app.doccomments.handleDocCommentsMessage`
+            // (DocCommentsBridge.kt) — extracted so it's directly unit-
+            // testable (DocCommentsBridgeTest.kt) with no running Service.
+            // This branch is now just plumbing: compute the two inputs that
+            // DO need a live Service (`homeDir`, this session's own live cwds)
+            // and hand the message off.
+            "docComments:list", "docComments:add", "docComments:reply", "docComments:resolve",
+            "docComments:reopen", "docComments:move", "docComments:watch", "docComments:unwatch" -> {
                 val homeDir = docCommentsHomeDir()
-                val format = com.youcoded.app.doccomments.nativeFormatFor(filePath)
-                val response = if (format != null) {
-                    when (val r = com.youcoded.app.doccomments.listNativeComments(format, filePath, projectRoot, homeDir)) {
-                        is com.youcoded.app.doccomments.NativeListResult.Ok -> org.json.JSONObject()
-                            .put("ok", true).put("comments", org.json.JSONArray(r.comments.map { it.toJson() }))
-                        is com.youcoded.app.doccomments.NativeListResult.Err ->
-                            org.json.JSONObject().put("ok", false).put("error", r.error)
-                    }
-                } else {
-                    when (val r = com.youcoded.app.doccomments.listComments(filePath, projectRoot, homeDir)) {
-                        is com.youcoded.app.doccomments.StoreResult.Ok -> org.json.JSONObject()
-                            .put("ok", true).put("comments", org.json.JSONArray(r.value.map { it.toJson() }))
-                        is com.youcoded.app.doccomments.StoreResult.Err ->
-                            org.json.JSONObject().put("ok", false).put("error", r.error.wire)
-                    }
-                }
+                val sessionRoots = sessionRegistry.sessions.value.values.map { it.cwd.absolutePath }
+                val response = com.youcoded.app.doccomments.handleDocCommentsMessage(msg.type, msg.payload, homeDir, sessionRoots)
+                    // Unreachable in practice — every label in this branch's
+                    // own match arm above is also one handleDocCommentsMessage
+                    // owns; kept as an honest fallback rather than `!!`.
+                    ?: org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, response) }
-            }
-
-            "docComments:add" -> {
-                val filePath = msg.payload.optString("path", "")
-                if (filePath.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "path")) }
-                    return@handleBridgeMessage
-                }
-                val projectRoot = msg.payload.optString("projectRoot", "").ifEmpty { null }
-                if (docCommentsGateRefused(projectRoot)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "unknown-project-root")) }
-                    return@handleBridgeMessage
-                }
-                if (com.youcoded.app.doccomments.refuseNativeMutation(filePath)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "not-yet-supported")) }
-                    return@handleBridgeMessage
-                }
-                val text = msg.payload.optString("text", "")
-                if (text.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "text")) }
-                    return@handleBridgeMessage
-                }
-                val selector = com.youcoded.app.doccomments.CommentSelector.fromJson(msg.payload.optJSONObject("selector"))
-                if (selector == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "selector")) }
-                    return@handleBridgeMessage
-                }
-                val author = msg.payload.optString("author", "user")
-                val homeDir = docCommentsHomeDir()
-                val response = when (val r = com.youcoded.app.doccomments.addComment(filePath, projectRoot, selector, text, author, homeDir)) {
-                    is com.youcoded.app.doccomments.StoreResult.Ok -> org.json.JSONObject().put("ok", true).put("id", r.value)
-                    is com.youcoded.app.doccomments.StoreResult.Err -> org.json.JSONObject().put("ok", false).put("error", r.error.wire)
-                }
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, response) }
-            }
-
-            // reply/resolve/reopen/move ALL require `path` — the sidecar
-            // holding a given comment id can only be found by knowing the
-            // file (design review 3, F1), same as desktop's own IPC handlers.
-            "docComments:reply" -> {
-                val filePath = msg.payload.optString("path", "")
-                if (filePath.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "path")) }
-                    return@handleBridgeMessage
-                }
-                val projectRoot = msg.payload.optString("projectRoot", "").ifEmpty { null }
-                if (docCommentsGateRefused(projectRoot)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "unknown-project-root")) }
-                    return@handleBridgeMessage
-                }
-                if (com.youcoded.app.doccomments.refuseNativeMutation(filePath)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "not-yet-supported")) }
-                    return@handleBridgeMessage
-                }
-                val commentId = msg.payload.optString("id", "")
-                if (commentId.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "id")) }
-                    return@handleBridgeMessage
-                }
-                val text = msg.payload.optString("text", "")
-                if (text.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "text")) }
-                    return@handleBridgeMessage
-                }
-                val author = msg.payload.optString("author", "user")
-                val homeDir = docCommentsHomeDir()
-                val response = when (val r = com.youcoded.app.doccomments.replyToComment(filePath, projectRoot, commentId, text, author, homeDir)) {
-                    is com.youcoded.app.doccomments.StoreResult.Ok -> org.json.JSONObject().put("ok", true)
-                    is com.youcoded.app.doccomments.StoreResult.Err -> org.json.JSONObject().put("ok", false).put("error", r.error.wire)
-                }
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, response) }
-            }
-
-            "docComments:resolve" -> {
-                val filePath = msg.payload.optString("path", "")
-                if (filePath.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "path")) }
-                    return@handleBridgeMessage
-                }
-                val projectRoot = msg.payload.optString("projectRoot", "").ifEmpty { null }
-                if (docCommentsGateRefused(projectRoot)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "unknown-project-root")) }
-                    return@handleBridgeMessage
-                }
-                if (com.youcoded.app.doccomments.refuseNativeMutation(filePath)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "not-yet-supported")) }
-                    return@handleBridgeMessage
-                }
-                val commentId = msg.payload.optString("id", "")
-                if (commentId.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "id")) }
-                    return@handleBridgeMessage
-                }
-                val by = msg.payload.optString("by", "user")
-                val homeDir = docCommentsHomeDir()
-                val response = when (val r = com.youcoded.app.doccomments.resolveComment(filePath, projectRoot, commentId, by, homeDir)) {
-                    is com.youcoded.app.doccomments.StoreResult.Ok -> org.json.JSONObject().put("ok", true)
-                    is com.youcoded.app.doccomments.StoreResult.Err -> org.json.JSONObject().put("ok", false).put("error", r.error.wire)
-                }
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, response) }
-            }
-
-            "docComments:reopen" -> {
-                val filePath = msg.payload.optString("path", "")
-                if (filePath.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "path")) }
-                    return@handleBridgeMessage
-                }
-                val projectRoot = msg.payload.optString("projectRoot", "").ifEmpty { null }
-                if (docCommentsGateRefused(projectRoot)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "unknown-project-root")) }
-                    return@handleBridgeMessage
-                }
-                if (com.youcoded.app.doccomments.refuseNativeMutation(filePath)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "not-yet-supported")) }
-                    return@handleBridgeMessage
-                }
-                val commentId = msg.payload.optString("id", "")
-                if (commentId.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "id")) }
-                    return@handleBridgeMessage
-                }
-                val by = msg.payload.optString("by", "user")
-                val homeDir = docCommentsHomeDir()
-                val response = when (val r = com.youcoded.app.doccomments.reopenComment(filePath, projectRoot, commentId, by, homeDir)) {
-                    is com.youcoded.app.doccomments.StoreResult.Ok -> org.json.JSONObject().put("ok", true)
-                    is com.youcoded.app.doccomments.StoreResult.Err -> org.json.JSONObject().put("ok", false).put("error", r.error.wire)
-                }
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, response) }
-            }
-
-            "docComments:move" -> {
-                val filePath = msg.payload.optString("path", "")
-                if (filePath.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "path")) }
-                    return@handleBridgeMessage
-                }
-                val projectRoot = msg.payload.optString("projectRoot", "").ifEmpty { null }
-                if (docCommentsGateRefused(projectRoot)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "unknown-project-root")) }
-                    return@handleBridgeMessage
-                }
-                if (com.youcoded.app.doccomments.refuseNativeMutation(filePath)) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "not-yet-supported")) }
-                    return@handleBridgeMessage
-                }
-                val commentId = msg.payload.optString("id", "")
-                if (commentId.isEmpty()) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "id")) }
-                    return@handleBridgeMessage
-                }
-                val newSelector = com.youcoded.app.doccomments.CommentSelector.fromJson(msg.payload.optJSONObject("newSelector"))
-                if (newSelector == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", false).put("error", "missing-field").put("field", "newSelector")) }
-                    return@handleBridgeMessage
-                }
-                val homeDir = docCommentsHomeDir()
-                val response = when (val r = com.youcoded.app.doccomments.moveComment(filePath, projectRoot, commentId, newSelector, homeDir)) {
-                    is com.youcoded.app.doccomments.StoreResult.Ok -> org.json.JSONObject().put("ok", true)
-                    is com.youcoded.app.doccomments.StoreResult.Err -> org.json.JSONObject().put("ok", false).put("error", r.error.wire)
-                }
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, response) }
-            }
-
-            // Watching is the one piece that still follows Git's "absent, not
-            // reimplemented" precedent, for EVERY file type (§1.6): Android has
-            // no FileObserver-based watch today (artifacts:watch-project
-            // already answers the same way), and reopen-1's "full phone
-            // support" answer was about read/add/reply/resolve, not live-
-            // watching. The comments pane re-lists() on mount and after every
-            // local mutation, so this refusal only costs the unprompted push.
-            // Explicit branch (never the generic unsupported catch-all) with
-            // the SAME shape artifacts:watch-project already returns (review
-            // 1, F10) — remote-shim.ts's REJECT_ON_NOT_OK already treats a
-            // failed watch/unwatch as a rejection, not an ordinary value.
-            "docComments:watch", "docComments:unwatch" -> {
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it,
-                    org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
             }
 
             // Project View hub (conversations, repo, context) is desktop-only in v1
