@@ -260,3 +260,90 @@ await writeDocx('deeply-nested.docx', {
     'word/comments.xml': deepCommentsXml,
   },
 });
+
+// ---------------------------------------------------------------------------
+// word365-realistic.docx — T11 review's "strengthen tests" ask: a fixture
+// that looks like a REAL Word 365 file, exercising three review findings
+// together rather than in three separate tiny fixtures:
+//   - F1: a hyperlink referencing r:id="rId99", which does NOT exist in
+//     document.xml.rels — a dangling relationship reference. Real files
+//     accumulate these (a deleted hyperlink target, a relationship Word
+//     itself failed to clean up) and Word opens them without complaint;
+//     `verifyOoxmlWiring` must not fail a write that never touches it.
+//   - F3: the commented run AND the plain uncommented run both carry
+//     `w:rsidR`/`w:rsidRDefault` — attributes real Word stamps on nearly
+//     every run in a file that's been edited more than once, which
+//     `splitRunAtOffsets` must preserve on every piece it produces.
+//   - F4: `word/commentsIds.xml` (w16cid) and `word/commentsExtensible.xml`
+//     (w16cex) — Word 2016+'s own extension parts — already present, with an
+//     entry for the existing comment, so a new add/reply must extend BOTH
+//     consistently (matching durableId) rather than leaving them out of sync
+//     or fabricating them where a simpler fixture has neither.
+// The plain, uncommented, rsid-bearing paragraph is also this fixture's F2
+// target: adding a comment there is the only part of ANY test against this
+// fixture that touches document.xml at all, so [Content_Types].xml, the
+// rels part, comments.xml and commentsExtended.xml can all be asserted
+// byte-identical after every OTHER operation (resolve/reopen/reply).
+// ---------------------------------------------------------------------------
+const REALISTIC_COMMENT_PARA_ID = 'AAAA0001'; // the existing comment's own paragraph (inside comments.xml)
+const REALISTIC_DURABLE_ID = '00000001';
+
+const realisticBody =
+  // Paragraph 1: the dangling hyperlink (F1) — untouched by every operation
+  // this fixture's tests run.
+  `<w:p w14:paraId="B0000001"><w:hyperlink r:id="rId99">${run('External reference')}</w:hyperlink></w:p>` +
+  // Paragraph 2: the existing, already-commented run, WITH rsid attributes on
+  // the run itself (F3 — proves a split done during resolve/reopen/reply's
+  // OWN read-back verification, or any future move, wouldn't lose them; the
+  // add test below splits the OTHER paragraph instead, so this one also
+  // stands as "an rsid-bearing run this operation never touches at all").
+  `<w:p w14:paraId="B0000002"><w:commentRangeStart w:id="0"/>` +
+  `<w:r w:rsidR="00AB1234" w:rsidRPr="00AB1234"><w:t xml:space="preserve">Revenue grew across every region this quarter.</w:t></w:r>` +
+  `<w:commentRangeEnd w:id="0"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="0"/></w:r></w:p>` +
+  // Paragraph 3: plain, uncommented, rsid-bearing — the F3/add target. The
+  // comment text below ("look strong across every region") starts and ends
+  // strictly INSIDE this run, so adding it forces `splitRunAtOffsets` to
+  // produce three pieces, all of which must keep the original's rsids.
+  `<w:p w14:paraId="B0000003"><w:r w:rsidR="00CC5678" w:rsidRDefault="00CC5678"><w:t xml:space="preserve">The results look strong across every region this cycle, well ahead of plan.</w:t></w:r></w:p>`;
+
+const realisticCommentsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments ${W} ${W14}>${comment(
+  0,
+  'Priya Shah',
+  'PS',
+  '2026-09-20T10:00:00Z',
+  REALISTIC_COMMENT_PARA_ID,
+  'Can we get the regional breakdown for this?'
+)}</w:comments>`;
+
+const realisticCommentsExtendedXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w15:commentsEx ${W15}><w15:commentEx w15:paraId="${REALISTIC_COMMENT_PARA_ID}" w15:done="0"/></w15:commentsEx>`;
+
+const realisticCommentsIdsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid"><w16cid:commentId w16cid:paraId="${REALISTIC_COMMENT_PARA_ID}" w16cid:durableId="${REALISTIC_DURABLE_ID}"/></w16cid:commentsIds>`;
+
+const realisticCommentsExtensibleXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w16cex:commentsExtensible xmlns:w16cex="http://schemas.microsoft.com/office/word/2018/wordml/cex"><w16cex:commentExtensible w16cex:durableId="${REALISTIC_DURABLE_ID}" w16cex:dateUtc="2026-09-20T10:00:00.000Z"/></w16cex:commentsExtensible>`;
+
+await writeDocx('word365-realistic.docx', {
+  contentTypesExtra:
+    `<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>` +
+    `<Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>` +
+    `<Override PartName="/word/commentsIds.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml"/>` +
+    `<Override PartName="/word/commentsExtensible.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml"/>`,
+  // rId99 (the hyperlink's target, F1) is deliberately ABSENT here — that
+  // absence, with the reference to it still live in document.xml, IS the
+  // dangling relationship this fixture exists to carry.
+  documentRels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/><Relationship Id="rId3" Type="http://schemas.microsoft.com/office/2011/relationships/commentsExtended" Target="commentsExtended.xml"/><Relationship Id="rId4" Type="http://schemas.microsoft.com/office/2016/relationships/commentsIds" Target="commentsIds.xml"/><Relationship Id="rId5" Type="http://schemas.microsoft.com/office/2018/relationships/commentsExtensible" Target="commentsExtensible.xml"/></Relationships>`,
+  // `xmlns:r` (F1) is what makes `r:id="rId99"` a real, namespaced attribute
+  // the same way every real Word document declares it on `<w:document>`.
+  documentXml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document ${W} ${W14} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${realisticBody}</w:body></w:document>`,
+  extraParts: {
+    'word/comments.xml': realisticCommentsXml,
+    'word/commentsExtended.xml': realisticCommentsExtendedXml,
+    'word/commentsIds.xml': realisticCommentsIdsXml,
+    'word/commentsExtensible.xml': realisticCommentsExtensibleXml,
+  },
+});

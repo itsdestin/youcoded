@@ -8,16 +8,53 @@
 // — read current bytes, apply an in-memory mutation, back up, atomically
 // replace, verify by re-reading, and roll back to the backup on any verify
 // failure — and the task brief for T13 explicitly asks to "reuse it if it's
-// generic, rather than copying." `docx-comments.ts` is under a PARALLEL,
-// read-only implementation review while this module is being built, so it is
-// deliberately left untouched (its own `writeDocxMutation` keeps its private
-// copy of this same shape) — this module exists so `xlsx-comments.ts` doesn't
-// duplicate that logic a second time, and so a future consolidation (having
-// docx-comments.ts import this too) has somewhere to land without behaviour
-// change.
+// generic, rather than copying." `docx-comments.ts` was originally left
+// untouched because it was under a PARALLEL, read-only implementation review
+// while this module was being built; that review has since produced its own
+// findings (T11 review), and docx's own `writeDocxMutation` (docx-comments.ts)
+// is now a thin wrapper AROUND this module's `writeFileMutation` — the
+// consolidation this comment used to describe as future work. `xlsx-
+// comments.ts` was left unmodified by that consolidation: this module's own
+// signature changes (originalBytes threaded to `verify`, the F5 backup
+// relocation below) are additive/backward-compatible, so xlsx's behaviour
+// picks up the same fixes for free without needing its own edit.
 import { promises as fs } from 'fs';
+import { createHash } from 'crypto';
+import * as os from 'os';
+import * as path from 'path';
 
 export type PipelineError = 'read-failed' | 'backup-failed' | 'write-failed' | 'verify-failed';
+
+// F5 (T11 review — major): backups now live in ONE place OUTSIDE every user
+// project — `~/.claude/youcoded-doc-backups/`, matching this app's own
+// `.claude`-rooted state convention (`youcoded-cache`, `youcoded-config`,
+// `youcoded-favorites.json`, ...) — rather than a sibling
+// `<file>.bak-<timestamp>` next to the source. The design spec
+// (docs/active/specs/2026-09-26-doc-comments-build-design.md §3.3 step 1)
+// left the location an open choice ("next to the source... or under
+// `.youcoded/backups/`, decided at task time"); a dotdir INSIDE the user's
+// project is still inside whatever that project's own git repo or cloud-sync
+// tool (Dropbox, iCloud) watches, so it does NOT satisfy review finding F5's
+// "not synced/committed" requirement — only a location entirely outside the
+// project does. `os.homedir()` is redirected to a per-run sandbox under test
+// (vitest.config.ts's `YOUCODED_TEST_HOME`/`HOME` override), so this needs no
+// separate test-only path.
+const BACKUP_DIR = path.join(os.homedir(), '.claude', 'youcoded-doc-backups');
+
+/**
+ * F5: ONE rolling backup per file, not one per write. The filename is derived
+ * from a hash of the SOURCE file's absolute path — never a timestamp — so the
+ * next write to this same file naturally overwrites the previous backup
+ * instead of accumulating one per write forever. `backupSuffix` (e.g.
+ * `.docx.bak`) is carried into the name purely so a human browsing the
+ * directory can tell what kind of file it backs up; it plays no role in the
+ * rolling behaviour itself. Exported so a test can locate a specific file's
+ * backup without duplicating this hashing scheme.
+ */
+export function backupPathFor(absolutePath: string, backupSuffix: string): string {
+  const hash = createHash('sha256').update(absolutePath).digest('hex').slice(0, 20);
+  return path.join(BACKUP_DIR, `${hash}${backupSuffix}`);
+}
 
 /** `ErrorResult` is generic over the WHOLE `{ok:false, ...}` shape, not just
  *  an `error` string — a caller (like xlsx-comments.ts's feature-loss guard)
@@ -81,7 +118,15 @@ export async function writeFileMutation<Extra extends Record<string, unknown>, E
   absolutePath: string,
   backupSuffix: string,
   mutate: MutateFn<Extra, ErrorResult>,
-  verify: (newBytes: Buffer, extra: Extra) => Promise<boolean>
+  // F1 (T11 review — blocker): `originalBytes` is passed to `verify` so a
+  // format-specific check (docx's `verifyOoxmlWiring`) can scope itself to
+  // what THIS operation changed — e.g. diffing dangling relationship ids
+  // before/after — instead of judging the whole file, which would fail on
+  // damage the file already had before this app ever touched it. A verify
+  // callback with fewer parameters (xlsx-comments.ts's own, unchanged) still
+  // type-checks and runs unmodified: TypeScript allows passing a function
+  // that IGNORES trailing arguments wherever one that reads them is expected.
+  verify: (newBytes: Buffer, extra: Extra, originalBytes: Buffer) => Promise<boolean>
 ): Promise<({ ok: true } & Extra) | ErrorResult | { ok: false; error: PipelineError }> {
   return withWriteLock(absolutePath, async () => {
     let originalBytes: Buffer;
@@ -96,9 +141,12 @@ export async function writeFileMutation<Extra extends Record<string, unknown>, E
     const { bytes: newBytes, ...extraRest } = mutated;
     const extra = extraRest as unknown as Extra;
 
-    // Step 1 (§3.3/§4.3): backup BEFORE touching the real target at all.
-    const backupPath = `${absolutePath}${backupSuffix}-${Date.now()}`;
+    // Step 1 (§3.3/§4.3, F5): backup BEFORE touching the real target at all —
+    // ONE rolling backup per file, at a stable path outside the project (see
+    // `backupPathFor`'s own doc comment), never a sibling `.bak-<timestamp>`.
+    const backupPath = backupPathFor(absolutePath, backupSuffix);
     try {
+      await fs.mkdir(path.dirname(backupPath), { recursive: true });
       await fs.writeFile(backupPath, originalBytes);
     } catch {
       return { ok: false, error: 'backup-failed' };
@@ -128,7 +176,7 @@ export async function writeFileMutation<Extra extends Record<string, unknown>, E
     // Verify, with AUTOMATIC ROLLBACK on failure.
     let verified: boolean;
     try {
-      verified = await verify(newBytes, extra);
+      verified = await verify(newBytes, extra, originalBytes);
     } catch {
       verified = false;
     }
@@ -136,7 +184,11 @@ export async function writeFileMutation<Extra extends Record<string, unknown>, E
       await fs.rename(backupPath, absolutePath);
       return { ok: false, error: 'verify-failed' };
     }
-    await fs.unlink(backupPath);
+    // F5: the backup is KEPT, not deleted, on success — "one rolling backup
+    // per file" (spec §3.3/§4.3) is a standing safety net, not just cover for
+    // the moment of the write. The NEXT write to this same file overwrites
+    // this same path (`backupPathFor` is stable per absolute path), so
+    // exactly one backup ever exists per source file.
     return { ok: true, ...extra };
   });
 }

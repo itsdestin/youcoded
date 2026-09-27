@@ -37,7 +37,6 @@
 // also writes `node_modules/.package-lock.json` IN PLACE through a shared
 // hardlink). No node_modules write of any kind was needed since jszip@3.10.1
 // was already present on disk; this is a metadata-only declaration.
-import { promises as fs } from 'fs';
 import { randomBytes } from 'crypto';
 import JSZip from 'jszip';
 import { DOMParser } from 'linkedom';
@@ -49,6 +48,9 @@ import type {
 } from '../../shared/doc-comments-types';
 import { checkNamedEntriesWithinCeiling } from './zip-size-guard';
 import { resolveSelector } from '../../shared/doc-comments-anchor';
+// T11 review (F1/F5): docx's own write pipeline is now a thin wrapper around
+// this shared one — see the doc comment on `writeDocxMutation` below.
+import { writeFileMutation } from './write-pipeline';
 
 // Not exported: nothing outside this module needs the error union by name
 // (knip flags an exported type nothing ever imports as dead code — same
@@ -512,6 +514,21 @@ function parseXml(xml: string): Document {
   return new DOMParser().parseFromString(xml, 'text/xml') as unknown as Document;
 }
 
+/** Copies every ATTRIBUTE (not child element) from `from` onto `to` — used by
+ *  `splitRunAtOffsets` (F3, T11 review — major) so a run's own `<w:r
+ *  w:rsidR="..." w:rsidRPr="...">` attributes survive a split. The prior code
+ *  only cloned the run's `w:rPr` CHILD element, silently dropping every
+ *  attribute Word stamps directly on `<w:r>` itself — a real Word 365 file
+ *  always carries rsid attributes on its runs, so every add/move that landed
+ *  on an already-typed document was quietly stripping Word's own revision-
+ *  tracking data from the pieces it split. */
+function copyAttributes(from: Element, to: Element): void {
+  const attrs = (from as unknown as { attributes: ArrayLike<{ name: string; value: string }> }).attributes;
+  for (let i = 0; i < attrs.length; i++) {
+    to.setAttribute(attrs[i].name, attrs[i].value);
+  }
+}
+
 function elementsByTag(doc: Document, tag: string): Element[] {
   return Array.from(doc.getElementsByTagName(tag)) as unknown as Element[];
 }
@@ -566,6 +583,21 @@ function findCommentParaId(commentsDoc: Document, rawId: string): string | null 
 interface LoadedArchive {
   zip: JSZip;
   documentDoc: Document;
+  /** F2 (T11 review — major): the ORIGINAL, unparsed bytes of every part this
+   *  module might write back, captured before any mutation touches the DOM.
+   *  `serializeArchive` writes these back VERBATIM (not `doc.toString()`) for
+   *  any part this operation's own `*Changed` flag stayed `false` — the only
+   *  way to guarantee a part this operation never touched comes out BYTE-
+   *  IDENTICAL, since a full parse-then-reserialize round trip through
+   *  linkedom always changes the XML declaration and self-closing-tag
+   *  spacing even when nothing in the document itself changed. */
+  documentXmlOriginal: string;
+  /** F2: whether THIS operation actually mutated `documentDoc`'s tree (vs.
+   *  merely having it parsed and in memory, which every operation does) —
+   *  distinct from `commentsTouched`'s "should this part exist in the
+   *  output at all" question below. Only `add`/`move` ever set this; reply/
+   *  resolve/reopen never touch document.xml. */
+  documentChanged: boolean;
   commentsDoc: Document;
   commentsIsNew: boolean;
   /** Whether `commentsDoc` should actually be written back into the zip.
@@ -579,11 +611,44 @@ interface LoadedArchive {
    *  of bug F17's own verify step exists to catch (confirmed by that check
    *  failing during this module's own implementation). */
   commentsTouched: boolean;
+  /** F2: the ORIGINAL bytes of comments.xml, or `null` when `commentsIsNew`
+   *  (nothing to preserve — there is no "original" for a part that didn't
+   *  exist). See `documentXmlOriginal`'s own doc comment for why this exists. */
+  commentsXmlOriginal: string | null;
+  /** F2: whether THIS operation mutated `commentsDoc`'s tree (append/edit a
+   *  `<w:comment>`) — reply and add set this; resolve/reopen/move never do. */
+  commentsChanged: boolean;
   extendedDoc: Document;
   extendedIsNew: boolean;
   extendedTouched: boolean;
+  extendedXmlOriginal: string | null;
+  extendedChanged: boolean;
   contentTypesDoc: Document;
+  contentTypesXmlOriginal: string;
+  contentTypesChanged: boolean;
   relsDoc: Document;
+  relsXmlOriginal: string | null;
+  /** Mirrors `commentsTouched`: must this part be written back at all (it
+   *  existed originally, or this operation created it via `ensureCommentsPart`
+   *  / `ensureExtendedPart`)? A file with no rels part at all (structurally
+   *  unusual, but not ruled out) that no operation ever adds a relationship to
+   *  must not gain a fabricated one. */
+  relsTouched: boolean;
+  relsChanged: boolean;
+  /** F4: `word/commentsIds.xml` (the w16cid part pairing each comment's
+   *  `w14:paraId` with a durable id) and `word/commentsExtensible.xml` (the
+   *  w16cex part pairing that durable id with a UTC timestamp) — Word 2016+'s
+   *  own extension parts. Both are `null` when the file doesn't have the part
+   *  at all, and this module NEVER creates either one — see `appendCommentEntry`
+   *  call sites below: "if absent, don't create them" (F4) is the whole rule.
+   *  When present, a brand-new comment/reply gets a matching entry so the two
+   *  parts stay internally consistent with comments.xml/commentsExtended.xml. */
+  commentsIdsDoc: Document | null;
+  commentsIdsXmlOriginal: string | null;
+  commentsIdsChanged: boolean;
+  commentsExtensibleDoc: Document | null;
+  commentsExtensibleXmlOriginal: string | null;
+  commentsExtensibleChanged: boolean;
 }
 
 /** Union of every `w14:paraId`/`w15:paraId` already in use anywhere in the
@@ -617,6 +682,81 @@ function generateParaId(existing: ReadonlySet<string>): string {
     if (!existing.has(candidate)) return candidate;
   }
   throw new Error('docx-comments: could not generate a unique paraId');
+}
+
+/** F4: union of every `w16cid:durableId`/`w16cex:durableId` already in use —
+ *  mirrors `collectAllParaIds`'s own reasoning, so a freshly minted durable id
+ *  can never collide with one either extension part already has. Reads
+ *  whichever of the two parts is actually present; a file can have one
+ *  without the other (unusual, but this module doesn't assume both-or-
+ *  neither). */
+function collectAllDurableIds(archive: LoadedArchive): Set<string> {
+  const set = new Set<string>();
+  if (archive.commentsIdsDoc) {
+    for (const el of elementsByTag(archive.commentsIdsDoc, 'w16cid:commentId')) {
+      const id = el.getAttribute('w16cid:durableId');
+      if (id) set.add(id);
+    }
+  }
+  if (archive.commentsExtensibleDoc) {
+    for (const el of elementsByTag(archive.commentsExtensibleDoc, 'w16cex:commentExtensible')) {
+      const id = el.getAttribute('w16cex:durableId');
+      if (id) set.add(id);
+    }
+  }
+  return set;
+}
+
+/** F4: an 8-hex-digit durable id, same shape/collision-retry policy as
+ *  `generateParaId` above (real Word durable ids are also 8 hex digits) —
+ *  kept as its own function rather than sharing `generateParaId` directly so
+ *  a future change to one id kind's shape doesn't silently affect the other. */
+function generateDurableId(existing: ReadonlySet<string>): string {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const candidate = randomBytes(4).toString('hex').toUpperCase();
+    if (!existing.has(candidate)) return candidate;
+  }
+  throw new Error('docx-comments: could not generate a unique durableId');
+}
+
+/** F4: appends one `<w16cid:commentId>` entry — `word/commentsIds.xml`'s own
+ *  shape, pairing a comment's `w14:paraId` (same value comments.xml's own
+ *  `<w:p w14:paraId="...">` carries) with a durable id. */
+function appendCommentIdsEntry(doc: Document, paraId: string, durableId: string): void {
+  const el = doc.createElement('w16cid:commentId');
+  el.setAttribute('w16cid:paraId', paraId);
+  el.setAttribute('w16cid:durableId', durableId);
+  doc.documentElement.appendChild(el);
+}
+
+/** F4: appends one `<w16cex:commentExtensible>` entry — `word/
+ *  commentsExtensible.xml`'s own shape, keyed by the SAME durable id
+ *  `appendCommentIdsEntry` just used (never by paraId — this part's own
+ *  schema keys off durableId only), carrying the UTC creation timestamp. */
+function appendCommentExtensibleEntry(doc: Document, durableId: string, dateUtc: string): void {
+  const el = doc.createElement('w16cex:commentExtensible');
+  el.setAttribute('w16cex:durableId', durableId);
+  el.setAttribute('w16cex:dateUtc', dateUtc);
+  doc.documentElement.appendChild(el);
+}
+
+/** F4: adds matching entries to whichever of commentsIds.xml/
+ *  commentsExtensible.xml is actually present for a BRAND-NEW `<w:comment>`
+ *  this operation just created (`add` or `reply` — a reply is its own new
+ *  `<w:comment>`, same as a top-level add). Does nothing if NEITHER part
+ *  exists — this module never creates them (F4's own "if absent, don't
+ *  create them" rule). */
+function recordCommentExtensionParts(archive: LoadedArchive, paraId: string): void {
+  if (!archive.commentsIdsDoc && !archive.commentsExtensibleDoc) return;
+  const durableId = generateDurableId(collectAllDurableIds(archive));
+  if (archive.commentsIdsDoc) {
+    appendCommentIdsEntry(archive.commentsIdsDoc, paraId, durableId);
+    archive.commentsIdsChanged = true;
+  }
+  if (archive.commentsExtensibleDoc) {
+    appendCommentExtensibleEntry(archive.commentsExtensibleDoc, durableId, new Date().toISOString());
+    archive.commentsExtensibleChanged = true;
+  }
 }
 
 function nextRelId(relsDoc: Document): string {
@@ -656,6 +796,13 @@ function ensureCommentsPart(archive: LoadedArchive): void {
   addContentTypeOverride(archive.contentTypesDoc, '/word/comments.xml', COMMENTS_CONTENT_TYPE);
   addRelationship(archive.relsDoc, COMMENTS_REL_TYPE, 'comments.xml');
   archive.commentsTouched = true;
+  // F2: creating the part necessarily changes contentTypes/rels too — without
+  // this, a first-ever `add` on a comments-less file would leave
+  // `contentTypesChanged`/`relsChanged` `false` and `serializeArchive` would
+  // write back the PRE-mutation original bytes, silently discarding the
+  // override/relationship this function just added.
+  archive.contentTypesChanged = true;
+  archive.relsChanged = true;
 }
 
 /** §3.3 steps 3/4: "creating commentsExtended.xml if absent" (reply) / "if
@@ -664,6 +811,9 @@ function ensureExtendedPart(archive: LoadedArchive): void {
   addContentTypeOverride(archive.contentTypesDoc, '/word/commentsExtended.xml', COMMENTS_EXT_CONTENT_TYPE);
   addRelationship(archive.relsDoc, COMMENTS_EXT_REL_TYPE, 'commentsExtended.xml');
   archive.extendedTouched = true;
+  // F2: see the identical note in `ensureCommentsPart` above.
+  archive.contentTypesChanged = true;
+  archive.relsChanged = true;
 }
 
 function appendCommentEntry(
@@ -733,6 +883,10 @@ function splitRunAtOffsets(
   const pieces: Element[] = [];
   for (let i = 0; i < cuts.length - 1; i++) {
     const newRun = doc.createElement('w:r');
+    // F3 (T11 review — major): every piece gets the ORIGINAL run's own
+    // attributes (w:rsidR, w:rsidRPr, w:rsidDel, ...), not just its w:rPr
+    // child — see `copyAttributes`'s own doc comment.
+    copyAttributes(run, newRun);
     if (rPr) newRun.appendChild(rPr.cloneNode(true) as unknown as Element);
     const newT = doc.createElement('w:t');
     newT.setAttribute('xml:space', 'preserve');
@@ -939,24 +1093,34 @@ async function loadArchiveForWrite(
     'word/commentsExtended.xml',
     '[Content_Types].xml',
     'word/_rels/document.xml.rels',
+    // F4: two more parts this module now reads/writes when present.
+    'word/commentsIds.xml',
+    'word/commentsExtensible.xml',
   ]);
   if (!sizeCheck.ok) return { ok: false, error: sizeCheck.error };
 
   const commentsFile = zip.file('word/comments.xml');
   const extendedFile = zip.file('word/commentsExtended.xml');
   const relsFile = zip.file('word/_rels/document.xml.rels');
+  const commentsIdsFile = zip.file('word/commentsIds.xml');
+  const commentsExtensibleFile = zip.file('word/commentsExtensible.xml');
 
-  const [documentXml, contentTypesXml, commentsXml, extendedXml, relsXml] = await Promise.all([
-    documentFile.async('string'),
-    contentTypesFile.async('string'),
-    commentsFile ? commentsFile.async('string') : Promise.resolve(null),
-    extendedFile ? extendedFile.async('string') : Promise.resolve(null),
-    relsFile ? relsFile.async('string') : Promise.resolve(null),
-  ]);
+  const [documentXml, contentTypesXml, commentsXml, extendedXml, relsXml, commentsIdsXml, commentsExtensibleXml] =
+    await Promise.all([
+      documentFile.async('string'),
+      contentTypesFile.async('string'),
+      commentsFile ? commentsFile.async('string') : Promise.resolve(null),
+      extendedFile ? extendedFile.async('string') : Promise.resolve(null),
+      relsFile ? relsFile.async('string') : Promise.resolve(null),
+      commentsIdsFile ? commentsIdsFile.async('string') : Promise.resolve(null),
+      commentsExtensibleFile ? commentsExtensibleFile.async('string') : Promise.resolve(null),
+    ]);
 
   const archive: LoadedArchive = {
     zip,
     documentDoc: parseXml(documentXml),
+    documentXmlOriginal: documentXml,
+    documentChanged: false,
     commentsDoc: parseXml(commentsXml ?? EMPTY_COMMENTS_XML),
     commentsIsNew: commentsXml === null,
     // Already-existing parts are always written back (any mutation of them
@@ -967,21 +1131,102 @@ async function loadArchiveForWrite(
     // orphan commentsExtended.xml part on every `add`, caught by this
     // module's own F17 verify step during implementation).
     commentsTouched: commentsXml !== null,
+    commentsXmlOriginal: commentsXml,
+    commentsChanged: false,
     extendedDoc: parseXml(extendedXml ?? EMPTY_EXTENDED_XML),
     extendedIsNew: extendedXml === null,
     extendedTouched: extendedXml !== null,
+    extendedXmlOriginal: extendedXml,
+    extendedChanged: false,
     contentTypesDoc: parseXml(contentTypesXml),
+    contentTypesXmlOriginal: contentTypesXml,
+    contentTypesChanged: false,
     relsDoc: parseXml(relsXml ?? EMPTY_RELS_XML),
+    relsXmlOriginal: relsXml,
+    relsTouched: relsXml !== null,
+    relsChanged: false,
+    // F4: parsed only when present; never fabricated from an empty template
+    // the way comments.xml/commentsExtended.xml are, because this module
+    // must never CREATE either part (see `LoadedArchive.commentsIdsDoc`'s own
+    // doc comment).
+    commentsIdsDoc: commentsIdsXml !== null ? parseXml(commentsIdsXml) : null,
+    commentsIdsXmlOriginal: commentsIdsXml,
+    commentsIdsChanged: false,
+    commentsExtensibleDoc: commentsExtensibleXml !== null ? parseXml(commentsExtensibleXml) : null,
+    commentsExtensibleXmlOriginal: commentsExtensibleXml,
+    commentsExtensibleChanged: false,
   };
   return { ok: true, archive };
 }
 
+const XML_DECL_RE = /^<\?xml[^>]*\?>/;
+// Matches a self-closing tag's OPENING `<tag ...` up to the space linkedom
+// inserts before `/>` — requiring the leading `<` is what keeps this from
+// ever touching plain text content, since a literal `<` in XML text is
+// always escaped as `&lt;` (this module's own fixtures/writers escape it the
+// same way every real Word writer does).
+const SELF_CLOSING_SPACE_RE = /(<[\w:.-]+(?:\s+[^<>]*)?) \/>/g;
+
+/**
+ * F2 (T11 review — major): re-serializes `doc` through linkedom, then undoes
+ * the TWO pieces of pure serializer noise linkedom's `toString()` introduces
+ * that a byte-identical-when-unchanged contract can't tolerate on a part that
+ * DID change: (1) its own XML declaration, which lowercases `encoding` and
+ * drops `standalone="yes"` outright — replaced with the ORIGINAL declaration
+ * verbatim, since the declaration itself is never something this module's
+ * mutations actually change; (2) a space linkedom adds before every
+ * self-closing tag's `/>` that the original never had. `originalXml === null`
+ * means there IS no original (a brand-new part) — nothing to match, so only
+ * the self-closing-tag normalization applies.
+ */
+function serializePart(doc: Document, originalXml: string | null): string {
+  let out = doc.toString();
+  if (originalXml !== null) {
+    const originalDecl = originalXml.match(XML_DECL_RE);
+    out = originalDecl ? out.replace(XML_DECL_RE, originalDecl[0]) : out.replace(XML_DECL_RE, '');
+  }
+  return out.replace(SELF_CLOSING_SPACE_RE, '$1/>');
+}
+
+/** F2: writes `name` into the zip using the ORIGINAL bytes verbatim when this
+ *  operation never changed the part (guaranteeing byte-identical output),
+ *  or the re-serialized (and declaration/self-closing-tag normalized) DOM
+ *  when it did. */
+function writePart(zip: JSZip, name: string, changed: boolean, doc: Document, originalXml: string | null): void {
+  if (!changed && originalXml !== null) {
+    zip.file(name, originalXml);
+    return;
+  }
+  zip.file(name, serializePart(doc, originalXml));
+}
+
 async function serializeArchive(archive: LoadedArchive): Promise<Buffer> {
-  archive.zip.file('word/document.xml', archive.documentDoc.toString());
-  if (archive.commentsTouched) archive.zip.file('word/comments.xml', archive.commentsDoc.toString());
-  if (archive.extendedTouched) archive.zip.file('word/commentsExtended.xml', archive.extendedDoc.toString());
-  archive.zip.file('[Content_Types].xml', archive.contentTypesDoc.toString());
-  archive.zip.file('word/_rels/document.xml.rels', archive.relsDoc.toString());
+  writePart(archive.zip, 'word/document.xml', archive.documentChanged, archive.documentDoc, archive.documentXmlOriginal);
+  if (archive.commentsTouched) {
+    writePart(archive.zip, 'word/comments.xml', archive.commentsChanged, archive.commentsDoc, archive.commentsXmlOriginal);
+  }
+  if (archive.extendedTouched) {
+    writePart(archive.zip, 'word/commentsExtended.xml', archive.extendedChanged, archive.extendedDoc, archive.extendedXmlOriginal);
+  }
+  writePart(archive.zip, '[Content_Types].xml', archive.contentTypesChanged, archive.contentTypesDoc, archive.contentTypesXmlOriginal);
+  if (archive.relsTouched) {
+    writePart(archive.zip, 'word/_rels/document.xml.rels', archive.relsChanged, archive.relsDoc, archive.relsXmlOriginal);
+  }
+  // F4: only ever written back if the part was already present — this
+  // module never creates either one (see `LoadedArchive.commentsIdsDoc`'s own
+  // doc comment).
+  if (archive.commentsIdsDoc) {
+    writePart(archive.zip, 'word/commentsIds.xml', archive.commentsIdsChanged, archive.commentsIdsDoc, archive.commentsIdsXmlOriginal);
+  }
+  if (archive.commentsExtensibleDoc) {
+    writePart(
+      archive.zip,
+      'word/commentsExtensible.xml',
+      archive.commentsExtensibleChanged,
+      archive.commentsExtensibleDoc,
+      archive.commentsExtensibleXmlOriginal
+    );
+  }
   return archive.zip.generateAsync({ type: 'nodebuffer' });
 }
 
@@ -1009,6 +1254,7 @@ async function mutateAddComment(
 
   if (archive.commentsIsNew) ensureCommentsPart(archive);
   insertCommentRangeMarkers(archive.documentDoc, leaves!, fullText, resolved.start, resolved.end, String(newId));
+  archive.documentChanged = true; // F2: this operation touched document.xml
   appendCommentEntry(archive.commentsDoc, {
     id: newId,
     author: commentAuthorToDisplayName(args.author),
@@ -1016,6 +1262,8 @@ async function mutateAddComment(
     paraId,
     text: args.text,
   });
+  archive.commentsChanged = true; // F2: this operation touched comments.xml
+  recordCommentExtensionParts(archive, paraId); // F4
 
   const bytes = await serializeArchive(archive);
   return { ok: true, bytes, id: `w-${newId}` };
@@ -1043,9 +1291,12 @@ async function mutateReplyToComment(
     paraId,
     text: args.text,
   });
+  archive.commentsChanged = true; // F2: this operation touched comments.xml
 
   if (archive.extendedIsNew) ensureExtendedPart(archive);
   upsertExtendedEntry(archive.extendedDoc, paraId, { done: false, paraIdParent: targetParaId });
+  archive.extendedChanged = true; // F2: this operation touched commentsExtended.xml
+  recordCommentExtensionParts(archive, paraId); // F4 — a reply is its own new comment
 
   const bytes = await serializeArchive(archive);
   return { ok: true, bytes };
@@ -1067,6 +1318,7 @@ async function mutateSetResolved(
 
   if (archive.extendedIsNew) ensureExtendedPart(archive);
   upsertExtendedEntry(archive.extendedDoc, targetParaId, { done });
+  archive.extendedChanged = true; // F2: this operation touched commentsExtended.xml
 
   const bytes = await serializeArchive(archive);
   return { ok: true, bytes };
@@ -1085,6 +1337,7 @@ async function mutateMoveComment(
 
   if (!findCommentParaId(archive.commentsDoc, rawId)) return { ok: false, error: 'comment-not-found' };
   if (!removeCommentRangeAndReference(archive.documentDoc, rawId)) return { ok: false, error: 'comment-not-found' };
+  archive.documentChanged = true; // F2: this operation touched document.xml
 
   // Re-resolve against the CURRENT text (the old range is already gone from
   // this in-memory copy, but nothing has been written to disk yet — a
@@ -1104,36 +1357,21 @@ async function mutateMoveComment(
 
 // -----------------------------------------------------------------------
 // The write pipeline: backup, atomic replace, verify, automatic rollback.
+//
+// T11 review (F1/F5): this used to be a private re-implementation of the
+// exact same shape T13 later factored out into write-pipeline.ts's generic
+// `writeFileMutation` — per-path lock, backup-before-write, atomic replace,
+// verify-with-rollback. `writeDocxMutation` below is now a THIN WRAPPER
+// around that shared pipeline (one pipeline, not two, per this task's own
+// brief) rather than a second copy of it; every behaviour change from the F1/
+// F5 findings (originalBytes threaded to verify, the rolling ~/.claude
+// backup location) lives once, in write-pipeline.ts, and applies to docx and
+// xlsx identically.
 // -----------------------------------------------------------------------
 
-/** Per-absolute-path in-process serialization (T11's own "two mutations on
- *  one file serialize, no lost update" pinning test): nothing else in this
- *  design puts a lock around a docx mutation the way T1's JSON sidecar has
- *  `mutateFileUnderLock` — without one, two IPC calls racing the SAME file
- *  would both read the same original bytes, mutate independently, and
- *  whichever writes last would silently discard the other's change. Every
- *  real caller (desktop IPC, remote, and T9b's future pending-mutation
- *  queue) reaches this SAME main process, so a plain per-path promise chain
- *  is enough — cross-PROCESS safety (a second `node` process) is a
- *  deliberately separate, not-yet-built concern (§9.2's pending-mutation
- *  queue exists precisely so the MCP script never mutates a docx directly). */
-const writeLocks = new Map<string, Promise<unknown>>();
-
-function withDocxWriteLock<T>(absolutePath: string, fn: () => Promise<T>): Promise<T> {
-  const prior = writeLocks.get(absolutePath) ?? Promise.resolve();
-  const settled = prior.then(fn, fn);
-  // Chain a NEVER-REJECTING tracker so one failed mutation doesn't poison the
-  // lock for the next caller — `settled` itself (returned below) still
-  // carries this call's own real outcome, including a rejection.
-  writeLocks.set(
-    absolutePath,
-    settled.then(
-      () => undefined,
-      () => undefined
-    )
-  );
-  return settled;
-}
+// Exported so a test can locate a specific write's backup file directly
+// (via write-pipeline.ts's `backupPathFor`) rather than guessing its path.
+export const DOCX_BACKUP_SUFFIX = '.docx.bak';
 
 type MutateFn<Extra extends Record<string, unknown>> = (
   currentBytes: Buffer
@@ -1144,68 +1382,27 @@ type MutateFn<Extra extends Record<string, unknown>> = (
  * test can pin the automatic-rollback path directly (T11's own "failed
  * verification restores the original — inject a fault" pinning test) by
  * supplying a `verify` that deliberately returns `false`, without needing to
- * corrupt real on-disk bytes to provoke a genuine failure.
+ * corrupt real on-disk bytes to provoke a genuine failure. `verify`'s third
+ * parameter (`originalBytes`, F1) is OPTIONAL to call — a caller (like the
+ * existing rollback-pinning tests) that only needs `(newBytes, extra)` still
+ * type-checks and runs exactly as before.
  */
 export async function writeDocxMutation<Extra extends Record<string, unknown>>(
   absolutePath: string,
   mutate: MutateFn<Extra>,
-  verify: (newBytes: Buffer, extra: Extra) => Promise<boolean>
+  verify: (newBytes: Buffer, extra: Extra, originalBytes: Buffer) => Promise<boolean>
 ): Promise<({ ok: true } & Extra) | { ok: false; error: DocxWriteError }> {
-  return withDocxWriteLock(absolutePath, async () => {
-    let originalBytes: Buffer;
-    try {
-      originalBytes = await fs.readFile(absolutePath);
-    } catch {
-      return { ok: false, error: 'read-failed' };
-    }
-
-    const mutated = await mutate(originalBytes);
-    if (!mutated.ok) return mutated;
-    const { bytes: newBytes, ...extraRest } = mutated;
-    const extra = extraRest as unknown as Extra;
-
-    // Step 1 (§3.3): backup BEFORE touching the real target at all.
-    const backupPath = `${absolutePath}.docx.bak-${Date.now()}`;
-    try {
-      await fs.writeFile(backupPath, originalBytes);
-    } catch {
-      return { ok: false, error: 'backup-failed' };
-    }
-
-    // Atomic replace: tmp-write then rename, never a direct overwrite —
-    // matches artifacts/cas-write.ts's own atomicWrite shape.
-    const tmpPath = `${absolutePath}.${process.pid}.${Date.now()}.tmp`;
-    try {
-      await fs.writeFile(tmpPath, newBytes);
-      await fs.rename(tmpPath, absolutePath);
-    } catch {
-      try {
-        await fs.unlink(tmpPath);
-      } catch {
-        /* already gone */
-      }
-      try {
-        await fs.unlink(backupPath);
-      } catch {
-        /* best-effort — the real target was never touched either way */
-      }
-      return { ok: false, error: 'write-failed' };
-    }
-
-    // Step 6 (§3.3, F5/F17): verify, with AUTOMATIC ROLLBACK on failure.
-    let verified: boolean;
-    try {
-      verified = await verify(newBytes, extra);
-    } catch {
-      verified = false;
-    }
-    if (!verified) {
-      await fs.rename(backupPath, absolutePath);
-      return { ok: false, error: 'verify-failed' };
-    }
-    await fs.unlink(backupPath);
-    return { ok: true, ...extra };
-  });
+  const result = await writeFileMutation<Extra, { ok: false; error: DocxWriteError }>(
+    absolutePath,
+    DOCX_BACKUP_SUFFIX,
+    mutate,
+    verify
+  );
+  // write-pipeline.ts's own `PipelineError` ('read-failed'/'backup-failed'/
+  // 'write-failed'/'verify-failed') is a strict SUBSET of `DocxWriteError` —
+  // every value it can produce is already a member of that union, so this
+  // is a type-narrowing pass-through, not a real conversion.
+  return result as ({ ok: true } & Extra) | { ok: false; error: DocxWriteError };
 }
 
 /**
@@ -1215,8 +1412,48 @@ export async function writeDocxMutation<Extra extends Record<string, unknown>>(
  * actually present in the archive has a matching `[Content_Types].xml`
  * `Override`. Catches "opens in Word, silently drops in Google Docs" ahead
  * of the manual R10 check, not instead of it.
+ *
+ * F1 (T11 review — blocker): the ORIGINAL r:id check failed the whole write
+ * if ANY r:id anywhere in the document didn't resolve — including one that
+ * was ALREADY dangling before this app ever touched the file (a stale
+ * hyperlink relationship a prior edit left behind is common in real Word
+ * files, and Word itself opens them without complaint). Scoped now to
+ * relationships THIS OPERATION is responsible for: `originalBytes` is
+ * re-checked the same way, and only an id that resolved in the ORIGINAL file
+ * and stopped resolving in the NEW one — i.e. something this write itself
+ * broke — fails verification. An id that was already broken is left exactly
+ * as it was, untouched and unblamed.
  */
-async function verifyOoxmlWiring(bytes: Buffer): Promise<boolean> {
+async function collectDanglingRIds(bytes: Buffer): Promise<Set<string>> {
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(bytes);
+  } catch {
+    return new Set();
+  }
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) return new Set();
+  const relsFile = zip.file('word/_rels/document.xml.rels');
+  const [documentXml, relsXml] = await Promise.all([
+    documentFile.async('string'),
+    relsFile ? relsFile.async('string') : Promise.resolve(null),
+  ]);
+  const relIds = new Set<string>();
+  if (relsXml) {
+    for (const el of elementsByTag(parseXml(relsXml), 'Relationship')) {
+      const id = el.getAttribute('Id');
+      if (id) relIds.add(id);
+    }
+  }
+  const dangling = new Set<string>();
+  for (const ref of documentXml.match(/r:id="[^"]*"/g) ?? []) {
+    const id = ref.slice('r:id="'.length, -1);
+    if (!relIds.has(id)) dangling.add(id);
+  }
+  return dangling;
+}
+
+async function verifyOoxmlWiring(bytes: Buffer, originalBytes: Buffer): Promise<boolean> {
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(bytes);
@@ -1240,10 +1477,11 @@ async function verifyOoxmlWiring(bytes: Buffer): Promise<boolean> {
       if (id) relIds.add(id);
     }
   }
+  const preExistingDangling = await collectDanglingRIds(originalBytes); // F1
   const referenced = documentXml.match(/r:id="[^"]*"/g) ?? [];
   for (const ref of referenced) {
     const id = ref.slice('r:id="'.length, -1);
-    if (!relIds.has(id)) return false;
+    if (!relIds.has(id) && !preExistingDangling.has(id)) return false;
   }
 
   const contentTypesDoc = parseXml(contentTypesXml);
@@ -1273,8 +1511,8 @@ export async function addDocxComment(args: {
   return writeDocxMutation(
     args.absolutePath,
     (bytes) => mutateAddComment(bytes, args),
-    async (newBytes, extra) => {
-      if (!(await verifyOoxmlWiring(newBytes))) return false;
+    async (newBytes, extra, originalBytes) => {
+      if (!(await verifyOoxmlWiring(newBytes, originalBytes))) return false;
       const result = await readDocxComments(newBytes, args.path);
       if (!result.ok) return false;
       const added = result.comments.find((c) => c.id === extra.id);
@@ -1293,8 +1531,8 @@ export async function replyToDocxComment(args: {
   return writeDocxMutation(
     args.absolutePath,
     (bytes) => mutateReplyToComment(bytes, args),
-    async (newBytes) => {
-      if (!(await verifyOoxmlWiring(newBytes))) return false;
+    async (newBytes, _extra, originalBytes) => {
+      if (!(await verifyOoxmlWiring(newBytes, originalBytes))) return false;
       const result = await readDocxComments(newBytes, args.path);
       if (!result.ok) return false;
       const target = result.comments.find((c) => c.id === args.id);
@@ -1317,8 +1555,8 @@ export async function resolveDocxComment(args: {
   return writeDocxMutation(
     args.absolutePath,
     (bytes) => mutateSetResolved(bytes, args, true),
-    async (newBytes) => {
-      if (!(await verifyOoxmlWiring(newBytes))) return false;
+    async (newBytes, _extra, originalBytes) => {
+      if (!(await verifyOoxmlWiring(newBytes, originalBytes))) return false;
       const result = await readDocxComments(newBytes, args.path);
       if (!result.ok) return false;
       const target = result.comments.find((c) => c.id === args.id);
@@ -1335,8 +1573,8 @@ export async function reopenDocxComment(args: {
   return writeDocxMutation(
     args.absolutePath,
     (bytes) => mutateSetResolved(bytes, args, false),
-    async (newBytes) => {
-      if (!(await verifyOoxmlWiring(newBytes))) return false;
+    async (newBytes, _extra, originalBytes) => {
+      if (!(await verifyOoxmlWiring(newBytes, originalBytes))) return false;
       const result = await readDocxComments(newBytes, args.path);
       if (!result.ok) return false;
       const target = result.comments.find((c) => c.id === args.id);
@@ -1354,8 +1592,8 @@ export async function moveDocxComment(args: {
   return writeDocxMutation(
     args.absolutePath,
     (bytes) => mutateMoveComment(bytes, args),
-    async (newBytes) => {
-      if (!(await verifyOoxmlWiring(newBytes))) return false;
+    async (newBytes, _extra, originalBytes) => {
+      if (!(await verifyOoxmlWiring(newBytes, originalBytes))) return false;
       const rawId = stripWPrefix(args.id);
       if (rawId === null || args.newSelector.kind !== 'text') return false;
 

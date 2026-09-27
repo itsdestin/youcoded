@@ -11,8 +11,8 @@
 // doc-comments MOCK's own fixture generator already used
 // (src/renderer/dev/workbench/fixtures/docs/make.mjs).
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, mkdtemp, rm, readdir } from 'fs/promises';
-import { join, dirname } from 'path';
+import { readFile, writeFile, mkdtemp, rm, stat } from 'fs/promises';
+import { join } from 'path';
 import { tmpdir } from 'os';
 import JSZip from 'jszip';
 import {
@@ -23,9 +23,20 @@ import {
   reopenDocxComment,
   moveDocxComment,
   writeDocxMutation,
+  DOCX_BACKUP_SUFFIX,
 } from '../src/main/doc-comments/docx-comments';
+import { backupPathFor } from '../src/main/doc-comments/write-pipeline';
 import { buildDeclaredOversizeZip } from './fixtures/doc-comments/oversized-zip';
 import type { CommentSelector } from '../src/shared/doc-comments-types';
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const FIXTURES_DIR = join(__dirname, 'fixtures', 'doc-comments');
 
@@ -574,9 +585,18 @@ describe('docx-comments write — verify-after-write with automatic rollback', (
   // pinning test list: "failed verification restores the original (inject a
   // fault)". This is more direct than corrupting real bytes on disk to
   // provoke a genuine failure.
-  it('a failed verification restores the original bytes exactly, and cleans up the backup', async () => {
+  //
+  // F5 (T11 review — major): the backup no longer lives NEXT TO the source
+  // file (a sibling `.docx.bak-<timestamp>`, which a project's own git repo
+  // or cloud-sync folder would pick up) — it's one ROLLING file at a stable,
+  // hashed path under `~/.claude/youcoded-doc-backups/` (write-pipeline.ts's
+  // `backupPathFor`), kept after a successful write rather than deleted. These
+  // two tests were rewritten against that new location and lifecycle; see
+  // `write-pipeline.ts` for the actual behaviour they pin.
+  it('a failed verification restores the original bytes exactly, and clears the backup it consumed', async () => {
     await withScratchCopy('launch-brief.docx', async (target) => {
       const before = await readFile(target);
+      const backupPath = backupPathFor(target, DOCX_BACKUP_SUFFIX);
       const result = await writeDocxMutation(
         target,
         async (bytes) => ({ ok: true, bytes: Buffer.concat([bytes, Buffer.from([0])]) }),
@@ -584,30 +604,58 @@ describe('docx-comments write — verify-after-write with automatic rollback', (
       );
       expect(result).toEqual({ ok: false, error: 'verify-failed' });
       expect(await readFile(target)).toEqual(before); // restored byte-for-byte
-
-      const dir = dirname(target);
-      const leftover = (await readdir(dir)).filter((f) => f.includes('.docx.bak-'));
-      expect(leftover).toHaveLength(0); // renamed back over the target, nothing left behind
+      // Rolled back means RENAMED back over the target — the backup file
+      // itself no longer exists afterward (it now IS the live file again).
+      expect(await exists(backupPath)).toBe(false);
     });
   });
 
-  it('the backup exists WHILE verify runs, and is cleaned up after a successful write', async () => {
+  it('the backup exists WHILE verify runs, and is KEPT (not deleted) after a successful write', async () => {
     await withScratchCopy('launch-brief.docx', async (target) => {
-      const dir = dirname(target);
+      const backupPath = backupPathFor(target, DOCX_BACKUP_SUFFIX);
+      const before = await readFile(target);
       let sawBackupDuringVerify = false;
       const result = await writeDocxMutation(
         target,
         async (bytes) => ({ ok: true, bytes: Buffer.concat([bytes]) }),
         async () => {
-          const files = await readdir(dir);
-          sawBackupDuringVerify = files.some((f) => f.includes('.docx.bak-'));
+          sawBackupDuringVerify = await exists(backupPath);
           return true;
         }
       );
       expect(result).toEqual({ ok: true });
       expect(sawBackupDuringVerify).toBe(true); // existed DURING the write
-      const filesAfter = await readdir(dir);
-      expect(filesAfter.some((f) => f.includes('.docx.bak-'))).toBe(false); // cleaned up after success
+      expect(await exists(backupPath)).toBe(true); // KEPT after success (F5)
+      expect(await readFile(backupPath)).toEqual(before); // holds the PRE-write bytes
+    });
+  });
+
+  it('one rolling backup per file — a second successful write overwrites the same backup path, never adding a second one', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      // `backupPathFor` is a pure hash of `target`'s own absolute path, so
+      // "never adding a second one" is exactly "the path is the SAME both
+      // times" (asserted directly, not by counting a shared directory other
+      // tests' own backups also live in) — what actually needs proving is
+      // that its CONTENT rolls forward to the latest pre-write bytes rather
+      // than staying frozen at the first write's.
+      const backupPathFirst = backupPathFor(target, DOCX_BACKUP_SUFFIX);
+      const firstOriginal = await readFile(target);
+      await writeDocxMutation(target, async (bytes) => ({ ok: true, bytes }), async () => true);
+      expect(await readFile(backupPathFirst)).toEqual(firstOriginal);
+
+      const secondOriginal = await readFile(target);
+      const result = await writeDocxMutation(
+        target,
+        async (bytes) => ({ ok: true, bytes: Buffer.concat([bytes, Buffer.from([1])]) }),
+        async () => true
+      );
+      expect(result).toEqual({ ok: true });
+      const backupPathSecond = backupPathFor(target, DOCX_BACKUP_SUFFIX);
+      expect(backupPathSecond).toBe(backupPathFirst); // same stable path, both times
+      // The backup now reflects the SECOND write's pre-write bytes — the
+      // first write's backup was overwritten in place, never left as a
+      // second file.
+      expect(await readFile(backupPathSecond)).toEqual(secondOriginal);
     });
   });
 });
@@ -643,6 +691,287 @@ describe('docx-comments write — concurrency', () => {
       expect(read.comments).toHaveLength(4);
       expect(read.comments.some((c) => c.text === 'First concurrent comment.')).toBe(true);
       expect(read.comments.some((c) => c.text === 'Second concurrent comment.')).toBe(true);
+    });
+  });
+});
+
+// -----------------------------------------------------------------------
+// T11 review round — F1/F2/F3/F4, all against `word365-realistic.docx`
+// (tests/fixtures/doc-comments/make-docx-fixtures.mjs's own header explains
+// exactly what it carries and why: a dangling hyperlink r:id, rsid-bearing
+// runs, and existing commentsIds.xml/commentsExtensible.xml parts — "a
+// fixture that looks like a real Word 365 file", per the review's own ask).
+// -----------------------------------------------------------------------
+
+/** Order-INDEPENDENT attribute lookup — linkedom does not guarantee it
+ *  serializes attributes in setAttribute call order (confirmed empirically:
+ *  a clone built by copying a parsed element's own attributes in iteration
+ *  order came back reversed), so a test asserting on a specific attribute's
+ *  VALUE must never assume where it sits in the tag. */
+function attr(tag: string, name: string): string | null {
+  const m = new RegExp(`${name}="([^"]*)"`).exec(tag);
+  return m ? m[1] : null;
+}
+
+function selfClosingTags(xml: string, tagName: string): string[] {
+  return xml.match(new RegExp(`<${tagName}\\b[^>]*/>`, 'g')) ?? [];
+}
+
+function findCommentBlock(commentsXml: string, rawId: string): string | null {
+  const blocks = commentsXml.match(/<w:comment\b[^>]*>[\s\S]*?<\/w:comment>/g) ?? [];
+  return blocks.find((b) => attr(b, 'w:id') === rawId) ?? null;
+}
+
+describe('docx-comments write — F1: a pre-existing dangling relationship never blocks an unrelated write', () => {
+  it('adding a comment elsewhere succeeds despite a dangling hyperlink r:id, which is left completely untouched', async () => {
+    await withScratchCopy('word365-realistic.docx', async (target) => {
+      const before = await readFile(target);
+      const documentXmlBefore = await (await JSZip.loadAsync(before)).file('word/document.xml')!.async('string');
+      const hyperlinkMarkup = '<w:hyperlink r:id="rId99"><w:r><w:t xml:space="preserve">External reference</w:t></w:r></w:hyperlink>';
+      expect(documentXmlBefore).toContain(hyperlinkMarkup); // the dangling ref really is there
+
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/word365-realistic.docx',
+        selector: textSelector('look strong across every region'),
+        text: 'Which regions specifically?',
+        author: 'user',
+      });
+      // The OLD behaviour: `verifyOoxmlWiring` judged the WHOLE document, so
+      // this write would fail with 'verify-failed' purely because of a
+      // relationship this operation never went near.
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      const documentXmlAfter = await (await JSZip.loadAsync(await readFile(target))).file('word/document.xml')!.async('string');
+      expect(documentXmlAfter).toContain(hyperlinkMarkup); // still there, byte-for-byte, untouched
+    });
+  });
+});
+
+describe('docx-comments write — F2: a part this operation never touches round-trips byte-identical', () => {
+  it('resolve changes only commentsExtended.xml; document.xml, comments.xml, [Content_Types].xml and the rels part are byte-identical', async () => {
+    await withScratchCopy('word365-realistic.docx', async (target) => {
+      const zipBefore = await JSZip.loadAsync(await readFile(target));
+      const [documentBefore, commentsBefore, contentTypesBefore, relsBefore] = await Promise.all([
+        zipBefore.file('word/document.xml')!.async('string'),
+        zipBefore.file('word/comments.xml')!.async('string'),
+        zipBefore.file('[Content_Types].xml')!.async('string'),
+        zipBefore.file('word/_rels/document.xml.rels')!.async('string'),
+      ]);
+
+      const result = await resolveDocxComment({ absolutePath: target, path: 'docs/word365-realistic.docx', id: 'w-0' });
+      expect(result.ok).toBe(true);
+
+      const zipAfter = await JSZip.loadAsync(await readFile(target));
+      expect(await zipAfter.file('word/document.xml')!.async('string')).toBe(documentBefore);
+      expect(await zipAfter.file('word/comments.xml')!.async('string')).toBe(commentsBefore);
+      expect(await zipAfter.file('[Content_Types].xml')!.async('string')).toBe(contentTypesBefore);
+      expect(await zipAfter.file('word/_rels/document.xml.rels')!.async('string')).toBe(relsBefore);
+      expect(await zipAfter.file('word/commentsExtended.xml')!.async('string')).toContain('w15:done="1"');
+    });
+  });
+
+  it('reopen changes only commentsExtended.xml the same way', async () => {
+    await withScratchCopy('word365-realistic.docx', async (target) => {
+      await resolveDocxComment({ absolutePath: target, path: 'docs/word365-realistic.docx', id: 'w-0' });
+      const zipBefore = await JSZip.loadAsync(await readFile(target));
+      const [documentBefore, commentsBefore, contentTypesBefore, relsBefore] = await Promise.all([
+        zipBefore.file('word/document.xml')!.async('string'),
+        zipBefore.file('word/comments.xml')!.async('string'),
+        zipBefore.file('[Content_Types].xml')!.async('string'),
+        zipBefore.file('word/_rels/document.xml.rels')!.async('string'),
+      ]);
+
+      const result = await reopenDocxComment({ absolutePath: target, path: 'docs/word365-realistic.docx', id: 'w-0' });
+      expect(result.ok).toBe(true);
+
+      const zipAfter = await JSZip.loadAsync(await readFile(target));
+      expect(await zipAfter.file('word/document.xml')!.async('string')).toBe(documentBefore);
+      expect(await zipAfter.file('word/comments.xml')!.async('string')).toBe(commentsBefore);
+      expect(await zipAfter.file('[Content_Types].xml')!.async('string')).toBe(contentTypesBefore);
+      expect(await zipAfter.file('word/_rels/document.xml.rels')!.async('string')).toBe(relsBefore);
+      expect(await zipAfter.file('word/commentsExtended.xml')!.async('string')).toContain('w15:done="0"');
+    });
+  });
+
+  it('reply changes only comments.xml and commentsExtended.xml; document.xml, [Content_Types].xml and rels are byte-identical', async () => {
+    await withScratchCopy('word365-realistic.docx', async (target) => {
+      const zipBefore = await JSZip.loadAsync(await readFile(target));
+      const [documentBefore, contentTypesBefore, relsBefore] = await Promise.all([
+        zipBefore.file('word/document.xml')!.async('string'),
+        zipBefore.file('[Content_Types].xml')!.async('string'),
+        zipBefore.file('word/_rels/document.xml.rels')!.async('string'),
+      ]);
+
+      const result = await replyToDocxComment({
+        absolutePath: target,
+        path: 'docs/word365-realistic.docx',
+        id: 'w-0',
+        text: 'Broken out by region in the appendix.',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+
+      const zipAfter = await JSZip.loadAsync(await readFile(target));
+      expect(await zipAfter.file('word/document.xml')!.async('string')).toBe(documentBefore);
+      expect(await zipAfter.file('[Content_Types].xml')!.async('string')).toBe(contentTypesBefore);
+      expect(await zipAfter.file('word/_rels/document.xml.rels')!.async('string')).toBe(relsBefore);
+      const commentsAfter = await zipAfter.file('word/comments.xml')!.async('string');
+      expect(commentsAfter).toContain('Broken out by region in the appendix.');
+    });
+  });
+
+  it('add changes only document.xml (new range markers + reference run) and comments.xml — [Content_Types].xml and rels stay byte-identical since comments.xml already existed', async () => {
+    await withScratchCopy('word365-realistic.docx', async (target) => {
+      const zipBefore = await JSZip.loadAsync(await readFile(target));
+      const [documentBefore, contentTypesBefore, relsBefore] = await Promise.all([
+        zipBefore.file('word/document.xml')!.async('string'),
+        zipBefore.file('[Content_Types].xml')!.async('string'),
+        zipBefore.file('word/_rels/document.xml.rels')!.async('string'),
+      ]);
+
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/word365-realistic.docx',
+        // The WHOLE run, start-to-end (unlike F3's test below, which targets
+        // a strictly-interior substring on purpose) — both edges land on
+        // leaf BOUNDARIES, so `insertCommentRangeMarkers` never needs to
+        // split the run at all, and the only diff against `documentBefore`
+        // is exactly the three marker/reference substrings this normalized
+        // comparison strips.
+        selector: textSelector('The results look strong across every region this cycle, well ahead of plan.'),
+        text: 'Which regions specifically?',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const newId = result.id.slice('w-'.length);
+
+      const zipAfter = await JSZip.loadAsync(await readFile(target));
+      expect(await zipAfter.file('[Content_Types].xml')!.async('string')).toBe(contentTypesBefore);
+      expect(await zipAfter.file('word/_rels/document.xml.rels')!.async('string')).toBe(relsBefore);
+
+      const documentAfter = await zipAfter.file('word/document.xml')!.async('string');
+      // A NORMALIZED diff (F2's own ask): strip exactly the three substrings
+      // this add is known to insert and nothing else should remain different.
+      const normalized = documentAfter
+        .replace(`<w:commentRangeStart w:id="${newId}"/>`, '')
+        .replace(`<w:commentRangeEnd w:id="${newId}"/>`, '')
+        .replace(`<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${newId}"/></w:r>`, '');
+      expect(normalized).toBe(documentBefore);
+    });
+  });
+});
+
+describe('docx-comments write — F3: splitting a run preserves its own attributes (rsids)', () => {
+  it('a comment strictly inside an rsid-bearing run keeps w:rsidR/w:rsidRDefault on every resulting piece', async () => {
+    await withScratchCopy('word365-realistic.docx', async (target) => {
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/word365-realistic.docx',
+        // Strictly inside the "The results look strong across every region
+        // this cycle, well ahead of plan." run — forces a 3-way split
+        // (before / quote / after), all from the SAME original <w:r
+        // w:rsidR="00CC5678" w:rsidRDefault="00CC5678">.
+        selector: textSelector('look strong across every region'),
+        text: 'Which regions specifically?',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+
+      const documentXml = await (await JSZip.loadAsync(await readFile(target))).file('word/document.xml')!.async('string');
+      // Prior behaviour (F3): `splitRunAtOffsets` only cloned the run's
+      // `w:rPr` child, silently dropping every attribute Word stamps
+      // directly on `<w:r>` — every split piece would have NEITHER rsid.
+      const rsidRRuns = (documentXml.match(/<w:r\b[^>]*>/g) ?? []).filter((tag) => attr(tag, 'w:rsidR') === '00CC5678');
+      const rsidRDefaultRuns = (documentXml.match(/<w:r\b[^>]*>/g) ?? []).filter(
+        (tag) => attr(tag, 'w:rsidRDefault') === '00CC5678'
+      );
+      expect(rsidRRuns).toHaveLength(3); // before / quote / after
+      expect(rsidRDefaultRuns).toHaveLength(3);
+    });
+  });
+});
+
+describe('docx-comments write — F4: commentsIds.xml/commentsExtensible.xml stay consistent when present, never created when absent', () => {
+  it('add appends a matching w16cid/w16cex entry (shared durable id) when both parts already exist', async () => {
+    await withScratchCopy('word365-realistic.docx', async (target) => {
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/word365-realistic.docx',
+        selector: textSelector('look strong across every region'),
+        text: 'Which regions specifically?',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const newRawId = result.id.slice('w-'.length);
+
+      const zip = await JSZip.loadAsync(await readFile(target));
+      const commentsXml = await zip.file('word/comments.xml')!.async('string');
+      const newCommentBlock = findCommentBlock(commentsXml, newRawId);
+      expect(newCommentBlock).not.toBeNull();
+      const newParaId = attr(newCommentBlock!, 'w14:paraId');
+      expect(newParaId).not.toBeNull();
+
+      const commentsIdsXml = await zip.file('word/commentsIds.xml')!.async('string');
+      const commentsExtensibleXml = await zip.file('word/commentsExtensible.xml')!.async('string');
+
+      const idsTags = selfClosingTags(commentsIdsXml, 'w16cid:commentId');
+      expect(idsTags).toHaveLength(2); // the fixture's original entry + this new one
+      // The ORIGINAL entry is untouched.
+      expect(idsTags.some((t) => attr(t, 'w16cid:paraId') === 'AAAA0001' && attr(t, 'w16cid:durableId') === '00000001')).toBe(
+        true
+      );
+      const newIdsTag = idsTags.find((t) => attr(t, 'w16cid:paraId') === newParaId);
+      expect(newIdsTag).toBeDefined();
+      const newDurableId = attr(newIdsTag!, 'w16cid:durableId');
+      expect(newDurableId).not.toBeNull();
+      expect(newDurableId).not.toBe('00000001'); // freshly minted, not reused
+
+      const extTags = selfClosingTags(commentsExtensibleXml, 'w16cex:commentExtensible');
+      expect(extTags).toHaveLength(2);
+      expect(extTags.some((t) => attr(t, 'w16cex:durableId') === '00000001')).toBe(true); // original untouched
+      const newExtTag = extTags.find((t) => attr(t, 'w16cex:durableId') === newDurableId);
+      expect(newExtTag).toBeDefined(); // the SAME durable id links both new entries
+      expect(attr(newExtTag!, 'w16cex:dateUtc')).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+  });
+
+  it('a reply also gets a matching w16cid/w16cex entry — a reply is its own new <w:comment>', async () => {
+    await withScratchCopy('word365-realistic.docx', async (target) => {
+      const result = await replyToDocxComment({
+        absolutePath: target,
+        path: 'docs/word365-realistic.docx',
+        id: 'w-0',
+        text: 'Broken out by region in the appendix.',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+
+      const zip = await JSZip.loadAsync(await readFile(target));
+      const idsTags = selfClosingTags(await zip.file('word/commentsIds.xml')!.async('string'), 'w16cid:commentId');
+      const extTags = selfClosingTags(await zip.file('word/commentsExtensible.xml')!.async('string'), 'w16cex:commentExtensible');
+      expect(idsTags).toHaveLength(2);
+      expect(extTags).toHaveLength(2);
+    });
+  });
+
+  it('never creates commentsIds.xml/commentsExtensible.xml for a file that never had them', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        selector: textSelector('Keep support tickets about the update below 200 per week.'),
+        text: 'By channel too, please.',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+
+      const zip = await JSZip.loadAsync(await readFile(target));
+      expect(zip.file('word/commentsIds.xml')).toBeNull();
+      expect(zip.file('word/commentsExtensible.xml')).toBeNull();
     });
   });
 });

@@ -7,10 +7,10 @@
 // EVERY xlsx write op (add/reply/resolve/reopen/move) delegates its
 // backup/atomic-write/verify/rollback behaviour to this one function.
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, mkdtemp, rm, readdir } from 'fs/promises';
+import { readFile, writeFile, mkdtemp, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { writeFileMutation } from '../src/main/doc-comments/write-pipeline';
+import { writeFileMutation, backupPathFor } from '../src/main/doc-comments/write-pipeline';
 
 async function withScratchFile<T>(content: string, fn: (target: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), 'ycd-write-pipeline-'));
@@ -23,10 +23,26 @@ async function withScratchFile<T>(content: string, fn: (target: string) => Promi
   }
 }
 
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// T11 review (F1/F5, applied here at the shared-module level): the backup no
+// longer lives next to the target file (a sibling `.bak-<timestamp>`, which a
+// project's own git repo or cloud-sync folder would pick up) — it's one
+// ROLLING file at a stable, hashed path under `~/.claude/youcoded-doc-
+// backups/` (`backupPathFor`), kept after a successful write rather than
+// deleted. These tests were rewritten against that location and lifecycle.
 describe('write-pipeline — verify-after-write with automatic rollback', () => {
-  it('a failed verification restores the original bytes exactly, and cleans up the backup', async () => {
+  it('a failed verification restores the original bytes exactly, and clears the backup it consumed', async () => {
     await withScratchFile('original bytes', async (target) => {
       const before = await readFile(target);
+      const backupPath = backupPathFor(target, '.xlsx.bak');
       const result = await writeFileMutation<{}, { ok: false; error: string }>(
         target,
         '.xlsx.bak',
@@ -35,37 +51,58 @@ describe('write-pipeline — verify-after-write with automatic rollback', () => 
       );
       expect(result).toEqual({ ok: false, error: 'verify-failed' });
       expect(await readFile(target)).toEqual(before); // restored byte-for-byte
-
-      const dir = join(target, '..');
-      const leftover = (await readdir(dir)).filter((f) => f.includes('.xlsx.bak-'));
-      expect(leftover).toHaveLength(0); // renamed back over the target, nothing left behind
+      // Rolled back means RENAMED back over the target — the backup no
+      // longer exists afterward (it now IS the live file again).
+      expect(await exists(backupPath)).toBe(false);
     });
   });
 
-  it('the backup exists WHILE verify runs, and is cleaned up after a successful write', async () => {
+  it('the backup exists WHILE verify runs, and is KEPT (not deleted) after a successful write', async () => {
     await withScratchFile('original bytes', async (target) => {
-      const dir = join(target, '..');
+      const backupPath = backupPathFor(target, '.xlsx.bak');
+      const before = await readFile(target);
       let sawBackupDuringVerify = false;
       const result = await writeFileMutation<{}, { ok: false; error: string }>(
         target,
         '.xlsx.bak',
         async (bytes) => ({ ok: true, bytes }),
         async () => {
-          const files = await readdir(dir);
-          sawBackupDuringVerify = files.some((f) => f.includes('.xlsx.bak-'));
+          sawBackupDuringVerify = await exists(backupPath);
           return true;
         }
       );
       expect(result).toEqual({ ok: true });
       expect(sawBackupDuringVerify).toBe(true);
-      const filesAfter = await readdir(dir);
-      expect(filesAfter.some((f) => f.includes('.xlsx.bak-'))).toBe(false);
+      expect(await exists(backupPath)).toBe(true); // KEPT after success (F5)
+      expect(await readFile(backupPath)).toEqual(before); // holds the PRE-write bytes
+    });
+  });
+
+  it('one rolling backup per file — a second successful write overwrites the same backup path', async () => {
+    await withScratchFile('original bytes', async (target) => {
+      const backupPath = backupPathFor(target, '.xlsx.bak');
+      const firstOriginal = await readFile(target);
+      await writeFileMutation<{}, { ok: false; error: string }>(target, '.xlsx.bak', async (bytes) => ({ ok: true, bytes }), async () => true);
+      expect(await readFile(backupPath)).toEqual(firstOriginal);
+
+      const secondOriginal = await readFile(target);
+      await writeFileMutation<{}, { ok: false; error: string }>(
+        target,
+        '.xlsx.bak',
+        async (bytes) => ({ ok: true, bytes: Buffer.concat([bytes, Buffer.from('!')]) }),
+        async () => true
+      );
+      // Same path both times, now holding the SECOND write's pre-write bytes
+      // — overwritten in place, never accumulated as a second file.
+      expect(backupPathFor(target, '.xlsx.bak')).toBe(backupPath);
+      expect(await readFile(backupPath)).toEqual(secondOriginal);
     });
   });
 
   it('a mutate-level refusal never touches the file at all — no backup, no write', async () => {
     await withScratchFile('original bytes', async (target) => {
       const before = await readFile(target);
+      const backupPath = backupPathFor(target, '.xlsx.bak');
       const result = await writeFileMutation<{}, { ok: false; error: 'refused' }>(
         target,
         '.xlsx.bak',
@@ -74,8 +111,45 @@ describe('write-pipeline — verify-after-write with automatic rollback', () => 
       );
       expect(result).toEqual({ ok: false, error: 'refused' });
       expect(await readFile(target)).toEqual(before);
-      const dir = join(target, '..');
-      expect((await readdir(dir)).filter((f) => f.includes('.bak-'))).toHaveLength(0);
+      expect(await exists(backupPath)).toBe(false);
+    });
+  });
+
+  // F1 (T11 review — blocker): `verify` now also receives the file's ORIGINAL
+  // bytes, so a format-specific check can scope itself to what THIS operation
+  // changed instead of judging the whole file (docx-comments.ts's own
+  // `verifyOoxmlWiring` uses this to ignore a dangling relationship the file
+  // already had before the write).
+  it('passes the ORIGINAL (pre-write) bytes as verify\'s third argument', async () => {
+    await withScratchFile('original bytes', async (target) => {
+      const originalOnDisk = await readFile(target);
+      let seenOriginal: Buffer | undefined;
+      const result = await writeFileMutation<{}, { ok: false; error: string }>(
+        target,
+        '.xlsx.bak',
+        async (bytes) => ({ ok: true, bytes: Buffer.concat([bytes, Buffer.from('!')]) }),
+        async (_newBytes, _extra, originalBytes) => {
+          seenOriginal = originalBytes;
+          return true;
+        }
+      );
+      expect(result).toEqual({ ok: true });
+      expect(seenOriginal).toEqual(originalOnDisk);
+    });
+  });
+
+  // A `verify` callback with FEWER parameters (exactly what xlsx-comments.ts
+  // itself still passes, unmodified) must keep type-checking and running —
+  // this is the whole reason the new third parameter is additive-only.
+  it('still accepts a verify callback that ignores the extra originalBytes parameter', async () => {
+    await withScratchFile('original bytes', async (target) => {
+      const result = await writeFileMutation<{}, { ok: false; error: string }>(
+        target,
+        '.xlsx.bak',
+        async (bytes) => ({ ok: true, bytes }),
+        async () => true // arity 0 — never reads newBytes/extra/originalBytes
+      );
+      expect(result).toEqual({ ok: true });
     });
   });
 });
