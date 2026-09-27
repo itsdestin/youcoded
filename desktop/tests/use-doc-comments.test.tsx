@@ -5,7 +5,7 @@
 // (list/watch/mutate/reconcile/refuse/roll back) behaves as designed, while
 // `tests/ReadingHighlights.test.tsx` (unmodified by this task) is the proof
 // that the public hook API itself didn't move.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import {
   __resetDocCommentsStoreForTest,
