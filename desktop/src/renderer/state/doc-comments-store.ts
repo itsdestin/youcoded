@@ -286,6 +286,13 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
     case 'cell-already-has-comment': return 'This cell already has a comment.';
     case 'cell-has-no-value': return 'Add a value to this cell before commenting on it.';
     case 'destination-cell-occupied': return 'The destination cell already has a comment.';
+    // F9/this rewrite: the xlsx write path now edits an existing workbook's
+    // comment data in place instead of rebuilding the whole file, so it can
+    // refuse a workbook whose comment wiring doesn't look like an ordinary
+    // legacy note (see xlsx-comments.ts's own 'ambiguous-comment-wiring' doc
+    // comment) rather than risk guessing at it.
+    case 'ambiguous-comment-wiring':
+      return "This workbook's existing comments are set up in an unusual way YouCoded doesn't recognize, so it won't risk editing them.";
     case 'unsupported-workbook-features':
       return res.features?.length
         ? `This workbook uses features YouCoded can't edit yet (${res.features.join(', ')}).`
