@@ -59,3 +59,31 @@ fun checkNamedEntriesWithinCeiling(zip: ZipFile, names: List<String>): ZipSizeGu
     }
     return ZipSizeGuardResult.Ok
 }
+
+/**
+ * Refuses if the SUM of every entry's declared uncompressed size (or any
+ * single entry alone) is over the ceiling. Mirrors desktop's
+ * `checkTotalWithinCeiling` (zip-size-guard.ts) — used by `XlsxComments.kt`
+ * (T18/§4.3a), which — unlike Word's fixed three-named-part read
+ * (`checkNamedEntriesWithinCeiling`, above) — has no small fixed set of part
+ * names to check ahead of time: an xlsx's worksheet/comments part names and
+ * count vary per workbook (§4.3a's own "sheetN.xml"/"commentsN.xml"
+ * numbering follows worksheet position, not a fixed count), so the whole
+ * archive is pre-scanned before ANY part is parsed. An entry with an unknown
+ * declared size (`ZipEntry.getSize() == -1`) contributes `0` to the running
+ * total rather than being refused outright, matching desktop's own
+ * `declaredUncompressedSize` fallback.
+ */
+fun checkAllEntriesWithinCeiling(zip: ZipFile): ZipSizeGuardResult {
+    var total = 0L
+    val entries = zip.entries()
+    while (entries.hasMoreElements()) {
+        val entry = entries.nextElement()
+        if (entry.isDirectory) continue
+        val size = if (entry.size >= 0) entry.size else 0L
+        if (size > MAX_DECLARED_UNCOMPRESSED_BYTES) return ZipSizeGuardResult.ArchiveTooLarge
+        total += size
+        if (total > MAX_DECLARED_UNCOMPRESSED_BYTES) return ZipSizeGuardResult.ArchiveTooLarge
+    }
+    return ZipSizeGuardResult.Ok
+}
