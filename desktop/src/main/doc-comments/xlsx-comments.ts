@@ -12,7 +12,7 @@
 import JSZip from 'jszip';
 import ExcelJS from 'exceljs';
 import type { CellSelector, CommentAuthor, CommentReply, CommentSelector, PersistedComment } from '../../shared/doc-comments-types';
-import { checkTotalWithinCeiling } from './zip-size-guard';
+import { checkTotalWithinCeiling, decompressBounded } from './zip-size-guard';
 import { writeFileMutation } from './write-pipeline';
 
 // Not exported (same convention as docx-comments.ts's DocxReadError, and
@@ -170,6 +170,25 @@ export async function readXlsxComments(bytes: Uint8Array | Buffer, path: string)
   }
   const sizeCheck = checkTotalWithinCeiling(zip);
   if (!sizeCheck.ok) return { ok: false, error: sizeCheck.error };
+
+  // F3 (implementation review): the declared-size pre-scan above only ever
+  // reads central-directory METADATA (zip-size-guard.ts's own header) — a
+  // crafted entry can simply lie about it. Unlike docx-comments.ts's own read
+  // path, this module never reads a NAMED part itself — the actual per-entry
+  // decompression happens entirely inside exceljs's own `.xlsx.load()`, a
+  // black box with no hook of its own to bound it. So every entry is inflated
+  // HERE, through JSZip's own streaming API (`decompressBounded`), with a
+  // byte-counting cap — the decompressed text itself is discarded immediately
+  // (only whether it stayed under the ceiling matters for this check) —
+  // BEFORE the same bytes are ever handed to exceljs's loader.
+  const entries: JSZip.JSZipObject[] = [];
+  zip.forEach((_relativePath, file) => {
+    if (!file.dir) entries.push(file);
+  });
+  for (const entry of entries) {
+    const bounded = await decompressBounded(entry);
+    if (!bounded.ok) return { ok: false, error: bounded.error };
+  }
 
   const workbook = new ExcelJS.Workbook();
   try {

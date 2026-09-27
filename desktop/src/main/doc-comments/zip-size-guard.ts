@@ -93,3 +93,76 @@ export function checkTotalWithinCeiling(zip: JSZip): ZipSizeGuardResult {
   }
   return { ok: true };
 }
+
+// =============================================================================
+// F3 (implementation review, both docx/xlsx READ paths): a decompression-time
+// backstop UNDERNEATH the two declared-size checks above.
+//
+// WHY the checks above are not enough on their own: both only ever read
+// `declaredUncompressedSize`, a value this module's own header already
+// documents as coming from JSZip's internal-but-stable `_data.uncompressedSize`
+// field — itself sourced from the archive's own CENTRAL DIRECTORY metadata,
+// never verified against what an entry ACTUALLY decompresses to (and falling
+// back to `0` when absent — see `declaredUncompressedSize` above). A crafted
+// entry can declare a small (or absent) uncompressed size while its real
+// DEFLATE stream expands far past it; both declared-size checks would wave it
+// straight through, and `.async('string')` would then decompress the FULL
+// real size into memory regardless. `decompressBounded` below is the check
+// that doesn't trust anything the archive DECLARES: it consumes the entry's
+// own internal stream (`nodeStream` — real bytes, not the reported metadata),
+// counting them AS THEY ARRIVE and aborting the stream the moment the running
+// total crosses the ceiling, so at most one chunk's worth of bytes beyond the
+// ceiling is ever held in memory — never the full oversized output.
+// =============================================================================
+
+export type DecompressionGuardResult = { ok: true; text: string } | { ok: false; error: 'archive-too-large' };
+
+/**
+ * Decompresses `file` (a JSZip entry already resolved via `zip.file(name)`)
+ * to a UTF-8 string, counting REAL decompressed bytes as they come off its own
+ * `nodeStream` and resolving `{ ok: false, error: 'archive-too-large' }` the
+ * MOMENT the running total exceeds `ceilingBytes` — never `.async('string')`,
+ * which buffers the FULL decompressed output before this function would ever
+ * get a chance to look at it. See this section's own header for why this
+ * exists as a backstop UNDERNEATH `checkNamedEntriesWithinCeiling`/
+ * `checkTotalWithinCeiling`, which only ever look at the archive's own
+ * declared metadata.
+ *
+ * `ceilingBytes` defaults to the same `MAX_DECLARED_UNCOMPRESSED_BYTES`
+ * ceiling the declared-size checks use above. A caller only ever overrides it
+ * in a test — proving the abort fires correctly, well under the real 200MB
+ * production ceiling, without a test having to actually inflate anywhere near
+ * that much data itself.
+ */
+export function decompressBounded(
+  file: JSZip.JSZipObject,
+  ceilingBytes = MAX_DECLARED_UNCOMPRESSED_BYTES
+): Promise<DecompressionGuardResult> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    const stream = file.nodeStream('nodebuffer');
+    const finish = (result: DecompressionGuardResult) => {
+      if (settled) return;
+      settled = true;
+      // `destroy()` (Node 8+) stops the underlying decompression work rather
+      // than letting it run to completion after we've already stopped
+      // listening — the whole point of aborting EARLY rather than just
+      // ignoring further `data` events.
+      (stream as unknown as { destroy?: () => void }).destroy?.();
+      resolve(result);
+    };
+    stream.on('data', (chunk: Buffer) => {
+      if (settled) return;
+      total += chunk.length;
+      if (total > ceilingBytes) {
+        finish({ ok: false, error: 'archive-too-large' });
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on('end', () => finish({ ok: true, text: Buffer.concat(chunks).toString('utf8') }));
+    stream.on('error', () => finish({ ok: false, error: 'archive-too-large' }));
+  });
+}

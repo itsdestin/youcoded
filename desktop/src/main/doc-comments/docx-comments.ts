@@ -46,7 +46,7 @@ import type {
   CommentSelector,
   PersistedComment,
 } from '../../shared/doc-comments-types';
-import { checkNamedEntriesWithinCeiling } from './zip-size-guard';
+import { checkNamedEntriesWithinCeiling, decompressBounded } from './zip-size-guard';
 import { resolveSelector } from '../../shared/doc-comments-anchor';
 // T11 review (F1/F5): docx's own write pipeline is now a thin wrapper around
 // this shared one — see the doc comment on `writeDocxMutation` below.
@@ -388,11 +388,25 @@ export async function readDocxComments(bytes: Uint8Array | Buffer, path: string)
   ]);
   if (!sizeCheck.ok) return { ok: false, error: sizeCheck.error };
 
-  const [commentsXml, documentXml, extendedXml] = await Promise.all([
-    commentsFile.async('string'),
-    documentFile.async('string'),
-    extendedFile ? extendedFile.async('string') : Promise.resolve(null),
-  ]);
+  // F3 (implementation review): `decompressBounded` — never `.async('string')`
+  // — counts REAL decompressed bytes as they arrive and refuses the moment
+  // they exceed the ceiling, regardless of what the archive's own metadata
+  // declared (see zip-size-guard.ts's own header for why the check above
+  // isn't a sufficient guard on its own). Sequential rather than
+  // `Promise.all` so a bomb on an EARLIER part is caught without also paying
+  // to decompress the later ones first.
+  const commentsResult = await decompressBounded(commentsFile);
+  if (!commentsResult.ok) return { ok: false, error: commentsResult.error };
+  const documentResult = await decompressBounded(documentFile);
+  if (!documentResult.ok) return { ok: false, error: documentResult.error };
+  let extendedXml: string | null = null;
+  if (extendedFile) {
+    const extendedResult = await decompressBounded(extendedFile);
+    if (!extendedResult.ok) return { ok: false, error: extendedResult.error };
+    extendedXml = extendedResult.text;
+  }
+  const commentsXml = commentsResult.text;
+  const documentXml = documentResult.text;
 
   const rawComments = parseCommentsXml(commentsXml);
   const extended = extendedXml ? parseCommentsExtendedXml(extendedXml) : new Map<string, ExtendedInfo>();

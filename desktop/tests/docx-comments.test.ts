@@ -26,7 +26,7 @@ import {
   DOCX_BACKUP_SUFFIX,
 } from '../src/main/doc-comments/docx-comments';
 import { backupPathFor } from '../src/main/doc-comments/write-pipeline';
-import { buildDeclaredOversizeZip } from './fixtures/doc-comments/oversized-zip';
+import { buildDeclaredOversizeZip, buildRealZipBomb } from './fixtures/doc-comments/oversized-zip';
 import type { CommentSelector } from '../src/shared/doc-comments-types';
 
 async function exists(path: string): Promise<boolean> {
@@ -216,6 +216,23 @@ describe('docx-comments — a decompression-bomb-shaped archive', () => {
       500 * 1024 * 1024
     );
     const result = await readDocxComments(bytes, 'docs/bomb.docx');
+    expect(result).toEqual({ ok: false, error: 'archive-too-large' });
+  });
+
+  // F3 (implementation review): a declared-size lie isn't the only shape a
+  // decompression bomb can take — an entry whose declared size is small (or
+  // never checked at all here) but whose REAL decompressed bytes exceed the
+  // ceiling must be caught too, by `decompressBounded`'s own byte-counting
+  // loop (zip-size-guard.ts), never by trusting the archive's metadata. This
+  // is a REAL zip bomb (word/comments.xml genuinely decompresses to just over
+  // the 200MB ceiling) — no central-directory patching involved at all.
+  it('refuses word/comments.xml whose REAL decompressed bytes exceed the ceiling, with no declared-size lie involved', async () => {
+    const bytes = await buildRealZipBomb(
+      { 'word/document.xml': '<w:document><w:body/></w:document>' },
+      'word/comments.xml',
+      201 * 1024 * 1024
+    );
+    const result = await readDocxComments(bytes, 'docs/real-bomb.docx');
     expect(result).toEqual({ ok: false, error: 'archive-too-large' });
   });
 });

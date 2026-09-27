@@ -15,6 +15,7 @@
 // central directory is sufficient to fool a caller doing the same central-
 // directory-based check this fixture is built to exercise.
 import JSZip from 'jszip';
+import { Readable } from 'stream';
 
 const CENTRAL_DIR_SIGNATURE = 0x02014b50; // 'PK\x01\x02', little-endian
 
@@ -67,4 +68,54 @@ function patchCentralDirectoryUncompressedSize(buf: Buffer, targetEntryName: str
     throw new Error(`buildDeclaredOversizeZip: no central directory entry found for "${targetEntryName}"`);
   }
   return patched;
+}
+
+/** A Node Readable of `totalBytes` zero bytes, generated on demand in small
+ *  chunks — building `buildRealZipBomb`'s fixture below never holds the
+ *  whole (multi-hundred-MB) uncompressed content in memory at once, only
+ *  ever one chunk. */
+function zerosStream(totalBytes: number): Readable {
+  const CHUNK = 64 * 1024;
+  let sent = 0;
+  return new Readable({
+    read() {
+      if (sent >= totalBytes) {
+        this.push(null);
+        return;
+      }
+      const n = Math.min(CHUNK, totalBytes - sent);
+      this.push(Buffer.alloc(n));
+      sent += n;
+    },
+  });
+}
+
+/**
+ * Builds a REAL zip bomb: `bombEntryName` genuinely decompresses to
+ * `realUncompressedBytes` of zero bytes (DEFLATE compresses that to almost
+ * nothing, and `zerosStream` never holds it all in memory at once either),
+ * plus any other plain-text `otherFiles`. The bomb entry's DECLARED
+ * uncompressed size (central directory only, same mechanism
+ * `buildDeclaredOversizeZip` above relies on) is then patched DOWN to a
+ * handful of bytes — far SMALLER than its real content — specifically so
+ * `checkNamedEntriesWithinCeiling`/`checkTotalWithinCeiling`'s own
+ * declared-size-only check would wave it straight through. Without this
+ * patch, JSZip's own `generateAsync` would report the entry's TRUE (and
+ * therefore already-over-ceiling) size in the declared metadata, and the
+ * pre-existing declared-size check alone would already catch it — which
+ * would make a test built from this fixture prove nothing new. Used to pin
+ * F3 (implementation review): `decompressBounded`'s own byte-counting
+ * decompression-time backstop, the ONLY check left standing once the
+ * declared size is a lie.
+ */
+export async function buildRealZipBomb(
+  otherFiles: Record<string, string>,
+  bombEntryName: string,
+  realUncompressedBytes: number,
+): Promise<Buffer> {
+  const zip = new JSZip();
+  for (const [name, content] of Object.entries(otherFiles)) zip.file(name, content);
+  zip.file(bombEntryName, zerosStream(realUncompressedBytes), { compression: 'DEFLATE' });
+  const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  return patchCentralDirectoryUncompressedSize(buf, bombEntryName, 16);
 }

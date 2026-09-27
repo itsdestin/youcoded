@@ -20,7 +20,7 @@ import {
   reopenXlsxComment,
   moveXlsxComment,
 } from '../src/main/doc-comments/xlsx-comments';
-import { buildDeclaredOversizeZip } from './fixtures/doc-comments/oversized-zip';
+import { buildDeclaredOversizeZip, buildRealZipBomb } from './fixtures/doc-comments/oversized-zip';
 import type { CommentSelector } from '../src/shared/doc-comments-types';
 
 const FIXTURE = join(__dirname, 'fixtures', 'doc-comments', 'q3-sales-by-rep.xlsx');
@@ -152,6 +152,31 @@ describe('xlsx-comments — reply threads and the resolve marker', () => {
   });
 });
 
+// F2 (implementation review — parity): a workbook with one real worksheet
+// plus one CHARTSHEET must stay "single-sheet" — exceljs's own `reconcile()`
+// never surfaces a chartsheet as a worksheet at all (this file's own header,
+// T13 section), so `workbook.worksheets.length` already excludes it here.
+// The shared fixture (`chartsheet-workbook.xlsx`, `make-xlsx-chartsheet-
+// fixture.mjs`) and this exact assertion are what Android's `XlsxComments.kt`
+// own golden-parity test (`chartsheetWorkbookMatchesTheDesktopReaderFieldFor
+// FieldAndStaysSingleSheet`) is pinned against — see that fixture generator's
+// own header for why exceljs can't write a chartsheet itself.
+describe('xlsx-comments — a workbook with a worksheet AND a chartsheet', () => {
+  it('never counts the chartsheet as a worksheet — stays single-sheet, no `sheet` on the selector', async () => {
+    const bytes = await readFile(join(__dirname, 'fixtures', 'doc-comments', 'chartsheet-workbook.xlsx'));
+    const result = await readXlsxComments(bytes, 'reports/chartsheet-workbook.xlsx');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.comments).toHaveLength(1);
+    const note = result.comments[0];
+    expect(note.selector.kind).toBe('cell');
+    if (note.selector.kind !== 'cell') return;
+    // §4.2: `sheet` is only ever named on a genuinely multi-sheet workbook.
+    expect(note.selector.selector.sheet).toBeUndefined();
+    expect(note.author).toBe('person:Priya Shah');
+  });
+});
+
 describe('xlsx-comments — not a valid workbook at all', () => {
   it('refuses honestly instead of throwing', async () => {
     const result = await readXlsxComments(Buffer.from('not a workbook'), 'reports/garbage.xlsx');
@@ -249,6 +274,20 @@ describe('xlsx-comments — a decompression-bomb-shaped archive', () => {
       500 * 1024 * 1024
     );
     const result = await readXlsxComments(bytes, 'reports/bomb.xlsx');
+    expect(result).toEqual({ ok: false, error: 'archive-too-large' });
+  });
+
+  // F3 (implementation review): a declared-size lie isn't the only shape a
+  // decompression bomb can take — this module never reads a named part
+  // itself (exceljs's own `.xlsx.load()` decompresses everything internally),
+  // so every entry is now inflated through JSZip's own streaming API with a
+  // byte-counting cap during the pre-scan (`decompressBounded`, zip-size-
+  // guard.ts), BEFORE exceljs ever sees the bytes. This is a REAL zip bomb
+  // (xl/workbook.xml genuinely decompresses to just over the 200MB ceiling)
+  // — no central-directory patching involved at all.
+  it('refuses an entry whose REAL decompressed bytes exceed the ceiling, with no declared-size lie involved', async () => {
+    const bytes = await buildRealZipBomb({}, 'xl/workbook.xml', 201 * 1024 * 1024);
+    const result = await readXlsxComments(bytes, 'reports/real-bomb.xlsx');
     expect(result).toEqual({ ok: false, error: 'archive-too-large' });
   });
 });
