@@ -1,0 +1,11 @@
+{
+  "fixture": "launch-brief.docx",
+  "path": "docs/launch-brief.docx",
+  "op": "reopen",
+  "args": {
+    "id": "w-0"
+  },
+  "result": {
+    "ok": true
+  }
+}

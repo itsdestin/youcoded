@@ -169,7 +169,13 @@ private fun locateFallback(absoluteFilePath: String, homeDir: File): StoreResult
     return StoreResult.Ok(File(dir, "$hash.json").path)
 }
 
-private fun sha256Hex(s: String): String {
+// `internal` (not `private`) — T17's docx write pipeline (DocxComments.kt)
+// reuses this to derive the SAME kind of stable, per-absolute-path hash for
+// its own `~/.claude/youcoded-doc-backups/<hash>.docx.bak` rolling backup
+// path (mirroring desktop's write-pipeline.ts `backupPathFor`), rather than a
+// second, independently-written hashing helper that could drift from this
+// one's algorithm.
+internal fun sha256Hex(s: String): String {
     val digest = MessageDigest.getInstance("SHA-256").digest(s.toByteArray(Charsets.UTF_8))
     return digest.joinToString("") { "%02x".format(it) }
 }

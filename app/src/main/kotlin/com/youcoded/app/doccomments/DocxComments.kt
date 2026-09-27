@@ -55,6 +55,21 @@ import javax.xml.parsers.DocumentBuilder
 import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.parsers.ParserConfigurationException
 import org.xml.sax.InputSource
+// Write-path (T17) imports — kept plain JDK/kotlinx.coroutines, no Android
+// framework classes (mirrors the read path's own "runs in a plain JVM" pin,
+// DocxCommentsTest.kt's `runsInAPlainJvmEnvironmentNoAndroidFrameworkClassInvolved`).
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
+import java.security.SecureRandom
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import javax.xml.transform.OutputKeys
+import javax.xml.transform.TransformerFactory
+import javax.xml.transform.dom.DOMSource
+import javax.xml.transform.stream.StreamResult
 
 /** Mirrors desktop's `DocxReadError` union (docx-comments.ts). `UNSAFE_XML`
  *  has no desktop counterpart yet (F1, implementation review, Android-only
@@ -130,6 +145,40 @@ private class WalkFrame(val el: Element, val children: List<Element>, var idx: I
 
 private class RangeInfo(var start: Int, var end: Int)
 
+/** T17's write-path addition to T16's `walkDocument` — a leaf is one
+ *  contiguous span of `fullText` that came from a single DOM unit (a `<w:t>`
+ *  run's text, a single-character `w:tab`/`w:br`/`w:cr`, or the synthetic
+ *  paragraph-break `\n` a `</w:p>` contributes), gap-free by construction.
+ *  Mirrors docx-comments.ts's `WriteLeaf` union — see that file's own doc
+ *  comment for why this lets `resolveSelector`'s character OFFSETS be
+ *  translated back into an exact DOM insertion point for add/move, something
+ *  the read path's `ranges` map never needed (it only looks up an id Word
+ *  ALREADY marked, never inserts one). `open` because it's a base class three
+ *  concrete leaf kinds extend rather than a Kotlin `sealed` hierarchy, purely
+ *  so `start`/`end` can live once in the base rather than being repeated in
+ *  every subclass constructor. */
+private open class WriteLeaf(val start: Int, val end: Int) {
+    class Text(start: Int, end: Int, val run: Element, val textEl: Element) : WriteLeaf(start, end)
+    class Atom(start: Int, end: Int, val run: Element) : WriteLeaf(start, end)
+    class ParaBreak(start: Int, end: Int, val paragraph: Element) : WriteLeaf(start, end)
+}
+
+private class WalkResult(val fullText: String, val ranges: Map<String, RangeInfo>, val leaves: List<WriteLeaf>?)
+
+/** Walks up from `el` (inclusive) for the nearest ancestor with `tagName`, or
+ *  `null` if none exists before the document root. Used to find a `<w:t>`'s
+ *  owning `<w:r>` — comment range markers are always inserted as RUN
+ *  siblings, never inside a run's own children. Mirrors docx-comments.ts's
+ *  `nearestAncestor`. */
+private fun nearestAncestor(el: Element, tagName: String): Element? {
+    var cur: Node? = el
+    while (cur != null) {
+        if (cur is Element && cur.tagName == tagName) return cur
+        cur = cur.parentNode
+    }
+    return null
+}
+
 private fun elementChildren(el: Element): List<Element> {
     val out = mutableListOf<Element>()
     val nodes = el.childNodes
@@ -152,11 +201,20 @@ private fun elementChildren(el: Element): List<Element> {
  * `w15:paraId` — that identifier only exists on `<w:p>` elements, and only
  * commentsExtended.xml's own entries key off it).
  */
-private fun walkDocument(doc: Document): Pair<String, Map<String, RangeInfo>> {
+/**
+ * `collectLeaves` (T17, write path only): also builds the `WriteLeaf[]` list
+ * above, in the SAME single pass that builds `fullText` — never a second,
+ * separately-maintained walk that could disagree with this one about what
+ * `fullText` actually contains. Defaults to `false`, unchanged behaviour for
+ * every existing (read-path) call site — mirrors docx-comments.ts's own
+ * `walkDocument(doc, { collectLeaves })` option.
+ */
+private fun walkDocument(doc: Document, collectLeaves: Boolean = false): WalkResult {
     val ranges = LinkedHashMap<String, RangeInfo>()
     val fullText = StringBuilder()
+    val leaves: MutableList<WriteLeaf>? = if (collectLeaves) mutableListOf() else null
     val bodies = doc.getElementsByTagName("w:body")
-    if (bodies.length == 0) return Pair("", ranges)
+    if (bodies.length == 0) return WalkResult("", ranges, leaves)
     val body = bodies.item(0) as Element
 
     val stack = ArrayDeque<WalkFrame>()
@@ -168,16 +226,34 @@ private fun walkDocument(doc: Document): Pair<String, Map<String, RangeInfo>> {
             // Post-order step: append the paragraph-break newline after every
             // child of a `<w:p>` has been visited — mirrors the old recursive
             // shape's "append \n after the recursive call returns".
-            if (frame.el.tagName == "w:p") fullText.append('\n')
+            if (frame.el.tagName == "w:p") {
+                if (leaves != null) leaves.add(WriteLeaf.ParaBreak(fullText.length, fullText.length + 1, frame.el))
+                fullText.append('\n')
+            }
             stack.removeLast()
             continue
         }
         val el = frame.children[frame.idx]
         frame.idx++
         when (el.tagName) {
-            "w:t" -> fullText.append(el.textContent ?: "")
-            "w:tab" -> fullText.append('\t')
-            "w:br", "w:cr" -> fullText.append('\n')
+            "w:t" -> {
+                val text = el.textContent ?: ""
+                // An empty <w:t> contributes zero characters — no leaf needed
+                // (and none would be addressable by any offset anyway).
+                if (leaves != null && text.isNotEmpty()) {
+                    val run = nearestAncestor(el, "w:r") ?: el
+                    leaves.add(WriteLeaf.Text(fullText.length, fullText.length + text.length, run, el))
+                }
+                fullText.append(text)
+            }
+            "w:tab" -> {
+                if (leaves != null) leaves.add(WriteLeaf.Atom(fullText.length, fullText.length + 1, nearestAncestor(el, "w:r") ?: el))
+                fullText.append('\t')
+            }
+            "w:br", "w:cr" -> {
+                if (leaves != null) leaves.add(WriteLeaf.Atom(fullText.length, fullText.length + 1, nearestAncestor(el, "w:r") ?: el))
+                fullText.append('\n')
+            }
             "w:commentRangeStart" -> {
                 if (el.hasAttribute("w:id")) {
                     val id = el.getAttribute("w:id")
@@ -194,7 +270,7 @@ private fun walkDocument(doc: Document): Pair<String, Map<String, RangeInfo>> {
         // element's own tag handling above, matching the old `visit(el)` call).
         stack.addLast(WalkFrame(el, elementChildren(el), 0))
     }
-    return Pair(fullText.toString(), ranges)
+    return WalkResult(fullText.toString(), ranges, leaves)
 }
 
 private class RawComment(
@@ -439,7 +515,9 @@ private fun readDocxCommentsFromZip(z: ZipFile, path: String): DocxReadResult {
 
     val rawComments = parseCommentsXml(commentsXml)
     val extended = extendedXml?.let { parseCommentsExtendedXml(it) } ?: emptyMap()
-    val (fullText, ranges) = walkDocument(parseXml(documentXml))
+    val walked = walkDocument(parseXml(documentXml))
+    val fullText = walked.fullText
+    val ranges = walked.ranges
 
     val byParaId = HashMap<String, RawComment>()
     for (c in rawComments) if (c.paraId != null) byParaId[c.paraId] = c
@@ -498,4 +576,1095 @@ private fun readDocxCommentsFromZip(z: ZipFile, path: String): DocxReadResult {
     }
 
     return DocxReadResult.Ok(comments)
+}
+
+// =============================================================================
+// Word (.docx) comment WRITING on Android — T17 of the doc-comments build
+// (docs/active/specs/2026-09-26-doc-comments-build-design.md §3.2a/§3.3, §8
+// T17). add / reply / resolve / reopen / move, mirroring desktop's own
+// docx-comments.ts write section (T11, post-review-fixes commit c496576bd and
+// later) field-for-field: id/paraId uniqueness scanned fresh from the file
+// (never assumed monotonic), the Word 2016+ commentsIds.xml/
+// commentsExtensible.xml entries when (and only when) already present, the
+// move/repoint algorithm (review 3, F2), byte-identical pass-through of every
+// part this operation didn't touch, verify-by-reread with THIS file's own
+// `readDocxComments`, and a rolling backup outside any project.
+//
+// WHY the write pipeline below (`writeDocxMutation`) verifies BEFORE ever
+// touching the real target file, rather than desktop's write-then-verify-
+// then-restore-from-backup shape: Kotlin builds the mutated archive fully
+// in-memory/on-a-scratch-file first, so "verify by reread" can run against
+// that SCRATCH file (never the live target) before any real replace happens.
+// This gives the identical outward guarantee §3.3 step 6 requires — a failed
+// write leaves the target byte-for-byte what it was before, never a
+// half-written third state — through a simpler mechanism than an actual
+// disk-level rollback: there is nothing to roll back, because the target was
+// never written to in the first place. The backup file (step 1) is still
+// written unconditionally before the real replace, as the same STANDING
+// safety net the design requires (kept after success, not just for this
+// write's own failure path) — it is not what makes verify-failure safe here,
+// that's simply "don't do the replace."
+//
+// WHY cross-process locking (com.youcoded.app.artifacts.CasWrite.kt's
+// `mutateFileUnderLock`) is deliberately NOT used for the real `.docx` target
+// file itself, only an in-process kotlinx.coroutines Mutex per absolute path:
+// design §1.5 ("Kotlin's own file-locking") works through this exact question
+// and its answer is explicit — "unlike the JSON sidecar, the MCP script never
+// touches a .docx/.xlsx file directly — it goes through the pending-mutation
+// queue (§9.2, T20), whose applier is SessionService's own polling loop
+// running in the SAME process as every Kotlin-originated write... Android
+// never needs the desktop main process's cross-process mkdir-lock for THIS
+// path, only ordinary in-process exclusion." An in-process Mutex keyed by
+// absolute path is therefore already the CORRECT and SUFFICIENT primitive per
+// the design's own reasoning — reaching for the mkdir-based cross-process
+// lock here would add real overhead (extra syscalls, a `.lock` directory
+// racing on every write) to guard against a process that structurally cannot
+// reach this file directly. The ATOMIC-REPLACE mechanics below (write to a
+// sibling `.tmp` path, then `Files.move` with `ATOMIC_MOVE`, falling back to
+// `REPLACE_EXISTING`) still mirror `CasWrite.kt`'s own shape exactly, so this
+// module follows that file's PATTERN even where it doesn't call its lock.
+// =============================================================================
+
+private const val W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+private const val W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
+private const val W15_NS = "http://schemas.microsoft.com/office/word/2012/wordml"
+private const val RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+private const val COMMENTS_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"
+private const val COMMENTS_EXT_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"
+private const val COMMENTS_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
+private const val COMMENTS_EXT_REL_TYPE = "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
+
+private val EMPTY_COMMENTS_XML =
+    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="$W_NS" xmlns:w14="$W14_NS"></w:comments>"""
+private val EMPTY_EXTENDED_XML =
+    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:commentsEx xmlns:w15="$W15_NS"></w15:commentsEx>"""
+private val EMPTY_RELS_XML =
+    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="$RELS_NS"></Relationships>"""
+
+/** Mirrors desktop's `DocxWriteError` union (docx-comments.ts) — every value
+ *  carries its own wire string so a dispatch layer never re-derives one from
+ *  the enum name (avoiding the read path's `.name.lowercase().replace(...)`
+ *  trick drifting from desktop's own literal strings for a NEW error). */
+enum class DocxWriteError(val wire: String) {
+    INVALID_DOCX("invalid-docx"),
+    MISSING_DOCUMENT_PART("missing-document-part"),
+    ARCHIVE_TOO_LARGE("archive-too-large"),
+    UNSAFE_XML("unsafe-xml"),
+    COMMENT_NOT_FOUND("comment-not-found"),
+    SELECTOR_NOT_FOUND("selector-not-found"),
+    INVALID_SELECTOR("invalid-selector"),
+    READ_FAILED("read-failed"),
+    BACKUP_FAILED("backup-failed"),
+    WRITE_FAILED("write-failed"),
+    VERIFY_FAILED("verify-failed"),
+}
+
+sealed class DocxWriteResult<out T> {
+    data class Ok<T>(val value: T) : DocxWriteResult<T>()
+    data class Err(val error: DocxWriteError) : DocxWriteResult<Nothing>()
+}
+
+/** Copies every ATTRIBUTE (not child element) from `from` onto `to` — used by
+ *  `splitRunAtOffsets` so a run's own `<w:r w:rsidR="..." w:rsidRPr="...">`
+ *  attributes survive a split, not just its `w:rPr` CHILD (a real Word 365
+ *  file always carries rsid attributes on its runs). Mirrors docx-comments.ts's
+ *  `copyAttributes` (T11 review, F3). */
+private fun copyAttributes(from: Element, to: Element) {
+    val attrs = from.attributes ?: return
+    for (i in 0 until attrs.length) {
+        val attr = attrs.item(i)
+        to.setAttribute(attr.nodeName, attr.nodeValue ?: "")
+    }
+}
+
+private fun elementsByTag(doc: Document, tag: String): List<Element> {
+    val nodes = doc.getElementsByTagName(tag)
+    return (0 until nodes.length).map { nodes.item(it) as Element }
+}
+
+private fun elementsByTag(el: Element, tag: String): List<Element> {
+    val nodes = el.getElementsByTagName(tag)
+    return (0 until nodes.length).map { nodes.item(it) as Element }
+}
+
+private fun findByAttr(doc: Document, tag: String, attr: String, value: String): Element? =
+    elementsByTag(doc, tag).find { it.hasAttribute(attr) && it.getAttribute(attr) == value }
+
+/** `"w-3"` -> `"3"`; `null` for anything not shaped like a Word-native id
+ *  this reader's own `readDocxComments` mints (`id: "w-${c.id}"`). A reply id
+ *  (`w-3-r1`) is never a valid target for reply/resolve/reopen/move — those
+ *  always act on a whole THREAD, never a single reply within it. */
+private fun stripWPrefix(id: String): String? = Regex("^w-([^-]+)$").find(id)?.groupValues?.get(1)
+
+/** §3.4: a reply/add made from this app must round-trip back into `w:author`
+ *  naming "the account's display name or 'You'" — NEVER overwriting a
+ *  colleague's own original `w:author` (only ever called to author a
+ *  BRAND-NEW `<w:comment>`). No accounts exist yet (§1.2), so `'user'` is
+ *  literally "You"; `'assistant'` is a plain, honest label. */
+private fun commentAuthorToDisplayName(author: CommentAuthor): String = when {
+    author == "user" -> "You"
+    author == "assistant" -> "Assistant"
+    author.startsWith("person:") -> author.removePrefix("person:").ifEmpty { "Unknown" }
+    else -> "Unknown"
+}
+
+private fun maxExistingCommentId(commentsDoc: Document): Int {
+    var max = -1
+    for (el in elementsByTag(commentsDoc, "w:comment")) {
+        val n = el.getAttribute("w:id").toIntOrNull()
+        if (n != null && n > max) max = n
+    }
+    return max
+}
+
+private fun findCommentParaId(commentsDoc: Document, rawId: String): String? {
+    val el = findByAttr(commentsDoc, "w:comment", "w:id", rawId) ?: return null
+    val p = elementsByTag(el, "w:p").firstOrNull() ?: return null
+    return if (p.hasAttribute("w14:paraId")) p.getAttribute("w14:paraId") else null
+}
+
+/** Loaded, mutable in-memory representation of every part a write might
+ *  touch. Mirrors desktop's `LoadedArchive` (docx-comments.ts) field-for-
+ *  field, including its `*Touched`/`*Changed`/`*Original` bookkeeping —
+ *  see that type's own doc comment for why each exists (an untouched part
+ *  must be written back byte-identical; a part that started absent and stays
+ *  untouched by THIS operation must stay absent from the output, never gain
+ *  an orphan empty shell). `entries` holds every OTHER part in the archive
+ *  (images, styles.xml, numbering.xml, ...) verbatim — this module never
+ *  parses or touches them, only copies them straight through. */
+private class LoadedArchive(
+    val entries: LinkedHashMap<String, ByteArray>,
+    val documentDoc: Document,
+    val documentXmlOriginal: String,
+    var documentChanged: Boolean = false,
+    val commentsDoc: Document,
+    val commentsIsNew: Boolean,
+    var commentsTouched: Boolean,
+    val commentsXmlOriginal: String?,
+    var commentsChanged: Boolean = false,
+    val extendedDoc: Document,
+    val extendedIsNew: Boolean,
+    var extendedTouched: Boolean,
+    val extendedXmlOriginal: String?,
+    var extendedChanged: Boolean = false,
+    val contentTypesDoc: Document,
+    val contentTypesXmlOriginal: String,
+    var contentTypesChanged: Boolean = false,
+    val relsDoc: Document,
+    val relsXmlOriginal: String?,
+    var relsTouched: Boolean,
+    var relsChanged: Boolean = false,
+    val commentsIdsDoc: Document?,
+    val commentsIdsXmlOriginal: String?,
+    var commentsIdsChanged: Boolean = false,
+    val commentsExtensibleDoc: Document?,
+    val commentsExtensibleXmlOriginal: String?,
+    var commentsExtensibleChanged: Boolean = false,
+)
+
+/** Union of every `w14:paraId`/`w15:paraId` already in use anywhere in the
+ *  archive — document.xml's own paragraphs, comments.xml's comment
+ *  paragraphs, AND commentsExtended.xml's own entries — so a freshly
+ *  generated one can never collide with ANY of them. Mirrors
+ *  `collectAllParaIds` (docx-comments.ts). */
+private fun collectAllParaIds(archive: LoadedArchive): Set<String> {
+    val set = mutableSetOf<String>()
+    for (doc in listOf(archive.documentDoc, archive.commentsDoc)) {
+        for (el in elementsByTag(doc, "w:p")) {
+            if (el.hasAttribute("w14:paraId")) set.add(el.getAttribute("w14:paraId"))
+        }
+    }
+    for (el in elementsByTag(archive.extendedDoc, "w15:commentEx")) {
+        if (el.hasAttribute("w15:paraId")) set.add(el.getAttribute("w15:paraId"))
+    }
+    return set
+}
+
+private val secureRandom = SecureRandom()
+
+private fun randomHex8(): String {
+    val bytes = ByteArray(4)
+    secureRandom.nextBytes(bytes)
+    return bytes.joinToString("") { "%02X".format(it) }
+}
+
+/** An 8-hex-digit value "the way Word itself does" — never sequential,
+ *  re-rolled on the rare collision against every paraId already in the
+ *  archive. Mirrors `generateParaId` (docx-comments.ts, F6). */
+private fun generateParaId(existing: Set<String>): String {
+    repeat(100) {
+        val candidate = randomHex8()
+        if (!existing.contains(candidate)) return candidate
+    }
+    throw IllegalStateException("docx-comments: could not generate a unique paraId")
+}
+
+/** Union of every `w16cid:durableId`/`w16cex:durableId` already in use.
+ *  Mirrors `collectAllDurableIds` (docx-comments.ts, F4). */
+private fun collectAllDurableIds(archive: LoadedArchive): Set<String> {
+    val set = mutableSetOf<String>()
+    archive.commentsIdsDoc?.let { doc ->
+        for (el in elementsByTag(doc, "w16cid:commentId")) {
+            if (el.hasAttribute("w16cid:durableId")) set.add(el.getAttribute("w16cid:durableId"))
+        }
+    }
+    archive.commentsExtensibleDoc?.let { doc ->
+        for (el in elementsByTag(doc, "w16cex:commentExtensible")) {
+            if (el.hasAttribute("w16cex:durableId")) set.add(el.getAttribute("w16cex:durableId"))
+        }
+    }
+    return set
+}
+
+private fun generateDurableId(existing: Set<String>): String {
+    repeat(100) {
+        val candidate = randomHex8()
+        if (!existing.contains(candidate)) return candidate
+    }
+    throw IllegalStateException("docx-comments: could not generate a unique durableId")
+}
+
+private fun appendCommentIdsEntry(doc: Document, paraId: String, durableId: String) {
+    val el = doc.createElement("w16cid:commentId")
+    el.setAttribute("w16cid:paraId", paraId)
+    el.setAttribute("w16cid:durableId", durableId)
+    doc.documentElement.appendChild(el)
+}
+
+private fun appendCommentExtensibleEntry(doc: Document, durableId: String, dateUtc: String) {
+    val el = doc.createElement("w16cex:commentExtensible")
+    el.setAttribute("w16cex:durableId", durableId)
+    el.setAttribute("w16cex:dateUtc", dateUtc)
+    doc.documentElement.appendChild(el)
+}
+
+/** F4: adds matching entries to whichever of commentsIds.xml/
+ *  commentsExtensible.xml is actually present for a BRAND-NEW `<w:comment>`
+ *  this operation just created (add or reply). Does nothing if NEITHER part
+ *  exists — this module never CREATES them. Mirrors
+ *  `recordCommentExtensionParts` (docx-comments.ts). */
+private fun recordCommentExtensionParts(archive: LoadedArchive, paraId: String) {
+    if (archive.commentsIdsDoc == null && archive.commentsExtensibleDoc == null) return
+    val durableId = generateDurableId(collectAllDurableIds(archive))
+    archive.commentsIdsDoc?.let {
+        appendCommentIdsEntry(it, paraId, durableId)
+        archive.commentsIdsChanged = true
+    }
+    archive.commentsExtensibleDoc?.let {
+        appendCommentExtensibleEntry(it, durableId, isoNow())
+        archive.commentsExtensibleChanged = true
+    }
+}
+
+private fun nextRelId(relsDoc: Document): String {
+    var max = 0
+    for (el in elementsByTag(relsDoc, "Relationship")) {
+        val m = Regex("^rId(\\d+)$").find(el.getAttribute("Id"))
+        if (m != null) max = maxOf(max, m.groupValues[1].toInt())
+    }
+    return "rId${max + 1}"
+}
+
+private fun addContentTypeOverride(contentTypesDoc: Document, partName: String, contentType: String) {
+    val exists = elementsByTag(contentTypesDoc, "Override").any { it.getAttribute("PartName") == partName }
+    if (exists) return
+    val el = contentTypesDoc.createElement("Override")
+    el.setAttribute("PartName", partName)
+    el.setAttribute("ContentType", contentType)
+    contentTypesDoc.documentElement.appendChild(el)
+}
+
+private fun addRelationship(relsDoc: Document, type: String, target: String) {
+    val exists = elementsByTag(relsDoc, "Relationship").any { it.getAttribute("Target") == target }
+    if (exists) return
+    val el = relsDoc.createElement("Relationship")
+    el.setAttribute("Id", nextRelId(relsDoc))
+    el.setAttribute("Type", type)
+    el.setAttribute("Target", target)
+    relsDoc.documentElement.appendChild(el)
+}
+
+/** §3.3 step 2 — called only when `archive.commentsIsNew`. Mirrors
+ *  `ensureCommentsPart` (docx-comments.ts) EXACTLY, including its own
+ *  narrow scope: it does not set `relsTouched` — see that function's own doc
+ *  comment above `LoadedArchive.relsTouched` in the TS source for why (a file
+ *  with literally no pre-existing rels part at all is a structurally unusual
+ *  shape no real fixture exercises; porting the identical behaviour here
+ *  keeps this module's parity claim honest rather than "fixing" an edge case
+ *  the reference implementation itself doesn't handle). */
+private fun ensureCommentsPart(archive: LoadedArchive) {
+    addContentTypeOverride(archive.contentTypesDoc, "/word/comments.xml", COMMENTS_CONTENT_TYPE)
+    addRelationship(archive.relsDoc, COMMENTS_REL_TYPE, "comments.xml")
+    archive.commentsTouched = true
+    archive.contentTypesChanged = true
+    archive.relsChanged = true
+}
+
+private fun ensureExtendedPart(archive: LoadedArchive) {
+    addContentTypeOverride(archive.contentTypesDoc, "/word/commentsExtended.xml", COMMENTS_EXT_CONTENT_TYPE)
+    addRelationship(archive.relsDoc, COMMENTS_EXT_REL_TYPE, "commentsExtended.xml")
+    archive.extendedTouched = true
+    archive.contentTypesChanged = true
+    archive.relsChanged = true
+}
+
+private fun appendCommentEntry(commentsDoc: Document, id: Int, author: String, date: String, paraId: String, text: String) {
+    val commentEl = commentsDoc.createElement("w:comment")
+    commentEl.setAttribute("w:id", id.toString())
+    commentEl.setAttribute("w:author", author)
+    commentEl.setAttribute("w:date", date)
+    val pEl = commentsDoc.createElement("w:p")
+    pEl.setAttribute("w14:paraId", paraId)
+    val rEl = commentsDoc.createElement("w:r")
+    val tEl = commentsDoc.createElement("w:t")
+    tEl.setAttribute("xml:space", "preserve")
+    tEl.textContent = text
+    rEl.appendChild(tEl)
+    pEl.appendChild(rEl)
+    commentEl.appendChild(pEl)
+    commentsDoc.documentElement.appendChild(commentEl)
+}
+
+/** §3.3 step 4 (and step 3's `w15:paraIdParent`): update an EXISTING
+ *  `w15:commentEx` entry in place when one already exists for `paraId`
+ *  (never duplicated), or create a fresh one when it doesn't. Mirrors
+ *  `upsertExtendedEntry` (docx-comments.ts). */
+private fun upsertExtendedEntry(extendedDoc: Document, paraId: String, done: Boolean, paraIdParent: String?) {
+    val existing = findByAttr(extendedDoc, "w15:commentEx", "w15:paraId", paraId)
+    val el = existing ?: extendedDoc.createElement("w15:commentEx")
+    el.setAttribute("w15:paraId", paraId)
+    el.setAttribute("w15:done", if (done) "1" else "0")
+    if (paraIdParent != null) el.setAttribute("w15:paraIdParent", paraIdParent)
+    if (existing == null) extendedDoc.documentElement.appendChild(el)
+}
+
+/**
+ * Splits `run` (whose text lives in its child `textEl`) at every offset in
+ * `offsetsInRun`, replacing `run` in the tree with the resulting pieces —
+ * clones of `run`'s own `w:rPr` (so formatting survives) PLUS every
+ * ATTRIBUTE `run` itself carries (rsids etc. — `copyAttributes`), each
+ * holding one slice of the original text. Returns the pieces AND the full
+ * cut-point list so the caller can look up "the piece that starts/ends at
+ * exactly offset X". A no-op (`offsetsInRun` has nothing strictly interior)
+ * returns `[run]` unchanged. Mirrors `splitRunAtOffsets` (docx-comments.ts).
+ */
+private fun splitRunAtOffsets(doc: Document, run: Element, textEl: Element, offsetsInRun: List<Int>): Pair<List<Element>, List<Int>> {
+    val text = textEl.textContent ?: ""
+    val cutsSet = sortedSetOf(0, text.length)
+    for (o in offsetsInRun) if (o > 0 && o < text.length) cutsSet.add(o)
+    val cuts = cutsSet.toList()
+    if (cuts.size <= 2) return Pair(listOf(run), listOf(0, text.length))
+
+    val rPr = elementsByTag(run, "w:rPr").firstOrNull()
+    val pieces = mutableListOf<Element>()
+    for (i in 0 until cuts.size - 1) {
+        val newRun = doc.createElement("w:r")
+        copyAttributes(run, newRun)
+        if (rPr != null) newRun.appendChild(rPr.cloneNode(true))
+        val newT = doc.createElement("w:t")
+        newT.setAttribute("xml:space", "preserve")
+        newT.textContent = text.substring(cuts[i], cuts[i + 1])
+        newRun.appendChild(newT)
+        pieces.add(newRun)
+    }
+    val parent = run.parentNode as Element
+    for (piece in pieces) parent.insertBefore(piece, run)
+    parent.removeChild(run)
+    return Pair(pieces, cuts)
+}
+
+private class InsertionAnchor(val parent: Element, val before: Node?)
+
+/** Resolves WHERE (a DOM `parent`/`before` pair — `parent.insertBefore(new,
+ *  before)`, `before === null` meaning "append") to place a marker for
+ *  character offset `offset`, splitting a run when the offset falls strictly
+ *  inside one. Mirrors `anchorForOffset` (docx-comments.ts). */
+private fun anchorForOffset(doc: Document, leaves: List<WriteLeaf>, offset: Int, edge: String): InsertionAnchor {
+    val idx = leaves.indexOfFirst { offset >= it.start && offset < it.end }
+    if (idx == -1) {
+        // offset === fullText.length (or the document has no leaves at all,
+        // which resolveSelector already ruled out by finding a match).
+        val last = leaves.lastOrNull() ?: throw IllegalStateException("docx-comments: no leaves to anchor an insertion against")
+        return when (last) {
+            is WriteLeaf.ParaBreak -> InsertionAnchor(last.paragraph, null)
+            is WriteLeaf.Text -> InsertionAnchor(last.run.parentNode as Element, last.run.nextSibling)
+            is WriteLeaf.Atom -> InsertionAnchor(last.run.parentNode as Element, last.run.nextSibling)
+            else -> throw IllegalStateException("docx-comments: unreachable leaf kind")
+        }
+    }
+    val leaf = leaves[idx]
+    if (leaf is WriteLeaf.ParaBreak) {
+        // The only reachable offset here is leaf.start — "immediately after
+        // the last real content of the paragraph that just closed, before
+        // the implicit paragraph break".
+        return InsertionAnchor(leaf.paragraph, null)
+    }
+    val run = when (leaf) {
+        is WriteLeaf.Text -> leaf.run
+        is WriteLeaf.Atom -> leaf.run
+        else -> throw IllegalStateException("docx-comments: unreachable leaf kind")
+    }
+    val offsetInRun = offset - leaf.start
+    val runLen = leaf.end - leaf.start
+    // A BOUNDARY position never needs a split — see docx-comments.ts's own
+    // doc comment for why this is checked FIRST, before ever splitting.
+    if (leaf is WriteLeaf.Atom || offsetInRun == 0) {
+        return InsertionAnchor(run.parentNode as Element, run)
+    }
+    if (offsetInRun == runLen) {
+        return InsertionAnchor(run.parentNode as Element, run.nextSibling)
+    }
+    val textEl = (leaf as WriteLeaf.Text).textEl
+    val (pieces, cuts) = splitRunAtOffsets(doc, run, textEl, listOf(offsetInRun))
+    return if (edge == "start") {
+        val piece = pieces[cuts.indexOf(offsetInRun)]
+        InsertionAnchor(piece.parentNode as Element, piece)
+    } else {
+        val piece = pieces[cuts.indexOf(offsetInRun) - 1]
+        InsertionAnchor(piece.parentNode as Element, piece.nextSibling)
+    }
+}
+
+private fun buildCommentReferenceRun(doc: Document, id: String): Element {
+    val refRun = doc.createElement("w:r")
+    val rPr = doc.createElement("w:rPr")
+    val rStyle = doc.createElement("w:rStyle")
+    rStyle.setAttribute("w:val", "CommentReference")
+    rPr.appendChild(rStyle)
+    refRun.appendChild(rPr)
+    val ref = doc.createElement("w:commentReference")
+    ref.setAttribute("w:id", id)
+    refRun.appendChild(ref)
+    return refRun
+}
+
+/**
+ * Inserts a `w:commentRangeStart`/`w:commentRangeEnd` pair for `id` at
+ * `[start, end)`, plus the `w:commentReference` run immediately after the end
+ * marker. When `start` and `end` fall in the SAME original text leaf, both
+ * cuts are made in ONE `splitRunAtOffsets` call; when they fall in different
+ * leaves, the two ends are resolved independently. Mirrors
+ * `insertCommentRangeMarkers` (docx-comments.ts).
+ */
+private fun insertCommentRangeMarkers(doc: Document, leaves: List<WriteLeaf>, start: Int, end: Int, id: String) {
+    val startMarker = doc.createElement("w:commentRangeStart")
+    startMarker.setAttribute("w:id", id)
+    val endMarker = doc.createElement("w:commentRangeEnd")
+    endMarker.setAttribute("w:id", id)
+    val refRun = buildCommentReferenceRun(doc, id)
+
+    val startIdx = leaves.indexOfFirst { start >= it.start && start < it.end }
+    val endIdx = leaves.indexOfFirst { end >= it.start && end < it.end }
+
+    if (startIdx != -1 && startIdx == endIdx && leaves[startIdx] is WriteLeaf.Text) {
+        val leaf = leaves[startIdx] as WriteLeaf.Text
+        val so = start - leaf.start
+        val eo = end - leaf.start
+        val (pieces, cuts) = splitRunAtOffsets(doc, leaf.run, leaf.textEl, listOf(so, eo))
+        val startPiece = pieces[cuts.indexOf(so)]
+        val endPiece = pieces[cuts.indexOf(eo) - 1]
+        (startPiece.parentNode as Element).insertBefore(startMarker, startPiece)
+        (endPiece.parentNode as Element).insertBefore(endMarker, endPiece.nextSibling)
+        (endMarker.parentNode as Element).insertBefore(refRun, endMarker.nextSibling)
+        return
+    }
+
+    val startAnchor = anchorForOffset(doc, leaves, start, "start")
+    startAnchor.parent.insertBefore(startMarker, startAnchor.before)
+    val endAnchor = anchorForOffset(doc, leaves, end, "end")
+    endAnchor.parent.insertBefore(endMarker, endAnchor.before)
+    (endMarker.parentNode as Element).insertBefore(refRun, endMarker.nextSibling)
+}
+
+/** §3.3 step 5 (Move, review 3 F2): removes the CURRENT
+ *  `w:commentRangeStart`/`End` pair and its paired `w:commentReference` run,
+ *  all matched by `id`. Returns `false` when any of the three pieces can't be
+ *  found. Mirrors `removeCommentRangeAndReference` (docx-comments.ts). */
+private fun removeCommentRangeAndReference(doc: Document, id: String): Boolean {
+    val start = findByAttr(doc, "w:commentRangeStart", "w:id", id)
+    val end = findByAttr(doc, "w:commentRangeEnd", "w:id", id)
+    val ref = findByAttr(doc, "w:commentReference", "w:id", id)
+    if (start == null || end == null || ref == null) return false
+    (start.parentNode as? Element)?.removeChild(start)
+    (end.parentNode as? Element)?.removeChild(end)
+    val refRun = nearestAncestor(ref, "w:r") ?: ref
+    (refRun.parentNode as? Element)?.removeChild(refRun)
+    return true
+}
+
+private fun countAttrOccurrences(xml: String, tag: String, attr: String, value: String): Int {
+    val escaped = Regex.escape(value)
+    val re = Regex("<$tag\\b[^>]*\\b$attr=\"$escaped\"")
+    return re.findAll(xml).count()
+}
+
+private fun isoNow(): String = java.time.Instant.now().toString()
+
+/** Every entry name this module parses/mutates as a DOM part — every OTHER
+ *  entry in the archive is copied through verbatim, untouched. */
+private val TRACKED_PART_NAMES = setOf(
+    "word/document.xml",
+    "word/comments.xml",
+    "word/commentsExtended.xml",
+    "[Content_Types].xml",
+    "word/_rels/document.xml.rels",
+    "word/commentsIds.xml",
+    "word/commentsExtensible.xml",
+)
+
+/**
+ * Loads every part a write might touch off `file` (a scratch COPY of the real
+ * target — see `writeDocxMutation` below, never the live file itself),
+ * mirroring T16's own size-guard-before-decompress discipline. F16 (review 2):
+ * unlike the read path's fixed three-named-part check, a WRITE must copy
+ * through EVERY other part unchanged too, so the WHOLE archive is size-
+ * guarded up front (`checkAllEntriesWithinCeiling`, the same guard T18/§4.3a's
+ * xlsx reader uses for its own variable part set) before anything is loaded
+ * into memory — an over-size file routes to `ARCHIVE_TOO_LARGE`, never an OOM.
+ */
+private fun loadArchiveForWrite(file: File): DocxWriteResult<LoadedArchive> {
+    val zip = try {
+        ZipFile(file)
+    } catch (_: Exception) {
+        return DocxWriteResult.Err(DocxWriteError.INVALID_DOCX)
+    }
+    return try {
+        zip.use { z ->
+            val totalCheck = checkAllEntriesWithinCeiling(z)
+            if (totalCheck is ZipSizeGuardResult.ArchiveTooLarge) {
+                return DocxWriteResult.Err(DocxWriteError.ARCHIVE_TOO_LARGE)
+            }
+
+            val documentEntry = z.getEntry("word/document.xml") ?: return DocxWriteResult.Err(DocxWriteError.MISSING_DOCUMENT_PART)
+            val contentTypesEntry = z.getEntry("[Content_Types].xml") ?: return DocxWriteResult.Err(DocxWriteError.MISSING_DOCUMENT_PART)
+
+            val entries = LinkedHashMap<String, ByteArray>()
+            for (entry in java.util.Collections.list(z.entries())) {
+                if (entry.isDirectory) continue
+                if (TRACKED_PART_NAMES.contains(entry.name)) continue
+                entries[entry.name] = readEntryBounded(z, entry)
+            }
+
+            val documentXml = readEntryBounded(z, documentEntry).toString(Charsets.UTF_8)
+            val contentTypesXml = readEntryBounded(z, contentTypesEntry).toString(Charsets.UTF_8)
+            val commentsEntry = z.getEntry("word/comments.xml")
+            val extendedEntry = z.getEntry("word/commentsExtended.xml")
+            val relsEntry = z.getEntry("word/_rels/document.xml.rels")
+            val commentsIdsEntry = z.getEntry("word/commentsIds.xml")
+            val commentsExtensibleEntry = z.getEntry("word/commentsExtensible.xml")
+
+            val commentsXml = commentsEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
+            val extendedXml = extendedEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
+            val relsXml = relsEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
+            val commentsIdsXml = commentsIdsEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
+            val commentsExtensibleXml = commentsExtensibleEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
+
+            val archive = LoadedArchive(
+                entries = entries,
+                documentDoc = parseXml(documentXml),
+                documentXmlOriginal = documentXml,
+                commentsDoc = parseXml(commentsXml ?: EMPTY_COMMENTS_XML),
+                commentsIsNew = commentsXml == null,
+                commentsTouched = commentsXml != null,
+                commentsXmlOriginal = commentsXml,
+                extendedDoc = parseXml(extendedXml ?: EMPTY_EXTENDED_XML),
+                extendedIsNew = extendedXml == null,
+                extendedTouched = extendedXml != null,
+                extendedXmlOriginal = extendedXml,
+                contentTypesDoc = parseXml(contentTypesXml),
+                contentTypesXmlOriginal = contentTypesXml,
+                relsDoc = parseXml(relsXml ?: EMPTY_RELS_XML),
+                relsXmlOriginal = relsXml,
+                relsTouched = relsXml != null,
+                commentsIdsDoc = commentsIdsXml?.let { parseXml(it) },
+                commentsIdsXmlOriginal = commentsIdsXml,
+                commentsExtensibleDoc = commentsExtensibleXml?.let { parseXml(it) },
+                commentsExtensibleXmlOriginal = commentsExtensibleXml,
+            )
+            DocxWriteResult.Ok(archive)
+        }
+    } catch (_: DocxUnsafeXmlDoctypeException) {
+        DocxWriteResult.Err(DocxWriteError.UNSAFE_XML)
+    } catch (_: ZipBombDetectedException) {
+        DocxWriteResult.Err(DocxWriteError.ARCHIVE_TOO_LARGE)
+    }
+}
+
+private val XML_DECL_RE = Regex("^<\\?xml[^>]*\\?>")
+
+private fun serializeDocument(doc: Document): String {
+    val transformer = TransformerFactory.newInstance().newTransformer()
+    transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes")
+    transformer.setOutputProperty(OutputKeys.METHOD, "xml")
+    transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8")
+    val writer = java.io.StringWriter()
+    transformer.transform(DOMSource(doc), StreamResult(writer))
+    return writer.toString()
+}
+
+/**
+ * Mirrors desktop's `serializePart` (docx-comments.ts, F2): a CHANGED part is
+ * re-serialized fresh, with its XML declaration forced back to the ORIGINAL
+ * part's own declaration (verbatim) when one exists, or a sensible default
+ * when this operation created the part from nothing. Unlike desktop's
+ * linkedom-based serializer, `javax.xml.transform`'s own serializer does not
+ * add a space before a self-closing tag's `/>` — confirmed empirically while
+ * building this module — so no post-processing-away of that specific
+ * linkedom quirk is needed here (F2's OTHER half, "an untouched part is
+ * written back byte-for-byte verbatim", is handled by `writePart` below,
+ * never routing an unchanged part through this function at all).
+ */
+private fun serializePart(doc: Document, originalXml: String?): String {
+    val body = serializeDocument(doc)
+    val decl = originalXml?.let { XML_DECL_RE.find(it)?.value }
+        ?: """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"""
+    return decl + body
+}
+
+private fun ZipOutputStream.writeEntry(name: String, bytes: ByteArray) {
+    putNextEntry(ZipEntry(name))
+    write(bytes)
+    closeEntry()
+}
+
+/** Writes the mutated archive to `outFile` (a scratch path — never the live
+ *  target, see `writeDocxMutation`). Every pass-through part is copied
+ *  verbatim unconditionally; every tracked part is written back byte-for-byte
+ *  verbatim when this operation left it unchanged (`writePart`'s `!changed`
+ *  branch), or freshly serialized when it didn't. Mirrors `serializeArchive`
+ *  (docx-comments.ts). */
+private fun serializeArchiveToFile(archive: LoadedArchive, outFile: File) {
+    ZipOutputStream(java.io.BufferedOutputStream(java.io.FileOutputStream(outFile))).use { zos ->
+        for ((name, bytes) in archive.entries) {
+            zos.writeEntry(name, bytes)
+        }
+        fun writePart(name: String, changed: Boolean, doc: Document, originalXml: String?) {
+            val bytes = if (!changed && originalXml != null) {
+                originalXml.toByteArray(Charsets.UTF_8)
+            } else {
+                serializePart(doc, originalXml).toByteArray(Charsets.UTF_8)
+            }
+            zos.writeEntry(name, bytes)
+        }
+        writePart("word/document.xml", archive.documentChanged, archive.documentDoc, archive.documentXmlOriginal)
+        if (archive.commentsTouched) {
+            writePart("word/comments.xml", archive.commentsChanged, archive.commentsDoc, archive.commentsXmlOriginal)
+        }
+        if (archive.extendedTouched) {
+            writePart("word/commentsExtended.xml", archive.extendedChanged, archive.extendedDoc, archive.extendedXmlOriginal)
+        }
+        writePart("[Content_Types].xml", archive.contentTypesChanged, archive.contentTypesDoc, archive.contentTypesXmlOriginal)
+        if (archive.relsTouched) {
+            writePart("word/_rels/document.xml.rels", archive.relsChanged, archive.relsDoc, archive.relsXmlOriginal)
+        }
+        archive.commentsIdsDoc?.let {
+            writePart("word/commentsIds.xml", archive.commentsIdsChanged, it, archive.commentsIdsXmlOriginal)
+        }
+        archive.commentsExtensibleDoc?.let {
+            writePart("word/commentsExtensible.xml", archive.commentsExtensibleChanged, it, archive.commentsExtensibleXmlOriginal)
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Pure, in-memory mutations against an already-loaded archive.
+// -----------------------------------------------------------------------
+
+private fun mutateAddComment(archive: LoadedArchive, selector: CommentSelector, text: String, author: CommentAuthor): DocxWriteResult<String> {
+    if (selector !is CommentSelector.Text) return DocxWriteResult.Err(DocxWriteError.INVALID_SELECTOR)
+    val walked = walkDocument(archive.documentDoc, collectLeaves = true)
+    val resolved = resolveSelector(walked.fullText, selector.selector) ?: return DocxWriteResult.Err(DocxWriteError.SELECTOR_NOT_FOUND)
+
+    val newId = maxExistingCommentId(archive.commentsDoc) + 1
+    val paraId = generateParaId(collectAllParaIds(archive))
+
+    if (archive.commentsIsNew) ensureCommentsPart(archive)
+    insertCommentRangeMarkers(archive.documentDoc, walked.leaves!!, resolved.start, resolved.end, newId.toString())
+    archive.documentChanged = true
+    appendCommentEntry(archive.commentsDoc, newId, commentAuthorToDisplayName(author), isoNow(), paraId, text)
+    archive.commentsChanged = true
+    recordCommentExtensionParts(archive, paraId)
+
+    return DocxWriteResult.Ok("w-$newId")
+}
+
+private fun mutateReplyToComment(archive: LoadedArchive, id: String, text: String, author: CommentAuthor): DocxWriteResult<Unit> {
+    val rawId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val targetParaId = findCommentParaId(archive.commentsDoc, rawId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+
+    val newId = maxExistingCommentId(archive.commentsDoc) + 1
+    val paraId = generateParaId(collectAllParaIds(archive))
+    appendCommentEntry(archive.commentsDoc, newId, commentAuthorToDisplayName(author), isoNow(), paraId, text)
+    archive.commentsChanged = true
+
+    if (archive.extendedIsNew) ensureExtendedPart(archive)
+    upsertExtendedEntry(archive.extendedDoc, paraId, false, targetParaId)
+    archive.extendedChanged = true
+    recordCommentExtensionParts(archive, paraId) // a reply is its own new comment
+
+    return DocxWriteResult.Ok(Unit)
+}
+
+private fun mutateSetResolved(archive: LoadedArchive, id: String, done: Boolean): DocxWriteResult<Unit> {
+    val rawId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val targetParaId = findCommentParaId(archive.commentsDoc, rawId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+
+    if (archive.extendedIsNew) ensureExtendedPart(archive)
+    upsertExtendedEntry(archive.extendedDoc, targetParaId, done, null)
+    archive.extendedChanged = true
+
+    return DocxWriteResult.Ok(Unit)
+}
+
+private fun mutateMoveComment(archive: LoadedArchive, id: String, newSelector: CommentSelector): DocxWriteResult<Unit> {
+    if (newSelector !is CommentSelector.Text) return DocxWriteResult.Err(DocxWriteError.INVALID_SELECTOR)
+    val rawId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    if (findCommentParaId(archive.commentsDoc, rawId) == null) return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    if (!removeCommentRangeAndReference(archive.documentDoc, rawId)) return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    archive.documentChanged = true
+
+    // Re-resolve against the CURRENT text (the old range is already gone from
+    // this in-memory copy, but nothing has been written to the real target
+    // yet — a SELECTOR_NOT_FOUND return below discards this whole in-memory
+    // archive, leaving the on-disk original untouched).
+    val walked = walkDocument(archive.documentDoc, collectLeaves = true)
+    val resolved = resolveSelector(walked.fullText, newSelector.selector) ?: return DocxWriteResult.Err(DocxWriteError.SELECTOR_NOT_FOUND)
+
+    insertCommentRangeMarkers(archive.documentDoc, walked.leaves!!, resolved.start, resolved.end, rawId)
+
+    return DocxWriteResult.Ok(Unit)
+}
+
+// -----------------------------------------------------------------------
+// F17: a minimal OOXML relationship/content-types sanity check — every r:id
+// referenced anywhere in document.xml resolves in word/_rels/document.xml.rels,
+// and every comments/commentsExtended part actually present has a matching
+// [Content_Types].xml Override. F1 (T11 review): scoped to a before/after
+// DIFF of dangling ids — a reference that was ALREADY dangling before this
+// write touched the file is left unblamed. Mirrors `collectDanglingRIds`/
+// `verifyOoxmlWiring` (docx-comments.ts).
+// -----------------------------------------------------------------------
+
+private val RID_REF_RE = Regex("r:id=\"([^\"]*)\"")
+
+private fun collectDanglingRIds(file: File): Set<String> {
+    val zip = try { ZipFile(file) } catch (_: Exception) { return emptySet() }
+    return try {
+        zip.use { z ->
+            val documentEntry = z.getEntry("word/document.xml") ?: return emptySet()
+            val relsEntry = z.getEntry("word/_rels/document.xml.rels")
+            val documentXml = readEntryBounded(z, documentEntry).toString(Charsets.UTF_8)
+            val relsXml = relsEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
+            val relIds = mutableSetOf<String>()
+            if (relsXml != null) {
+                for (el in elementsByTag(parseXml(relsXml), "Relationship")) {
+                    val id = el.getAttribute("Id")
+                    if (id.isNotEmpty()) relIds.add(id)
+                }
+            }
+            val dangling = mutableSetOf<String>()
+            for (m in RID_REF_RE.findAll(documentXml)) {
+                val id = m.groupValues[1]
+                if (!relIds.contains(id)) dangling.add(id)
+            }
+            dangling
+        }
+    } catch (_: Exception) {
+        emptySet()
+    }
+}
+
+private fun verifyOoxmlWiring(outFile: File, originalDangling: Set<String>): Boolean {
+    val zip = try { ZipFile(outFile) } catch (_: Exception) { return false }
+    return try {
+        zip.use { z ->
+            val documentEntry = z.getEntry("word/document.xml") ?: return false
+            val contentTypesEntry = z.getEntry("[Content_Types].xml") ?: return false
+            val relsEntry = z.getEntry("word/_rels/document.xml.rels")
+            val documentXml = readEntryBounded(z, documentEntry).toString(Charsets.UTF_8)
+            val contentTypesXml = readEntryBounded(z, contentTypesEntry).toString(Charsets.UTF_8)
+            val relsXml = relsEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
+
+            val relIds = mutableSetOf<String>()
+            if (relsXml != null) {
+                for (el in elementsByTag(parseXml(relsXml), "Relationship")) {
+                    val id = el.getAttribute("Id")
+                    if (id.isNotEmpty()) relIds.add(id)
+                }
+            }
+            for (m in RID_REF_RE.findAll(documentXml)) {
+                val id = m.groupValues[1]
+                if (!relIds.contains(id) && !originalDangling.contains(id)) return false
+            }
+
+            val contentTypesDoc = parseXml(contentTypesXml)
+            val overrides = elementsByTag(contentTypesDoc, "Override").map { it.getAttribute("PartName") }.toSet()
+            if (z.getEntry("word/comments.xml") != null && !overrides.contains("/word/comments.xml")) return false
+            if (z.getEntry("word/commentsExtended.xml") != null && !overrides.contains("/word/commentsExtended.xml")) return false
+            true
+        }
+    } catch (_: Exception) {
+        false
+    }
+}
+
+// -----------------------------------------------------------------------
+// The write pipeline: backup, atomic replace, verify-before-replace.
+// See this section's own top-of-file header for why verify runs against a
+// scratch file BEFORE the real target is ever touched, and why only an
+// in-process Mutex (not CasWrite.kt's cross-process mkdir lock) guards it.
+// -----------------------------------------------------------------------
+
+private val docxWriteLocks = ConcurrentHashMap<String, Mutex>()
+private fun docxLockFor(absolutePath: String): Mutex = docxWriteLocks.computeIfAbsent(absolutePath) { Mutex() }
+
+/** Exported so a test can locate a specific write's backup file directly. */
+const val DOCX_BACKUP_SUFFIX = ".docx.bak"
+
+/** One rolling backup per file — never one per write. The filename is a hash
+ *  of the SOURCE file's own absolute path, never a timestamp, so the next
+ *  write to the same file overwrites the previous backup rather than
+ *  accumulating one forever. Same directory NAME desktop's write-pipeline.ts
+ *  uses under `~/.claude` (`youcoded-doc-backups`), rooted at THIS device's
+ *  own `homeDir` — "the app's own storage" the task brief asks this be
+ *  documented as. */
+fun docxBackupPathFor(homeDir: File, absolutePath: String): File {
+    val hash = sha256Hex(absolutePath)
+    val dir = File(File(homeDir, ".claude"), "youcoded-doc-backups")
+    return File(dir, "$hash$DOCX_BACKUP_SUFFIX")
+}
+
+/**
+ * The generic half of the pipeline: lock, scratch-copy, hand `workCopy`/
+ * `outFile` to `mutate` (format-specific logic lives entirely in the
+ * caller's closure — this function never parses OOXML itself), verify,
+ * backup, atomic replace. `mutate`/`verify` operate on FILES (never a
+ * pre-parsed archive) so this shares the exact same bytes-in/file-out shape
+ * as desktop's `writeFileMutation` (write-pipeline.ts) and, not coincidentally,
+ * so a test can inject a fault the same simple way desktop's own T11 pinning
+ * test does (read `workCopy`, write deliberately-corrupted bytes to `outFile`,
+ * return `true` from `mutate`, `false` from `verify`) without needing to
+ * fabricate a `LoadedArchive` by hand. `internal` (not `private`): the T17
+ * pinning test for "failed verification leaves the target byte-identical"
+ * calls this directly, the same way docx-comments.test.ts calls the exported
+ * `writeDocxMutation` on the TS side.
+ */
+internal suspend fun <T> writeDocxMutation(
+    absolutePath: String,
+    homeDir: File,
+    mutate: (workCopy: File, outFile: File) -> DocxWriteResult<T>,
+    verify: (outFile: File, value: T, originalFile: File) -> Boolean,
+): DocxWriteResult<T> {
+    return docxLockFor(absolutePath).withLock {
+        val target = File(absolutePath)
+        if (!target.exists()) return@withLock DocxWriteResult.Err(DocxWriteError.READ_FAILED)
+        val parentDir = target.parentFile ?: return@withLock DocxWriteResult.Err(DocxWriteError.READ_FAILED)
+        // Sibling scratch paths (never the system temp dir) — maximizes the
+        // chance `Files.move` below is a true same-filesystem ATOMIC_MOVE,
+        // mirroring desktop's own `${absolutePath}.${pid}.${now}.tmp` sibling
+        // convention (write-pipeline.ts) and CasWrite.kt's `<target>.tmp`.
+        // A fixed name (no pid/timestamp) is safe here because the
+        // per-absolute-path Mutex above already excludes every other
+        // in-process writer of THIS same file.
+        val workCopy = File(parentDir, "${target.name}.ycdread.tmp")
+        val outFile = File(parentDir, "${target.name}.ycdwrite.tmp")
+        try {
+            try {
+                target.copyTo(workCopy, overwrite = true)
+            } catch (_: Exception) {
+                return@withLock DocxWriteResult.Err(DocxWriteError.READ_FAILED)
+            }
+
+            val mutated = mutate(workCopy, outFile)
+            if (mutated is DocxWriteResult.Err) return@withLock mutated
+            val value = (mutated as DocxWriteResult.Ok).value
+
+            // Verify-by-reread BEFORE the real target is ever touched — see
+            // this section's own header for why a failure here needs no
+            // separate "restore the backup" step: `target` was never written.
+            val verified = try { verify(outFile, value, target) } catch (_: Exception) { false }
+            if (!verified) return@withLock DocxWriteResult.Err(DocxWriteError.VERIFY_FAILED)
+
+            // Step 1 (backup, §3.3): capture the pre-mutation bytes at a
+            // stable, rolling, per-file path OUTSIDE any project, kept as a
+            // standing safety net after success (never deleted).
+            val backupFile = docxBackupPathFor(homeDir, absolutePath)
+            try {
+                backupFile.parentFile?.mkdirs()
+                target.copyTo(backupFile, overwrite = true)
+            } catch (_: Exception) {
+                return@withLock DocxWriteResult.Err(DocxWriteError.BACKUP_FAILED)
+            }
+
+            // Atomic replace: the ALREADY-VERIFIED output takes the target's
+            // place — never a direct overwrite. Mirrors CasWrite.kt's own
+            // ATOMIC_MOVE-with-REPLACE_EXISTING-fallback shape.
+            try {
+                try {
+                    Files.move(
+                        outFile.toPath(),
+                        target.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING,
+                    )
+                } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                    Files.move(outFile.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+            } catch (_: Exception) {
+                return@withLock DocxWriteResult.Err(DocxWriteError.WRITE_FAILED)
+            }
+            DocxWriteResult.Ok(value)
+        } finally {
+            workCopy.delete()
+            outFile.delete() // no-op once already moved onto `target`
+        }
+    }
+}
+
+/** Glues the generic file-in/file-out pipeline above to the archive-based
+ *  mutations below: load `workCopy` into a `LoadedArchive`, apply
+ *  `mutateArchive` in memory, serialize the result to `outFile`. Every real
+ *  operation's own `mutate` closure is just this plus its own archive
+ *  mutation function. */
+private fun <T> loadMutateSerialize(workCopy: File, outFile: File, mutateArchive: (LoadedArchive) -> DocxWriteResult<T>): DocxWriteResult<T> {
+    val loaded = loadArchiveForWrite(workCopy)
+    if (loaded is DocxWriteResult.Err) return loaded
+    val archive = (loaded as DocxWriteResult.Ok).value
+    val mutated = mutateArchive(archive)
+    if (mutated is DocxWriteResult.Err) return mutated
+    val value = (mutated as DocxWriteResult.Ok).value
+    return try {
+        serializeArchiveToFile(archive, outFile)
+        DocxWriteResult.Ok(value)
+    } catch (_: Exception) {
+        DocxWriteResult.Err(DocxWriteError.WRITE_FAILED)
+    }
+}
+
+// -----------------------------------------------------------------------
+// Public orchestration — one per operation, each wiring its own mutate +
+// verify into `writeDocxMutation`. `absolutePath` is the already-
+// containment-verified real file path (DocCommentsDispatch.kt resolves it,
+// the same way it already does for `listNativeComments`); `path` is the
+// caller's project-relative (or fallback-absolute) path, stamped onto
+// `PersistedComment.path` — needed here only to re-run this file's own
+// reader during verification.
+// -----------------------------------------------------------------------
+
+suspend fun addDocxComment(
+    absolutePath: String,
+    path: String,
+    selector: CommentSelector,
+    text: String,
+    author: CommentAuthor,
+    homeDir: File,
+): DocxWriteResult<String> = writeDocxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerialize(workCopy, outFile) { archive -> mutateAddComment(archive, selector, text, author) } },
+    verify = { outFile, newId, originalFile ->
+        verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile)) &&
+            run {
+                val r = readDocxComments(outFile, path)
+                r is DocxReadResult.Ok && r.comments.any { it.id == newId && it.text == text }
+            }
+    },
+)
+
+suspend fun replyToDocxComment(
+    absolutePath: String,
+    path: String,
+    id: String,
+    text: String,
+    author: CommentAuthor,
+    homeDir: File,
+): DocxWriteResult<Unit> = writeDocxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerialize(workCopy, outFile) { archive -> mutateReplyToComment(archive, id, text, author) } },
+    verify = { outFile, _, originalFile ->
+        verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile)) &&
+            run {
+                val r = readDocxComments(outFile, path)
+                (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }?.replies?.any { it.text == text } == true
+            }
+    },
+)
+
+/** `by` is accepted for call-site symmetry with the generic `{path, id, by}`
+ *  payload but deliberately UNUSED — a native Word comment has nowhere to
+ *  record it (§3.2: history starts empty for a freshly-read native comment;
+ *  only the CURRENT `w15:done` bit exists in the file). Mirrors
+ *  `resolveDocxComment` (docx-comments.ts). */
+suspend fun resolveDocxComment(absolutePath: String, path: String, id: String, homeDir: File): DocxWriteResult<Unit> = writeDocxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerialize(workCopy, outFile) { archive -> mutateSetResolved(archive, id, true) } },
+    verify = { outFile, _, originalFile ->
+        verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile)) &&
+            run {
+                val r = readDocxComments(outFile, path)
+                (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }?.resolved == true
+            }
+    },
+)
+
+suspend fun reopenDocxComment(absolutePath: String, path: String, id: String, homeDir: File): DocxWriteResult<Unit> = writeDocxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerialize(workCopy, outFile) { archive -> mutateSetResolved(archive, id, false) } },
+    verify = { outFile, _, originalFile ->
+        verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile)) &&
+            run {
+                val r = readDocxComments(outFile, path)
+                (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }?.resolved == false
+            }
+    },
+)
+
+suspend fun moveDocxComment(
+    absolutePath: String,
+    path: String,
+    id: String,
+    newSelector: CommentSelector,
+    homeDir: File,
+): DocxWriteResult<Unit> {
+    if (newSelector !is CommentSelector.Text) return DocxWriteResult.Err(DocxWriteError.INVALID_SELECTOR)
+    val rawId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    return writeDocxMutation(
+        absolutePath,
+        homeDir,
+        mutate = { workCopy, outFile -> loadMutateSerialize(workCopy, outFile) { archive -> mutateMoveComment(archive, id, newSelector) } },
+        verify = { outFile, _, originalFile ->
+            val wiringOk = verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile))
+            // "The OLD range is gone, a NEW one exists" (review 3, F2) — a
+            // low-level marker COUNT, since PersistedComment (one record per
+            // comments.xml id) can't itself distinguish "exactly one range"
+            // from "two ranges silently collapsed by a map".
+            val marksOk = wiringOk && run {
+                val zip = try { ZipFile(outFile) } catch (_: Exception) { null }
+                if (zip == null) {
+                    false
+                } else {
+                    zip.use { z ->
+                        val documentEntry = z.getEntry("word/document.xml")
+                        if (documentEntry == null) {
+                            false
+                        } else {
+                            val documentXml = readEntryBounded(z, documentEntry).toString(Charsets.UTF_8)
+                            countAttrOccurrences(documentXml, "w:commentRangeStart", "w:id", rawId) == 1 &&
+                                countAttrOccurrences(documentXml, "w:commentRangeEnd", "w:id", rawId) == 1 &&
+                                countAttrOccurrences(documentXml, "w:commentReference", "w:id", rawId) == 1
+                        }
+                    }
+                }
+            }
+            marksOk && run {
+                val r = readDocxComments(outFile, path)
+                val target = (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }
+                val sel = target?.selector
+                sel is CommentSelector.Text && sel.selector.exact == newSelector.selector.exact
+            }
+        },
+    )
 }

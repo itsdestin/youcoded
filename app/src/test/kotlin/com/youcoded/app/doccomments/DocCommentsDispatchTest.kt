@@ -38,8 +38,11 @@ class DocCommentsDispatchTest {
     }
 
     @Test
-    fun `refuseNativeMutation refuses every docx and xlsx target, never a plain-text one`() {
-        assertTrue(refuseNativeMutation("docs/plan.docx"))
+    // T17: docx write is now real (this task) — refuseNativeMutation no
+    // longer refuses a .docx target, only the still-unbuilt .xlsx write
+    // (T19) and never a plain-text one.
+    fun `refuseNativeMutation refuses only xlsx (docx writes for real as of T17), never a plain-text one`() {
+        assertTrue(!refuseNativeMutation("docs/plan.docx"))
         assertTrue(refuseNativeMutation("reports/q3.xlsx"))
         assertTrue(!refuseNativeMutation("docs/plan.md"))
     }

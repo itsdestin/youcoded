@@ -1,0 +1,14 @@
+{
+  "fixture": "launch-brief.docx",
+  "path": "docs/launch-brief.docx",
+  "op": "add",
+  "args": {
+    "exact": "Marketing emails go out the same morning as the public launch.",
+    "text": "Confirm the send time with marketing.",
+    "author": "user"
+  },
+  "result": {
+    "ok": true,
+    "id": "w-3"
+  }
+}

@@ -117,11 +117,37 @@ class DocCommentsBridgeTest {
         assertEquals("selector", response.getString("field"))
     }
 
+    // T17: docx add is now real, dispatched to DocxComments.kt's write
+    // pipeline instead of refusing — a target that doesn't actually exist on
+    // disk gets the write pipeline's own honest `read-failed` refusal (it
+    // never fabricates a fresh .docx from nothing), never the OLD
+    // `not-yet-supported` answer or a silent sidecar-store write (§1.1: Word
+    // comments never get a PersistedComment sidecar row).
     @Test
-    fun `add against a docx target refuses not-yet-supported without ever calling the store`() = runTest {
+    fun `add against a docx target dispatches to the real T17 write pipeline, never the sidecar store`() = runTest {
         val root = tempRoot()
         val payload = JSONObject()
             .put("path", "docs/plan.docx")
+            .put("projectRoot", root.path)
+            .put("text", "x")
+            .put("selector", TEXT_SELECTOR_JSON)
+        val response = handleDocCommentsMessage("docComments:add", payload, root, listOf(root.path))!!
+        assertEquals(false, response.getBoolean("ok"))
+        assertEquals("read-failed", response.getString("error"))
+
+        // Confirms this never silently fell through to the sidecar store: a
+        // sidecar-backed add would have created `.youcoded/comments/docs/
+        // plan.docx.json` — Word/Excel comments never get one (§1.1).
+        assertTrue(!File(root, ".youcoded/comments/docs/plan.docx.json").exists())
+    }
+
+    // .xlsx write is still T19's not-yet-built task — this is the one
+    // remaining case that pins the OLD, still-true `not-yet-supported` shape.
+    @Test
+    fun `add against an xlsx target still refuses not-yet-supported (T19 unbuilt)`() = runTest {
+        val root = tempRoot()
+        val payload = JSONObject()
+            .put("path", "reports/q3.xlsx")
             .put("projectRoot", root.path)
             .put("text", "x")
             .put("selector", TEXT_SELECTOR_JSON)

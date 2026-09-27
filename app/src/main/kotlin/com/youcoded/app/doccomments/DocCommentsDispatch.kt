@@ -30,16 +30,16 @@
 // (everything else: `invalid-docx`/`invalid-xlsx`, the SAME wire code the
 // reader itself would have produced had `ZipFile` failed to open at all).
 //
-// WRITE (add/reply/resolve/reopen/move) is NOT yet real for `.docx`/`.xlsx`
-// on Android: T17 (Word write) and T19 (Excel write) — the Kotlin ports of
-// desktop's `addDocxComment`/`addXlsxComment` etc. — are separate, not-yet-
-// built tasks per the design's own task table (T4's row: "dispatching to
-// DocxComments.kt/XlsxComments.kt for .docx/.xlsx targets — T16/T17/T18/T19
-// below, not this task"). Until T17/T19 land, a native-format mutation
-// refuses with a typed `not-yet-supported` — the SAME shape desktop's own
+// WRITE (add/reply/resolve/reopen/move): T17 (this task) wires the `.docx`
+// half into `DocxComments.kt`'s own write functions below — Word comment
+// mutation on Android is now REAL, dispatched through the exact same
+// containment/allowlist gates `listNativeComments` already uses for reads (a
+// write is at least as sensitive as a read, never a looser gate). `.xlsx` is
+// still T19's not-yet-built task, so `refuseNativeMutation` now refuses ONLY
+// xlsx targets — the SAME typed `not-yet-supported` shape desktop's own
 // `refuseNativeMutation` answered before T11/T13 landed (doc-comments-
-// dispatch.ts). This is an honest interim answer, not a silent no-op: the
-// phone reports "not yet supported" rather than claiming success or hanging.
+// dispatch.ts): an honest interim answer for the one remaining unbuilt format,
+// not a silent no-op.
 package com.youcoded.app.doccomments
 
 import java.io.File
@@ -154,9 +154,116 @@ fun listNativeComments(format: NativeFormat, path: String, projectRoot: String?,
     }
 }
 
-/** add/reply/resolve/reopen/move against a `.docx`/`.xlsx` target: refused
- *  honestly until T17/T19 build the Kotlin write halves — see this file's
- *  own header. Kept as a single named check (mirroring desktop's now-
- *  always-null `refuseNativeMutation`) so a future task has one place to
- *  wire a real write into, rather than a per-channel special case. */
-fun refuseNativeMutation(filePath: String): Boolean = nativeFormatFor(filePath) != null
+/** add/reply/resolve/reopen/move against an `.xlsx` target: refused honestly
+ *  until T19 builds its Kotlin write half — see this file's own header. `.docx`
+ *  no longer refuses (T17, this task). Kept as a single named check (mirroring
+ *  desktop's own `refuseNativeMutation`, now permanently null there since both
+ *  its formats shipped) so T19 has one place to stop wiring a refusal into,
+ *  rather than a per-channel special case. */
+fun refuseNativeMutation(filePath: String): Boolean = nativeFormatFor(filePath) == NativeFormat.XLSX
+
+/** Generic Ok/Err result for a `.docx`/`.xlsx` WRITE dispatch — mirrors
+ *  `NativeListResult` above, kept generic (unlike that one) because `add`
+ *  returns a new comment id while reply/resolve/reopen/move return nothing. */
+sealed class NativeMutateResult<out T> {
+    data class Ok<T>(val value: T) : NativeMutateResult<T>()
+    data class Err(val error: String) : NativeMutateResult<Nothing>()
+}
+
+/**
+ * Resolves a `.docx`/`.xlsx` mutation's target the SAME way `listNativeComments`
+ * resolves its read target: `resolveSourceFilePath`'s containment check when
+ * `projectRoot` is given (already vetted by `refuseUnknownProjectRoot` at the
+ * bridge layer before dispatch is ever reached — see that function's own doc
+ * comment), or `allowUntrackedNativeRead`'s allowlist when it isn't. A write
+ * is at least as sensitive as a read, so it gets the exact same gate, never a
+ * looser one. Mirrors desktop's `resolveDocxTarget`/`resolveXlsxTarget`
+ * (doc-comments-dispatch.ts).
+ */
+private fun resolveNativeWriteTarget(path: String, projectRoot: String?, homeDir: File): NativeMutateResult<String> {
+    val resolved = resolveSourceFilePath(path, projectRoot, homeDir)
+    if (resolved is StoreResult.Err) return NativeMutateResult.Err(resolved.error.wire)
+    val absolutePath = (resolved as StoreResult.Ok).value
+    if (projectRoot.isNullOrEmpty()) {
+        if (!allowUntrackedNativeRead(absolutePath, homeDir, File(homeDir, ".claude"))) {
+            return NativeMutateResult.Err("path-not-tracked")
+        }
+    }
+    return NativeMutateResult.Ok(absolutePath)
+}
+
+/** T17: Android's real `.docx` write dispatch — the Kotlin equivalent of
+ *  desktop's `addNativeDocxComment`/etc. (doc-comments-dispatch.ts), calling
+ *  straight into `DocxComments.kt`'s own write pipeline (§3.2a/§3.3). */
+suspend fun addNativeDocxComment(
+    path: String,
+    projectRoot: String?,
+    selector: CommentSelector,
+    text: String,
+    author: CommentAuthor,
+    homeDir: File,
+): NativeMutateResult<String> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return when (val r = addDocxComment(absolutePath, path, selector, text, author, homeDir)) {
+        is DocxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
+        is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+    }
+}
+
+suspend fun replyToNativeDocxComment(
+    path: String,
+    projectRoot: String?,
+    id: String,
+    text: String,
+    author: CommentAuthor,
+    homeDir: File,
+): NativeMutateResult<Unit> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return when (val r = replyToDocxComment(absolutePath, path, id, text, author, homeDir)) {
+        is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+        is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+    }
+}
+
+/** `by` accepted for call-site symmetry with the generic `{path, id, by}`
+ *  payload but not forwarded — see `resolveDocxComment`'s own doc comment
+ *  (DocxComments.kt) for why a native Word comment has nowhere to record it. */
+suspend fun resolveNativeDocxComment(path: String, projectRoot: String?, id: String, homeDir: File): NativeMutateResult<Unit> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return when (val r = resolveDocxComment(absolutePath, path, id, homeDir)) {
+        is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+        is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+    }
+}
+
+suspend fun reopenNativeDocxComment(path: String, projectRoot: String?, id: String, homeDir: File): NativeMutateResult<Unit> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return when (val r = reopenDocxComment(absolutePath, path, id, homeDir)) {
+        is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+        is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+    }
+}
+
+suspend fun moveNativeDocxComment(
+    path: String,
+    projectRoot: String?,
+    id: String,
+    newSelector: CommentSelector,
+    homeDir: File,
+): NativeMutateResult<Unit> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return when (val r = moveDocxComment(absolutePath, path, id, newSelector, homeDir)) {
+        is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+        is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+    }
+}

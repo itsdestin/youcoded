@@ -1,0 +1,12 @@
+{
+  "fixture": "launch-brief.docx",
+  "path": "docs/launch-brief.docx",
+  "op": "move",
+  "args": {
+    "id": "w-1",
+    "newExact": "Keep support tickets about the update below 200 per week."
+  },
+  "result": {
+    "ok": true
+  }
+}
