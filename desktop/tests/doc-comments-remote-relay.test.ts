@@ -100,6 +100,22 @@ describe('docComments over remote access', () => {
     expect(sent[1].payload.comments).toHaveLength(1);
   });
 
+  // F4 (T5 implementation review): the renderer mints the comment id and
+  // sends it — the WS surface forwards it through, same as desktop IPC.
+  it('forwards a caller-supplied id straight through over the WS surface (F4, T5 review)', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
+    const sent: any[] = [];
+    const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    const client = { id: 'phone-a', ws };
+    const callerId = 'c-cafecafe-cafe-4caf-8caf-cafecafecafe';
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:add', id: 'req-1',
+      payload: { path: 'docs/plan.md', projectRoot: root, selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1' } }, text: 'hi', author: 'user', id: callerId },
+    }));
+    expect(sent[0].payload).toEqual({ ok: true, id: callerId });
+  });
+
   // T13: a .xlsx target's mutations are real over the remote WS surface too
   // (T3 built BOTH desktop IPC and this WS surface off the same dispatch
   // module — they must never disagree about which formats are real). q3.xlsx
@@ -178,7 +194,9 @@ describe('docComments over remote access', () => {
     // this test drives only the remote-server half of that already-wired
     // pipe, since it does not stand up the full ipc-handlers.ts dependency
     // graph (doc-comments-ipc-handlers.test.ts pins the webContents half).
-    initDocCommentsWatcher((sourcePath) => server.broadcast({ type: 'docComments:changed', payload: { path: sourcePath } }));
+    // `projectRoot` forwarded too (F3, T5 review) — mirrors ipc-handlers.ts's
+    // real production wiring, which this hand-rolled stand-in otherwise drifts from.
+    initDocCommentsWatcher((sourcePath, projectRoot) => server.broadcast({ type: 'docComments:changed', payload: { path: sourcePath, projectRoot } }));
     const sent: any[] = [];
     const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
     const client = { id: 'phone-a', ws };
@@ -209,7 +227,7 @@ describe('docComments over remote access', () => {
     }
     expect(pushed).toBe(true);
     const evt = sent.find((s) => s.type === 'docComments:changed');
-    expect(evt.payload).toEqual({ path: 'docs/live.md' });
+    expect(evt.payload).toEqual({ path: 'docs/live.md', projectRoot: root });
   });
 
   describe('projectRoot gate over the WS surface (post-T3 build review, F1 — blocker)', () => {

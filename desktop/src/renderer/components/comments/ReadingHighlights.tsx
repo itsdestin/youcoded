@@ -26,8 +26,6 @@ import { buildContextMenu, type MenuEntry } from '../context-menu/build-menu';
 import { useQuoteMarks, ACTIVE_CLASSES, segmentsRect, cellSelector } from './use-quote-marks';
 import { useDocComments } from '../../state/doc-comments-store';
 import { isSummaryChipRef, type ComposeRef } from '../context-menu/compose-ref';
-import { Button } from '../ui/Button';
-import { Toast } from '../ui/Toast';
 
 // Hover-card open delay + a short close delay: a highlight answering on the
 // first pixel of hover would fire constantly while reading/scanning text;
@@ -78,7 +76,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
   // buildContextMenu's "Add comment" entry (selection-release menu OR the
   // real right-click menu), which writes straight to the store itself — see
   // build-menu.ts's own WHY. This component only reads/positions the result.
-  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment, clearFocus, lastError, dismissError } = useDocComments(path, projectRoot);
+  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment, clearFocus } = useDocComments(path, projectRoot);
   const visible = useMemo(() => comments.filter((c) => showResolved || !c.resolved), [comments, showResolved]);
   const marks = useQuoteMarks(containerRef, visible);
 
@@ -352,19 +350,11 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
           onCancel={() => removeComment(draftComment.id)}
         />
       )}
-      {/* T5 (doc-comments build, design §7): Reading mode has no comment pane
-          to host this in (that's CommentsPaneFrame's job in Comments mode) —
-          a failed reply/resolve/reopen here still needs the real, typed
-          reason surfaced, per error-message-standards.md. */}
-      {lastError && (
-        <Toast
-          variant="global"
-          tone="error"
-          message={lastError.message}
-          onDismiss={dismissError}
-          action={<Button variant="secondary" size="sm" onClick={lastError.onRetry}>Retry</Button>}
-        />
-      )}
+      {/* F7 fix (T5 review): a failed reply/resolve/reopen now shows inline on
+          the card that's actually on screen — NewCommentPopover's own error
+          slot for a failed add (above), HighlightHoverCard's for a failed
+          reply/resolve/reopen from the hover preview — rather than a global
+          toast nothing here points back to. */}
     </>
   );
 }

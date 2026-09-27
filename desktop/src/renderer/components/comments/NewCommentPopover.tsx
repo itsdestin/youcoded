@@ -23,6 +23,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Textarea } from '../ui/Textarea';
 import { Button } from '../ui/Button';
+import { ErrorState } from '../ui/states';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { placeBubble } from '../ui/anchor-position';
 import type { DocComment } from '../../state/doc-comments-store';
@@ -134,6 +135,14 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
           }
         }}
       />
+      {/* F7 fix (T5 review): a failed `docComments:add` now keeps the draft
+          open (doc-comments-store.ts's `persistNewComment`) with the real,
+          typed cause here — error-message-standards.md's "specific and
+          accurate" branch, Retry replaying the exact same call — instead of
+          silently discarding the note or routing it to a global toast. */}
+      {comment.error && (
+        <ErrorState className="mt-1.5" message={comment.error.message} onRetry={comment.error.onRetry} />
+      )}
       <div className="mt-1.5 flex items-center justify-end gap-1.5">
         {/* onMouseDown preventDefault: keeps focus (and the click-away
             listener's target check) on the textarea/panel rather than

@@ -51,6 +51,10 @@ enum class DocCommentsError(val wire: String) {
     // string exactly, reached when the MCP script (or a stuck prior holder)
     // keeps the lock past mutateFileUnderLock's 3s wait.
     LOCK_TIMEOUT("lock-timeout"),
+    // F4 (T5 review): mirrors desktop's own 'invalid-id'/'duplicate-id' — the
+    // renderer now mints and sends the comment id (see `addComment` below).
+    INVALID_ID("invalid-id"),
+    DUPLICATE_ID("duplicate-id"),
 }
 
 sealed class StoreResult<out T> {
@@ -231,6 +235,10 @@ private fun lockFor(sidecarPath: String): Mutex = locks.computeIfAbsent(sidecarP
 private sealed class Apply<out T> {
     data class Applied<T>(val file: CommentsSidecarFile, val extra: T) : Apply<T>()
     object NotFound : Apply<Nothing>()
+    // F4 (T5 review): a distinct outright refusal from inside the lock (e.g.
+    // `addComment`'s own duplicate-id check below) — mirrors desktop's own
+    // `mutateSidecar` accepting a `Refusal` alongside `'not-found'`.
+    data class Refused(val error: DocCommentsError) : Apply<Nothing>()
 }
 
 /**
@@ -270,6 +278,10 @@ private suspend fun <T> mutateSidecar(sidecarPath: String, apply: (CommentsSidec
                         outcome = StoreResult.Err(DocCommentsError.COMMENT_NOT_FOUND)
                         null
                     }
+                    is Apply.Refused -> {
+                        outcome = StoreResult.Err(applied.error)
+                        null
+                    }
                     is Apply.Applied -> {
                         outcome = StoreResult.Ok(applied.extra)
                         applied.file.toJson().toString()
@@ -299,7 +311,19 @@ private fun findComment(file: CommentsSidecarFile, id: String): PersistedComment
 private fun replaceComment(file: CommentsSidecarFile, id: String, next: PersistedComment): CommentsSidecarFile =
     CommentsSidecarFile(file.version, file.comments.map { if (it.id == id) next else it }, file.raw)
 
-/** Account-ready id (§1.2): a UUID, never a counter. */
+// F4 (T5 review): a caller-supplied id must look like this store's own
+// `c-${UUID}` shape — mirrors desktop's own COMMENT_ID_RE.
+private val COMMENT_ID_RE = Regex(
+    "^c-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\$",
+    RegexOption.IGNORE_CASE,
+)
+
+/** Account-ready id (§1.2): a UUID, never a counter. F4 (T5 review): `id` is
+ *  the RENDERER-minted id (the shared React UI's own `addComment`) — used
+ *  instead of minting a fresh one here so the renderer's optimistic local id
+ *  and the persisted id are the same string from the start. Optional-then-
+ *  required (this pass keeps it optional): a caller that hasn't been updated
+ *  yet still gets a server-minted id exactly as before. */
 suspend fun addComment(
     path: String,
     projectRoot: String?,
@@ -307,18 +331,29 @@ suspend fun addComment(
     text: String,
     author: CommentAuthor,
     homeDir: File,
+    id: String? = null,
 ): StoreResult<String> {
     val resolved = resolveSidecarPath(path, projectRoot, homeDir)
     if (resolved is StoreResult.Err) return resolved
     val sidecarPath = (resolved as StoreResult.Ok).value
-    val id = "c-" + java.util.UUID.randomUUID().toString()
+    if (id != null && !COMMENT_ID_RE.matches(id)) {
+        return StoreResult.Err(DocCommentsError.INVALID_ID)
+    }
+    val realId = id ?: ("c-" + java.util.UUID.randomUUID().toString())
     val comment = PersistedComment(
-        id = id, path = path, selector = selector, text = text, author = author,
+        id = realId, path = path, selector = selector, text = text, author = author,
         createdAt = System.currentTimeMillis(), replies = emptyList(), resolved = false, history = emptyList(),
     )
     return mutateSidecar(sidecarPath) { file ->
-        // F2: preserve file.raw here too (a brand-new sidecar has none).
-        Apply.Applied(CommentsSidecarFile(file.version, file.comments + comment, file.raw), id)
+        // F4: refuse a caller-supplied id colliding with one already in this
+        // sidecar, checked against the CURRENT on-disk state inside the lock —
+        // mirrors desktop's own addComment.
+        if (id != null && findComment(file, id) != null) {
+            Apply.Refused(DocCommentsError.DUPLICATE_ID)
+        } else {
+            // F2: preserve file.raw here too (a brand-new sidecar has none).
+            Apply.Applied(CommentsSidecarFile(file.version, file.comments + comment, file.raw), realId)
+        }
     }
 }
 

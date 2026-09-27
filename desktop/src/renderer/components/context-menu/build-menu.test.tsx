@@ -13,11 +13,14 @@ import type { ComposeRef } from './compose-ref';
 // CODE files no longer use this shape — CodeMirror replaced CodeView, and its
 // contract is pinned by build-menu-cm6.test.tsx, which mounts the REAL
 // component (a synthetic shape here would stay green while production broke).
-function mountViewer(opts: { path: string; source: 'raw' | 'rendered'; body: string }) {
+function mountViewer(opts: { path: string; source: 'raw' | 'rendered'; body: string; projectRoot?: string }) {
   const container = document.createElement('div');
   container.setAttribute('data-artifact-viewer', 'true');
   container.setAttribute('data-doc-path', opts.path);
   container.setAttribute('data-artifact-source', opts.source);
+  // F3 (T5 implementation review): CommentableDocument stamps this too — see
+  // that component's own WHY for why "Add comment" needs it.
+  container.setAttribute('data-project-root', opts.projectRoot ?? '');
   const pre = document.createElement('pre');
   pre.textContent = opts.body;
   container.appendChild(pre);
@@ -170,6 +173,71 @@ describe('artifact viewer context menu', () => {
     const after = commentsForPath('docs/notes.txt');
     expect(after.length).toBe(before + 1);
     expect(after[after.length - 1]).toMatchObject({ quote: 'bravo', sourceLabel: 'line 2 · notes.txt', resolved: false });
+  });
+
+  // F1 (T5 implementation review, blocker): before this fix every "Add
+  // comment" stored prefix: '' / suffix: '' / occurrence: 0 regardless of
+  // which copy of a repeated phrase was selected — a choice `resolveSelector`
+  // can never retroactively recover. This selects the THIRD "marker" (each
+  // copy has distinct surrounding context) and proves the stored selector
+  // both records the right occurrence index AND, fed back into
+  // `resolveSelector`, actually resolves to that third copy's real position.
+  it('a comment on the 3rd copy of a repeated phrase stores distinguishing prefix/suffix and resolveSelector finds the 3rd copy (F1)', async () => {
+    const body = 'alpha marker one\nbeta marker two\ngamma marker three';
+    const needle = 'marker';
+    const first = body.indexOf(needle);
+    const second = body.indexOf(needle, first + 1);
+    const third = body.indexOf(needle, second + 1);
+    expect(third).toBeGreaterThan(second);
+
+    const { container, pre } = mountViewer({ path: 'docs/repeated.txt', source: 'raw', body });
+    selectWithin(pre, third, third + needle.length);
+    const entries = buildContextMenu(container);
+    const comment = entries?.find((e) => e.type === 'item' && e.id === 'comment');
+    expect(comment, 'Add comment must exist for a selection').toBeTruthy();
+    const { commentsForPath } = await import('../../state/doc-comments-store');
+    if (comment?.type === 'item') comment.run();
+    const after = commentsForPath('docs/repeated.txt');
+    const added = after[after.length - 1] as any;
+    expect(added.quote).toBe(needle);
+    expect(added.selectorOccurrence).toBe(2); // 0-indexed: the THIRD copy
+    expect(added.selectorPrefix).toContain('gamma');
+    expect(added.selectorSuffix).toContain('three');
+
+    const { resolveSelector } = await import('../../../shared/doc-comments-anchor');
+    const resolved = resolveSelector(body, {
+      type: 'TextQuoteSelector',
+      exact: added.quote,
+      prefix: added.selectorPrefix ?? '',
+      suffix: added.selectorSuffix ?? '',
+      occurrence: added.selectorOccurrence ?? 0,
+    });
+    expect(resolved).toEqual({ start: third, end: third + needle.length });
+  });
+
+  // F3 (T5 implementation review): before this fix "Add comment" had no way
+  // to know WHICH project a right-clicked file belonged to, so two projects
+  // sharing a relative path (both a README.md) always merged into the
+  // per-machine loose-file store. `data-project-root` (read off the SAME
+  // container `data-doc-path` already comes from) fixes that.
+  it('"Add comment" sends the container\'s own data-project-root, keeping two projects\' same-named files separate', async () => {
+    const a = mountViewer({ path: 'README.md', source: 'raw', body: FILE, projectRoot: '/proj-a' });
+    selectWithin(a.pre, 6, 11); // "bravo"
+    const entriesA = buildContextMenu(a.container);
+    const commentA = entriesA?.find((e) => e.type === 'item' && e.id === 'comment');
+    if (commentA?.type === 'item') commentA.run();
+
+    const b = mountViewer({ path: 'README.md', source: 'raw', body: FILE, projectRoot: '/proj-b' });
+    selectWithin(b.pre, 12, 19); // "charlie"
+    const entriesB = buildContextMenu(b.container);
+    const commentB = entriesB?.find((e) => e.type === 'item' && e.id === 'comment');
+    if (commentB?.type === 'item') commentB.run();
+
+    const { commentsForPath } = await import('../../state/doc-comments-store');
+    const inA = commentsForPath('README.md', '/proj-a');
+    const inB = commentsForPath('README.md', '/proj-b');
+    expect(inA.map((c) => c.quote)).toEqual(['bravo']);
+    expect(inB.map((c) => c.quote)).toEqual(['charlie']);
   });
 
   it('offers no "Ask about this" without a selection — the whole file is never implied', () => {

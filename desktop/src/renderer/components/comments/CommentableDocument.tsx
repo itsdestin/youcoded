@@ -45,7 +45,9 @@ export function CommentableDocument({
   const contentRef = useRef<HTMLDivElement>(null);
   const [rootRef, narrow] = useContainerNarrow<HTMLDivElement>(MARGIN_COLLAPSE_PX);
   // Hover/click an "Ask about this" chip → light up its source text here.
-  useRefSourceHighlight(contentRef, path);
+  // F3 (T5 review): projectRoot threaded through so a repeated relative path
+  // across two open projects highlights only ITS OWN comments.
+  useRefSourceHighlight(contentRef, path, projectRoot);
   // Round 13: the wide comment list is its own scroller BESIDE the document
   // (cards stack from the top, no longer pinned to their highlights). Only
   // the narrow marker rail still lives inside the document's scroller, since
@@ -58,6 +60,15 @@ export function CommentableDocument({
       data-artifact-viewer
       data-doc-path={path}
       data-artifact-source={source}
+      // F3 fix (T5 review): build-menu.ts's "Add comment" has no React props
+      // of its own — it reads this container's own attributes at click time,
+      // the same way it already reads `data-doc-path`. Without this, a
+      // comment added via the right-click menu had no way to know WHICH
+      // project's copy of `path` it belonged to and always landed in the
+      // per-machine loose-file partition, even when this file is really
+      // inside a known project (two projects sharing a relative path, e.g.
+      // both having a `README.md`, would then merge their comments).
+      data-project-root={projectRoot ?? ''}
     >
       {children}
     </div>

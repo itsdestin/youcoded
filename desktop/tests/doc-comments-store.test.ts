@@ -397,3 +397,50 @@ describe('lock-path canonicalization uses the project root only, never the possi
     }
   });
 });
+
+// F4 (T5 implementation review): the RENDERER mints the comment id now
+// (`c-${randomUUID()}`) and passes it here — main uses it instead of minting
+// its own, closing the local-id/server-id swap window the old design had.
+describe('addComment — caller-supplied id (F4, T5 review)', () => {
+  const CALLER_ID = 'c-11111111-2222-4333-8444-555555555555';
+
+  it('uses the caller-supplied id instead of minting its own', async () => {
+    const added = await addComment({
+      path: 'docs/id.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'x', author: 'user', id: CALLER_ID,
+    });
+    expect(added).toEqual({ ok: true, id: CALLER_ID });
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'id.md.json');
+    const onDisk = await readSidecar(sidecarPath);
+    expect(onDisk.comments[0].id).toBe(CALLER_ID);
+  });
+
+  it('still mints its own id when none is supplied (an unupdated caller)', async () => {
+    const added = await addComment({ path: 'docs/id2.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'x', author: 'user' });
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    expect(added.id).toMatch(/^c-[0-9a-f-]{36}$/i);
+  });
+
+  it('refuses a caller-supplied id that is not shaped like this store\'s own ids', async () => {
+    const result = await addComment({
+      path: 'docs/id3.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'x', author: 'user', id: 'not-a-real-id',
+    });
+    expect(result).toEqual({ ok: false, error: 'invalid-id' });
+  });
+
+  it('refuses a caller-supplied id that collides with one already in this file\'s sidecar', async () => {
+    const first = await addComment({
+      path: 'docs/id4.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'first', author: 'user', id: CALLER_ID,
+    });
+    expect(first.ok).toBe(true);
+    const second = await addComment({
+      path: 'docs/id4.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'second', author: 'user', id: CALLER_ID,
+    });
+    expect(second).toEqual({ ok: false, error: 'duplicate-id' });
+    // The FIRST comment is untouched — a refused duplicate never overwrites.
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'id4.md.json');
+    const onDisk = await readSidecar(sidecarPath);
+    expect(onDisk.comments).toHaveLength(1);
+    expect(onDisk.comments[0].text).toBe('first');
+  });
+});

@@ -2287,6 +2287,8 @@ export class RemoteServer {
           selector: payload?.selector,
           text: String(payload?.text ?? ''),
           author: payload?.author,
+          // F4 fix (T5 review): the renderer mints and sends this now.
+          id: typeof payload?.id === 'string' && payload.id.length > 0 ? payload.id : undefined,
         }));
         break;
       }

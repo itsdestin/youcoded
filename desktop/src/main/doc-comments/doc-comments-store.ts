@@ -37,12 +37,18 @@ const FALLBACK_DIR = ['.youcoded', 'loose-file-comments'];
 // 'sidecar-corrupt' and 'path-not-absolute' added post-review (F3, F4 — see
 // their fix sites below) — both are refusals a caller can surface honestly,
 // same as the three that shipped with T1.
+// 'invalid-id'/'duplicate-id' added post-review (F4, T5 review — see
+// `addComment`'s own WHY below): the renderer now mints and passes the
+// comment id up front; both are honest refusals for a caller-supplied id
+// this store cannot accept, never a silent overwrite or a thrown exception.
 type DocCommentsError =
   | 'path-outside-project'
   | 'lock-timeout'
   | 'comment-not-found'
   | 'sidecar-corrupt'
-  | 'path-not-absolute';
+  | 'path-not-absolute'
+  | 'invalid-id'
+  | 'duplicate-id';
 
 /** A refusal shared by every entry point below — a typed error the caller
  *  surfaces honestly (§1.5), never a silent clamp or a thrown exception. */
@@ -321,7 +327,7 @@ export async function listComments(args: {
 // harmless (gitignored under `.youcoded/`, no data in it) — noted, not fixed.
 async function mutateSidecar<Extra extends Record<string, unknown>>(
   sidecarPath: string,
-  apply: (file: CommentsSidecarFile) => { file: CommentsSidecarFile; extra: Extra } | 'not-found'
+  apply: (file: CommentsSidecarFile) => { file: CommentsSidecarFile; extra: Extra } | 'not-found' | Refusal
 ): Promise<({ ok: true } & Extra) | Refusal> {
   // A plain object wrapper, not a reassigned `let` — the mutate callback
   // below runs inside `mutateFileUnderLock`, a separate function, so a
@@ -341,6 +347,17 @@ async function mutateSidecar<Extra extends Record<string, unknown>>(
     const applied = apply(parsed.file);
     if (applied === 'not-found') {
       box.outcome = { ok: false, error: 'comment-not-found' };
+      return null;
+    }
+    // F4 (T5 review): `apply` can also refuse OUTRIGHT (e.g. `addComment`'s
+    // own duplicate-id check below) — a distinct refusal from 'not-found',
+    // checked inside the SAME lock acquisition as the read, so the check sees
+    // truly current on-disk state rather than a racing read from outside it.
+    // Narrowed on the SUCCESS shape's own `file` key (never present on a
+    // `Refusal`) rather than `'ok' in applied` — a generic `Extra` makes the
+    // negative check too weak for the compiler to exclude the success arm.
+    if (!('file' in applied)) {
+      box.outcome = applied;
       return null;
     }
     box.outcome = { ok: true, ...applied.extra };
@@ -365,19 +382,37 @@ function replaceComment(file: CommentsSidecarFile, id: string, next: PersistedCo
   return { ...file, comments: file.comments.map((c) => (c.id === id ? next : c)) };
 }
 
+/** F4 (T5 review): a caller-supplied id must look like this store's own
+ *  `c-${randomUUID()}` shape — loose enough to accept any UUID variant/case,
+ *  strict enough to refuse garbage (a truncated string, a docx/xlsx-shaped
+ *  `w-`/`x-` id sent to the wrong channel) rather than silently storing it. */
+const COMMENT_ID_RE = /^c-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function addComment(args: {
   path: string;
   projectRoot?: string;
   selector: CommentSelector;
   text: string;
   author: CommentAuthor;
+  /** F4 fix (T5 review, design §7 review 2 F9): the RENDERER mints this now
+   *  (`c-${randomUUID()}`) and passes it here, so its optimistic local id and
+   *  the persisted id are the same string from the start — no more swapping
+   *  the local id for a server-minted one once the round trip lands.
+   *  Optional-then-required (this pass keeps it optional): a caller that
+   *  hasn't been updated yet still gets a server-minted id exactly as
+   *  before, so this can land ahead of every call site adopting it. */
+  id?: string;
 }): Promise<{ ok: true; id: string } | Refusal> {
   const resolved = await resolveSidecarPath(args);
   if (!resolved.ok) return resolved;
+  if (args.id !== undefined && !COMMENT_ID_RE.test(args.id)) {
+    return { ok: false, error: 'invalid-id' };
+  }
   // Account-ready id (§1.2): a UUID, never a counter — a `let idCounter`
   // (the renderer mock's `nextId()`) resets every reload and would collide
-  // across sidecars/processes.
-  const id = `c-${randomUUID()}`;
+  // across sidecars/processes. Minted here only when the caller didn't
+  // already mint one (F4's fallback for an unupdated caller, above).
+  const id = args.id ?? `c-${randomUUID()}`;
   const comment: PersistedComment = {
     id,
     path: args.path,
@@ -389,10 +424,20 @@ export async function addComment(args: {
     resolved: false,
     history: [],
   };
-  return mutateSidecar(resolved.sidecarPath, (file) => ({
-    file: { ...file, comments: [...file.comments, comment] },
-    extra: { id },
-  }));
+  // Explicit type argument (F4): the callback below also returns a `Refusal`
+  // branch, which throws off `Extra` inference (it comes back as a bare
+  // `Record<string, unknown>` instead of `{id: string}` without this).
+  return mutateSidecar<{ id: string }>(resolved.sidecarPath, (file) => {
+    // F4: refuse a caller-supplied id that collides with one already in this
+    // sidecar, checked INSIDE the lock against the current on-disk state
+    // (never a separate read-then-write outside it) — a real UUID collision
+    // is vanishingly unlikely, but a hand-rolled or replayed id is refused
+    // honestly rather than silently overwriting the existing comment.
+    if (args.id !== undefined && findComment(file, args.id)) {
+      return { ok: false, error: 'duplicate-id' };
+    }
+    return { file: { ...file, comments: [...file.comments, comment] }, extra: { id } };
+  });
 }
 
 export async function replyToComment(args: {
@@ -493,7 +538,13 @@ export async function moveComment(args: {
  *  same value `PersistedComment.path` already holds for a fallback-stored
  *  comment (§1.4). */
 export type CommentsWatchTarget =
-  | { kind: 'project'; commentsDir: string }
+  // F3 fix (T5 review): `projectRoot` (the REALPATHED root — same value the
+  // renderer's own `keyFor` needs) rides along so `doc-comments-watcher.ts`
+  // can put it on the `docComments:changed` push. Without it, two projects
+  // sharing a relative path (both have a `README.md`) both matched the same
+  // renderer-side key, so a change in ONE project could re-list the wrong
+  // project's open viewer.
+  | { kind: 'project'; commentsDir: string; projectRoot: string }
   | { kind: 'fallback'; sidecarPath: string; sourcePath: string };
 
 export async function resolveWatchTarget(args: {
@@ -505,7 +556,7 @@ export async function resolveWatchTarget(args: {
     if ('error' in located) return located;
     return {
       ok: true,
-      target: { kind: 'project', commentsDir: path.join(located.realProjectRoot, ...SIDECAR_DIR) },
+      target: { kind: 'project', commentsDir: path.join(located.realProjectRoot, ...SIDECAR_DIR), projectRoot: located.realProjectRoot },
     };
   }
   const fb = await locateFallback(args.path);

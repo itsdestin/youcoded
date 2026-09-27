@@ -9,6 +9,11 @@ import { addComment as addDocComment } from '../../state/doc-comments-store';
 // Round 2: "Ask about this" builds a ComposeRef pill (ported from
 // session/comments-mock-c) instead of a {quote, sourceLabel} chip.
 import { genRefId, truncateQuote, type ComposeRef } from './compose-ref';
+// F1 (T5 review): the same whitespace-tolerant occurrence-counting
+// `resolveSelector` will later use to re-find a comment's quote — so a
+// comment minted here disambiguates a repeated phrase the SAME way a re-anchor
+// pass will look for it, rather than a locally-reinvented count.
+import { quoteContextAt } from '../../../shared/doc-comments-anchor';
 
 // Builds the chat right-click menu for a given DOM target. Pure inspection of
 // the DOM + current selection → a list of entries; the host owns positioning,
@@ -344,8 +349,10 @@ function describeArtifactSelection(sel: string, container: HTMLElement): string 
 
 /** Spreadsheet cell under a right-click with no text selected: "Ask about
  *  this" / "Add comment" name the CELL (Excel's comment model — Destin's Excel
- *  follow-up, 2026-09-24), with its shown value as the quote. */
-function cellEntries(td: HTMLElement, path: string): MenuEntry[] {
+ *  follow-up, 2026-09-24), with its shown value as the quote. `projectRoot`:
+ *  see `artifactMenu`'s own WHY (F3, T5 review) — a `CellSelector` has no
+ *  prefix/suffix, but it still needs to land in the RIGHT project's partition. */
+function cellEntries(td: HTMLElement, path: string, projectRoot: string | undefined): MenuEntry[] {
   const cell = td.getAttribute('data-cell') || '';
   const value = (td.textContent ?? '').trim();
   // The tab name only when the workbook has more than one (XlsxView stamps
@@ -360,9 +367,71 @@ function cellEntries(td: HTMLElement, path: string): MenuEntry[] {
     },
     {
       type: 'item', id: 'comment', label: 'Add comment', icon: 'comment',
-      run: () => { addDocComment(path, value, label, { cell, sheet }); },
+      run: () => { addDocComment(path, value, label, { cell, sheet, projectRoot }); },
     },
   ];
+}
+
+/** Full document text + the [start,end) offsets of the CURRENT selection, in
+ *  whatever coordinate space matches `container`'s own `data-artifact-source`
+ *  — the shape `doc-comments-anchor.ts`'s `quoteContextAt` needs to compute a
+ *  real `prefix`/`suffix`/`occurrence` (F1, T5 review) instead of the
+ *  hardcoded `''`/`''`/`0` every comment used to store. Returns `null` when
+ *  no reliable offsets are available (nothing selected, or a Range this
+ *  function can't map) — callers fall back to no context, exactly the old
+ *  honest-degrade behavior. */
+/** Walks `root`'s text nodes to map a DOM Range's boundaries onto offsets
+ *  into `root.textContent` — the same "flatten every text node in document
+ *  order" model both `raw` (a `<pre>`, possibly several highlight.js spans)
+ *  and `rendered` (arbitrary prose markup) content share. `null` when either
+ *  boundary can't be found (a Range whose container isn't a descendant text
+ *  node, e.g. an empty/element-only selection). */
+function rangeTextOffsets(root: Node, range: Range): { start: number; end: number } | null {
+  let start = -1;
+  let end = -1;
+  let pos = 0;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (start === -1 && node === range.startContainer) start = pos + range.startOffset;
+    if (node === range.endContainer) end = pos + range.endOffset;
+    pos += node.textContent?.length ?? 0;
+  }
+  return start === -1 || end === -1 ? null : { start, end };
+}
+
+function selectionOffsets(container: HTMLElement): { fullText: string; start: number; end: number } | null {
+  const source = container.getAttribute('data-artifact-source');
+  if (source === 'cm6') {
+    // CM6 virtualizes its DOM (see describeArtifactSelection's own WHY) — the
+    // live EditorView's document/selection are the only reliable source.
+    const view = editorViewFor(container);
+    const range = view?.state.selection.main;
+    if (!view || !range || range.empty) return null;
+    return { fullText: view.state.doc.toString(), start: range.from, end: range.to };
+  }
+  // `raw` (a verbatim `<pre>`) and rendered markdown/docx prose both map the
+  // LIVE selection Range onto their own root's flattened text the same way —
+  // never a first-occurrence `indexOf(sel)` (describeArtifactSelection's own
+  // documented "an acceptable miss" for a LABEL only; silently wrong here,
+  // since it would report a repeated phrase's FIRST copy's context for
+  // whichever copy was actually selected, defeating F1's whole point).
+  const root = source === 'raw' ? container.querySelector('pre') : container;
+  if (!root) return null;
+  const selection = window.getSelection();
+  const range = selection && selection.rangeCount ? selection.getRangeAt(0) : null;
+  if (!range) return null;
+  const offsets = rangeTextOffsets(root, range);
+  if (!offsets) return null;
+  return { fullText: root.textContent ?? '', start: offsets.start, end: offsets.end };
+}
+
+/** `undefined` (no context — the old honest degrade) whenever offsets aren't
+ *  available; otherwise the real prefix/suffix/occurrence for this exact
+ *  quote at this exact position. */
+function quoteContextFor(container: HTMLElement, sel: string): { prefix: string; suffix: string; occurrence: number } | undefined {
+  if (!sel) return undefined;
+  const offsets = selectionOffsets(container);
+  return offsets ? quoteContextAt(offsets.fullText, offsets.start, offsets.end) : undefined;
 }
 
 function artifactMenu(container: HTMLElement, target?: HTMLElement): MenuEntry[] {
@@ -370,14 +439,22 @@ function artifactMenu(container: HTMLElement, target?: HTMLElement): MenuEntry[]
   // image sub-menu roadmap item for an ABSOLUTE path on <img> elements. This one
   // is the project-relative artifact path, which is what reads well in a prompt.
   const path = container.getAttribute('data-doc-path') || '';
+  // F3 (T5 review): CommentableDocument stamps this on the SAME container as
+  // data-doc-path — reading it here is what lets a comment minted from this
+  // menu land in the RIGHT project's partition (doc-comments-store.ts's
+  // `keyFor`) instead of always falling back to the per-machine loose-file
+  // store, which is what happened when two different projects' viewers had
+  // no way to tell their comments apart.
+  const projectRoot = container.getAttribute('data-project-root') || undefined;
   const sel = selectionText().trim();
   const entries: MenuEntry[] = [];
   const cell = !sel && path ? target?.closest<HTMLElement>('[data-cell]') : null;
-  if (cell && container.contains(cell)) entries.push(...cellEntries(cell, path));
+  if (cell && container.contains(cell)) entries.push(...cellEntries(cell, path, projectRoot));
   if (sel && path) {
     const ref = describeArtifactSelection(sel, container);
     const sourceLabel = sourceLabelFor(ref, path);
     const lineOpts = parseLineRef(ref) ?? undefined;
+    const quoteCtx = quoteContextFor(container, sel);
     entries.push({
       type: 'item',
       id: 'ask',
@@ -396,7 +473,7 @@ function artifactMenu(container: HTMLElement, target?: HTMLElement): MenuEntry[]
       id: 'comment',
       label: 'Add comment',
       icon: 'comment',
-      run: () => { addDocComment(path, sel, sourceLabel, lineOpts); },
+      run: () => { addDocComment(path, sel, sourceLabel, { ...lineOpts, ...quoteCtx, projectRoot }); },
     });
   }
   entries.push(...textBasics(container));

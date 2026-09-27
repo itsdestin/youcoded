@@ -30,12 +30,12 @@ const PENDING_TRIES = 30;
 // Exported for a direct test of the summary-chip hover fix (F3, T7 review) —
 // avoids needing a `CSS.highlights`/`Highlight` polyfill just to observe which
 // ranges this function computes.
-export function rangeFor(root: HTMLElement, ref: ComposeRef): Range | Range[] | null {
+export function rangeFor(root: HTMLElement, ref: ComposeRef, projectRoot?: string): Range | Range[] | null {
   // Ask Your Assistant's summary chip covers several comments: one range each
   // (review deck R-5).
   if (ref.commentIds?.length && ref.path) {
     const ids = new Set(ref.commentIds);
-    const ranges = commentsForPath(ref.path)
+    const ranges = commentsForPath(ref.path, projectRoot)
       .filter((c) => ids.has(c.id))
       .map((c) => singleRange(root, { ...ref, commentIds: undefined, quote: c.quote, cell: c.cell, sheet: c.sheet }))
       .filter((r): r is Range => !!r);
@@ -47,7 +47,7 @@ export function rangeFor(root: HTMLElement, ref: ComposeRef): Range | Range[] | 
   // "every currently open comment on this path" from the live store instead.
   if (isSummaryChipRef(ref) && ref.path) {
     const path = ref.path;
-    const ranges = commentsForPath(path)
+    const ranges = commentsForPath(path, projectRoot)
       .filter((c) => !c.resolved)
       .map((c) => singleRange(root, { ...ref, quote: c.quote, cell: c.cell, sheet: c.sheet }))
       .filter((r): r is Range => !!r);
@@ -91,7 +91,7 @@ export function scrollToRange(range: Range): void {
   el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
-export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>, path: string): void {
+export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>, path: string, projectRoot?: string): void {
   useEffect(() => {
     let flashTimer: number | null = null;
     let pendingTimer: number | null = null;
@@ -110,7 +110,7 @@ export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>,
       // of that file may be the one painting it).
       if (ref && ref.path !== path) return;
       const root = contentRef.current;
-      paint(HOVER_NAME, ref && root ? rangeFor(root, ref) : null);
+      paint(HOVER_NAME, ref && root ? rangeFor(root, ref, projectRoot) : null);
     };
     const onJump = (e: Event) => {
       const detail = (e as CustomEvent<{ ref?: ComposeRef; handled?: boolean }>).detail;
@@ -120,13 +120,13 @@ export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>,
       // must not try to open it again.
       detail.handled = true;
       const ref = detail.ref;
-      const range = rangeFor(root, ref);
+      const range = rangeFor(root, ref, projectRoot);
       if (range) { flash(range); return; }
       // A cell on a sheet tab that isn't showing: switch to it, then look again.
       if (ref.cell && ref.sheet) {
         revealSheet(path, ref.sheet);
         pendingTimer = window.setTimeout(() => {
-          const again = contentRef.current ? rangeFor(contentRef.current, ref) : null;
+          const again = contentRef.current ? rangeFor(contentRef.current, ref, projectRoot) : null;
           if (again) flash(again);
         }, PENDING_RETRY_MS);
       }
@@ -139,7 +139,7 @@ export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>,
       let tries = 0;
       const attempt = () => {
         const root = contentRef.current;
-        const range = root ? rangeFor(root, pending) : null;
+        const range = root ? rangeFor(root, pending, projectRoot) : null;
         if (range) { flash(range); pendingTimer = null; return; }
         if (++tries < PENDING_TRIES) pendingTimer = window.setTimeout(attempt, PENDING_RETRY_MS);
       };
@@ -154,5 +154,5 @@ export function useRefSourceHighlight(contentRef: RefObject<HTMLElement | null>,
       paint(HOVER_NAME, null);
       paint(FLASH_NAME, null);
     };
-  }, [contentRef, path]);
+  }, [contentRef, path, projectRoot]);
 }

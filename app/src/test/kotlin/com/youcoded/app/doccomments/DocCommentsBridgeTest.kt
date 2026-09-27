@@ -83,6 +83,31 @@ class DocCommentsBridgeTest {
         assertEquals(id, listResponse.getJSONArray("comments").getJSONObject(0).getString("id"))
     }
 
+    // F4 (T5 implementation review): the shared React UI's renderer store
+    // mints the comment id and sends it on the payload — forwarded straight
+    // through to the store here, mirroring desktop's own ipc-handlers.ts.
+    @Test
+    fun `forwards a caller-supplied id straight through to the store`() = runTest {
+        val root = tempRoot()
+        val callerId = "c-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        val addPayload = JSONObject()
+            .put("path", "docs/plan.md")
+            .put("projectRoot", root.path)
+            .put("text", "hello")
+            .put("selector", TEXT_SELECTOR_JSON)
+            .put("id", callerId)
+        val addResponse = handleDocCommentsMessage("docComments:add", addPayload, root, listOf(root.path))!!
+        assertEquals(true, addResponse.getBoolean("ok"))
+        assertEquals(callerId, addResponse.getString("id"))
+
+        val listResponse = handleDocCommentsMessage(
+            "docComments:list",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path),
+            root, listOf(root.path),
+        )!!
+        assertEquals(callerId, listResponse.getJSONArray("comments").getJSONObject(0).getString("id"))
+    }
+
     @Test
     fun `add with no selector refuses missing-field for selector`() = runTest {
         val root = tempRoot()

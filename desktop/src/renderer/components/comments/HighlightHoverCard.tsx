@@ -17,6 +17,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { CompleteToggle } from '../SessionCardDetails';
 import { formatRelativeTime } from '../../utils/format-time';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
+import { ErrorState } from '../ui/states';
 import { placeBubble } from '../ui/anchor-position';
 import { Avatar, authorName } from './Avatar';
 import { ReplyField } from './ReplyField';
@@ -116,6 +117,12 @@ export function HighlightHoverCard({ comment, anchorRect, boundsEl, onPointerEnt
             </div>
           ))}
         </div>
+      )}
+      {/* F7 fix (T5 review): a failed reply/resolve/reopen from THIS hover
+          preview shows here — the card actually on screen — instead of a
+          global toast the preview has already closed by the time it appears. */}
+      {comment.error && (
+        <ErrorState className="mt-2" message={comment.error.message} onRetry={comment.error.onRetry} />
       )}
       <ReplyField onSend={onReply} onFocusChange={setFocused} onDraftChange={setHasText} />
     </OverlayPanel>

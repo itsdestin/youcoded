@@ -1874,8 +1874,12 @@ contextBridge.exposeInMainWorld('claude', {
   docComments: {
     list: (filePath: string, projectRoot?: string) =>
       ipcRenderer.invoke('docComments:list', { path: filePath, projectRoot }),
-    add: (filePath: string, selector: unknown, text: string, author: string, projectRoot?: string) =>
-      ipcRenderer.invoke('docComments:add', { path: filePath, selector, text, author, projectRoot }),
+    // `id` (F4, T5 review): the renderer mints the comment id and sends it
+    // here — main uses it instead of minting its own, closing the
+    // local-id/server-id swap window doc-comments-store.ts's (renderer)
+    // `addComment` used to need.
+    add: (filePath: string, selector: unknown, text: string, author: string, projectRoot?: string, id?: string) =>
+      ipcRenderer.invoke('docComments:add', { path: filePath, selector, text, author, projectRoot, id }),
     reply: (filePath: string, id: string, text: string, author: string, projectRoot?: string) =>
       ipcRenderer.invoke('docComments:reply', { path: filePath, id, text, author, projectRoot }),
     resolve: (filePath: string, id: string, by: string, projectRoot?: string) =>
@@ -1892,8 +1896,11 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('docComments:watch', { path: filePath, projectRoot }),
     unwatch: (filePath: string, projectRoot?: string) =>
       ipcRenderer.invoke('docComments:unwatch', { path: filePath, projectRoot }),
-    onChanged: (cb: (evt: { path: string }) => void) => {
-      const handler = (_e: any, evt: { path: string }) => cb(evt);
+    // `projectRoot` (F3, T5 review): identifies WHICH project's copy of a
+    // possibly-shared relative path changed — see doc-comments-store.ts's
+    // (renderer) `keyFor`.
+    onChanged: (cb: (evt: { path: string; projectRoot?: string }) => void) => {
+      const handler = (_e: any, evt: { path: string; projectRoot?: string }) => cb(evt);
       ipcRenderer.on('docComments:changed', handler);
       return () => ipcRenderer.removeListener('docComments:changed', handler);
     },

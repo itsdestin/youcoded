@@ -31,6 +31,10 @@ const DEBOUNCE_MS = 300;
 interface Entry {
   watcher: FSWatcher | null;
   refs: Map<number, number>; // subscriberId -> refcount
+  // F3 fix (T5 review): the target's own realpathed project root (undefined
+  // for a 'fallback' entry) — carried on every `docComments:changed` push for
+  // this entry so the renderer can key it the same way its own store does.
+  projectRoot: string | undefined;
   // Debounced PER SOURCE PATH, not one timer for the whole entry: rapid
   // writes to the SAME file's sidecar coalesce into one push, but two
   // DIFFERENT files changing inside the same project in the same window each
@@ -45,12 +49,16 @@ interface Entry {
   stopped: boolean;
 }
 
-let emit: ((sourcePath: string) => void) | null = null;
+// F3 fix (T5 review): `projectRoot` rides along on every push so a renderer
+// watching TWO projects that happen to share a relative path (both have a
+// `README.md`) can tell which project's copy actually changed, instead of
+// re-listing whichever one it last registered for that bare path.
+let emit: ((sourcePath: string, projectRoot: string | undefined) => void) | null = null;
 const entries = new Map<string, Entry>(); // canonical watch key -> entry
 
 /** Wire the broadcast sink once at startup (ipc-handlers.ts owns webContents
  *  + the remote broadcast, same shape as initProjectWatchers/initGitWatchers). */
-export function initDocCommentsWatcher(onChange: (sourcePath: string) => void): void {
+export function initDocCommentsWatcher(onChange: (sourcePath: string, projectRoot: string | undefined) => void): void {
   emit = onChange;
 }
 
@@ -74,7 +82,7 @@ function scheduleChange(entry: Entry, sourcePath: string): void {
   if (existing) clearTimeout(existing);
   const timer = setTimeout(() => {
     entry.timers.delete(sourcePath);
-    emit?.(sourcePath);
+    emit?.(sourcePath, entry.projectRoot);
   }, DEBOUNCE_MS);
   timer.unref?.();
   entry.timers.set(sourcePath, timer);
@@ -94,7 +102,13 @@ export async function watchComments(target: CommentsWatchTarget, subscriberId: n
     entry.refs.set(subscriberId, (entry.refs.get(subscriberId) ?? 0) + 1);
     return { ok: entry.watcher !== null };
   }
-  entry = { watcher: null, refs: new Map([[subscriberId, 1]]), timers: new Map(), stopped: false };
+  entry = {
+    watcher: null,
+    refs: new Map([[subscriberId, 1]]),
+    timers: new Map(),
+    stopped: false,
+    projectRoot: target.kind === 'project' ? target.projectRoot : undefined,
+  };
   // Register BEFORE the async watcher start so a concurrent watchComments for
   // the same key refcounts THIS entry instead of starting a second watcher
   // (project-watcher.ts's own registration-order comment applies here too).

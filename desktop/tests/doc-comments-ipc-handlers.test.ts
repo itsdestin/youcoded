@@ -77,6 +77,21 @@ describe('registerDocCommentsHandlers', () => {
     expect(listed.comments).toHaveLength(1);
   });
 
+  // F4 (T5 implementation review): the renderer mints the comment id and
+  // sends it on the `add` payload — this IPC handler forwards it through to
+  // the store rather than always minting its own.
+  it('forwards a caller-supplied id straight through to the store (F4, T5 review)', async () => {
+    const ipcMain = fakeIpcMain();
+    registerDocCommentsHandlers(ipcMain as any, deps);
+    const callerId = 'c-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+      path: 'docs/plan.md', projectRoot: root, selector: CELL_SELECTOR, text: 'hello', author: 'user', id: callerId,
+    });
+    expect(added).toEqual({ ok: true, id: callerId });
+    const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
+    expect(listed.comments[0].id).toBe(callerId);
+  });
+
   // T13: a .xlsx target's mutations are REAL now — same wiring T11 already
   // proved for .docx, exercised here through the IPC surface. q3.xlsx has two
   // sheets (Q3, By rep), so a write-side selector must name `sheet` (§4.2).
@@ -339,7 +354,9 @@ describe('registerDocCommentsHandlers', () => {
     }
     expect(sawChange).toBe(true);
     const evt = deps.sent.find((s) => s.channel === DOC_COMMENTS_IPC.CHANGED);
-    expect(evt.payload).toEqual({ path: 'docs/live.md' });
+    // F3 (T5 review): the push now carries `projectRoot` too, so a renderer
+    // watching two projects that share a relative path can tell them apart.
+    expect(evt.payload).toEqual({ path: 'docs/live.md', projectRoot: root });
   });
 
   it('unwatch stops the push and drops the ref on renderer destroy', async () => {

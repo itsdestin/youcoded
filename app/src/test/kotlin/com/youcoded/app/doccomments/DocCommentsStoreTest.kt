@@ -401,4 +401,46 @@ class DocCommentsStoreTest {
         // sleep or a wall-clock-duration guess.
         assertTrue(releasedMarker.exists(), "the store's writer returned before the foreign process released its lock")
     }
+
+    // ── F4 (T5 implementation review) — caller-supplied id ──────────────────
+    @Test
+    fun `uses the caller-supplied id instead of minting its own`() = runTest {
+        val root = tempProjectRoot()
+        val callerId = "c-11111111-2222-4333-8444-555555555555"
+        val added = addComment("docs/id.md", root.path, TEXT_SELECTOR, "x", "user", root, callerId)
+        assertEquals(StoreResult.Ok(callerId), added)
+        val sidecarFile = File(root, ".youcoded/comments/docs/id.md.json")
+        val onDisk = CommentsSidecarFile.parse(sidecarFile.readText())!!
+        assertEquals(callerId, onDisk.comments[0].id)
+    }
+
+    @Test
+    fun `still mints its own id when none is supplied (an unupdated caller)`() = runTest {
+        val root = tempProjectRoot()
+        val added = addComment("docs/id2.md", root.path, TEXT_SELECTOR, "x", "user", root)
+        assertTrue(added is StoreResult.Ok, "expected Ok, got $added")
+        val id = (added as StoreResult.Ok).value
+        assertTrue(Regex("^c-[0-9a-f-]{36}$", RegexOption.IGNORE_CASE).matches(id), "id '$id' is not shaped like a real comment id")
+    }
+
+    @Test
+    fun `refuses a caller-supplied id that is not shaped like this store's own ids`() = runTest {
+        val root = tempProjectRoot()
+        val result = addComment("docs/id3.md", root.path, TEXT_SELECTOR, "x", "user", root, "not-a-real-id")
+        assertEquals(StoreResult.Err(DocCommentsError.INVALID_ID), result)
+    }
+
+    @Test
+    fun `refuses a caller-supplied id that collides with one already in this file's sidecar`() = runTest {
+        val root = tempProjectRoot()
+        val callerId = "c-11111111-2222-4333-8444-555555555555"
+        val first = addComment("docs/id4.md", root.path, TEXT_SELECTOR, "first", "user", root, callerId)
+        assertTrue(first is StoreResult.Ok, "expected Ok, got $first")
+        val second = addComment("docs/id4.md", root.path, TEXT_SELECTOR, "second", "user", root, callerId)
+        assertEquals(StoreResult.Err(DocCommentsError.DUPLICATE_ID), second)
+        val sidecarFile = File(root, ".youcoded/comments/docs/id4.md.json")
+        val onDisk = CommentsSidecarFile.parse(sidecarFile.readText())!!
+        assertEquals(1, onDisk.comments.size)
+        assertEquals("first", onDisk.comments[0].text)
+    }
 }

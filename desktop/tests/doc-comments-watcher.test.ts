@@ -25,6 +25,7 @@ describe('doc-comments watcher', () => {
   let root: string;
   let commentsDir: string;
   let changes: string[];
+  let changesWithRoot: Array<{ path: string; projectRoot: string | undefined }>;
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   // Rewrite spacing must exceed the 500ms awaitWriteFinish stability window
   // (same reasoning as project-watcher.test.ts's PROBE_REWRITE_MS), or a
@@ -59,7 +60,11 @@ describe('doc-comments watcher', () => {
     commentsDir = path.join(root, '.youcoded', 'comments');
     await fs.promises.mkdir(commentsDir, { recursive: true });
     changes = [];
-    initDocCommentsWatcher((sourcePath) => changes.push(sourcePath));
+    changesWithRoot = [];
+    initDocCommentsWatcher((sourcePath, projectRoot) => {
+      changes.push(sourcePath);
+      changesWithRoot.push({ path: sourcePath, projectRoot });
+    });
   });
   afterEach(async () => {
     __resetDocCommentsWatcherForTest();
@@ -67,15 +72,28 @@ describe('doc-comments watcher', () => {
   });
 
   it('reports a project-scoped change as the SOURCE file relative path', async () => {
-    const target: CommentsWatchTarget = { kind: 'project', commentsDir };
+    const target: CommentsWatchTarget = { kind: 'project', commentsDir, projectRoot: root };
     const res = await watchComments(target, 1);
     expect(res.ok).toBe(true);
     await untilLive(commentsDir, 'docs/plan.md.json');
     unwatchComments(target, 1);
   });
 
+  // F3 (T5 implementation review): the renderer keys its own store by
+  // (projectRoot, path) so two projects sharing a relative path never merge —
+  // that only works if the push actually CARRIES the project root.
+  it('carries the target\'s own project root on the push (F3, T5 review)', async () => {
+    const target: CommentsWatchTarget = { kind: 'project', commentsDir, projectRoot: root };
+    await watchComments(target, 1);
+    await untilLive(commentsDir, 'rooted.md.json');
+    await seen(() => expect(changesWithRoot.some((c) => c.path === 'rooted.md')).toBe(true));
+    const entry = changesWithRoot.find((c) => c.path === 'rooted.md');
+    expect(entry?.projectRoot).toBe(root);
+    unwatchComments(target, 1);
+  });
+
   it('coalesces a burst of writes to the SAME file into one push', async () => {
-    const target: CommentsWatchTarget = { kind: 'project', commentsDir };
+    const target: CommentsWatchTarget = { kind: 'project', commentsDir, projectRoot: root };
     await watchComments(target, 1);
     await untilLive(commentsDir, 'burst.md.json');
     changes = [];
@@ -92,7 +110,7 @@ describe('doc-comments watcher', () => {
   });
 
   it('never fires a change for churn under .pending/ (review 2, F20)', async () => {
-    const target: CommentsWatchTarget = { kind: 'project', commentsDir };
+    const target: CommentsWatchTarget = { kind: 'project', commentsDir, projectRoot: root };
     await watchComments(target, 1);
     // Prove the watch is live via an ordinary file first — a negative
     // assertion before a positive signal would be indistinguishable from "not
@@ -111,7 +129,7 @@ describe('doc-comments watcher', () => {
   });
 
   it('refcounts: the watcher survives one unsubscribe and closes after the last', async () => {
-    const target: CommentsWatchTarget = { kind: 'project', commentsDir };
+    const target: CommentsWatchTarget = { kind: 'project', commentsDir, projectRoot: root };
     await watchComments(target, 1);
     await watchComments(target, 2);
     unwatchComments(target, 1);
@@ -125,7 +143,7 @@ describe('doc-comments watcher', () => {
   });
 
   it('a crashed subscriber (dropDocCommentsSubscriber) releases its ref like an explicit unwatch', async () => {
-    const target: CommentsWatchTarget = { kind: 'project', commentsDir };
+    const target: CommentsWatchTarget = { kind: 'project', commentsDir, projectRoot: root };
     await watchComments(target, 1);
     dropDocCommentsSubscriber(1);
     await wait(50);
@@ -152,6 +170,8 @@ describe('doc-comments watcher', () => {
       if (ok) break;
     }
     expect(changes).toContain('/abs/path/to/loose-file.md');
+    const entry = changesWithRoot.find((c) => c.path === '/abs/path/to/loose-file.md');
+    expect(entry?.projectRoot).toBeUndefined(); // F3: the fallback (loose-file) scheme has no project root
     unwatchComments(target, 1);
   });
 });

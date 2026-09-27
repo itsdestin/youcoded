@@ -4,6 +4,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/Button';
 import { Textarea } from '../ui/Textarea';
+import { ErrorState } from '../ui/states';
 import { CompleteToggle } from '../SessionCardDetails';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { DocComment } from '../../state/doc-comments-store';
@@ -86,6 +87,13 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
           {resolveToggle}
         </div>
         <p className="mt-1.5 text-fg-muted">Resolved by {authorNameInline(comment.resolvedBy ?? 'user')}</p>
+        {/* F7 fix (T5 review): a failed reopen rolls back to `resolved: true`,
+            so its error lands on THIS branch — one error per comment, shown
+            where the comment actually is, never a global toast
+            (error-message-standards.md: specific detail + Retry). */}
+        {comment.error && (
+          <ErrorState className="mt-1.5" message={comment.error.message} onRetry={comment.error.onRetry} />
+        )}
       </div>
     );
   }
@@ -128,6 +136,14 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
           </div>
         </div>
       ))}
+
+      {/* F7 fix (T5 review): a failed add (still a draft, `isDraft`) or a
+          failed reply/resolve (rolled back to `resolved: false`, landing
+          here) both show their own error inline — one per comment, no
+          clobbering, since it lives ON the comment object itself. */}
+      {comment.error && (
+        <ErrorState className="mt-2" message={comment.error.message} onRetry={comment.error.onRetry} />
+      )}
 
       {/* The reply box is shared with the Reading-mode hover card (ReplyField.tsx). */}
       {!isDraft && <ReplyField onSend={onReply} />}

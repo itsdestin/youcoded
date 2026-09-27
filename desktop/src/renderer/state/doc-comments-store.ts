@@ -8,15 +8,17 @@
 // comment component already reads, per §7: "That interface does not change."
 //
 // Store shape: still a module-level store, no Context — but comments are now
-// kept PER PATH (`commentsByPath`), not one flat array, and `useDocComments`
-// hands `useSyncExternalStore` a per-path snapshot getter that returns the
-// SAME object reference when nothing relevant to that path changed
-// (performance.md rule 3: "subscribe to a slice, never the whole" — a flat
-// array meant every mounted viewer's `useSyncExternalStore` re-rendered on
-// EVERY comment change anywhere, in any open file, which is exactly the
-// storm rule 3 exists to prevent once more than one file's comments pane can
-// be open at once).
+// kept PER (project, path) KEY (`commentsByKey`, F3 review fix — bare-path
+// keying let two projects sharing a relative path merge comments), not one
+// flat array, and `useDocComments` hands `useSyncExternalStore` a per-key
+// snapshot getter that returns the SAME object reference when nothing
+// relevant to that key changed (performance.md rule 3: "subscribe to a
+// slice, never the whole" — a flat array meant every mounted viewer's
+// `useSyncExternalStore` re-rendered on EVERY comment change anywhere, in any
+// open file, which is exactly the storm rule 3 exists to prevent once more
+// than one file's comments pane can be open at once).
 import { useEffect, useSyncExternalStore } from 'react';
+import { useOnScreen } from './on-screen-context';
 import type {
   CommentAuthor as SharedCommentAuthor,
   CellSelector,
@@ -65,6 +67,24 @@ export interface DocComment {
    *  future caller/UI (T6's dedicated "text no longer found" treatment) has
    *  somewhere to read it from. Always `undefined` today. */
   status?: 'anchored' | 'detached';
+  /** F1 fix (T5 review): the selector's disambiguation context, computed by
+   *  build-menu.ts at selection time and carried on the draft purely so
+   *  `persistNewComment` (below) can build the real `TextQuoteSelector` once
+   *  the debounced `docComments:add` actually fires. Never read by any
+   *  comment-rendering component — NOT part of the "same public shape" (§7)
+   *  contract other fields are, since nothing displays it. */
+  selectorPrefix?: string;
+  selectorSuffix?: string;
+  selectorOccurrence?: number;
+  /** F7 fix (T5 review): the most recent mutation failure FOR THIS COMMENT —
+   *  a failed reply/resolve/reopen, or a failed add still sitting on its
+   *  never-persisted draft. Per-comment, not per-path (the old `errorByPath`
+   *  let a second failing comment in the same file silently clobber the
+   *  first's error) — CommentCard/NewCommentPopover render it inline with
+   *  `<ErrorState>` (error-message-standards.md: specific detail + Retry),
+   *  never a global toast. Additive: existing consumers that destructure only
+   *  the fields they already knew about see no change. */
+  error?: { message: string; onRetry: () => void };
 }
 
 export function basenameOf(path: string): string {
@@ -127,23 +147,33 @@ function fromPersisted(p: PersistedComment): DocComment {
 }
 
 /** Builds the selector `docComments:add` needs from the renderer's simple
- *  call shape (`quote`/`opts`, unchanged since the mockup — build-menu.ts's
- *  "Add comment" entries call this with no other context). `prefix`/`suffix`
- *  are the real anchoring pass's job (§2.2) once it's wired into the viewer
- *  (a separate, not-yet-built task) — left empty here rather than guessed,
- *  which still lets `resolveSelector` find an exact-text match, just without
- *  the extra disambiguation power real surrounding context would add.
- *  `occurrence: 0` for the same reason: this call site has no DOM to count
- *  prior matches in. */
+ *  call shape (`quote`/`opts`). F1 fix (T5 review): `prefix`/`suffix`/
+ *  `occurrence` used to be hardcoded `''`/`''`/`0` for EVERY comment — a
+ *  choice `resolveSelector` (§2.2) can never retroactively fix once written,
+ *  so a repeated phrase's 2nd/3rd/… copy was indistinguishable from its 1st
+ *  forever. `build-menu.ts`'s "Add comment" entries now compute these at
+ *  selection time (raw/CM6: real character offsets against the full source;
+ *  rendered markdown/docx: the DOM Range against the viewer container's own
+ *  text, via `doc-comments-anchor.ts`'s `quoteContextAt`) and pass them
+ *  through `opts` — this only threads them into the selector shape, same as
+ *  before. `opts` staying optional keeps every existing call site (cell
+ *  comments, and any caller that genuinely has no DOM to derive context from)
+ *  working with the same honest `''`/`''`/`0` fallback as before. */
 function selectorFor(
   quote: string,
-  opts?: { startLine?: number; endLine?: number; cell?: string; sheet?: string },
+  opts?: { startLine?: number; endLine?: number; cell?: string; sheet?: string; prefix?: string; suffix?: string; occurrence?: number },
 ): CommentSelector {
   if (opts?.cell) {
     const cellSel: CellSelector = { type: 'CellSelector', cell: opts.cell, sheet: opts.sheet };
     return { kind: 'cell', selector: cellSel };
   }
-  const textSel: TextQuoteSelector = { type: 'TextQuoteSelector', exact: quote, prefix: '', suffix: '', occurrence: 0 };
+  const textSel: TextQuoteSelector = {
+    type: 'TextQuoteSelector',
+    exact: quote,
+    prefix: opts?.prefix ?? '',
+    suffix: opts?.suffix ?? '',
+    occurrence: opts?.occurrence ?? 0,
+  };
   return {
     kind: 'text',
     selector: textSel,
@@ -161,14 +191,24 @@ function selectorFor(
 // `resolveComment` directly with no IPC to talk to.
 interface DocCommentsIpc {
   list: (path: string, projectRoot?: string) => Promise<unknown>;
-  add: (path: string, selector: unknown, text: string, author: string, projectRoot?: string) => Promise<unknown>;
+  // F4 fix (T5 review, design §7 review 2 F9): `id` is the renderer-minted
+  // comment id (see `addComment` below) — main uses it instead of minting its
+  // own, so the optimistic local id and the persisted id are the SAME string
+  // from the start. Trailing/optional so a caller that never passes one (a
+  // bare unit test) still round-trips through the pre-fix server-mint path.
+  add: (path: string, selector: unknown, text: string, author: string, projectRoot?: string, id?: string) => Promise<unknown>;
   reply: (path: string, id: string, text: string, author: string, projectRoot?: string) => Promise<unknown>;
   resolve: (path: string, id: string, by: string, projectRoot?: string) => Promise<unknown>;
   reopen: (path: string, id: string, by: string, projectRoot?: string) => Promise<unknown>;
   move: (path: string, id: string, newSelector: unknown, projectRoot?: string) => Promise<unknown>;
   watch: (path: string, projectRoot?: string) => Promise<unknown>;
   unwatch: (path: string, projectRoot?: string) => Promise<unknown>;
-  onChanged: (cb: (evt: { path: string }) => void) => () => void;
+  // F3 fix (T5 review): `projectRoot` identifies WHICH project's copy of a
+  // possibly-shared relative path changed — two projects can both have a
+  // `README.md`, and without this a change in one could re-list the wrong
+  // project's viewer (see `keyFor` below). `undefined` for the per-machine
+  // loose-file store, matching every other channel's own `projectRoot` shape.
+  onChanged: (cb: (evt: { path: string; projectRoot?: string }) => void) => () => void;
 }
 
 function getIpc(): DocCommentsIpc | null {
@@ -210,6 +250,8 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
     case 'comment-not-found': return "This comment couldn't be found anymore.";
     case 'sidecar-corrupt': return "This file's saved comments can't be read right now.";
     case 'path-not-tracked': return "This file isn't part of an open project or tracked file.";
+    case 'invalid-id': return "Couldn't save this comment — its id wasn't valid.";
+    case 'duplicate-id': return 'A comment with this id already exists.';
     case 'read-failed': return "Couldn't read this file.";
     case 'invalid-docx': return "This Word file doesn't look valid.";
     case 'invalid-xlsx': return "This Excel file doesn't look valid.";
@@ -234,23 +276,22 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
   }
 }
 
-// ── projectRoot registry ────────────────────────────────────────────────────
-// Every real call site that KNOWS a projectRoot (every viewer, via
-// ActiveArtifactView's own `projectRoot` prop) passes it into
-// `useDocComments(path, projectRoot)`; this registers it here so the free
-// functions below (`addComment`/`addReply`/`resolveComment`/…) — reached
-// directly from build-menu.ts's context-menu entries and from CommentCard's
-// callbacks, neither of which has a projectRoot of their own to pass — can
-// still send a real one with their IPC calls. A path with nothing registered
-// (a bare unit test, or a file opened before its viewer supplied one) falls
-// back to `undefined`, i.e. the per-machine loose-file store (design §1.4) —
-// an honest degrade, never a crash.
-const projectRootByPath = new Map<string, string>();
-function registerProjectRoot(path: string, projectRoot: string | undefined): void {
-  if (projectRoot) projectRootByPath.set(path, projectRoot);
+// ── Per-(project, path) keying (F3 fix, T5 review) ──────────────────────────
+// Every store map below used to be keyed by the bare relative `path`. Two
+// DIFFERENT projects can share a relative path (both have a `README.md`) —
+// keyed by bare path, their comments MERGED into one array, a write from one
+// project's viewer could land in the other's array, and they shared a single
+// watch refcount (the first project's viewer to close would unwatch the
+// SECOND project's still-open file). Every map is now keyed by this composite
+// string instead, built the same way `doc-comments-anchor.ts`'s
+// `cellSelectorKey` already separates two identifiers with `\u0000` (a byte
+// that can never appear in a real path or project root).
+function keyFor(path: string, projectRoot: string | undefined): string {
+  return `${projectRoot ?? ''}\u0000${path}`;
 }
-function projectRootFor(path: string): string | undefined {
-  return projectRootByPath.get(path);
+function projectRootOfKey(key: string): string | undefined {
+  const root = key.slice(0, key.indexOf('\u0000'));
+  return root || undefined;
 }
 
 // ── Seed data is GONE from this module (§7) ─────────────────────────────────
@@ -261,39 +302,36 @@ function projectRootFor(path: string): string | undefined {
 const EMPTY_COMMENTS: readonly DocComment[] = [];
 
 interface Snap {
-  commentsByPath: Record<string, DocComment[]>;
+  commentsByKey: Record<string, DocComment[]>;
   focusId: string | null;
-  showResolvedByPath: Record<string, boolean>;
-  /** Per-path transient mutation failure, for a toast — additive to
-   *  `DocCommentsApi` (existing consumers destructure only the fields they
-   *  already knew about, so this changes nothing for them). */
-  errorByPath: Record<string, { message: string; onRetry: () => void } | undefined>;
+  showResolvedByKey: Record<string, boolean>;
 }
 
 function emptySnap(): Snap {
-  return { commentsByPath: {}, focusId: null, showResolvedByPath: {}, errorByPath: {} };
+  return { commentsByKey: {}, focusId: null, showResolvedByKey: {} };
 }
 
 let snap: Snap = emptySnap();
 const subs = new Set<() => void>();
-/** `id -> path`, kept in lockstep with `commentsByPath` — every mutation
- *  below (`addReply`/`resolveComment`/`reopenComment`/…) is reached with just
- *  an id (the free-function API predates the per-file sidecar split, §1.6's
- *  own F1 finding), so this is what lets a lookup by id alone find the right
- *  path's array in O(1) instead of scanning every open file's comments. */
-const commentPathIndex = new Map<string, string>();
+/** `id -> (project,path) key`, kept in lockstep with `commentsByKey` — every
+ *  mutation below (`addReply`/`resolveComment`/`reopenComment`/…) is reached
+ *  with just an id (the free-function API predates the per-file sidecar
+ *  split, §1.6's own F1 finding), so this is what lets a lookup by id alone
+ *  find the right key's array in O(1) instead of scanning every open file's
+ *  comments. */
+const commentKeyIndex = new Map<string, string>();
 
 function publish(patch: Partial<Snap>) {
   snap = { ...snap, ...patch };
   for (const s of subs) s();
 }
 
-/** Replaces one path's array (and only that path's) — every touched-comment
- *  mutation goes through this so an unrelated path's `commentsByPath[path]`
- *  array reference never changes, which is what lets `getPathSnapshot` below
+/** Replaces one key's array (and only that key's) — every touched-comment
+ *  mutation goes through this so an unrelated key's `commentsByKey[key]`
+ *  array reference never changes, which is what lets `getKeySnapshot` below
  *  skip a re-render for every OTHER open file (performance.md rule 3). */
-function publishPath(path: string, comments: DocComment[]): void {
-  publish({ commentsByPath: { ...snap.commentsByPath, [path]: comments } });
+function publishKey(key: string, comments: DocComment[]): void {
+  publish({ commentsByKey: { ...snap.commentsByKey, [key]: comments } });
 }
 
 function subscribe(cb: () => void): () => void {
@@ -301,51 +339,59 @@ function subscribe(cb: () => void): () => void {
   return () => subs.delete(cb);
 }
 
-/** What `useDocComments(path)` actually hands `useSyncExternalStore` — a
- *  small per-path view, cached and reused across renders whenever nothing
- *  relevant to THIS path changed (comments, its own showResolved flag, its
- *  own error, or a focus id that belongs to one of ITS comments). A change to
- *  a different file's comments never invalidates this path's cached view, so
+/** What `useDocComments(path, projectRoot)` actually hands
+ *  `useSyncExternalStore` — a small per-key view, cached and reused across
+ *  renders whenever nothing relevant to THIS key changed (comments, its own
+ *  showResolved flag, or a focus id that belongs to one of ITS comments). A
+ *  change to a different file's (or a different project's SAME-named file's)
+ *  comments never invalidates this key's cached view, so
  *  `useSyncExternalStore`'s own `Object.is` check sees "unchanged" and skips
  *  re-rendering every OTHER mounted comments pane. */
-interface PathSnap {
+interface KeySnap {
   comments: DocComment[];
   focusId: string | null;
   showResolved: boolean;
-  error: { message: string; onRetry: () => void } | null;
 }
-const pathSnapCache = new Map<string, PathSnap>();
+const keySnapCache = new Map<string, KeySnap>();
 
-function getPathSnapshot(path: string): PathSnap {
-  const comments = snap.commentsByPath[path] ?? (EMPTY_COMMENTS as DocComment[]);
-  const focusId = snap.focusId != null && commentPathIndex.get(snap.focusId) === path ? snap.focusId : null;
-  const showResolved = snap.showResolvedByPath[path] ?? false;
-  const error = snap.errorByPath[path] ?? null;
-  const cached = pathSnapCache.get(path);
-  if (cached && cached.comments === comments && cached.focusId === focusId && cached.showResolved === showResolved && cached.error === error) {
+function getKeySnapshot(key: string): KeySnap {
+  const comments = snap.commentsByKey[key] ?? (EMPTY_COMMENTS as DocComment[]);
+  const focusId = snap.focusId != null && commentKeyIndex.get(snap.focusId) === key ? snap.focusId : null;
+  const showResolved = snap.showResolvedByKey[key] ?? false;
+  const cached = keySnapCache.get(key);
+  if (cached && cached.comments === comments && cached.focusId === focusId && cached.showResolved === showResolved) {
     return cached;
   }
-  const next: PathSnap = { comments, focusId, showResolved, error };
-  pathSnapCache.set(path, next);
+  const next: KeySnap = { comments, focusId, showResolved };
+  keySnapCache.set(key, next);
   return next;
 }
 
-function setError(path: string, message: string, onRetry: () => void): void {
-  publish({ errorByPath: { ...snap.errorByPath, [path]: { message, onRetry } } });
+// ── F8 fix (T5 review): prune an unused (project, path) entry ──────────────
+// A key with zero live subscribers AND zero comments left (every comment
+// resolved-and-forgotten is still a comment; this is the "opened once, never
+// commented" case, which is the overwhelming majority of files a long
+// session touches) carries nothing worth keeping around forever — every map
+// below grows by one entry per DISTINCT (project, path) ever opened, with no
+// eviction, for the lifetime of the renderer process.
+function pruneKeyIfUnused(key: string): void {
+  if ((refsByKey.get(key) ?? 0) > 0) return;
+  if ((snap.commentsByKey[key]?.length ?? 0) > 0) return;
+  keySnapCache.delete(key);
+  keyGeneration.delete(key);
+  if (!(key in snap.commentsByKey) && !(key in snap.showResolvedByKey)) return;
+  const nextComments = { ...snap.commentsByKey };
+  delete nextComments[key];
+  const nextShow = { ...snap.showResolvedByKey };
+  delete nextShow[key];
+  publish({ commentsByKey: nextComments, showResolvedByKey: nextShow });
 }
 
-function dismissError(path: string): void {
-  if (!snap.errorByPath[path]) return;
-  const next = { ...snap.errorByPath };
-  delete next[path];
-  publish({ errorByPath: next });
-}
-
-// ── Hydration + watch (per path, refcounted) ────────────────────────────────
-// One list() per path per "goes from 0 to 1 live viewers" (design §7: "list on
-// file open"); one docComments:watch subscription per path for as long as at
+// ── Hydration + watch (per key, refcounted) ─────────────────────────────────
+// One list() per key per "goes from 0 to 1 live viewers" (design §7: "list on
+// file open"); one docComments:watch subscription per key for as long as at
 // least one viewer is mounted, released the instant the last one unmounts.
-const pathRefs = new Map<string, number>();
+const refsByKey = new Map<string, number>();
 let changedUnsub: (() => void) | null = null;
 
 /** Last-one-wins de-dupe by id — the safety net for the race `mergeServer
@@ -362,18 +408,39 @@ function dedupeById(comments: DocComment[]): DocComment[] {
   return [...byId.values()];
 }
 
-/** Replaces every comment this store already knew about for `path` with the
+/** Bumped every time server truth actually lands for a key — F9's own
+ *  "has a refresh landed since this mutation started" check reads this to
+ *  decide whether a failed reply/resolve/reopen's `rollback` would be
+ *  reapplying a STALE pre-mutation snapshot over newer server truth that
+ *  arrived while the mutation was in flight. */
+const keyGeneration = new Map<string, number>();
+function bumpGeneration(key: string): void {
+  keyGeneration.set(key, (keyGeneration.get(key) ?? 0) + 1);
+}
+function currentGeneration(key: string): number {
+  return keyGeneration.get(key) ?? 0;
+}
+
+/** Replaces every comment this store already knew about for `key` with the
  *  server's own list, but PRESERVES any comment that only exists locally so
  *  far (a draft still being composed, not yet persisted — see `addComment`) —
  *  the server has never heard of it, so a naive replace would silently
  *  discard someone's half-written note the moment an unrelated change on the
- *  same file pushed a refresh. */
-function mergeServerComments(path: string, serverComments: PersistedComment[]): void {
+ *  same file pushed a refresh. Also preserves a live per-comment `error`
+ *  (F7): that is CLIENT-side state the server has never heard of, and a
+ *  refresh landing mid-failure must not silently clear the very error it
+ *  exists to keep visible until the user retries or the retry succeeds. */
+function mergeServerComments(key: string, serverComments: PersistedComment[]): void {
   const fresh = serverComments.map(fromPersisted);
-  for (const c of fresh) commentPathIndex.set(c.id, path);
-  const existing = snap.commentsByPath[path] ?? [];
+  for (const c of fresh) commentKeyIndex.set(c.id, key);
+  const existing = snap.commentsByKey[key] ?? [];
   const keptLocal = existing.filter((c) => pendingLocalIds.has(c.id));
-  publishPath(path, dedupeById([...keptLocal, ...fresh]));
+  const errorsById = new Map(existing.filter((c) => c.error).map((c) => [c.id, c.error]));
+  const freshWithErrors = errorsById.size
+    ? fresh.map((c) => (errorsById.has(c.id) ? { ...c, error: errorsById.get(c.id) } : c))
+    : fresh;
+  bumpGeneration(key);
+  publishKey(key, dedupeById([...keptLocal, ...freshWithErrors]));
 }
 
 async function hydrate(path: string, projectRoot: string | undefined): Promise<void> {
@@ -381,7 +448,7 @@ async function hydrate(path: string, projectRoot: string | undefined): Promise<v
   if (!ipc) return;
   const res: any = await ipc.list(path, projectRoot).catch(() => null);
   if (res && res.ok && Array.isArray(res.comments)) {
-    mergeServerComments(path, res.comments as PersistedComment[]);
+    mergeServerComments(keyFor(path, projectRoot), res.comments as PersistedComment[]);
   }
 }
 
@@ -390,14 +457,22 @@ function ensureChangedListener(): void {
   const ipc = getIpc();
   if (!ipc) return;
   changedUnsub = ipc.onChanged((evt) => {
-    if (!pathRefs.has(evt.path)) return; // nobody is looking at this file right now
-    void hydrate(evt.path, projectRootFor(evt.path));
+    const key = keyFor(evt.path, evt.projectRoot);
+    if (!refsByKey.has(key)) return; // nobody is looking at this exact (project, file) right now
+    void hydrate(evt.path, evt.projectRoot);
   });
 }
 
-function subscribePath(path: string, projectRoot: string | undefined): () => void {
-  const n = (pathRefs.get(path) ?? 0) + 1;
-  pathRefs.set(path, n);
+/** Design §7/§1.5 "Watching", plus F6 (T5 review): a hidden-but-mounted
+ *  viewer (a background session's ChatView, kept alive per performance.md
+ *  rule 2) must not keep a live `docComments:watch` running — `useDocComments`
+ *  below only calls this while `useOnScreen()` is true, so going off-screen
+ *  releases the subscription exactly like unmounting would, and coming back
+ *  on-screen re-subscribes, which re-`list()`s. */
+function subscribeKey(path: string, projectRoot: string | undefined): () => void {
+  const key = keyFor(path, projectRoot);
+  const n = (refsByKey.get(key) ?? 0) + 1;
+  refsByKey.set(key, n);
   ensureChangedListener();
   const ipc = getIpc();
   if (n === 1) {
@@ -405,12 +480,25 @@ function subscribePath(path: string, projectRoot: string | undefined): () => voi
     void ipc?.watch(path, projectRoot).catch(() => {});
   }
   return () => {
-    const remaining = (pathRefs.get(path) ?? 1) - 1;
+    const remaining = (refsByKey.get(key) ?? 1) - 1;
     if (remaining <= 0) {
-      pathRefs.delete(path);
+      refsByKey.delete(key);
       void ipc?.unwatch(path, projectRoot).catch(() => {});
+      // F5 fix (T5 review): the LAST viewer of this file just went away (or
+      // went off-screen) — a draft still mid-debounce (typed, not yet
+      // flushed) would otherwise persist several hundred ms into a file
+      // nothing is looking at anymore, exactly the stray-write class of bug
+      // `flushPersist`'s every OTHER exit path (Enter / "Comment" /
+      // click-away, via `clearCommentFocus`) already prevents. Only a
+      // draft that was NEVER actually sent (still in `pendingLocalIds`) is
+      // discarded — the same outcome Cancel / click-away-with-empty-text
+      // already produce; an already-persisted comment is untouched.
+      for (const c of snap.commentsByKey[key] ?? []) {
+        if (pendingLocalIds.has(c.id)) removeComment(c.id);
+      }
+      pruneKeyIfUnused(key);
     } else {
-      pathRefs.set(path, remaining);
+      refsByKey.set(key, remaining);
     }
   };
 }
@@ -464,22 +552,22 @@ function cancelPersist(id: string): void {
 }
 
 function findComment(id: string): DocComment | undefined {
-  const path = commentPathIndex.get(id);
-  if (!path) return undefined;
-  return snap.commentsByPath[path]?.find((c) => c.id === id);
+  const key = commentKeyIndex.get(id);
+  if (!key) return undefined;
+  return snap.commentsByKey[key]?.find((c) => c.id === id);
 }
 
-/** Every id-addressed mutation below funnels through this: look the id's path
+/** Every id-addressed mutation below funnels through this: look the id's key
  *  up in the index, apply `updater` to just that one comment inside just that
- *  path's array, and publish only that path (see `publishPath`'s own WHY). */
+ *  key's array, and publish only that key (see `publishKey`'s own WHY). */
 function updateComment(id: string, updater: (c: DocComment) => DocComment): DocComment | undefined {
-  const path = commentPathIndex.get(id);
-  if (!path) return undefined;
-  const arr = snap.commentsByPath[path];
+  const key = commentKeyIndex.get(id);
+  if (!key) return undefined;
+  const arr = snap.commentsByKey[key];
   if (!arr) return undefined;
   const before = arr.find((c) => c.id === id);
   if (!before) return undefined;
-  publishPath(path, arr.map((c) => (c.id === id ? updater(c) : c)));
+  publishKey(key, arr.map((c) => (c.id === id ? updater(c) : c)));
   return before;
 }
 
@@ -487,19 +575,36 @@ function rollback(id: string, previous: DocComment): void {
   updateComment(id, () => previous);
 }
 
+/** F7: attaches (or clears, passing `null`) a per-comment inline error —
+ *  see `DocComment.error`'s own WHY. A no-op when the comment is already
+ *  gone (e.g. a concurrent refresh removed it). */
+function setCommentError(id: string, message: string, onRetry: () => void): void {
+  updateComment(id, (c) => ({ ...c, error: { message, onRetry } }));
+}
+function clearCommentError(id: string): void {
+  updateComment(id, (c) => (c.error ? { ...c, error: undefined } : c));
+}
+
 export function addComment(
   path: string,
   quote: string,
   sourceLabel: string,
-  opts?: { startLine?: number; endLine?: number; cell?: string; sheet?: string; author?: CommentAuthor },
+  opts?: {
+    startLine?: number; endLine?: number; cell?: string; sheet?: string; author?: CommentAuthor;
+    // F1: the selector's disambiguation context (see `selectorFor`'s WHY).
+    prefix?: string; suffix?: string; occurrence?: number;
+    projectRoot?: string;
+  },
 ): string {
-  // A temporary, locally-minted id — main mints its OWN id on a successful
-  // `docComments:add` (doc-comments-store.ts's `addComment`, `c-${randomUUID()}`),
-  // so this is swapped for the real one once that round trip lands (below);
-  // until then (or forever, offline / in a plain unit test with no IPC) it is
-  // the only id anything sees, exactly like the old pure-mock's counter-based
-  // id always was.
-  const id = `local-${nextLocalSuffix()}`;
+  // F4 fix (T5 review, design §7 review 2 F9): the RENDERER mints the real id
+  // up front — main uses THIS exact id instead of minting its own
+  // (`docComments:add`'s `id` argument, threaded through by `persistNewComment`
+  // below) — so the optimistic local id and the persisted id are the SAME
+  // string from the start; no more swapping one for the other once the round
+  // trip lands. `crypto.randomUUID()` (already used elsewhere in this
+  // renderer, e.g. pending-handoff.ts) works with no IPC bridge too, so this
+  // stays exactly as synchronous/offline-safe as the old counter-based id.
+  const id = `c-${crypto.randomUUID()}`;
   const author = opts?.author ?? 'user';
   const comment: DocComment = {
     id,
@@ -517,41 +622,51 @@ export function addComment(
     resolved: false,
     resolvedBy: null,
     resolvedAt: null,
+    selectorPrefix: opts?.prefix,
+    selectorSuffix: opts?.suffix,
+    selectorOccurrence: opts?.occurrence,
   };
+  const key = keyFor(path, opts?.projectRoot);
   pendingLocalIds.add(id);
-  commentPathIndex.set(id, path);
+  commentKeyIndex.set(id, key);
   // WHY append, never unshift: comments read top-to-bottom in the margin in
   // the order they were made, same as Docs — a fresh one lands where its
   // anchor sits, not necessarily last, but insertion order is a stable tie-break.
   publish({
-    commentsByPath: { ...snap.commentsByPath, [path]: [...(snap.commentsByPath[path] ?? []), comment] },
+    commentsByKey: { ...snap.commentsByKey, [key]: [...(snap.commentsByKey[key] ?? []), comment] },
     focusId: id,
   });
   return id;
 }
 
 /** Actually calls `docComments:add` with whatever text the draft holds right
- *  now, and reconciles the local id to the server's real one on success —
- *  see `pendingLocalIds`'s own WHY. Never called with empty text (the
- *  scheduler below only arms once text is non-empty; `ipc-handlers.ts`
- *  refuses an empty `text` outright). */
+ *  now. Never called with empty text (the scheduler below only arms once
+ *  text is non-empty; `ipc-handlers.ts` refuses an empty `text` outright). */
 function persistNewComment(id: string): void {
   const comment = findComment(id);
   if (!comment || !comment.text.trim()) return;
   const ipc = getIpc();
   if (!ipc) return; // no bridge (unit test / no preload) — stays local-only
   const path = comment.path;
-  const projectRoot = projectRootFor(path);
+  const key = commentKeyIndex.get(id)!;
+  const projectRoot = projectRootOfKey(key);
   const selector = selectorFor(comment.quote, {
     startLine: comment.startLine, endLine: comment.endLine, cell: comment.cell, sheet: comment.sheet,
+    prefix: comment.selectorPrefix, suffix: comment.selectorSuffix, occurrence: comment.selectorOccurrence,
   });
-  void callMutation(() => ipc.add(path, selector, comment.text, comment.author, projectRoot)).then((res) => {
+  void callMutation(() => ipc.add(path, selector, comment.text, comment.author, projectRoot, id)).then((res) => {
     if (res.ok) {
       pendingLocalIds.delete(id);
+      // F4: for a plain sidecar-backed file, `res.id === id` now (main used
+      // OUR id) and this whole branch is a no-op. It stays as a safety net
+      // for `.docx`/`.xlsx` targets, whose comment ids are the FILE's own
+      // numbering (Word's `w:id`, Excel's cell-keyed note id) and can never
+      // be dictated by the caller — those still mint their own id server-side
+      // and this reconciles it.
       if (res.id && res.id !== id) {
-        commentPathIndex.delete(id);
-        commentPathIndex.set(res.id, path);
-        const arr = snap.commentsByPath[path] ?? [];
+        commentKeyIndex.delete(id);
+        commentKeyIndex.set(res.id, key);
+        const arr = snap.commentsByKey[key] ?? [];
         // A `docComments:changed` push (our OWN write, or someone else's) can
         // resolve its `list()` refresh WHILE this exact `add()` call is still
         // in flight, so the server's own copy of this comment may already be
@@ -565,25 +680,20 @@ function persistNewComment(id: string): void {
         const alreadyLanded = arr.some((c) => c.id === res.id);
         const nextArr = alreadyLanded ? arr.filter((c) => c.id !== id) : arr.map((c) => (c.id === id ? { ...c, id: res.id! } : c));
         publish({
-          commentsByPath: { ...snap.commentsByPath, [path]: dedupeById(nextArr) },
+          commentsByKey: { ...snap.commentsByKey, [key]: dedupeById(nextArr) },
           focusId: snap.focusId === id ? res.id! : snap.focusId,
         });
       }
       return;
     }
-    // Honest rollback (review 2, F9): a draft that failed to save never
-    // existed anywhere but this window, so "pre-mutation state" is
-    // non-existence — remove it, and keep the reason visible in the pane
-    // via the path-scoped toast, with Retry replaying the exact same call.
-    cancelPersist(id);
-    commentPathIndex.delete(id);
-    const arr = snap.commentsByPath[path] ?? [];
-    publishPath(path, arr.filter((c) => c.id !== id));
-    setError(path, describeError(res), () => {
-      pendingLocalIds.add(id);
-      commentPathIndex.set(id, path);
-      persistNewComment(id);
-    });
+    // F7 fix (T5 review, supersedes review 2's F9 "remove it" behavior): a
+    // failed add now KEEPS the draft in place (still a pending local, so
+    // Retry can replay the exact same call) and attaches the failure to the
+    // comment itself, for CommentCard/NewCommentPopover's own inline
+    // `<ErrorState>` — never a global toast, and never silently discarded
+    // (a user who typed a real note deserves the chance to retry it, not to
+    // have it vanish).
+    setCommentError(id, describeError(res), () => { clearCommentError(id); persistNewComment(id); });
   });
 }
 
@@ -592,6 +702,7 @@ function persistNewComment(id: string): void {
 function setCommentText(id: string, text: string): void {
   updateComment(id, (c) => ({ ...c, text }));
   if (pendingLocalIds.has(id) && text.trim()) {
+    clearCommentError(id); // a fresh edit retries fresh; the old failure no longer applies
     schedulePersist(id, () => persistNewComment(id));
   } else if (!text.trim()) {
     cancelPersist(id);
@@ -607,11 +718,19 @@ function addReply(id: string, author: CommentAuthor, text: string): void {
   if (!before) return;
   const ipc = getIpc();
   if (!ipc || pendingLocalIds.has(id)) return; // never-persisted draft — nothing to reply to server-side yet
-  const projectRoot = projectRootFor(before.path);
+  const key = commentKeyIndex.get(id)!;
+  const projectRoot = projectRootOfKey(key);
+  const gen = currentGeneration(key);
   void callMutation(() => ipc.reply(before.path, id, trimmed, author, projectRoot)).then((res) => {
     if (res.ok) return;
-    rollback(id, before);
-    setError(before.path, describeError(res), () => addReply(id, author, text));
+    // F9 fix (T5 review): a `docComments:changed` refresh can land WHILE this
+    // mutation is in flight — reapplying `before` (captured before the
+    // refresh) would silently undo that newer server truth. Re-list instead
+    // whenever the key's generation moved; only rollback to `before` when
+    // nothing newer has landed.
+    if (currentGeneration(key) !== gen) void hydrate(before.path, projectRoot);
+    else rollback(id, before);
+    setCommentError(id, describeError(res), () => addReply(id, author, text));
   });
 }
 
@@ -624,11 +743,14 @@ export function resolveComment(id: string, by: CommentAuthor): void {
   if (!before) return;
   const ipc = getIpc();
   if (!ipc || pendingLocalIds.has(id)) return;
-  const projectRoot = projectRootFor(before.path);
+  const key = commentKeyIndex.get(id)!;
+  const projectRoot = projectRootOfKey(key);
+  const gen = currentGeneration(key);
   void callMutation(() => ipc.resolve(before.path, id, by, projectRoot)).then((res) => {
     if (res.ok) return;
-    rollback(id, before);
-    setError(before.path, describeError(res), () => resolveComment(id, by));
+    if (currentGeneration(key) !== gen) void hydrate(before.path, projectRoot); // F9
+    else rollback(id, before);
+    setCommentError(id, describeError(res), () => resolveComment(id, by));
   });
 }
 
@@ -641,11 +763,14 @@ function reopenComment(id: string): void {
   if (!before) return;
   const ipc = getIpc();
   if (!ipc || pendingLocalIds.has(id)) return;
-  const projectRoot = projectRootFor(before.path);
+  const key = commentKeyIndex.get(id)!;
+  const projectRoot = projectRootOfKey(key);
+  const gen = currentGeneration(key);
   void callMutation(() => ipc.reopen(before.path, id, 'user', projectRoot)).then((res) => {
     if (res.ok) return;
-    rollback(id, before);
-    setError(before.path, describeError(res), () => reopenComment(id));
+    if (currentGeneration(key) !== gen) void hydrate(before.path, projectRoot); // F9
+    else rollback(id, before);
+    setCommentError(id, describeError(res), () => reopenComment(id));
   });
 }
 
@@ -654,15 +779,17 @@ function reopenComment(id: string): void {
  *  exposes no delete IPC channel — this only ever removes a NEVER-PERSISTED
  *  local draft (NewCommentPopover's Cancel / CommentCard's Delete, both of
  *  which only show while a draft's text is still empty, i.e. before
- *  `persistNewComment` could have run). */
+ *  `persistNewComment` could have run — plus F5's own unmount/off-screen
+ *  cleanup, which reaches this for the same "never persisted" reason). */
 function removeComment(id: string): void {
   cancelPersist(id);
-  const path = commentPathIndex.get(id);
-  if (!path) return;
-  commentPathIndex.delete(id);
-  const arr = snap.commentsByPath[path];
+  const key = commentKeyIndex.get(id);
+  if (!key) return;
+  commentKeyIndex.delete(id);
+  const arr = snap.commentsByKey[key];
   if (!arr) return;
-  publishPath(path, arr.filter((c) => c.id !== id));
+  publishKey(key, arr.filter((c) => c.id !== id));
+  pruneKeyIfUnused(key); // F8: this may have been the key's last comment
 }
 
 function clearCommentFocus(): void {
@@ -673,12 +800,17 @@ function clearCommentFocus(): void {
   }
 }
 
-export function commentsForPath(path: string): DocComment[] {
-  return snap.commentsByPath[path] ?? [];
+/** Bare-path lookup for callers with no `projectRoot` of their own
+ *  (use-ref-source-highlight.ts's chip highlighting, build-menu.test.tsx) —
+ *  resolves against the per-machine loose-file partition (`keyFor(path,
+ *  undefined)`). A caller that DOES know its project passes it, the same way
+ *  `useDocComments` does, to read that project's own comments instead. */
+export function commentsForPath(path: string, projectRoot?: string): DocComment[] {
+  return snap.commentsByKey[keyFor(path, projectRoot)] ?? [];
 }
 
-function setShowResolved(path: string, value: boolean): void {
-  publish({ showResolvedByPath: { ...snap.showResolvedByPath, [path]: value } });
+function setShowResolved(key: string, value: boolean): void {
+  publish({ showResolvedByKey: { ...snap.showResolvedByKey, [key]: value } });
 }
 
 export interface DocCommentsApi {
@@ -686,50 +818,59 @@ export interface DocCommentsApi {
   focusId: string | null;
   showResolved: boolean;
   setShowResolved: (value: boolean) => void;
-  addComment: (quote: string, sourceLabel: string, opts?: { startLine?: number; endLine?: number; cell?: string; sheet?: string }) => string;
+  addComment: (
+    quote: string,
+    sourceLabel: string,
+    opts?: { startLine?: number; endLine?: number; cell?: string; sheet?: string; prefix?: string; suffix?: string; occurrence?: number },
+  ) => string;
   setCommentText: typeof setCommentText;
   addReply: typeof addReply;
   resolveComment: typeof resolveComment;
   reopenComment: typeof reopenComment;
   removeComment: typeof removeComment;
   clearFocus: typeof clearCommentFocus;
-  /** Additive (existing components destructure only what they already knew
-   *  about): the most recent mutation failure for THIS path, for a toast. */
-  lastError: { message: string; onRetry: () => void } | null;
-  dismissError: () => void;
 }
 
 /** The one hook surfaces read — a slice of the shared store scoped to one
- *  file path (performance.md rule 3: subscribe to a slice, not the whole —
- *  `getPathSnapshot` is what makes this a REAL slice, not just a filtered
- *  view of one shared snapshot object). `projectRoot`, when the caller has
- *  one (every real viewer does, via ActiveArtifactView's own prop — see the
- *  registry's own WHY above), is what lets `docComments:list`/`:add`/etc.
- *  find the right project's sidecar instead of falling back to the
- *  per-machine loose-file store. */
+ *  (project, path) key (performance.md rule 3: subscribe to a slice, not the
+ *  whole — `getKeySnapshot` is what makes this a REAL slice, not just a
+ *  filtered view of one shared snapshot object). `projectRoot`, when the
+ *  caller has one (every real viewer does, via ActiveArtifactView's own
+ *  prop), is part of that key (F3, T5 review) — two projects sharing a
+ *  relative path get two entirely separate entries, never merged. */
 export function useDocComments(path: string, projectRoot?: string): DocCommentsApi {
-  registerProjectRoot(path, projectRoot);
-  const s = useSyncExternalStore(subscribe, () => getPathSnapshot(path));
+  const key = keyFor(path, projectRoot);
+  const s = useSyncExternalStore(subscribe, () => getKeySnapshot(key));
+  // F6 fix (T5 review): a hidden-but-mounted viewer (a background session's
+  // ChatView, kept alive per performance.md rule 2 — "App keeps a ChatView
+  // mounted for EVERY open session") must not keep a live `docComments:watch`
+  // running for a file nobody can see. `useOnScreen()` defaults to `true`
+  // outside ChatView (e.g. Project View's Files tab, which already unmounts
+  // its own file viewer on hide — see FilesTab.tsx's own WHY), so this is a
+  // no-op there; inside a background ChatView it releases the watch exactly
+  // like unmounting would, and re-subscribes (re-`list()`s) on coming back.
+  const onScreen = useOnScreen();
 
   // Design §7 / §1.5 "Watching": list on mount, subscribe to docComments:watch
-  // while at least one viewer is open on this path, released the moment the
-  // last one unmounts.
-  useEffect(() => subscribePath(path, projectRoot), [path, projectRoot]);
+  // while at least one viewer is open AND on screen for this key, released
+  // the moment the last one unmounts or goes off screen.
+  useEffect(() => {
+    if (!onScreen) return undefined;
+    return subscribeKey(path, projectRoot);
+  }, [path, projectRoot, onScreen]);
 
   return {
     comments: s.comments,
     focusId: s.focusId,
     showResolved: s.showResolved,
-    setShowResolved: (value) => setShowResolved(path, value),
-    addComment: (quote, sourceLabel, opts) => addComment(path, quote, sourceLabel, opts),
+    setShowResolved: (value) => setShowResolved(key, value),
+    addComment: (quote, sourceLabel, opts) => addComment(path, quote, sourceLabel, { ...opts, projectRoot }),
     setCommentText,
     addReply,
     resolveComment,
     reopenComment,
     removeComment,
     clearFocus: clearCommentFocus,
-    lastError: s.error,
-    dismissError: () => dismissError(path),
   };
 }
 
@@ -743,10 +884,10 @@ export function __resetDocCommentsStoreForTest(): void {
   for (const { timer } of pendingPersist.values()) clearTimeout(timer);
   pendingPersist.clear();
   pendingLocalIds.clear();
-  commentPathIndex.clear();
-  pathSnapCache.clear();
-  projectRootByPath.clear();
-  pathRefs.clear();
+  commentKeyIndex.clear();
+  keySnapCache.clear();
+  keyGeneration.clear();
+  refsByKey.clear();
   changedUnsub?.();
   changedUnsub = null;
   snap = emptySnap();

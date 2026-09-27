@@ -2575,8 +2575,10 @@ export function installShim(): void {
     // exactly (core parity invariant: SAME shared window.claude shape).
     docComments: {
       list: (filePath: string, projectRoot?: string) => invoke('docComments:list', { path: filePath, projectRoot }),
-      add: (filePath: string, selector: unknown, text: string, author: string, projectRoot?: string) =>
-        invoke('docComments:add', { path: filePath, selector, text, author, projectRoot }),
+      // `id` (F4, T5 review): mirrors preload.ts — the renderer mints the
+      // comment id, main uses it instead of minting its own.
+      add: (filePath: string, selector: unknown, text: string, author: string, projectRoot?: string, id?: string) =>
+        invoke('docComments:add', { path: filePath, selector, text, author, projectRoot, id }),
       reply: (filePath: string, id: string, text: string, author: string, projectRoot?: string) =>
         invoke('docComments:reply', { path: filePath, id, text, author, projectRoot }),
       resolve: (filePath: string, id: string, by: string, projectRoot?: string) =>
@@ -2591,7 +2593,8 @@ export function installShim(): void {
       // misread as "subscribed, no changes yet".
       watch: (filePath: string, projectRoot?: string) => invoke('docComments:watch', { path: filePath, projectRoot }),
       unwatch: (filePath: string, projectRoot?: string) => invoke('docComments:unwatch', { path: filePath, projectRoot }),
-      onChanged: (cb: (evt: { path: string }) => void) => {
+      // `projectRoot` (F3, T5 review): mirrors preload.ts's onChanged shape.
+      onChanged: (cb: (evt: { path: string; projectRoot?: string }) => void) => {
         const handler: Callback = (evt: any) => cb(evt);
         addListener('docComments:changed', handler);
         return () => removeListener('docComments:changed', handler);

@@ -76,7 +76,9 @@ suspend fun handleDocCommentsMessage(
             if (text.isEmpty()) return missingField("text")
             val selector = CommentSelector.fromJson(payload.optJSONObject("selector")) ?: return missingField("selector")
             val author = payload.optString("author", "user")
-            when (val r = addComment(filePath, projectRoot, selector, text, author, homeDir)) {
+            // F4 (T5 review): the renderer mints and sends this now.
+            val callerId = payload.optString("id", "").ifEmpty { null }
+            when (val r = addComment(filePath, projectRoot, selector, text, author, homeDir, callerId)) {
                 is StoreResult.Ok -> JSONObject().put("ok", true).put("id", r.value)
                 is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
             }

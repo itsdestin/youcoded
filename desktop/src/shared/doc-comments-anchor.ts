@@ -49,6 +49,12 @@ function compact(text: string): { compact: string; toOriginal: number[] } {
  * ORIGINAL `fullText`. Returns `[]` when `exact` (once whitespace is
  * stripped) is empty or genuinely absent — the zero-occurrences case §2.2
  * says must become `'detached'`, never a thrown error.
+ *
+ * Not exported: `quoteContextAt` below is the public surface `build-menu.ts`
+ * actually needs (the SAME occurrence numbering `resolveSelector` will later
+ * re-derive, so a repeated phrase's Nth copy round-trips to the Nth copy
+ * rather than always being stored as occurrence 0) — a bare re-export of this
+ * helper with no outside caller is dead weight knip would flag.
  */
 function findAllOccurrences(fullText: string, exact: string): ResolvedRange[] {
   const needle = exact.replace(/\s+/g, '');
@@ -212,6 +218,38 @@ export function resolveSelector(fullText: string, sel: TextQuoteSelector): Resol
     }
   }
   return best;
+}
+
+/** §1.1's own number for prefix/suffix width — "~32 chars before/after". */
+const PREFIX_SUFFIX_CHARS = 32;
+
+/**
+ * F1 (blocker, T5 review): computes the `prefix`/`suffix`/`occurrence` a
+ * `TextQuoteSelector` needs to survive a repeated phrase, given the quote's
+ * own `[start, end)` offsets into `fullText` — the exact shape `build-menu.ts`
+ * has for a raw/CM6 selection (real character offsets) and can derive for a
+ * rendered markdown/docx selection (a DOM Range walked against the viewer
+ * container's own `textContent`, see `build-menu.ts`'s `quoteContextFor`).
+ * Before this fix every new comment stored `prefix: '' / suffix: '' /
+ * occurrence: 0` unconditionally, which `resolveSelector` above can never
+ * retroactively recover once written — a repeated phrase's 2nd/3rd/… copy was
+ * indistinguishable from its 1st forever.
+ *
+ * `occurrence` is the quote's index among `findAllOccurrences`'s OWN matches
+ * (the same whitespace-tolerant scan `resolveSelector` uses to re-find it
+ * later) — not a naive `indexOf` count — so a caller whose `start` sits on
+ * whitespace-collapsed text still lands on the right index. `-1` (not found,
+ * which should not happen for a real selection: `exact` was sliced FROM
+ * `fullText` at `[start, end)`) falls back to `0`, the same default every
+ * caller already used before this fix, rather than storing a negative index.
+ */
+export function quoteContextAt(fullText: string, start: number, end: number): { prefix: string; suffix: string; occurrence: number } {
+  const exact = fullText.slice(start, end);
+  const prefix = fullText.slice(Math.max(0, start - PREFIX_SUFFIX_CHARS), start);
+  const suffix = fullText.slice(end, Math.min(fullText.length, end + PREFIX_SUFFIX_CHARS));
+  const occurrences = findAllOccurrences(fullText, exact);
+  const occurrence = occurrences.findIndex((o) => o.start === start);
+  return { prefix, suffix, occurrence: occurrence === -1 ? 0 : occurrence };
 }
 
 /**

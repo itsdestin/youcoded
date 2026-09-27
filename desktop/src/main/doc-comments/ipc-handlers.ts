@@ -88,8 +88,11 @@ function missingField(field: string): MissingFieldRefusal {
 }
 
 export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, deps: DocCommentsHandlerDeps): void {
-  initDocCommentsWatcher((sourcePath) => {
-    const payload = { path: sourcePath };
+  initDocCommentsWatcher((sourcePath, projectRoot) => {
+    // F3 fix (T5 review): `projectRoot` rides along so a renderer watching two
+    // projects that share a relative path (both have a `README.md`) re-lists
+    // the RIGHT one — see doc-comments-store.ts's (renderer) `keyFor`.
+    const payload = { path: sourcePath, projectRoot };
     for (const wc of deps.getAllWebContents()) {
       if (!wc.isDestroyed()) wc.send(DOC_COMMENTS_IPC.CHANGED, payload);
     }
@@ -155,6 +158,11 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
       selector: payload?.selector as CommentSelector,
       text,
       author: payload?.author as CommentAuthor,
+      // F4 fix (T5 review): the renderer mints and sends this now — see
+      // doc-comments-store.ts's own `addComment` WHY. `optStr` already treats
+      // an empty/non-string value as absent, matching every other optional
+      // field on this payload.
+      id: optStr(payload?.id),
     });
   });
 

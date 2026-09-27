@@ -3328,8 +3328,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
  *  (open/replied/resolved/Word/Excel — fixtures/doc-comments.ts). */
 function createDocCommentsMock(empty: boolean) {
   let comments: PersistedComment[] = empty ? [] : seedDocComments();
-  const subs = new Set<(evt: { path: string }) => void>();
-  const publish = (path: string) => subs.forEach((cb) => cb({ path }));
+  const subs = new Set<(evt: { path: string; projectRoot?: string }) => void>();
+  // `projectRoot` on the push (F3, T5 review): mirrors the real watcher —
+  // harmless here (the workbench only ever has one fixture project), but
+  // keeps this mock's wire shape identical to production's.
+  const publish = (path: string, projectRoot?: string) => subs.forEach((cb) => cb({ path, projectRoot }));
   // Refcounted the same shape as the real chokidar relay (doc-comments-
   // watcher.ts) — the workbench never actually pushes an unprompted change
   // (nothing else writes to this fixture concurrently), but tracking refs
@@ -3340,46 +3343,49 @@ function createDocCommentsMock(empty: boolean) {
 
   return {
     list: async (path: string, _projectRoot?: string) => ({ ok: true, comments: comments.filter((c) => c.path === path) }),
-    add: async (path: string, selector: CommentSelector, text: string, author: CommentAuthor, _projectRoot?: string) => {
+    // `id` (F4, T5 review): the renderer now mints and sends this — honored
+    // here instead of minting a fresh one, mirroring the real store's own
+    // (now caller-supplied-id-first) `addComment`.
+    add: async (path: string, selector: CommentSelector, text: string, author: CommentAuthor, projectRoot?: string, id?: string) => {
       // Mirrors ipc-handlers.ts's own `reqStr` refusal — an empty `text` is
       // never written, same as the real store.
       if (!text) return { ok: false, error: 'missing-field', field: 'text' };
-      const id = `c-${Math.random().toString(36).slice(2, 10)}`;
-      const comment: PersistedComment = { id, path, selector, text, author, createdAt: Date.now(), replies: [], resolved: false, history: [] };
+      const realId = id ?? `c-${Math.random().toString(36).slice(2, 10)}`;
+      const comment: PersistedComment = { id: realId, path, selector, text, author, createdAt: Date.now(), replies: [], resolved: false, history: [] };
       comments = [...comments, comment];
-      publish(path);
-      return { ok: true, id };
+      publish(path, projectRoot);
+      return { ok: true, id: realId };
     },
-    reply: async (path: string, id: string, text: string, author: CommentAuthor, _projectRoot?: string) => {
+    reply: async (path: string, id: string, text: string, author: CommentAuthor, projectRoot?: string) => {
       const idx = findIndex(id);
       if (idx === -1) return { ok: false, error: 'comment-not-found' };
       const c = comments[idx];
       const replyId = `${c.id}-r${c.replies.length + 1}`;
       comments = comments.map((x, i) => (i === idx ? { ...c, replies: [...c.replies, { id: replyId, author, text, createdAt: Date.now() }] } : x));
-      publish(path);
+      publish(path, projectRoot);
       return { ok: true };
     },
-    resolve: async (path: string, id: string, by: CommentAuthor, _projectRoot?: string) => {
+    resolve: async (path: string, id: string, by: CommentAuthor, projectRoot?: string) => {
       const idx = findIndex(id);
       if (idx === -1) return { ok: false, error: 'comment-not-found' };
       const c = comments[idx];
       comments = comments.map((x, i) => (i === idx ? { ...c, resolved: true, history: [...c.history, { by, at: Date.now(), action: 'resolved' as const }] } : x));
-      publish(path);
+      publish(path, projectRoot);
       return { ok: true };
     },
-    reopen: async (path: string, id: string, by: CommentAuthor, _projectRoot?: string) => {
+    reopen: async (path: string, id: string, by: CommentAuthor, projectRoot?: string) => {
       const idx = findIndex(id);
       if (idx === -1) return { ok: false, error: 'comment-not-found' };
       const c = comments[idx];
       comments = comments.map((x, i) => (i === idx ? { ...c, resolved: false, history: [...c.history, { by, at: Date.now(), action: 'reopened' as const }] } : x));
-      publish(path);
+      publish(path, projectRoot);
       return { ok: true };
     },
-    move: async (path: string, id: string, newSelector: CommentSelector, _projectRoot?: string) => {
+    move: async (path: string, id: string, newSelector: CommentSelector, projectRoot?: string) => {
       const idx = findIndex(id);
       if (idx === -1) return { ok: false, error: 'comment-not-found' };
       comments = comments.map((x, i) => (i === idx ? { ...x, selector: newSelector } : x));
-      publish(path);
+      publish(path, projectRoot);
       return { ok: true };
     },
     watch: async (path: string, _projectRoot?: string) => {
@@ -3391,7 +3397,7 @@ function createDocCommentsMock(empty: boolean) {
       if (n <= 0) watchRefs.delete(path); else watchRefs.set(path, n);
       return { ok: true };
     },
-    onChanged: (cb: (evt: { path: string }) => void) => {
+    onChanged: (cb: (evt: { path: string; projectRoot?: string }) => void) => {
       subs.add(cb);
       return () => { subs.delete(cb); };
     },
