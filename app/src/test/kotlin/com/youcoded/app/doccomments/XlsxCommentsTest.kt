@@ -109,6 +109,30 @@ class XlsxCommentsTest {
         assertMatchesGolden("q3-sales-by-rep", result.comments)
     }
 
+    // F2 (implementation review — parity): a workbook with one real worksheet
+    // plus one CHARTSHEET must be labelled single-sheet, exactly like desktop
+    // (exceljs's own `reconcile()` never surfaces a chartsheet as a worksheet
+    // at all — xlsx-comments.ts's own header comment) — never counted as a
+    // second "sheet" that would make the selector stamp a `sheet` name the
+    // desktop reader would never stamp for the identical file. Golden parity
+    // against the real desktop reader's own output for this exact fixture.
+    @Test
+    fun chartsheetWorkbookMatchesTheDesktopReaderFieldForFieldAndStaysSingleSheet() {
+        val result = readXlsxComments(fixtureFile("chartsheet-workbook.xlsx"), "reports/chartsheet-workbook.xlsx")
+        assertTrue(result is XlsxReadResult.Ok, "expected Ok, got $result")
+        assertMatchesGolden("chartsheet-workbook", result.comments)
+        val comments = result.comments
+        assertEquals(1, comments.size)
+        val note = comments[0]
+        val selector = note.selector
+        assertTrue(selector is CommentSelector.Cell, "expected a cell selector")
+        // §4.2: `sheet` is only ever named on a MULTI-sheet workbook — a
+        // chartsheet counted as a second worksheet (the pre-fix bug this test
+        // pins) would make this workbook wrongly look multi-sheet and stamp
+        // "Data" here instead of leaving it unnamed.
+        assertEquals(null, (selector as CommentSelector.Cell).selector.sheet)
+    }
+
     // ── Behavioural pins mirroring desktop/tests/xlsx-comments.test.ts ─────
 
     @Test
@@ -250,6 +274,60 @@ class XlsxCommentsTest {
         garbage.writeBytes("not a workbook".toByteArray(Charsets.UTF_8))
         val result = readXlsxComments(garbage, "reports/garbage.xlsx")
         assertEquals(XlsxReadResult.Err(XlsxReadError.INVALID_XLSX), result)
+    }
+
+    // F1 (implementation review — high, security): same reasoning as
+    // DocxCommentsTest.kt's own identical pin — see `rejectDoctype`'s doc
+    // comment (XlsxComments.kt) for why this platform-independent pre-check
+    // exists on top of the factory's own (possibly Expat-ignored, on a real
+    // device) `disallow-doctype-decl` feature.
+    @Test
+    fun refusesAWorkbookXmlCarryingAnInternalDtdEntityBomb() {
+        val doctypeBomb = """
+            <?xml version="1.0"?>
+            <!DOCTYPE lolz [
+             <!ENTITY lol "lol">
+             <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+            ]>
+            <workbook><sheets><sheet name="&lol2;" sheetId="1" r:id="rId1"/></sheets></workbook>
+        """.trimIndent()
+        val bytes = buildPlainZip(
+            mapOf(
+                "xl/workbook.xml" to doctypeBomb,
+                "xl/_rels/workbook.xml.rels" to "<Relationships/>",
+            ),
+        )
+        val f = Files.createTempFile("ycd-xlsx-read-", "-doctype-bomb.xlsx").toFile()
+        f.deleteOnExit()
+        f.writeBytes(bytes)
+        val result = readXlsxComments(f, "reports/doctype-bomb.xlsx")
+        assertEquals(XlsxReadResult.Err(XlsxReadError.UNSAFE_XML), result)
+    }
+
+    // F3 (implementation review): same reasoning as DocxCommentsTest.kt's own
+    // identical pin — a REAL zip bomb whose DECLARED size is patched down to a
+    // few bytes (so the declared-size precheck alone would wave it through)
+    // must still be refused once its real decompressed bytes cross the
+    // ceiling, caught by `readEntryBounded`'s byte-counting loop, never by
+    // trusting the archive's own metadata. The bomb sits at `xl/workbook.xml`
+    // itself — the FIRST part `readXlsxComments` unconditionally reads — so
+    // this exercises the real end-to-end read path, not just the primitive:
+    // its actual (bogus, all-zero) content never needs to look like a real
+    // workbook, since `readEntryBounded` throws mid-read, before this or any
+    // other content is ever handed to `parseWorkbookSheets`.
+    @Test
+    fun refusesAWorkbookXmlEntryWhoseRealDecompressedBytesExceedTheCeilingEvenWhenItsDeclaredSizeIsTiny() {
+        val bytes = buildRealZipBomb(
+            files = emptyMap(),
+            bombEntryName = "xl/workbook.xml",
+            realUncompressedBytes = 201L * 1024 * 1024,
+            declaredUncompressedSize = 10L,
+        )
+        val f = Files.createTempFile("ycd-xlsx-read-", "-real-bomb.xlsx").toFile()
+        f.deleteOnExit()
+        f.writeBytes(bytes)
+        val result = readXlsxComments(f, "reports/real-bomb.xlsx")
+        assertEquals(XlsxReadResult.Err(XlsxReadError.ARCHIVE_TOO_LARGE), result)
     }
 
     @Test

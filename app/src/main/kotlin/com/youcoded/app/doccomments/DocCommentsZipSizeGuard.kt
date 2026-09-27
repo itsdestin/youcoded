@@ -87,3 +87,70 @@ fun checkAllEntriesWithinCeiling(zip: ZipFile): ZipSizeGuardResult {
     }
     return ZipSizeGuardResult.Ok
 }
+
+// =============================================================================
+// F3 (implementation review, both docx/xlsx read paths): a decompression-time
+// backstop UNDERNEATH the two declared-size checks above.
+//
+// WHY the checks above are not enough on their own: `checkNamedEntriesWithinCeiling`/
+// `checkAllEntriesWithinCeiling` only ever read `ZipEntry.getSize()` — a value
+// that comes straight from the archive's own CENTRAL DIRECTORY metadata and is
+// never verified against what the entry ACTUALLY decompresses to. A crafted
+// entry can declare a small (or, per the `-1` fallback above, effectively
+// zero-contributing) uncompressed size while its real DEFLATE stream expands
+// far past it — the declared-size checks would wave it straight through, and
+// the two readers would then decompress the FULL real size into memory
+// regardless. `readEntryBounded` below is the check that doesn't trust
+// anything the archive DECLARES: it counts REAL bytes as they come off the
+// decompression stream and aborts the moment the running total crosses the
+// ceiling, so at most one chunk's worth of bytes beyond the ceiling is ever
+// held in memory — never the full oversized output.
+// =============================================================================
+
+/** Thrown by `readEntryBounded` when an entry's REAL decompressed byte count
+ *  exceeds `ceilingBytes` — a distinct signal from `ZipSizeGuardResult
+ *  .ArchiveTooLarge` above (which is a plain return value, not an exception)
+ *  only because `readEntryBounded` is called from deep inside each reader's
+ *  own parsing pipeline, several stack frames below where the equivalent
+ *  `DocxReadResult.Err`/`XlsxReadResult.Err` is actually constructed and
+ *  returned — an exception lets it unwind cleanly back to that one place
+ *  (each reader's own top-level `try`/`catch`) without every intermediate
+ *  call needing its own sealed-result plumbing for a case that should never
+ *  happen against a legitimate file. */
+class ZipBombDetectedException : Exception()
+
+/** Read-loop chunk size for `readEntryBounded` — large enough to keep the
+ *  per-chunk overhead low, small enough that a refusal fires promptly once
+ *  the running total crosses the ceiling rather than after one more huge
+ *  buffer's worth of needless decompression. */
+private const val BOUNDED_READ_CHUNK_BYTES = 8192
+
+/**
+ * Reads `entry`'s decompressed bytes from `zip`, counting REAL bytes as they
+ * come off the DEFLATE stream and throwing `ZipBombDetectedException` the
+ * MOMENT the running total exceeds `ceilingBytes` — see this section's own
+ * header for why this exists as a backstop UNDERNEATH
+ * `checkNamedEntriesWithinCeiling`/`checkAllEntriesWithinCeiling`, which only
+ * ever look at the archive's own declared metadata.
+ *
+ * `ceilingBytes` defaults to the same `MAX_DECLARED_UNCOMPRESSED_BYTES`
+ * ceiling the declared-size checks use above. A caller only ever overrides it
+ * in a test — proving the abort fires correctly, well under the real 200MB
+ * production ceiling, without a test having to actually allocate/inflate
+ * anywhere near that much data itself.
+ */
+fun readEntryBounded(zip: ZipFile, entry: ZipEntry, ceilingBytes: Long = MAX_DECLARED_UNCOMPRESSED_BYTES): ByteArray {
+    zip.getInputStream(entry).use { input ->
+        val out = java.io.ByteArrayOutputStream()
+        val chunk = ByteArray(BOUNDED_READ_CHUNK_BYTES)
+        var total = 0L
+        while (true) {
+            val n = input.read(chunk)
+            if (n == -1) break
+            total += n
+            if (total > ceilingBytes) throw ZipBombDetectedException()
+            out.write(chunk, 0, n)
+        }
+        return out.toByteArray()
+    }
+}

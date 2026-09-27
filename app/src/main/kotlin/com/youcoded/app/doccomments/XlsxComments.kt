@@ -73,10 +73,14 @@ import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.parsers.ParserConfigurationException
 import org.xml.sax.InputSource
 
-/** Mirrors desktop's `XlsxReadError` union (xlsx-comments.ts). */
+/** Mirrors desktop's `XlsxReadError` union (xlsx-comments.ts). `UNSAFE_XML`
+ *  has no desktop counterpart yet (F1, implementation review, Android-only so
+ *  far — see `rejectDoctype`'s own doc comment for why this platform needs a
+ *  check desktop's `linkedom`-based parser doesn't). */
 enum class XlsxReadError {
     INVALID_XLSX,
     ARCHIVE_TOO_LARGE,
+    UNSAFE_XML,
 }
 
 sealed class XlsxReadResult {
@@ -167,12 +171,47 @@ private fun newSecureDocumentBuilder(): DocumentBuilder {
     return factory.newDocumentBuilder()
 }
 
-private fun parseXml(xml: String): Document =
-    newSecureDocumentBuilder().parse(InputSource(StringReader(xml)))
+/** Thrown by `parseXml` when a part's raw XML text contains a `<!DOCTYPE`
+ *  declaration — refused BEFORE any parser sees it. Same reasoning as
+ *  `DocxComments.kt`'s own identical class (F1, implementation review — high,
+ *  security): Android's actual on-device `javax.xml.parsers` implementation
+ *  is Expat-backed, not the Xerces implementation this module's JVM unit
+ *  tests run against, and may not recognize the `disallow-doctype-decl`
+ *  feature URI at all — `newSecureDocumentBuilder`'s own `setFeature` loop
+ *  silently swallows an unrecognized feature, which would otherwise leave
+ *  DOCTYPE-based internal-entity expansion ("billion laughs") reachable on a
+ *  real device despite every JVM test passing. A plain case-insensitive
+ *  substring scan is platform-independent by construction and never a false
+ *  positive (a literal `<` in XML text must be escaped as `&lt;`, so a
+ *  literal `<!DOCTYPE` anywhere in the string is always a real markup
+ *  declaration). Duplicated rather than shared — same "two read/write modules
+ *  are deliberately independent" convention this file's own header already
+ *  documents for `newSecureDocumentBuilder`. */
+private class XlsxUnsafeXmlDoctypeException : Exception()
 
+private val DOCTYPE_DECLARATION = Regex("(?i)<!DOCTYPE")
+
+private fun rejectDoctype(xml: String) {
+    if (DOCTYPE_DECLARATION.containsMatchIn(xml)) throw XlsxUnsafeXmlDoctypeException()
+}
+
+private fun parseXml(xml: String): Document {
+    rejectDoctype(xml)
+    return newSecureDocumentBuilder().parse(InputSource(StringReader(xml)))
+}
+
+/** F3 (implementation review): reads via `readEntryBounded`
+ *  (DocCommentsZipSizeGuard.kt) rather than a plain `getInputStream().
+ *  readBytes()` — counts REAL decompressed bytes as they arrive and throws
+ *  `ZipBombDetectedException` the moment they exceed the ceiling, regardless
+ *  of what the archive's own declared metadata said. Every call site already
+ *  runs inside `readXlsxComments`'s own top-level `try`/`catch` (see that
+ *  function), so letting the exception propagate here — rather than catching
+ *  it locally — is what turns it into the SAME typed `ARCHIVE_TOO_LARGE`
+ *  refusal every other size-guard trip already produces. */
 private fun readZipEntryText(zip: ZipFile, name: String): String? {
     val entry = zip.getEntry(name) ?: return null
-    return zip.getInputStream(entry).use { it.readBytes() }.toString(Charsets.UTF_8)
+    return readEntryBounded(zip, entry).toString(Charsets.UTF_8)
 }
 
 private fun elementChildrenNamed(el: Element, tagName: String): List<Element> {
@@ -332,98 +371,140 @@ fun readXlsxComments(file: File, path: String): XlsxReadResult {
     } catch (_: Exception) {
         return XlsxReadResult.Err(XlsxReadError.INVALID_XLSX)
     }
-    zip.use { z ->
-        // F2-equivalent (decompression-bomb guard): checked FIRST, before any
-        // entry (including `xl/workbook.xml` itself) is decompressed — unlike
-        // docx's fixed three-named-part read, an xlsx's part set/count varies
-        // per workbook (§4.3a), so the WHOLE archive is pre-scanned off
-        // `ZipEntry.getSize()`'s CENTRAL DIRECTORY metadata (no decompression
-        // needed to read it) before `readZipEntryText` ever calls
-        // `getInputStream()` on anything, mirroring desktop's own order:
-        // `JSZip.loadAsync` (metadata only) then `checkTotalWithinCeiling`
-        // then only afterward `workbook.xlsx.load()` (which decompresses).
-        if (checkAllEntriesWithinCeiling(z) is ZipSizeGuardResult.ArchiveTooLarge) {
-            return XlsxReadResult.Err(XlsxReadError.ARCHIVE_TOO_LARGE)
-        }
+    // F1/F3 (implementation review): `rejectDoctype` and `readEntryBounded`
+    // (DocCommentsZipSizeGuard.kt) both signal by throwing, since they're
+    // reached several calls deep inside `readXlsxCommentsFromZip`'s own
+    // pipeline (through `readZipEntryText`/`parseXml`/`parseWorkbookSheets`/
+    // `parseRels`/`parseCommentsXml`) — catching both here, in the ONE place
+    // this function actually returns an `XlsxReadResult`, keeps every
+    // intermediate call from needing its own sealed-result plumbing for a
+    // case that should never happen against a legitimate file. See
+    // `readXlsxCommentsFromZip`'s own inner `try`/`catch` blocks for why a
+    // `DOCTYPE`/zip-bomb signal is deliberately RE-THROWN past them rather
+    // than being absorbed into the pre-existing generic `INVALID_XLSX`/
+    // `continue` handling those blocks already had.
+    return try {
+        zip.use { z -> readXlsxCommentsFromZip(z, path) }
+    } catch (_: XlsxUnsafeXmlDoctypeException) {
+        XlsxReadResult.Err(XlsxReadError.UNSAFE_XML)
+    } catch (_: ZipBombDetectedException) {
+        XlsxReadResult.Err(XlsxReadError.ARCHIVE_TOO_LARGE)
+    }
+}
 
-        val workbookXml = readZipEntryText(z, "xl/workbook.xml")
-            ?: return XlsxReadResult.Err(XlsxReadError.INVALID_XLSX)
-        val workbookRelsXml = readZipEntryText(z, "xl/_rels/workbook.xml.rels")
-            ?: return XlsxReadResult.Err(XlsxReadError.INVALID_XLSX)
+private fun readXlsxCommentsFromZip(z: ZipFile, path: String): XlsxReadResult {
+    // F2-equivalent (decompression-bomb guard): checked FIRST, before any
+    // entry (including `xl/workbook.xml` itself) is decompressed — unlike
+    // docx's fixed three-named-part read, an xlsx's part set/count varies
+    // per workbook (§4.3a), so the WHOLE archive is pre-scanned off
+    // `ZipEntry.getSize()`'s CENTRAL DIRECTORY metadata (no decompression
+    // needed to read it) before `readZipEntryText` ever calls
+    // `getInputStream()` on anything, mirroring desktop's own order:
+    // `JSZip.loadAsync` (metadata only) then `checkTotalWithinCeiling`
+    // then only afterward `workbook.xlsx.load()` (which decompresses).
+    // Kept as the fast first line of defense; F3's `readEntryBounded`
+    // (used by `readZipEntryText` above) is the backstop underneath it
+    // that doesn't trust this declared metadata at all.
+    if (checkAllEntriesWithinCeiling(z) is ZipSizeGuardResult.ArchiveTooLarge) {
+        return XlsxReadResult.Err(XlsxReadError.ARCHIVE_TOO_LARGE)
+    }
 
-        val sheets = try {
-            parseWorkbookSheets(workbookXml)
+    val workbookXml = readZipEntryText(z, "xl/workbook.xml")
+        ?: return XlsxReadResult.Err(XlsxReadError.INVALID_XLSX)
+    val workbookRelsXml = readZipEntryText(z, "xl/_rels/workbook.xml.rels")
+        ?: return XlsxReadResult.Err(XlsxReadError.INVALID_XLSX)
+
+    val sheets = try {
+        parseWorkbookSheets(workbookXml)
+    } catch (e: XlsxUnsafeXmlDoctypeException) {
+        throw e
+    } catch (_: Exception) {
+        return XlsxReadResult.Err(XlsxReadError.INVALID_XLSX)
+    }
+    val workbookRels = try {
+        parseRels(workbookRelsXml)
+    } catch (e: XlsxUnsafeXmlDoctypeException) {
+        throw e
+    } catch (_: Exception) {
+        return XlsxReadResult.Err(XlsxReadError.INVALID_XLSX)
+    }
+
+    // §4.2: `sheet` named on the selector only when the workbook has more
+    // than one tab that actually resolves to a real WORKSHEET part — a
+    // `<sheet>` entry with a dangling rId is skipped (existing behaviour),
+    // and — F2, implementation review, parity — so is one whose
+    // relationship Type is anything OTHER than
+    // `.../relationships/worksheet` (a chartsheet's own Type ends in
+    // `/relationships/chartsheet`). Before this Type check, a workbook
+    // with exactly one real worksheet plus one chartsheet counted as
+    // TWO resolved sheets here, so `singleSheet` came out `false` and the
+    // selector stamped a `sheet` name desktop's own reader (exceljs's
+    // `reconcile()` — xlsx-comments.ts's own header comment — never
+    // surfaces a chartsheet as a worksheet at all) would never stamp for
+    // the identical file. Filtering by Type is the OOXML-correct way to
+    // tell a worksheet from a chartsheet — never by file extension or
+    // target-path guessing, same precedent `findCommentsPartPath` already
+    // set for finding the comments relationship itself.
+    val resolvedSheets = sheets.mapNotNull { sheet ->
+        val rel = workbookRels[sheet.rId] ?: return@mapNotNull null
+        if (!rel.type.endsWith("/relationships/worksheet")) return@mapNotNull null
+        val worksheetPath = resolveRelativeTarget("xl", rel.target)
+        if (z.getEntry(worksheetPath) == null) return@mapNotNull null
+        sheet to worksheetPath
+    }
+    val singleSheet = resolvedSheets.size <= 1
+
+    val comments = mutableListOf<PersistedComment>()
+    for ((sheet, worksheetPath) in resolvedSheets) {
+        val sheetName = sheet.name
+        val commentsPartPath = findCommentsPartPath(z, worksheetPath) ?: continue
+        val commentsXml = readZipEntryText(z, commentsPartPath) ?: continue
+        val rawComments = try {
+            parseCommentsXml(commentsXml)
+        } catch (e: XlsxUnsafeXmlDoctypeException) {
+            throw e
         } catch (_: Exception) {
-            return XlsxReadResult.Err(XlsxReadError.INVALID_XLSX)
-        }
-        val workbookRels = try {
-            parseRels(workbookRelsXml)
-        } catch (_: Exception) {
-            return XlsxReadResult.Err(XlsxReadError.INVALID_XLSX)
+            continue
         }
 
-        // §4.2: `sheet` named on the selector only when the workbook has
-        // more than one tab that actually resolves to a real worksheet part
-        // (a `<sheet>` entry with a dangling/chartsheet rId is skipped below,
-        // same as exceljs's own `reconcile()` silently ignoring it).
-        val resolvedSheets = sheets.mapNotNull { sheet ->
-            val rel = workbookRels[sheet.rId] ?: return@mapNotNull null
-            val worksheetPath = resolveRelativeTarget("xl", rel.target)
-            if (z.getEntry(worksheetPath) == null) return@mapNotNull null
-            sheet to worksheetPath
-        }
-        val singleSheet = resolvedSheets.size <= 1
+        for (raw in rawComments) {
+            val (resolved, body) = stripResolvedMarker(raw.rawText)
+            val turns = splitTurns(body)
+            if (turns.isEmpty()) continue
+            val first = turns[0]
+            val rest = turns.drop(1)
 
-        val comments = mutableListOf<PersistedComment>()
-        for ((sheet, worksheetPath) in resolvedSheets) {
-            val sheetName = sheet.name
-            val commentsPartPath = findCommentsPartPath(z, worksheetPath) ?: continue
-            val commentsXml = readZipEntryText(z, commentsPartPath) ?: continue
-            val rawComments = try {
-                parseCommentsXml(commentsXml)
-            } catch (_: Exception) {
-                continue
-            }
+            val cellSelector = CellSelector(cell = raw.cellRef, sheet = if (singleSheet) null else sheetName)
+            val selector = CommentSelector.Cell(cellSelector)
 
-            for (raw in rawComments) {
-                val (resolved, body) = stripResolvedMarker(raw.rawText)
-                val turns = splitTurns(body)
-                if (turns.isEmpty()) continue
-                val first = turns[0]
-                val rest = turns.drop(1)
-
-                val cellSelector = CellSelector(cell = raw.cellRef, sheet = if (singleSheet) null else sheetName)
-                val selector = CommentSelector.Cell(cellSelector)
-
-                val replies = rest.mapIndexed { i, turn ->
-                    CommentReply(
-                        id = "x-${sheet.sheetId}-${raw.cellRef}-r${i + 1}",
-                        author = toCommentAuthor(turn.author),
-                        text = turn.text,
-                        createdAt = System.currentTimeMillis(),
-                    )
-                }
-
-                comments.add(
-                    PersistedComment(
-                        id = "x-${sheet.sheetId}-${raw.cellRef}",
-                        path = path,
-                        selector = selector,
-                        text = first.text,
-                        author = toCommentAuthor(first.author),
-                        // exceljs's legacy Note carries no timestamp of its
-                        // own — never invent one; the read time is the only
-                        // honest value available (same reasoning as desktop's
-                        // own reader).
-                        createdAt = System.currentTimeMillis(),
-                        replies = replies,
-                        resolved = resolved,
-                        history = emptyList(),
-                    ),
+            val replies = rest.mapIndexed { i, turn ->
+                CommentReply(
+                    id = "x-${sheet.sheetId}-${raw.cellRef}-r${i + 1}",
+                    author = toCommentAuthor(turn.author),
+                    text = turn.text,
+                    createdAt = System.currentTimeMillis(),
                 )
             }
-        }
 
-        return XlsxReadResult.Ok(comments)
+            comments.add(
+                PersistedComment(
+                    id = "x-${sheet.sheetId}-${raw.cellRef}",
+                    path = path,
+                    selector = selector,
+                    text = first.text,
+                    author = toCommentAuthor(first.author),
+                    // exceljs's legacy Note carries no timestamp of its
+                    // own — never invent one; the read time is the only
+                    // honest value available (same reasoning as desktop's
+                    // own reader).
+                    createdAt = System.currentTimeMillis(),
+                    replies = replies,
+                    resolved = resolved,
+                    history = emptyList(),
+                ),
+            )
+        }
     }
+
+    return XlsxReadResult.Ok(comments)
 }

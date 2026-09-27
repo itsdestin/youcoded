@@ -56,11 +56,15 @@ import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.parsers.ParserConfigurationException
 import org.xml.sax.InputSource
 
-/** Mirrors desktop's `DocxReadError` union (docx-comments.ts). */
+/** Mirrors desktop's `DocxReadError` union (docx-comments.ts). `UNSAFE_XML`
+ *  has no desktop counterpart yet (F1, implementation review, Android-only
+ *  so far) — see `rejectDoctype`'s own doc comment for why this platform
+ *  needs a check desktop's `linkedom`-based parser doesn't. */
 enum class DocxReadError {
     INVALID_DOCX,
     MISSING_DOCUMENT_PART,
     ARCHIVE_TOO_LARGE,
+    UNSAFE_XML,
 }
 
 sealed class DocxReadResult {
@@ -256,8 +260,45 @@ private fun newSecureDocumentBuilder(): DocumentBuilder {
     return factory.newDocumentBuilder()
 }
 
-private fun parseXml(xml: String): Document =
-    newSecureDocumentBuilder().parse(InputSource(StringReader(xml)))
+/** Thrown by `parseXml` when a part's raw XML text contains a `<!DOCTYPE`
+ *  declaration — refused BEFORE any parser sees it (F1, implementation
+ *  review — high, security). WHY the factory's own `disallow-doctype-decl`
+ *  feature (above) isn't trustworthy enough on its own: this module's JVM
+ *  unit tests run against the JVM's bundled Xerces implementation, which DOES
+ *  honor that feature name and throws its own `SAXParseException` on a
+ *  DOCTYPE — so a real bug here would never surface in `./gradlew test` at
+ *  all. Android's actual on-device `javax.xml.parsers` implementation is
+ *  Expat-backed, not Xerces, and may not recognize the
+ *  `"http://apache.org/xml/features/disallow-doctype-decl"` feature URI —
+ *  `newSecureDocumentBuilder`'s own `setFeature` loop silently swallows an
+ *  unrecognized feature (catching `ParserConfigurationException` on the
+ *  `setFeature` CALL itself, with no log), which would leave DOCTYPE
+ *  processing — and by extension internal-entity expansion, a "billion
+ *  laughs" attack — reachable on a real device despite every JVM test here
+ *  passing. A plain case-insensitive substring scan is platform-independent
+ *  by CONSTRUCTION: it never depends on which parser implementation, or
+ *  which of its features, actually got applied, so it refuses identically on
+ *  the JVM and on a real device. No anchoring to the start of the string is
+ *  needed to "allow leading BOM/whitespace/declaration" — a literal `<!DOCTYPE`
+ *  can never legitimately appear anywhere in well-formed XML text content
+ *  either (a literal `<` in text must be escaped as `&lt;`), so a match
+ *  ANYWHERE in the string is already an unambiguous real markup declaration,
+ *  never a false positive off ordinary document prose. The factory's own
+ *  security features stay configured too, as defense in depth for whatever
+ *  parser DOES honor them — this check is the layer that doesn't need to
+ *  trust that at all. */
+private class DocxUnsafeXmlDoctypeException : Exception()
+
+private val DOCTYPE_DECLARATION = Regex("(?i)<!DOCTYPE")
+
+private fun rejectDoctype(xml: String) {
+    if (DOCTYPE_DECLARATION.containsMatchIn(xml)) throw DocxUnsafeXmlDoctypeException()
+}
+
+private fun parseXml(xml: String): Document {
+    rejectDoctype(xml)
+    return newSecureDocumentBuilder().parse(InputSource(StringReader(xml)))
+}
 
 private fun parseCommentsXml(xml: String): List<RawComment> {
     val doc = parseXml(xml)
@@ -343,92 +384,118 @@ fun readDocxComments(file: File, path: String): DocxReadResult {
     } catch (_: Exception) {
         return DocxReadResult.Err(DocxReadError.INVALID_DOCX)
     }
-    zip.use { z ->
-        val commentsEntry = z.getEntry("word/comments.xml")
-            ?: return DocxReadResult.Ok(emptyList())
-        val documentEntry = z.getEntry("word/document.xml")
-            // A comments.xml part with no document.xml at all is not a real
-            // Word file (every .docx has one) — refuse rather than silently
-            // reporting no comments for what is actually a corrupt archive.
-            ?: return DocxReadResult.Err(DocxReadError.MISSING_DOCUMENT_PART)
-        val extendedEntry = z.getEntry("word/commentsExtended.xml")
+    // F1/F3 (implementation review): `rejectDoctype` (thrown from `parseXml`,
+    // reached indirectly through `parseCommentsXml`/`parseCommentsExtendedXml`/
+    // `walkDocument`) and `readEntryBounded` (DocCommentsZipSizeGuard.kt, F3's
+    // decompression-time backstop) both signal by throwing rather than by a
+    // sealed result, since they're reached several calls deep inside
+    // `readDocxCommentsFromZip`'s own pipeline — catching both here, in the
+    // ONE place this function actually returns a `DocxReadResult`, is what
+    // stays honest about the exception rather than a swallow-and-guess
+    // (`newSecureDocumentBuilder`'s own `setFeature` catch is the failure mode
+    // F1 exists to compensate for — this catch is never that: it's a REAL,
+    // logged-by-being-a-typed-result outcome, not a silently-ignored one).
+    return try {
+        zip.use { z -> readDocxCommentsFromZip(z, path) }
+    } catch (_: DocxUnsafeXmlDoctypeException) {
+        DocxReadResult.Err(DocxReadError.UNSAFE_XML)
+    } catch (_: ZipBombDetectedException) {
+        DocxReadResult.Err(DocxReadError.ARCHIVE_TOO_LARGE)
+    }
+}
 
-        // F2-equivalent (zip-size-guard): refuse a decompression-bomb-shaped
-        // archive BEFORE any entry is decompressed, checked against the
-        // CENTRAL DIRECTORY's declared size, never against actually-
-        // decompressed bytes.
-        val sizeCheck = checkNamedEntriesWithinCeiling(
-            z,
-            listOf("word/comments.xml", "word/document.xml", "word/commentsExtended.xml"),
-        )
-        if (sizeCheck is ZipSizeGuardResult.ArchiveTooLarge) {
-            return DocxReadResult.Err(DocxReadError.ARCHIVE_TOO_LARGE)
-        }
+private fun readDocxCommentsFromZip(z: ZipFile, path: String): DocxReadResult {
+    val commentsEntry = z.getEntry("word/comments.xml")
+        ?: return DocxReadResult.Ok(emptyList())
+    val documentEntry = z.getEntry("word/document.xml")
+        // A comments.xml part with no document.xml at all is not a real
+        // Word file (every .docx has one) — refuse rather than silently
+        // reporting no comments for what is actually a corrupt archive.
+        ?: return DocxReadResult.Err(DocxReadError.MISSING_DOCUMENT_PART)
+    val extendedEntry = z.getEntry("word/commentsExtended.xml")
 
-        val commentsXml = z.getInputStream(commentsEntry).use { it.readBytes() }.toString(Charsets.UTF_8)
-        val documentXml = z.getInputStream(documentEntry).use { it.readBytes() }.toString(Charsets.UTF_8)
-        val extendedXml = extendedEntry?.let { z.getInputStream(it).use { s -> s.readBytes() }.toString(Charsets.UTF_8) }
+    // F2-equivalent (zip-size-guard): refuse a decompression-bomb-shaped
+    // archive BEFORE any entry is decompressed, checked against the
+    // CENTRAL DIRECTORY's declared size, never against actually-
+    // decompressed bytes. Kept as the fast first line of defense; F3's
+    // `readEntryBounded` call just below is the backstop that doesn't
+    // trust this declared metadata at all.
+    val sizeCheck = checkNamedEntriesWithinCeiling(
+        z,
+        listOf("word/comments.xml", "word/document.xml", "word/commentsExtended.xml"),
+    )
+    if (sizeCheck is ZipSizeGuardResult.ArchiveTooLarge) {
+        return DocxReadResult.Err(DocxReadError.ARCHIVE_TOO_LARGE)
+    }
 
-        val rawComments = parseCommentsXml(commentsXml)
-        val extended = extendedXml?.let { parseCommentsExtendedXml(it) } ?: emptyMap()
-        val (fullText, ranges) = walkDocument(parseXml(documentXml))
+    // F3: bounded, byte-counting decompression (DocCommentsZipSizeGuard.kt)
+    // — counts REAL decompressed bytes as they arrive and throws
+    // `ZipBombDetectedException` (caught by `readDocxComments` above) the
+    // moment they exceed the ceiling, regardless of what the archive's own
+    // metadata declared.
+    val commentsXml = readEntryBounded(z, commentsEntry).toString(Charsets.UTF_8)
+    val documentXml = readEntryBounded(z, documentEntry).toString(Charsets.UTF_8)
+    val extendedXml = extendedEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
 
-        val byParaId = HashMap<String, RawComment>()
-        for (c in rawComments) if (c.paraId != null) byParaId[c.paraId] = c
+    val rawComments = parseCommentsXml(commentsXml)
+    val extended = extendedXml?.let { parseCommentsExtendedXml(it) } ?: emptyMap()
+    val (fullText, ranges) = walkDocument(parseXml(documentXml))
 
-        // Group every raw comment.xml entry into its root's replies[] (if
-        // it's a reply, however deeply nested) or the top-level list (if
-        // it's a root).
-        val repliesByRootParaId = HashMap<String, MutableList<CommentReply>>()
-        val topLevel = mutableListOf<RawComment>()
-        for (c in rawComments) {
-            val rootParaId = c.paraId?.let { resolveRootParaId(it, extended) }
-            val isReply = rootParaId != null && rootParaId != c.paraId && byParaId.containsKey(rootParaId)
-            if (isReply) {
-                val root = byParaId.getValue(rootParaId!!)
-                val list = repliesByRootParaId.getOrPut(rootParaId) { mutableListOf() }
-                list.add(
-                    CommentReply(
-                        id = "w-${root.id}-r${list.size + 1}",
-                        author = toCommentAuthor(c.author),
-                        text = c.text,
-                        createdAt = parseDate(c.date),
-                    ),
-                )
-            } else {
-                topLevel.add(c)
-            }
-        }
+    val byParaId = HashMap<String, RawComment>()
+    for (c in rawComments) if (c.paraId != null) byParaId[c.paraId] = c
 
-        val comments = topLevel.map { c ->
-            val range = ranges[c.id]
-            val ext = c.paraId?.let { extended[it] }
-            val exact = if (range != null) fullText.substring(range.start, range.end) else ""
-            val selector = CommentSelector.Text(
-                TextQuoteSelector(
-                    exact = exact,
-                    prefix = if (range != null) buildPrefix(fullText, range.start) else "",
-                    suffix = if (range != null) buildSuffix(fullText, range.end) else "",
-                    occurrence = if (range != null) countOccurrencesBefore(fullText, exact, range.start) else 0,
+    // Group every raw comment.xml entry into its root's replies[] (if
+    // it's a reply, however deeply nested) or the top-level list (if
+    // it's a root).
+    val repliesByRootParaId = HashMap<String, MutableList<CommentReply>>()
+    val topLevel = mutableListOf<RawComment>()
+    for (c in rawComments) {
+        val rootParaId = c.paraId?.let { resolveRootParaId(it, extended) }
+        val isReply = rootParaId != null && rootParaId != c.paraId && byParaId.containsKey(rootParaId)
+        if (isReply) {
+            val root = byParaId.getValue(rootParaId!!)
+            val list = repliesByRootParaId.getOrPut(rootParaId) { mutableListOf() }
+            list.add(
+                CommentReply(
+                    id = "w-${root.id}-r${list.size + 1}",
+                    author = toCommentAuthor(c.author),
+                    text = c.text,
+                    createdAt = parseDate(c.date),
                 ),
             )
-            PersistedComment(
-                id = "w-${c.id}",
-                path = path,
-                selector = selector,
-                text = c.text,
-                author = toCommentAuthor(c.author),
-                createdAt = parseDate(c.date),
-                replies = c.paraId?.let { repliesByRootParaId[it] } ?: emptyList(),
-                resolved = ext?.done ?: false,
-                // Word's own OOXML has no separate resolve/reopen AUDIT
-                // TRAIL — only the CURRENT w15:done bit. `history` starts
-                // empty for a freshly-read native comment (write path, T17,
-                // is what would append to it).
-                history = emptyList(),
-            )
+        } else {
+            topLevel.add(c)
         }
-
-        return DocxReadResult.Ok(comments)
     }
+
+    val comments = topLevel.map { c ->
+        val range = ranges[c.id]
+        val ext = c.paraId?.let { extended[it] }
+        val exact = if (range != null) fullText.substring(range.start, range.end) else ""
+        val selector = CommentSelector.Text(
+            TextQuoteSelector(
+                exact = exact,
+                prefix = if (range != null) buildPrefix(fullText, range.start) else "",
+                suffix = if (range != null) buildSuffix(fullText, range.end) else "",
+                occurrence = if (range != null) countOccurrencesBefore(fullText, exact, range.start) else 0,
+            ),
+        )
+        PersistedComment(
+            id = "w-${c.id}",
+            path = path,
+            selector = selector,
+            text = c.text,
+            author = toCommentAuthor(c.author),
+            createdAt = parseDate(c.date),
+            replies = c.paraId?.let { repliesByRootParaId[it] } ?: emptyList(),
+            resolved = ext?.done ?: false,
+            // Word's own OOXML has no separate resolve/reopen AUDIT
+            // TRAIL — only the CURRENT w15:done bit. `history` starts
+            // empty for a freshly-read native comment (write path, T17,
+            // is what would append to it).
+            history = emptyList(),
+        )
+    }
+
+    return DocxReadResult.Ok(comments)
 }

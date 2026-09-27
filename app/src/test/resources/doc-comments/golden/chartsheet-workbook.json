@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "id": "x-1-B2",
+      "path": "reports/chartsheet-workbook.xlsx",
+      "selector": {
+        "kind": "cell",
+        "selector": {
+          "type": "CellSelector",
+          "cell": "B2"
+        }
+      },
+      "text": "Confirm this against the finance close.",
+      "author": "person:Priya Shah",
+      "createdAt": 0,
+      "replies": [],
+      "resolved": false,
+      "history": []
+    }
+  ]
+}

@@ -244,6 +244,82 @@ class DocxCommentsTest {
         assertEquals(DocxReadResult.Err(DocxReadError.ARCHIVE_TOO_LARGE), result)
     }
 
+    // F1 (implementation review — high, security): a part carrying an
+    // internal-entity "billion laughs" DTD bomb must be refused, not parsed —
+    // see `rejectDoctype`'s own doc comment (DocxComments.kt) for why this
+    // pre-check exists ON TOP OF the factory's own `disallow-doctype-decl`
+    // feature: this JVM test's own Xerces-backed parser WOULD also refuse the
+    // DOCTYPE on its own (confirming this exact scenario can never surface a
+    // real bug from `./gradlew test` alone), but Android's actual on-device
+    // Expat-backed parser may silently ignore that feature name entirely,
+    // which is exactly what this platform-independent substring check exists
+    // to catch regardless of which parser implementation is on the classpath.
+    @Test
+    fun refusesADocxWhoseDocumentXmlCarriesAnInternalDtdEntityBomb() {
+        val doctypeBomb = """
+            <?xml version="1.0"?>
+            <!DOCTYPE lolz [
+             <!ENTITY lol "lol">
+             <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+             <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+            ]>
+            <w:document><w:body><w:p><w:r><w:t>&lol3;</w:t></w:r></w:p></w:body></w:document>
+        """.trimIndent()
+        val bytes = buildPlainZip(
+            mapOf(
+                "word/document.xml" to doctypeBomb,
+                "word/comments.xml" to "<w:comments/>",
+            ),
+        )
+        val f = Files.createTempFile("ycd-docx-read-", "-doctype-bomb.docx").toFile()
+        f.deleteOnExit()
+        f.writeBytes(bytes)
+        val result = readDocxComments(f, "docs/doctype-bomb.docx")
+        assertEquals(DocxReadResult.Err(DocxReadError.UNSAFE_XML), result)
+    }
+
+    @Test
+    fun refusesACommentsXmlCarryingAnInternalDtdEntityBomb() {
+        val doctypeBomb = """
+            <?xml version="1.0"?>
+            <!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">]>
+            <w:comments><w:comment w:id="1" w:author="X" w:date="2020-01-01T00:00:00Z"><w:p w14:paraId="AAAAAAAA"><w:r><w:t>&lol2;</w:t></w:r></w:p></w:comment></w:comments>
+        """.trimIndent()
+        val bytes = buildPlainZip(
+            mapOf(
+                "word/document.xml" to "<w:document><w:body/></w:document>",
+                "word/comments.xml" to doctypeBomb,
+            ),
+        )
+        val f = Files.createTempFile("ycd-docx-read-", "-doctype-bomb2.docx").toFile()
+        f.deleteOnExit()
+        f.writeBytes(bytes)
+        val result = readDocxComments(f, "docs/doctype-bomb2.docx")
+        assertEquals(DocxReadResult.Err(DocxReadError.UNSAFE_XML), result)
+    }
+
+    // F3 (implementation review): the declared-size precheck
+    // (`checkNamedEntriesWithinCeiling`) only ever reads CENTRAL DIRECTORY
+    // metadata — a crafted entry can simply lie about it. This builds a REAL
+    // zip bomb (word/comments.xml genuinely decompresses to well over the
+    // 200MB ceiling) whose declared size is patched down to a few bytes, so
+    // the declared-size precheck alone would wave it through; only the
+    // byte-counting `readEntryBounded` backstop can catch this shape.
+    @Test
+    fun refusesACommentsXmlEntryWhoseRealDecompressedBytesExceedTheCeilingEvenWhenItsDeclaredSizeIsTiny() {
+        val bytes = buildRealZipBomb(
+            files = mapOf("word/document.xml" to "<w:document><w:body/></w:document>"),
+            bombEntryName = "word/comments.xml",
+            realUncompressedBytes = 201L * 1024 * 1024,
+            declaredUncompressedSize = 10L,
+        )
+        val f = Files.createTempFile("ycd-docx-read-", "-real-bomb.docx").toFile()
+        f.deleteOnExit()
+        f.writeBytes(bytes)
+        val result = readDocxComments(f, "docs/real-bomb.docx")
+        assertEquals(DocxReadResult.Err(DocxReadError.ARCHIVE_TOO_LARGE), result)
+    }
+
     @Test
     fun findsACommentNestedThousandsOfLevelsDeepWithoutOverflowingTheCallStack() {
         val result = readDocxComments(fixtureFile("deeply-nested.docx"), "docs/deeply-nested.docx")

@@ -88,3 +88,58 @@ private fun patchCentralDirectoryUncompressedSize(buf: ByteArray, targetEntryNam
     check(found) { "buildDeclaredOversizeZip: no central directory entry found for \"$targetEntryName\"" }
     return patched
 }
+
+/** Builds a plain, ordinary real zip from `files` (name -> text content) —
+ *  no size tampering at all. A small shared helper so a test pinning
+ *  ordinary/malformed-content behaviour (F1's DOCTYPE refusal, for example)
+ *  doesn't need to hand-roll `ZipOutputStream` boilerplate of its own. */
+fun buildPlainZip(files: Map<String, String>): ByteArray {
+    val baos = ByteArrayOutputStream()
+    ZipOutputStream(baos).use { zos ->
+        for ((name, content) in files) {
+            zos.putNextEntry(ZipEntry(name))
+            zos.write(content.toByteArray(StandardCharsets.UTF_8))
+            zos.closeEntry()
+        }
+    }
+    return baos.toByteArray()
+}
+
+/**
+ * Builds a REAL zip bomb: `bombEntryName` genuinely decompresses to
+ * `realUncompressedBytes` (all zero bytes — DEFLATE compresses that to almost
+ * nothing, so this stays a cheap, fast fixture despite the large real size),
+ * plus any other plain-text `files`. The bomb entry's DECLARED uncompressed
+ * size (central directory only, same mechanism `buildDeclaredOversizeZip`
+ * above relies on) is then patched down to `declaredUncompressedSize` — far
+ * SMALLER than its real content — so a declared-size-only precheck
+ * (`checkNamedEntriesWithinCeiling`/`checkAllEntriesWithinCeiling`) would wave
+ * it straight through. Used to pin F3 (implementation review): `readEntryBounded`'s
+ * own byte-COUNTING guard, which never trusts the declared size at all and
+ * must catch this shape on its own, independent of the declared-size checks.
+ */
+fun buildRealZipBomb(
+    files: Map<String, String>,
+    bombEntryName: String,
+    realUncompressedBytes: Long,
+    declaredUncompressedSize: Long,
+): ByteArray {
+    val baos = ByteArrayOutputStream()
+    ZipOutputStream(baos).use { zos ->
+        for ((name, content) in files) {
+            zos.putNextEntry(ZipEntry(name))
+            zos.write(content.toByteArray(StandardCharsets.UTF_8))
+            zos.closeEntry()
+        }
+        zos.putNextEntry(ZipEntry(bombEntryName))
+        val chunk = ByteArray(8192) // all-zero — trivial for DEFLATE to compress
+        var written = 0L
+        while (written < realUncompressedBytes) {
+            val n = minOf(chunk.size.toLong(), realUncompressedBytes - written).toInt()
+            zos.write(chunk, 0, n)
+            written += n
+        }
+        zos.closeEntry()
+    }
+    return patchCentralDirectoryUncompressedSize(baos.toByteArray(), bombEntryName, declaredUncompressedSize)
+}
