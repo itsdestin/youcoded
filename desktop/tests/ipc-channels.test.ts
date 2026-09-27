@@ -1335,22 +1335,23 @@ describe('git:* IPC parity (git surface)', () => {
   });
 });
 
-// docComments:* IPC parity — T3 of the doc-comments build (design
-// docs/active/specs/2026-09-26-doc-comments-build-design.md §1.6). Unlike the
-// git:* block above, this one deliberately does NOT assert an Android arm in
-// SessionService.kt: per the design's own task table, Android parity is a
-// SEPARATE task (T4) that depends on T3, not something T3 lands alongside it.
-// Until T4 lands, these channels fall through Kotlin's existing generic
-// catch-all (buildUnsupportedResponse — android-honest-build.test.ts already
-// pins that arm exists for ANY unhandled channel), which is the correct,
-// honest interim behaviour per ipc-bridge.md ("a channel Kotlin has no branch
-// for answers {ok:false, unsupported:true}") — not a gap this file should
-// paper over with a premature Kotlin-containment assertion.
+// docComments:* IPC parity — T3/T4 of the doc-comments build (design
+// docs/active/specs/2026-09-26-doc-comments-build-design.md §1.6). T4 adds
+// the Android arm this block's own header used to say was deliberately
+// deferred: list/add/reply/resolve/reopen/move are now REAL Kotlin `when`
+// branches in SessionService.kt (DocCommentsStore.kt/DocCommentsGate.kt/
+// DocCommentsDispatch.kt), reopen-1's "full phone support" superseding the
+// git-style desktop-only stub an earlier revision of the design gave this
+// feature. watch/unwatch stay `not-implemented-on-mobile` (a general
+// FileObserver-based-push gap, §1.6) — same shape as artifacts:watch-project
+// (review 1, F10), never the bare `{unsupported:true}` catch-all.
 describe('docComments:* IPC parity', () => {
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
   const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
   const server = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
+  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
+  const kotlin = fs.existsSync(kotlinPath) ? readSourceFile(kotlinPath) : null;
 
   const channels: Array<[string, string]> = [
     ['docComments:list', 'DOC_COMMENTS_IPC.LIST'],
@@ -1380,6 +1381,9 @@ describe('docComments:* IPC parity', () => {
     it(`${ch} handled by remote-server.ts (WS case)`, () => {
       expect(server).toContain(`case '${ch}':`);
     });
+    it(`${ch} has a Kotlin arm in SessionService.kt`, () => {
+      if (kotlin) expect(kotlin).toContain(`"${ch}"`);
+    });
   }
 
   it('docComments:changed push channel present in preload + remote-shim', () => {
@@ -1401,6 +1405,31 @@ describe('docComments:* IPC parity', () => {
 
   it('the doc-comments IPC surface registration is actually wired into registerIpcHandlers', () => {
     expect(handlers).toContain('registerDocCommentsHandlers(ipcMain');
+  });
+
+  it('docComments:watch/:unwatch answer the SAME not-implemented-on-mobile shape as artifacts:watch-project, never the bare unsupported catch-all', () => {
+    if (!kotlin) return;
+    // The exact JSON shape T4's own pinning-test row calls for: a typed,
+    // explicit branch — {ok:false, error:'not-implemented-on-mobile'} — not
+    // MessageRouter.buildUnsupportedResponse's {ok:false, unsupported:true}
+    // no-branch-at-all catch-all (a different mechanism per ipc-bridge.md).
+    const watchBranch = kotlin.match(/"docComments:watch",\s*"docComments:unwatch"\s*->\s*\{[\s\S]*?\}\n/);
+    expect(watchBranch, 'docComments:watch/:unwatch branch not found in SessionService.kt').toBeTruthy();
+    expect(watchBranch![0]).toContain('"not-implemented-on-mobile"');
+    expect(watchBranch![0]).not.toContain('unsupported');
+  });
+
+  it('docComments:list/add/reply/resolve/reopen/move are real Kotlin implementations on Android, not stubbed not-implemented-on-mobile', () => {
+    if (!kotlin) return;
+    for (const ch of ['docComments:list', 'docComments:add', 'docComments:reply', 'docComments:resolve', 'docComments:reopen', 'docComments:move']) {
+      const branch = kotlin.match(new RegExp(`"${ch}"\\s*->\\s*\\{[\\s\\S]{0,4000}?\\n            \\}\\n`));
+      expect(branch, `${ch} branch not found in SessionService.kt`).toBeTruthy();
+      // A real branch calls into the DocCommentsStore/DocCommentsDispatch
+      // Kotlin modules T4 added — a stub would instead answer a bare
+      // not-implemented-on-mobile with nothing else in the branch body.
+      expect(branch![0]).toContain('com.youcoded.app.doccomments');
+      expect(branch![0]).not.toBe(`"${ch}" -> {\n                msg.id?.let { bridgeServer.respond(ws, msg.type, it,\n                    org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }\n            }\n`);
+    }
   });
 });
 
