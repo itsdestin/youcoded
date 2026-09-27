@@ -11,15 +11,85 @@
 // doc-comments MOCK's own fixture generator already used
 // (src/renderer/dev/workbench/fixtures/docs/make.mjs).
 import { describe, it, expect } from 'vitest';
-import { readFile } from 'fs/promises';
-import { join } from 'path';
-import { readDocxComments } from '../src/main/doc-comments/docx-comments';
+import { readFile, writeFile, mkdtemp, rm, readdir } from 'fs/promises';
+import { join, dirname } from 'path';
+import { tmpdir } from 'os';
+import JSZip from 'jszip';
+import {
+  readDocxComments,
+  addDocxComment,
+  replyToDocxComment,
+  resolveDocxComment,
+  reopenDocxComment,
+  moveDocxComment,
+  writeDocxMutation,
+} from '../src/main/doc-comments/docx-comments';
 import { buildDeclaredOversizeZip } from './fixtures/doc-comments/oversized-zip';
+import type { CommentSelector } from '../src/shared/doc-comments-types';
 
 const FIXTURES_DIR = join(__dirname, 'fixtures', 'doc-comments');
 
 async function loadFixture(name: string): Promise<Buffer> {
   return readFile(join(FIXTURES_DIR, name));
+}
+
+function textSelector(exact: string): CommentSelector {
+  return { kind: 'text', selector: { type: 'TextQuoteSelector', exact, prefix: '', suffix: '', occurrence: 0 } };
+}
+
+async function withScratchCopy<T>(fixtureName: string, fn: (targetPath: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), 'ycd-docx-write-'));
+  const target = join(dir, fixtureName);
+  await writeFile(target, await loadFixture(fixtureName));
+  try {
+    return await fn(target);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * T11's own "gapped/non-sequential existing w:id" fixture (§8 T11's pinning
+ * test list) — built in-memory rather than as a new checked-in binary,
+ * since it exists only to pin `maxExistingCommentId`'s "(max existing w:id)
+ * + 1, never assumed monotonic" rule (§3.3, F6) and needs no other content
+ * T10's own fixtures don't already cover. Two comments, ids 3 and 7 (a gap,
+ * and starting above 0) — a naive `comments.length` counter would mint `2`
+ * next; the correct next id is `8`.
+ */
+const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+const W14 = 'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"';
+
+async function buildGappedIdsDocx(): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>`
+  );
+  zip.file(
+    '_rels/.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`
+  );
+  zip.file(
+    'word/_rels/document.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>`
+  );
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W} ${W14}><w:body>` +
+      `<w:p w14:paraId="E0000001"><w:commentRangeStart w:id="3"/><w:r><w:t xml:space="preserve">First commented run.</w:t></w:r><w:commentRangeEnd w:id="3"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="3"/></w:r></w:p>` +
+      `<w:p w14:paraId="E0000002"><w:commentRangeStart w:id="7"/><w:r><w:t xml:space="preserve">Second commented run.</w:t></w:r><w:commentRangeEnd w:id="7"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="7"/></w:r></w:p>` +
+      `<w:p w14:paraId="E0000003"><w:r><w:t xml:space="preserve">A brand new sentence with nothing commented yet.</w:t></w:r></w:p>` +
+      `</w:body></w:document>`
+  );
+  zip.file(
+    'word/comments.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W} ${W14}>` +
+      `<w:comment w:id="3" w:author="Priya Shah" w:date="2026-09-26T09:00:00Z"><w:p w14:paraId="F0000003"><w:r><w:t xml:space="preserve">First note.</w:t></w:r></w:p></w:comment>` +
+      `<w:comment w:id="7" w:author="Priya Shah" w:date="2026-09-26T09:01:00Z"><w:p w14:paraId="F0000007"><w:r><w:t xml:space="preserve">Second note.</w:t></w:r></w:p></w:comment>` +
+      `</w:comments>`
+  );
+  return zip.generateAsync({ type: 'nodebuffer' });
 }
 
 // §3.2 (review 1, F1 — blocker): this module must run with no browser DOM at
@@ -179,5 +249,400 @@ describe('docx-comments — a comment spanning multiple runs and two paragraphs'
     expect(c.selector.selector.exact).toBe('first half \nsecond half.');
     expect(c.selector.selector.prefix).toContain('Before the change:');
     expect(c.selector.selector.suffix).toContain('After the note.');
+  });
+});
+
+// =============================================================================
+// T11: writing (add / reply / resolve / reopen / move) — docs/active/specs/
+// 2026-09-26-doc-comments-build-design.md §3.3, §8 T11.
+// =============================================================================
+
+describe('docx-comments write — add', () => {
+  it('adds a new comment and it round-trips through the SAME reader', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        selector: textSelector('Marketing emails go out the same morning as the public launch.'),
+        text: 'Confirm the send time with marketing.',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.id).toMatch(/^w-\d+$/);
+
+      const read = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const added = read.comments.find((c) => c.id === result.id);
+      expect(added).toBeDefined();
+      expect(added?.text).toBe('Confirm the send time with marketing.');
+      expect(added?.author).toBe('person:You');
+      expect(added?.resolved).toBe(false);
+      if (added?.selector.kind !== 'text') throw new Error('expected a text selector');
+      expect(added.selector.selector.exact).toBe('Marketing emails go out the same morning as the public launch.');
+
+      // Existing Word-authored comments are preserved byte-for-byte in their
+      // OWN fields (comments.xml's <w:comment> entries for ids 0/1/2 are
+      // untouched by an add elsewhere in the document).
+      const untouched = read.comments.find((c) => c.id === 'w-0');
+      expect(untouched).toMatchObject({ author: 'person:Priya Shah', resolved: true, text: expect.stringContaining('Is 30% realistic') });
+    });
+  });
+
+  it('creates comments.xml (+ its content-types override + relationship) from scratch for a docx with no comments part yet', async () => {
+    await withScratchCopy('no-comments.docx', async (target) => {
+      const before = await readFile(target);
+      const zipBefore = await JSZip.loadAsync(before);
+      expect(zipBefore.file('word/comments.xml')).toBeNull();
+
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/no-comments.docx',
+        selector: textSelector('Nothing here has ever been commented on.'),
+        text: 'First comment this file has ever had.',
+        author: 'assistant',
+      });
+      expect(result.ok).toBe(true);
+
+      const after = await readFile(target);
+      const zipAfter = await JSZip.loadAsync(after);
+      expect(zipAfter.file('word/comments.xml')).not.toBeNull();
+      const contentTypes = await zipAfter.file('[Content_Types].xml')!.async('string');
+      expect(contentTypes).toContain('/word/comments.xml');
+      const rels = await zipAfter.file('word/_rels/document.xml.rels')!.async('string');
+      expect(rels).toContain('comments.xml');
+
+      const read = await readDocxComments(after, 'docs/no-comments.docx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      expect(read.comments).toHaveLength(1);
+      expect(read.comments[0].author).toBe('person:Assistant');
+      expect(read.comments[0].text).toBe('First comment this file has ever had.');
+    });
+  });
+
+  it('a comment spanning multiple runs and two paragraphs inserts correctly around an EXISTING range', async () => {
+    await withScratchCopy('spanning-comment.docx', async (target) => {
+      // Targets "half \nsecond" — spans the "half " run, the paragraph
+      // break, and the start of "second " in the NEXT paragraph — distinct
+      // from the fixture's own existing id=5 range, proving this insertion
+      // doesn't get confused by markers already present in the document.
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/spanning-comment.docx',
+        selector: textSelector('half \nsecond'),
+        text: 'A second, independent multi-paragraph comment.',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      const read = await readDocxComments(await readFile(target), 'docs/spanning-comment.docx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      expect(read.comments).toHaveLength(2);
+      const added = read.comments.find((c) => c.id === result.id);
+      if (added?.selector.kind !== 'text') throw new Error('expected a text selector');
+      expect(added.selector.selector.exact).toBe('half \nsecond');
+      // The ORIGINAL comment (id 5) is untouched.
+      const original = read.comments.find((c) => c.id === 'w-5');
+      expect(original?.text).toBe('Should this be one paragraph instead of two?');
+      if (original?.selector.kind !== 'text') throw new Error('expected a text selector');
+      expect(original.selector.selector.exact).toBe('first half \nsecond half.');
+    });
+  });
+
+  it('a comment on text strictly INSIDE a single run splits that run correctly', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      // "30%" sits in the middle of the w:t "Move 30% of weekly active
+      // users..." — neither offset lands on a run boundary, so this only
+      // passes if splitRunAtOffsets's mid-run split is correct.
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        selector: textSelector('30%'),
+        text: 'Just the percentage.',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      const read = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const added = read.comments.find((c) => c.id === result.id);
+      if (added?.selector.kind !== 'text') throw new Error('expected a text selector');
+      expect(added.selector.selector.exact).toBe('30%');
+      expect(added.selector.selector.prefix).toContain('Move');
+      expect(added.selector.selector.suffix).toContain('of weekly');
+      // The pre-existing comment on the SAME paragraph (id 0, the whole
+      // goal sentence) is unaffected by another comment's run split.
+      const original = read.comments.find((c) => c.id === 'w-0');
+      if (original?.selector.kind !== 'text') throw new Error('expected a text selector');
+      expect(original.selector.selector.exact).toBe('Move 30% of weekly active users to the new app within six weeks of launch.');
+    });
+  });
+
+  it('mints (max existing w:id) + 1 against a gapped/non-sequential id set, never a naive count-based id', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ycd-docx-write-'));
+    const target = join(dir, 'gapped.docx');
+    await writeFile(target, await buildGappedIdsDocx());
+    try {
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/gapped.docx',
+        selector: textSelector('A brand new sentence with nothing commented yet.'),
+        text: 'x',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.id).toBe('w-8'); // existing ids are 3 and 7 — next is 8, not 2
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a selector that does not resolve against the current text', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const before = await readFile(target);
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        selector: textSelector('this text does not exist anywhere in the document'),
+        text: 'x',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'selector-not-found' });
+      expect(await readFile(target)).toEqual(before); // untouched — nothing was even attempted
+    });
+  });
+
+  it('refuses a cell selector against a Word target rather than silently coercing it', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1' } },
+        text: 'x',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'invalid-selector' });
+    });
+  });
+});
+
+describe('docx-comments write — reply', () => {
+  it('appends a reply, preserving the existing reply thread', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await replyToDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        id: 'w-1',
+        text: 'Sounds good, thanks both.',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: true });
+
+      const read = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const target1 = read.comments.find((c) => c.id === 'w-1');
+      expect(target1?.replies).toHaveLength(2);
+      expect(target1?.replies[0]).toMatchObject({ author: 'person:Marcus Lee' }); // the ORIGINAL reply, unmoved
+      expect(target1?.replies[1]).toMatchObject({ author: 'person:You', text: 'Sounds good, thanks both.' });
+    });
+  });
+
+  it('refuses an id this file does not have', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await replyToDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-999', text: 'x', author: 'user' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+});
+
+describe('docx-comments write — resolve / reopen', () => {
+  it('resolve sets w15:done, reopen clears it, and either creates commentsExtended.xml if the file never had one', async () => {
+    await withScratchCopy('spanning-comment.docx', async (target) => {
+      const zipBefore = await JSZip.loadAsync(await readFile(target));
+      expect(zipBefore.file('word/commentsExtended.xml')).toBeNull();
+
+      const resolved = await resolveDocxComment({ absolutePath: target, path: 'docs/spanning-comment.docx', id: 'w-5' });
+      expect(resolved).toEqual({ ok: true });
+      let read = await readDocxComments(await readFile(target), 'docs/spanning-comment.docx');
+      expect(read.ok && read.comments[0].resolved).toBe(true);
+
+      const reopened = await reopenDocxComment({ absolutePath: target, path: 'docs/spanning-comment.docx', id: 'w-5' });
+      expect(reopened).toEqual({ ok: true });
+      read = await readDocxComments(await readFile(target), 'docs/spanning-comment.docx');
+      expect(read.ok && read.comments[0].resolved).toBe(false);
+    });
+  });
+
+  it('resolving an already-resolved comment updates the EXISTING entry rather than duplicating it', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      // id 0 starts resolved (w15:done="1") — reopen then resolve again.
+      await reopenDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-0' });
+      await resolveDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-0' });
+      const zip = await JSZip.loadAsync(await readFile(target));
+      const extendedXml = await zip.file('word/commentsExtended.xml')!.async('string');
+      expect((extendedXml.match(/w15:paraId="10000000"/g) ?? []).length).toBe(1); // still exactly one entry
+      const read = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      expect(read.ok && read.comments.find((c) => c.id === 'w-0')?.resolved).toBe(true);
+      // Unrelated entries (id 1, id 2's reply-linking) are untouched.
+      const t1 = read.ok ? read.comments.find((c) => c.id === 'w-1') : undefined;
+      expect(t1?.resolved).toBe(false);
+      expect(t1?.replies).toHaveLength(1);
+    });
+  });
+
+  it('refuses an id this file does not have', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await resolveDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-999' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+});
+
+describe('docx-comments write — move', () => {
+  it('relocates a comment: the OLD range is gone, the NEW one resolves, id/replies/resolve state unchanged', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await moveDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        id: 'w-1',
+        newSelector: textSelector('Keep support tickets about the update below 200 per week.'),
+      });
+      expect(result).toEqual({ ok: true });
+
+      const bytes = await readFile(target);
+      const zip = await JSZip.loadAsync(bytes);
+      const documentXml = await zip.file('word/document.xml')!.async('string');
+      // OLD range gone: the moved-away text no longer carries id 1's markers.
+      expect(documentXml).not.toMatch(/Beta opens to 500 customers[\s\S]{0,80}w:id="1"/);
+      expect((documentXml.match(/w:commentRangeStart w:id="1"/g) ?? []).length).toBe(1);
+      expect((documentXml.match(/w:commentRangeEnd w:id="1"/g) ?? []).length).toBe(1);
+      expect((documentXml.match(/w:commentReference w:id="1"/g) ?? []).length).toBe(1);
+
+      const read = await readDocxComments(bytes, 'docs/launch-brief.docx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const moved = read.comments.find((c) => c.id === 'w-1');
+      expect(moved).toBeDefined();
+      if (moved?.selector.kind !== 'text') throw new Error('expected a text selector');
+      expect(moved.selector.selector.exact).toBe('Keep support tickets about the update below 200 per week.');
+      // id/replies/resolve state carried over unchanged.
+      expect(moved.replies).toHaveLength(1);
+      expect(moved.replies[0]).toMatchObject({ author: 'person:Marcus Lee' });
+      expect(moved.resolved).toBe(false);
+    });
+  });
+
+  it('refuses when newSelector does not resolve, leaving the file byte-identical (never a silent delete)', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const before = await readFile(target);
+      const result = await moveDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        id: 'w-1',
+        newSelector: textSelector('this text is nowhere in the document'),
+      });
+      expect(result).toEqual({ ok: false, error: 'selector-not-found' });
+      expect(await readFile(target)).toEqual(before);
+    });
+  });
+
+  it('refuses an id this file does not have', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await moveDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        id: 'w-999',
+        newSelector: textSelector('Keep support tickets'),
+      });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+});
+
+describe('docx-comments write — verify-after-write with automatic rollback', () => {
+  // Exercises `writeDocxMutation` directly — the SAME shared pipeline every
+  // real operation above (`addDocxComment` etc.) calls — with an injected
+  // fault (a `verify` that deliberately returns `false`), per T11's own
+  // pinning test list: "failed verification restores the original (inject a
+  // fault)". This is more direct than corrupting real bytes on disk to
+  // provoke a genuine failure.
+  it('a failed verification restores the original bytes exactly, and cleans up the backup', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const before = await readFile(target);
+      const result = await writeDocxMutation(
+        target,
+        async (bytes) => ({ ok: true, bytes: Buffer.concat([bytes, Buffer.from([0])]) }),
+        async () => false // the injected fault: verification always fails
+      );
+      expect(result).toEqual({ ok: false, error: 'verify-failed' });
+      expect(await readFile(target)).toEqual(before); // restored byte-for-byte
+
+      const dir = dirname(target);
+      const leftover = (await readdir(dir)).filter((f) => f.includes('.docx.bak-'));
+      expect(leftover).toHaveLength(0); // renamed back over the target, nothing left behind
+    });
+  });
+
+  it('the backup exists WHILE verify runs, and is cleaned up after a successful write', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const dir = dirname(target);
+      let sawBackupDuringVerify = false;
+      const result = await writeDocxMutation(
+        target,
+        async (bytes) => ({ ok: true, bytes: Buffer.concat([bytes]) }),
+        async () => {
+          const files = await readdir(dir);
+          sawBackupDuringVerify = files.some((f) => f.includes('.docx.bak-'));
+          return true;
+        }
+      );
+      expect(result).toEqual({ ok: true });
+      expect(sawBackupDuringVerify).toBe(true); // existed DURING the write
+      const filesAfter = await readdir(dir);
+      expect(filesAfter.some((f) => f.includes('.docx.bak-'))).toBe(false); // cleaned up after success
+    });
+  });
+});
+
+describe('docx-comments write — concurrency', () => {
+  it('two mutations on one file serialize, and neither is lost', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const [a, b] = await Promise.all([
+        addDocxComment({
+          absolutePath: target,
+          path: 'docs/launch-brief.docx',
+          selector: textSelector('Marketing emails go out the same morning as the public launch.'),
+          text: 'First concurrent comment.',
+          author: 'user',
+        }),
+        addDocxComment({
+          absolutePath: target,
+          path: 'docs/launch-brief.docx',
+          selector: textSelector('The payment screen has not been tested on older Android phones.'),
+          text: 'Second concurrent comment.',
+          author: 'assistant',
+        }),
+      ]);
+      expect(a.ok).toBe(true);
+      expect(b.ok).toBe(true);
+      if (!a.ok || !b.ok) return;
+      expect(a.id).not.toBe(b.id); // unique ids even when minted concurrently
+
+      const read = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      // Original 2 top-level comments + both concurrent adds — NEITHER lost.
+      expect(read.comments).toHaveLength(4);
+      expect(read.comments.some((c) => c.text === 'First concurrent comment.')).toBe(true);
+      expect(read.comments.some((c) => c.text === 'Second concurrent comment.')).toBe(true);
+    });
   });
 });

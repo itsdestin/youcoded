@@ -100,7 +100,31 @@ describe('docComments over remote access', () => {
     expect(sent[1].payload.comments).toHaveLength(1);
   });
 
-  it('list on a .docx target reads the file over the WS surface; add refuses honestly', async () => {
+  it('list on a .xlsx target reads the file over the WS surface; add refuses honestly (T13 not built)', async () => {
+    const fixturesDir = path.join(__dirname, 'fixtures', 'doc-comments');
+    await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.promises.copyFile(path.join(fixturesDir, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3.xlsx'));
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
+    const sent: any[] = [];
+    const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    const client = { id: 'phone-a', ws };
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:list', id: 'req-1', payload: { path: 'reports/q3.xlsx', projectRoot: root },
+    }));
+    expect(sent[0].payload.ok).toBe(true);
+    expect(sent[0].payload.comments.length).toBeGreaterThan(0);
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:add', id: 'req-2',
+      payload: { path: 'reports/q3.xlsx', projectRoot: root, selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1' } }, text: 'x', author: 'user' },
+    }));
+    expect(sent[1].payload).toEqual({ ok: false, error: 'not-yet-supported' });
+  });
+
+  // T11: a .docx target's mutations are real over the remote WS surface too
+  // (T3 built BOTH desktop IPC and this WS surface off the same dispatch
+  // module — they must never disagree about which formats are real).
+  it('list on a .docx target reads the file over the WS surface; add writes for real', async () => {
     const fixturesDir = path.join(__dirname, 'fixtures', 'doc-comments');
     await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
     await fs.promises.copyFile(path.join(fixturesDir, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));
@@ -116,9 +140,13 @@ describe('docComments over remote access', () => {
     expect(sent[0].payload.comments.length).toBeGreaterThan(0);
     await server.handleMessage(client, JSON.stringify({
       type: 'docComments:add', id: 'req-2',
-      payload: { path: 'docs/launch-brief.docx', projectRoot: root, selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1' } }, text: 'x', author: 'user' },
+      payload: {
+        path: 'docs/launch-brief.docx', projectRoot: root,
+        selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 } },
+        text: 'x', author: 'user',
+      },
     }));
-    expect(sent[1].payload).toEqual({ ok: false, error: 'not-yet-supported' });
+    expect(sent[1].payload).toEqual({ ok: true, id: expect.stringMatching(/^w-/) });
   });
 
   it('refuses a ../../etc/passwd-shaped path over the WS surface, same as desktop (F3/F1)', async () => {

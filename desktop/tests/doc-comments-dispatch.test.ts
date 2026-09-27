@@ -1,13 +1,25 @@
 // Pins T3's docComments:* dispatch point (docs/active/specs/2026-09-26-doc-
-// comments-build-design.md §1.1, §3.2, §4.1): a .docx/.xlsx target has no
-// sidecar — list() reads the file's OWN comments via T10/T12's readers, and
-// every mutation (add/reply/resolve/reopen/move) refuses honestly, since
-// writing into these formats (T11/T13) has not landed yet.
+// comments-build-design.md §1.1, §3.2, §4.1) AND T11's docx write dispatch
+// (§3.3): a .docx/.xlsx target has no sidecar — list() reads the file's OWN
+// comments via T10/T12's readers. Writing into .xlsx (T13) still refuses
+// honestly, since that write path hasn't landed; writing into .docx (T11) is
+// real — every mutation dispatches to docx-comments.ts's write functions
+// through the SAME containment/untracked-source gate `listNativeComments`
+// already uses.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { nativeFormatFor, refuseNativeMutation, listNativeComments } from '../src/main/doc-comments/doc-comments-dispatch';
+import {
+  nativeFormatFor,
+  refuseNativeMutation,
+  listNativeComments,
+  addNativeDocxComment,
+  replyToNativeDocxComment,
+  resolveNativeDocxComment,
+  reopenNativeDocxComment,
+  moveNativeDocxComment,
+} from '../src/main/doc-comments/doc-comments-dispatch';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures', 'doc-comments');
 
@@ -29,9 +41,9 @@ describe('nativeFormatFor', () => {
 });
 
 describe('refuseNativeMutation', () => {
-  it('refuses a .docx/.xlsx target and lets everything else proceed', () => {
-    expect(refuseNativeMutation('docs/plan.docx')).toEqual({ ok: false, error: 'not-yet-supported' });
+  it('refuses a .xlsx target (T13 not built) but lets .docx (T11, real) and everything else proceed', () => {
     expect(refuseNativeMutation('reports/q3.xlsx')).toEqual({ ok: false, error: 'not-yet-supported' });
+    expect(refuseNativeMutation('docs/plan.docx')).toBeNull();
     expect(refuseNativeMutation('notes/todo.md')).toBeNull();
   });
 });
@@ -93,5 +105,62 @@ describe('listNativeComments — fallback (no projectRoot) source-file gate (pos
     await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'in-project.docx'));
     const result = await listNativeComments('docx', { path: 'docs/in-project.docx', projectRoot: root });
     expect(result.ok).toBe(true);
+  });
+});
+
+// T11: the docx mutation dispatch functions get the SAME containment/
+// untracked-source gate as listNativeComments, before ever reaching
+// docx-comments.ts's write module.
+describe('addNativeDocxComment / replyToNativeDocxComment / etc. — gated the same way listNativeComments is', () => {
+  it('adds a real comment through the containment-checked path inside a project', async () => {
+    await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
+    const target = path.join(root, 'docs', 'launch-brief.docx');
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), target);
+    const result = await addNativeDocxComment({
+      path: 'docs/launch-brief.docx',
+      projectRoot: root,
+      selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 } },
+      text: 'Confirm the send time.',
+      author: 'user',
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses a ../../etc/passwd-shaped path the same way listNativeComments does', async () => {
+    const result = await addNativeDocxComment({
+      path: '../../../../etc/passwd',
+      projectRoot: root,
+      selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'x', prefix: '', suffix: '', occurrence: 0 } },
+      text: 'x',
+      author: 'user',
+    });
+    expect(result).toEqual({ ok: false, error: 'path-outside-project' });
+  });
+
+  it('refuses an untracked absolute .docx path with no projectRoot, same as listNativeComments', async () => {
+    const loose = path.join(root, 'untracked.docx');
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), loose);
+    const result = await replyToNativeDocxComment({ path: loose, id: 'w-0', text: 'x', author: 'user' });
+    expect(result).toEqual({ ok: false, error: 'path-not-tracked' });
+  });
+
+  it('resolve/reopen/move all dispatch to the real docx write path inside a project', async () => {
+    await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
+    const target = path.join(root, 'docs', 'launch-brief.docx');
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), target);
+
+    const resolved = await resolveNativeDocxComment({ path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', by: 'user' });
+    expect(resolved).toEqual({ ok: true });
+
+    const reopened = await reopenNativeDocxComment({ path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', by: 'user' });
+    expect(reopened).toEqual({ ok: true });
+
+    const moved = await moveNativeDocxComment({
+      path: 'docs/launch-brief.docx',
+      projectRoot: root,
+      id: 'w-1',
+      newSelector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 } },
+    });
+    expect(moved).toEqual({ ok: true });
   });
 });

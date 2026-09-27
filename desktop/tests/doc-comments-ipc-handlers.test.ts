@@ -77,7 +77,31 @@ describe('registerDocCommentsHandlers', () => {
     expect(listed.comments).toHaveLength(1);
   });
 
-  it('list on a .docx target reads the file’s own comments; every mutation refuses honestly', async () => {
+  it('list on a .xlsx target reads the file’s own comments; every mutation refuses honestly (T13 not built)', async () => {
+    await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3.xlsx'));
+    const ipcMain = fakeIpcMain();
+    registerDocCommentsHandlers(ipcMain as any, deps);
+    const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
+    expect(listed.ok).toBe(true);
+    expect(listed.comments.length).toBeGreaterThan(0);
+
+    const mutationCalls: Array<[string, any]> = [
+      [DOC_COMMENTS_IPC.ADD, { path: 'reports/q3.xlsx', projectRoot: root, selector: CELL_SELECTOR, text: 'x', author: 'user' }],
+      [DOC_COMMENTS_IPC.REPLY, { path: 'reports/q3.xlsx', projectRoot: root, id: 'c-x', text: 'x', author: 'user' }],
+      [DOC_COMMENTS_IPC.RESOLVE, { path: 'reports/q3.xlsx', projectRoot: root, id: 'c-x', by: 'user' }],
+      [DOC_COMMENTS_IPC.REOPEN, { path: 'reports/q3.xlsx', projectRoot: root, id: 'c-x', by: 'user' }],
+      [DOC_COMMENTS_IPC.MOVE, { path: 'reports/q3.xlsx', projectRoot: root, id: 'c-x', newSelector: CELL_SELECTOR }],
+    ];
+    for (const [channel, payload] of mutationCalls) {
+      const result = await ipcMain.call(channel, payload);
+      expect(result, `${channel} did not refuse a .xlsx target`).toEqual({ ok: false, error: 'not-yet-supported' });
+    }
+  });
+
+  // T11: a .docx target's mutations are REAL now (T13's .xlsx write path is
+  // the one still pinned above as "not-yet-supported").
+  it('list on a .docx target reads the file’s own comments; add/reply/resolve/reopen/move all write for real', async () => {
     await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
     await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));
     const ipcMain = fakeIpcMain();
@@ -86,17 +110,47 @@ describe('registerDocCommentsHandlers', () => {
     expect(listed.ok).toBe(true);
     expect(listed.comments.length).toBeGreaterThan(0);
 
-    const mutationCalls: Array<[string, any]> = [
-      [DOC_COMMENTS_IPC.ADD, { path: 'docs/launch-brief.docx', projectRoot: root, selector: CELL_SELECTOR, text: 'x', author: 'user' }],
-      [DOC_COMMENTS_IPC.REPLY, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'c-x', text: 'x', author: 'user' }],
-      [DOC_COMMENTS_IPC.RESOLVE, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'c-x', by: 'user' }],
-      [DOC_COMMENTS_IPC.REOPEN, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'c-x', by: 'user' }],
-      [DOC_COMMENTS_IPC.MOVE, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'c-x', newSelector: CELL_SELECTOR }],
-    ];
-    for (const [channel, payload] of mutationCalls) {
-      const result = await ipcMain.call(channel, payload);
-      expect(result, `${channel} did not refuse a .docx target`).toEqual({ ok: false, error: 'not-yet-supported' });
-    }
+    const textSelector: CommentSelector = {
+      kind: 'text',
+      selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 },
+    };
+    const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+      path: 'docs/launch-brief.docx', projectRoot: root, selector: textSelector, text: 'x', author: 'user',
+    });
+    expect(added).toEqual({ ok: true, id: expect.stringMatching(/^w-/) });
+
+    const replied = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
+      path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', text: 'thanks', author: 'user',
+    });
+    expect(replied).toEqual({ ok: true });
+
+    const resolved = await ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, {
+      path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', by: 'user',
+    });
+    expect(resolved).toEqual({ ok: true });
+
+    const reopened = await ipcMain.call(DOC_COMMENTS_IPC.REOPEN, {
+      path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', by: 'user',
+    });
+    expect(reopened).toEqual({ ok: true });
+
+    const moved = await ipcMain.call(DOC_COMMENTS_IPC.MOVE, {
+      path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', newSelector: textSelector,
+    });
+    expect(moved).toEqual({ ok: true });
+
+    // A cell selector reaching a Word target is a caller bug, not a
+    // format-not-yet-built refusal — refused honestly, not silently coerced.
+    const badAdd = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+      path: 'docs/launch-brief.docx', projectRoot: root, selector: CELL_SELECTOR, text: 'x', author: 'user',
+    });
+    expect(badAdd).toEqual({ ok: false, error: 'invalid-selector' });
+
+    // An id this file doesn't have refuses honestly rather than guessing.
+    const missing = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
+      path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-999', text: 'x', author: 'user',
+    });
+    expect(missing).toEqual({ ok: false, error: 'comment-not-found' });
   });
 
   it('refuses a ../../etc/passwd-shaped path on EVERY one of the six channels', async () => {

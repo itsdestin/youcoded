@@ -27,7 +27,16 @@ import {
   dropDocCommentsSubscriber,
 } from './doc-comments-watcher';
 import { DOC_COMMENTS_IPC } from './ipc-channels';
-import { nativeFormatFor, refuseNativeMutation, listNativeComments } from './doc-comments-dispatch';
+import {
+  nativeFormatFor,
+  refuseNativeMutation,
+  listNativeComments,
+  addNativeDocxComment,
+  replyToNativeDocxComment,
+  resolveNativeDocxComment,
+  reopenNativeDocxComment,
+  moveNativeDocxComment,
+} from './doc-comments-dispatch';
 import { refuseUnknownProjectRoot } from './doc-comments-gate';
 import type { CommentAuthor, CommentSelector } from '../../shared/doc-comments-types';
 
@@ -113,13 +122,22 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     const projectRoot = optStr(payload?.projectRoot);
     const gated = await gateProjectRoot(projectRoot);
     if (gated) return gated;
-    // Writing INTO a .docx/.xlsx (T11/T13) has not landed yet — refuse
-    // honestly rather than silently writing a sidecar nobody reads back for
-    // this file, or a no-op that looks like success.
+    // Writing INTO a .xlsx (T13) has not landed yet — refuse honestly rather
+    // than silently writing a sidecar nobody reads back for this file, or a
+    // no-op that looks like success. A .docx target is real (T11, below).
     const refused = refuseNativeMutation(filePath);
     if (refused) return refused;
     const text = reqStr(payload?.text);
     if (text === null) return missingField('text');
+    if (nativeFormatFor(filePath) === 'docx') {
+      return addNativeDocxComment({
+        path: filePath,
+        projectRoot,
+        selector: payload?.selector as CommentSelector,
+        text,
+        author: payload?.author as CommentAuthor,
+      });
+    }
     return addComment({
       path: filePath,
       projectRoot,
@@ -146,6 +164,9 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     if (id === null) return missingField('id');
     const text = reqStr(payload?.text);
     if (text === null) return missingField('text');
+    if (nativeFormatFor(filePath) === 'docx') {
+      return replyToNativeDocxComment({ path: filePath, projectRoot, id, text, author: payload?.author as CommentAuthor });
+    }
     return replyToComment({
       path: filePath,
       projectRoot,
@@ -165,6 +186,9 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     if (refused) return refused;
     const id = reqStr(payload?.id);
     if (id === null) return missingField('id');
+    if (nativeFormatFor(filePath) === 'docx') {
+      return resolveNativeDocxComment({ path: filePath, projectRoot, id, by: payload?.by as CommentAuthor });
+    }
     return resolveComment({
       path: filePath,
       projectRoot,
@@ -183,6 +207,9 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     if (refused) return refused;
     const id = reqStr(payload?.id);
     if (id === null) return missingField('id');
+    if (nativeFormatFor(filePath) === 'docx') {
+      return reopenNativeDocxComment({ path: filePath, projectRoot, id, by: payload?.by as CommentAuthor });
+    }
     return reopenComment({
       path: filePath,
       projectRoot,
@@ -201,6 +228,9 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     if (refused) return refused;
     const id = reqStr(payload?.id);
     if (id === null) return missingField('id');
+    if (nativeFormatFor(filePath) === 'docx') {
+      return moveNativeDocxComment({ path: filePath, projectRoot, id, newSelector: payload?.newSelector as CommentSelector });
+    }
     return moveComment({
       path: filePath,
       projectRoot,

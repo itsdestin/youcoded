@@ -23,7 +23,16 @@ import {
   listComments, addComment, replyToComment, resolveComment, reopenComment, moveComment, resolveWatchTarget,
 } from './doc-comments/doc-comments-store';
 import { watchComments, unwatchComments, dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
-import { nativeFormatFor, refuseNativeMutation, listNativeComments } from './doc-comments/doc-comments-dispatch';
+import {
+  nativeFormatFor,
+  refuseNativeMutation,
+  listNativeComments,
+  addNativeDocxComment,
+  replyToNativeDocxComment,
+  resolveNativeDocxComment,
+  reopenNativeDocxComment,
+  moveNativeDocxComment,
+} from './doc-comments/doc-comments-dispatch';
 import { refuseUnknownProjectRoot } from './doc-comments/doc-comments-gate';
 // Shared cap so a local folder's description (set via a remote browser client)
 // can't drift from the synced registry's limit — same constant project-registry.ts
@@ -2247,6 +2256,16 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
+        if (nativeFormatFor(filePath) === 'docx') {
+          this.respond(client.ws, type, id, await addNativeDocxComment({
+            path: filePath,
+            projectRoot,
+            selector: payload?.selector,
+            text: String(payload?.text ?? ''),
+            author: payload?.author,
+          }));
+          break;
+        }
         this.respond(client.ws, type, id, await addComment({
           path: filePath,
           projectRoot,
@@ -2263,6 +2282,16 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
+        if (nativeFormatFor(filePath) === 'docx') {
+          this.respond(client.ws, type, id, await replyToNativeDocxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            text: String(payload?.text ?? ''),
+            author: payload?.author,
+          }));
+          break;
+        }
         this.respond(client.ws, type, id, await replyToComment({
           path: filePath,
           projectRoot,
@@ -2279,6 +2308,15 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
+        if (nativeFormatFor(filePath) === 'docx') {
+          this.respond(client.ws, type, id, await resolveNativeDocxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            by: payload?.by,
+          }));
+          break;
+        }
         this.respond(client.ws, type, id, await resolveComment({
           path: filePath,
           projectRoot,
@@ -2294,6 +2332,15 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
+        if (nativeFormatFor(filePath) === 'docx') {
+          this.respond(client.ws, type, id, await reopenNativeDocxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            by: payload?.by,
+          }));
+          break;
+        }
         this.respond(client.ws, type, id, await reopenComment({
           path: filePath,
           projectRoot,
@@ -2309,6 +2356,15 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
+        if (nativeFormatFor(filePath) === 'docx') {
+          this.respond(client.ws, type, id, await moveNativeDocxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            newSelector: payload?.newSelector,
+          }));
+          break;
+        }
         this.respond(client.ws, type, id, await moveComment({
           path: filePath,
           projectRoot,
