@@ -11,18 +11,13 @@
 // SAME by-extension decision identically — a fork here would let one surface
 // silently disagree with the other about which files are sidecar-backed.
 //
-// Writes into .xlsx (T13) have not landed yet: every mutation
-// (add/reply/resolve/reopen/move) against that extension refuses honestly
-// with `not-yet-supported` rather than either silently writing a sidecar
-// nobody reads back for that file, or a no-op that looks like success.
-//
 // .docx WRITES (T11, docs/active/specs/2026-09-26-doc-comments-build-
-// design.md §3.3) are real as of this module's `addNativeDocxComment` etc.
-// below — a `.docx` target no longer refuses. The by-extension dispatch
-// pattern is unchanged: this is still the ONE place both desktop IPC
-// (ipc-handlers.ts) and the remote WS surface (remote-server.ts) decide
-// which files are native-format vs. sidecar-backed, and now also which
-// native format actually has a write path built.
+// design.md §3.3) and .xlsx WRITES (T13, §4.3) are both real as of this
+// module's `addNativeDocxComment`/`addNativeXlsxComment` etc. below — neither
+// native format refuses any more. The by-extension dispatch pattern is
+// unchanged: this is still the ONE place both desktop IPC (ipc-handlers.ts)
+// and the remote WS surface (remote-server.ts) decide which files are
+// native-format vs. sidecar-backed.
 import { promises as fs } from 'fs';
 import path from 'path';
 import {
@@ -34,7 +29,15 @@ import {
   reopenDocxComment,
   moveDocxComment,
 } from './docx-comments';
-import { readXlsxComments, type XlsxReadResult } from './xlsx-comments';
+import {
+  readXlsxComments,
+  type XlsxReadResult,
+  addXlsxComment,
+  replyToXlsxComment,
+  resolveXlsxComment,
+  reopenXlsxComment,
+  moveXlsxComment,
+} from './xlsx-comments';
 import { resolveSourceFilePath, type Refusal } from './doc-comments-store';
 import { authorizeBytesRead } from '../artifacts/read-service';
 import type { CommentAuthor, CommentSelector } from '../../shared/doc-comments-types';
@@ -61,12 +64,14 @@ export function nativeFormatFor(filePath: string): NativeFormat | null {
 }
 
 /** A mutation channel's shared first step: refuse immediately for a target
- *  this feature CANNOT yet write into — today that's `.xlsx` only (T13 hasn't
- *  landed) — before touching the sidecar store at all. Returns `null`
- *  (proceed) for a `.docx` target (T11, real) and for every non-native
- *  extension (the ordinary sidecar path). */
-export function refuseNativeMutation(filePath: string): ({ ok: false; error: 'not-yet-supported' }) | null {
-  return nativeFormatFor(filePath) === 'xlsx' ? { ok: false, error: 'not-yet-supported' } : null;
+ *  this feature CANNOT yet write into. Both native formats now have a real
+ *  write path (`.docx` — T11; `.xlsx` — T13), so this always returns `null`
+ *  (proceed) today — kept as a single named check, rather than deleted
+ *  outright, so `ipc-handlers.ts`/`remote-server.ts` have one place to wire a
+ *  refusal into again if a future native format's write path lands after its
+ *  read path does, the same staged order `.xlsx` itself went through. */
+export function refuseNativeMutation(_filePath: string): ({ ok: false; error: 'not-yet-supported' }) | null {
+  return null;
 }
 
 /** Resolves a `.docx` mutation's target the SAME way `listNativeComments`
@@ -146,6 +151,82 @@ export async function moveNativeDocxComment(args: {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
   return moveDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, newSelector: args.newSelector });
+}
+
+/** T13's own `.xlsx` equivalent of `resolveDocxTarget` — same containment/
+ *  untracked-source gate, never a looser one, since a write is at least as
+ *  sensitive as a read. */
+async function resolveXlsxTarget(
+  args: { path: string; projectRoot?: string }
+): Promise<{ ok: true; absolutePath: string } | Refusal | UntrackedSourceRefusal> {
+  const resolved = await resolveSourceFilePath(args);
+  if (!resolved.ok) return resolved;
+  if (!args.projectRoot) {
+    const auth = await authorizeBytesRead(resolved.absolutePath);
+    if (!auth.ok) return { ok: false, error: 'path-not-tracked' };
+  }
+  return resolved;
+}
+
+export async function addNativeXlsxComment(args: {
+  path: string;
+  projectRoot?: string;
+  selector: CommentSelector;
+  text: string;
+  author: CommentAuthor;
+}): Promise<{ ok: true; id: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+  const resolved = await resolveXlsxTarget(args);
+  if (!resolved.ok) return resolved;
+  return addXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, selector: args.selector, text: args.text, author: args.author });
+}
+
+export async function replyToNativeXlsxComment(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  text: string;
+  author: CommentAuthor;
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+  const resolved = await resolveXlsxTarget(args);
+  if (!resolved.ok) return resolved;
+  return replyToXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text, author: args.author });
+}
+
+/** `by` is accepted for call-site symmetry with the generic `{path, id, by}`
+ *  payload (§1.6) but not forwarded — see xlsx-comments.ts's own
+ *  `resolveXlsxComment`/`reopenXlsxComment` doc comment for why a native
+ *  Excel Note has nowhere to record it. */
+export async function resolveNativeXlsxComment(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  by: CommentAuthor;
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+  const resolved = await resolveXlsxTarget(args);
+  if (!resolved.ok) return resolved;
+  return resolveXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+}
+
+export async function reopenNativeXlsxComment(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  by: CommentAuthor;
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+  const resolved = await resolveXlsxTarget(args);
+  if (!resolved.ok) return resolved;
+  return reopenXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+}
+
+export async function moveNativeXlsxComment(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  newSelector: CommentSelector;
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+  const resolved = await resolveXlsxTarget(args);
+  if (!resolved.ok) return resolved;
+  return moveXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, newSelector: args.newSelector });
 }
 
 /** `docComments:list` for a `.docx`/`.xlsx` target: resolve the SOURCE file's

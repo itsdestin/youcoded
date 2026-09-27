@@ -77,7 +77,10 @@ describe('registerDocCommentsHandlers', () => {
     expect(listed.comments).toHaveLength(1);
   });
 
-  it('list on a .xlsx target reads the file’s own comments; every mutation refuses honestly (T13 not built)', async () => {
+  // T13: a .xlsx target's mutations are REAL now — same wiring T11 already
+  // proved for .docx, exercised here through the IPC surface. q3.xlsx has two
+  // sheets (Q3, By rep), so a write-side selector must name `sheet` (§4.2).
+  it('list on a .xlsx target reads the file’s own comments; add/reply/resolve/reopen/move all write for real', async () => {
     await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3.xlsx'));
     const ipcMain = fakeIpcMain();
@@ -86,21 +89,43 @@ describe('registerDocCommentsHandlers', () => {
     expect(listed.ok).toBe(true);
     expect(listed.comments.length).toBeGreaterThan(0);
 
-    const mutationCalls: Array<[string, any]> = [
-      [DOC_COMMENTS_IPC.ADD, { path: 'reports/q3.xlsx', projectRoot: root, selector: CELL_SELECTOR, text: 'x', author: 'user' }],
-      [DOC_COMMENTS_IPC.REPLY, { path: 'reports/q3.xlsx', projectRoot: root, id: 'c-x', text: 'x', author: 'user' }],
-      [DOC_COMMENTS_IPC.RESOLVE, { path: 'reports/q3.xlsx', projectRoot: root, id: 'c-x', by: 'user' }],
-      [DOC_COMMENTS_IPC.REOPEN, { path: 'reports/q3.xlsx', projectRoot: root, id: 'c-x', by: 'user' }],
-      [DOC_COMMENTS_IPC.MOVE, { path: 'reports/q3.xlsx', projectRoot: root, id: 'c-x', newSelector: CELL_SELECTOR }],
-    ];
-    for (const [channel, payload] of mutationCalls) {
-      const result = await ipcMain.call(channel, payload);
-      expect(result, `${channel} did not refuse a .xlsx target`).toEqual({ ok: false, error: 'not-yet-supported' });
-    }
+    const cellSelector: CommentSelector = { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1', sheet: 'Q3' } as CellSelector };
+    const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+      path: 'reports/q3.xlsx', projectRoot: root, selector: cellSelector, text: 'x', author: 'user',
+    });
+    expect(added).toEqual({ ok: true, id: expect.stringMatching(/^x-/) });
+
+    const q3Note = listed.comments.find((c: any) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B2');
+    const id = q3Note.id;
+
+    const replied = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
+      path: 'reports/q3.xlsx', projectRoot: root, id, text: 'thanks', author: 'user',
+    });
+    expect(replied).toEqual({ ok: true });
+
+    const resolved = await ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, {
+      path: 'reports/q3.xlsx', projectRoot: root, id, by: 'user',
+    });
+    expect(resolved).toEqual({ ok: true });
+
+    const reopened = await ipcMain.call(DOC_COMMENTS_IPC.REOPEN, {
+      path: 'reports/q3.xlsx', projectRoot: root, id, by: 'user',
+    });
+    expect(reopened).toEqual({ ok: true });
+
+    const moved = await ipcMain.call(DOC_COMMENTS_IPC.MOVE, {
+      path: 'reports/q3.xlsx', projectRoot: root, id,
+      newSelector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'C2', sheet: 'Q3' } },
+    });
+    expect(moved).toEqual({ ok: true });
+
+    // An id this file doesn't have refuses honestly rather than guessing.
+    const missing = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
+      path: 'reports/q3.xlsx', projectRoot: root, id: 'x-999-Z99', text: 'x', author: 'user',
+    });
+    expect(missing).toEqual({ ok: false, error: 'comment-not-found' });
   });
 
-  // T11: a .docx target's mutations are REAL now (T13's .xlsx write path is
-  // the one still pinned above as "not-yet-supported").
   it('list on a .docx target reads the file’s own comments; add/reply/resolve/reopen/move all write for real', async () => {
     await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
     await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));

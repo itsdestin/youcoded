@@ -8,15 +8,60 @@
 // that shaped the fixture's own cell choices) — a real workbook exceljs
 // itself wrote, with eight real Notes across two sheets.
 import { describe, it, expect } from 'vitest';
-import { readFile } from 'fs/promises';
-import { join } from 'path';
-import { readXlsxComments } from '../src/main/doc-comments/xlsx-comments';
+import { readFile, writeFile, mkdtemp, rm, readdir } from 'fs/promises';
+import { join, dirname } from 'path';
+import { tmpdir } from 'os';
+import JSZip from 'jszip';
+import {
+  readXlsxComments,
+  addXlsxComment,
+  replyToXlsxComment,
+  resolveXlsxComment,
+  reopenXlsxComment,
+  moveXlsxComment,
+} from '../src/main/doc-comments/xlsx-comments';
 import { buildDeclaredOversizeZip } from './fixtures/doc-comments/oversized-zip';
+import type { CommentSelector } from '../src/shared/doc-comments-types';
 
 const FIXTURE = join(__dirname, 'fixtures', 'doc-comments', 'q3-sales-by-rep.xlsx');
 
 async function loadFixture(): Promise<Buffer> {
   return readFile(FIXTURE);
+}
+
+function cellSelector(cell: string, sheet?: string): CommentSelector {
+  return { kind: 'cell', selector: { type: 'CellSelector', cell, ...(sheet ? { sheet } : {}) } };
+}
+
+/** `{author, text}` only — a `CommentReply.id` is derived from its parent
+ *  comment's OWN (cell-address-derived) id, and `createdAt` is a fresh
+ *  `Date.now()` stamped on every READ (§4's own reader has no per-reply
+ *  timestamp to persist) — neither survives a move, or even a second read a
+ *  few milliseconds later, so comparing replies across two reads or across a
+ *  move must ignore both rather than asserting on incidental values. */
+function repliesShape(replies: ReadonlyArray<{ author: string; text: string }>) {
+  return replies.map((r) => ({ author: r.author, text: r.text }));
+}
+
+async function withScratchCopy<T>(fn: (target: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), 'ycd-xlsx-write-'));
+  const target = join(dir, 'q3-sales-by-rep.xlsx');
+  await writeFile(target, await loadFixture());
+  try {
+    return await fn(target);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** Injects a fake OOXML part exceljs cannot model (a chart) into the real
+ *  fixture's own bytes — used only to prove the feature-loss guard trips on
+ *  the entry NAME, never on its (here, deliberately nonsensical) content;
+ *  the guard runs before exceljs ever parses anything. */
+async function withFakeChartPart(): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(await loadFixture());
+  zip.file('xl/charts/chart1.xml', '<c:chartSpace/>');
+  return zip.generateAsync({ type: 'nodebuffer' });
 }
 
 describe('xlsx-comments — parsing a workbook with a .note set', () => {
@@ -205,5 +250,534 @@ describe('xlsx-comments — a decompression-bomb-shaped archive', () => {
     );
     const result = await readXlsxComments(bytes, 'reports/bomb.xlsx');
     expect(result).toEqual({ ok: false, error: 'archive-too-large' });
+  });
+});
+
+// =============================================================================
+// T13: Excel (.xlsx) comment WRITING — add / reply / resolve / reopen / move.
+// =============================================================================
+
+describe('xlsx-comments write — add', () => {
+  it('adds a new comment and it round-trips through the SAME reader', async () => {
+    await withScratchCopy(async (target) => {
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        selector: cellSelector('A1', 'Q3'),
+        text: 'Should this be Region or Territory?',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.id).toMatch(/^x-\d+-A1$/);
+
+      const read = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const added = read.comments.find((c) => c.id === result.id);
+      expect(added).toBeDefined();
+      expect(added?.text).toBe('Should this be Region or Territory?');
+      expect(added?.author).toBe('person:You');
+      expect(added?.resolved).toBe(false);
+      expect(added?.replies).toEqual([]);
+
+      // Existing notes elsewhere in the workbook are preserved byte-for-byte
+      // in their OWN fields — an add elsewhere never touches them.
+      const untouched = read.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B2');
+      expect(untouched).toMatchObject({ author: 'person:Priya Shah', resolved: false, text: expect.stringContaining('West is Priya') });
+    });
+  });
+
+  it('refuses a text selector against an Excel target rather than silently coercing it', async () => {
+    await withScratchCopy(async (target) => {
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'x', prefix: '', suffix: '', occurrence: 0 } },
+        text: 'x',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'invalid-selector' });
+    });
+  });
+
+  it('refuses a bare cell reference with no sheet name against a multi-sheet workbook, since that is ambiguous', async () => {
+    await withScratchCopy(async (target) => {
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        selector: cellSelector('A1'), // no sheet — Q3 + By rep both exist
+        text: 'x',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'invalid-selector' });
+    });
+  });
+
+  it('refuses a sheet name the workbook does not have', async () => {
+    await withScratchCopy(async (target) => {
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        selector: cellSelector('A1', 'Nonexistent'),
+        text: 'x',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'sheet-not-found' });
+    });
+  });
+
+  it('refuses a malformed cell reference', async () => {
+    await withScratchCopy(async (target) => {
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        selector: cellSelector('not-a-cell', 'Q3'),
+        text: 'x',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'invalid-selector' });
+    });
+  });
+
+  it('refuses adding onto a cell that already has a note — nothing silently merged or clobbered', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readFile(target);
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        selector: cellSelector('B2', 'Q3'), // already has Priya Shah's note
+        text: 'x',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'cell-already-has-comment' });
+      expect(await readFile(target)).toEqual(before); // untouched
+    });
+  });
+
+  // A confirmed exceljs@4.4.0 limitation (make-xlsx-fixture.mjs's own
+  // header documents the same thing for the READ fixture it works around):
+  // a note set on a cell with no value AND no prior presence in the loaded
+  // XML is silently dropped on write. Refused honestly rather than risked.
+  it('refuses adding a comment to a genuinely empty (value-less) cell, leaving the file byte-identical', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readFile(target);
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        selector: cellSelector('F1', 'Q3'), // Q3 only ever uses columns A-D
+        text: 'x',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'cell-has-no-value' });
+      expect(await readFile(target)).toEqual(before);
+    });
+  });
+
+  it('refuses a workbook carrying a chart — a feature exceljs would silently drop on write — leaving the file byte-identical', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ycd-xlsx-write-'));
+    const target = join(dir, 'has-chart.xlsx');
+    try {
+      const before = await withFakeChartPart();
+      await writeFile(target, before);
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'reports/has-chart.xlsx',
+        selector: cellSelector('A1', 'Q3'),
+        text: 'x',
+        author: 'user',
+      });
+      expect(result).toEqual({
+        ok: false,
+        error: 'unsupported-workbook-features',
+        features: ['charts or chart sheets'],
+      });
+      expect(await readFile(target)).toEqual(before); // byte-identical — never even opened by exceljs
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('xlsx-comments write — reply', () => {
+  it('appends a reply, preserving the existing reply thread and resolve state', async () => {
+    await withScratchCopy(async (target) => {
+      // By rep!B5 already has one reply from Marcus Lee AND the current
+      // resolve marker (make-xlsx-fixture.mjs) — a new reply must land AFTER
+      // the existing one and the marker must survive at the very end.
+      const before = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      if (!before.ok) throw new Error('setup: fixture failed to read');
+      const target1 = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B5')!;
+
+      const result = await replyToXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        id: target1.id,
+        text: 'Thanks for confirming.',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: true });
+
+      const read = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const updated = read.comments.find((c) => c.id === target1.id);
+      expect(updated?.replies).toHaveLength(2);
+      expect(updated?.replies[0]).toMatchObject({ author: 'person:Marcus Lee' }); // ORIGINAL reply, unmoved
+      expect(updated?.replies[1]).toMatchObject({ author: 'person:You', text: 'Thanks for confirming.' });
+      // The marker survived the reply — still resolved.
+      expect(updated?.resolved).toBe(true);
+    });
+  });
+
+  it('a reply body containing resolve-like natural-language text is NOT read as resolved', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      if (!before.ok) throw new Error('setup: fixture failed to read');
+      const q3Note = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B2')!;
+      expect(q3Note.resolved).toBe(false);
+
+      const result = await replyToXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        id: q3Note.id,
+        text: 'Following up — ✓ Resolved',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: true });
+
+      const read = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const updated = read.comments.find((c) => c.id === q3Note.id);
+      // The reply's own VISIBLE text ends with the marker's words, but this
+      // app's writer never emits a leading ZWSP for ordinary reply text —
+      // only `resolveXlsxComment` does that — so this must stay unresolved.
+      expect(updated?.resolved).toBe(false);
+      expect(updated?.replies[0].text).toBe('Following up — ✓ Resolved');
+    });
+  });
+
+  it('refuses an id this file does not have', async () => {
+    await withScratchCopy(async (target) => {
+      const result = await replyToXlsxComment({ absolutePath: target, path: 'reports/q3-sales-by-rep.xlsx', id: 'x-1-Z99', text: 'x', author: 'user' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+
+  it('refuses a reply id (never a valid target for reply/resolve/reopen/move — those act on the whole thread)', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      if (!before.ok) throw new Error('setup: fixture failed to read');
+      const threaded = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B5')!;
+      const replyId = threaded.replies[0].id; // shaped like `${threaded.id}-r1`
+      const result = await replyToXlsxComment({ absolutePath: target, path: 'reports/q3-sales-by-rep.xlsx', id: replyId, text: 'x', author: 'user' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+});
+
+describe('xlsx-comments write — resolve / reopen', () => {
+  it('resolve appends the CURRENT marker, reopen strips it — nothing else in the body changes', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      if (!before.ok) throw new Error('setup: fixture failed to read');
+      const q3Note = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B2')!;
+      expect(q3Note.resolved).toBe(false);
+
+      const resolved = await resolveXlsxComment({ absolutePath: target, path: 'reports/q3-sales-by-rep.xlsx', id: q3Note.id });
+      expect(resolved).toEqual({ ok: true });
+      let read = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      expect(read.ok && read.comments.find((c) => c.id === q3Note.id)?.resolved).toBe(true);
+      expect(read.ok && read.comments.find((c) => c.id === q3Note.id)?.text).toBe(q3Note.text); // text unchanged
+
+      const reopened = await reopenXlsxComment({ absolutePath: target, path: 'reports/q3-sales-by-rep.xlsx', id: q3Note.id });
+      expect(reopened).toEqual({ ok: true });
+      read = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      expect(read.ok && read.comments.find((c) => c.id === q3Note.id)?.resolved).toBe(false);
+      expect(read.ok && read.comments.find((c) => c.id === q3Note.id)?.text).toBe(q3Note.text); // still unchanged
+    });
+  });
+
+  it('reopening a comment already resolved with the LEGACY marker strips it cleanly and never re-writes the legacy form', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      if (!before.ok) throw new Error('setup: fixture failed to read');
+      // By rep!B6 is resolved with the LEGACY bracketed-token marker.
+      const legacyResolved = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B6')!;
+      expect(legacyResolved.resolved).toBe(true);
+
+      const reopened = await reopenXlsxComment({ absolutePath: target, path: 'reports/q3-sales-by-rep.xlsx', id: legacyResolved.id });
+      expect(reopened).toEqual({ ok: true });
+      const read = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const updated = read.comments.find((c) => c.id === legacyResolved.id);
+      expect(updated?.resolved).toBe(false);
+      expect(updated?.text).toBe(legacyResolved.text);
+      expect(repliesShape(updated?.replies ?? [])).toEqual(repliesShape(legacyResolved.replies));
+
+      // Resolving it again writes the CURRENT marker, never the legacy one —
+      // confirmed by inspecting the raw note body directly.
+      await resolveXlsxComment({ absolutePath: target, path: 'reports/q3-sales-by-rep.xlsx', id: legacyResolved.id });
+      const zip = await JSZip.loadAsync(await readFile(target));
+      const allComments = await Promise.all(zip.file(/xl\/comments\d+\.xml/).map((f) => f.async('string')));
+      const joined = allComments.join('\n');
+      expect(joined).not.toContain('yc:resolved'); // legacy token never written again
+    });
+  });
+
+  it('a reply body whose real text happens to contain resolve-like language is NOT read as resolved (reopen leaves it alone)', async () => {
+    await withScratchCopy(async (target) => {
+      // By rep!B7 already carries a human-typed "✓ Resolved" with no leading
+      // ZWSP — resolve/reopen must not misread it, and reopening an already-
+      // unresolved comment must be a harmless no-op.
+      const before = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      if (!before.ok) throw new Error('setup: fixture failed to read');
+      const lookalike = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B7')!;
+      expect(lookalike.resolved).toBe(false);
+
+      const reopened = await reopenXlsxComment({ absolutePath: target, path: 'reports/q3-sales-by-rep.xlsx', id: lookalike.id });
+      expect(reopened).toEqual({ ok: true });
+      const read = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const updated = read.comments.find((c) => c.id === lookalike.id);
+      expect(updated?.resolved).toBe(false);
+      expect(updated?.text).toBe('Following up next week. ✓ Resolved'); // untouched, marker regex didn't eat real content
+    });
+  });
+
+  it('refuses an id this file does not have', async () => {
+    await withScratchCopy(async (target) => {
+      const result = await resolveXlsxComment({ absolutePath: target, path: 'reports/q3-sales-by-rep.xlsx', id: 'x-1-Z99' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+});
+
+describe('xlsx-comments write — move', () => {
+  it('relocates a note to a value-bearing cell with no note: the OLD cell has none, the NEW one matches byte-for-byte, replies/resolve state carried over', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      if (!before.ok) throw new Error('setup: fixture failed to read');
+      const threaded = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B5')!;
+
+      const result = await moveXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        id: threaded.id,
+        // A2 ("Priya") has a real value and no note — a genuinely empty cell
+        // (e.g. C5) can't be used here: exceljs silently drops a note on a
+        // value-less cell it never loaded as a real element (`cellHasNoValue`'s
+        // own doc comment), which this app refuses rather than risks (F1's
+        // sibling 'cell-has-no-value' refusal, pinned separately below).
+        newSelector: cellSelector('A2', 'By rep'),
+      });
+      expect(result).toEqual({ ok: true });
+
+      const read = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      // OLD id (cell-address-derived) no longer resolves to anything.
+      expect(read.comments.find((c) => c.id === threaded.id)).toBeUndefined();
+      const moved = read.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'A2' && c.selector.selector.sheet === 'By rep');
+      expect(moved).toBeDefined();
+      expect(moved?.text).toBe(threaded.text);
+      expect(repliesShape(moved?.replies ?? [])).toEqual(repliesShape(threaded.replies));
+      expect(moved?.resolved).toBe(threaded.resolved);
+      // The OLD cell (B5) has no comment reading back any more.
+      expect(read.comments.some((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B5' && c.selector.selector.sheet === 'By rep')).toBe(false);
+    });
+  });
+
+  it('moves a comment across sheets, carrying the resolve marker verbatim', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      if (!before.ok) throw new Error('setup: fixture failed to read');
+      // By rep!B5 is resolved (current marker) — moving it to the OTHER sheet
+      // must carry the marker along, not silently drop resolve state.
+      const resolvedNote = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B5')!;
+      expect(resolvedNote.resolved).toBe(true);
+
+      const result = await moveXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        id: resolvedNote.id,
+        newSelector: cellSelector('D2', 'Q3'), // "Jul" — a real value, no note
+      });
+      expect(result).toEqual({ ok: true });
+
+      const read = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const moved = read.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'D2');
+      expect(moved?.resolved).toBe(true);
+      expect(repliesShape(moved?.replies ?? [])).toEqual(repliesShape(resolvedNote.replies));
+    });
+  });
+
+  it('refuses moving onto a cell that already has a DIFFERENT comment — nothing silently clobbered', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readFile(target);
+      const beforeRead = await readXlsxComments(before, 'reports/q3-sales-by-rep.xlsx');
+      if (!beforeRead.ok) throw new Error('setup: fixture failed to read');
+      const q3Note = beforeRead.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B2')!;
+
+      const result = await moveXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        id: q3Note.id,
+        newSelector: cellSelector('B18', 'Q3'), // already has its OWN note
+      });
+      expect(result).toEqual({ ok: false, error: 'destination-cell-occupied' });
+      expect(await readFile(target)).toEqual(before); // byte-identical — refused before writing anything
+    });
+  });
+
+  it('refuses a malformed/nonexistent sheet reference, leaving the file byte-identical', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readFile(target);
+      const beforeRead = await readXlsxComments(before, 'reports/q3-sales-by-rep.xlsx');
+      if (!beforeRead.ok) throw new Error('setup: fixture failed to read');
+      const q3Note = beforeRead.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B2')!;
+
+      const badSheet = await moveXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        id: q3Note.id,
+        newSelector: cellSelector('A1', 'NoSuchSheet'),
+      });
+      expect(badSheet).toEqual({ ok: false, error: 'sheet-not-found' });
+
+      const badCell = await moveXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        id: q3Note.id,
+        newSelector: cellSelector('not-a-cell', 'Q3'),
+      });
+      expect(badCell).toEqual({ ok: false, error: 'invalid-selector' });
+      expect(await readFile(target)).toEqual(before);
+    });
+  });
+
+  // A confirmed exceljs@4.4.0 limitation (also documented in make-xlsx-
+  // fixture.mjs's own header): a note set on a cell with no value AND no
+  // prior presence in the loaded XML is silently DROPPED on write — never
+  // just misplaced, gone from both the old and any attempted new location.
+  // Refused honestly (`cell-has-no-value`) rather than risked.
+  it('refuses relocating a note onto a genuinely empty (value-less) destination cell, leaving the file byte-identical', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readFile(target);
+      const beforeRead = await readXlsxComments(before, 'reports/q3-sales-by-rep.xlsx');
+      if (!beforeRead.ok) throw new Error('setup: fixture failed to read');
+      const q3Note = beforeRead.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B2')!;
+
+      // C5 on "By rep" was never populated by the fixture generator (only
+      // columns A/B exist there) — a genuinely empty cell, not merely a
+      // blank-looking styled one.
+      const result = await moveXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        id: q3Note.id,
+        newSelector: cellSelector('C5', 'By rep'),
+      });
+      expect(result).toEqual({ ok: false, error: 'cell-has-no-value' });
+      expect(await readFile(target)).toEqual(before);
+    });
+  });
+
+  it('refuses an id this file does not have', async () => {
+    await withScratchCopy(async (target) => {
+      const result = await moveXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        id: 'x-1-Z99',
+        newSelector: cellSelector('A1', 'Q3'),
+      });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+
+  it('refuses a workbook carrying a chart, before ever attempting the repoint', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ycd-xlsx-write-'));
+    const target = join(dir, 'has-chart.xlsx');
+    try {
+      const before = await withFakeChartPart();
+      await writeFile(target, before);
+      const result = await moveXlsxComment({
+        absolutePath: target,
+        path: 'reports/has-chart.xlsx',
+        id: 'x-1-B2',
+        newSelector: cellSelector('A1', 'Q3'),
+      });
+      expect(result).toEqual({
+        ok: false,
+        error: 'unsupported-workbook-features',
+        features: ['charts or chart sheets'],
+      });
+      expect(await readFile(target)).toEqual(before);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('xlsx-comments write — verify-after-write with automatic rollback', () => {
+  // The generic mechanism (backup/atomic-write/verify/rollback) is pinned
+  // once, at the shared module level, in write-pipeline.test.ts — every xlsx
+  // write op delegates to it identically. This test exercises the SAME
+  // contract through a real xlsx write op end to end, confirming the
+  // `.xlsx.bak-` backup naming this module actually uses and that a add()
+  // call which fails verification leaves the real file untouched.
+  it('an add whose own verify step never runs (mutate-level refusal) never creates or leaves a backup', async () => {
+    await withScratchCopy(async (target) => {
+      const before = await readFile(target);
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'reports/q3-sales-by-rep.xlsx',
+        selector: cellSelector('B2', 'Q3'), // already commented — refused before any write
+        text: 'x',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'cell-already-has-comment' });
+      expect(await readFile(target)).toEqual(before);
+      const dir = dirname(target);
+      expect((await readdir(dir)).filter((f) => f.includes('.xlsx.bak-'))).toHaveLength(0);
+    });
+  });
+});
+
+describe('xlsx-comments write — concurrency', () => {
+  it('two mutations on one file serialize, and neither is lost', async () => {
+    await withScratchCopy(async (target) => {
+      const [a, b] = await Promise.all([
+        addXlsxComment({
+          absolutePath: target,
+          path: 'reports/q3-sales-by-rep.xlsx',
+          selector: cellSelector('A1', 'Q3'),
+          text: 'First concurrent comment.',
+          author: 'user',
+        }),
+        addXlsxComment({
+          absolutePath: target,
+          path: 'reports/q3-sales-by-rep.xlsx',
+          selector: cellSelector('A2', 'Q3'),
+          text: 'Second concurrent comment.',
+          author: 'user',
+        }),
+      ]);
+      expect(a.ok).toBe(true);
+      expect(b.ok).toBe(true);
+
+      const read = await readXlsxComments(await readFile(target), 'reports/q3-sales-by-rep.xlsx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      if (!a.ok || !b.ok) return;
+      const first = read.comments.find((c) => c.id === a.id);
+      const second = read.comments.find((c) => c.id === b.id);
+      expect(first?.text).toBe('First concurrent comment.');
+      expect(second?.text).toBe('Second concurrent comment.');
+    });
   });
 });

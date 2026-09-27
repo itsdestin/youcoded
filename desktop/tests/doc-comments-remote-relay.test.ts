@@ -100,7 +100,11 @@ describe('docComments over remote access', () => {
     expect(sent[1].payload.comments).toHaveLength(1);
   });
 
-  it('list on a .xlsx target reads the file over the WS surface; add refuses honestly (T13 not built)', async () => {
+  // T13: a .xlsx target's mutations are real over the remote WS surface too
+  // (T3 built BOTH desktop IPC and this WS surface off the same dispatch
+  // module — they must never disagree about which formats are real). q3.xlsx
+  // has two sheets, so the write-side selector names `sheet` (§4.2).
+  it('list on a .xlsx target reads the file over the WS surface; add writes for real', async () => {
     const fixturesDir = path.join(__dirname, 'fixtures', 'doc-comments');
     await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.promises.copyFile(path.join(fixturesDir, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3.xlsx'));
@@ -116,9 +120,13 @@ describe('docComments over remote access', () => {
     expect(sent[0].payload.comments.length).toBeGreaterThan(0);
     await server.handleMessage(client, JSON.stringify({
       type: 'docComments:add', id: 'req-2',
-      payload: { path: 'reports/q3.xlsx', projectRoot: root, selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1' } }, text: 'x', author: 'user' },
+      payload: {
+        path: 'reports/q3.xlsx', projectRoot: root,
+        selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1', sheet: 'Q3' } },
+        text: 'x', author: 'user',
+      },
     }));
-    expect(sent[1].payload).toEqual({ ok: false, error: 'not-yet-supported' });
+    expect(sent[1].payload).toEqual({ ok: true, id: expect.stringMatching(/^x-/) });
   });
 
   // T11: a .docx target's mutations are real over the remote WS surface too
