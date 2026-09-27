@@ -112,3 +112,33 @@ describe('CommentCard — a comment whose saved text/cell can no longer be found
     expect(screen.queryByText(/no longer found/i)).toBeNull();
   });
 });
+
+// F3 (T14 review, performance.md rule 4): a comment in a file too large for
+// use-quote-marks.ts/use-code-comment-anchors.ts to check gets its OWN
+// status — 'unchecked' — rather than reusing 'detached', which would falsely
+// claim the text is specifically gone.
+describe('CommentCard — a comment in a file too large to check (status "unchecked")', () => {
+  it('shows the honest "too large to check" line, never the "no longer found" one', () => {
+    renderCard(baseComment({ status: 'unchecked' }));
+    expect(screen.getByText(/too large to show where this comment points/i)).toBeTruthy();
+    expect(screen.queryByText(/no longer found/i)).toBeNull();
+    expect(screen.queryByText(/no longer exists/i)).toBeNull();
+  });
+
+  it('never invents a cause for why the file is too large', () => {
+    renderCard(baseComment({ status: 'unchecked' }));
+    const note = screen.getByText(/too large/i);
+    expect(note.textContent).not.toMatch(/delet|remov|rename|moved/i);
+  });
+
+  it('a RESOLVED unchecked comment still shows the note and stays reopenable (R6)', () => {
+    renderCard(baseComment({ status: 'unchecked', resolved: true, resolvedBy: 'user', resolvedAt: Date.now() }));
+    expect(screen.getByText(/too large to show where this comment points/i)).toBeTruthy();
+    expect(screen.getByTitle(/reopen/i)).toBeTruthy();
+  });
+
+  it('a still-empty draft never shows the unchecked note either', () => {
+    renderCard(baseComment({ status: 'unchecked', text: '', replies: [] }));
+    expect(screen.queryByText(/too large/i)).toBeNull();
+  });
+});

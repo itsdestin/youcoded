@@ -260,6 +260,51 @@ describe('artifact viewer context menu', () => {
     const ids = buildContextMenu(ta)?.filter((e) => e.type === 'item').map((e: any) => e.id);
     expect(ids).toEqual(['cut', 'copy', 'paste', 'select-all']);
   });
+
+  // F6 (T14 review): a ChatImage placeholder's interaction-state text
+  // ("Image from … · Show", marked data-anchor-skip) must never enter a
+  // comment's captured prefix/suffix/exact — it isn't the document's real
+  // content and changes independently of any edit to the file (it vanishes
+  // once the image is shown).
+  it('"Add comment" never captures an interaction-state placeholder\'s text as context (F6)', async () => {
+    const container = document.createElement('div');
+    container.setAttribute('data-artifact-viewer', 'true');
+    container.setAttribute('data-doc-path', 'notes.md');
+    container.setAttribute('data-artifact-source', 'rendered');
+    container.setAttribute('data-project-root', '');
+    const before = document.createTextNode('before');
+    const placeholder = document.createElement('button');
+    placeholder.setAttribute('data-anchor-skip', '');
+    placeholder.textContent = 'Image from example.com · Show';
+    const after = document.createTextNode(' TARGET after');
+    container.append(before, placeholder, after);
+    document.body.appendChild(container);
+
+    const range = document.createRange();
+    range.setStart(after, 1); // " TARGET after" — index 1 is 'T'
+    range.setEnd(after, 1 + 'TARGET'.length);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    const entries = buildContextMenu(container);
+    const comment = entries?.find((e) => e.type === 'item' && e.id === 'comment');
+    expect(comment, 'Add comment must exist for a selection').toBeTruthy();
+    const { commentsForPath } = await import('../../state/doc-comments-store');
+    if (comment?.type === 'item') comment.run();
+    const stored = commentsForPath('notes.md');
+    const added = stored[stored.length - 1] as any;
+
+    expect(added.quote).toBe('TARGET');
+    // The placeholder's own words never leak into the captured context.
+    expect(added.selectorPrefix).not.toMatch(/show|image from/i);
+    expect(added.selectorSuffix).not.toMatch(/show|image from/i);
+    // Consistent with use-quote-marks.ts's own skip-filtered text model: the
+    // placeholder contributes NOTHING, so "before" and " after" sit directly
+    // adjacent to "TARGET" in the captured context.
+    expect(added.selectorPrefix).toBe('before ');
+    expect(added.selectorSuffix).toBe(' after');
+  });
 });
 
 // A3 (2026-08-26 preview-header spec): a previewed past conversation

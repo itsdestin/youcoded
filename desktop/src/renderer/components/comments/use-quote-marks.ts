@@ -6,8 +6,8 @@
 // mutually exclusive (ActiveArtifactView renders exactly one), so each
 // simply calls this hook independently — never both at once, so there is no
 // double-wrap risk to guard against.
-import { useLayoutEffect, useState, type RefObject } from 'react';
-import { setCommentStatus, type DocComment } from '../../state/doc-comments-store';
+import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { setCommentStatus, anchorSignature, type DocComment } from '../../state/doc-comments-store';
 // T14 (docs/active/specs/2026-09-26-doc-comments-build-design.md §2.2/§2.3):
 // the real anchoring algorithm, shared with the main process and the MCP
 // script — swapped in below for the mockup's own `findQuote` search
@@ -15,6 +15,9 @@ import { setCommentStatus, type DocComment } from '../../state/doc-comments-stor
 // unrelated "Ask about this" chip flash, which was never part of this task).
 import { resolveSelector, resolveCellSelector, cellSelectorKey } from '../../../shared/doc-comments-anchor';
 import type { TextQuoteSelector, CellSelector } from '../../../shared/doc-comments-types';
+// F6 (T14 review): interaction-state placeholder text (ChatImage's "Image
+// from … · Show") must never enter the text `resolveSelector` searches.
+import { isAnchorSkipped } from './anchor-skip';
 
 const MARK_ATTR = 'data-comment-mark';
 // Soft accent tint (G-8 reads this as the "selected span" case — the same
@@ -165,6 +168,24 @@ export function useQuoteMarks(
   comments: DocComment[],
 ): Map<string, HTMLElement[]> {
   const [marks, setMarks] = useState<Map<string, HTMLElement[]>>(new Map());
+  // F4 (T14 review, performance.md rule 5): `comments` gets a BRAND NEW array
+  // reference on every keystroke typed into any comment's own note/reply box
+  // (doc-comments-store.ts's `setCommentText`/`addReply` republish the whole
+  // array for that file) — a plain `[containerRef, comments]` dependency
+  // reran this WHOLE-DOCUMENT anchoring pass (`markAll`'s tree walk plus one
+  // `resolveSelector` call per comment) on every such keystroke, for every
+  // comment in the file, not just the one being typed into. `signature`
+  // (doc-comments-store.ts's `anchorSignature`) only changes when something
+  // that actually affects an anchor's position or look changes (id, quote,
+  // selector prefix/suffix/occurrence, cell, sheet, resolved) — typing
+  // text/replies leaves it unchanged, so the effect below simply skips the
+  // pass. `commentsRef` (the same "latest ref" idiom renderer-lists.md's own
+  // SkillCard/SessionDrawer use for handlers) hands the effect body the
+  // CURRENT comments to anchor against without making the array reference
+  // itself a dependency.
+  const commentsRef = useRef(comments);
+  commentsRef.current = comments;
+  const signature = anchorSignature(comments);
   useLayoutEffect(() => {
     const root = containerRef.current;
     if (!root) {
@@ -179,13 +200,14 @@ export function useQuoteMarks(
     const observer = new MutationObserver(() => pass());
     const pass = () => {
       observer.disconnect();
-      setMarks(markAll(root, comments));
+      setMarks(markAll(root, commentsRef.current));
       observer.takeRecords();
       observer.observe(root, { childList: true, subtree: true });
     };
     pass();
     return () => observer.disconnect();
-  }, [containerRef, comments]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- commentsRef always holds the latest comments; signature (not the array reference) is the real re-anchor trigger, see the WHY above
+  }, [containerRef, signature]);
   return marks;
 }
 
@@ -206,6 +228,11 @@ function collectText(root: Node): { text: string; points: TextPoint[] } {
   const points: TextPoint[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+    // F6 (T14 review): interaction-state placeholder text (ChatImage's
+    // "Image from … · Show") is never part of the searched text — must agree
+    // with build-menu.ts's rangeTextOffsets, which skips the SAME nodes at
+    // save time via the SAME predicate.
+    if (isAnchorSkipped(n)) continue;
     const s = n.data;
     for (let i = 0; i < s.length; i++) {
       text += s[i];
@@ -215,13 +242,19 @@ function collectText(root: Node): { text: string; points: TextPoint[] } {
   return { text, points };
 }
 
-// Rule 6 (performance.md): bounds the one genuinely O(document-length) cost
-// this pass has — a pathological multi-megabyte file skips highlighting
-// entirely rather than allocating a same-length TextPoint array and running
-// resolveSelector's own (already individually bounded — doc-comments-
-// anchor.ts's MAX_SCORED_OCCURRENCES/EXACT_SAMPLE_CHARS) scoring over it. 2M
-// characters is far past any real note/plan/code file this feature targets.
-const MAX_ANCHOR_TEXT_CHARS = 2_000_000;
+// F3 (T14 review): this cites Rule 4 (performance.md: "per-event work does
+// not grow with history or session count"), not Rule 6 (layout/paint) as an
+// earlier version of this comment mistakenly said — bounds the one genuinely
+// O(document-length) cost this pass has: a pathological multi-megabyte file
+// skips the tree-walk/resolveSelector work entirely rather than allocating a
+// same-length TextPoint array and running resolveSelector's own (already
+// individually bounded — doc-comments-anchor.ts's MAX_SCORED_OCCURRENCES/
+// EXACT_SAMPLE_CHARS) scoring over it. 2M characters is far past any real
+// note/plan/code file this feature targets. Exported so
+// use-code-comment-anchors.ts's own bound (CodeMirror's live document can be
+// just as large as a rendered file's DOM text) uses the exact same number —
+// one constant, not two that could quietly drift apart.
+export const MAX_ANCHOR_TEXT_CHARS = 2_000_000;
 
 /** The element whose flattened text is the SAME text `quoteContextAt`/
  *  `resolveSelector` were given at save time (build-menu.ts's
@@ -286,7 +319,18 @@ function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLEle
   const textRoot = textComments.length ? textRootFor(root) : null;
   if (textRoot) {
     const { text, points } = collectText(textRoot);
-    if (text.length <= MAX_ANCHOR_TEXT_CHARS) {
+    if (text.length > MAX_ANCHOR_TEXT_CHARS) {
+      // F3 (T14 review): before this fix, going over the bound left `status`
+      // untouched — an oversized file's comments showed NEITHER a highlight
+      // NOR T6's "text no longer found" note, indistinguishable from "hasn't
+      // been checked yet" (which is, in fact, exactly what happened — but
+      // silently). 'unchecked' says that explicitly and never claims the text
+      // is gone (it might still be there); CommentCard renders it as its own
+      // honest line ("This file is too large to show where this comment
+      // points."), never reusing 'detached'’s wording, which would be a
+      // guessed cause (error-message-standards.md).
+      for (const c of textComments) setCommentStatus(c.id, 'unchecked');
+    } else {
       for (const c of textComments) {
         const sel: TextQuoteSelector = {
           type: 'TextQuoteSelector',

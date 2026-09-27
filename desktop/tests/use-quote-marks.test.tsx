@@ -9,12 +9,13 @@
 // still anchoring, deleted text going detached without disappearing from the
 // list, cell comments, and that a settled pass reaches a fixed point rather
 // than re-marking forever.
-import { describe, it, expect, afterEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
-import { useQuoteMarks } from '../src/renderer/components/comments/use-quote-marks';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import { useQuoteMarks, MAX_ANCHOR_TEXT_CHARS } from '../src/renderer/components/comments/use-quote-marks';
 import {
   addComment,
   commentsForPath,
+  useDocComments,
   __resetDocCommentsStoreForTest,
 } from '../src/renderer/state/doc-comments-store';
 import { quoteContextAt } from '../src/shared/doc-comments-anchor';
@@ -178,5 +179,84 @@ describe('use-quote-marks — real anchoring (resolveSelector)', () => {
     }
     expect(commentsForPath(path)[0].status).toBe(settledStatus);
     expect(result.current.size).toBe(1);
+  });
+
+  // F3 (T14 review): past MAX_ANCHOR_TEXT_CHARS this used to leave `status`
+  // unset — indistinguishable from "hasn't been checked yet" and showing
+  // neither a highlight nor T6's "text no longer found" note. 'unchecked' is
+  // the distinct, honest state instead (never claims the text is gone).
+  it('marks a text comment "unchecked" (not silently unset) once the document is past the size bound', () => {
+    const path = 'test-fixtures/oversized.md';
+    addComment(path, 'needle', 'label', { prefix: '', suffix: '', occurrence: 0 });
+    const oversized = 'x'.repeat(MAX_ANCHOR_TEXT_CHARS + 1);
+    const root = mountRoot('rendered', (r) => { r.textContent = oversized; });
+    const containerRef = { current: root };
+
+    const { result } = renderHook(() => useQuoteMarks(containerRef, commentsForPath(path)));
+
+    expect(result.current.size).toBe(0); // no highlight — same as detached
+    expect(commentsForPath(path)[0].status).toBe('unchecked');
+  });
+
+  // F6 (T14 review): a ChatImage placeholder's interaction-state text
+  // ("Image from … · Show") must never enter the text resolveSelector
+  // searches — if it did, this document would have TWO occurrences of
+  // "MARKER" (one inside the skipped button, one in real trailing text), and
+  // an empty prefix/suffix context would tie-break to the EARLIER one
+  // (doc-comments-anchor.ts's own documented tie rule), wrongly landing the
+  // mark inside the button.
+  it('excludes an interaction-state placeholder from the text resolveSelector searches', () => {
+    const path = 'test-fixtures/placeholder.md';
+    addComment(path, 'MARKER', 'label', { prefix: '', suffix: '', occurrence: 0 });
+
+    const root = mountRoot('rendered', (r) => {
+      r.append(document.createTextNode('start '));
+      const placeholder = document.createElement('button');
+      placeholder.setAttribute('data-anchor-skip', '');
+      placeholder.textContent = 'Image from example.com · Show MARKER';
+      r.appendChild(placeholder);
+      r.append(document.createTextNode(' MARKER end'));
+    });
+    const containerRef = { current: root };
+
+    const { result } = renderHook(() => useQuoteMarks(containerRef, commentsForPath(path)));
+
+    expect(result.current.size).toBe(1);
+    const seg = [...result.current.values()][0][0];
+    // The mark wraps the REAL "MARKER" in ordinary trailing text — never the
+    // decoy one inside the skipped placeholder button.
+    expect(seg.closest('button')).toBeNull();
+    expect(commentsForPath(path)[0].status).toBe('anchored');
+  });
+});
+
+// F4 (T14 review, performance.md rule 5): typing in a comment's own note/
+// reply republishes the WHOLE comments array with a fresh reference — before
+// this fix that alone re-ran the whole-document anchoring pass (markAll's
+// tree walk + one resolveSelector call per comment) on every keystroke.
+describe('use-quote-marks — typing in a comment does not re-anchor (F4)', () => {
+  it('a keystroke that only changes a comment\'s text never re-runs the anchoring pass', () => {
+    const path = 'test-fixtures/keystroke.md';
+    const id = addComment(path, 'hello world', 'label', { prefix: '', suffix: '', occurrence: 0 });
+    const root = mountRoot('rendered', (r) => { r.textContent = 'say hello world to everyone'; });
+    const containerRef = { current: root };
+
+    const { result, rerender } = renderHook(
+      ({ comments }) => useQuoteMarks(containerRef, comments),
+      { initialProps: { comments: commentsForPath(path) } },
+    );
+    expect(result.current.size).toBe(1);
+
+    const spy = vi.spyOn(document, 'createTreeWalker');
+    const { result: api } = renderHook(() => useDocComments(path));
+    for (const ch of 'hi') {
+      act(() => { api.current.setCommentText(id, (commentsForPath(path)[0]?.text ?? '') + ch); });
+      rerender({ comments: commentsForPath(path) });
+    }
+
+    expect(commentsForPath(path)[0].text).toBe('hi');
+    expect(spy).not.toHaveBeenCalled(); // no re-anchor pass at all
+    expect(result.current.size).toBe(1); // unchanged, still anchored
+    spy.mockRestore();
   });
 });

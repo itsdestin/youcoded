@@ -45,6 +45,29 @@ function DetachedNote({ comment }: { comment: DocComment }) {
   );
 }
 
+// F3 (T14 review, performance.md rule 4): past use-quote-marks.ts's/
+// use-code-comment-anchors.ts's MAX_ANCHOR_TEXT_CHARS bound, a comment is
+// never actually checked — 'unchecked' says exactly that, distinct from
+// 'detached' ("no longer found"), which would be a guessed cause this file's
+// size can't actually support (error-message-standards.md: never invent a
+// cause).
+function UncheckedNote() {
+  return (
+    <p className="mt-1 text-2xs text-fg-muted" data-unchecked-note>
+      This file is too large to show where this comment points.
+    </p>
+  );
+}
+
+/** The one place that decides which (if either) status note a card shows —
+ *  keeps CommentCard's two render branches (open/resolved) from having to
+ *  repeat the same status-to-note mapping. */
+function StatusNote({ comment }: { comment: DocComment }) {
+  if (comment.status === 'unchecked') return <UncheckedNote />;
+  if (comment.status === 'detached') return <DetachedNote comment={comment} />;
+  return null;
+}
+
 export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResolve, onReopen, onDelete }: Props) {
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -107,7 +130,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
           <div className="flex-1 min-w-0">
             {header(comment, cellRef)}
             <p className="mt-0.5 text-fg-muted truncate">{comment.text}</p>
-            {comment.status === 'detached' && <DetachedNote comment={comment} />}
+            <StatusNote comment={comment} />
           </div>
           {resolveToggle}
         </div>
@@ -148,7 +171,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
           ) : (
             <p className="mt-0.5 text-fg-2 whitespace-pre-wrap">{comment.text}</p>
           )}
-          {!isDraft && comment.status === 'detached' && <DetachedNote comment={comment} />}
+          {!isDraft && <StatusNote comment={comment} />}
         </div>
         {resolveToggle}
       </div>

@@ -14,6 +14,12 @@ import { genRefId, truncateQuote, type ComposeRef } from './compose-ref';
 // comment minted here disambiguates a repeated phrase the SAME way a re-anchor
 // pass will look for it, rather than a locally-reinvented count.
 import { quoteContextAt } from '../../../shared/doc-comments-anchor';
+// F6 (T14 review): the SAME predicate use-quote-marks.ts's collectText uses
+// at resolve time — a placeholder's interaction-state text (ChatImage's
+// "Image from … · Show") must never enter a comment's captured context on
+// this end either, or the two ends would disagree about what the document's
+// "real" text even is.
+import { isAnchorSkipped } from '../comments/anchor-skip';
 
 // Builds the chat right-click menu for a given DOM target. Pure inspection of
 // the DOM + current selection → a list of entries; the host owns positioning,
@@ -386,17 +392,23 @@ function cellEntries(td: HTMLElement, path: string, projectRoot: string | undefi
  *  and `rendered` (arbitrary prose markup) content share. `null` when either
  *  boundary can't be found (a Range whose container isn't a descendant text
  *  node, e.g. an empty/element-only selection). */
-function rangeTextOffsets(root: Node, range: Range): { start: number; end: number } | null {
+// F6 (T14 review): returns the SAME whitespace-skip-filtered text the offsets
+// were computed against (not `root.textContent`, which still includes any
+// `data-anchor-skip` placeholder's text) — `start`/`end` and `text` must stay
+// offsets into ONE consistent string, or a quote/prefix/suffix sliced out of
+// `text` could land on the wrong characters entirely.
+function rangeTextOffsets(root: Node, range: Range): { text: string; start: number; end: number } | null {
   let start = -1;
   let end = -1;
-  let pos = 0;
+  let text = '';
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    if (start === -1 && node === range.startContainer) start = pos + range.startOffset;
-    if (node === range.endContainer) end = pos + range.endOffset;
-    pos += node.textContent?.length ?? 0;
+    if (isAnchorSkipped(node)) continue; // F6: never counted, never searched
+    if (start === -1 && node === range.startContainer) start = text.length + range.startOffset;
+    if (node === range.endContainer) end = text.length + range.endOffset;
+    text += node.textContent ?? '';
   }
-  return start === -1 || end === -1 ? null : { start, end };
+  return start === -1 || end === -1 ? null : { text, start, end };
 }
 
 function selectionOffsets(container: HTMLElement): { fullText: string; start: number; end: number } | null {
@@ -404,6 +416,8 @@ function selectionOffsets(container: HTMLElement): { fullText: string; start: nu
   if (source === 'cm6') {
     // CM6 virtualizes its DOM (see describeArtifactSelection's own WHY) — the
     // live EditorView's document/selection are the only reliable source.
+    // CM6 renders code, not markdown/docx prose, so there's no ChatImage
+    // placeholder here to skip.
     const view = editorViewFor(container);
     const range = view?.state.selection.main;
     if (!view || !range || range.empty) return null;
@@ -422,7 +436,7 @@ function selectionOffsets(container: HTMLElement): { fullText: string; start: nu
   if (!range) return null;
   const offsets = rangeTextOffsets(root, range);
   if (!offsets) return null;
-  return { fullText: root.textContent ?? '', start: offsets.start, end: offsets.end };
+  return { fullText: offsets.text, start: offsets.start, end: offsets.end };
 }
 
 /** `undefined` (no context — the old honest degrade) whenever offsets aren't

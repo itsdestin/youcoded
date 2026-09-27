@@ -5,7 +5,7 @@
 // can't anchor against the live CodeMirror document is grouped after every
 // anchored one (not wherever its stale creation-time line number happens to
 // land it), and gets no click-to-jump wiring since there is no line to jump to.
-import React from 'react';
+import React, { Profiler } from 'react';
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { act, render, cleanup, waitFor, renderHook } from '@testing-library/react';
 import { EditorView } from '@codemirror/view';
@@ -103,6 +103,47 @@ describe('CodeCommentsRail — a comment the live editor can no longer anchor', 
       // CodeCommentsRail's own guard then skips jumpToRef/hover wiring and
       // the row never gets the "cursor-pointer" affordance a jumpable one has.
       expect(row.className).not.toMatch(/cursor-pointer/);
+    } finally {
+      teardown(view, host);
+    }
+  });
+});
+
+// F5 (T14 review): a render-count guard for the EXACT bug class T14's own
+// commit already fixed once (an unmemoized `visible` array fed a fresh
+// reference into useCodeCommentAnchors's effect deps on every render,
+// including one its own setState caused — "Maximum update depth exceeded" in
+// the real workbench). A render storm here would either throw that error or,
+// worse, silently commit far more times than a settled comments pane ever
+// should — this pins a bounded render count so a regression can't return
+// silently.
+describe('CodeCommentsRail — settles instead of looping (F5)', () => {
+  it('commits a small, bounded number of times and never throws "Maximum update depth exceeded"', async () => {
+    const original = 'TARGET LINE\nline two\nline three';
+    const start = original.indexOf('TARGET LINE');
+    const ctx = quoteContextAt(original, start, start + 'TARGET LINE'.length);
+    const id = addComment(PATH, 'TARGET LINE', 'label', {
+      startLine: 1, endLine: 1, prefix: ctx.prefix, suffix: ctx.suffix, occurrence: ctx.occurrence,
+    });
+    writeNote(id, 'a settled note');
+
+    const { view, host } = mountEditor(original);
+    try {
+      let commits = 0;
+      const onRender = () => { commits += 1; };
+
+      const { container } = render(
+        <Profiler id="rail" onRender={onRender}>
+          <CodeCommentsRail path={PATH} />
+        </Profiler>,
+      );
+      await waitFor(() => expect(container.textContent).toContain('a settled note'));
+
+      // A settled pane commits a handful of times (mount, the anchoring
+      // pass's own state update, maybe one retry) — nowhere near the
+      // hundreds/thousands an infinite update loop would produce before
+      // React throws. This bound proves the loop can't return silently.
+      expect(commits).toBeLessThan(20);
     } finally {
       teardown(view, host);
     }

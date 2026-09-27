@@ -68,8 +68,14 @@ export interface DocComment {
    *  (code files, the same `resolveSelector` run against the live CodeMirror
    *  document), or the cell-presence check inside `use-quote-marks.ts` for a
    *  spreadsheet (`resolveCellSelector`). Deliberately NOT set by
-   *  `fromPersisted` above — see `setCommentStatus`'s own WHY. */
-  status?: 'anchored' | 'detached';
+   *  `fromPersisted` above — see `setCommentStatus`'s own WHY.
+   *  `'unchecked'` (F3, T14 review): past `MAX_ANCHOR_TEXT_CHARS`
+   *  (use-quote-marks.ts/use-code-comment-anchors.ts), the file is simply too
+   *  large to run the anchoring pass on at all — a distinct, honest state
+   *  from `'detached'` (which claims the text is specifically gone; a file
+   *  this large was never actually checked, so that claim would be a guess
+   *  error-message-standards.md forbids). */
+  status?: 'anchored' | 'detached' | 'unchecked';
   /** F1 fix (T5 review); T14 (§2.2/§2.3): the selector's disambiguation
    *  context. For a still-pending draft it's computed by build-menu.ts at
    *  selection time (see `persistNewComment` below); for an already-persisted
@@ -789,10 +795,40 @@ export function resolveComment(id: string, by: CommentAuthor): void {
  *  render-storm safety) instead of looping. Never persisted (PersistedComment
  *  comment's own WHY): purely a derived, client-side field, so this never
  *  touches IPC. */
-export function setCommentStatus(id: string, status: 'anchored' | 'detached'): void {
+export function setCommentStatus(id: string, status: 'anchored' | 'detached' | 'unchecked'): void {
   const current = findComment(id);
   if (!current || current.status === status) return;
   updateComment(id, (c) => ({ ...c, status }));
+}
+
+/** F4 (T14 review, performance.md rule 5): a stable per-comment "does this
+ *  comment's ANCHOR need re-resolving" signature — id plus every field
+ *  `resolveSelector`/`resolveCellSelector` actually reads (quote, selector
+ *  prefix/suffix/occurrence, cell, sheet) plus `resolved` (which only changes
+ *  the mark's OPEN/RESOLVED class, not its position, but still needs a fresh
+ *  pass). Typing in a comment's own note or reply republishes `DocComment[]`
+ *  with a brand-new array reference on every keystroke (`setCommentText`/
+ *  `addReply` above) — `use-quote-marks.ts`'s `useQuoteMarks` and
+ *  `use-code-comment-anchors.ts`'s `useCodeCommentAnchors` key their
+ *  (expensive, whole-document) anchoring effect on THIS STRING instead of the
+ *  array reference, so a keystroke that only changes `text`/`replies`/`error`
+ *  never re-runs it. `\u0001`/`\u0002` separators: a real collision could only
+ *  ever make the joined string LONGER/DIFFERENT than it would otherwise be
+ *  (an unnecessary re-anchor at worst), never make two genuinely different
+ *  comment sets compare equal. */
+export function anchorSignature(comments: DocComment[]): string {
+  return comments
+    .map((c) => [
+      c.id,
+      c.quote,
+      c.selectorPrefix ?? '',
+      c.selectorSuffix ?? '',
+      c.selectorOccurrence ?? '',
+      c.cell ?? '',
+      c.sheet ?? '',
+      c.resolved ? '1' : '0',
+    ].join('\u0001'))
+    .join('\u0002');
 }
 
 function reopenComment(id: string): void {
