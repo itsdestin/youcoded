@@ -1,0 +1,24 @@
+{
+  "comments": [
+    {
+      "id": "w-9",
+      "path": "docs/deeply-nested.docx",
+      "selector": {
+        "kind": "text",
+        "selector": {
+          "type": "TextQuoteSelector",
+          "exact": "A comment buried very deep in the document tree.",
+          "prefix": "",
+          "suffix": " ",
+          "occurrence": 0
+        }
+      },
+      "text": "A comment buried very deep in the document tree.",
+      "author": "person:Priya Shah",
+      "createdAt": 1790413800000,
+      "replies": [],
+      "resolved": false,
+      "history": []
+    }
+  ]
+}

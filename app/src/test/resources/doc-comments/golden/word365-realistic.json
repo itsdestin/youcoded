@@ -1,0 +1,24 @@
+{
+  "comments": [
+    {
+      "id": "w-0",
+      "path": "docs/word365-realistic.docx",
+      "selector": {
+        "kind": "text",
+        "selector": {
+          "type": "TextQuoteSelector",
+          "exact": "Revenue grew across every region this quarter.",
+          "prefix": "External reference ",
+          "suffix": " The results look strong across ",
+          "occurrence": 0
+        }
+      },
+      "text": "Can we get the regional breakdown for this?",
+      "author": "person:Priya Shah",
+      "createdAt": 1789898400000,
+      "replies": [],
+      "resolved": false,
+      "history": []
+    }
+  ]
+}
