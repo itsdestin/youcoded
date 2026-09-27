@@ -31,12 +31,16 @@ interface Props {
   fill?: boolean;
   /** Extra classes for the content column (e.g. Word's `.doc-html`). */
   contentClassName?: string;
+  /** T5 (doc-comments build, design §7): forwarded to `useDocComments` via
+   *  CommentsMargin/ReadingHighlights so the real IPC calls know which
+   *  project's sidecar (or tracked `.docx`/`.xlsx`) to reach. */
+  projectRoot?: string;
   children: ReactNode;
 }
 
 export function CommentableDocument({
   path, commentsMode = 'reading', onOpenComments, focusThreadId,
-  source, fill = false, contentClassName = '', children,
+  source, fill = false, contentClassName = '', children, projectRoot,
 }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [rootRef, narrow] = useContainerNarrow<HTMLDivElement>(MARGIN_COLLAPSE_PX);
@@ -59,11 +63,11 @@ export function CommentableDocument({
     </div>
   );
   const inline = commentsMode === 'comments'
-    ? (narrow && <CommentsMargin containerRef={contentRef} path={path} narrow openThreadId={focusThreadId} />)
+    ? (narrow && <CommentsMargin containerRef={contentRef} path={path} narrow openThreadId={focusThreadId} projectRoot={projectRoot} />)
     // A spreadsheet has no text selection to comment on — its cells are
     // commented by right-clicking them (build-menu.ts) — so the auto-popping
     // selection menu stays off there.
-    : <ReadingHighlights containerRef={contentRef} path={path} onOpenComments={onOpenComments ?? (() => {})} selectionMenu={source !== 'sheet'} />;
+    : <ReadingHighlights containerRef={contentRef} path={path} onOpenComments={onOpenComments ?? (() => {})} selectionMenu={source !== 'sheet'} projectRoot={projectRoot} />;
   return (
     <div ref={rootRef} className="flex h-full">
       {fill ? (
@@ -77,7 +81,7 @@ export function CommentableDocument({
           <div className="flex min-h-full">{content}{inline}</div>
         </div>
       )}
-      {wideComments && <CommentsMargin containerRef={contentRef} path={path} narrow={false} openThreadId={focusThreadId} />}
+      {wideComments && <CommentsMargin containerRef={contentRef} path={path} narrow={false} openThreadId={focusThreadId} projectRoot={projectRoot} />}
     </div>
   );
 }

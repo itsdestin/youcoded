@@ -1310,7 +1310,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       message just sent — is in view; in the (auto-)expanded
                       pane the send happened out of sight and the button
                       "doesn't seem clickable" (review deck R-5). */}
-                  <CommentsFloatingActions path={active.path} beforeSend={() => editRef.current?.toggleComments()} />
+                  <CommentsFloatingActions path={active.path} beforeSend={() => editRef.current?.toggleComments()} projectRoot={projectRoot} />
                 </div>
               )}
               {active && (

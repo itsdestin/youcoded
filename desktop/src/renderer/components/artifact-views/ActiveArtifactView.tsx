@@ -606,7 +606,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // it independently): "Open in comments" on a RESOLVED thread must reveal
   // it — Comments mode hides resolved by default, and jumping to a thread
   // nobody can see would look like the link did nothing.
-  const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(artifact.path);
+  const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(artifact.path, projectRoot);
   // The Comments button's number counts OPEN comments only — "Comments 4"
   // with two already resolved read as four things still waiting on you.
   const openCount = pathComments.filter((c) => !c.resolved).length;
@@ -848,6 +848,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
               commentsMode={commentsMode}
               onOpenComments={openComments}
               focusThreadId={focusThreadId}
+              projectRoot={projectRoot}
             />
           </Suspense>
           </ViewerErrorBoundary>
@@ -857,7 +858,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
             own comment has the WHY). Comments mode only; Reading mode for code
             is the plain editor, full width, same as markdown. */}
         {showCodeRail && commentsMode === 'comments' && (
-          <CodeCommentsRail path={artifact.path} />
+          <CodeCommentsRail path={artifact.path} projectRoot={projectRoot} />
         )}
       </div>
       {/* Partial-view notice — floats over the BOTTOM of the doc pane, in the

@@ -11,6 +11,8 @@
 import { createContext, useContext, type ReactNode, type Ref } from 'react';
 import { Toggle } from '../ui/Toggle';
 import { CloseButton } from '../ui/CloseButton';
+import { Button } from '../ui/Button';
+import { Toast } from '../ui/Toast';
 import { useDocComments } from '../../state/doc-comments-store';
 import { CommentsFloatingActions } from './CommentsFloatingActions';
 import type { ComposeRef } from '../context-menu/compose-ref';
@@ -35,10 +37,12 @@ interface Props {
   children: ReactNode;
   /** The outer column, for callers that measure it. */
   frameRef?: Ref<HTMLDivElement>;
+  /** T5: forwarded to `useDocComments` for the real docComments:* IPC. */
+  projectRoot?: string;
 }
 
-export function CommentsPaneFrame({ path, children, frameRef }: Props) {
-  const { showResolved, setShowResolved } = useDocComments(path);
+export function CommentsPaneFrame({ path, children, frameRef, projectRoot }: Props) {
+  const { showResolved, setShowResolved, lastError, dismissError } = useDocComments(path, projectRoot);
   const actionsInPane = useContext(CommentsActionsInPaneContext);
   const closePane = useContext(CommentsCloseContext);
   return (
@@ -67,8 +71,22 @@ export function CommentsPaneFrame({ path, children, frameRef }: Props) {
             the list's pb-28 lets the last card scroll clear of it. */}
         {actionsInPane && (
           <div className="absolute inset-x-2 bottom-2">
-            <CommentsFloatingActions path={path} beforeSend={actionsInPane.beforeAsk} sendVia={actionsInPane.sendVia} />
+            <CommentsFloatingActions path={path} beforeSend={actionsInPane.beforeAsk} sendVia={actionsInPane.sendVia} projectRoot={projectRoot} />
           </div>
+        )}
+        {/* T5 (doc-comments build, design §7): a failed mutation (the file
+            didn't save, the project root wasn't recognized, …) rolls the
+            optimistic change back and surfaces the real, typed cause here —
+            error-message-standards.md's "specific and accurate" branch, with
+            Retry replaying the exact same call. */}
+        {lastError && (
+          <Toast
+            variant="global"
+            tone="error"
+            message={lastError.message}
+            onDismiss={dismissError}
+            action={<Button variant="secondary" size="sm" onClick={lastError.onRetry}>Retry</Button>}
+          />
         )}
       </div>
     </div>

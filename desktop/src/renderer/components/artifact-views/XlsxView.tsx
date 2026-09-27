@@ -138,7 +138,7 @@ function buildSheet(ws: any): SheetVM {
   return { name: ws.name || 'Sheet', colCount, colWidths, rows, byKey, truncated, rowsTruncated, colsTruncated };
 }
 
-export function XlsxView({ absolutePath, path, commentsMode, onOpenComments, focusThreadId }: ArtifactViewProps) {
+export function XlsxView({ absolutePath, path, commentsMode, onOpenComments, focusThreadId, projectRoot }: ArtifactViewProps) {
   // BinaryContent owns loading/error for the byte read and remounts the inner
   // component per file, so sheets/selection/parse errors reset on switch.
   return (
@@ -149,6 +149,7 @@ export function XlsxView({ absolutePath, path, commentsMode, onOpenComments, foc
           commentsMode={commentsMode}
           onOpenComments={onOpenComments}
           focusThreadId={focusThreadId}
+          projectRoot={projectRoot}
           source="sheet"
           fill
         >

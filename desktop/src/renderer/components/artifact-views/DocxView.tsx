@@ -10,7 +10,7 @@ import { CommentableDocument } from '../comments/CommentableDocument';
 // @ts-ignore mammoth.browser lacks type declarations
 import mammoth from 'mammoth/mammoth.browser';
 
-export function DocxView({ absolutePath, path, commentsMode, onOpenComments, focusThreadId }: ArtifactViewProps) {
+export function DocxView({ absolutePath, path, commentsMode, onOpenComments, focusThreadId, projectRoot }: ArtifactViewProps) {
   // BinaryContent owns loading/error for the byte read and remounts the inner
   // component per file, so html/parseError can't go stale across switches.
   return (
@@ -22,15 +22,16 @@ export function DocxView({ absolutePath, path, commentsMode, onOpenComments, foc
           commentsMode={commentsMode}
           onOpenComments={onOpenComments}
           focusThreadId={focusThreadId}
+          projectRoot={projectRoot}
         />
       )}
     </BinaryContent>
   );
 }
 
-type CommentProps = Pick<ArtifactViewProps, 'path' | 'commentsMode' | 'onOpenComments' | 'focusThreadId'>;
+type CommentProps = Pick<ArtifactViewProps, 'path' | 'commentsMode' | 'onOpenComments' | 'focusThreadId' | 'projectRoot'>;
 
-function DocxContent({ bytes, path, commentsMode, onOpenComments, focusThreadId }: { bytes: Uint8Array } & CommentProps) {
+function DocxContent({ bytes, path, commentsMode, onOpenComments, focusThreadId, projectRoot }: { bytes: Uint8Array } & CommentProps) {
   const [html, setHtml] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
 
@@ -59,6 +60,7 @@ function DocxContent({ bytes, path, commentsMode, onOpenComments, focusThreadId 
       commentsMode={commentsMode}
       onOpenComments={onOpenComments}
       focusThreadId={focusThreadId}
+      projectRoot={projectRoot}
       source="rendered"
       contentClassName="doc-html max-w-none"
     >

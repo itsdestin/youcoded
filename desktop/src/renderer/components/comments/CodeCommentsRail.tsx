@@ -17,6 +17,8 @@ import { dispatchRefHover, jumpToRef, type ComposeRef } from '../context-menu/co
 
 interface Props {
   path: string;
+  /** T5: forwarded to `useDocComments` for the real docComments:* IPC. */
+  projectRoot?: string;
 }
 
 /** A card's lines as a ref, so the chip highlighter lights them. */
@@ -25,15 +27,15 @@ function linesRef(c: DocComment, path: string): ComposeRef | null {
   return { id: c.id, kind: 'doc', label: '', path, lineRange: [c.startLine, c.endLine ?? c.startLine] };
 }
 
-export function CodeCommentsRail({ path }: Props) {
-  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path);
+export function CodeCommentsRail({ path, projectRoot }: Props) {
+  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path, projectRoot);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const visible = comments
     .filter((c) => showResolved || !c.resolved)
     .sort((a, b) => (a.startLine ?? 0) - (b.startLine ?? 0) || a.createdAt - b.createdAt);
 
   return (
-    <CommentsPaneFrame path={path}>
+    <CommentsPaneFrame path={path} projectRoot={projectRoot}>
       {/* pb-28: room to scroll the last card up past the floating Ask Your
           Assistant button. */}
       <div data-comments-list className="flex flex-col gap-2 p-2 pb-28">

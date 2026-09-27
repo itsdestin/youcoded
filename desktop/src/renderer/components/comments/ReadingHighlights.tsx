@@ -26,6 +26,8 @@ import { buildContextMenu, type MenuEntry } from '../context-menu/build-menu';
 import { useQuoteMarks, ACTIVE_CLASSES, segmentsRect, cellSelector } from './use-quote-marks';
 import { useDocComments } from '../../state/doc-comments-store';
 import { isSummaryChipRef, type ComposeRef } from '../context-menu/compose-ref';
+import { Button } from '../ui/Button';
+import { Toast } from '../ui/Toast';
 
 // Hover-card open delay + a short close delay: a highlight answering on the
 // first pixel of hover would fire constantly while reading/scanning text;
@@ -55,6 +57,8 @@ interface Props {
   /** Pop the right-click menu when a text selection is released. Off for
    *  spreadsheets, whose cells are commented by right-clicking the cell. */
   selectionMenu?: boolean;
+  /** T5: forwarded to `useDocComments` for the real docComments:* IPC. */
+  projectRoot?: string;
 }
 
 // Touch (Destin, questions deck Q-3: phone support now, "tap opens the
@@ -69,12 +73,12 @@ if (typeof document !== 'undefined') {
 // to act on — the menu opens once the selection has stopped changing.
 const TOUCH_SELECTION_SETTLE_MS = 500;
 
-export function ReadingHighlights({ containerRef, path, onOpenComments, selectionMenu: selectionMenuOn = true }: Props) {
+export function ReadingHighlights({ containerRef, path, onOpenComments, selectionMenu: selectionMenuOn = true, projectRoot }: Props) {
   // WHY no `addComment` here: a new comment now always comes from
   // buildContextMenu's "Add comment" entry (selection-release menu OR the
   // real right-click menu), which writes straight to the store itself — see
   // build-menu.ts's own WHY. This component only reads/positions the result.
-  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment, clearFocus } = useDocComments(path);
+  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment, clearFocus, lastError, dismissError } = useDocComments(path, projectRoot);
   const visible = useMemo(() => comments.filter((c) => showResolved || !c.resolved), [comments, showResolved]);
   const marks = useQuoteMarks(containerRef, visible);
 
@@ -346,6 +350,19 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
           onTextChange={(t) => setCommentText(draftComment.id, t)}
           onDone={clearFocus}
           onCancel={() => removeComment(draftComment.id)}
+        />
+      )}
+      {/* T5 (doc-comments build, design §7): Reading mode has no comment pane
+          to host this in (that's CommentsPaneFrame's job in Comments mode) —
+          a failed reply/resolve/reopen here still needs the real, typed
+          reason surfaced, per error-message-standards.md. */}
+      {lastError && (
+        <Toast
+          variant="global"
+          tone="error"
+          message={lastError.message}
+          onDismiss={dismissError}
+          action={<Button variant="secondary" size="sm" onClick={lastError.onRetry}>Retry</Button>}
         />
       )}
     </>

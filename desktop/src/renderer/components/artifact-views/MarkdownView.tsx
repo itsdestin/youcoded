@@ -15,7 +15,7 @@ import { CommentableDocument } from '../comments/CommentableDocument';
 export function MarkdownView({
   path, content,
   editing = false, draft = '', onDraftChange,
-  commentsMode = 'reading', onOpenComments, focusThreadId,
+  commentsMode = 'reading', onOpenComments, focusThreadId, projectRoot,
 }: ArtifactViewProps) {
   if (content === null) {
     // Loading / missing / read-error are rendered by ActiveArtifactView (which
@@ -51,6 +51,7 @@ export function MarkdownView({
       commentsMode={commentsMode}
       onOpenComments={onOpenComments}
       focusThreadId={focusThreadId}
+      projectRoot={projectRoot}
       // Rendered markdown prose doesn't map back to source line numbers (see
       // describeArtifactSelection in build-menu.ts), so only plain-text files
       // get the 'raw' treatment that enables line-number citing.

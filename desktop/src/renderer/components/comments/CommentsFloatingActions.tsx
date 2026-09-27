@@ -14,8 +14,8 @@ import { basenameOf, useDocComments } from '../../state/doc-comments-store';
 import { genRefId, type ComposeRef } from '../context-menu/compose-ref';
 
 /** Puts every open comment on `path` into the composer as pills and sends. */
-function useSendOpenComments(path: string, beforeSend?: () => void, sendVia?: (lead: string, refs: ComposeRef[]) => void) {
-  const { comments } = useDocComments(path);
+function useSendOpenComments(path: string, beforeSend?: () => void, sendVia?: (lead: string, refs: ComposeRef[]) => void, projectRoot?: string) {
+  const { comments } = useDocComments(path, projectRoot);
   const open = comments.filter((c) => !c.resolved);
   const send = () => {
     if (open.length === 0) return;
@@ -55,8 +55,8 @@ function useSendOpenComments(path: string, beforeSend?: () => void, sendVia?: (l
   return { openCount: open.length, send };
 }
 
-export function CommentsFloatingActions({ path, beforeSend, sendVia }: { path: string; beforeSend?: () => void; sendVia?: (lead: string, refs: ComposeRef[]) => void }) {
-  const { openCount, send } = useSendOpenComments(path, beforeSend, sendVia);
+export function CommentsFloatingActions({ path, beforeSend, sendVia, projectRoot }: { path: string; beforeSend?: () => void; sendVia?: (lead: string, refs: ComposeRef[]) => void; projectRoot?: string }) {
+  const { openCount, send } = useSendOpenComments(path, beforeSend, sendVia, projectRoot);
   const askTitle = openCount === 0
     ? 'No open comments to ask about'
     : `Ask your assistant to work through ${openCount === 1 ? 'the open comment' : `the ${openCount} open comments`}`;

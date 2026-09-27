@@ -45,4 +45,12 @@ export interface ArtifactViewProps {
   /** The thread "Open in comments" asked to focus — set once per click, read
    *  once by CommentsMargin (via MarkdownView) to scroll/highlight it. */
   focusThreadId?: string;
+  /** T5 (doc-comments build, design §7): the real docComments:* IPC needs a
+   *  project root to find the right `.youcoded/comments/` sidecar (or a
+   *  `.docx`/`.xlsx` target's own bytes) instead of the per-machine
+   *  loose-file fallback. ActiveArtifactView already has this as its own
+   *  prop; threaded through here so MarkdownView/DocxView/XlsxView can hand
+   *  it to `useDocComments`/`CommentableDocument` without each viewer having
+   *  to resolve a project root of its own. */
+  projectRoot?: string;
 }

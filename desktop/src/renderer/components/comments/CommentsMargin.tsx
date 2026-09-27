@@ -113,6 +113,8 @@ interface Props {
    *  thread — scroll/highlight it once when this changes. ActiveArtifactView
    *  already made sure it's not hidden behind "Show resolved". */
   openThreadId?: string;
+  /** T5: forwarded to `useDocComments` for the real docComments:* IPC. */
+  projectRoot?: string;
 }
 
 /** The last thread request each file's margin acted on — outlives remounts. */
@@ -123,12 +125,12 @@ export function requestThreadAgain(path: string): void {
   HANDLED_THREADS.delete(path);
 }
 
-export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Props) {
+export function CommentsMargin({ containerRef, path, narrow, openThreadId, projectRoot }: Props) {
   // WHY read from the shared store, not a prop: CommentsPaneFooter owns the
   // "Show resolved" toggle's UI and the header's count reads the same store,
   // so all of them share ONE boolean without threading it through
   // ActiveArtifactView.
-  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path);
+  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path, projectRoot);
   const visible = useMemo(
     () => comments.filter((c) => showResolved || !c.resolved).sort((a, b) => a.createdAt - b.createdAt),
     [comments, showResolved],
@@ -367,7 +369,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
 
   // The settled panel (round 16/17): rounded, titled, Show Resolved switch —
   // CommentsPaneFrame, shared with code files.
-  return <CommentsPaneFrame path={path} frameRef={marginRef}>{list}</CommentsPaneFrame>;
+  return <CommentsPaneFrame path={path} frameRef={marginRef} projectRoot={projectRoot}>{list}</CommentsPaneFrame>;
 }
 
 const POPOVER_W = 288;
