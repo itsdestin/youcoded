@@ -8,9 +8,13 @@ package com.youcoded.app.doccomments
 
 import com.youcoded.app.config.WorkingDir
 import com.youcoded.app.config.WorkingDirStore
+import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -24,6 +28,11 @@ private fun fixtureFile(name: String): File {
     resourceStream.use { input -> tmp.outputStream().use { output -> input.copyTo(output) } }
     return tmp
 }
+
+// F2 (T17 implementation review) fixture-building constants — top-level
+// `const val` (Kotlin only allows `const` outside a class body).
+private const val W_NS_ATTR = """xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""""
+private const val W14_NS_ATTR = """xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""""
 
 class DocCommentsDispatchTest {
 
@@ -147,5 +156,174 @@ class DocCommentsDispatchTest {
         val neverCreated = File(project, "gone.docx")
         val result = listNativeComments(NativeFormat.DOCX, neverCreated.absolutePath, null, home)
         assertEquals(NativeListResult.Err("read-failed"), result)
+    }
+
+    // ── F2 (T17 implementation review, major/crash risk) — write-path
+    // exception boundary. Mirrors F3's own read-path fixture shape above: a
+    // REAL, openable zip (valid central directory) whose CONTENT is corrupt
+    // in a way `loadArchiveForWrite`'s own two specific catches
+    // (`DocxUnsafeXmlDoctypeException`/`ZipBombDetectedException`) don't
+    // cover — before this fix, an exception here escaped every
+    // addNativeDocxComment/replyToNativeDocxComment/etc. uncaught, which
+    // would kill the coroutine `serviceScope.launch` runs it in with no
+    // handler installed — a process crash on Android, not a typed refusal. ──
+
+    private fun textSelector(exact: String): CommentSelector.Text =
+        CommentSelector.Text(TextQuoteSelector(exact = exact, prefix = "", suffix = "", occurrence = 0))
+
+    /** A real, openable zip whose `word/comments.xml` entry is present but is
+     *  not valid XML at all (no DOCTYPE — that's `DocxUnsafeXmlDoctypeException`'s
+     *  own, already-caught case) — `parseXml` throws a plain `SAXException`
+     *  here, which `loadArchiveForWrite`'s own catch block does NOT list. */
+    private fun buildDocxWithMalformedCommentsXml(): File {
+        val dir = Files.createTempDirectory("ycd-dispatch-corrupt-write-").toFile().apply { deleteOnExit() }
+        val target = File(dir, "malformed-comments.docx")
+        ZipOutputStream(target.outputStream()).use { zos ->
+            fun entry(name: String, content: String) {
+                zos.putNextEntry(ZipEntry(name))
+                zos.write(content.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+            }
+            entry(
+                "[Content_Types].xml",
+                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>""",
+            )
+            entry(
+                "_rels/.rels",
+                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>""",
+            )
+            entry(
+                "word/_rels/document.xml.rels",
+                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>""",
+            )
+            entry(
+                "word/document.xml",
+                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document $W_NS_ATTR $W14_NS_ATTR><w:body>""" +
+                    """<w:p w14:paraId="E0000001"><w:commentRangeStart w:id="0"/><w:r><w:t xml:space="preserve">A commented sentence.</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="0"/></w:r></w:p>""" +
+                    """<w:p w14:paraId="E0000002"><w:r><w:t xml:space="preserve">An uncommented sentence to add a NEW comment on.</w:t></w:r></w:p>""" +
+                    """</w:body></w:document>""",
+            )
+            // The corrupt part: real bytes, a real entry, but not XML at all
+            // — never a truncated/absent entry (that's `MISSING_DOCUMENT_PART`,
+            // an already-typed, already-tested case).
+            entry("word/comments.xml", "this is not xml at all <<<")
+        }
+        return target
+    }
+
+    /** A real, openable zip whose `word/comments.xml` entry declares a CRC
+     *  that does not match its own (otherwise well-formed) bytes — the
+     *  "truncated/corrupted compressed entry" shape this finding names:
+     *  `ZipFile.getInputStream(entry)` throws a plain `java.util.zip.ZipException`
+     *  (CRC mismatch) while `readEntryBounded` reads it, well past
+     *  `loadArchiveForWrite`'s own two specific catches. */
+    private fun buildDocxWithCorruptCommentsPartCrc(): File {
+        val dir = Files.createTempDirectory("ycd-dispatch-corrupt-crc-").toFile().apply { deleteOnExit() }
+        val target = File(dir, "corrupt-crc.docx")
+        val commentsBytes = (
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments $W_NS_ATTR $W14_NS_ATTR>""" +
+                """<w:comment w:id="0" w:author="Priya Shah" w:date="2026-09-26T09:00:00Z"><w:p w14:paraId="F0000000"><w:r><w:t xml:space="preserve">Note.</w:t></w:r></w:p></w:comment>""" +
+                """</w:comments>"""
+            ).toByteArray(Charsets.UTF_8)
+        ZipOutputStream(target.outputStream()).use { zos ->
+            fun entry(name: String, content: String) {
+                zos.putNextEntry(ZipEntry(name))
+                zos.write(content.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+            }
+            entry(
+                "[Content_Types].xml",
+                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>""",
+            )
+            entry(
+                "_rels/.rels",
+                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>""",
+            )
+            entry(
+                "word/_rels/document.xml.rels",
+                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>""",
+            )
+            entry(
+                "word/document.xml",
+                """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document $W_NS_ATTR $W14_NS_ATTR><w:body>""" +
+                    """<w:p w14:paraId="E0000001"><w:commentRangeStart w:id="0"/><w:r><w:t xml:space="preserve">A commented sentence.</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="0"/></w:r></w:p>""" +
+                    """</w:body></w:document>""",
+            )
+            // STORED (never DEFLATED) so the on-disk bytes ARE the plaintext
+            // XML — corruptible in place below with no compression algorithm
+            // involved. Size/CRC are declared against the ORIGINAL, correct
+            // bytes; the corruption step below only mutates content bytes
+            // in place (same length), so the zip's own structure (local
+            // header, central directory, offsets) stays entirely valid —
+            // only this one entry's CONTENT vs. its own declared CRC
+            // disagrees, exactly "corrupt but openable."
+            val commentsEntry = ZipEntry("word/comments.xml")
+            commentsEntry.method = ZipEntry.STORED
+            commentsEntry.size = commentsBytes.size.toLong()
+            commentsEntry.compressedSize = commentsBytes.size.toLong()
+            val crc32 = CRC32()
+            crc32.update(commentsBytes)
+            commentsEntry.crc = crc32.value
+            zos.putNextEntry(commentsEntry)
+            zos.write(commentsBytes)
+            zos.closeEntry()
+        }
+        // Corrupt the STORED comments.xml payload IN PLACE (same byte count,
+        // so no offset in the zip's own structure moves) — find its unique
+        // marker text and flip it to something else the CRC no longer
+        // matches. `document.xml` above carries no `w:comment` substring of
+        // its own, so this search is unambiguous.
+        val bytes = target.readBytes()
+        val marker = "w:comment w:id".toByteArray(Charsets.UTF_8)
+        var idx = -1
+        outer@ for (i in 0..(bytes.size - marker.size)) {
+            for (j in marker.indices) if (bytes[i + j] != marker[j]) continue@outer
+            idx = i
+            break
+        }
+        assertTrue(idx >= 0, "test fixture bug: marker not found in the STORED comments.xml payload")
+        for (i in idx until idx + marker.size) bytes[i] = 'X'.code.toByte()
+        target.writeBytes(bytes)
+        return target
+    }
+
+    @Test
+    fun `addNativeDocxComment refuses invalid-docx instead of crashing when comments xml is not well-formed XML`() = runTest {
+        val home = Files.createTempDirectory("ycd-dispatch-corrupt-write-home-").toFile().apply { deleteOnExit() }
+        val docx = buildDocxWithMalformedCommentsXml()
+        WorkingDirStore(home).add(WorkingDir(label = "corrupt-write", path = docx.parentFile!!.canonicalPath))
+        val before = docx.readBytes()
+        val result = addNativeDocxComment(
+            docx.absolutePath, null,
+            textSelector("An uncommented sentence to add a NEW comment on."),
+            "x", "user", home,
+        )
+        assertEquals(NativeMutateResult.Err(DocxWriteError.INVALID_DOCX.wire), result)
+        assertTrue(docx.readBytes().contentEquals(before)) // target left byte-identical
+    }
+
+    @Test
+    fun `resolveNativeDocxComment refuses invalid-docx instead of crashing when comments xml is not well-formed XML`() = runTest {
+        // Same corrupt fixture, a DIFFERENT dispatch function — proves the
+        // boundary is applied uniformly across every write entry point, not
+        // just `add`.
+        val home = Files.createTempDirectory("ycd-dispatch-corrupt-write-home2-").toFile().apply { deleteOnExit() }
+        val docx = buildDocxWithMalformedCommentsXml()
+        WorkingDirStore(home).add(WorkingDir(label = "corrupt-write", path = docx.parentFile!!.canonicalPath))
+        val before = docx.readBytes()
+        val result = resolveNativeDocxComment(docx.absolutePath, null, "w-0", home)
+        assertEquals(NativeMutateResult.Err(DocxWriteError.INVALID_DOCX.wire), result)
+        assertTrue(docx.readBytes().contentEquals(before))
+    }
+
+    @Test
+    fun `moveNativeDocxComment refuses invalid-docx instead of crashing when comments xml is a corrupted (bad-CRC) entry`() = runTest {
+        val home = Files.createTempDirectory("ycd-dispatch-corrupt-crc-home-").toFile().apply { deleteOnExit() }
+        val docx = buildDocxWithCorruptCommentsPartCrc()
+        WorkingDirStore(home).add(WorkingDir(label = "corrupt-crc", path = docx.parentFile!!.canonicalPath))
+        val before = docx.readBytes()
+        val result = moveNativeDocxComment(docx.absolutePath, null, "w-0", textSelector("A commented sentence."), home)
+        assertEquals(NativeMutateResult.Err(DocxWriteError.INVALID_DOCX.wire), result)
+        assertTrue(docx.readBytes().contentEquals(before))
     }
 }

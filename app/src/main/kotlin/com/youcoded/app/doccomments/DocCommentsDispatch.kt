@@ -192,6 +192,38 @@ private fun resolveNativeWriteTarget(path: String, projectRoot: String?, homeDir
     return NativeMutateResult.Ok(absolutePath)
 }
 
+// F2 (T17 implementation review, major/crash risk): every write dispatch
+// function below now wraps its call into DocxComments.kt's own write
+// pipeline in the SAME exception boundary `listNativeComments` already has
+// for reads (see that function's own doc comment, F3, T4 review) — a
+// corrupt-but-openable archive (a bad `w:id` that fails `.toIntOrNull()`
+// somewhere this module doesn't already guard, a truncated deflate stream
+// mid-write, an XML shape `javax.xml.parsers`' strict parser refuses that
+// `readDocxComments` never needed to reach) can throw something other than
+// the two typed exceptions `loadArchiveForWrite`/`writeDocxMutation` already
+// catch (`DocxUnsafeXmlDoctypeException`, `ZipBombDetectedException`) — and
+// before this fix, that throw escaped uncaught through this dispatch
+// function, then `SessionService`'s own `serviceScope.launch { }` (no
+// CoroutineExceptionHandler installed on that scope), which is a PROCESS
+// CRASH on Android, not just a dropped response. `SecurityException`/
+// `FileNotFoundException` map to `read-failed` (the file vanished or became
+// unreadable between the containment check and the write, an I/O failure);
+// everything else maps to `invalid-docx` — the SAME wire code
+// `loadArchiveForWrite` itself already returns when `ZipFile(file)` fails to
+// open at all, so a caller sees one consistent code for "this archive's
+// content is unusable," not a leaked stack trace. `Exception`, never
+// `Throwable` — an OOM or stack overflow is a real crash this boundary must
+// not mask, same reasoning as `listNativeComments`'s own catch.
+private suspend fun <T> nativeMutateExceptionBoundary(block: suspend () -> NativeMutateResult<T>): NativeMutateResult<T> = try {
+    block()
+} catch (_: SecurityException) {
+    NativeMutateResult.Err(DocxWriteError.READ_FAILED.wire)
+} catch (_: java.io.FileNotFoundException) {
+    NativeMutateResult.Err(DocxWriteError.READ_FAILED.wire)
+} catch (_: Exception) {
+    NativeMutateResult.Err(DocxWriteError.INVALID_DOCX.wire)
+}
+
 /** T17: Android's real `.docx` write dispatch — the Kotlin equivalent of
  *  desktop's `addNativeDocxComment`/etc. (doc-comments-dispatch.ts), calling
  *  straight into `DocxComments.kt`'s own write pipeline (§3.2a/§3.3). */
@@ -206,9 +238,11 @@ suspend fun addNativeDocxComment(
     val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
     if (resolved is NativeMutateResult.Err) return resolved
     val absolutePath = (resolved as NativeMutateResult.Ok).value
-    return when (val r = addDocxComment(absolutePath, path, selector, text, author, homeDir)) {
-        is DocxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
-        is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+    return nativeMutateExceptionBoundary {
+        when (val r = addDocxComment(absolutePath, path, selector, text, author, homeDir)) {
+            is DocxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
+            is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
     }
 }
 
@@ -223,9 +257,11 @@ suspend fun replyToNativeDocxComment(
     val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
     if (resolved is NativeMutateResult.Err) return resolved
     val absolutePath = (resolved as NativeMutateResult.Ok).value
-    return when (val r = replyToDocxComment(absolutePath, path, id, text, author, homeDir)) {
-        is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
-        is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+    return nativeMutateExceptionBoundary {
+        when (val r = replyToDocxComment(absolutePath, path, id, text, author, homeDir)) {
+            is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+            is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
     }
 }
 
@@ -236,9 +272,11 @@ suspend fun resolveNativeDocxComment(path: String, projectRoot: String?, id: Str
     val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
     if (resolved is NativeMutateResult.Err) return resolved
     val absolutePath = (resolved as NativeMutateResult.Ok).value
-    return when (val r = resolveDocxComment(absolutePath, path, id, homeDir)) {
-        is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
-        is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+    return nativeMutateExceptionBoundary {
+        when (val r = resolveDocxComment(absolutePath, path, id, homeDir)) {
+            is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+            is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
     }
 }
 
@@ -246,9 +284,11 @@ suspend fun reopenNativeDocxComment(path: String, projectRoot: String?, id: Stri
     val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
     if (resolved is NativeMutateResult.Err) return resolved
     val absolutePath = (resolved as NativeMutateResult.Ok).value
-    return when (val r = reopenDocxComment(absolutePath, path, id, homeDir)) {
-        is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
-        is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+    return nativeMutateExceptionBoundary {
+        when (val r = reopenDocxComment(absolutePath, path, id, homeDir)) {
+            is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+            is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
     }
 }
 
@@ -262,8 +302,10 @@ suspend fun moveNativeDocxComment(
     val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
     if (resolved is NativeMutateResult.Err) return resolved
     val absolutePath = (resolved as NativeMutateResult.Ok).value
-    return when (val r = moveDocxComment(absolutePath, path, id, newSelector, homeDir)) {
-        is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
-        is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+    return nativeMutateExceptionBoundary {
+        when (val r = moveDocxComment(absolutePath, path, id, newSelector, homeDir)) {
+            is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+            is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
     }
 }

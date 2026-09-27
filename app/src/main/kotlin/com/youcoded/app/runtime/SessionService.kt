@@ -4198,11 +4198,31 @@ class SessionService : Service() {
             "docComments:reopen", "docComments:move", "docComments:watch", "docComments:unwatch" -> {
                 val homeDir = docCommentsHomeDir()
                 val sessionRoots = sessionRegistry.sessions.value.values.map { it.cwd.absolutePath }
-                val response = com.youcoded.app.doccomments.handleDocCommentsMessage(msg.type, msg.payload, homeDir, sessionRoots)
-                    // Unreachable in practice — every label in this branch's
-                    // own match arm above is also one handleDocCommentsMessage
-                    // owns; kept as an honest fallback rather than `!!`.
-                    ?: org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")
+                // F2 (T17 implementation review, major/crash risk): a
+                // format-agnostic LAST-RESORT backstop around the whole
+                // dispatch call. `addNativeDocxComment`/etc. (DocCommentsDispatch.kt)
+                // already catch every exception their own write path can
+                // throw, but this `when` branch runs inside
+                // `serviceScope.launch { handleBridgeMessage(ws, msg) }`
+                // (onCreate() above) with NO CoroutineExceptionHandler
+                // installed on `serviceScope` — an exception this dispatch
+                // layer somehow still didn't catch (a bug in a FUTURE
+                // change here, or a wholly different docComments:* path,
+                // e.g. the sidecar store's own JSON handling) would
+                // otherwise kill the coroutine silently: no response is ever
+                // sent, so the WebView's caller hangs forever, and on
+                // Android an uncaught exception with no handler installed on
+                // its scope is a PROCESS CRASH, not just a dropped message.
+                // Every docComments:* message gets an answer either way.
+                val response = try {
+                    com.youcoded.app.doccomments.handleDocCommentsMessage(msg.type, msg.payload, homeDir, sessionRoots)
+                        // Unreachable in practice — every label in this branch's
+                        // own match arm above is also one handleDocCommentsMessage
+                        // owns; kept as an honest fallback rather than `!!`.
+                        ?: org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")
+                } catch (_: Exception) {
+                    org.json.JSONObject().put("ok", false).put("error", "write-failed")
+                }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, response) }
             }
 
