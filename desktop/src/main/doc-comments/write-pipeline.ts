@@ -158,7 +158,42 @@ export async function writeFileMutation<Extra extends Record<string, unknown>, E
     const tmpPath = `${absolutePath}.${process.pid}.${Date.now()}.tmp`;
     try {
       await fs.writeFile(tmpPath, newBytes);
+      // F1 (T17 implementation review, major/durability): fsync the tmp
+      // file's bytes to disk BEFORE the rename that makes them visible as
+      // the real target — same idiom as artifacts/cas-write.ts's own
+      // `atomicWrite` (`fh.sync()`). A bare `fs.rename` only reorders a
+      // directory entry; it says nothing about whether the bytes the new
+      // name points at are durable yet, so a crash between the rename
+      // returning and the OS's own lazy flush could leave the real document
+      // TRUNCATED — the failure mode this finding names. A throw here (the
+      // open, or the sync itself) falls into the same catch below as a
+      // failed write: the tmp file and the not-yet-needed backup are both
+      // cleaned up, and the real target is left exactly as untouched as any
+      // other write-failed path leaves it.
+      const fh = await fs.open(tmpPath, 'r+');
+      try {
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
       await fs.rename(tmpPath, absolutePath);
+      // F1: best-effort fsync of the PARENT DIRECTORY too, so the rename's
+      // own directory-entry update is itself durable, not just the file's
+      // bytes (already covered above) — "where supported" per the finding:
+      // opening a directory as a file handle and syncing it is POSIX-only
+      // (fails on Windows), so this is wrapped in its own try/catch and
+      // never allowed to fail a write that has already fully succeeded.
+      try {
+        const dirHandle = await fs.open(path.dirname(absolutePath), 'r');
+        try {
+          await dirHandle.sync();
+        } finally {
+          await dirHandle.close();
+        }
+      } catch {
+        /* not supported on this platform/filesystem — the file-level fsync
+           above already guarantees the CONTENT survives a crash */
+      }
     } catch {
       try {
         await fs.unlink(tmpPath);

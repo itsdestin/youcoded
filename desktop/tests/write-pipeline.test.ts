@@ -6,8 +6,9 @@
 // docx-comments.test.ts, tested here once at the shared-module level since
 // EVERY xlsx write op (add/reply/resolve/reopen/move) delegates its
 // backup/atomic-write/verify/rollback behaviour to this one function.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFile, writeFile, mkdtemp, rm, stat } from 'fs/promises';
+import { promises as fsp } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { writeFileMutation, backupPathFor } from '../src/main/doc-comments/write-pipeline';
@@ -150,6 +151,68 @@ describe('write-pipeline — verify-after-write with automatic rollback', () => 
         async () => true // arity 0 — never reads newBytes/extra/originalBytes
       );
       expect(result).toEqual({ ok: true });
+    });
+  });
+
+  // F1 (T17 implementation review, major/durability): the tmp file's bytes
+  // are fsynced to disk BEFORE the rename that makes them visible as the
+  // real target — a bare rename says nothing about whether the OS has
+  // actually flushed the bytes the new name points at.
+  describe('F1 — fsync before rename', () => {
+    it('opens the tmp file for fsync before renaming it onto the target', async () => {
+      await withScratchFile('original bytes', async (target) => {
+        const openSpy = vi.spyOn(fsp, 'open');
+        const renameSpy = vi.spyOn(fsp, 'rename');
+        try {
+          const result = await writeFileMutation<{}, { ok: false; error: string }>(
+            target,
+            '.xlsx.bak',
+            async (bytes) => ({ ok: true, bytes }),
+            async () => true
+          );
+          expect(result).toEqual({ ok: true });
+          expect(openSpy.mock.invocationCallOrder.length).toBeGreaterThan(0);
+          expect(renameSpy.mock.invocationCallOrder.length).toBeGreaterThan(0);
+          // The FIRST fs.open call (the fsync handle on the tmp file) ran
+          // strictly before the FIRST fs.rename call.
+          expect(openSpy.mock.invocationCallOrder[0]).toBeLessThan(renameSpy.mock.invocationCallOrder[0]);
+        } finally {
+          openSpy.mockRestore();
+          renameSpy.mockRestore();
+        }
+      });
+    });
+
+    it('a failing fsync leaves the target byte-identical and removes the backup it had already written', async () => {
+      await withScratchFile('original bytes', async (target) => {
+        const before = await readFile(target);
+        const backupPath = backupPathFor(target, '.xlsx.bak');
+        const originalOpen = fsp.open.bind(fsp);
+        // Inject the fault on the FIRST fs.open call only — the tmp file's
+        // fsync handle — by wrapping the real handle and making its own
+        // `sync()` reject, proving the write path actually calls `sync()`
+        // (not merely `open()`) before it can proceed to rename.
+        const openSpy = vi.spyOn(fsp, 'open').mockImplementationOnce(async (...args: Parameters<typeof fsp.open>) => {
+          const handle = await originalOpen(...args);
+          handle.sync = async () => {
+            throw new Error('simulated fsync failure');
+          };
+          return handle;
+        });
+        try {
+          const result = await writeFileMutation<{}, { ok: false; error: string }>(
+            target,
+            '.xlsx.bak',
+            async (bytes) => ({ ok: true, bytes: Buffer.concat([bytes, Buffer.from('!')]) }),
+            async () => true
+          );
+          expect(result).toEqual({ ok: false, error: 'write-failed' });
+          expect(await readFile(target)).toEqual(before); // rename never ran
+          expect(await exists(backupPath)).toBe(false); // cleaned up — the real target was never touched either way
+        } finally {
+          openSpy.mockRestore();
+        }
+      });
     });
   });
 });
