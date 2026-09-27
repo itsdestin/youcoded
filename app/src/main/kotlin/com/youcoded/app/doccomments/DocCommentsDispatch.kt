@@ -60,6 +60,24 @@ sealed class NativeListResult {
  * the load-bearing part here") — the sensitive-path denylist
  * (`EditablePathPolicy.isSensitivePath`) is the load-bearing check for a
  * no-`projectRoot` native read on this platform, not a full roots allowlist.
+ *
+ * F4 (implementation review) — threading contract: `readDocxComments`/
+ * `readXlsxComments` (called below) are plain, BLOCKING, synchronous
+ * functions — not `suspend` — and perform real file/zip I/O directly on the
+ * calling thread. This is safe ONLY because of THIS function's own caller:
+ * `SessionService.handleBridgeMessage` is always invoked as
+ * `serviceScope.launch { handleBridgeMessage(ws, msg) }` (SessionService.kt's
+ * `onCreate()`), and `serviceScope` is
+ * `CoroutineScope(Dispatchers.IO + SupervisorJob())` — so EVERY
+ * `docComments:*` branch, including this function's own call into T16/T18's
+ * readers, already runs on `Dispatchers.IO` by the time it gets here, never
+ * on `Dispatchers.Main`/the UI thread. Making these readers `suspend fun` +
+ * wrapping their bodies in their own `withContext(Dispatchers.IO)` would be
+ * redundant (an extra dispatch hop onto a dispatcher the call is already
+ * running on) rather than a real safety improvement — this doc comment
+ * records that contract explicitly instead, so a future caller added OUTSIDE
+ * `handleBridgeMessage` doesn't assume these functions are main-thread-safe
+ * just because they carry no `Dispatchers.IO` mention of their own.
  */
 fun listNativeComments(format: NativeFormat, path: String, projectRoot: String?, homeDir: File): NativeListResult {
     val resolved = resolveSourceFilePath(path, projectRoot, homeDir)
