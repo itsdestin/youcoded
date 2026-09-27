@@ -175,4 +175,4 @@ The watcher depends on Claude Code's internal JSONL transcript format. Key assum
 
 ## Known Issues & Planned Updates
 
-See [GitHub Issues](https://github.com/itsdestin/destinclaude/issues) for known issues and planned updates.
+See [GitHub Issues](https://github.com/itsdestin/youcoded/issues) for known issues and planned updates.

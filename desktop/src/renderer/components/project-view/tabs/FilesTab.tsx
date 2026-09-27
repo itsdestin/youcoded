@@ -126,6 +126,7 @@ function folderErrorMessage(error: string, detail: string | undefined, atRoot: b
 import { FolderIcon as FolderCardIcon, DocIcon, ImageIcon, SheetIcon, CodeGlyphIcon, GridViewIcon, ListViewIcon } from '../icons';
 import { ChevronIcon } from '../../Icons';
 import { EmptyState, ErrorState } from '../../ui';
+import { useScreenOpen, ScreenMark } from '../../../shoot-mode';
 
 // The rounded box the list-view rows sit in — the same container language the
 // content-search groups already use. Module scope, NOT inside the component: a
@@ -273,6 +274,8 @@ function FilesTabImpl({
   const [truncated, setTruncated] = useState(false);
   // Current folder being browsed ('' = project root).
   const [currentDir, setCurrentDir] = useState('');
+  // Photo-only build: `shoot` opens a fixture folder (docs, and Locked under ?filesLocked=1).
+  useScreenOpen('projects/files/folder', (dir) => { if (dir) setCurrentDir(dir); }, ['docs', 'Locked']);
   // Report the browsed folder up to ProjectView, which needs it as the "+ Add
   // file" import destination — see the prop comment above. Deliberately keyed
   // on currentDir ONLY, not on onCurrentDirChange: ProjectView passes its raw
@@ -894,6 +897,7 @@ function FilesTabImpl({
     // `hidden` and `flex` are both display utilities, so keeping both would
     // leave which one wins up to their order in the generated stylesheet.
     <div className={hidden ? 'hidden' : 'relative flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-4 pb-4 gap-3 min-w-0 max-sm:h-auto max-sm:overflow-visible'}>
+      {!hidden && currentDir && <ScreenMark name={`projects/files/folder/${currentDir}`} />}
       {/* Breadcrumb line — folder path on the left, view switch on the right.
           Rendered even when search/type-filter has flattened the tree (which
           hides the path itself): the switch has to stay reachable while you

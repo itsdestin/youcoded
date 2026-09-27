@@ -59,7 +59,7 @@ It's designed for students, professionals, and anyone who uses AI regularly — 
 - Toggle **Incognito** in the multiplayer settings to stay hidden — no presence is broadcast in incognito mode
 
 **Personalization**
-- Community plugins from the [WeCoded marketplace](https://github.com/itsdestin/wecoded-marketplace) add journaling, a personal encyclopedia, task inbox processing, and text messaging — browse and install them from inside the app
+- Community plugins from the [YouCoded marketplace](https://github.com/itsdestin/wecoded-marketplace) add journaling, a personal encyclopedia, task inbox processing, and text messaging — browse and install them from inside the app
 - Cross-device sync is built into the app — no plugin required
 
 ## Platforms

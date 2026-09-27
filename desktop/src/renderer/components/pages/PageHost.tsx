@@ -58,6 +58,7 @@ import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
   PAGE_REFRESH_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss,
 } from './page-theme';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 function pagesBridge(): PagesBridge | undefined {
   return (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
@@ -105,6 +106,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // closed by Esc with the page focused — Destin, 2026-09-17.)
   const dismissTop = useDismissTop();
   const { pages, loaded, failed } = usePages();
+  // Photo-only build: `shoot` opens a page by id, in the panel or focused (the pinned-button view).
+  const pageIds = pages.map((p) => p.id);
+  useScreenOpen('pages/page', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id }); }, pageIds);
+  useScreenOpen('pages/focus', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id, focus: true }); }, pageIds);
   const summary = pages.find((p) => p.id === pageId) ?? null;
   const pinnedCount = pages.filter((p) => p.pinned).length;
   // The frame reloads when page.html was rewritten (the stamp moves) and not
@@ -354,6 +359,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         </aside>
         )}
         <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
+          {/* Photo-only marks: the view once its list has loaded, or the page once it is ready. */}
+          {load.state === 'idle' && loaded && !failed && <ScreenMark name="pages" />}
+          {load.state === 'ready' && pageId && <ScreenMark name={`pages/${pageFocus ? 'focus' : 'page'}/${pageId}`} />}
           {/* WHY: first-run belongs where the Pages button lands, not a second click into Manage pages. */}
           {load.state === 'idle' && !loaded && <LoadingState what="pages" />}
           {load.state === 'idle' && loaded && failed && <ErrorState message="The list of pages could not be read." onRetry={() => void refreshPages()} />}

@@ -21,6 +21,7 @@ import { NativeHome } from '../native-home';
 import { nativeStoreSlug, ccProjectSlug } from '../slug-encoding';
 import { laneMatches } from '../conversations/lane-guards';
 import { buildMetaFile } from './meta-builder';
+import { perfMark } from '../perf-marks';
 import {
   acquireBuildLock, atomicWriteFileSync, chatsearchDir, metaPath, refreshTurns,
 } from './index-store';
@@ -199,6 +200,9 @@ async function refreshFromLiveState(): Promise<void> {
   if (!store) return; // store unavailable this launch — nothing to index
 
   inFlight = true;
+  // WHY: the index build walks every conversation; the startup perf marks
+  // need to see whether it overlaps the Resume scan and the slug repair.
+  perfMark('bg:chatsearch-refresh:start');
   try {
     const tagLabels = new Map<string, string>();
     try {
@@ -255,6 +259,7 @@ async function refreshFromLiveState(): Promise<void> {
     // A failed refresh leaves the previous index in place. The next trigger
     // retries; a stale index is surfaced by the CLI's own age banner.
   } finally {
+    perfMark('bg:chatsearch-refresh:done');
     inFlight = false;
     if (pendingRerun) {
       pendingRerun = false;

@@ -2423,10 +2423,14 @@ void app.whenReady().then(async () => {
   // caller-side note and pauseSweeps' WHY in conversations/service.ts).
   // .finally ALWAYS resumes, even if the repair throws, so a bad repair can't
   // leave sync mirroring silently disabled forever.
+  // WHY the bg: marks: the store start and slug repair run detached, after the
+  // window, so the chore marks above never saw them — yet on a big history the
+  // repair is the longest thing a launch does (logs: 16-24 s every launch).
+  perfMark('bg:conversation-store:start');
   startConversationStore({ pauseSweeps: true })
-    .then(() => runSlugRepair())   // idempotent; runs with the sweeps quiesced (spec §6)
+    .then(() => { perfMark('bg:slug-repair:start'); return runSlugRepair(); })   // idempotent; runs with the sweeps quiesced (spec §6)
     .catch(e => log('ERROR', 'Main', 'ConversationStore start / slug repair failed', { error: String(e) }))
-    .finally(() => resumeSweeps());
+    .finally(() => { perfMark('bg:slug-repair:done'); resumeSweeps(); });
 
   // One-time symlink sweep (Plan 2c): the legacy SyncService.aggregateConversations()/
   // rewriteProjectSlugs() (deleted this release) left ~hundreds of symlinks/junctions

@@ -117,6 +117,8 @@ function Root() {
 // through App purely to break it. `?mode=workbench` matches none of App's
 // existing buddyMode branches, so <App/> falls through to the main app.
 const __mount = createRoot(document.getElementById('root')!);
+// Photo-only build flag (vite.config.ts `define`); see shoot-mode.tsx.
+declare const __SHOOT__: boolean;
 // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
 // Site mode: the landing page embeds the workbench as a live demo, built with
 // `npm run build:site` (VITE_WORKBENCH=1). Any other production build still
@@ -212,6 +214,16 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
         ]);
         __mount.render(<ThemeProvider><BuddySessionScreensMockup /></ThemeProvider>);
         return;
+      }
+      // Photo-only build (`shoot`): install the driver that opens named screens
+      // directly. `__SHOOT__` is false in every other build, so this import and the
+      // screen list never ship in the app or the landing page's demo.
+      if (typeof __SHOOT__ !== 'undefined' && __SHOOT__) {
+        const [{ installScreenDriver }, { SCREENS }] = await Promise.all([
+          import('./shoot-mode'),
+          import('./dev/workbench/screens'),
+        ]);
+        installScreenDriver(SCREENS);
       }
       // App is already statically imported above (Root renders it).
       __mount.render(<App />);

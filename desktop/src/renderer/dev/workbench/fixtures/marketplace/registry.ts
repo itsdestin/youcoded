@@ -352,8 +352,8 @@ export const MARKETPLACE_PLUGINS = [
   {
     "id": "wecoded-marketplace-publisher",
     "type": "plugin",
-    "displayName": "WeCoded Marketplace Publisher",
-    "description": "Publish your plugins to the WeCoded marketplace — conversational, non-technical-user friendly.",
+    "displayName": "YouCoded Marketplace Publisher",
+    "description": "Publish your plugins to the YouCoded marketplace — conversational, non-technical-user friendly.",
     "category": "productivity",
     "author": "@destin",
     "tags": [],
@@ -1280,7 +1280,7 @@ export const INSTALLED_SKILLS = [
   {
     "id": "marketplace-publisher",
     "displayName": "Marketplace Publisher",
-    "description": "Conversational assistant that helps users publish their plugins (skills, commands, hooks, MCPs, agents) to the WeCoded marketplace — disk discovery, plugin rebuild, secret sanitization, and PR creation.",
+    "description": "Conversational assistant that helps users publish their plugins (skills, commands, hooks, MCPs, agents) to the YouCoded marketplace — disk discovery, plugin rebuild, secret sanitization, and PR creation.",
     "category": "personal",
     "prompt": "/marketplace-publisher",
     "source": "marketplace",

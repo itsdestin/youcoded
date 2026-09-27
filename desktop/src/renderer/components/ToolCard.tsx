@@ -19,10 +19,10 @@ import { useCardKeysLive } from '../state/card-keys-context';
 import { asString } from '../utils/tool-input';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
-import { fullAutoStopCopy, floorAskNote, adminStopCopy } from './permissions/deny-list-copy';
+import { FullAutoStops, BROAD_ALLOW_COLORS } from './permissions/FullAutoStops';
+import { floorAskNote } from './permissions/deny-list-copy';
 import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
 import { AdminRunStrip } from './permissions/AdminRunStrip';
-import { PERMISSION_DISPLAY } from './StatusBar';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-user-link';
@@ -521,7 +521,7 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, suppressAlwaysAllow, floorStop, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false, noKeyboard = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false, noKeyboard = false }: {
   requestId: string;
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
@@ -540,6 +540,9 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
    *  (permission-store.ts:35-43), so naming the folder is what makes the grant's
    *  scope checkable — a worktree does NOT inherit its parent repo's rules. */
   folderName?: string;
+  toolName?: string;
+  external?: boolean;
+  specialistName?: string;
   /** Budget gates (max_steps / doom_loop) are a binary "Continue?" — never offer
    *  "Always Allow" (it'd persist a rule that permanently disables the guard).
    *  Also set for an external-directory ask, where a remembered rule could
@@ -585,6 +588,13 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // below the buttons"). It never offers Always Allow (floorStop suppresses it).
   const adminStop = floorStop === 'admin';
   const fullAutoStop = (permissionMode === 'full-auto' && !!denyListed) || adminStop;
+  // WHY: a forced outside-folder ask isn't deny-listed, but without its own
+  // safety-stop copy Full Auto looks broken and offers no session-scoped choice.
+  const externalStop = isNative && permissionMode === 'full-auto' && external === true
+    && !specialistName && (toolName === 'Write' || toolName === 'Edit');
+  const budgetStop = isNative && permissionMode === 'full-auto'
+    && (toolName === 'doom_loop' || toolName === 'max_steps');
+  const [confirmingExternal, setConfirmingExternal] = useState(false);
   // Consequence-gated confirm strip (deny-listed asks) — mirrors the delete-model
   // confirm in LocalModelsSection: replace the button row with a plain-language
   // warning + Cancel / confirm.
@@ -674,10 +684,16 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 
   // Build actions list so keyboard handler can index into it. The array MUST
   // match the VISUAL order so Arrow Left/Right walk the row: the safety stop
-  // puts deny in the MIDDLE (Run it / Skip it | Always Allow) — red mid-row is
+  // puts deny in the MIDDLE (Run it / Deny | Always Allow) — red mid-row is
   // owner-approved (compare R2) even though every other row ends on red.
   const actions = useRef<(() => void)[]>([]);
-  actions.current = fullAutoStop
+  actions.current = externalStop || budgetStop
+    ? [
+        () => handleRespond({ decision: { behavior: 'allow' } }),
+        () => handleRespond({ decision: { behavior: 'deny' } }),
+        ...(externalStop ? [() => setConfirmingExternal(true)] : []),
+      ]
+    : fullAutoStop
     ? [
         () => handleRespond({ decision: { behavior: 'allow' } }),
         () => handleRespond({ decision: { behavior: 'deny' } }),
@@ -697,7 +713,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // and while this card's chat is not the one on screen.
   const keysLive = useCardKeysLive();
   useEffect(() => {
-    if (responding || confirmingAlways || !keysLive || noKeyboard) return;
+    if (responding || confirmingAlways || confirmingExternal || !keysLive || noKeyboard) return;
     const handler = (e: KeyboardEvent) => {
       // WHY: InputBar sends on an Enter that reaches the page body and marks it
       // handled. That one keypress is the message, not an answer to this card.
@@ -719,7 +735,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [responding, confirmingAlways, keysLive, noKeyboard, focusIdx, count]);
+  }, [responding, confirmingAlways, confirmingExternal, keysLive, noKeyboard, focusIdx, count]);
 
   const pad = isAndroid() ? 'py-2' : 'py-1';
   const ring = 'ring-2 ring-white/40';
@@ -828,66 +844,23 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     );
   }
 
-  // The full-auto safety stop (compare surface 'full-auto-ask', settled R4).
-  // Same §11/change-61 carve-out as the rows below: green/red/orange are STATUS
-  // colors; the band wears the chip's own colors so it reads as the MODE
-  // stopping itself, not a generic permission question.
-  if (fullAutoStop) {
-    const fa = PERMISSION_DISPLAY['full-auto'];
-    const stop = adminStop && permissionMode !== 'full-auto' ? adminStopCopy() : fullAutoStopCopy(command, floorStop);
-    return (
-      <div className="px-3 py-2 space-y-2 border-t" style={{ background: fa.bg, borderColor: fa.border }}>
-        {/* Header + subheader as ONE tight block; the footer's only real gap
-            sits before the buttons (owner spacing direction, compare R3). */}
-        <div className="space-y-0.5">
-          <p className="text-xs font-medium" style={{ color: fa.color }}>{stop.header}</p>
-          <p className="text-2xs text-fg-dim leading-relaxed">{stop.subline}</p>
-        </div>
-        {/* An admin command shows its exact command line before Yes (UX review 1,
-            U1, admin-password design 2026-09-25): the header carries only the
-            assistant's summary, and this is a full-control-of-your-computer ask. */}
-        {floorStop === 'admin' && command && (
-          <p className="text-2xs leading-relaxed text-fg-2 bg-inset/70 px-2 py-1.5 rounded-sm break-all font-mono">{command}</p>
-        )}
-        <div className="flex items-center gap-2">
-          <button
-            ref={el => { buttonsRef.current[0] = el; }}
-            disabled={responding}
-            onClick={() => handleRespond({ decision: { behavior: 'allow' } })}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-400/60 hover:bg-green-400/80 text-green-100 transition-colors disabled:opacity-50 ${focusIdx === 0 ? ring : ''}`}
-          >
-            Run it
-          </button>
-          <button
-            ref={el => { buttonsRef.current[1] = el; }}
-            disabled={responding}
-            onClick={() => handleRespond({ decision: { behavior: 'deny' } })}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
-          >
-            Skip it
-          </button>
-          {/* P-18: a real 1px divider instead of a typed "|" — takes the theme's
-              edge colour and is silent to screen readers. */}
-          {!suppressAlwaysAllow && <span aria-hidden="true" className="w-px h-3.5 bg-edge shrink-0" />}
-          {/* Orange, not the generic row's blue: a fourth member of the status
-              button set, distinct from the amber band behind it (compare R2·A).
-              fullAutoStop implies a native deny-listed ask, so onAlwaysAllow
-              always routes through the consequence confirm above. */}
-          {/* Not offered when the ask can never be remembered (the removal-target
-              floor): a grant there would be a promise nothing keeps. */}
-          {!suppressAlwaysAllow && (<button
-            ref={el => { buttonsRef.current[2] = el; }}
-            disabled={responding}
-            onClick={onAlwaysAllow}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-orange-100 transition-colors disabled:opacity-50 ${focusIdx === 2 ? ring : ''}`}
-          >
-            Always Allow
-          </button>)}
-        </div>
-        {unconfirmedNote}
-      </div>
-    );
-  }
+  // WHY: the new permission floor cannot be remembered; keep its stop in the
+  // same explained band but with no persistent Always Allow choice.
+  if (confirmingExternal || externalStop || budgetStop || fullAutoStop) return (
+    <FullAutoStops
+      kind={externalStop || confirmingExternal ? 'external' : budgetStop ? 'budget' : 'danger'}
+      confirmingExternal={confirmingExternal} toolName={toolName} command={command}
+      floorStop={floorStop} suppressAlwaysAllow={suppressAlwaysAllow}
+      adminOutsideFullAuto={adminStop && permissionMode !== 'full-auto'}
+      specialistName={specialistName} folderName={folderName} responding={responding}
+      focusIdx={focusIdx} buttonsRef={buttonsRef} pad={pad} ring={ring} unconfirmedNote={unconfirmedNote}
+      onAllow={() => handleRespond({ decision: { behavior: 'allow' } })}
+      onDeny={() => handleRespond({ decision: { behavior: 'deny' } })}
+      onAlways={onAlwaysAllow} onOpenExternal={() => setConfirmingExternal(true)}
+      onBackExternal={() => setConfirmingExternal(false)}
+      onGrantExternal={() => handleRespond({ decision: { behavior: 'allow' }, allowExternalEditsForSession: true })}
+    />
+  );
 
   return (
     // Same §11/change-61 carve-out as the confirm row above: status colors stay,
@@ -911,7 +884,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
           ref={el => { buttonsRef.current[1] = el; }}
           disabled={responding}
           onClick={onAlwaysAllow}
-          className={`px-3 ${pad} text-xs font-medium rounded-lg bg-blue-600/60 hover:bg-blue-600/80 text-blue-100 transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
+          className={`px-3 ${pad} text-xs font-medium rounded-lg ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
         >
           Always Allow
         </button>
@@ -1556,6 +1529,9 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             noKeyboard={!!tool.specialist}
             suggestions={tool.permissionSuggestions}
             denyListed={tool.denyListed}
+            toolName={tool.toolName}
+            external={tool.external}
+            specialistName={tool.specialist?.title}
             permissionMode={tool.permissionMode}
             command={typeof (tool.input as any)?.command === 'string' ? (tool.input as any).command : undefined}
             folderName={sessionCwd ? basename(sessionCwd) : undefined}

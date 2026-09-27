@@ -48,7 +48,7 @@ export function FirstTimeWarning({ kind, open, onCancel, onContinue }: FirstTime
     // button (seen in the workbench 2026-09-10), and the design guide calls a
     // truncated title a bug. 420px fits every title and keeps the three
     // paragraphs at a comfortable measure.
-    <Dialog open={open} onClose={() => close(onCancel)} title={copy.title} size="panel">
+    <Dialog open={open} onClose={() => close(onCancel)} title={copy.title} size="panel" screen={`chat/first-time-warning/${kind}`}>
       {/* Paragraph style matches the Permissions page's mode definitions, so the
           Full auto warning reads as the same voice as the page it echoes. */}
       <div className="space-y-2">

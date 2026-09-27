@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Button, Checkbox, Dialog, SettingRow, Toggle } from '../ui';
+import { useScreenOpen } from '../../shoot-mode';
 
 // Claude Code's one permission setting: the Skip Permissions switch. It lived
 // in SettingsPanel.tsx's Session Defaults popup; it is now the first block of
@@ -37,6 +38,7 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
 }) {
   const [confirming, setConfirming] = useState(false);
   const [accepted, setAccepted] = useState(false);
+  useScreenOpen('settings/assistant/permissions/skip-confirm', () => setConfirming(true));
 
   const close = () => { setConfirming(false); setAccepted(false); };
 
@@ -61,7 +63,7 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
 
       {/* layer 3 + destructive: this is the app's shape for a confirmation
           that must not be lost behind the thing it is confirming. */}
-      <Dialog open={confirming} onClose={close} title="Skip Permissions Mode" size="prompt" layer={3} destructive>
+      <Dialog open={confirming} onClose={close} title="Skip Permissions Mode" size="prompt" layer={3} destructive screen="settings/assistant/permissions/skip-confirm">
         <div className="space-y-3 text-xs text-fg leading-relaxed">
           {/* Destin's copy (round 4, R4-3) — the three measured paragraphs it
               replaced read as a wall of grey. */}

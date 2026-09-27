@@ -6,6 +6,7 @@ import type { MarketplaceUser } from '../../main/marketplace-auth-store';
 import type { BlockRow } from '../state/marketplace-api-client';
 import { Button, Dialog, FieldError, InputGroup, SettingRow, Callout } from './ui';
 import { ConnectedAccountsBody } from './ConnectedAccounts';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // Settings → Account section. One self-contained row-button + popup, mounted in
 // both the Desktop and Android settings stacks. Auth-token state and mutations
@@ -108,6 +109,7 @@ function AccountAvatar({ url, size }: { url?: string | null; size: 'row' | 'larg
 export default function AccountSection() {
   const { signedIn, user } = useAccount();
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/account', () => setOpen(true)); // photo-only build: `shoot` opens it by name
 
   const rowLabel = 'Account';
   const rowDesc = signedIn
@@ -141,9 +143,10 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
   // Settings; external connections (GitHub now, Google etc. later) live on a
   // "Connected accounts" PAGE inside it. A sibling settings row read as a
   // second, contradictory GitHub sign-in ("Sign in with GitHub" right above
-  // "Connected as @…") because the WeCoded account also authenticates via
+  // "Connected as @…") because the YouCoded account also authenticates via
   // GitHub — two different jobs wearing the same octocat.
   const [page, setPage] = useState<'main' | 'connections'>('main');
+  useScreenOpen('settings/account/connections', () => setPage('connections')); // photo-only build
 
   // Combined github:status for the row summary + the connections page.
   // 'unavailable' (handler missing / rejected — the Android stub) hides the
@@ -172,12 +175,14 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
   return createPortal(
     <>
       <Dialog
+        screen="settings/account"
         open
         onClose={onClose}
         size="panel"
         title={page === 'connections' ? 'Connected services' : 'Account'}
         onBack={page === 'connections' ? () => setPage('main') : undefined}
       >
+        {page === 'connections' && <ScreenMark name="settings/account/connections" />}
             {page === 'connections' ? (
               <ConnectedAccountsBody
                 status={ghStatus === 'unavailable' ? null : ghStatus}
@@ -202,14 +207,14 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
                   <SignedOutBody signInPending={signInPending} startSignIn={startSignIn} />
                 )}
 
-                {/* Connected accounts entry — shown regardless of WeCoded
+                {/* Connected accounts entry — shown regardless of YouCoded
                     sign-in state (the GitHub connection is independent of it),
                     hidden only where the github:* channels don't exist. */}
                 {ghStatus !== 'unavailable' && (
                   <SettingRow
                     onClick={() => setPage('connections')}
                     icon={
-                      /* Neutral link glyph, NOT the octocat — the WeCoded
+                      /* Neutral link glyph, NOT the octocat — the YouCoded
                          sign-in button above already wears GitHub's mark, and
                          doubling it is what made the two read as one broken
                          flow. Provider marks belong on the sub-page rows. */

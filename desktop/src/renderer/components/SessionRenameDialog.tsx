@@ -64,7 +64,9 @@ function RenameForm({ id, name, onClose }: Props) {
     finally { if (alive.current) setSaving(false); }
   };
   // WHY: this dialog only saves protected manual names; it never clears ownership.
-  return <Dialog open title="Rename session" size="panel" layer={3} onClose={() => { if (!saving) onClose(); }}>
+  // WHY loaded-gated: the dialog opens showing "Loading…" until the name
+  // fetch resolves — the screen mark must not fire before real content is up.
+  return <Dialog open screen={loaded ? 'chat/rename-session' : undefined} title="Rename session" size="panel" layer={3} onClose={() => { if (!saving) onClose(); }}>
     {error && <ErrorState message={error} onRetry={retry} variant="inline" />}
     {!loaded ? <LoadingState what="the session name" /> : <form className="space-y-3" onSubmit={(e) => {
       e.preventDefault(); if (draft.trim()) void save();

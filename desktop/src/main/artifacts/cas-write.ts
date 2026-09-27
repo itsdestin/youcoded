@@ -129,6 +129,30 @@ export async function sweepStaleTmp(dir: string, targetBase: string): Promise<vo
   } catch { /* dir unreadable — skip the sweep entirely */ }
 }
 
+// WHY: on Windows, renaming over a file fails with EPERM/EACCES/EBUSY while
+// anything else has it open for that instant — a reader of the same file (the
+// app polls several of these), antivirus scanning the new temp file, a sync
+// client. The collision lasts milliseconds, but one un-retried attempt threw
+// and the whole write was lost (the delegation ledger dropped a saved note:
+// native-session-host.test.ts failed on Windows CI 2026-09-26 after its 23 s
+// wait). Retry briefly; sync-service.ts's own atomicWrite already does the
+// same. POSIX rename replaces an open file fine, so there an EACCES is a real
+// permission error and is thrown at once.
+const RENAME_RETRY_DELAYS_MS = [20, 50, 100, 200, 400];
+
+export async function renameReplacing(tmp: string, target: string, platform: NodeJS.Platform = process.platform): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rename(tmp, target);
+      return;
+    } catch (e: any) {
+      const transient = platform === 'win32' && (e.code === 'EPERM' || e.code === 'EACCES' || e.code === 'EBUSY');
+      if (!transient || attempt >= RENAME_RETRY_DELAYS_MS.length) throw e;
+      await new Promise((r) => setTimeout(r, RENAME_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
 /** Atomic tmp-write + fsync + rename onto `target`. */
 async function atomicWrite(target: string, content: string): Promise<void> {
   await sweepStaleTmp(dirname(target), basename(target));
@@ -140,7 +164,7 @@ async function atomicWrite(target: string, content: string): Promise<void> {
     const fh = await fs.open(tmp, 'r+');
     await fh.sync();
     await fh.close();
-    await fs.rename(tmp, target);
+    await renameReplacing(tmp, target);
   } catch (e) {
     // Non-crash strand (e.g. Windows AV holding the file → EPERM on rename):
     // remove our own tmp so it can't linger — and sync — as junk.

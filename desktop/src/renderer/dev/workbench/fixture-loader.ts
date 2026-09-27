@@ -304,10 +304,13 @@ export function loadFixture(
           // denyListed:true → the destructive-deny-list rule won; ToolCard
           // gates the "Always allow" strip behind a consequence warning.
           denyListed: parsed.denyListed === true,
-          // Carried so a floor's card (no Always Allow, its own note) and the
-          // Full-auto stop band can be shown from a fixture.
+          // WHY: workbench reviews must exercise the same Full Auto stop as a
+          // live PermissionRequest, not silently downgrade it to generic Yes/No.
+          external: parsed.external === true,
+          permissionMode: parsed.permissionMode,
+          // Carried so a floor's card (no Always Allow, its own note) — the
+          // admin stop included — can be shown from a fixture.
           ...(parsed.floorStop ? { floorStop: parsed.floorStop } : {}),
-          ...(parsed.permissionMode ? { permissionMode: parsed.permissionMode } : {}),
         };
         state = chatReducer(state, action);
         actions.push(action);
