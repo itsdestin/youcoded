@@ -49,16 +49,31 @@ export function CodeCommentsRail({ path, projectRoot }: Props) {
     [comments, showResolved],
   );
   const resolvedLines = useCodeCommentAnchors(path, visible);
+  // T6 (design §2.3): `visible` above is sorted by each comment's STALE
+  // creation-time `startLine` — fine as `useCodeCommentAnchors`'s input (order
+  // doesn't affect what it resolves), but wrong for what the user actually
+  // sees: a comment `resolveSelector` can no longer anchor has no live line to
+  // sort by at all, so it needs to drop out of "document order" rather than
+  // sit wherever its old line number happens to land it. Anchored comments
+  // are re-sorted by their CURRENT line (an edit above them may have shifted
+  // it since `visible` was sorted); detached ones are grouped after, in the
+  // order they were already in.
+  const ordered = useMemo(() => {
+    const anchored = visible.filter((c) => resolvedLines.has(c.id));
+    anchored.sort((a, b) => resolvedLines.get(a.id)!.startLine - resolvedLines.get(b.id)!.startLine);
+    const detached = visible.filter((c) => !resolvedLines.has(c.id));
+    return [...anchored, ...detached];
+  }, [visible, resolvedLines]);
 
   return (
     <CommentsPaneFrame path={path} projectRoot={projectRoot}>
       {/* pb-28: room to scroll the last card up past the floating Ask Your
           Assistant button. */}
       <div data-comments-list className="flex flex-col gap-2 p-2 pb-28">
-        {visible.length === 0 && (
+        {ordered.length === 0 && (
           <EmptyState message="No comments on this file yet." variant="inline" />
         )}
-        {visible.map((c) => {
+        {ordered.map((c) => {
           const ref = linesRef(c, path, resolvedLines);
           return (
             <div

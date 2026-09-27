@@ -138,7 +138,17 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
   const marginRef = useRef<HTMLDivElement>(null);
   const marks = useQuoteMarks(containerRef, visible);
   const rawTops = useAnchorTops(marks, marginRef, containerRef);
-  const tops = useMemo(() => stackedTops(visible, rawTops, narrow), [visible, rawTops, narrow]);
+  // T6 (design §2.3): a comment with no mark (detached, or a cell comment on
+  // a sheet tab that isn't showing right now) has no real anchor position —
+  // `rawTops` has no entry for it. Feeding it into `stackedTops` unfiltered
+  // used to fall back to `top: 0` for EVERY such comment, so they piled on
+  // top of each other (and of any real marker that scrolled near the top of
+  // the document) instead of getting their own place. Positioned markers are
+  // stacked as before; markers with no position at all get their own short
+  // list at the bottom of the narrow rail (see the `narrow` branch below).
+  const positionedComments = useMemo(() => visible.filter((c) => marks.has(c.id)), [visible, marks]);
+  const noMarkComments = useMemo(() => visible.filter((c) => !marks.has(c.id)), [visible, marks]);
+  const tops = useMemo(() => stackedTops(positionedComments, rawTops, narrow), [positionedComments, rawTops, narrow]);
   const [openId, setOpenId] = useState<string | null>(null);
   // The marker a desktop popover opens beside (null → centred fallback).
   const [openAnchor, setOpenAnchor] = useState<DOMRect | null>(null);
@@ -272,7 +282,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
     return (
       <>
         <div ref={marginRef} className="relative w-9 shrink-0 overflow-hidden border-l border-edge bg-panel" style={{ minHeight: '100%' }}>
-          {visible.map((c) => (
+          {positionedComments.map((c) => (
             <button
               key={c.id}
               type="button"
@@ -286,6 +296,40 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
               {c.resolved ? <CheckIcon className="w-3 h-3" /> : '💬'}
             </button>
           ))}
+          {/* T6 (design §2.3): no live position to hang these from — a short,
+              reachable list at the rail's bottom (the design's own suggested
+              placement) rather than piling them at top:0 with everything
+              else. A `detached` one gets the muted/dashed "no longer found"
+              treatment; a cell comment on a sheet tab that just isn't showing
+              right now (status left `undefined` — see use-quote-marks.ts)
+              keeps its normal look, since nothing here says its text is gone. */}
+          {noMarkComments.length > 0 && (
+            <div className="absolute inset-x-0 bottom-1 flex flex-col-reverse items-center gap-1">
+              {noMarkComments.map((c) => {
+                const detached = c.status === 'detached';
+                const detachedLabel = c.cell ? 'cell no longer exists' : 'text no longer found';
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    data-marker-id={c.id}
+                    onClick={(e) => { setOpenAnchor(e.currentTarget.getBoundingClientRect()); setOpenId(c.id); }}
+                    aria-label={
+                      detached
+                        ? `${c.resolved ? 'Resolved comment' : 'Comment'}: ${detachedLabel}`
+                        : `${c.resolved ? 'Resolved comment' : 'Comment'}: ${c.cell ?? c.quote}`
+                    }
+                    className={`coarse-hit w-6 h-6 rounded-full border flex items-center justify-center text-2xs
+                      ${c.resolved ? 'bg-inset border-edge-dim text-fg-muted'
+                        : detached ? 'border-dashed border-edge-dim bg-inset text-fg-muted'
+                        : 'bg-panel border-edge text-fg-2'}`}
+                  >
+                    {c.resolved ? <CheckIcon className="w-3 h-3" /> : '💬'}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
         {/* Portaled to <body> (phone check, 2026-09-24): rendered in place, the
             sheet lived inside the file drawer's stacking context, so the

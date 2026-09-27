@@ -21,6 +21,30 @@ interface Props {
   onDelete: () => void;
 }
 
+// T6 (docs/active/specs/2026-09-26-doc-comments-build-design.md §2.3): once
+// T14's resolveSelector can't find a comment's saved text/cell anymore, the
+// card still shows (R6: nothing silently lost) but needs to say WHY there's
+// no highlight to click through to. error-message-standards.md: never guess a
+// cause — this line states only what's actually known (the text/cell isn't
+// there) and quotes (truncated) what the comment was about, so the words
+// aren't lost along with the highlight.
+function truncateQuote(quote: string, max = 60): string {
+  const trimmed = quote.trim();
+  return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max).trimEnd()}…`;
+}
+
+function DetachedNote({ comment }: { comment: DocComment }) {
+  const isCell = Boolean(comment.cell);
+  const message = isCell ? 'Cell no longer exists in this file.' : 'Text no longer found in this file.';
+  const quoted = !isCell && comment.quote ? truncateQuote(comment.quote) : null;
+  return (
+    <p className="mt-1 text-2xs text-fg-muted" data-detached-note>
+      {message}
+      {quoted && <> “{quoted}”</>}
+    </p>
+  );
+}
+
 export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResolve, onReopen, onDelete }: Props) {
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -83,6 +107,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
           <div className="flex-1 min-w-0">
             {header(comment, cellRef)}
             <p className="mt-0.5 text-fg-muted truncate">{comment.text}</p>
+            {comment.status === 'detached' && <DetachedNote comment={comment} />}
           </div>
           {resolveToggle}
         </div>
@@ -123,6 +148,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
           ) : (
             <p className="mt-0.5 text-fg-2 whitespace-pre-wrap">{comment.text}</p>
           )}
+          {!isDraft && comment.status === 'detached' && <DetachedNote comment={comment} />}
         </div>
         {resolveToggle}
       </div>
