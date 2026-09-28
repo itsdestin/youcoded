@@ -326,6 +326,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         if (save.current.writeFailed) return refuse("Office couldn't save a copy of this file.");
         const failCopy = (e: unknown) => ({ ok: false as const, message: plainMessage(e, "Office couldn't save a copy of this file.") });
         let r: OfficeSaveCopyResult = await b.saveCopy(t, 'save').catch(failCopy);
+        // Main refused the copy (e.g. the target is open in Office): say so on the strip.
+        if (!r.ok && 'message' in r) return refuse(r.message);
         // WHY one final check, not rounds of catch-up (fix round 4): the overlay below blocks
         // typing while the copy is written, so the editor's bytes can only differ if something
         // slipped in before the overlay took the keyboard. One more hand-over and 'again' (main

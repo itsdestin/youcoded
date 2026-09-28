@@ -416,6 +416,14 @@ describe('Save a copy while the editor could still change', () => {
     expect(container.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
+  it("shows main's refusal of a copy target that is open in Office, on the strip, and does not switch", async () => {
+    const { saveCopy } = await failedWith();
+    saveCopy.mockImplementation(async (_t: string, mode: string) => (mode === 'check' ? { ok: true as const, possible: true } : { ok: false as const, message: 'That file is open in Office. Close it or choose another name.' }) as never);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
+    expect(await screen.findByText('That file is open in Office. Close it or choose another name.')).toBeInTheDocument();
+    expect(officeDocFor(COPY)).toBeNull();
+  });
+
   it('does not switch when handing the editor\'s bytes to main failed before the copy (I3)', async () => {
     const { saveCopy } = await failedWith({ writeFails: true });
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
