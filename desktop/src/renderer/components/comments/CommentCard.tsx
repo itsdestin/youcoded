@@ -10,7 +10,7 @@ import { formatRelativeTime } from '../../utils/format-time';
 import type { DocComment } from '../../state/doc-comments-store';
 import { Avatar, authorName, authorNameInline } from './Avatar';
 import { ReplyField } from './ReplyField';
-import { EditDeleteButtons, InlineEditField, DeleteConfirmRow, deleteCommentLabel } from './CommentActions';
+import { EditDeleteButtons, InlineEditField, DeleteConfirmRow, deleteCommentLabel, GROWING_FIELD_STYLE } from './CommentActions';
 
 interface Props {
   comment: DocComment;
@@ -202,11 +202,18 @@ export function CommentCard({
   const cellRef = comment.cell ? (comment.sheet ? `${comment.sheet} · ${comment.cell}` : comment.cell) : undefined;
   // The reference sits on its own muted line under name · time: beside them,
   // "By rep · B4" squeezed the author's name down to "Pr…" (polish pass).
-  const header = (c: { author: DocComment['author']; createdAt: number }, cell?: string) => (
+  // WHY `actions` rides the name · time line (Destin, 2026-09-28, edit box
+  // "squeezed"): the Edit/Delete/Resolve icons used to be a third flex column
+  // beside the text, so even while hidden they took ~60px from EVERY comment's
+  // text and the edit box, wrapping notes three words to a line. On the header
+  // line they take room only from the name, and the text below gets the card's
+  // full width — the same arrangement as Google Docs.
+  const header = (c: { author: DocComment['author']; createdAt: number }, cell?: string, actions?: React.ReactNode) => (
     <>
-      <div className="flex items-baseline gap-1.5 min-w-0">
+      <div className="flex items-center gap-1.5 min-w-0">
         <span className="font-medium text-fg truncate">{authorName(c.author)}</span>
         <span className="text-2xs text-fg-muted shrink-0">{formatRelativeTime(c.createdAt)}</span>
+        {actions && <div className="ml-auto shrink-0">{actions}</div>}
       </div>
       {cell && <div className="text-2xs text-fg-muted truncate">{cell}</div>}
     </>
@@ -224,7 +231,14 @@ export function CommentCard({
       <div key={r.id} className="flex items-start gap-2 mt-2 pl-1 group">
         <Avatar author={r.author} />
         <div className="flex-1 min-w-0">
-          {header(r)}
+          {header(r, undefined, onEditReply && onDeleteReply && !isEditingThis && !isConfirmingThis && (
+            <EditDeleteButtons
+              onEdit={() => { setEditingReplyId(r.id); setConfirmingDeleteReplyId(null); }}
+              onDelete={() => { setConfirmingDeleteReplyId(r.id); setEditingReplyId(null); }}
+              editLabel="Edit reply"
+              deleteLabel="Delete reply"
+            />
+          ))}
           {isEditingThis ? (
             <InlineEditField
               text={r.text}
@@ -242,14 +256,6 @@ export function CommentCard({
             />
           )}
         </div>
-        {onEditReply && onDeleteReply && !isEditingThis && !isConfirmingThis && (
-          <EditDeleteButtons
-            onEdit={() => { setEditingReplyId(r.id); setConfirmingDeleteReplyId(null); }}
-            onDelete={() => { setConfirmingDeleteReplyId(r.id); setEditingReplyId(null); }}
-            editLabel="Edit reply"
-            deleteLabel="Delete reply"
-          />
-        )}
       </div>
     );
   };
@@ -273,7 +279,7 @@ export function CommentCard({
         <div className="flex items-start gap-2 group">
           <Avatar author={comment.author} />
           <div className="flex-1 min-w-0">
-            {header(comment, cellRef)}
+            {header(comment, cellRef, topRightActions)}
             {isEditingComment ? (
               <InlineEditField
                 text={comment.text}
@@ -285,7 +291,6 @@ export function CommentCard({
             )}
             <StatusNote comment={comment} />
           </div>
-          {topRightActions}
         </div>
         <p className="mt-1.5 text-fg-muted">Resolved by {authorNameInline(comment.resolvedBy ?? 'user')}</p>
 
@@ -319,7 +324,7 @@ export function CommentCard({
       <div className="flex items-start gap-2 group">
         <Avatar author={comment.author} />
         <div className="flex-1 min-w-0">
-          {header(comment, cellRef)}
+          {header(comment, cellRef, topRightActions)}
           {isEditingComment ? (
             <InlineEditField
               text={comment.text}
@@ -339,6 +344,7 @@ export function CommentCard({
               <textarea
                 ref={textRef}
                 rows={2}
+                style={GROWING_FIELD_STYLE}
                 value={comment.text}
                 onChange={(e) => onTextChange(e.target.value)}
                 onKeyDown={(e) => {
@@ -380,7 +386,6 @@ export function CommentCard({
           )}
           {!isDraft && <StatusNote comment={comment} />}
         </div>
-        {topRightActions}
       </div>
 
       {/* E-4: delete asks first, inline, right where the reply box would

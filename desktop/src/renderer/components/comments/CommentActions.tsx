@@ -25,7 +25,7 @@
 //      two-step delete), inline in the card rather than a new Scrim/OverlayPanel
 //      — never a hand-rolled dialog, but not a floating popover either.
 // E-5: no "edited" marker — editing a comment/reply just replaces its text.
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/Button';
 
 /** 24×24 viewBox, stroke currentColor, the app's shared inline-icon
@@ -108,6 +108,13 @@ export function EditDeleteButtons({ onEdit, onDelete, editLabel, deleteLabel, cl
   );
 }
 
+/** WHY (Destin, 2026-09-28: the edit box cut text off after two lines): the
+ *  comment boxes grow with what's typed, up to a cap, then scroll. CSS
+ *  `field-sizing: content` does it with no script measuring the box on every
+ *  keystroke (performance.md rule 6 — the InputBar's scrollHeight approach
+ *  reads layout per key); Electron's Chromium supports it. */
+export const GROWING_FIELD_STYLE = { fieldSizing: 'content', minHeight: '3.2em', maxHeight: '14em', overflowY: 'auto' } as React.CSSProperties;
+
 /** Inline replacement for a comment/reply's text while editing it. Mounted
  *  only while the caller's own edit-mode flag is true, and that flag NEVER
  *  flips from something typed inside this field — only from the Edit button
@@ -140,6 +147,7 @@ export function InlineEditField({ text, onSave, onCancel, className = 'mt-1' }: 
       <textarea
         ref={ref}
         rows={2}
+        style={GROWING_FIELD_STYLE}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {

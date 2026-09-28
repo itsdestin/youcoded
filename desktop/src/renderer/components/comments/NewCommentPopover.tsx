@@ -27,6 +27,7 @@ import { ErrorState } from '../ui/states';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { placeBubble } from '../ui/anchor-position';
 import type { DocComment } from '../../state/doc-comments-store';
+import { GROWING_FIELD_STYLE } from './CommentActions';
 
 const GAP = 6;
 // The Edit FAB sits `bottom-9` (36px) with ~44px of button height above
@@ -124,6 +125,7 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
         <textarea
           ref={textRef}
           rows={3}
+          style={GROWING_FIELD_STYLE}
           value={comment.text}
           placeholder="Add a comment…"
           // Bare, like InputGroup.Field — the wrapper carries the border.
