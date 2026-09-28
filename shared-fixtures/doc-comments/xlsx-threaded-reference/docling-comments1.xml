@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="xr" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision"><authors><author>John Reviewer</author><author>Jane Editor</author><author>tc={04C1C54B-2744-A647-93D1-A99C27C7EFDC}</author><author>tc={3A26E9AE-8B38-864D-BAF4-BA5D9C6E1DA4}</author></authors><commentList><comment ref="A1" authorId="0" shapeId="0" xr:uid="{00000000-0006-0000-0000-000001000000}"><text><r><rPr><sz val="11"/><color theme="1"/><rFont val="Calibri"/><family val="2"/><scheme val="minor"/></rPr><t>Why Python specifically?</t></r></text></comment><comment ref="B2" authorId="1" shapeId="0" xr:uid="{00000000-0006-0000-0000-000002000000}"><text><r><rPr><sz val="11"/><color rgb="FF000000"/><rFont val="Calibri"/><family val="2"/></rPr><t>Which libraries are you referring to?</t></r></text></comment><comment ref="F7" authorId="2" shapeId="0" xr:uid="{04C1C54B-2744-A647-93D1-A99C27C7EFDC}"><text><t>[Threaded comment]
+
+Your version of Excel allows you to read this threaded comment; however, any edits to it will get removed if the file is opened in a newer version of Excel. Learn more: https://go.microsoft.com/fwlink/?linkid=870924
+
+Comment:
+    Minimum number of saltwater ducks
+Reply:
+    I never thought it would be so low</t></text></comment><comment ref="G12" authorId="3" shapeId="0" xr:uid="{3A26E9AE-8B38-864D-BAF4-BA5D9C6E1DA4}"><text><t>[Threaded comment]
+
+Your version of Excel allows you to read this threaded comment; however, any edits to it will get removed if the file is opened in a newer version of Excel. Learn more: https://go.microsoft.com/fwlink/?linkid=870924
+
+Comment:
+    Maximum number of ducks</t></text></comment></commentList></comments>

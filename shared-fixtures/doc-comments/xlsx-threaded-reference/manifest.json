@@ -1,0 +1,112 @@
+{
+  "_readFirst": "Facts below are machine-checkable against the sibling raw-part files and the two .xlsx fixtures in this directory. Prose citations/caveats are in README.md and the research report delivered alongside this fixture set. Compare against ../xlsx-note-reference/manifest.json for the legacy-Notes-only baseline.",
+
+  "contentTypes": {
+    "threadedCommentsContentType": "application/vnd.ms-excel.threadedcomments+xml",
+    "personContentType": "application/vnd.ms-excel.person+xml",
+    "legacyCommentsOverrideContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml",
+    "vmlDefaultContentType": "application/vnd.openxmlformats-officedocument.vmlDrawing",
+    "source": "learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/66e1875d-... (Threaded Comments part) and .../1a170d26-... (Persons part); confirmed byte-for-byte in docling-content-types.xml and elden-content-types-excerpt.xml"
+  },
+
+  "partPaths": {
+    "threadedComments": "xl/threadedComments/threadedComment{N}.xml",
+    "persons": "xl/persons/person.xml",
+    "legacyComments": "xl/comments{N}.xml",
+    "numberingScheme": "N is shared across comments{N}.xml, threadedComment{N}.xml and sheet{N}.xml for a given worksheet position -- NOT a separate global counter for threaded parts. A worksheet with no comments of any kind has no commentsN.xml/threadedCommentN.xml pair at all (N is skipped, not reused). Confirmed: docling sample uses N=1 for its single sheet; elden sample has 10 sheets, only sheets 1 and 5 (of the ones inspected) have comments, and use N=1 and N=4 respectively -- matching each sheet's own worksheet.xml.rels, not a 1:1 sheet-index mapping.",
+    "personsPartIsSingular": "Exactly one xl/persons/person.xml per workbook (not per worksheet), shared by every threadedComment part via personId. Confirmed in both fixtures."
+  },
+
+  "relationships": {
+    "threadedCommentRelationship": {
+      "type": "http://schemas.microsoft.com/office/2017/10/relationships/threadedComment",
+      "declaredIn": "xl/worksheets/_rels/sheet{N}.xml.rels (worksheet-level)",
+      "targetExample": "../threadedComments/threadedComment1.xml"
+    },
+    "personRelationship": {
+      "type": "http://schemas.microsoft.com/office/2017/10/relationships/person",
+      "declaredIn": "xl/_rels/workbook.xml.rels (workbook-level, NOT worksheet-level)",
+      "targetExample": "persons/person.xml"
+    },
+    "legacyCommentsRelationship": {
+      "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+      "declaredIn": "xl/worksheets/_rels/sheet{N}.xml.rels (worksheet-level, same as legacy-notes-only files)"
+    },
+    "implicitMeansNoRidInContent": "MS-XLSX calls both the threadedComment and person relationships 'implicit' (ISO/IEC29500-1 12.3.24 / 12.3.23): the Relationship entry IS present in the .rels part, but NO r:id attribute anywhere in the worksheet/workbook XML content points at it -- Excel finds these two parts purely by relationship Type. Contrast with vmlDrawing, which the worksheet DOES reference explicitly via <legacyDrawing r:id=\"...\"/>, and with the legacy comments relationship, which is likewise never referenced by r:id in worksheet content. Confirmed by diffing sheet1.xml content against sheet1.xml.rels in both fixtures: only legacyDrawing's rId appears in the worksheet body."
+  },
+
+  "guidFormat": {
+    "pattern": "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX} (braces included)",
+    "specPatternSource": "ECMA-376 ST_Guid simple type: xsd:pattern value=\"\\{[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\}\" -- strictly UPPERCASE hex per the schema (via randym/axlsx mirror of the ECMA-376 shared-commonSimpleTypes.xsd; MIT-licensed mirror, not the primary ECMA/ISO document itself)",
+    "realWorldCaseVaries": "Windows Excel and Mac Excel samples write UPPERCASE hex (docling fixture: {ED88F4F5-A552-4A41-970D-6B23DC2319F4}). Google Sheets export writes LOWERCASE hex (elden fixture: {7d3fab4d-4ec3-48eb-ae3d-c29f489f62a2}), which is technically non-conformant to the strict XSD pattern above but is accepted by Excel on read. A writer should emit uppercase to match the spec and the majority of real Excel output; a reader must match case-insensitively."
+  },
+
+  "timestampFormat": {
+    "pattern": "YYYY-MM-DDTHH:MM:SS.ff (exactly 2 fractional-second digits, no timezone offset, no trailing Z)",
+    "examples": ["2026-06-18T17:12:37.41 (docling, Mac Excel)", "2023-01-22T07:55:21.00 (elden, Google Sheets)", "2022-04-27T00:23:52.00 (elden, Google Sheets)"],
+    "note": "Every dT value across both fixtures (dozens of samples) uses this exact 2-decimal, no-Z shape. XSD type is xsd:dateTime (which permits a Z/offset), so a writer COULD add one and stay schema-valid, but no real sample seen writes one. Treat local-naive 2-decimal as the de facto format; do not assume UTC."
+  },
+
+  "threadedCommentAttributes": {
+    "root": "First message of a thread: has personId + id (both required GUIDs), ref (optional per XSD but always present in real samples), dT, optional done (\"1\"=resolved; real Excel samples OMIT done entirely when false, real Google Sheets samples write done=\"0\" explicitly when false), text child element. Never has parentId.",
+    "reply": "Has parentId set to the ROOT's id -- confirmed with a 3-reply thread and an 8-reply/9-message-total cell (see multipleThreadsPerCell below) that ALL replies point at the same root id, never chained reply-to-reply, even when replies span many days from different authors. done never observed on a reply element.",
+    "textElement": "<text> (default-ns) or <x18tc:text> (prefixed) child element holds the plain-text comment body; xml:space=\"preserve\" is written explicitly by Google Sheets, omitted by Excel (both preserve whitespace correctly regardless since XML default is to preserve unless told otherwise by the consuming app's own trimming)."
+  },
+
+  "multipleThreadsPerCell": {
+    "finding": "A single cell ref (e.g. \"B19\") can carry SEVERAL INDEPENDENT top-level threadedComment roots, not just one thread with nested replies. Confirmed directly: elden-threadedComment1-B19-excerpt.xml has 5 separate root ids all with ref=\"B19\" (some with their own replies, some without), spanning dT from 2022-04-27 to 2023-01-22 -- i.e. a resolved thread does not get reopened by a later comment on the same cell; a new 'New Comment' action starts a brand-new root. elden-comments1-B19-excerpt.xml correspondingly has 5 separate <comment ref=\"B19\"> legacy placeholder blocks, one per root, each with its own tc={id} author.",
+    "implication": "A reader/writer MUST group threadedComment elements by (ref, id-chain), never assume a single ref implies a single thread, and must be prepared to emit/parse multiple legacy <comment> placeholders sharing one ref."
+  },
+
+  "personAttributes": {
+    "schema": "displayName (required, string), id (required, GUID, matches threadedComment personId), userId (optional, string), providerId (optional, string)",
+    "realValuesSeen": {
+      "providerId": ["None (Mac Excel, local/non-AAD account -- docling fixture)", "google-sheets (every person in the elden fixture)", "Windows Live (reported in a third-party GitHub issue, not in our saved fixtures -- see README)"],
+      "userId": "Mac/Windows Excel local accounts repeat the displayName string itself as userId (odd but confirmed in docling: userId=\"Jane Smith (JS)\" for displayName=\"Jane Smith (JS)\"). Google Sheets OMITS userId entirely on every person entry in the elden fixture (57 entries checked, none have userId)."
+    }
+  },
+
+  "legacyPlaceholder": {
+    "sharedSentence": "[Threaded comment]\\n...Your version of Excel allows you to read this threaded comment; however, any edits to it will get removed if the file is opened in a newer version of Excel. Learn more: https://go.microsoft.com/fwlink/?linkid=870924",
+    "urlConfirmedAcross3IndependentSources": "docling fixture (Mac Excel), elden fixture (Google Sheets export), and PHPOffice/PhpSpreadsheet issue #2184 (independent real-Excel-365 sample quoted in that issue) -- all three use the identical fwlink URL and near-identical sentence.",
+    "whitespaceLayoutVaries": {
+      "excelVariant": "blank line after '[Threaded comment]', blank line before 'Comment:', 4-space indent under 'Comment:'/'Reply:' lines, one 'Reply:' block per reply, no trailing newline seen -- see docling-comments1.xml",
+      "googleSheetsVariant": "single space (not blank line) before 'Your version...', no blank line before 'Comment:', TAB indent (not 4 spaces), trailing newline, xml:space=\"preserve\" written explicitly -- see elden-comments4.xml and elden-comments1-B19-excerpt.xml"
+    },
+    "doneStatusNeverAppearsInPlaceholderText": "Confirmed: the B19 thread's root is done=\"1\" (resolved) yet its legacy placeholder text (elden-comments1-B19-excerpt.xml) contains no resolved/closed marker of any kind -- just the literal comment/reply text."
+  },
+
+  "tcAuthorLink": {
+    "pattern": "tc={GUID} where {GUID} is byte-identical (including case) to the corresponding threadedComment ROOT's id attribute",
+    "alsoMirroredInXrUid": "The legacy <comment> element's xr:uid attribute (xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\") is ALSO set to that same root id -- confirmed in every sample.",
+    "onlyLinkMechanism": "Confirmed by spec text (MS-XLSX 'Legacy Comment Placeholders' page) and by every real sample: the tc={GUID} author string is the ONLY link between a legacy placeholder and its real thread. There is no relationship-level or ref-level link beyond this string convention plus the advisory 'ref should correspond' rule (spec: if refs mismatch, the legacy placeholder's own ref wins for display)."
+  },
+
+  "vmlComparison": {
+    "objectTypeIdentical": "Both legacy Notes (see ../xlsx-note-reference/vmlDrawing1.vml) and threaded-comment legacy placeholders use the exact same <x:ClientData ObjectType=\"Note\"> shape -- there is no distinct ObjectType or VML marker for a threaded-comment placeholder.",
+    "structuralDifferenceFound": "../xlsx-note-reference/vmlDrawing1.vml (a genuine legacy Note, Windows Excel) includes <x:Locked>True</x:Locked> and <x:LockText>True</x:LockText> inside ClientData. ALL THREE real threaded-comment-placeholder VML samples inspected (docling-vmlDrawing1.vml [Mac Excel], elden-vmlDrawing4.vml [Google Sheets], plus a third Windows-Excel sample inspected but not redistributed here -- see README) OMIT both <x:Locked> and <x:LockText> entirely. This 3-for-3 agreement across Mac Excel, Google Sheets and Windows Excel makes it a well-corroborated difference rather than a single-sample fluke.",
+    "cosmeticOnlyDifferences": "Self-closing vs. paired-empty tags (<x:MoveWithCells/> vs <x:MoveWithCells></x:MoveWithCells>), fillcolor as a literal hex (#ffffe1) vs a theme token (infoBackground [80]), and attribute/whitespace formatting are writer-specific styling, not meaningful to the format."
+  },
+
+  "mixedNotesAndThreadedComments": {
+    "sameWorkbookDifferentCells": "Confirmed possible and unremarkable: docling-comments1.xml has genuine legacy Notes on A1/B2 (plain author names, no tc=) alongside threaded-comment placeholders on F7/G12 (tc=... authors) in the very same file/workbook.",
+    "sameCellBothTypes": "NOT independently verified either way by file inspection -- no sample encountered has both a real Note and a threaded comment on the identical cell. See README/report for the (unverified-by-us) community claim that Excel refuses this."
+  },
+
+  "sourceFixtures": [
+    {
+      "file": "docling-xlsx-comments.xlsx",
+      "sourceUrl": "https://github.com/docling-project/docling/blob/main/tests/data/xlsx/sources/xlsx_comments.xlsx",
+      "license": "MIT (docling-project/docling)",
+      "authoringApp": "Microsoft Macintosh Excel, AppVersion 16.0300 (docProps/app.xml)",
+      "demonstrates": "2 threaded-comment threads (F7: root+1 reply, unresolved; G12: root only, unresolved) coexisting with 2 genuine legacy Notes (A1, B2) in one workbook."
+    },
+    {
+      "file": "elden-ring-completionist-checklist.xlsx",
+      "sourceUrl": "https://github.com/Mjolniar/elden-ring-index-build-planner/blob/main/Elden%20Ring%20Completionist%20Checklist.xlsx",
+      "license": "MIT (Mjolniar/elden-ring-index-build-planner)",
+      "authoringApp": "Google Sheets xlsx export (no docProps/app.xml part at all; every person carries providerId=\"google-sheets\")",
+      "demonstrates": "done=\"1\" resolved threads, done=\"0\" explicit-unresolved threads, multi-reply flattening, and MULTIPLE independent threads sharing one cell ref (B19, 5 roots). Also contains a proprietary xl/documenttasks/documenttaskN.xml part (relationship type .../2019/04/relationships/documenttask) alongside the comments -- out of scope for this research but present and worth knowing about."
+    }
+  ]
+}
