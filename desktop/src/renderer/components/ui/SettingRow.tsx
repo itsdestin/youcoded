@@ -154,6 +154,12 @@ export type SettingRowProps = {
   expanded?: boolean;
   /** Overrides the muted description color — e.g. Android's green "Connected". */
   descriptionClassName?: string;
+  /**
+   * The row IS its card's header, not a thing nested inside it (Destin,
+   * 2026-09-28: a boxed header inside the "Additional backups" card read as a
+   * card-in-card). Drops the row's own tint, outline and side padding.
+   */
+  header?: boolean;
   className?: string;
 };
 
@@ -174,6 +180,7 @@ export function SettingRow({
   expanded,
   disabled,
   descriptionClassName,
+  header = false,
   className = '',
 }: SettingRowProps) {
   const d = DENSITY[variant];
@@ -255,7 +262,9 @@ export function SettingRow({
     </>
   );
 
-  const cls = `${SETTING_ROW_BASE}${hover} ${disabled ? 'opacity-50' : ''} ${className}`.trim();
+  // `header` swaps only the box, never the layout: same text column and control slot.
+  const base = header ? SETTING_ROW_BASE.replace(' px-3 py-2 bg-inset/50 border border-edge-dim rounded-lg', ' py-1') : SETTING_ROW_BASE;
+  const cls = `${base}${hover} ${disabled ? 'opacity-50' : ''} ${className}`.trim();
 
   if (isButton) {
     return (

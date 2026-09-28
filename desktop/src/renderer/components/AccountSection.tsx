@@ -4,7 +4,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { useAccount } from '../state/account-context';
 import type { MarketplaceUser } from '../../main/marketplace-auth-store';
 import type { BlockRow } from '../state/marketplace-api-client';
-import { Button, CARD_LEVEL_2, Dialog, FieldError, InputGroup, SettingRow, Callout } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, SettingRow, Callout } from './ui';
 import { ConnectedAccountsBody } from './ConnectedAccounts';
 
 // Settings → Account section. One self-contained row-button + popup, mounted in
@@ -249,7 +249,13 @@ function SignedOutBody({
     // was a centered hero CTA (size="lg", text-center) with two paragraphs
     // of small print — the one Settings row that broke the popup's normal
     // body-text conventions. Meaning kept, just said once.
-    <div className="space-y-2 py-2">
+    // WHY a level-1 card with a full-width button (Destin, fixes review F-5,
+    // 2026-09-28: "think about everything i've told you about my preferences"):
+    // the round-4 version left the text loose on the popup and the filled button
+    // alone at the bottom-left — both break the guide ("text that describes a card
+    // lives inside it"; "a lone main action is full width"; "left-aligned buttons
+    // are broken buttons"). Now it matches the Connected services card below it.
+    <div className={`${CARD_LEVEL_1} p-3 space-y-2.5`}>
       <p className="text-xs text-fg-2">
         One account, using your GitHub profile — for the marketplace, games, and syncing with friends.
       </p>
@@ -266,6 +272,7 @@ function SignedOutBody({
           );
         }}
         disabled={signInPending}
+        className="w-full"
       >
         {signInPending ? 'Signing in…' : 'Sign in to YouCoded'}
       </Button>

@@ -1437,12 +1437,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               // sibling here. Now ONE level-1 card; destinations are level-2.
               return (
                 <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
-                  {/* `!bg-transparent !px-0 !py-1` (ContextSettings' own precedent)
-                      strips SettingRow's own box — this row IS the card's header,
-                      not a nested thing inside it. */}
+                  {/* WHY `header` (Destin, 2026-09-28): this row IS the card's header —
+                      a boxed row here read as a card inside the card. */}
                   <SettingRow
                     variant="item"
-                    className="!bg-transparent !px-0 !py-1"
+                    header
                     title={<span className="flex items-center gap-2">Additional backups<Badge>Optional</Badge></span>}
                     description={sub}
                     control={

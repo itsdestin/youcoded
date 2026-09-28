@@ -32,7 +32,7 @@ export default function ContextSettings({ value, onChange }: ContextSettingsProp
         stack below the shared breakpoint without the old full-row padding. */}
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
     {PROVIDERS.map((provider) => <SettingRow key={provider.id} title={provider.label} variant="item"
-      className="!bg-transparent !px-0 !py-1" control={
+      header control={
         <SegmentedTabs aria-label={`${provider.label} context`} variant="nested"
           tabs={CONTEXT_OPTIONS} value={value[provider.id]}
           onChange={(mode) => {

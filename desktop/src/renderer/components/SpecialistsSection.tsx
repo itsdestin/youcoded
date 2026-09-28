@@ -225,7 +225,7 @@ export default function SpecialistsSection({ cwd }: {
               {/* Card-levels sweep (2026-09-27): `divide-y`/`border-t` are gone —
                   no full-width line inside a card. `space-y-2` on the row stack
                   separates Budget from Frontier instead. */}
-              <div className="space-y-2 py-1">
+              <div className="p-3 space-y-3">
                 <TierRow
                   tier="budget"
                   title="Budget"
@@ -353,7 +353,12 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
   // Stacked, not side-by-side: the panel dialog is ~420px wide and the picker
   // trigger is wide, so a row layout squeezed the hint into a one-word column.
   return (
-    <div className="px-3 py-2.5 space-y-1.5" data-testid={`tier-row-${tier}`}>
+    // WHY no padding of its own (Destin, fixes review F-4, 2026-09-28: "still a big
+    // gap after the budget selector"): each row carried px-3 py-2.5 on top of the
+    // stack's gap, so ~40px sat between Budget's picker and Frontier's title versus
+    // 6px between a title and its picker. The card now pads once (p-3) and spaces
+    // rows 12px apart — the guide's in-card rhythm.
+    <div className="space-y-1.5" data-testid={`tier-row-${tier}`}>
       <div className="flex items-baseline gap-2 flex-wrap">
         <span className="text-xs font-medium text-fg-2">{title}</span>
         <span className="text-2xs text-fg-muted">{hint}</span>
