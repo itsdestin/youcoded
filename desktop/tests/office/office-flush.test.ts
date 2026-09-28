@@ -170,6 +170,18 @@ describe('quitting with Office documents open', () => {
     expect(a.requests.length).toBe(before);
   });
 
+  it('"Close anyway" runs the caller\'s own proceed (a restart relaunches, then quits)', async () => {
+    const ipc = newIpc();
+    const a = aWindow(ipc, 7, { failed: 1, firstPath: '/a.docx' });
+    const quitApp = vi.fn();
+    const onProceed = vi.fn();
+    await expect(officeQuitGate([a.win], { ...depsFor(ipc, [7]), quitApp }, onProceed)).resolves.toBe(false);
+    ipc.emit(OFFICE_PROCEED, { sender: { id: 7 } });
+    expect(onProceed).toHaveBeenCalledTimes(1);
+    expect(quitApp).not.toHaveBeenCalled();
+    await officeQuitGate([a.win], { ...depsFor(ipc, [7]), quitApp }); // the gate it skipped once
+  });
+
   it("quit's final save never prompts: every window is told the person already chose", async () => {
     const ipc = newIpc();
     const a = aWindow(ipc, 7, { failed: 2 });

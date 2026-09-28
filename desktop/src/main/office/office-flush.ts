@@ -143,11 +143,18 @@ export function holdCloseForOfficeSave(win: ClosingWindow, ev: { preventDefault(
 export async function officeQuitGate(
   windows: ClosingWindow[] = BrowserWindow.getAllWindows() as unknown as ClosingWindow[],
   deps: GateDeps = realDeps(),
+  /** What Close anyway runs (fix round 6: a restart's relaunch-then-quit). */
+  onProceed?: () => void,
 ): Promise<boolean> {
   if (skipQuitGate) { skipQuitGate = false; return true; }
   const ipc = deps.ipc ?? ipcMain;
   listenForProceed(ipc);
   const asking = windows.filter((w) => !w.isDestroyed() && deps.hasDocuments(w.webContents.id));
+  // WHY a silent (hung or very slow) window counts as "go ahead" (M2, accepted in fix round 6):
+  // quit must always be able to finish. Its renderer caps each document's save at 4 s and
+  // answers inside main's 5 s, so only a renderer that cannot run at all misses the cap — and
+  // such a window could neither save nor show a prompt, so waiting longer would hang the quit
+  // for nothing. What it had not saved is lost; that is the price of never trapping the app.
   const outcomes = await Promise.all(asking.map((w) => askToFlush(w.webContents, ipc, deps.capMs, 'quit')));
   let count = 0;
   let prompter: ClosingWindow | null = null;
@@ -159,7 +166,7 @@ export async function officeQuitGate(
   });
   if (!prompter) return true;
   const w = prompter as ClosingWindow;
-  held.set(w.webContents.id, { kind: 'quit', quitApp: deps.quitApp ?? (() => app.quit()) });
+  held.set(w.webContents.id, { kind: 'quit', quitApp: onProceed ?? deps.quitApp ?? (() => app.quit()) });
   if (!w.webContents.isDestroyed()) w.webContents.send(OFFICE_UNSAVED_PROMPT, { count, firstPath });
   return false;
 }

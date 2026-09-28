@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
 import { loadDefaultAppIcon, fitForMacDock } from './app-icon';
+import { requestRestart } from './app-restart';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
@@ -742,9 +743,10 @@ export function registerIpcHandlers(
 
   ipcMain.handle(IPC.APP_RESTART, () => {
     // Generic restart channel — reused by any future setting that needs a
-    // restart to apply. relaunch() schedules the restart for after exit().
-    app.relaunch();
-    app.exit(0);
+    // restart to apply. WHY quit, not exit (Task 6 fix round 6, I-B): exit() skipped
+    // before-quit, so open Office documents were never saved and the person was never asked.
+    // The quit path saves first (or asks), then relaunches — see app-restart.ts.
+    requestRestart(() => app.quit());
   });
 
   // --- Theme marketplace ---

@@ -46,6 +46,8 @@ import { registerOfficeIpc } from './office/office-ipc';
 import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
 import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate } from './office/office-flush';
+import { createCloseGate } from './window-close-gate';
+import { gatedQuit } from './app-restart';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
 import { pickSuggestedModel } from './first-run-local';
@@ -984,7 +986,6 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // native dialog can't render the app's own switch. Main now ASKS the
   // renderer (window:close-request) and awaits its answer
   // (window:answer-close) instead of blocking on the OS dialog itself.
-  let confirmedClose = false;
   // The screen reloading or crashing takes an open quit prompt with it, and
   // with no timeout nothing else would ever settle that request — every later
   // X press would reuse it and the window could not be closed. Forget it, so
@@ -995,45 +996,42 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     if (details?.isMainFrame && !details.isSameDocument) closeRequests.dropFor(wid);
   });
   win.webContents.on('render-process-gone', () => closeRequests.dropFor(wid));
-  win.on('close', async (ev) => {
-    // Buddy windows never own sessions (they only subscribe). Skip the
-    // close-confirmation entirely so a floating widget never gets blocked
-    // by a "kill sessions?" dialog that wouldn't make sense in that UI.
-    if (opts?.buddy) return;
-    if (confirmedClose) return;
+  // The close itself: Office saves first, then the sessions prompt (window-close-gate.ts —
+  // Task 6 fix round 6 I-A moved it there so it can be tested, and so a vetoed unload re-arms
+  // the Office hold and the prompt instead of leaving the X a silent no-op).
+  const closeGate = createCloseGate({
+    buddy: !!opts?.buddy,
     // Whole-app quit wins over a pending prompt (design §4 step 5):
     // settlePendingCloseRequests() (called at the top of shutdownApp(), which
     // both before-quit and SIGTERM/SIGINT pass through) already resolved any
     // request THIS window had pending, and runShutdown()'s destroyAll() is
     // about to tear down every session anyway — a close event reaching here
     // once shuttingDown is set must ask nothing and let the window close.
-    if (shuttingDown || holdCloseForOfficeSave(win, ev)) return; // Office docs save first (≤5 s, design §4); quit already did
-    const ownedSessions = windowRegistry.sessionsForWindow(wid);
-    if (ownedSessions.length === 0) return; // no sessions — close freely
-    ev.preventDefault();
-    const answer = await closeRequests.request(wid, ownedSessions.length, (push) => {
+    shuttingDown: () => !!shuttingDown,
+    holdForOffice: (ev) => holdCloseForOfficeSave(win, ev), // Office docs save first (≤5 s, design §4)
+    sessionCount: () => windowRegistry.sessionsForWindow(wid).length,
+    ask: (count) => closeRequests.request(wid, count, (push) => {
       if (!win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST, push);
-    });
-    // A second close press while this was pending resolved the SAME promise
-    // for every concurrent invocation of this handler (design §4 step 4) — the
-    // first one through already ran the block below and set confirmedClose.
-    if (confirmedClose) return;
-    // Re-read ownership rather than reusing `ownedSessions`: the in-app prompt
+    }),
+    // Re-read ownership rather than reusing the count's list: the in-app prompt
     // does not block the strip the way the old modal OS dialog did, so a
     // session can be dragged into another window (or closed with its own X)
     // while this one waits on an answer. Passing a STALE list into
     // applyCloseAnswer would destroy/untrack a session that no longer belongs
     // to this window — review finding, T3 (pinned by
     // close-request-manager.test.ts's applyCloseAnswer suite).
-    const shouldClose = applyCloseAnswer(answer, windowRegistry.sessionsForWindow(wid), {
+    apply: (answer) => applyCloseAnswer(answer, windowRegistry.sessionsForWindow(wid), {
       untrack: (sid) => welcomeBackStore?.untrack(sid),
       destroySession: (sid) => sessionManager.destroySession(sid),
       releaseSession: (sid) => windowRegistry.releaseSession(sid),
-    });
-    if (!shouldClose) return; // Cancel — leave the window open, ask again next press
-    confirmedClose = true;
-    if (!win.isDestroyed()) win.close();
+    }),
+    isDestroyed: () => win.isDestroyed(),
+    close: () => win.close(),
   });
+  // A page's beforeunload veto (the Office unload guard, an unsaved text file) cancelled the
+  // close. Observed only — never preventDefault'ed, which would override the veto.
+  win.webContents.on('will-prevent-unload', () => closeGate.onUnloadPrevented());
+  win.on('close', (ev) => { void closeGate.onClose(ev); });
 
   return win;
 }
@@ -2615,7 +2613,13 @@ app.on('before-quit', (e) => {
   // quit below — let it proceed rather than cancelling forever.
   if (shuttingDown) return;
   e.preventDefault(); // Office first: an unsaved document asks the person before any teardown (office-flush.ts).
-  void officeQuitGate().then((go) => { if (go) void shutdownApp().finally(() => app.quit()); });
+  // gatedQuit (app-restart.ts) also carries a pending restart through the gate (fix round 6, I-B).
+  void gatedQuit({
+    gate: (onProceed) => officeQuitGate(undefined, undefined, onProceed),
+    relaunch: () => app.relaunch(),
+    shutdown: () => shutdownApp(),
+    quit: () => app.quit(),
+  }).catch(() => {});
 });
 
 // Route 3: OS shutdown, logout, `kill`, or Ctrl+C in a dev terminal. These
