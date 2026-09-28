@@ -27,7 +27,7 @@ export function OfficeAlerts({ onReview }: { onReview: (path: string) => void })
         layer={3}
         screen="office/unsaved-on-close"
       >
-        <p className="text-sm text-fg-2 pb-4">Review shows each one with Retry and Save a copy. Closing anyway loses their changes since the last save.</p>
+        <p className="text-sm text-fg-2 pb-4">Review shows each one with its choices, such as Retry. Closing anyway loses their changes since the last save.</p>
         <div className="flex gap-2 justify-end">
           <Button variant="danger" onClick={() => { clearUnsavedPrompt(); window.claude?.office?.proceedClose?.(); }}>Close anyway</Button>
           <Button variant="primary" onClick={review}>Review</Button>

@@ -14,7 +14,10 @@ export const OFFICE_FLUSH_REQUEST = 'office:flush-request';
 export const OFFICE_FLUSH_DONE = 'office:flush-done';
 const OFFICE_FLUSH_CAP_MS = 5_000;
 
-interface FlushTarget { send(channel: string, id: string): void; isDestroyed(): boolean }
+interface FlushTarget {
+  id: number; send(channel: string, id: string): void; isDestroyed(): boolean;
+  once?(event: 'will-prevent-unload', l: (e: { preventDefault(): void }) => void): unknown;
+}
 interface FlushIpc {
   on(channel: string, l: (e: unknown, ...args: unknown[]) => void): unknown;
   off(channel: string, l: (e: unknown, ...args: unknown[]) => void): unknown;
@@ -44,8 +47,9 @@ export function askToFlush(target: FlushTarget, ipc: FlushIpc = ipcMain, capMs =
     };
     const onDone = (e: unknown, answer: unknown, result: unknown) => {
       // Only the asked window may answer for itself (fix round 2).
-      const sender = (e as { sender?: unknown } | null)?.sender;
-      if (answer !== id || (sender !== undefined && sender !== target)) return;
+      // By id, for the same reason as `held` below.
+      const sender = (e as { sender?: { id?: unknown } } | null)?.sender;
+      if (answer !== id || (sender !== undefined && sender?.id !== target.id)) return;
       const failed = (result as { failed?: unknown } | null)?.failed;
       finish(typeof failed === 'number' && failed > 0 ? 'failed' : 'flushed');
     };
@@ -68,8 +72,20 @@ const realDeps = (): GateDeps => ({ hasDocuments: (id) => getOfficeSessions()?.h
 // that second close event must pass straight through.
 const flushedForClose = new WeakSet<object>();
 // A close or quit held because a window answered "failed": what "Close anyway" goes ahead with.
-const held = new Map<object, { kind: 'close'; win: ClosingWindow } | { kind: 'quit'; quitApp: () => void }>();
+// WHY keyed by the webContents id, not the object (dev window, fix round 2): the event.sender
+// Electron hands an ipcMain listener is not always the same JS object as win.webContents, so an
+// object key never matched and "Close anyway" did nothing.
+const held = new Map<number, { kind: 'close'; win: ClosingWindow } | { kind: 'quit'; quitApp: () => void }>();
 let skipQuitGate = false;
+let quitWindows: ClosingWindow[] = [];
+
+// WHY (dev window, fix round 2): the editor page cancels its own unload while its document is
+// modified (a beforeunload of its own). Once the person chose — saved, or "Close anyway" — or the
+// window stopped answering, that must not silently keep the window open: the close this module
+// re-issues overrides it, once.
+function letUnload(win: ClosingWindow): void {
+  win.webContents.once?.('will-prevent-unload', (e) => e.preventDefault());
+}
 
 // "Close anyway" (the renderer's office:proceed) — registered once, on first use.
 const proceedListening = new WeakSet<object>();
@@ -77,15 +93,19 @@ function listenForProceed(ipc: FlushIpc): void {
   if (proceedListening.has(ipc)) return;
   proceedListening.add(ipc);
   ipc.on(OFFICE_PROCEED, (e: unknown) => {
-    const sender = (e as { sender?: object } | null)?.sender;
-    const h = sender ? held.get(sender) : undefined;
-    if (!h || !sender) return;
-    held.delete(sender);
+    const id = (e as { sender?: { id?: unknown } } | null)?.sender?.id;
+    const h = typeof id === 'number' ? held.get(id) : undefined;
+    if (!h || typeof id !== 'number') return;
+    held.delete(id);
     if (h.kind === 'close') {
       flushedForClose.add(h.win);
+      letUnload(h.win);
       if (!h.win.isDestroyed()) h.win.close();
     } else {
       skipQuitGate = true;
+      // Every window with documents may unload now — the person chose to quit anyway.
+      held.forEach((other, key) => { if (other.kind === 'quit') held.delete(key); });
+      quitWindows.forEach(letUnload);
       h.quitApp();
     }
   });
@@ -105,8 +125,9 @@ export function holdCloseForOfficeSave(win: ClosingWindow, ev: { preventDefault(
   const ipc = deps.ipc ?? ipcMain;
   listenForProceed(ipc);
   void askToFlush(win.webContents, ipc, deps.capMs).then((how) => {
-    if (how === 'failed') { held.set(win.webContents, { kind: 'close', win }); return; }
+    if (how === 'failed') { held.set(win.webContents.id, { kind: 'close', win }); return; }
     flushedForClose.add(win);
+    letUnload(win);
     if (!win.isDestroyed()) win.close();
   });
   return true;
@@ -125,10 +146,13 @@ export async function officeQuitGate(
   const ipc = deps.ipc ?? ipcMain;
   listenForProceed(ipc);
   const asking = windows.filter((w) => !w.isDestroyed() && deps.hasDocuments(w.webContents.id));
+  quitWindows = asking;
   const outcomes = await Promise.all(asking.map((w) => askToFlush(w.webContents, ipc, deps.capMs)));
   const quitApp = deps.quitApp ?? (() => app.quit());
   let go = true;
-  outcomes.forEach((how, i) => { if (how === 'failed') { go = false; held.set(asking[i].webContents, { kind: 'quit', quitApp }); } });
+  outcomes.forEach((how, i) => { if (how === 'failed') { go = false; held.set(asking[i].webContents.id, { kind: 'quit', quitApp }); } });
+  // Going ahead: no editor may then keep its window from closing (see letUnload).
+  if (go) asking.forEach(letUnload);
   return go;
 }
 

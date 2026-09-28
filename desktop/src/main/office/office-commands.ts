@@ -166,9 +166,12 @@ function toEditorError(e: unknown, cmd: string, filePath: string): Error {
     // between the checks and the work. An ENOENT about anything else (a temp folder) is not
     // "can't find this file", and saying so would send the user looking for the wrong thing.
     if (err?.code === 'ENOENT' && err.path === filePath) return new Error(MSG.notFound);
-  } else if (cmd === 'write_editor_bin' && err?.code === 'ENOSPC') {
+  } else if (cmd === 'write_editor_bin') {
     // Storing the edited document is the first half of a save, so the save wording fits.
-    return new Error("The disk is full, so Office couldn't save this file.");
+    if (err?.code === 'ENOSPC') return new Error("The disk is full, so Office couldn't save this file.");
+    // WHY general, not "no permission" (fix round 2): the failing write is Office's own working
+    // copy, not the person's file — a permission sentence would send them to the wrong place.
+    return new Error("Office couldn't save this file.");
   }
   return new Error(verb ? `Office couldn't ${verb} this file.` : "Office couldn't finish that.");
 }

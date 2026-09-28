@@ -12,6 +12,7 @@ function setup(opts: { answers?: boolean; failed?: number } = {}) {
   const requests: string[] = [];
   const webContents = {
     id: 7,
+    once: vi.fn(),
     isDestroyed: () => false,
     send: vi.fn((channel: string, id: string) => {
       if (channel !== OFFICE_FLUSH_REQUEST) return;
@@ -163,5 +164,26 @@ describe('a window whose documents could not all be saved', () => {
     const p = officeQuitGate([win], deps);
     await vi.advanceTimersByTimeAsync(5_000);
     await expect(p).resolves.toBe(true);
+  });
+});
+
+describe("the editor's own unload veto", () => {
+  it('is overridden, once, for a close the person chose ("Close anyway")', async () => {
+    const { win, deps, ipc, webContents } = setup({ failed: 1 });
+    holdCloseForOfficeSave(win, { preventDefault() {} }, deps);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(webContents.once).not.toHaveBeenCalled();
+    ipc.emit(OFFICE_PROCEED, { sender: webContents });
+    expect(webContents.once).toHaveBeenCalledWith('will-prevent-unload', expect.any(Function));
+    const veto = { preventDefault: vi.fn() };
+    (webContents.once.mock.calls[0][1] as (e: typeof veto) => void)(veto);
+    expect(veto.preventDefault).toHaveBeenCalled();
+  });
+
+  it('is overridden for a close after every document saved', async () => {
+    const { win, deps, webContents } = setup();
+    holdCloseForOfficeSave(win, { preventDefault() {} }, deps);
+    await vi.waitFor(() => expect(win.close).toHaveBeenCalled());
+    expect(webContents.once).toHaveBeenCalledWith('will-prevent-unload', expect.any(Function));
   });
 });
