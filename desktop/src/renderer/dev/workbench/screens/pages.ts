@@ -21,8 +21,8 @@ export const PAGES: readonly ScreenEntry[] = [
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
   // Office (built in, design stage). Documents need the editor add-on served on
   // 127.0.0.1:4717 — fixtures/office.ts says how.
-  pg('office', 'view', 'office'),
-  { ...pg('office#empty', 'view', 'office', 'empty-state'), scenario: 'empty' },
+  pg('office/home', 'view', 'office'),
+  { ...pg('office/first-run', 'view', 'office', 'empty-state'), scenario: 'empty' },
   pg('office/document', 'view', 'office'),
   pg('office/spreadsheet', 'view', 'office'),
   pg('office/versions', 'dialog', 'office'),

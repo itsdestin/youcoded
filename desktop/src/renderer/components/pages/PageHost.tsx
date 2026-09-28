@@ -113,7 +113,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   useScreenOpen('pages/page', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id }); }, pageIds);
   useScreenOpen('pages/focus', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id, focus: true }); }, pageIds);
   // Office (built in): home beside the panel; documents as a pinned button opens them.
-  useScreenOpen('office', () => dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID }));
+  useScreenOpen('office/home', () => dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID }));
+  useScreenOpen('office/first-run', () => dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID }));
   useScreenOpen('office/document', () => { void previewOfficeTabs(0); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   useScreenOpen('office/spreadsheet', () => { void previewOfficeTabs(1); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   useScreenOpen('office/versions', () => { void previewOfficeTabs(0, true); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });

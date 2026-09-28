@@ -3555,7 +3555,13 @@ function createOfficeMock(empty: boolean): OfficeBridge {
     status: async () => ({
       editorOrigin: OFFICE_EDITOR_ORIGIN,
       recent,
-      project: empty ? null : { name: 'community-garden', files: OFFICE_FILES.map((f, i) => ({ ...f, at: ago([26, 49, 75][i] * HOUR) })) },
+      // Two files beyond Recent, so the "In <project>" list has something of its own to show
+      // (Recent's files are not repeated there). They open the fixture of their kind.
+      project: empty ? null : { name: 'community-garden', files: [
+        ...OFFICE_FILES.map((f, i) => ({ ...f, at: ago([26, 49, 75][i] * HOUR) })),
+        { ...OFFICE_FILES[1], path: '/home/you/Projects/community-garden/Volunteer rota.xlsx', name: 'Volunteer rota.xlsx', at: ago(52 * HOUR) },
+        { ...OFFICE_FILES[0], path: '/home/you/Projects/community-garden/Grant report.docx', name: 'Grant report.docx', at: ago(120 * HOUR) },
+      ] },
     }),
     create: async (kind) => {
       created += 1;
