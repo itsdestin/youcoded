@@ -28,8 +28,20 @@ export function createSessions(tempBase: string, opts: { drain?: (s: OfficeSessi
   // would load the file as it was before that save and, on its own next save, write the
   // older content back over the edits the closed tab just saved. Keyed by (real) path.
   const closing = new Map<string, Promise<void>>();
+  // Opens still waiting (for a close of the same file, or for their temp folder), by path.
+  const pendingOpens = new Map<string, number>();
 
   async function open(filePath: string, senderId: number): Promise<OfficeSession> {
+    pendingOpens.set(filePath, (pendingOpens.get(filePath) ?? 0) + 1);
+    try {
+      return await openNow(filePath, senderId);
+    } finally {
+      const n = (pendingOpens.get(filePath) ?? 1) - 1;
+      if (n > 0) pendingOpens.set(filePath, n); else pendingOpens.delete(filePath);
+    }
+  }
+
+  async function openNow(filePath: string, senderId: number): Promise<OfficeSession> {
     // A close that starts while this one waited is waited for too; the same promise twice is not.
     for (let c = closing.get(filePath), seen: Promise<void> | undefined; c && c !== seen; c = closing.get(filePath)) {
       seen = c;
@@ -84,10 +96,18 @@ export function createSessions(tempBase: string, opts: { drain?: (s: OfficeSessi
     return [...sessions.values()].find((s) => s.path === filePath);
   }
 
+  /** Whether Office holds `filePath` in any way: open, still draining its close (its last save
+   *  may yet land), or about to open. WHY all three (fix round 5): "Save a copy…" must never
+   *  write over such a file — the draining save, or the opening editor's first save, would
+   *  later overwrite the copy (or the copy would pull the file from under that editor). */
+  function inUse(filePath: string): boolean {
+    return !!byPath(filePath) || closing.has(filePath) || pendingOpens.has(filePath);
+  }
+
   /** Whether this window has any document open (the close/quit flush asks only those). */
   function hasFor(senderId: number): boolean {
     return [...sessions.values()].some((s) => s.senderId === senderId);
   }
 
-  return { open, get, close, closeAllFor, byPath, hasFor };
+  return { open, get, close, closeAllFor, byPath, inUse, hasFor };
 }

@@ -60,4 +60,34 @@ describe('office session registry', () => {
     expect(sessions.byPath('/docs/report.docx')?.token).toBe(session.token);
     expect(sessions.byPath('/docs/nope.docx')).toBeUndefined();
   });
+
+  // Fix round 5: "Save a copy…" refuses any file Office still holds — including one whose close
+  // is still draining its last save, and one whose open is still waiting for that close.
+  it('counts a file as in use while its close drains and while a re-open waits', async () => {
+    let release!: () => void;
+    const held = createSessions(tempBase, { drain: () => new Promise<void>((r) => (release = r)) });
+    const s = await held.open('/docs/report.docx', 1);
+    expect(held.inUse('/docs/report.docx')).toBe(true);
+    const closed = held.close(s.token);
+    expect(held.byPath('/docs/report.docx')).toBeUndefined();
+    expect(held.inUse('/docs/report.docx')).toBe(true); // draining
+    const reopened = held.open('/docs/report.docx', 1); // waits for the drain
+    release();
+    await closed;
+    const again = await reopened;
+    expect(held.inUse('/docs/report.docx')).toBe(true);
+    const closedAgain = held.close(again.token);
+    release();
+    await closedAgain;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(held.inUse('/docs/report.docx')).toBe(false);
+    expect(held.inUse('/docs/nope.docx')).toBe(false);
+  });
+
+  it('counts a file as in use while its first open is still under way', async () => {
+    const opening = sessions.open('/docs/new.docx', 1);
+    expect(sessions.inUse('/docs/new.docx')).toBe(true);
+    await opening;
+    expect(sessions.inUse('/docs/new.docx')).toBe(true);
+  });
 });

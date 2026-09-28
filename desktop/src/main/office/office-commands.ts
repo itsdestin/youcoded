@@ -440,7 +440,8 @@ export function createOfficeCommands(deps: {
     if (auth.realPath === real) throw userError(MSG.copyRefused);
     // C2 (fix round 4): never write over a file open in Office — in any tab, in any window. Its
     // own editor would later save over the copy (or the copy would pull the file from under it).
-    if (deps.sessions.byPath(auth.realPath)) throw userError(MSG.copyOpen);
+    // inUse (fix round 5) also counts a file still draining its close, or about to open.
+    if (deps.sessions.inUse(auth.realPath)) throw userError(MSG.copyOpen);
     const dir = path.dirname(target);
     const base = path.basename(target);
     const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
@@ -455,7 +456,7 @@ export function createOfficeCommands(deps: {
       // and the folder may have become protected, or a link swapped in, meanwhile.
       const again = await authorizeArtifactWrite({ projectRoot: path.dirname(target), fullPath: target, mustStayInRoot: false });
       if (!again.ok || again.realPath === real) throw userError(MSG.copyRefused);
-      if (deps.sessions.byPath(again.realPath)) throw userError(MSG.copyOpen);
+      if (deps.sessions.inUse(again.realPath)) throw userError(MSG.copyOpen);
       noteOwnWrite(target);
       await renameReplacing(tmp, target, process.platform, () => isClosing(s));
     } finally {
