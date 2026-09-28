@@ -32,7 +32,7 @@ function withOffice(over: Partial<OfficeBridge> = {}) {
     open: vi.fn(async () => ({ ok: true as const, token: 't1', origin: 'office://t1' })),
     invoke: vi.fn(async () => null),
     close: vi.fn(async () => {}),
-    saveCopy: vi.fn(async (_t: string, mode: string) => (mode === 'check' ? { ok: true as const, possible: true } : { ok: true as const, folder: 'Documents' })),
+    saveCopy: vi.fn(async (_t: string, mode: string) => (mode === 'check' ? { ok: true as const, possible: true } : { ok: true as const, folder: 'Documents', path: '/home/you/Documents/plan (copy).docx', unchanged: true })),
     ...over,
   };
   (window as unknown as { claude: unknown }).claude = { office };
@@ -42,7 +42,7 @@ function withOffice(over: Partial<OfficeBridge> = {}) {
 const frameOf = (c: HTMLElement) => c.querySelector('iframe[title="plan.docx"]');
 
 beforeEach(() => { resetOfficeStoreForTests(); resetOfficeAvailabilityForTests(); snapshot.current.pages = [OFFICE_PAGE_SUMMARY]; });
-afterEach(() => { cleanup(); delete (window as unknown as { claude?: unknown }).claude; });
+afterEach(() => { vi.useRealTimers(); cleanup(); delete (window as unknown as { claude?: unknown }).claude; });
 
 describe('an Office editor is not torn down with unsaved work', () => {
   function host(open: boolean, pageId: string | null = OFFICE_PAGE_ID) {
@@ -165,7 +165,7 @@ describe('when an Office save fails', () => {
     const { office, container } = await failedTab({
       open: vi.fn(async (p: string) => (p === COPY ? { ok: true as const, token: 't2', origin: 'office://t2' } : { ok: true as const, token: 't1', origin: 'office://t1' })),
       invoke,
-      saveCopy: vi.fn(async (_t: string, mode: string) => (mode === 'check' ? { ok: true as const, possible: true } : { ok: true as const, folder: 'Documents', path: COPY })),
+      saveCopy: vi.fn(async (_t: string, mode: string) => (mode === 'check' ? { ok: true as const, possible: true } : { ok: true as const, folder: 'Documents', path: COPY, unchanged: true })),
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
     expect(await screen.findByText('Saved a copy to Documents — now editing the copy.')).toBeInTheDocument();
@@ -225,30 +225,43 @@ describe('closing the window or quitting with a document whose save failed', () 
     );
   }
   async function askedToFlush(open: boolean, dispatch = vi.fn()) {
-    let request!: (id: string) => void;
+    let request!: (id: string, reason: string) => void;
+    let prompt!: (p: { count: number; firstPath: string }) => void;
     const flushDone = vi.fn();
     const proceedClose = vi.fn();
-    withOffice({ onFlushRequest: vi.fn((cb: (id: string) => void) => { request = cb; return () => {}; }), flushDone, proceedClose } as Partial<OfficeBridge>);
+    withOffice({
+      onFlushRequest: vi.fn((cb: (id: string, reason: string) => void) => { request = cb; return () => {}; }),
+      onUnsavedPrompt: vi.fn((cb: (p: { count: number; firstPath: string }) => void) => { prompt = cb; return () => {}; }),
+      flushDone, proceedClose,
+    } as Partial<OfficeBridge>);
     act(() => openDoc(FILE));
     const r = render(host(open, dispatch));
     await waitFor(() => expect(frameOf(r.container)).not.toBeNull());
     // The document's save fails, then main asks this window to save before closing.
     const { registerFlush } = await import('../../src/renderer/components/office/office-store');
     registerFlush(FILE.path, async () => ({ ok: false, message: "Office doesn't have permission to save this file." }));
-    await act(async () => { request('flush-1'); await new Promise((res) => setTimeout(res, 0)); });
+    await act(async () => { request('flush-1', 'close'); await new Promise((res) => setTimeout(res, 0)); });
+    // Main held the close and asks the person (the count covers every window).
+    act(() => prompt({ count: 1, firstPath: FILE.path }));
     return { flushDone, proceedClose, dispatch, ...r };
   }
 
-  it('answers main that it failed, and asks the person — even with the Office page closed', async () => {
-    const { flushDone } = await askedToFlush(false);
-    expect(flushDone).toHaveBeenCalledWith('flush-1', { failed: 1 });
+  it('answers main that it failed, and shows main\'s prompt — even with the Office page closed', async () => {
+    const { flushDone, container } = await askedToFlush(false);
+    expect(flushDone).toHaveBeenCalledWith('flush-1', { failed: 1, firstPath: FILE.path });
     expect(await screen.findByText("1 Office document couldn't be saved.")).toBeInTheDocument();
+    // Not taken down: the document is still there to Review.
+    expect(frameOf(container)).not.toBeNull();
   });
 
-  it('Close anyway lets main go ahead with the close or quit it held', async () => {
-    const { proceedClose } = await askedToFlush(false);
+  it('Close anyway takes the editors down, then lets main go ahead', async () => {
+    const { proceedClose, container } = await askedToFlush(false);
+    let frameAtProceed: Element | null | undefined;
+    proceedClose.mockImplementation(() => { frameAtProceed = frameOf(container); });
     fireEvent.click(await screen.findByRole('button', { name: 'Close anyway' }));
-    expect(proceedClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(proceedClose).toHaveBeenCalledTimes(1));
+    expect(frameAtProceed).toBeNull();
+    expect(frameOf(container)).toBeNull();
     expect(screen.queryByText("1 Office document couldn't be saved.")).toBeNull();
   });
 
@@ -258,6 +271,51 @@ describe('closing the window or quitting with a document whose save failed', () 
     fireEvent.click(await screen.findByRole('button', { name: 'Review' }));
     expect(dispatch).toHaveBeenCalledWith({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true });
     expect(proceedClose).not.toHaveBeenCalled();
+  });
+
+  it('takes the editors down before answering when every document saved, so none can veto the unload', async () => {
+    let request!: (id: string, reason: string) => void;
+    const flushDone = vi.fn();
+    withOffice({ onFlushRequest: vi.fn((cb: (id: string, reason: string) => void) => { request = cb; return () => {}; }), flushDone } as Partial<OfficeBridge>);
+    act(() => openDoc(FILE));
+    const r = render(host(true));
+    await waitFor(() => expect(frameOf(r.container)).not.toBeNull());
+    let frameAtAnswer: Element | null = null;
+    flushDone.mockImplementation(() => { frameAtAnswer = frameOf(r.container); });
+    await act(async () => { request('flush-2', 'close'); await new Promise((res) => setTimeout(res, 0)); });
+    await waitFor(() => expect(flushDone).toHaveBeenCalledWith('flush-2', { failed: 0, firstPath: undefined }));
+    // Gone already when main is told — so it is gone before main closes the window.
+    expect(frameAtAnswer).toBeNull();
+    expect(frameOf(r.container)).toBeNull();
+  });
+
+  it('keeps a dirty text-file edit\'s own guard: nothing of Office overrides the window\'s unload veto', async () => {
+    // The veto is the text editor's beforeunload (ActiveArtifactView); Office never touches it.
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', handler);
+    const { proceedClose } = await askedToFlush(false);
+    fireEvent.click(await screen.findByRole('button', { name: 'Close anyway' }));
+    await waitFor(() => expect(proceedClose).toHaveBeenCalled());
+    const ev = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+    window.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    window.removeEventListener('beforeunload', handler);
+  });
+
+  it('brings the editors back if the window stays open after all', async () => {
+    const { container } = await askedToFlush(false);
+    const button = await screen.findByRole('button', { name: 'Close anyway' });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      fireEvent.click(button);
+      expect(frameOf(container)).toBeNull();
+      await act(async () => { vi.advanceTimersByTime(9_999); });
+      expect(frameOf(container)).toBeNull();
+      await act(async () => { vi.advanceTimersByTime(1); });
+      expect(frameOf(container)).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -311,5 +369,116 @@ describe('the kept, hidden Office view', () => {
     send({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
     expect(await screen.findByText("An Office document couldn't be saved.")).toBeInTheDocument();
     expect(officeDocFor(FILE.path)).toMatchObject({ closing: false });
+  });
+});
+
+describe('Save a copy while typing goes on (the copy catches up)', () => {
+  const COPY = '/home/you/Documents/plan (copy).docx';
+  async function failedWith(againAnswers: boolean[]) {
+    const answers = [...againAnswers];
+    const saveCopy = vi.fn(async (_t: string, mode: string) => {
+      if (mode === 'check') return { ok: true as const, possible: true };
+      if (mode === 'save') return { ok: true as const, folder: 'Documents', path: COPY };
+      return { ok: true as const, folder: 'Documents', path: COPY, unchanged: answers.shift() ?? true };
+    });
+    const office = withOffice({
+      saveCopy,
+      // The original is read-only: every save the editor attempts is refused at save_file.
+      invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("Office doesn't have permission to save this file."); return null; }),
+    });
+    act(() => openDoc(FILE));
+    const r = render(<OfficeView />);
+    const iframe = await waitFor(() => { const f = frameOf(r.container) as HTMLIFrameElement; expect(f?.getAttribute('src')).toBe('office://t1/index.html'); return f; });
+    // The editor's side: each save the host asks for sends its bytes, then save_file.
+    const from = (data: unknown) => window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: iframe.contentWindow }));
+    vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation((msg: unknown) => {
+      if ((msg as { type?: string }).type !== 'yc:office-save') return;
+      queueMicrotask(() => act(() => {
+        from({ yc: 'rpc', id: Math.random(), cmd: 'write_editor_bin', args: { data: 'x' } });
+        from({ yc: 'rpc', id: Math.random(), cmd: 'save_file', args: { data: '' } });
+      }));
+    });
+    act(() => markFailed(FILE.path, "Office doesn't have permission to save this file."));
+    return { office, saveCopy, stop: () => {}, ...r };
+  }
+
+  it('writes the copy again when the editor changed during the first write, then switches', async () => {
+    const { saveCopy, stop } = await failedWith([false, true]);
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
+      await waitFor(() => expect(officeDocFor(COPY)).not.toBeNull());
+      expect(saveCopy.mock.calls.map((c) => c[1]).filter((m) => m !== 'check')).toEqual(['save', 'again', 'again']);
+    } finally { stop(); }
+  });
+
+  it('keeps editing the original — nothing discarded — when the copy keeps falling behind', async () => {
+    const { stop } = await failedWith([false, false, false]);
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
+      expect(await screen.findByText("Changes made while copying weren't included. Save a copy again.")).toBeInTheDocument();
+      expect(officeDocFor(FILE.path)).not.toBeNull();
+      expect(officeDocFor(COPY)).toBeNull();
+    } finally { stop(); }
+  });
+});
+
+describe('small follow-ups', () => {
+  it('the briefcase opens the copy after an in-place Save a copy', async () => {
+    const COPY = '/home/you/Documents/plan (copy).docx';
+    withOffice();
+    const { officeHeaderAction } = await import('../../src/renderer/components/office/use-office-edit-screen');
+    const { useOfficeAvailable } = await import('../../src/renderer/components/office/office-availability');
+    const { result } = renderHook(() => useOfficeAvailable());
+    await waitFor(() => expect(result.current).toBe(true));
+    const { noteInlineCopy } = await import('../../src/renderer/components/office/office-store');
+    noteInlineCopy(FILE.path, COPY);
+    const dispatch = vi.fn();
+    act(() => officeHeaderAction(FILE.path, dispatch)!.onClick());
+    await waitFor(() => expect(officeDocFor(COPY)).not.toBeNull());
+    expect(officeDocFor(FILE.path)).toBeNull();
+  });
+
+  it('counts a failed document once, though its in-place slot also answers for it', async () => {
+    let request!: (id: string, reason: string) => void;
+    const flushDone = vi.fn();
+    withOffice({ onFlushRequest: vi.fn((cb: (id: string, reason: string) => void) => { request = cb; return () => {}; }), flushDone } as Partial<OfficeBridge>);
+    const { registerFlush } = await import('../../src/renderer/components/office/office-store');
+    const failing = async () => ({ ok: false as const, message: 'x' });
+    registerFlush('/copy.docx', failing);
+    registerFlush('/original.docx', failing, { alias: true });
+    await act(async () => { request('f', 'close'); await new Promise((r) => setTimeout(r, 0)); });
+    expect(flushDone).toHaveBeenCalledWith('f', { failed: 1, firstPath: '/copy.docx' });
+  });
+
+  it('Review of a document edited in place brings that editor forward, not the Office page', async () => {
+    const dispatch = vi.fn();
+    withOffice();
+    const { registerInlineReveal, registerFlush } = await import('../../src/renderer/components/office/office-store');
+    const reveal = vi.fn();
+    registerInlineReveal('/in-place.docx', reveal);
+    render(
+      <ArtifactProvider value={{ state: { ...initialArtifactState, pageViewOpen: false }, dispatch }}>
+        <PageHost settingsOpen={false} onToggleSettings={() => {}} onCreatePage={() => {}} />
+      </ArtifactProvider>,
+    );
+    // Main's prompt, naming the in-place document as the first that could not be saved.
+    let prompt!: (p: { count: number; firstPath: string }) => void;
+    (window as unknown as { claude: { office: Partial<OfficeBridge> } }).claude.office.onUnsavedPrompt = (cb) => { prompt = cb; return () => {}; };
+    (window as unknown as { claude: { office: Partial<OfficeBridge> } }).claude.office.onFlushRequest = () => () => {};
+    (window as unknown as { claude: { office: Partial<OfficeBridge> } }).claude.office.flushDone = () => {};
+    registerFlush('/in-place.docx', async () => ({ ok: true }));
+    act(() => prompt({ count: 1, firstPath: '/in-place.docx' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Review' }));
+    expect(reveal).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'PAGE_OPENED' }));
+  });
+
+  it('a copy already open in another tab is brought forward, never opened twice', async () => {
+    const OTHER: OfficeFile = { ...FILE, path: '/home/you/Documents/plan (copy).docx', name: 'plan (copy).docx' };
+    const { replaceDoc, officeTabsNow } = await import('../../src/renderer/components/office/office-store');
+    act(() => { openDoc(OTHER); openDoc(FILE); });
+    act(() => replaceDoc(FILE.path, OTHER));
+    expect(officeTabsNow().docs.map((d) => d.file.path)).toEqual([OTHER.path]);
+    expect(officeTabsNow().active).toBe(OTHER.path);
   });
 });

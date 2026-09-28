@@ -11,7 +11,7 @@ import { useScreenOpen } from '../../shoot-mode';
 import type { ActiveArtifactHandle } from '../artifact-views/ActiveArtifactView';
 import { OFFICE_PAGE_ID } from '../../../shared/pages-types';
 import { isOfficeEditable, officeFileFor } from './office-files';
-import { flushOffice, openDoc } from './office-store';
+import { flushOffice, inlineCopyFor, openDoc } from './office-store';
 import { officeAvailableNow, useOfficeAvailable } from './office-availability';
 
 export function useOfficeEditScreen(
@@ -57,12 +57,14 @@ export function officeHeaderAction(
     onClick: () => {
       // One editor per file: an in-place edit closes before the file moves to a full tab —
       // after its last changes are saved, so the tab opens the file with them in it.
-      void flushOffice(absolutePath).then((r) => {
+      // After an in-place "Save a copy…" the edit lives in the copy: that is what opens (fix round 3).
+      const target = inlineCopyFor(absolutePath) ?? absolutePath;
+      void flushOffice(target).then((r) => {
         // A save that failed stops here (fix round 2): the in-place editor stays, showing its
         // reason with Retry / Save a copy… / Close without saving — nothing is dropped or moved.
         if (!r.ok) return;
         beforeOpen?.();
-        openDoc(officeFileFor(absolutePath));
+        openDoc(officeFileFor(target));
         dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID });
       });
     },

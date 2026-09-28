@@ -228,6 +228,15 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     if (!reg || !s || s.senderId !== sender.id) return { ok: false, message: MSG.refused };
     const run = commandsFor(reg);
     if (mode === 'check') return { ok: true, possible: run.canCopy(s.token) };
+    if (mode === 'again') {
+      try {
+        const r = await run.saveCopyAgain(s.token);
+        if (!r) return { ok: false, message: MSG.couldNotCopy };
+        return { ok: true, folder: path.basename(path.dirname(r.target)), path: r.target, unchanged: r.unchanged };
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : MSG.couldNotCopy };
+      }
+    }
     const pick = deps.pickCopyTarget ?? (await import('./office-dialogs')).pickCopyTarget;
     const target = await pick(sender, s.path);
     if (!target) return { ok: false, cancelled: true };

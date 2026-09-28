@@ -255,6 +255,39 @@ describe('EditorFrame autosave', () => {
     expect(onClosed).not.toHaveBeenCalled();
   });
 
+  it('a save that lands after the 5 s cap called it failed clears the failure and saves the rest normally', async () => {
+    let answer!: (v: unknown) => void;
+    fakeBridge({ invoke: vi.fn((_t: string, cmd: string) => (cmd === 'save_file' ? new Promise((r) => (answer = r)) : Promise.resolve(null))) });
+    const onCloseFailed = vi.fn();
+    const { fromEditor, saves, rerender } = await mountFrame({ onCloseFailed });
+    vi.useFakeTimers();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    rerender(<EditorFrame file={FILE} closing onCloseFailed={onCloseFailed} />);
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'set_document_modified', args: { modified: true } });
+    await act(async () => { vi.advanceTimersByTime(5_000); });
+    expect(saveStateFor(FILE.path).phase).toBe('failed');
+    rerender(<EditorFrame file={FILE} onCloseFailed={onCloseFailed} />);
+    const before = saves();
+    await act(async () => { answer('ok'); await Promise.resolve(); await Promise.resolve(); });
+    expect(saveStateFor(FILE.path).phase).not.toBe('failed');
+    await act(async () => { vi.advanceTimersByTime(3_000); });
+    expect(saves()).toBe(before + 1); // the change typed during it: an ordinary follow-up save
+  });
+
+  it('a save that lands after the 60 s guard called it failed is taken as saved', async () => {
+    fakeBridge();
+    const { fromEditor, handle } = await mountWithHandle();
+    vi.useFakeTimers();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    act(() => handle.current!.save());
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(saveStateFor(FILE.path).phase).toBe('failed');
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(saveStateFor(FILE.path).phase).not.toBe('failed');
+  });
+
   it('counts an asked-for save that never reaches save_file within 60 s as failed', async () => {
     fakeBridge();
     const { fromEditor, handle } = await mountWithHandle();

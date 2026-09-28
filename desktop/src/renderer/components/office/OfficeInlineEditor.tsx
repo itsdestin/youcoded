@@ -16,7 +16,7 @@ import { officeFileFor } from './office-files';
 import { EditorFrame } from './EditorFrame';
 import type { EditorFrameHandle, OfficeCommand, OfficeCommandState } from './EditorFrame';
 import { CommandGlyph } from './office-icons';
-import { flushOffice, holdInline, markCopied, officeDocFor, openDoc, registerFlush, useSaveState } from './office-store';
+import { flushOffice, holdInline, markCopied, noteInlineCopy, officeDocFor, openDoc, registerFlush, registerInlineReveal, useSaveState } from './office-store';
 import { OfficeSaveFailed } from './OfficeSaveFailed';
 import { useArtifactDispatch } from '../../state/ArtifactContext';
 import { OFFICE_PAGE_ID } from '../../../shared/pages-types';
@@ -56,7 +56,20 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
   }, [editPath, inOffice]);
   // Done and the panel close flush the PANEL's file (ActiveArtifactView); once this slot edits a
   // copy, that flush must reach the copy's editor.
-  useEffect(() => (copyPath ? registerFlush(absolutePath, () => flushOffice(copyPath)) : undefined), [absolutePath, copyPath]);
+  useEffect(() => {
+    if (!copyPath) return undefined;
+    noteInlineCopy(absolutePath, copyPath);
+    const stop = registerFlush(absolutePath, () => flushOffice(copyPath), { alias: true });
+    return () => { stop(); noteInlineCopy(absolutePath, null); };
+  }, [absolutePath, copyPath]);
+  // Review from the unsaved prompt (fix round 3): leave any page view covering the chat, and
+  // bring this editor into view with the keyboard on it.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => registerInlineReveal(editPath, () => {
+    dispatch({ type: 'PAGE_VIEW_CLOSED' });
+    rootRef.current?.scrollIntoView({ block: 'nearest' });
+    rootRef.current?.querySelector('iframe')?.focus();
+  }), [editPath, dispatch]);
   const saveState = useSaveState(file.path);
   if (inOffice) return null;
 
@@ -70,7 +83,7 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
 
 
   return (
-    <div className="h-full flex flex-col">
+    <div ref={rootRef} className="h-full flex flex-col">
       <div role="toolbar" aria-label="Formatting" className="h-10 shrink-0 flex items-center gap-1 px-2 border-b border-edge-dim bg-panel select-none overflow-x-auto">
         {groups.map((g, i) => (
           <React.Fragment key={g[0].cmd}>

@@ -15,7 +15,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markSaved, markSaving, markUnchanged, registerFlush } from './office-store';
+import { markChanged, markFailed, markSaved, markSaving, markUnchanged, officeEditorsSuspended, registerFlush, useOfficeEditorsSuspended } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -48,6 +48,8 @@ const CLOSE_SAVE_WAIT_MS = 5_000;
  *  anything this late means the editor gave up without telling the host (a failed
  *  get_current_path, an exception in its save path), and "Saving…" must not stay up forever. */
 const REQUESTED_SAVE_LIMIT_MS = 60_000;
+/** How many times Save a copy catches up with typing done while the copy was written. */
+const COPY_CATCH_UP_ROUNDS = 3;
 
 /** The theme as the editor gets it. WHY no fontLinks (build plan Task 6): the editor's CSP
  *  (font-src 'self' data:) blocks the Google stylesheets they point at; Task 9 serves the
@@ -110,6 +112,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   openedRef.current = opened;
   // Bumped by Retry, to open the document again from the start.
   const [attempt, setAttempt] = useState(0);
+  // Taken down before its window goes (office-store, fix round 3): no frame, so no editor page
+  // can veto the window's unload. It comes back (and reloads the document) if the window stays.
+  const suspended = useOfficeEditorsSuspended();
   // Escape the editor itself had no use for closes the app's top layer, as a page's does.
   const dismissTop = useDismissTop();
   const dismissRef = useRef(dismissTop);
@@ -194,6 +199,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     const s = save.current;
     const settled = () => !s.dirty && !s.requested && !s.saving && !s.timer;
     if (!originRef.current || (settled() && !s.failed)) return Promise.resolve({ ok: true });
+    // Taken down for a close (office-store suspend): nothing can be saved now; say how it stands.
+    if (officeEditorsSuspended()) return Promise.resolve(s.failed ? { ok: false, message: s.failMessage } : { ok: true });
     return new Promise<FlushResult>((resolve) => {
       const finish = (r: FlushResult) => {
         clearTimeout(cap);
@@ -219,6 +226,12 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   };
   const flushRef = useRef(flush);
   flushRef.current = flush;
+  /** Ask the editor to save now (its bytes reach main even when the save itself fails again). */
+  const saveOnce = (): Promise<FlushResult> => {
+    const s = save.current;
+    if (!s.saving && !s.requested) s.dirty = true;
+    return flush();
+  };
   const discardPending = () => {
     const s = save.current;
     if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
@@ -299,7 +312,27 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       // when the save itself fails again, so the copy holds every change — not only those up
       // to the last save attempt.
       await flushRef.current();
-      const r = await b.saveCopy(t, 'save').catch((e: unknown) => ({ ok: false as const, message: plainMessage(e, "Office couldn't save a copy of this file.") }));
+      const failCopy = (e: unknown) => ({ ok: false as const, message: plainMessage(e, "Office couldn't save a copy of this file.") });
+      let r: OfficeSaveCopyResult = await b.saveCopy(t, 'save').catch(failCopy);
+      // Typing while the copy was being written (fix round 3): the editor does not always say so
+      // (its "modified" flag is already on after the failed save), so ask it for its bytes once
+      // more and let main compare them with what went into the copy — 'again' re-writes the copy
+      // only if they differ. WHY this option (not carrying edits into the copy's editor): it
+      // needs no new editor protocol and ends with the copy holding exactly what was typed.
+      for (let round = 0; r.ok && 'folder' in r && round < COPY_CATCH_UP_ROUNDS; round++) {
+        await saveOnce();
+        const again: OfficeSaveCopyResult = await b.saveCopy(t, 'again').catch(failCopy);
+        if (!again.ok) { r = again; break; }
+        if ('unchanged' in again && again.unchanged) break;
+        if (round === COPY_CATCH_UP_ROUNDS - 1) {
+          // Still changing: do not switch and do not discard — the person keeps editing here.
+          // Said on the strip itself (the save-failed actions stay), where it survives re-renders.
+          const message = "Changes made while copying weren't included. Save a copy again.";
+          save.current.failMessage = message;
+          markFailed(file.path, message);
+          return { ok: false, message };
+        }
+      }
       if (r.ok && 'folder' in r) {
         // "Save As" (the owner's decision, fix round 2): the changes now live in the copy, and
         // the tab carries on editing the COPY — the original has nothing left to save, and later
@@ -360,6 +393,10 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       b.invoke(opened.token, m.cmd, m.args ?? {}).then((result) => {
         post({ yc: 'rpc-result', id: m.id, result });
         if (saving) {
+          // WHY clear `failed` (fix round 3): the 5 s cap or the 60 s guard may already have
+          // called this save failed; it landed after all. Anything still dirty is then an
+          // ordinary follow-up save (saveSettled re-arms autosave), never a stuck tab.
+          save.current.failed = false;
           // A change during the save keeps the strip at "Saving…" for the follow-up save.
           if (save.current.dirty) markChanged(file.path); else markSaved(file.path);
           saveSettled();
@@ -408,8 +445,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   return (
     <div className="absolute inset-0 overflow-hidden" hidden={hidden}>
       {phase === 'open' && !hidden && screen && <ScreenMark name={screen} />}
-      <iframe
+      {!suspended && <iframe
         ref={ref}
+        data-office-editor=""
         src={origin === null ? undefined : `${origin}/index.html`}
         title={file.name}
         // The editor needs scripts, workers and its own storage — on ITS origin,
@@ -417,7 +455,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals"
         className={`absolute border-0 ${slim ? '' : 'inset-0 w-full h-full'} ${phase === 'open' ? '' : 'invisible'}`}
         style={slim ? SLIM_OVERSCAN : undefined}
-      />
+      />}
       {phase === 'starting' && <div className="absolute inset-0"><LoadingState what={stripExt(file.name)} verb="Opening" /></div>}
       {phase === 'failed' && (
         <div className="p-6 max-w-xl mx-auto">

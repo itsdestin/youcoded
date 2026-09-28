@@ -1,4 +1,5 @@
 import { constants as fsc, promises as fsp } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { EDITOR_BIN_MAX_BYTES, OFFICE_MAX_BYTES } from '../../shared/office-types';
 import { renameReplacing } from '../artifacts/cas-write';
@@ -183,17 +184,22 @@ export interface OfficeCopyRunner {
   canCopy(token: string): boolean;
   /** Translate the document's current Editor.bin into `target`. Never touches the original. */
   saveCopy(token: string, target: string): Promise<void>;
+  /** Re-translate into the last copy's target if Editor.bin changed since. null: no copy yet. */
+  saveCopyAgain(token: string): Promise<{ target: string; unchanged: boolean } | null>;
 }
 type OfficeRunner = ((token: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>) & OfficeCopyRunner;
 
 // Per document: whether the editor has handed over an edited Editor.bin, and whether the last
 // save failed while translating. WHY a WeakMap: the same private-bookkeeping reason as queues.
-const copyState = new WeakMap<OfficeSession, { edited: boolean; translateFailed: boolean }>();
+// lastCopy: where the last copy went and a hash of the Editor.bin it was made from, so 'again'
+// can tell whether the editor's bytes changed since (fix round 3).
+const copyState = new WeakMap<OfficeSession, { edited: boolean; translateFailed: boolean; lastCopy?: { target: string; hash: string } }>();
 const copyStateOf = (s: OfficeSession) => {
   let c = copyState.get(s);
   if (!c) copyState.set(s, (c = { edited: false, translateFailed: false }));
   return c;
 };
+const hashFile = async (file: string) => createHash('sha256').update(await fsp.readFile(file)).digest('hex');
 
 export function createOfficeCommands(deps: {
   root: string;
@@ -436,8 +442,10 @@ export function createOfficeCommands(deps: {
     const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
     const tmp = path.join(priv, base);
     try {
+      const hash = await hashFile(editorBin(s));
       await convert(deps.root, editorBin(s), tmp, fmt, jobsBase(s), abortOf(s).signal);
       await finishCopy(tmp, null);
+      copyStateOf(s).lastCopy = { target, hash };
       if (isClosing(s)) throw userError(MSG.closing, true);
       // Again right before the rename (fix round 2), as a save does: the translation takes time,
       // and the folder may have become protected, or a link swapped in, meanwhile.
@@ -469,6 +477,21 @@ export function createOfficeCommands(deps: {
       if (!s) return false;
       const c = copyStateOf(s);
       return c.edited && !c.translateFailed;
+    },
+    async saveCopyAgain(token: string): Promise<{ target: string; unchanged: boolean } | null> {
+      const s = deps.sessions.get(token);
+      if (!s) throw new Error(MSG.refused);
+      const last = copyStateOf(s).lastCopy;
+      if (!last) return null;
+      try {
+        return await enqueueOther(s, async () => {
+          if ((await hashFile(editorBin(s))) === last.hash) return { target: last.target, unchanged: true };
+          await saveCopyFile(s, last.target);
+          return { target: last.target, unchanged: false };
+        });
+      } catch (e) {
+        throw toEditorError(e, 'save_copy', last.target);
+      }
     },
     async saveCopy(token: string, target: string): Promise<void> {
       const s = deps.sessions.get(token);

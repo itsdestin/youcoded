@@ -65,11 +65,69 @@ export type FlushResult = { ok: true } | { ok: false; message: string };
 // briefcase, closing the panel, leaving a tab, the hand-off to an Office tab, window close and
 // quit — would drop the last few seconds of typing. Those paths wait for this first (≤5 s).
 const flushers = new Map<string, () => Promise<FlushResult>>();
+// Paths whose flusher only forwards to another editor's (an in-place edit that moved to its
+// copy). WHY kept apart (fix round 3): a close or quit counts each failed document once.
+const aliasPaths = new Set<string>();
 
-export function registerFlush(path: string, flush: () => Promise<FlushResult>): () => void {
+export function registerFlush(path: string, flush: () => Promise<FlushResult>, opts: { alias?: boolean } = {}): () => void {
   flushers.set(path, flush);
+  if (opts.alias) aliasPaths.add(path); else aliasPaths.delete(path);
   answerFlushRequests();
-  return () => { if (flushers.get(path) === flush) flushers.delete(path); };
+  return () => { if (flushers.get(path) === flush) { flushers.delete(path); aliasPaths.delete(path); } };
+}
+
+// ── In-place edits that moved to their copy ("Save a copy…", fix round 2) ──
+// The file panel still shows the original; its briefcase must open the copy (fix round 3).
+const inlineCopies = new Map<string, string>();
+export function noteInlineCopy(original: string, copy: string | null): void {
+  if (copy) inlineCopies.set(original, copy); else inlineCopies.delete(original);
+}
+export function inlineCopyFor(original: string): string | null {
+  return inlineCopies.get(original) ?? null;
+}
+
+// In-place editors can be brought forward for Review (the unsaved prompt, fix round 3).
+const inlineRevealers = new Map<string, () => void>();
+export function registerInlineReveal(path: string, reveal: () => void): () => void {
+  inlineRevealers.set(path, reveal);
+  return () => { if (inlineRevealers.get(path) === reveal) inlineRevealers.delete(path); };
+}
+/** Bring the in-place editor of `path` forward; false when no in-place editor has it. */
+export function revealInline(path: string): boolean {
+  const r = inlineRevealers.get(path);
+  if (!r) return false;
+  r();
+  return true;
+}
+
+// ── Taking the editors down before a window goes (fix round 3) ──
+// WHY: an editor page with unsaved changes cancels its window's unload (its own beforeunload),
+// and main must not override unload vetoes — an unsaved text-file edit uses the same veto and
+// must keep the window open. So once every document is saved (or the person chose Close
+// anyway), the renderer removes the editors' frames itself before answering main: no editor
+// page, no editor veto. If the window then stays open anyway (another veto, a cancelled
+// prompt), the frames come back after a moment and load their documents again.
+let suspended = false;
+let resumeTimer: ReturnType<typeof setTimeout> | undefined;
+const suspendListeners = new Set<() => void>();
+const OFFICE_RESUME_MS = 10_000;
+export function suspendOfficeEditors(): void {
+  suspended = true;
+  clearTimeout(resumeTimer);
+  resumeTimer = setTimeout(() => { suspended = false; suspendListeners.forEach((l) => l()); }, OFFICE_RESUME_MS);
+  suspendListeners.forEach((l) => l());
+}
+export function officeEditorsSuspended(): boolean { return suspended; }
+/** Resolves once no editor frame is left in the page (React removes them on its next render),
+ *  so main's close only starts after they are gone. Capped at 1 s: main still has its own cap. */
+async function whenEditorFramesGone(): Promise<void> {
+  const until = Date.now() + 1_000;
+  while (typeof document !== 'undefined' && document.querySelector('iframe[data-office-editor]') && Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 16));
+  }
+}
+export function useOfficeEditorsSuspended(): boolean {
+  return useSyncExternalStore((l) => { suspendListeners.add(l); return () => { suspendListeners.delete(l); }; }, () => suspended, () => suspended);
 }
 
 /** Save the file's unsaved changes, if an editor has it open. */
@@ -85,17 +143,29 @@ function answerFlushRequests(): void {
   const office = typeof window === 'undefined' ? undefined : window.claude?.office;
   if (answering || !office?.onFlushRequest || !office.flushDone) return;
   answering = true;
-  office.onFlushRequest((id) => {
-    const entries = [...flushers.entries()];
+  office.onFlushRequest((id, reason) => {
+    const entries = [...flushers.entries()].filter(([path]) => !aliasPaths.has(path));
     void Promise.all(entries.map(([, f]) => f().catch(() => null))).then((results) => {
       // WHY report failures (fix round 2): a document whose save failed must not be closed with
-      // its window without the person choosing that. Main keeps the window (or the quit) waiting
-      // on the answer; the prompt below offers Review or Close anyway.
+      // its window without the person choosing that. Main holds the close (or quit) and sends
+      // the prompt (counting every window's documents, office:unsaved-prompt).
       const failed = entries.filter((_, i) => results[i]?.ok === false).map(([path]) => path);
-      office.flushDone?.(id, { failed: failed.length });
-      if (failed.length > 0) setAlerts({ ...alerts, unsaved: { count: failed.length, firstPath: failed[0] } });
+      // 'final' is quit's last pass after the person chose: take everything down, ask nothing.
+      const down = failed.length === 0 || reason === 'final';
+      if (down) suspendOfficeEditors();
+      void (down ? whenEditorFramesGone() : Promise.resolve()).then(() => {
+        office.flushDone?.(id, { failed: reason === 'final' ? 0 : failed.length, firstPath: failed[0] });
+      });
     });
   });
+  office.onUnsavedPrompt?.((p) => setAlerts({ ...alerts, unsaved: { count: p.count, firstPath: p.firstPath } }));
+}
+
+/** "Close anyway": take the editors down, then let main go ahead with the close or quit. */
+export function closeAnyway(): void {
+  setAlerts({ ...alerts, unsaved: null });
+  suspendOfficeEditors();
+  void whenEditorFramesGone().then(() => window.claude?.office?.proceedClose?.());
 }
 
 // ── Alerts shown outside the Office page (fix round 2) ──
@@ -183,6 +253,12 @@ export function cancelClose(path: string): void {
 /** "Save a copy…" landed (fix round 2): the tab now edits the copy — same place in the strip,
  *  in front if it was. The original's editor unmounts with nothing left to save. */
 export function replaceDoc(oldPath: string, file: OfficeFile): void {
+  // The copy already has a tab (fix round 3): bring that one forward, never a second tab.
+  if (oldPath !== file.path && state.docs.some((d) => d.file.path === file.path)) {
+    set({ ...state, docs: state.docs.filter((d) => d.file.path !== oldPath), active: file.path });
+    forgetSaveState(oldPath);
+    return;
+  }
   set({
     ...state,
     docs: state.docs.map((d) => (d.file.path === oldPath ? { file, asleep: false } : d)),
@@ -281,6 +357,11 @@ export function resetOfficeStoreForTests(): void {
   saves = {};
   inlineHolders.clear();
   flushers.clear();
+  aliasPaths.clear();
+  inlineCopies.clear();
+  inlineRevealers.clear();
+  suspended = false;
+  clearTimeout(resumeTimer);
   answering = false;
   alerts = { unsaved: null, closeFailed: null };
   listeners.forEach((l) => l());

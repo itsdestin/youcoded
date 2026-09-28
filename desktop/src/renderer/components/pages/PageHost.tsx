@@ -48,7 +48,7 @@ import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
-import { previewOfficeTabs, selectTab, useOfficeTabs } from '../office/office-store';
+import { officeDocFor, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
 import { OfficeAlerts } from '../office/OfficeAlerts';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
@@ -304,7 +304,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // unmounted inside autosave's 3 s window lost its last changes. Kept mounted, the editors
   // also come back instantly. Everything else in the view still goes when it closes.
   // Review (the unsaved prompt, a failed hidden close): the Office page, in front, on that tab.
-  const reviewOffice = (path: string) => { selectTab(path); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); };
+  // A document edited in place is brought forward where it is (fix round 3), never as a tab.
+  const reviewOffice = (path: string) => {
+    if (!officeDocFor(path) && revealInline(path)) return;
+    selectTab(path); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true });
+  };
   // The alerts stay mounted either way: a close or quit can ask while no page is open.
   if (!open && !officeKept) return <OfficeAlerts onReview={reviewOffice} />;
 

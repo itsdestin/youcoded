@@ -64,14 +64,18 @@ export interface OfficeBridge {
   /** Replace the file with a kept copy; the current file is kept first. */
   restore(path: string, versionId: string): Promise<{ ok: true } | { ok: false; message: string }>;
   /** "Save a copy…" for a document whose save failed: `check` says whether a copy can succeed
-   *  (hide the button when not); `save` asks where and writes it, never touching the original. */
-  saveCopy(token: string, mode: 'check' | 'save'): Promise<OfficeSaveCopyResult>;
+   *  (hide the button when not); `save` asks where and writes it, never touching the original;
+   *  `again` re-writes that same copy if the editor's bytes changed since (typing meanwhile). */
+  saveCopy(token: string, mode: 'check' | 'save' | 'again'): Promise<OfficeSaveCopyResult>;
   /** Window close / app quit (design §4): main asks this window to save every open document,
    *  and waits for flushDone with the same id (or 5 s). Desktop only — absent elsewhere. */
-  onFlushRequest?(cb: (id: string) => void): () => void;
+  onFlushRequest?(cb: (id: string, reason: 'close' | 'quit' | 'final') => void): () => void;
+  /** Main held a close or quit because documents could not be saved: ask the person. The count
+   *  covers every window (quit); firstPath is this window's first such document. */
+  onUnsavedPrompt?(cb: (p: { count: number; firstPath: string }) => void): () => void;
   /** failed: how many documents could not be saved — main then keeps the window (or quit)
    *  waiting for the person's choice instead of closing. */
-  flushDone?(id: string, result: { failed: number }): void;
+  flushDone?(id: string, result: { failed: number; firstPath?: string }): void;
   /** "Close anyway" on that prompt: main goes ahead with the close or quit it held. */
   proceedClose?(): void;
 }
@@ -81,6 +85,9 @@ export type OfficeSaveCopyResult =
   /** Saved: `path` is where the copy went (the tab switches to it); `folder` is its folder's
    *  name, the only part of the path ever shown. */
   | { ok: true; folder: string; path: string }
+  /** 'again': whether the editor's newest bytes matched what is already in the copy (then
+   *  nothing was written); otherwise the copy was written again with them. */
+  | { ok: true; folder: string; path: string; unchanged: boolean }
   | { ok: false; cancelled: true }
   | { ok: false; message: string };
 

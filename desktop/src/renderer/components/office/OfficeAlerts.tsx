@@ -7,7 +7,7 @@
 import React from 'react';
 import { Button, Dialog, Toast } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
-import { clearCloseFailed, clearUnsavedPrompt, previewUnsavedPrompt, useOfficeAlerts } from './office-store';
+import { clearCloseFailed, clearUnsavedPrompt, closeAnyway, previewUnsavedPrompt, useOfficeAlerts } from './office-store';
 
 export function OfficeAlerts({ onReview }: { onReview: (path: string) => void }) {
   const { unsaved, closeFailed } = useOfficeAlerts();
@@ -31,7 +31,7 @@ export function OfficeAlerts({ onReview }: { onReview: (path: string) => void })
       >
         <p className="text-sm text-fg-2 pb-4">Review shows each one with its choices, such as Retry. Closing anyway loses their changes since the last save.</p>
         <div className="flex gap-2 justify-end">
-          <Button variant="danger" onClick={() => { clearUnsavedPrompt(); window.claude?.office?.proceedClose?.(); }}>Close anyway</Button>
+          <Button variant="danger" onClick={closeAnyway}>Close anyway</Button>
           <Button variant="primary" onClick={review}>Review</Button>
         </div>
       </Dialog>

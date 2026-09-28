@@ -7,26 +7,36 @@
 // open document first — OFFICE_FLUSH_REQUEST with an id — and waits for OFFICE_FLUSH_DONE with
 // the same id, or 5 s, whichever comes first. The renderer side is office-store.ts
 // (answerFlushRequests).
+//
+// When a window answers that some documents could not be saved, main holds the close (or the
+// quit) and asks the person through OFFICE_UNSAVED_PROMPT — one prompt, counting every window's
+// failed documents — until they choose Review or Close anyway (OFFICE_PROCEED).
+//
+// WHY main never overrides a window's unload veto (fix round 3): the renderer takes its Office
+// editors down itself once they are saved (or the person chose Close anyway), so an editor page
+// can no longer cancel the unload — and every veto that remains (an unsaved text-file edit) is
+// legitimate and must keep the window open.
 import { BrowserWindow, app, ipcMain } from 'electron';
 import { getOfficeSessions, quitOfficeSessions } from './office-session-registry';
 
 export const OFFICE_FLUSH_REQUEST = 'office:flush-request';
 export const OFFICE_FLUSH_DONE = 'office:flush-done';
+export const OFFICE_PROCEED = 'office:proceed';
+export const OFFICE_UNSAVED_PROMPT = 'office:unsaved-prompt';
 const OFFICE_FLUSH_CAP_MS = 5_000;
 
-interface FlushTarget {
-  id: number; send(channel: string, id: string): void; isDestroyed(): boolean;
-  once?(event: 'will-prevent-unload', l: (e: { preventDefault(): void }) => void): unknown;
-}
+/** Why main asks: a window close, the quit gate, or quit's final save (which never prompts). */
+type FlushReason = 'close' | 'quit' | 'final';
+
+interface FlushTarget { id: number; send(channel: string, ...args: unknown[]): void; isDestroyed(): boolean }
 interface FlushIpc {
   on(channel: string, l: (e: unknown, ...args: unknown[]) => void): unknown;
   off(channel: string, l: (e: unknown, ...args: unknown[]) => void): unknown;
 }
-export const OFFICE_PROCEED = 'office:proceed';
 
 let seq = 0;
 
-type FlushOutcome = 'flushed' | 'failed' | 'timeout' | 'gone';
+type FlushOutcome = { how: 'flushed' | 'timeout' | 'gone' } | { how: 'failed'; count: number; firstPath: string };
 
 /**
  * Ask one window to save its open documents. Never rejects; resolves how it ended:
@@ -35,32 +45,33 @@ type FlushOutcome = 'flushed' | 'failed' | 'timeout' | 'gone';
  * WHY the cap only without an answer (fix round 2): a window that ANSWERS "failed" is waiting
  * for the person to choose (Review / Close anyway); only silence may be treated as "go ahead".
  */
-export function askToFlush(target: FlushTarget, ipc: FlushIpc = ipcMain, capMs = OFFICE_FLUSH_CAP_MS): Promise<FlushOutcome> {
-  if (target.isDestroyed()) return Promise.resolve('gone');
+export function askToFlush(target: FlushTarget, ipc: FlushIpc = ipcMain, capMs = OFFICE_FLUSH_CAP_MS, reason: FlushReason = 'close'): Promise<FlushOutcome> {
+  if (target.isDestroyed()) return Promise.resolve({ how: 'gone' });
   const id = `flush-${++seq}`;
   return new Promise((resolve) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (how: FlushOutcome) => {
+    const finish = (o: FlushOutcome) => {
       clearTimeout(timer);
       ipc.off(OFFICE_FLUSH_DONE, onDone);
-      resolve(how);
+      resolve(o);
     };
     const onDone = (e: unknown, answer: unknown, result: unknown) => {
-      // Only the asked window may answer for itself (fix round 2).
-      // By id, for the same reason as `held` below.
+      // Only the asked window may answer for itself — matched by id: the event.sender Electron
+      // hands a listener is not always the same object as win.webContents (fix round 2).
       const sender = (e as { sender?: { id?: unknown } } | null)?.sender;
       if (answer !== id || (sender !== undefined && sender?.id !== target.id)) return;
-      const failed = (result as { failed?: unknown } | null)?.failed;
-      finish(typeof failed === 'number' && failed > 0 ? 'failed' : 'flushed');
+      const r = (result ?? {}) as { failed?: unknown; firstPath?: unknown };
+      if (typeof r.failed === 'number' && r.failed > 0) finish({ how: 'failed', count: r.failed, firstPath: String(r.firstPath ?? '') });
+      else finish({ how: 'flushed' });
     };
     ipc.on(OFFICE_FLUSH_DONE, onDone);
-    timer = setTimeout(() => finish('timeout'), capMs);
-    try { target.send(OFFICE_FLUSH_REQUEST, id); } catch { finish('gone'); }
+    timer = setTimeout(() => finish({ how: 'timeout' }), capMs);
+    try { target.send(OFFICE_FLUSH_REQUEST, id, reason); } catch { finish({ how: 'gone' }); }
   });
 }
 
 interface ClosingWindow {
-  webContents: FlushTarget & { id: number };
+  webContents: FlushTarget;
   isDestroyed(): boolean;
   close(): void;
 }
@@ -71,21 +82,10 @@ const realDeps = (): GateDeps => ({ hasDocuments: (id) => getOfficeSessions()?.h
 // the window go instead of asking again. WHY (the loop): the gate re-issues close() itself, and
 // that second close event must pass straight through.
 const flushedForClose = new WeakSet<object>();
-// A close or quit held because a window answered "failed": what "Close anyway" goes ahead with.
-// WHY keyed by the webContents id, not the object (dev window, fix round 2): the event.sender
-// Electron hands an ipcMain listener is not always the same JS object as win.webContents, so an
-// object key never matched and "Close anyway" did nothing.
+// What "Close anyway" goes ahead with, keyed by the webContents id of the window that shows the
+// prompt (ids, not objects — see askToFlush).
 const held = new Map<number, { kind: 'close'; win: ClosingWindow } | { kind: 'quit'; quitApp: () => void }>();
 let skipQuitGate = false;
-let quitWindows: ClosingWindow[] = [];
-
-// WHY (dev window, fix round 2): the editor page cancels its own unload while its document is
-// modified (a beforeunload of its own). Once the person chose — saved, or "Close anyway" — or the
-// window stopped answering, that must not silently keep the window open: the close this module
-// re-issues overrides it, once.
-function letUnload(win: ClosingWindow): void {
-  win.webContents.once?.('will-prevent-unload', (e) => e.preventDefault());
-}
 
 // "Close anyway" (the renderer's office:proceed) — registered once, on first use.
 const proceedListening = new WeakSet<object>();
@@ -99,13 +99,11 @@ function listenForProceed(ipc: FlushIpc): void {
     held.delete(id);
     if (h.kind === 'close') {
       flushedForClose.add(h.win);
-      letUnload(h.win);
       if (!h.win.isDestroyed()) h.win.close();
     } else {
-      skipQuitGate = true;
-      // Every window with documents may unload now — the person chose to quit anyway.
+      // One choice covers every window's documents (fix round 3).
       held.forEach((other, key) => { if (other.kind === 'quit') held.delete(key); });
-      quitWindows.forEach(letUnload);
+      skipQuitGate = true;
       h.quitApp();
     }
   });
@@ -115,7 +113,7 @@ function listenForProceed(ipc: FlushIpc): void {
  * Call first in a window's `close` handler. Returns true when it held the close (preventDefault)
  * to save this window's Office documents. It closes the window itself once they are saved (or
  * after 5 s with no answer); when the window answers that some could not be saved, it leaves
- * the window open — the renderer asks the person, and "Close anyway" closes it (office:proceed).
+ * the window open and asks the person (OFFICE_UNSAVED_PROMPT); "Close anyway" closes it.
  * Returns false when there is nothing to save, or on the close it re-issued.
  */
 export function holdCloseForOfficeSave(win: ClosingWindow, ev: { preventDefault(): void }, deps: GateDeps = realDeps()): boolean {
@@ -124,10 +122,13 @@ export function holdCloseForOfficeSave(win: ClosingWindow, ev: { preventDefault(
   ev.preventDefault();
   const ipc = deps.ipc ?? ipcMain;
   listenForProceed(ipc);
-  void askToFlush(win.webContents, ipc, deps.capMs).then((how) => {
-    if (how === 'failed') { held.set(win.webContents.id, { kind: 'close', win }); return; }
+  void askToFlush(win.webContents, ipc, deps.capMs, 'close').then((o) => {
+    if (o.how === 'failed') {
+      held.set(win.webContents.id, { kind: 'close', win });
+      if (!win.webContents.isDestroyed()) win.webContents.send(OFFICE_UNSAVED_PROMPT, { count: o.count, firstPath: o.firstPath });
+      return;
+    }
     flushedForClose.add(win);
-    letUnload(win);
     if (!win.isDestroyed()) win.close();
   });
   return true;
@@ -135,8 +136,8 @@ export function holdCloseForOfficeSave(win: ClosingWindow, ev: { preventDefault(
 
 /**
  * Quit, before anything is torn down: every window with open documents saves them. Resolves
- * true to go ahead; false when a window answered that some could not be saved — the quit is
- * then held for the person's choice, and "Close anyway" quits again (this gate then lets it by).
+ * true to go ahead; false when some could not be saved — the quit is then held and ONE prompt
+ * (in the first such window) counts them all; "Close anyway" quits again past this gate.
  */
 export async function officeQuitGate(
   windows: ClosingWindow[] = BrowserWindow.getAllWindows() as unknown as ClosingWindow[],
@@ -146,24 +147,31 @@ export async function officeQuitGate(
   const ipc = deps.ipc ?? ipcMain;
   listenForProceed(ipc);
   const asking = windows.filter((w) => !w.isDestroyed() && deps.hasDocuments(w.webContents.id));
-  quitWindows = asking;
-  const outcomes = await Promise.all(asking.map((w) => askToFlush(w.webContents, ipc, deps.capMs)));
-  const quitApp = deps.quitApp ?? (() => app.quit());
-  let go = true;
-  outcomes.forEach((how, i) => { if (how === 'failed') { go = false; held.set(asking[i].webContents.id, { kind: 'quit', quitApp }); } });
-  // Going ahead: no editor may then keep its window from closing (see letUnload).
-  if (go) asking.forEach(letUnload);
-  return go;
+  const outcomes = await Promise.all(asking.map((w) => askToFlush(w.webContents, ipc, deps.capMs, 'quit')));
+  let count = 0;
+  let prompter: ClosingWindow | null = null;
+  let firstPath = '';
+  outcomes.forEach((o, i) => {
+    if (o.how !== 'failed') return;
+    count += o.count;
+    if (!prompter) { prompter = asking[i]; firstPath = o.firstPath; }
+  });
+  if (!prompter) return true;
+  const w = prompter as ClosingWindow;
+  held.set(w.webContents.id, { kind: 'quit', quitApp: deps.quitApp ?? (() => app.quit()) });
+  if (!w.webContents.isDestroyed()) w.webContents.send(OFFICE_UNSAVED_PROMPT, { count, firstPath });
+  return false;
 }
 
-/** Quit's teardown: every window saves once more (all at once, capped), then the office
- *  sessions are stopped and their temp folders removed (quitOfficeSessions). */
+/** Quit's teardown: every window saves once more and takes its editors down (all at once,
+ *  capped; 'final' never prompts — the person already chose), then the office sessions are
+ *  stopped and their temp folders removed (quitOfficeSessions). */
 export async function flushThenQuitOfficeSessions(
   windows: ClosingWindow[] = BrowserWindow.getAllWindows() as unknown as ClosingWindow[],
   deps: GateDeps = realDeps(),
   quit: () => Promise<void> = () => quitOfficeSessions(),
 ): Promise<void> {
   const asking = windows.filter((w) => !w.isDestroyed() && deps.hasDocuments(w.webContents.id));
-  await Promise.all(asking.map((w) => askToFlush(w.webContents, deps.ipc, deps.capMs)));
+  await Promise.all(asking.map((w) => askToFlush(w.webContents, deps.ipc, deps.capMs, 'final')));
   await quit();
 }

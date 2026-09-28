@@ -741,6 +741,22 @@ describe.skipIf(!HAS_ADDON)('saving a copy when the file itself cannot be saved'
     await chmod(s.path, 0o644);
   });
 
+  it('writes the copy again only when the editor handed over new bytes since', async () => {
+    const { s, run } = await failedSaveOfReadOnly();
+    const target = path.join(dir, 'copies', 'memo (copy).docx');
+    await mkdir(path.dirname(target), { recursive: true });
+    await run.saveCopy(s.token, target);
+    await expect(run.saveCopyAgain(s.token)).resolves.toEqual({ target, unchanged: true });
+    // Typing during the copy: the editor's newest bytes are the memo's own content.
+    const warm = path.join(dir, 'm');
+    await mkdir(warm, { recursive: true });
+    await convert(ROOT, MEMO, path.join(warm, 'Editor.bin'), FORMAT.bin, warm);
+    await run(s.token, 'write_editor_bin', { data: (await readFile(path.join(warm, 'Editor.bin'))).toString('base64') });
+    await expect(run.saveCopyAgain(s.token)).resolves.toEqual({ target, unchanged: false });
+    expect(await textOf(target)).toBe(await textOf(MEMO));
+    await chmod(s.path, 0o644);
+  });
+
   it('refuses to "copy" over the original itself', async () => {
     const { s, run } = await failedSaveOfReadOnly();
     await expect(run.saveCopy(s.token, s.path)).rejects.toThrow("Office can't save a copy there. Choose another folder.");
