@@ -18,6 +18,7 @@ import {
   deployClaudeCodeDocCommentsMcp,
   DOC_COMMENTS_SERVER_JS,
   DOC_COMMENTS_MCP_DIR,
+  __resetDocCommentsMcpSweepForTest,
 } from '../src/main/claude-code-doc-comments-mcp';
 import {
   DOC_COMMENTS_MCP_SERVER_PREFIX,
@@ -183,6 +184,74 @@ describe('deployment', () => {
     } finally {
       fs.rmSync(baseDir, { recursive: true, force: true });
     }
+  });
+
+  // T9c/T20 adversarial review, finding #1 — cheap hardening (never the real
+  // boundary; see the WHY note beside `deployClaudeCodeDocCommentsMcp`'s own
+  // token generation for what this can and can't defend against). `mode &
+  // 0o077` is POSIX-only (accepted-history-store.test.ts's own precedent) —
+  // Windows reports 0o666 for every file, so this assertion is skipped there.
+  it('the deploy directory and its config file are owner-only', () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
+    try {
+      const deployment = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
+      if (process.platform !== 'win32') {
+        expect(fs.statSync(deployment.deployDir).mode & 0o077).toBe(0);
+        expect(fs.statSync(deployment.configPath).mode & 0o077).toBe(0);
+      }
+    } finally {
+      fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+  });
+
+  // Finding #3 — the returned `deployDir` is exactly the directory holding
+  // both files, so a caller (ipc-handlers.ts) can delete it wholesale.
+  it('deployDir names the exact directory the server and config live in', () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
+    try {
+      const deployment = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
+      expect(path.dirname(deployment.serverPath)).toBe(deployment.deployDir);
+      expect(path.dirname(deployment.configPath)).toBe(deployment.deployDir);
+    } finally {
+      fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+  });
+
+  describe('leftover-deploy sweep (finding #3)', () => {
+    afterEach(() => {
+      __resetDocCommentsMcpSweepForTest();
+    });
+
+    it('a directory left behind by a previous process run is swept on the first deploy of a fresh process', () => {
+      const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
+      try {
+        const leftover = path.join(baseDir, DOC_COMMENTS_MCP_DIR, 'youcoded-doc-comments-oldstale');
+        fs.mkdirSync(leftover, { recursive: true });
+        fs.writeFileSync(path.join(leftover, 'mcp-config.json'), '{"mcpServers":{}}');
+        expect(fs.existsSync(leftover)).toBe(true);
+
+        __resetDocCommentsMcpSweepForTest(); // pretend this is a fresh process
+        const deployment = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
+
+        expect(fs.existsSync(leftover)).toBe(false);
+        expect(fs.existsSync(deployment.deployDir)).toBe(true);
+      } finally {
+        fs.rmSync(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    it('never re-sweeps mid-process, so a sibling deployment created earlier in the SAME run survives', () => {
+      const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
+      try {
+        __resetDocCommentsMcpSweepForTest();
+        const first = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
+        const second = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
+        expect(fs.existsSync(first.deployDir)).toBe(true);
+        expect(fs.existsSync(second.deployDir)).toBe(true);
+      } finally {
+        fs.rmSync(baseDir, { recursive: true, force: true });
+      }
+    });
   });
 });
 

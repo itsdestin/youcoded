@@ -878,6 +878,11 @@ export interface DocCommentsMcpDeployment {
    *  refuse any request that doesn't carry it. Never logged, never sent to
    *  the renderer/IPC — see session-manager.ts's own emit-site comment. */
   token: string;
+  /** This deployment's own directory (T9c/T20 adversarial review, finding #3)
+   *  — the caller (session-manager.ts) deletes it wholesale on session-exit;
+   *  see `sweepStaleDeploysOnce` below for the crash/kill case this alone
+   *  doesn't cover. */
+  deployDir: string;
 }
 
 /** Own subdirectory, mirroring claude-code-mcp.ts's CLAUDE_CODE_MCP_DIR — its
@@ -890,6 +895,34 @@ export const DOC_COMMENTS_MCP_DIR = 'claude-code-doc-comments-mcp';
  *  harder to guess or pre-declare than the old fixed constant. */
 function randomDocCommentsMcpServerId(): string {
   return `${DOC_COMMENTS_MCP_SERVER_PREFIX}-${randomBytes(4).toString('hex')}`;
+}
+
+/** Guards the once-per-process leftover-deploy sweep (T9c/T20 adversarial
+ *  review, finding #3) — every deployment directory this process has ever
+ *  created lives under one parent with no PER-DEPLOYMENT cleanup guaranteed
+ *  (a crash or a force-quit skips session-manager.ts's own on-exit delete).
+ *  Swept once, the first time THIS process deploys anything: safe because no
+ *  in-memory queue state from a PREVIOUS process life could possibly still
+ *  reference one of those directories (this app persists no queue state
+ *  across a restart), and never mid-process, since a sibling deployment
+ *  created earlier in the SAME run is still live and must not be swept. */
+let sweptStaleDeploysThisProcess = false;
+
+/** Test-only: re-arms the sweep so a test can observe it firing against its
+ *  own fresh temp directory, mirroring pending-mutation-queue.ts's own
+ *  `__resetPendingMutationQueueForTest`. */
+export function __resetDocCommentsMcpSweepForTest(): void {
+  sweptStaleDeploysThisProcess = false;
+}
+
+function sweepStaleDeploysOnce(baseDir: string): void {
+  if (sweptStaleDeploysThisProcess) return;
+  sweptStaleDeploysThisProcess = true;
+  try {
+    fs.rmSync(path.join(baseDir, DOC_COMMENTS_MCP_DIR), { recursive: true, force: true });
+  } catch {
+    // Best-effort — a failed sweep never blocks a real deploy.
+  }
 }
 
 /**
@@ -910,10 +943,31 @@ export function deployClaudeCodeDocCommentsMcp(
   nodePath: string,
   projectRoot: string
 ): DocCommentsMcpDeployment {
+  // Finding #3: sweep any directory a PREVIOUS process life left behind
+  // before creating this deployment's own — see sweepStaleDeploysOnce's own
+  // doc comment for why this is safe.
+  sweepStaleDeploysOnce(baseDir);
+
   const serverId = randomDocCommentsMcpServerId();
   // 16 random bytes (32 hex chars), fixed-length so the applier's
   // constant-time comparison never has to handle a variable-length input
   // from a legitimate caller (finding #1).
+  //
+  // WHY this token is real, tested defense against SOME threats and not
+  // others (T9c/T20 adversarial review, finding #1 — triage, review
+  // 2026-09-27): it stops a request PLANTED before this session existed
+  // (nothing before spawn time could know it) and a request from a
+  // DIFFERENT session/process that never received it. It does NOT, and was
+  // never meant to, stop code running INSIDE this already-live session
+  // (this session's own Bash/Write tools, a skill file it runs, a
+  // compromised dependency it executes) from reading its own token and
+  // forging a request — that code already has the SAME filesystem access
+  // needed to edit the target .docx/.xlsx directly, with no token required
+  // at all, and in `default` permission mode that same Bash/Write access
+  // would itself trigger an ordinary PermissionRequest prompt. The token's
+  // job is closing the pre-planted-file and cross-session/cross-process
+  // mix-up cases, never same-uid code execution — see the review file's own
+  // triage section for the full reasoning.
   const token = randomBytes(16).toString('hex');
 
   // WHY a PER-SESSION subdirectory, unlike claude-code-mcp.ts's SendUserLink
@@ -927,12 +981,21 @@ export function deployClaudeCodeDocCommentsMcp(
   // deployment test: two sessions on the same host produced the SAME
   // observed server id because they raced onto the same file). Keying the
   // directory on the very serverId just minted makes every deployment its
-  // own path, so no two sessions can ever collide on the same file — the
-  // accepted tradeoff is that these small per-session directories are never
-  // individually cleaned up (the same "no eviction policy" limitation this
-  // codebase already accepts for `~/.claude/youcoded-doc-backups/`).
+  // own path, so no two sessions can ever collide on the same file.
+  // Per-deployment cleanup is now real (finding #3, T9c/T20 review) — the
+  // caller deletes `deployDir` on session-exit, and `sweepStaleDeploysOnce`
+  // above catches whatever a crash/kill skips — so the earlier "these small
+  // per-session directories are never individually cleaned up" tradeoff no
+  // longer applies.
   const dir = path.join(baseDir, DOC_COMMENTS_MCP_DIR, serverId);
-  fs.mkdirSync(dir, { recursive: true });
+  // Owner-only (finding #1, cheap hardening — see the WHY note above the
+  // token for what this can and can't defend against; it does not stop
+  // this session's OWN uid, only other OS users/tools on a shared machine).
+  // `mkdirSync`'s own `mode` alone can be weakened by the process umask, so
+  // an explicit `chmodSync` follows it — mirrors chatgpt-request-diagnostics
+  // .ts's own dir/file hardening shape.
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
 
   const serverPath = path.join(dir, 'doc-comments-mcp.js');
   fs.writeFileSync(serverPath, DOC_COMMENTS_SERVER_JS, 'utf8');
@@ -949,6 +1012,10 @@ export function deployClaudeCodeDocCommentsMcp(
     },
   };
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+  // Owner-only (finding #1) — this is the file that actually holds the
+  // token; the directory-level 0700 above already blocks traversal by
+  // another OS user, this is belt-and-suspenders on the file itself.
+  fs.chmodSync(configPath, 0o600);
 
-  return { serverPath, configPath, allowedTools: [docCommentsMcpReadTool(serverId)], serverId, token };
+  return { serverPath, configPath, allowedTools: [docCommentsMcpReadTool(serverId)], serverId, token, deployDir: dir };
 }

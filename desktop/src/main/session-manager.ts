@@ -312,7 +312,11 @@ export class SessionManager extends EventEmitter {
         // to impersonate this session's server, never help the user. Both
         // listeners live in ipc-handlers.ts (the queue) and main.ts (the
         // permission check) — see each file's own comment at its listener.
-        this.emit('doc-comments-mcp-attached', id, resolvedCwd, docComments.token, docComments.serverId);
+        // `deployDir` (T9c/T20 review, finding #3) lets ipc-handlers.ts
+        // delete this session's own deploy directory on session-exit —
+        // never sent to the renderer either, though it carries no secret of
+        // its own (a plain filesystem path).
+        this.emit('doc-comments-mcp-attached', id, resolvedCwd, docComments.token, docComments.serverId, docComments.deployDir);
       } catch (err) {
         log('WARN', 'SessionManager', 'doc-comments MCP deploy failed — this session starts without comment tools', { error: String(err) });
       }

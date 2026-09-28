@@ -405,11 +405,17 @@ describe('SessionManager', () => {
     manager.createSession({ name: 'private-event', cwd: tmpDir, skipPermissions: false });
 
     expect(attached).toHaveBeenCalledTimes(1);
-    const [sessionId, cwd, token, serverId] = attached.mock.calls[0];
+    const [sessionId, cwd, token, serverId, deployDir] = attached.mock.calls[0];
     expect(cwd).toBe(tmpDir);
     expect(typeof token).toBe('string');
     expect(token.length).toBeGreaterThan(16);
     expect(serverId.startsWith(`${DOC_COMMENTS_MCP_SERVER_PREFIX}-`)).toBe(true);
+    // T9c/T20 adversarial review, finding #3: ipc-handlers.ts's own
+    // session-exit listener needs this to delete the deploy directory —
+    // carries no secret of its own (a plain filesystem path), but still
+    // rides the same PRIVATE event, never session-created.
+    expect(typeof deployDir).toBe('string');
+    expect(deployDir.length).toBeGreaterThan(0);
 
     expect(created).toHaveBeenCalledTimes(1);
     const createdInfo = created.mock.calls[0][0];

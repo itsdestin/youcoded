@@ -38,6 +38,9 @@ class PtyBridge(
         private set
     private var docCommentsToken: String? = null
     private var docCommentsProjectRoot: String? = null
+    /** This deployment's own directory (T9c/T20 review, finding #3) — deleted
+     *  wholesale in stop() once the session ends. */
+    private var docCommentsDeployDir: String? = null
 
     private val _screenVersion = MutableStateFlow(0)
     val screenVersion: StateFlow<Int> = _screenVersion
@@ -214,6 +217,11 @@ class PtyBridge(
         // DocCommentsPermission.kt for the real per-call mechanism).
         // `cwd` becomes the ONE trusted project root every tool call on this
         // surface is contained to — never a value the model can influence.
+        // No mobileSessionId argument (T9c/T20 review, finding #2 fix) —
+        // ClaudeCodeDocCommentsMcp.deploy names its own directory from the
+        // serverId it mints internally, never from a caller-supplied value,
+        // so there is no placeholder-fallback path left to reintroduce a
+        // fixed, collision-prone directory.
         val docComments = try {
             ClaudeCodeDocCommentsMcp.deploy(
                 mobileDir,
@@ -221,7 +229,6 @@ class PtyBridge(
                 "/system/bin/linker64",
                 nodePath.absolutePath,
                 cwd.absolutePath,
-                mobileSessionId ?: "no-session-id",
             )
         } catch (e: Exception) {
             android.util.Log.w("PtyBridge", "doc-comments MCP deploy failed — this session starts without comment tools", e)
@@ -233,6 +240,7 @@ class PtyBridge(
             docCommentsServerId = docComments.serverId
             docCommentsToken = docComments.token
             docCommentsProjectRoot = cwd.absolutePath
+            docCommentsDeployDir = docComments.deployDir
         }
         val mcpFlags = if (mcpConfigPaths.isEmpty()) ""
             else " --mcp-config ${mcpConfigPaths.joinToString(" ")} --allowedTools ${allowedToolNames.joinToString(" ")}"
@@ -399,6 +407,17 @@ class PtyBridge(
         val id = mobileSessionId
         if (root != null && id != null) {
             com.youcoded.app.doccomments.DocCommentsPendingQueue.stop(id, root)
+        }
+        // T9c/T20 review, finding #3: delete this session's own doc-comments
+        // deploy directory (config + token) now that it's genuinely done —
+        // a process kill/crash that skips this still gets swept on the next
+        // deploy in a fresh process (ClaudeCodeDocCommentsMcp.sweepStaleDeploysOnce).
+        docCommentsDeployDir?.let { dir ->
+            try {
+                File(dir).deleteRecursively()
+            } catch (e: Exception) {
+                android.util.Log.w("PtyBridge", "doc-comments deploy dir cleanup failed (non-fatal)", e)
+            }
         }
         session?.finishIfRunning()
         session = null
