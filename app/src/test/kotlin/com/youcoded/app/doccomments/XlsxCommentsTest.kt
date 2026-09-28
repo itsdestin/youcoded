@@ -90,6 +90,69 @@ private fun withReplacedZipEntry(source: File, entryName: String, newContent: By
 private fun readZipEntryText(file: File, name: String): String? =
     ZipFile(file).use { zip -> zip.getEntry(name)?.let { zip.getInputStream(it).use { s -> s.readBytes() } }.let { it?.toString(Charsets.UTF_8) } }
 
+/** F1 (High, android-xlsx-review) test fixture builder: copies `source`,
+ *  ADDING one brand-new entry with `ZipEntry.STORED` (uncompressed) —
+ *  mirrors a real embedded image or other already-compressed binary asset
+ *  (real Excel workbooks routinely store their `xl/media` images this way).
+ *  Used to
+ *  prove the fix's raw-passthrough path: a STORED entry this module's own
+ *  mutation never touches must come back byte-identical AND still `STORED`
+ *  (never re-encoded to `DEFLATED`), which only holds if it was streamed
+ *  through untouched rather than decompressed-then-rewritten. */
+private fun withAddedStoredZipEntry(source: File, entryName: String, content: ByteArray): File {
+    val out = Files.createTempFile("ycd-xlsx-stored-", ".xlsx").toFile()
+    out.deleteOnExit()
+    val crc = java.util.zip.CRC32().apply { update(content) }.value
+    ZipFile(source).use { zin ->
+        ZipOutputStream(out.outputStream()).use { zout ->
+            for (entry in Collections.list(zin.entries())) {
+                if (entry.isDirectory) continue
+                val bytes = zin.getInputStream(entry).use { it.readBytes() }
+                zout.putNextEntry(ZipEntry(entry.name))
+                zout.write(bytes)
+                zout.closeEntry()
+            }
+            val newEntry = ZipEntry(entryName)
+            newEntry.method = ZipEntry.STORED
+            newEntry.size = content.size.toLong()
+            newEntry.compressedSize = content.size.toLong()
+            newEntry.crc = crc
+            zout.putNextEntry(newEntry)
+            zout.write(content)
+            zout.closeEntry()
+        }
+    }
+    return out
+}
+
+/** F1 test fixture builder: copies `source`, adding one brand-new `DEFLATED`
+ *  (the zip default) entry — used for the "a large-image workbook doesn't
+ *  require whole-archive buffering" case. `content` is deliberately
+ *  ALL-ZERO bytes, so the resulting `.xlsx` stays small and fast to write to
+ *  disk in a unit test even though the entry's DECLARED uncompressed size is
+ *  large (tens of MB) — the same "declared vs. actual" shape a real
+ *  embedded image or big untouched worksheet has, without this test needing
+ *  to actually allocate/write that much real entropy to disk. */
+private fun withAddedDeflatedZipEntry(source: File, entryName: String, content: ByteArray): File {
+    val out = Files.createTempFile("ycd-xlsx-deflated-", ".xlsx").toFile()
+    out.deleteOnExit()
+    ZipFile(source).use { zin ->
+        ZipOutputStream(out.outputStream()).use { zout ->
+            for (entry in Collections.list(zin.entries())) {
+                if (entry.isDirectory) continue
+                val bytes = zin.getInputStream(entry).use { it.readBytes() }
+                zout.putNextEntry(ZipEntry(entry.name))
+                zout.write(bytes)
+                zout.closeEntry()
+            }
+            zout.putNextEntry(ZipEntry(entryName))
+            zout.write(content)
+            zout.closeEntry()
+        }
+    }
+    return out
+}
+
 private fun cellSelector(cell: String, sheet: String? = null): CommentSelector = CommentSelector.Cell(CellSelector(cell, sheet))
 
 private fun commentAt(comments: List<PersistedComment>, cell: String): List<PersistedComment> =
@@ -562,6 +625,167 @@ class XlsxCommentsTest {
         val knownG12Id = buildXlsxThreadIdForTest(1, "G12", "{3A26E9AE-8B38-864D-BAF4-BA5D9C6E1DA4}")
         val result = resolveXlsxComment(xlsx.absolutePath, "reports/docling.xlsx", knownG12Id, home)
         assertTrue(result is XlsxWriteResult.Ok, "expected Ok, got $result")
+    }
+
+    // ── F1 (High, android-xlsx-review) — untouched entries are streamed, ──
+    // ── never buffered whole; content survives exactly ─────────────────
+
+    @Test
+    fun `an untouched STORED entry (e_g_ an embedded image) passes through RAW, byte-identical and still STORED, never re-compressed`() = runTest {
+        val base = fixtureFile("docling-xlsx-comments.xlsx")
+        val imageBytes = ByteArray(2 * 1024 * 1024) { (it % 251).toByte() } // 2MB, non-trivial pattern
+        val xlsx = withAddedStoredZipEntry(base, "xl/media/image1.png", imageBytes)
+        val home = tempHome()
+
+        val result = addXlsxComment(xlsx.absolutePath, "reports/docling.xlsx", cellSelector("C1"), "x", "user", home)
+        assertTrue(result is XlsxWriteResult.Ok, "expected Ok, got $result")
+
+        ZipFile(xlsx).use { zip ->
+            val entry = zip.getEntry("xl/media/image1.png") ?: fail("expected the untouched image entry to survive the write")
+            // The fix's own raw-passthrough case: a STORED entry this
+            // operation never touches must come back STILL STORED (never
+            // re-encoded to DEFLATED) — the old buggy code fully decompressed
+            // then rewrote EVERY entry via `zos.writeEntry` (always DEFLATED),
+            // so this specific assertion would fail against the pre-fix code.
+            assertEquals(ZipEntry.STORED, entry.method, "an untouched STORED entry must never be re-compressed")
+            assertEquals(imageBytes.size.toLong(), entry.size)
+            val outBytes = zip.getInputStream(entry).use { it.readBytes() }
+            assertTrue(imageBytes.contentEquals(outBytes), "untouched entry content must be byte-identical")
+        }
+    }
+
+    @Test
+    fun `a workbook carrying a large (40MB declared) untouched part writes successfully and preserves its content exactly`() = runTest {
+        // A JVM unit test has no reliable way to assert peak heap directly —
+        // this proves the EXTERNALLY OBSERVABLE contract the fix promises
+        // (a large declared-size untouched part survives a comment write,
+        // content intact) rather than instrumenting the allocator. Combined
+        // with the STORED-passthrough test above (which DOES distinguish
+        // "streamed through" from "fully buffered then rewritten" via the
+        // compression-method assertion), this is the achievable proof in a
+        // plain `./gradlew test` environment.
+        val base = fixtureFile("docling-xlsx-comments.xlsx")
+        val largeBytes = ByteArray(40 * 1024 * 1024) // all-zero — deflates to almost nothing on disk
+        val xlsx = withAddedDeflatedZipEntry(base, "xl/media/image2.bin", largeBytes)
+        val home = tempHome()
+
+        val result = addXlsxComment(xlsx.absolutePath, "reports/docling.xlsx", cellSelector("D1"), "y", "user", home)
+        assertTrue(result is XlsxWriteResult.Ok, "expected Ok, got $result")
+
+        ZipFile(xlsx).use { zip ->
+            val entry = zip.getEntry("xl/media/image2.bin") ?: fail("expected the untouched large entry to survive the write")
+            val outBytes = zip.getInputStream(entry).use { it.readBytes() }
+            assertEquals(largeBytes.size, outBytes.size)
+            assertTrue(largeBytes.contentEquals(outBytes), "untouched large entry content must be byte-identical")
+        }
+
+        // The pre-existing F7/G12 threads must also survive untouched.
+        val read = readXlsxComments(xlsx, "reports/docling.xlsx") as XlsxReadResult.Ok
+        assertEquals(1, commentAt(read.comments, "F7").size)
+        assertEquals(1, commentAt(read.comments, "G12").size)
+    }
+
+    // ── F2 (Medium, android-xlsx-review) — the three desktop-review fixes ──
+    // ── ported into Kotlin with no dedicated pinning test of their own ─────
+
+    @Test
+    fun `moving a thread twice within the same worksheet reuses its tc author entry, never duplicating it`() = runTest {
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
+        val home = tempHome()
+        val before = (readXlsxComments(xlsx, "reports/docling.xlsx") as XlsxReadResult.Ok).comments
+        val f7 = commentAt(before, "F7").single()
+        val guid = parseXlsxThreadId(f7.id)!!.guid
+
+        val move1 = moveXlsxComment(xlsx.absolutePath, "reports/docling.xlsx", f7.id, cellSelector("M1"), home)
+        assertTrue(move1 is XlsxWriteResult.Ok, "expected Ok, got $move1")
+        val idAfterMove1 = (move1 as XlsxWriteResult.Ok).value
+
+        val move2 = moveXlsxComment(xlsx.absolutePath, "reports/docling.xlsx", idAfterMove1, cellSelector("N1"), home)
+        assertTrue(move2 is XlsxWriteResult.Ok, "expected Ok, got $move2")
+
+        val commentsXml = readZipEntryText(xlsx, "xl/comments1.xml")!!
+        // Desktop review F2, ported (`resolveOrAppendTcAuthor`): moving a
+        // thread twice within the SAME worksheet must reuse its ONE
+        // `<author>tc={GUID}</author>` entry, never mint a byte-duplicate
+        // orphan on every move.
+        val authorCount = Regex("tc=\\{$guid\\}", RegexOption.IGNORE_CASE).findAll(commentsXml).count()
+        assertEquals(1, authorCount, "expected exactly one tc= author entry for this thread's GUID after two moves, found $authorCount")
+    }
+
+    @Test
+    fun `declares xmlns_r defensively before stamping legacyDrawing on a worksheet that never had it`() = runTest {
+        val base = fixtureFile("synthetic-worksheet-with-extlst.xlsx")
+        // Neither real fixture (docling, elden) omits xmlns:r on its
+        // worksheet root — this is a hand-built minimal worksheet, the same
+        // "unusual/minimal writer" shape the desktop review's own F5 finding
+        // named as unverified-but-unguarded before its fix.
+        val minimalWorksheet = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+            "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
+            "<dimension ref=\"A1:A1\"/><sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData></worksheet>"
+        val xlsx = withReplacedZipEntry(base, "xl/worksheets/sheet1.xml", minimalWorksheet.toByteArray(Charsets.UTF_8))
+        val home = tempHome()
+
+        val result = addXlsxComment(xlsx.absolutePath, "reports/no-xmlns-r.xlsx", cellSelector("A1"), "first comment", "user", home)
+        assertTrue(result is XlsxWriteResult.Ok, "expected Ok, got $result")
+
+        val worksheetXml = readZipEntryText(xlsx, "xl/worksheets/sheet1.xml")!!
+        assertTrue(
+            worksheetXml.contains("xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""),
+            "must defensively declare xmlns:r before stamping legacyDrawing's r:id (desktop review F5, ported)",
+        )
+        assertTrue(worksheetXml.contains("<legacyDrawing"))
+
+        // Confirms the produced worksheet part is actually well-formed XML —
+        // an undeclared-prefix attribute would fail this parse.
+        javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(org.xml.sax.InputSource(java.io.StringReader(worksheetXml)))
+    }
+
+    @Test
+    fun `returns ambiguous-comment-wiring, not comment-not-found, when the fallback scan must pass through a corrupted sheet`() = runTest {
+        val xlsx = fixtureFile("elden-ring-completionist-checklist.xlsx")
+        // Corrupt sheet1's own <legacyDrawing r:id="..."> so it no longer
+        // matches its own vmlDrawing relationship's Id — the SAME "partial/
+        // inconsistent legacy wiring" shape `getWorksheetContext` already
+        // treats as ambiguous for a HINTED sheet. Desktop review F6, ported:
+        // the FALLBACK scan must surface the honest `ambiguous-comment-wiring`
+        // refusal instead of misreporting "comment not found" when it has to
+        // pass through this sheet on its way to searching every other one.
+        val originalWorksheetXml = readZipEntryText(xlsx, "xl/worksheets/sheet1.xml")!!
+        val corrupted = Regex("(<legacyDrawing r:id=\")([^\"]+)(\")").replace(originalWorksheetXml) { m ->
+            "${m.groupValues[1]}${m.groupValues[2]}ZZZ${m.groupValues[3]}"
+        }
+        assertTrue(corrupted != originalWorksheetXml, "the fixture must actually have a legacyDrawing r:id to corrupt")
+        val modified = withReplacedZipEntry(xlsx, "xl/worksheets/sheet1.xml", corrupted.toByteArray(Charsets.UTF_8))
+
+        // A bogus sheetId (no such sheet) + a GUID matching nothing, so the
+        // hinted lookup misses immediately and the fallback scan must walk
+        // every sheet — including the now-corrupted sheet1 — before
+        // concluding.
+        val bogusId = "xt-999-A1-00000000-0000-0000-0000-000000000000"
+        val result = resolveXlsxComment(modified.absolutePath, "reports/elden.xlsx", bogusId, tempHome())
+        assertEquals(XlsxWriteError.AMBIGUOUS_COMMENT_WIRING, (result as XlsxWriteResult.Err).error)
+    }
+
+    @Test
+    fun `allows a read exactly AT the record-count ceiling`() {
+        val base = fixtureFile("docling-xlsx-comments.xlsx")
+        // MAX_COMMENT_RECORDS (private in XlsxComments.kt) mirrors desktop's
+        // own 20000 — hardcoded here the same way the existing "+1 refuses"
+        // test does, rather than exporting an implementation constant purely
+        // for a test to read. Complements that test: an off-by-one in the
+        // `>` vs. `>=` comparison would only be caught by having BOTH
+        // boundaries tested.
+        val exactlyAtCeiling = buildString {
+            append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
+            append("<ThreadedComments xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments\" xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
+            repeat(20000) { i -> append("<threadedComment ref=\"A1\" id=\"{00000000-0000-0000-0000-${i.toString().padStart(12, '0')}}\"><text>x</text></threadedComment>") }
+            append("</ThreadedComments>")
+        }
+        val modified = withReplacedZipEntry(base, "xl/threadedComments/threadedComment1.xml", exactlyAtCeiling.toByteArray(Charsets.UTF_8))
+        val result = readXlsxComments(modified, "reports/exactly.xlsx")
+        assertTrue(result is XlsxReadResult.Ok, "expected Ok exactly AT the ceiling, got $result")
+        assertEquals(20000, (result as XlsxReadResult.Ok).comments.size)
     }
 }
 

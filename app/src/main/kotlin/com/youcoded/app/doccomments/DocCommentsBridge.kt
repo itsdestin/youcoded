@@ -195,12 +195,21 @@ suspend fun handleDocCommentsMessage(
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true)
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
                 }
-                // T19: a move's fresh id (§4.2/§4.3) is not read by any IPC
-                // caller today — §1.6's own reasoning already applies this
-                // identically to docx's move — so the response stays
-                // `{ok:true}`, matching every other mutation's shape here.
+                // Coordinator review fix: desktop's own `docComments:move` IPC
+                // response for an xlsx target carries the moved thread's
+                // FRESH id (`moveNativeXlsxComment` in doc-comments-
+                // dispatch.ts returns `{ok:true, id: string}`, confirmed
+                // directly against that file — §4.2/§4.3's "never guessing at
+                // a stale hint" reasoning: a moved thread's OLD id's embedded-
+                // cell hint goes stale the instant it moves, so the very next
+                // call against the SAME thread needs the fresh one to skip a
+                // full-workbook fallback scan). Docx's own move never changes
+                // its id (a `TextQuoteSelector`-anchored comment keeps the
+                // same `w:id`), so ONLY the xlsx branch carries `id` here —
+                // this is a real, intentional per-format asymmetry in
+                // desktop's own shape, not an inconsistency to "fix" away.
                 NativeFormat.XLSX -> when (val r = moveNativeXlsxComment(filePath, projectRoot, commentId, newSelector, homeDir)) {
-                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("id", r.value)
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
                 }
                 null -> when (val r = moveComment(filePath, projectRoot, commentId, newSelector, homeDir)) {

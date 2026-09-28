@@ -25,6 +25,22 @@ private val TEXT_SELECTOR_JSON = JSONObject()
         JSONObject().put("type", "TextQuoteSelector").put("exact", "hello").put("prefix", "").put("suffix", " world").put("occurrence", 0),
     )
 
+private fun cellSelectorJson(cell: String): JSONObject =
+    JSONObject().put("kind", "cell").put("selector", JSONObject().put("type", "CellSelector").put("cell", cell))
+
+/** Copies a real test-resource fixture (`/doc-comments/<name>`) to
+ *  `<root>/<relativePath>` — used by F3 (android-xlsx-review)'s bridge-level
+ *  end-to-end test so `docComments:*` messages can be driven against a REAL
+ *  `.xlsx` file on disk, not a nonexistent-target routing check. */
+private fun copyFixtureInto(root: File, name: String, relativePath: String): File {
+    val dest = File(root, relativePath)
+    dest.parentFile?.mkdirs()
+    val resourceStream = object {}.javaClass.getResourceAsStream("/doc-comments/$name")
+        ?: error("missing test resource doc-comments/$name")
+    resourceStream.use { input -> dest.outputStream().use { output -> input.copyTo(output) } }
+    return dest
+}
+
 class DocCommentsBridgeTest {
 
     @Test
@@ -258,6 +274,88 @@ class DocCommentsBridgeTest {
             root, listOf(root.path),
         )!!
         assertEquals("comment-not-found", response.getString("error"))
+    }
+
+    // F3 (android-xlsx-review, Low): xlsx reply/resolve/reopen/move were
+    // exercised at the module level (XlsxCommentsTest.kt) but never at the
+    // bridge/JSON level — this drives add->reply->resolve->reopen->move
+    // through `handleDocCommentsMessage` against a REAL `.xlsx` fixture,
+    // asserting the exact JSON envelope at every step, mirroring the
+    // plain-sidecar round trip test above (line ~230) field-for-field.
+    @Test
+    fun `xlsx add-reply-resolve-reopen-move round trips through the real T19 write pipeline end to end, matching desktop's own response shapes`() = runTest {
+        val root = tempRoot()
+        copyFixtureInto(root, "docling-xlsx-comments.xlsx", "reports/docling.xlsx")
+
+        val addResponse = handleDocCommentsMessage(
+            "docComments:add",
+            JSONObject().put("path", "reports/docling.xlsx").put("projectRoot", root.path).put("text", "bridge e2e").put("selector", cellSelectorJson("C1")),
+            root, listOf(root.path),
+        )!!
+        assertEquals(setOf("ok", "id"), addResponse.keys().asSequence().toSet())
+        assertEquals(true, addResponse.getBoolean("ok"))
+        val id = addResponse.getString("id")
+        assertTrue(id.startsWith("xt-"), "expected an xt-<...> xlsx thread id, got $id")
+
+        val replyResponse = handleDocCommentsMessage(
+            "docComments:reply",
+            JSONObject().put("path", "reports/docling.xlsx").put("projectRoot", root.path).put("id", id).put("text", "a reply"),
+            root, listOf(root.path),
+        )!!
+        assertEquals(setOf("ok", "reply"), replyResponse.keys().asSequence().toSet())
+        assertEquals(true, replyResponse.getBoolean("ok"))
+        val replyJson = replyResponse.getJSONObject("reply")
+        assertEquals("a reply", replyJson.getString("text"))
+        assertEquals("$id-r1", replyJson.getString("id"))
+
+        val resolveResponse = handleDocCommentsMessage(
+            "docComments:resolve",
+            JSONObject().put("path", "reports/docling.xlsx").put("projectRoot", root.path).put("id", id),
+            root, listOf(root.path),
+        )!!
+        assertEquals(setOf("ok"), resolveResponse.keys().asSequence().toSet())
+        assertEquals(true, resolveResponse.getBoolean("ok"))
+
+        val reopenResponse = handleDocCommentsMessage(
+            "docComments:reopen",
+            JSONObject().put("path", "reports/docling.xlsx").put("projectRoot", root.path).put("id", id),
+            root, listOf(root.path),
+        )!!
+        assertEquals(setOf("ok"), reopenResponse.keys().asSequence().toSet())
+        assertEquals(true, reopenResponse.getBoolean("ok"))
+
+        val moveResponse = handleDocCommentsMessage(
+            "docComments:move",
+            JSONObject().put("path", "reports/docling.xlsx").put("projectRoot", root.path).put("id", id).put("newSelector", cellSelectorJson("D1")),
+            root, listOf(root.path),
+        )!!
+        // Coordinator review fix: desktop's own `docComments:move` response
+        // for an xlsx target carries the moved thread's FRESH id
+        // (`{ok:true, id}`) — unlike docx's bare `{ok:true}` — confirmed
+        // directly against `doc-comments-dispatch.ts`'s own
+        // `moveNativeXlsxComment` return type. This is the one assertion in
+        // this test that would have caught the bridge silently discarding it.
+        assertEquals(setOf("ok", "id"), moveResponse.keys().asSequence().toSet())
+        assertEquals(true, moveResponse.getBoolean("ok"))
+        val movedId = moveResponse.getString("id")
+        assertTrue(movedId.contains("-D1-"), "the fresh id must embed the NEW cell, got $movedId")
+
+        val listResponse = handleDocCommentsMessage(
+            "docComments:list",
+            JSONObject().put("path", "reports/docling.xlsx").put("projectRoot", root.path),
+            root, listOf(root.path),
+        )!!
+        assertEquals(true, listResponse.getBoolean("ok"))
+        val comments = listResponse.getJSONArray("comments")
+        var found: JSONObject? = null
+        for (i in 0 until comments.length()) {
+            val c = comments.getJSONObject(i)
+            if (c.getString("id") == movedId) found = c
+        }
+        assertTrue(found != null, "expected the moved comment at its fresh id in the final list")
+        assertEquals(false, found!!.getBoolean("resolved"))
+        assertEquals(1, found.getJSONArray("replies").length())
+        assertEquals("D1", found.getJSONObject("selector").getJSONObject("selector").getString("cell"))
     }
 
     @Test

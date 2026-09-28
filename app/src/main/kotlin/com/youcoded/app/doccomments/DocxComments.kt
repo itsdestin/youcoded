@@ -764,11 +764,19 @@ private fun findCommentParaId(commentsDoc: Document, rawId: String): String? {
  *  see that type's own doc comment for why each exists (an untouched part
  *  must be written back byte-identical; a part that started absent and stays
  *  untouched by THIS operation must stay absent from the output, never gain
- *  an orphan empty shell). `entries` holds every OTHER part in the archive
- *  (images, styles.xml, numbering.xml, ...) verbatim — this module never
- *  parses or touches them, only copies them straight through. */
+ *  an orphan empty shell). Every OTHER part in the archive (images,
+ *  styles.xml, numbering.xml, ...) is never parsed or touched — `zip` (the
+ *  source archive, kept OPEN by the caller across load+mutate+serialize, see
+ *  `loadMutateSerialize`) is consulted directly at serialize time so those
+ *  parts can be streamed straight through instead of ever being decompressed
+ *  into memory here (review F1, android-xlsx-review — the same "decompresses
+ *  and re-compresses EVERY part, not just the ones a mutation touches" bug
+ *  confirmed present in this module too, not just `XlsxComments.kt`; this
+ *  REPLACES the prior `entries: LinkedHashMap<String, ByteArray>` field,
+ *  which used to `readEntryBounded` — fully decompress — every non-tracked
+ *  entry unconditionally). */
 private class LoadedArchive(
-    val entries: LinkedHashMap<String, ByteArray>,
+    val zip: ZipFile,
     val documentDoc: Document,
     val documentXmlOriginal: String,
     var documentChanged: Boolean = false,
@@ -1148,76 +1156,66 @@ private val TRACKED_PART_NAMES = setOf(
 )
 
 /**
- * Loads every part a write might touch off `file` (a scratch COPY of the real
- * target — see `writeDocxMutation` below, never the live file itself),
- * mirroring T16's own size-guard-before-decompress discipline. F16 (review 2):
- * unlike the read path's fixed three-named-part check, a WRITE must copy
- * through EVERY other part unchanged too, so the WHOLE archive is size-
- * guarded up front (`checkAllEntriesWithinCeiling`, the same guard T18/§4.3a's
- * xlsx reader uses for its own variable part set) before anything is loaded
- * into memory — an over-size file routes to `ARCHIVE_TOO_LARGE`, never an OOM.
+ * Loads the SIX tracked parts (`TRACKED_PART_NAMES`) off an ALREADY-OPEN
+ * `zip` (owned and closed by the caller, `loadMutateSerialize` — kept open
+ * across load+mutate+serialize so `serializeArchiveToFile` can stream every
+ * OTHER entry directly from it, see that function's own header), mirroring
+ * T16's own size-guard-before-decompress discipline. F16 (review 2): unlike
+ * the read path's fixed three-named-part check, a WRITE must copy through
+ * EVERY other part unchanged too, so the WHOLE archive is size-guarded up
+ * front (`checkAllEntriesWithinCeiling`, metadata-only, the same guard
+ * T18/§4.3a's xlsx reader uses for its own variable part set) before
+ * anything is decompressed — an over-size file routes to `ARCHIVE_TOO_LARGE`,
+ * never an OOM. Review F1 (android-xlsx-review): this no longer eagerly
+ * decompresses every non-tracked entry into a byte map — only these six.
  */
-private fun loadArchiveForWrite(file: File): DocxWriteResult<LoadedArchive> {
-    val zip = try {
-        ZipFile(file)
-    } catch (_: Exception) {
-        return DocxWriteResult.Err(DocxWriteError.INVALID_DOCX)
-    }
+private fun loadArchiveForWrite(zip: ZipFile): DocxWriteResult<LoadedArchive> {
     return try {
-        zip.use { z ->
-            val totalCheck = checkAllEntriesWithinCeiling(z)
-            if (totalCheck is ZipSizeGuardResult.ArchiveTooLarge) {
-                return DocxWriteResult.Err(DocxWriteError.ARCHIVE_TOO_LARGE)
-            }
-
-            val documentEntry = z.getEntry("word/document.xml") ?: return DocxWriteResult.Err(DocxWriteError.MISSING_DOCUMENT_PART)
-            val contentTypesEntry = z.getEntry("[Content_Types].xml") ?: return DocxWriteResult.Err(DocxWriteError.MISSING_DOCUMENT_PART)
-
-            val entries = LinkedHashMap<String, ByteArray>()
-            for (entry in java.util.Collections.list(z.entries())) {
-                if (entry.isDirectory) continue
-                if (TRACKED_PART_NAMES.contains(entry.name)) continue
-                entries[entry.name] = readEntryBounded(z, entry)
-            }
-
-            val documentXml = readEntryBounded(z, documentEntry).toString(Charsets.UTF_8)
-            val contentTypesXml = readEntryBounded(z, contentTypesEntry).toString(Charsets.UTF_8)
-            val commentsEntry = z.getEntry("word/comments.xml")
-            val extendedEntry = z.getEntry("word/commentsExtended.xml")
-            val relsEntry = z.getEntry("word/_rels/document.xml.rels")
-            val commentsIdsEntry = z.getEntry("word/commentsIds.xml")
-            val commentsExtensibleEntry = z.getEntry("word/commentsExtensible.xml")
-
-            val commentsXml = commentsEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
-            val extendedXml = extendedEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
-            val relsXml = relsEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
-            val commentsIdsXml = commentsIdsEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
-            val commentsExtensibleXml = commentsExtensibleEntry?.let { readEntryBounded(z, it).toString(Charsets.UTF_8) }
-
-            val archive = LoadedArchive(
-                entries = entries,
-                documentDoc = parseXml(documentXml),
-                documentXmlOriginal = documentXml,
-                commentsDoc = parseXml(commentsXml ?: EMPTY_COMMENTS_XML),
-                commentsIsNew = commentsXml == null,
-                commentsTouched = commentsXml != null,
-                commentsXmlOriginal = commentsXml,
-                extendedDoc = parseXml(extendedXml ?: EMPTY_EXTENDED_XML),
-                extendedIsNew = extendedXml == null,
-                extendedTouched = extendedXml != null,
-                extendedXmlOriginal = extendedXml,
-                contentTypesDoc = parseXml(contentTypesXml),
-                contentTypesXmlOriginal = contentTypesXml,
-                relsDoc = parseXml(relsXml ?: EMPTY_RELS_XML),
-                relsXmlOriginal = relsXml,
-                relsTouched = relsXml != null,
-                commentsIdsDoc = commentsIdsXml?.let { parseXml(it) },
-                commentsIdsXmlOriginal = commentsIdsXml,
-                commentsExtensibleDoc = commentsExtensibleXml?.let { parseXml(it) },
-                commentsExtensibleXmlOriginal = commentsExtensibleXml,
-            )
-            DocxWriteResult.Ok(archive)
+        val totalCheck = checkAllEntriesWithinCeiling(zip)
+        if (totalCheck is ZipSizeGuardResult.ArchiveTooLarge) {
+            return DocxWriteResult.Err(DocxWriteError.ARCHIVE_TOO_LARGE)
         }
+
+        val documentEntry = zip.getEntry("word/document.xml") ?: return DocxWriteResult.Err(DocxWriteError.MISSING_DOCUMENT_PART)
+        val contentTypesEntry = zip.getEntry("[Content_Types].xml") ?: return DocxWriteResult.Err(DocxWriteError.MISSING_DOCUMENT_PART)
+
+        val documentXml = readEntryBounded(zip, documentEntry).toString(Charsets.UTF_8)
+        val contentTypesXml = readEntryBounded(zip, contentTypesEntry).toString(Charsets.UTF_8)
+        val commentsEntry = zip.getEntry("word/comments.xml")
+        val extendedEntry = zip.getEntry("word/commentsExtended.xml")
+        val relsEntry = zip.getEntry("word/_rels/document.xml.rels")
+        val commentsIdsEntry = zip.getEntry("word/commentsIds.xml")
+        val commentsExtensibleEntry = zip.getEntry("word/commentsExtensible.xml")
+
+        val commentsXml = commentsEntry?.let { readEntryBounded(zip, it).toString(Charsets.UTF_8) }
+        val extendedXml = extendedEntry?.let { readEntryBounded(zip, it).toString(Charsets.UTF_8) }
+        val relsXml = relsEntry?.let { readEntryBounded(zip, it).toString(Charsets.UTF_8) }
+        val commentsIdsXml = commentsIdsEntry?.let { readEntryBounded(zip, it).toString(Charsets.UTF_8) }
+        val commentsExtensibleXml = commentsExtensibleEntry?.let { readEntryBounded(zip, it).toString(Charsets.UTF_8) }
+
+        val archive = LoadedArchive(
+            zip = zip,
+            documentDoc = parseXml(documentXml),
+            documentXmlOriginal = documentXml,
+            commentsDoc = parseXml(commentsXml ?: EMPTY_COMMENTS_XML),
+            commentsIsNew = commentsXml == null,
+            commentsTouched = commentsXml != null,
+            commentsXmlOriginal = commentsXml,
+            extendedDoc = parseXml(extendedXml ?: EMPTY_EXTENDED_XML),
+            extendedIsNew = extendedXml == null,
+            extendedTouched = extendedXml != null,
+            extendedXmlOriginal = extendedXml,
+            contentTypesDoc = parseXml(contentTypesXml),
+            contentTypesXmlOriginal = contentTypesXml,
+            relsDoc = parseXml(relsXml ?: EMPTY_RELS_XML),
+            relsXmlOriginal = relsXml,
+            relsTouched = relsXml != null,
+            commentsIdsDoc = commentsIdsXml?.let { parseXml(it) },
+            commentsIdsXmlOriginal = commentsIdsXml,
+            commentsExtensibleDoc = commentsExtensibleXml?.let { parseXml(it) },
+            commentsExtensibleXmlOriginal = commentsExtensibleXml,
+        )
+        DocxWriteResult.Ok(archive)
     } catch (_: DocxUnsafeXmlDoctypeException) {
         DocxWriteResult.Err(DocxWriteError.UNSAFE_XML)
     } catch (_: ZipBombDetectedException) {
@@ -1262,17 +1260,63 @@ private fun ZipOutputStream.writeEntry(name: String, bytes: ByteArray) {
     closeEntry()
 }
 
+// Same ceiling `DocCommentsZipSizeGuard.kt`'s own `readEntryBounded` uses,
+// duplicated here (not exported from that file — `XlsxComments.kt` keeps its
+// own identical copy for the same reason, "two write modules are
+// deliberately independent") so a STREAMED copy of an untouched, still-
+// compressed entry gets the identical real-byte-counted zip-bomb backstop a
+// fully-buffered `readEntryBounded` call already gives every part this
+// module actually parses.
+private const val MAX_STREAMED_ENTRY_BYTES = 200L * 1024 * 1024
+private const val STREAM_COPY_BUFFER_BYTES = 8192
+
+/** Review F1 (High, android-xlsx-review) fix, ported from `XlsxComments.kt`'s
+ *  own identical helper: streams ONE untouched zip entry straight from
+ *  `sourceZip` to `zos`, in bounded chunks, NEVER buffering its whole
+ *  decompressed content in one array. A `STORED` entry (already
+ *  uncompressed — no expansion possible) is passed through as RAW bytes with
+ *  its OWN size/crc preserved exactly. Anything else (`DEFLATED`) is
+ *  decompressed and re-compressed at the output stream's own default level,
+ *  STREAMED through one small fixed buffer, with the same real-byte-counted
+ *  zip-bomb backstop `readEntryBounded` gives every part this module
+ *  actually parses. See that file's own copy for the full "no public
+ *  java.util.zip API for a raw DEFLATE passthrough" citation. */
+private fun streamCopyUntouchedEntry(sourceZip: ZipFile, entry: ZipEntry, zos: ZipOutputStream) {
+    val isStored = entry.method == ZipEntry.STORED
+    val outEntry = ZipEntry(entry.name)
+    if (isStored) {
+        outEntry.method = ZipEntry.STORED
+        outEntry.size = entry.size
+        outEntry.compressedSize = entry.size
+        outEntry.crc = entry.crc
+    }
+    zos.putNextEntry(outEntry)
+    sourceZip.getInputStream(entry).use { input ->
+        val buffer = ByteArray(STREAM_COPY_BUFFER_BYTES)
+        var total = 0L
+        while (true) {
+            val n = input.read(buffer)
+            if (n == -1) break
+            total += n
+            if (!isStored && total > MAX_STREAMED_ENTRY_BYTES) throw ZipBombDetectedException()
+            zos.write(buffer, 0, n)
+        }
+    }
+    zos.closeEntry()
+}
+
 /** Writes the mutated archive to `outFile` (a scratch path — never the live
- *  target, see `writeDocxMutation`). Every pass-through part is copied
- *  verbatim unconditionally; every tracked part is written back byte-for-byte
- *  verbatim when this operation left it unchanged (`writePart`'s `!changed`
- *  branch), or freshly serialized when it didn't. Mirrors `serializeArchive`
- *  (docx-comments.ts). */
+ *  target, see `writeDocxMutation`). Every tracked part is written back
+ *  byte-for-byte verbatim when this operation left it unchanged (`writePart`'s
+ *  `!changed` branch), or freshly serialized when it didn't. Every OTHER
+ *  entry — genuinely untouched by this write — is streamed straight through
+ *  from `archive.zip` via `streamCopyUntouchedEntry`, never decompressed into
+ *  a `ByteArray` here (review F1: this REPLACES the old unconditional
+ *  `for ((name, bytes) in archive.entries)` loop, which iterated a map that
+ *  had ALREADY fully decompressed every one of those entries at load time).
+ *  Mirrors `serializeArchive` (docx-comments.ts). */
 private fun serializeArchiveToFile(archive: LoadedArchive, outFile: File) {
     ZipOutputStream(java.io.BufferedOutputStream(java.io.FileOutputStream(outFile))).use { zos ->
-        for ((name, bytes) in archive.entries) {
-            zos.writeEntry(name, bytes)
-        }
         fun writePart(name: String, changed: Boolean, doc: Document, originalXml: String?) {
             val bytes = if (!changed && originalXml != null) {
                 originalXml.toByteArray(Charsets.UTF_8)
@@ -1297,6 +1341,11 @@ private fun serializeArchiveToFile(archive: LoadedArchive, outFile: File) {
         }
         archive.commentsExtensibleDoc?.let {
             writePart("word/commentsExtensible.xml", archive.commentsExtensibleChanged, it, archive.commentsExtensibleXmlOriginal)
+        }
+        for (entry in java.util.Collections.list(archive.zip.entries())) {
+            if (entry.isDirectory) continue
+            if (TRACKED_PART_NAMES.contains(entry.name)) continue
+            streamCopyUntouchedEntry(archive.zip, entry, zos)
         }
     }
 }
@@ -1690,22 +1739,41 @@ internal suspend fun <T> writeDocxMutation(
 }
 
 /** Glues the generic file-in/file-out pipeline above to the archive-based
- *  mutations below: load `workCopy` into a `LoadedArchive`, apply
- *  `mutateArchive` in memory, serialize the result to `outFile`. Every real
+ *  mutations below: opens `workCopy` as a `ZipFile` ONCE and keeps it open
+ *  across load, mutate, AND serialize (`finally { zip.close() }`) — the
+ *  structural change review F1 needed, since `serializeArchiveToFile` must be
+ *  able to stream-copy an untouched entry straight from the SAME open source
+ *  archive `loadArchiveForWrite` read the six tracked parts from. Every real
  *  operation's own `mutate` closure is just this plus its own archive
- *  mutation function. */
+ *  mutation function. A `ZipBombDetectedException` thrown during serialize
+ *  (the streamed backstop firing on an untouched entry) is mapped directly to
+ *  `ARCHIVE_TOO_LARGE` here rather than falling into the generic
+ *  `WRITE_FAILED` catch below it — the same "never swallow a typed signal
+ *  into a wrong wire code" discipline `XlsxComments.kt`'s own equivalent fix
+ *  uses (there via re-throw past an extra layer this file doesn't have). */
 private fun <T> loadMutateSerialize(workCopy: File, outFile: File, mutateArchive: (LoadedArchive) -> DocxWriteResult<T>): DocxWriteResult<T> {
-    val loaded = loadArchiveForWrite(workCopy)
-    if (loaded is DocxWriteResult.Err) return loaded
-    val archive = (loaded as DocxWriteResult.Ok).value
-    val mutated = mutateArchive(archive)
-    if (mutated is DocxWriteResult.Err) return mutated
-    val value = (mutated as DocxWriteResult.Ok).value
-    return try {
-        serializeArchiveToFile(archive, outFile)
-        DocxWriteResult.Ok(value)
+    val zip = try {
+        ZipFile(workCopy)
     } catch (_: Exception) {
-        DocxWriteResult.Err(DocxWriteError.WRITE_FAILED)
+        return DocxWriteResult.Err(DocxWriteError.INVALID_DOCX)
+    }
+    return try {
+        val loaded = loadArchiveForWrite(zip)
+        if (loaded is DocxWriteResult.Err) return loaded
+        val archive = (loaded as DocxWriteResult.Ok).value
+        val mutated = mutateArchive(archive)
+        if (mutated is DocxWriteResult.Err) return mutated
+        val value = (mutated as DocxWriteResult.Ok).value
+        try {
+            serializeArchiveToFile(archive, outFile)
+            DocxWriteResult.Ok(value)
+        } catch (_: ZipBombDetectedException) {
+            DocxWriteResult.Err(DocxWriteError.ARCHIVE_TOO_LARGE)
+        } catch (_: Exception) {
+            DocxWriteResult.Err(DocxWriteError.WRITE_FAILED)
+        }
+    } finally {
+        zip.close()
     }
 }
 

@@ -64,7 +64,9 @@ package com.youcoded.app.doccomments
 
 import org.w3c.dom.Document
 import org.w3c.dom.Element
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.StringReader
 import java.util.Collections
 import java.util.Date
@@ -692,16 +694,26 @@ private class WorksheetCtx(
     var threadedChanged: Boolean = false,
 )
 
-/** Every part a write might touch, loaded once as raw bytes (F16, review 2 —
- *  "loading the whole archive into memory... is reasonable... carried over
- *  unchanged here" — the design's own accepted, documented risk for Android's
- *  xlsx writer). `overrides` accumulates the FINAL bytes for every changed or
- *  brand-new part at serialize time; every other entry passes through
- *  `entries` unchanged, byte-for-byte — the "never re-serialize an untouched
- *  part" guarantee mirrored from desktop's own JSZip-passthrough approach. */
+/** Review F1 (High, android-xlsx-review): every part this write TOUCHES —
+ *  the fixed top-level trio (`[Content_Types].xml`, `xl/workbook.xml`,
+ *  `xl/_rels/workbook.xml.rels`), `persons.xml` if present, and whatever
+ *  `getWorksheetContext` lazily resolves for a specific worksheet — is
+ *  decompressed ONCE and its original bytes kept in `originalBytesByName`,
+ *  keyed by zip entry name. `zip` (the source archive, kept OPEN by the
+ *  caller for this whole load-mutate-serialize call — see
+ *  `loadMutateSerializeXlsx`) is consulted directly at serialize time for
+ *  every OTHER entry, which is streamed straight through
+ *  (`streamCopyUntouchedEntry`) rather than ever being fully decompressed
+ *  into memory here. This REPLACES the prior design (`entries: LinkedHashMap
+ *  <String, ByteArray>`, eagerly populated for the WHOLE archive regardless
+ *  of what the mutation touched) the review's own F1 finding confirmed
+ *  decompressed AND re-compressed every single part on every write,
+ *  contradicting this module's own "never re-serialize an untouched part"
+ *  claim and multiplying peak memory on a phone for any workbook carrying
+ *  large unrelated parts (embedded images, many untouched worksheets). */
 private class WriteArchive(
-    val entries: LinkedHashMap<String, ByteArray>,
-    val overrides: MutableMap<String, ByteArray> = mutableMapOf(),
+    val zip: ZipFile,
+    val originalBytesByName: MutableMap<String, ByteArray> = mutableMapOf(),
     val sheets: List<SheetMeta>,
     val contentTypesDoc: Document,
     val contentTypesOriginal: String,
@@ -717,14 +729,42 @@ private class WriteArchive(
     var parsedBytesTotal: Long = 0L,
 )
 
+/** Reads (and, in `tracker`, REMEMBERS) one named part's raw bytes — the lazy
+ *  replacement for the old eager `entries` map. Returns `null` (and tracks
+ *  nothing) if the part doesn't exist. Every caller that wants a part's bytes
+ *  available for a byte-identical write-back (never re-serialized unless
+ *  actually changed) goes through this, never a direct `zip.getInputStream`
+ *  call — that discipline is what lets `serializeArchiveToFile` tell "this
+ *  operation touched it" (present in the map, even if unchanged) apart from
+ *  "genuinely untouched" (stream-copy) by a single map lookup. Takes the
+ *  tracking map directly, not a whole `WriteArchive`, so `loadArchiveForWrite`
+ *  can populate it BEFORE the (immutable-by-`val`) `WriteArchive` itself
+ *  exists. */
+private fun readAndTrackPart(zip: ZipFile, name: String, tracker: MutableMap<String, ByteArray>): String? {
+    val entry = zip.getEntry(name) ?: return null
+    val bytes = readEntryBounded(zip, entry)
+    tracker[name] = bytes
+    return bytes.toString(Charsets.UTF_8)
+}
+
+/** `WriteArchive`-taking overload for every call site AFTER the archive
+ *  itself exists (`getWorksheetContext` and friends) — just forwards to the
+ *  map-taking version above using the archive's own tracker. */
+private fun readAndTrackPart(archive: WriteArchive, name: String): String? =
+    readAndTrackPart(archive.zip, name, archive.originalBytesByName)
+
 /** Picks the smallest positive integer not already used by an
  *  `xl/comments<N>.xml`, `xl/drawings/vmlDrawing<N>.vml`, OR
  *  `xl/threadedComments/threadedComment<N>.xml` part ANYWHERE in the
- *  archive — "skip the gap, don't reserve it" (§4.2). */
+ *  archive — "skip the gap, don't reserve it" (§4.2). Scans `archive.zip`'s
+ *  own entry NAMES directly (central-directory metadata only, exactly like
+ *  the read path's own size guard — no decompression), rather than the old
+ *  `entries.keys` map, since that map no longer holds every part's name
+ *  after the F1 fix (only the ones actually touched). */
 private fun mintPartNumber(archive: WriteArchive): Int {
     var max = 0
-    val allPaths = archive.entries.keys + archive.overrides.keys
-    for (p in allPaths) {
+    for (entry in Collections.list(archive.zip.entries())) {
+        val p = entry.name
         Regex("^xl/comments(\\d+)\\.xml$").find(p)?.let { max = maxOf(max, it.groupValues[1].toInt()) }
         Regex("^xl/drawings/vmlDrawing(\\d+)\\.vml$").find(p)?.let { max = maxOf(max, it.groupValues[1].toInt()) }
         Regex("^xl/threadedComments/threadedComment(\\d+)\\.xml$").find(p)?.let { max = maxOf(max, it.groupValues[1].toInt()) }
@@ -1044,13 +1084,14 @@ private fun resolveWorksheetForSelector(archive: WriteArchive, sel: CellSelector
 private fun getWorksheetContext(archive: WriteArchive, sheetMeta: SheetMeta): XlsxWriteResult<WorksheetCtx> {
     archive.worksheetContexts[sheetMeta.partPath]?.let { return XlsxWriteResult.Ok(it) }
 
-    val worksheetBytes = archive.entries[sheetMeta.partPath] ?: return XlsxWriteResult.Err(XlsxWriteError.INVALID_SELECTOR)
-    val worksheetXmlOriginal = worksheetBytes.toString(Charsets.UTF_8)
+    // Review F1: lazy, per-part reads via `readAndTrackPart` — the ONLY
+    // parts this call decompresses are the ones a mutation actually needs to
+    // resolve THIS worksheet's own wiring, never the rest of the archive.
+    val worksheetXmlOriginal = readAndTrackPart(archive, sheetMeta.partPath) ?: return XlsxWriteResult.Err(XlsxWriteError.INVALID_SELECTOR)
     val worksheetDoc = parseXml(worksheetXmlOriginal)
 
     val relsPartPath = worksheetRelsPathFor(sheetMeta.partPath)
-    val relsBytes = archive.entries[relsPartPath]
-    val relsXmlOriginal = relsBytes?.toString(Charsets.UTF_8)
+    val relsXmlOriginal = readAndTrackPart(archive, relsPartPath)
     val relsDoc = parseXml(relsXmlOriginal ?: EMPTY_RELS_XML)
 
     val legacyDrawingEl = elementsByTag(worksheetDoc, "legacyDrawing").firstOrNull()
@@ -1075,15 +1116,15 @@ private fun getWorksheetContext(archive: WriteArchive, sheetMeta: SheetMeta): Xl
             val worksheetDir = dirnameOfPart(sheetMeta.partPath)
             val cPath = resolveRelTarget(worksheetDir, commentsRel.getAttribute("Target"))
             val vPath = resolveRelTarget(worksheetDir, vmlRel.getAttribute("Target"))
-            val cBytes = archive.entries[cPath]
-            val vBytes = archive.entries[vPath]
-            if (cBytes == null || vBytes == null) {
+            val cXml = readAndTrackPart(archive, cPath)
+            val vXml = readAndTrackPart(archive, vPath)
+            if (cXml == null || vXml == null) {
                 ambiguous = true
             } else {
                 commentsPartPath = cPath
                 vmlPartPath = vPath
-                commentsXmlOriginal = cBytes.toString(Charsets.UTF_8)
-                vmlXmlOriginal = vBytes.toString(Charsets.UTF_8)
+                commentsXmlOriginal = cXml
+                vmlXmlOriginal = vXml
                 commentsDoc = parseXml(commentsXmlOriginal)
                 vmlDoc = parseXml(vmlXmlOriginal)
                 legacyExisting = true
@@ -1099,12 +1140,12 @@ private fun getWorksheetContext(archive: WriteArchive, sheetMeta: SheetMeta): Xl
     var threadedExisting = false
     if (threadedRel != null) {
         val tPath = resolveRelTarget(dirnameOfPart(sheetMeta.partPath), threadedRel.getAttribute("Target"))
-        val tBytes = archive.entries[tPath]
-        if (tBytes == null) {
+        val tXml = readAndTrackPart(archive, tPath)
+        if (tXml == null) {
             ambiguous = true
         } else {
             threadedPartPath = tPath
-            threadedXmlOriginal = tBytes.toString(Charsets.UTF_8)
+            threadedXmlOriginal = tXml
             threadedDoc = parseXml(threadedXmlOriginal)
             threadedExisting = true
         }
@@ -1251,64 +1292,59 @@ private fun insertThreadIntoWorksheet(archive: WriteArchive, ctx: WorksheetCtx, 
 // Archive load/serialize for a WRITE.
 // -----------------------------------------------------------------------
 
-/** Loads every part off `file` (a scratch COPY — never the live target, see
- *  `writeXlsxMutation` below), whole-archive size-guarded before anything is
- *  read (`checkAllEntriesWithinCeiling`, matching this module's own read-path
- *  convention). */
-private fun loadArchiveForWrite(file: File): XlsxWriteResult<WriteArchive> {
-    val zip = try {
-        ZipFile(file)
-    } catch (_: Exception) {
-        return XlsxWriteResult.Err(XlsxWriteError.INVALID_XLSX)
-    }
+/** Loads the FIXED top-level trio plus `persons.xml` (if present) off an
+ *  ALREADY-OPEN `zip` (owned and closed by the caller, `loadMutateSerializeXlsx`
+ *  — kept open across load+mutate+serialize so `serializeArchiveToFile` can
+ *  still reach every OTHER entry directly for streaming, see that function's
+ *  own header). Whole-archive size-guarded before anything is read
+ *  (`checkAllEntriesWithinCeiling`, metadata-only, matching this module's own
+ *  read-path convention). Review F1 (High, android-xlsx-review): this no
+ *  longer eagerly decompresses EVERY entry into a byte map — only these few
+ *  named top-level parts, via `readAndTrackPart`. Worksheet-scoped parts stay
+ *  exactly as lazy as they already were (`getWorksheetContext`, unchanged by
+ *  this fix). */
+private fun loadArchiveForWrite(zip: ZipFile): XlsxWriteResult<WriteArchive> {
     return try {
-        zip.use { z ->
-            if (checkAllEntriesWithinCeiling(z) is ZipSizeGuardResult.ArchiveTooLarge) {
-                return XlsxWriteResult.Err(XlsxWriteError.ARCHIVE_TOO_LARGE)
-            }
-            val entries = LinkedHashMap<String, ByteArray>()
-            for (entry in Collections.list(z.entries())) {
-                if (entry.isDirectory) continue
-                entries[entry.name] = readEntryBounded(z, entry)
-            }
-
-            val workbookBytes = entries["xl/workbook.xml"] ?: return XlsxWriteResult.Err(XlsxWriteError.INVALID_XLSX)
-            val contentTypesBytes = entries["[Content_Types].xml"] ?: return XlsxWriteResult.Err(XlsxWriteError.INVALID_XLSX)
-            val workbookXml = workbookBytes.toString(Charsets.UTF_8)
-            val contentTypesXml = contentTypesBytes.toString(Charsets.UTF_8)
-            val workbookRelsXml = entries["xl/_rels/workbook.xml.rels"]?.toString(Charsets.UTF_8) ?: EMPTY_RELS_XML
-
-            val sheets = parseSheetsFromWorkbook(workbookXml, workbookRelsXml)
-            val workbookRelsDoc = parseXml(workbookRelsXml)
-            val contentTypesDoc = parseXml(contentTypesXml)
-
-            var personsPartPath = "xl/persons/person.xml"
-            var personsDoc: Document? = null
-            var personsOriginal: String? = null
-            val personRel = elementsByTag(workbookRelsDoc, "Relationship").find { it.getAttribute("Type") == PERSON_REL_TYPE }
-            if (personRel != null) {
-                personsPartPath = resolveRelTarget("xl", personRel.getAttribute("Target"))
-                val personBytes = entries[personsPartPath]
-                if (personBytes != null) {
-                    personsOriginal = personBytes.toString(Charsets.UTF_8)
-                    personsDoc = parseXml(personsOriginal)
-                }
-            }
-
-            XlsxWriteResult.Ok(
-                WriteArchive(
-                    entries = entries,
-                    sheets = sheets,
-                    contentTypesDoc = contentTypesDoc,
-                    contentTypesOriginal = contentTypesXml,
-                    workbookRelsDoc = workbookRelsDoc,
-                    workbookRelsOriginal = workbookRelsXml,
-                    personsPartPath = personsPartPath,
-                    personsDoc = personsDoc,
-                    personsOriginal = personsOriginal,
-                ),
-            )
+        if (checkAllEntriesWithinCeiling(zip) is ZipSizeGuardResult.ArchiveTooLarge) {
+            return XlsxWriteResult.Err(XlsxWriteError.ARCHIVE_TOO_LARGE)
         }
+        if (zip.getEntry("xl/workbook.xml") == null || zip.getEntry("[Content_Types].xml") == null) {
+            return XlsxWriteResult.Err(XlsxWriteError.INVALID_XLSX)
+        }
+
+        val originalBytesByName = mutableMapOf<String, ByteArray>()
+        val workbookXml = readAndTrackPart(zip, "xl/workbook.xml", originalBytesByName) ?: return XlsxWriteResult.Err(XlsxWriteError.INVALID_XLSX)
+        val contentTypesXml = readAndTrackPart(zip, "[Content_Types].xml", originalBytesByName) ?: return XlsxWriteResult.Err(XlsxWriteError.INVALID_XLSX)
+        val workbookRelsXml = readAndTrackPart(zip, "xl/_rels/workbook.xml.rels", originalBytesByName) ?: EMPTY_RELS_XML
+
+        val sheets = parseSheetsFromWorkbook(workbookXml, workbookRelsXml)
+        val workbookRelsDoc = parseXml(workbookRelsXml)
+        val contentTypesDoc = parseXml(contentTypesXml)
+
+        var personsPartPath = "xl/persons/person.xml"
+        var personsDoc: Document? = null
+        var personsOriginal: String? = null
+        val personRel = elementsByTag(workbookRelsDoc, "Relationship").find { it.getAttribute("Type") == PERSON_REL_TYPE }
+        if (personRel != null) {
+            personsPartPath = resolveRelTarget("xl", personRel.getAttribute("Target"))
+            personsOriginal = readAndTrackPart(zip, personsPartPath, originalBytesByName)
+            if (personsOriginal != null) personsDoc = parseXml(personsOriginal)
+        }
+
+        XlsxWriteResult.Ok(
+            WriteArchive(
+                zip = zip,
+                originalBytesByName = originalBytesByName,
+                sheets = sheets,
+                contentTypesDoc = contentTypesDoc,
+                contentTypesOriginal = contentTypesXml,
+                workbookRelsDoc = workbookRelsDoc,
+                workbookRelsOriginal = workbookRelsXml,
+                personsPartPath = personsPartPath,
+                personsDoc = personsDoc,
+                personsOriginal = personsOriginal,
+            ),
+        )
     } catch (_: XlsxUnsafeXmlDoctypeException) {
         XlsxWriteResult.Err(XlsxWriteError.UNSAFE_XML)
     } catch (_: ZipBombDetectedException) {
@@ -1316,67 +1352,163 @@ private fun loadArchiveForWrite(file: File): XlsxWriteResult<WriteArchive> {
     }
 }
 
+// Same ceiling `DocCommentsZipSizeGuard.kt`'s own `readEntryBounded` uses,
+// duplicated here (not exported from that file) so a STREAMED copy of an
+// untouched, still-compressed entry gets the identical real-byte-counted
+// zip-bomb backstop a fully-buffered `readEntryBounded` call already gives
+// every part this module actually parses — kept in sync by convention, the
+// same "not enforced at compile time, but named" precedent that file's own
+// header already accepts for the desktop/Android 200MB constant.
+private const val MAX_STREAMED_ENTRY_BYTES = 200L * 1024 * 1024
+private const val STREAM_COPY_BUFFER_BYTES = 8192
+
+/** Review F1 (High, android-xlsx-review) fix: streams ONE untouched zip entry
+ *  straight from `sourceZip` to `zos`, in bounded chunks, NEVER buffering its
+ *  whole decompressed content in one array — the replacement for the old
+ *  `WriteArchive.entries` map, which used to `readEntryBounded` (fully
+ *  decompress into a `ByteArray`) EVERY entry in the archive regardless of
+ *  whether the mutation ever touched it, then re-deflate every one of them
+ *  again on the way out.
+ *
+ *  A `STORED` entry (already uncompressed — no expansion possible, and its
+ *  declared size already passed `checkAllEntriesWithinCeiling`) is passed
+ *  through as RAW bytes with its OWN size/crc preserved exactly — "raw
+ *  compressed bytes where java.util.zip allows" (a `STORED` entry's
+ *  "compressed" form IS its raw content, so no inflate/deflate work happens
+ *  at all). Anything else (`DEFLATED`, the overwhelming majority of real
+ *  entries) has no public `java.util.zip` API to copy its compressed byte
+ *  range verbatim (confirmed against the JDK's own public surface — desktop's
+ *  JSZip-based byte-for-byte passthrough has no Kotlin/JDK equivalent), so it
+ *  is decompressed and re-compressed at the output stream's own default
+ *  level — but STREAMED through one small fixed buffer, never held in memory
+ *  as a whole `ByteArray`, with the SAME real-byte-counted zip-bomb backstop
+ *  `readEntryBounded` gives every part this module actually parses. */
+private fun streamCopyUntouchedEntry(sourceZip: ZipFile, entry: ZipEntry, zos: ZipOutputStream) {
+    val isStored = entry.method == ZipEntry.STORED
+    val outEntry = ZipEntry(entry.name)
+    if (isStored) {
+        outEntry.method = ZipEntry.STORED
+        outEntry.size = entry.size
+        outEntry.compressedSize = entry.size
+        outEntry.crc = entry.crc
+    }
+    zos.putNextEntry(outEntry)
+    sourceZip.getInputStream(entry).use { input ->
+        val buffer = ByteArray(STREAM_COPY_BUFFER_BYTES)
+        var total = 0L
+        while (true) {
+            val n = input.read(buffer)
+            if (n == -1) break
+            total += n
+            // STORED can never expand past its own already-checked declared
+            // size — only a DEFLATED-or-other entry needs this backstop.
+            if (!isStored && total > MAX_STREAMED_ENTRY_BYTES) throw ZipBombDetectedException()
+            zos.write(buffer, 0, n)
+        }
+    }
+    zos.closeEntry()
+}
+
 /** Writes `archive` to `outFile` (a scratch path). Every part this operation
- *  changed (or minted fresh) is (re-)serialized into `archive.overrides`;
- *  everything else in `archive.entries` is copied through verbatim,
- *  byte-for-byte — the same "never re-serialize an untouched part" guarantee
- *  desktop's own JSZip-passthrough approach gives, expressed as an explicit
- *  override map instead of a mutable in-place zip. */
+ *  actually CHANGED (or minted fresh) is (re-)serialized into a small local
+ *  `overrides` map; every part it merely TOUCHED but left unchanged is
+ *  re-emitted from `archive.originalBytesByName` verbatim; every OTHER entry
+ *  in `archive.zip` — genuinely untouched by this call — is streamed straight
+ *  through via `streamCopyUntouchedEntry`, never decompressed into a
+ *  `ByteArray` here. Review F1 (High): this is the fix — the prior version of
+ *  this function iterated a `LinkedHashMap` that ALREADY held every entry's
+ *  full decompressed bytes, which is what actually did the "at most six parts
+ *  touched" guarantee this file's own doc comments claimed but did not
+ *  deliver at the compressed-byte level. */
 private fun serializeArchiveToFile(archive: WriteArchive, outFile: File) {
+    val overrides = mutableMapOf<String, ByteArray>()
     if (archive.contentTypesChanged) {
-        archive.overrides["[Content_Types].xml"] = serializeXlsxPart(archive.contentTypesDoc, archive.contentTypesOriginal).toByteArray(Charsets.UTF_8)
+        overrides["[Content_Types].xml"] = serializeXlsxPart(archive.contentTypesDoc, archive.contentTypesOriginal).toByteArray(Charsets.UTF_8)
     }
     if (archive.workbookRelsChanged) {
-        archive.overrides["xl/_rels/workbook.xml.rels"] = serializeXlsxPart(archive.workbookRelsDoc, archive.workbookRelsOriginal).toByteArray(Charsets.UTF_8)
+        overrides["xl/_rels/workbook.xml.rels"] = serializeXlsxPart(archive.workbookRelsDoc, archive.workbookRelsOriginal).toByteArray(Charsets.UTF_8)
     }
     if (archive.personsChanged && archive.personsDoc != null) {
-        archive.overrides[archive.personsPartPath] = serializeXlsxPart(archive.personsDoc!!, archive.personsOriginal).toByteArray(Charsets.UTF_8)
+        overrides[archive.personsPartPath] = serializeXlsxPart(archive.personsDoc!!, archive.personsOriginal).toByteArray(Charsets.UTF_8)
     }
     for (ctx in archive.worksheetContexts.values) {
         if (ctx.worksheetChanged) {
-            archive.overrides[ctx.partPath] = serializeXlsxPart(ctx.worksheetDoc, ctx.worksheetXmlOriginal).toByteArray(Charsets.UTF_8)
+            overrides[ctx.partPath] = serializeXlsxPart(ctx.worksheetDoc, ctx.worksheetXmlOriginal).toByteArray(Charsets.UTF_8)
         }
         if (ctx.relsChanged) {
-            archive.overrides[ctx.relsPartPath] = serializeXlsxPart(ctx.relsDoc, ctx.relsXmlOriginal).toByteArray(Charsets.UTF_8)
+            overrides[ctx.relsPartPath] = serializeXlsxPart(ctx.relsDoc, ctx.relsXmlOriginal).toByteArray(Charsets.UTF_8)
         }
         val commentsPath = ctx.commentsPartPath
         if (ctx.commentsChanged && ctx.commentsDoc != null && commentsPath != null) {
-            archive.overrides[commentsPath] = serializeXlsxPart(ctx.commentsDoc!!, ctx.commentsXmlOriginal).toByteArray(Charsets.UTF_8)
+            overrides[commentsPath] = serializeXlsxPart(ctx.commentsDoc!!, ctx.commentsXmlOriginal).toByteArray(Charsets.UTF_8)
         }
         val vmlPath = ctx.vmlPartPath
         if (ctx.vmlChanged && ctx.vmlDoc != null && vmlPath != null) {
-            archive.overrides[vmlPath] = serializeXlsxPart(ctx.vmlDoc!!, ctx.vmlXmlOriginal).toByteArray(Charsets.UTF_8)
+            overrides[vmlPath] = serializeXlsxPart(ctx.vmlDoc!!, ctx.vmlXmlOriginal).toByteArray(Charsets.UTF_8)
         }
         val threadedPath = ctx.threadedPartPath
         if (ctx.threadedChanged && ctx.threadedDoc != null && threadedPath != null) {
-            archive.overrides[threadedPath] = serializeXlsxPart(ctx.threadedDoc!!, ctx.threadedXmlOriginal).toByteArray(Charsets.UTF_8)
+            overrides[threadedPath] = serializeXlsxPart(ctx.threadedDoc!!, ctx.threadedXmlOriginal).toByteArray(Charsets.UTF_8)
         }
     }
 
-    java.util.zip.ZipOutputStream(java.io.BufferedOutputStream(java.io.FileOutputStream(outFile))).use { zos ->
-        val written = mutableSetOf<String>()
-        for ((name, bytes) in archive.entries) {
-            zos.writeXlsxEntry(name, archive.overrides[name] ?: bytes)
-            written.add(name)
+    ZipOutputStream(BufferedOutputStream(FileOutputStream(outFile))).use { zos ->
+        val writtenNames = mutableSetOf<String>()
+        for (entry in Collections.list(archive.zip.entries())) {
+            if (entry.isDirectory) continue
+            val name = entry.name
+            writtenNames.add(name)
+            val overrideBytes = overrides[name]
+            when {
+                overrideBytes != null -> zos.writeXlsxEntry(name, overrideBytes)
+                archive.originalBytesByName.containsKey(name) -> zos.writeXlsxEntry(name, archive.originalBytesByName.getValue(name))
+                else -> streamCopyUntouchedEntry(archive.zip, entry, zos)
+            }
         }
-        for ((name, bytes) in archive.overrides) {
-            if (name !in written) zos.writeXlsxEntry(name, bytes) // a brand-new part
+        for ((name, bytes) in overrides) {
+            if (name !in writtenNames) zos.writeXlsxEntry(name, bytes) // a brand-new part
         }
     }
 }
 
+/** Glues the generic file-in/file-out pipeline (`writeXlsxMutation`) to the
+ *  archive-based mutations: opens `workCopy` as a `ZipFile` ONCE and keeps it
+ *  open across load, mutate, AND serialize (`finally { zip.close() }`) — the
+ *  structural change review F1 needed, since `serializeArchiveToFile` must be
+ *  able to stream-copy an untouched entry straight from the SAME open source
+ *  archive `loadArchiveForWrite`/`getWorksheetContext` read the touched parts
+ *  from. A `ZipBombDetectedException`/`XlsxUnsafeXmlDoctypeException` thrown
+ *  during serialize (the streamed backstop firing on an untouched entry, or a
+ *  DOCTYPE surfacing in a part this call newly decompresses) is RE-THROWN
+ *  past this function's own generic `WRITE_FAILED` catch, the same
+ *  "never swallow a typed signal into a wrong wire code" idiom this file
+ *  already uses elsewhere — `writeXlsxMutation`'s own outer catch is what
+ *  turns those into the correctly-typed `UNSAFE_XML`/`ARCHIVE_TOO_LARGE`. */
 private fun <T> loadMutateSerializeXlsx(workCopy: File, outFile: File, mutateArchive: (WriteArchive) -> XlsxWriteResult<T>): XlsxWriteResult<T> {
-    val loaded = loadArchiveForWrite(workCopy)
-    if (loaded is XlsxWriteResult.Err) return loaded
-    val archive = (loaded as XlsxWriteResult.Ok).value
-    val mutated = mutateArchive(archive)
-    if (mutated is XlsxWriteResult.Err) return mutated
-    val value = (mutated as XlsxWriteResult.Ok).value
-    return try {
-        serializeArchiveToFile(archive, outFile)
-        XlsxWriteResult.Ok(value)
+    val zip = try {
+        ZipFile(workCopy)
     } catch (_: Exception) {
-        XlsxWriteResult.Err(XlsxWriteError.WRITE_FAILED)
+        return XlsxWriteResult.Err(XlsxWriteError.INVALID_XLSX)
+    }
+    return try {
+        val loaded = loadArchiveForWrite(zip)
+        if (loaded is XlsxWriteResult.Err) return loaded
+        val archive = (loaded as XlsxWriteResult.Ok).value
+        val mutated = mutateArchive(archive)
+        if (mutated is XlsxWriteResult.Err) return mutated
+        val value = (mutated as XlsxWriteResult.Ok).value
+        try {
+            serializeArchiveToFile(archive, outFile)
+            XlsxWriteResult.Ok(value)
+        } catch (e: XlsxUnsafeXmlDoctypeException) {
+            throw e
+        } catch (e: ZipBombDetectedException) {
+            throw e
+        } catch (_: Exception) {
+            XlsxWriteResult.Err(XlsxWriteError.WRITE_FAILED)
+        }
+    } finally {
+        zip.close()
     }
 }
 
