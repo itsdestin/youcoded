@@ -230,7 +230,7 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
           "panel" (420px) stops the wrapping. The grid keeps the key chips in their
           own column so a long label can never push one out of line. */}
       <Dialog screen="settings/shortcuts" open onClose={onClose} size="panel" title="Keyboard Shortcuts">
-        <div className="grid grid-cols-[1fr_auto] gap-x-4 items-center">
+        <div className={`${CARD_LEVEL_1} px-3 py-1.5 grid grid-cols-[1fr_auto] gap-x-3 items-center`}>{/* WHY a card: the table sat bare on the popup (SP-1) */}
           {SHORTCUTS.map(({ keys, description }) => (
             <React.Fragment key={keys}>
               <span className="text-2xs text-fg-dim py-1.5">{description}</span>
@@ -666,7 +666,7 @@ function SoundButton() {
                 <section>
                   {/* WHY SectionLabel (fix batch 2): the guide's small label — normal case, no spaced-out capitals. */}
                   <SectionLabel className="mb-2">Volume</SectionLabel>
-                  <div className="flex items-center gap-3">
+                  <div className={`${CARD_LEVEL_1} px-3 py-2.5 flex items-center gap-3`}>{/* WHY a card: nothing bare on the popup (popup-spacing SP-1; Remote Access) */}
                     {/* Mute toggle */}
                     <button onClick={handleToggleMute} className="text-fg-muted hover:text-fg shrink-0">
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
@@ -703,7 +703,7 @@ function SoundButton() {
                     useState initializers re-read that category's saved values. */}
                 <section>
                   {/* WHY SectionLabel (fix batch 2): the guide's small label — normal case, no spaced-out capitals. */}
-                  <SectionLabel className="mb-2">Notification</SectionLabel>
+                  <SectionLabel className="mb-2">Notification</SectionLabel><div className={`${CARD_LEVEL_1} p-3`}>{/* WHY: tabs, switch and sound list are one idea, so one card (SP-1) */}
                   <SegmentedTabs
                     variant="contained"
                     aria-label="Notification type"
@@ -721,7 +721,7 @@ function SoundButton() {
                     label={SOUND_CATEGORY_META[soundCategory].label}
                     description={SOUND_CATEGORY_META[soundCategory].description}
                     dotColor={SOUND_CATEGORY_META[soundCategory].dotColor}
-                  />
+                  /></div>
                 </section>
       </Dialog>
     </>

@@ -42,8 +42,8 @@ export function FoldRow({ title, description, open, onToggle, defaultOpen = fals
   return (
     <div className={className}>
       <SettingRow variant="item" title={title} description={description} onClick={toggle} expanded={isOpen} />
-      {/* 6px under the row — the guide's gap between settings rows. */}
-      {isOpen && <div className="mt-1.5">{children}</div>}
+      {/* 8px under the row — the one gap between neighbouring boxes (popup-spacing SP-5). */}
+      {isOpen && <div className="mt-2">{children}</div>}
     </div>
   );
 }

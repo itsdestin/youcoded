@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
 import type { ExplainerSection } from './SettingsExplainer';
-import { Button, Dialog, Toggle, SettingRow } from './ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, Toggle, SettingRow } from './ui';
 
 // Explainer copy lives here as a const because it pairs tightly with the
 // controls above it — both are about GPU choice. Sections render inline in
@@ -96,73 +96,78 @@ export default function PerformancePopup({
   return (
     <>
       <Dialog screen="settings/performance" open onClose={onClose} title="Performance" size="panel">
-            <p className="text-xs text-fg-2">GPU choice affects performance.</p>
+            {/* WHY two cards (popup-spacing SP-3, Destin: "headers/paragraph totally run
+                into eachother and the visual heirarchy is unclear"): the setting and
+                everything about THIS machine in one card; the explanation in a
+                second, its sections folded so the popup opens short. Nothing sits
+                bare on the popup (Remote Access is the reference). The old one-line
+                intro ("GPU choice affects performance.") repeated the explainer and
+                is gone; every other word is unchanged. */}
+            <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+              {/* The card's own header row (no box of its own); the whole row stays
+                  clickable — a bigger touch target, and SettingRow keeps the toggle's
+                  own click from firing twice. */}
+              <SettingRow
+                header
+                variant="item"
+                title="Prefer power saving"
+                description="Use the integrated GPU instead of the discrete one. Saves battery, but UI animations may stutter."
+                onClick={handleToggle}
+                control={
+                  <Toggle
+                    checked={saved}
+                    onChange={handleToggle}
+                    aria-label="Prefer power saving"
+                  />
+                }
+              />
 
-            {/* Toggle row. This was a whole-row <button role="switch"> whose
-                indicator was a hand-rolled 16x16 SQUARE — it announced itself as a
-                switch but looked like a checkbox. It's the shared <Toggle> now
-                (change 15), on the right like every other settings row.
-
-                The row stays clickable (bigger touch target — this renderer is also
-                the Android UI). SettingRow owns the "don't fire twice" problem now:
-                it stops the control's own click from bubbling, replacing the
-                closest('[role="switch"]') guard this row used to hand-roll. */}
-            <SettingRow
-              variant="item"
-              title="Prefer power saving"
-              description="Use the integrated GPU instead of the discrete one. Saves battery, but UI animations may stutter."
-              onClick={handleToggle}
-              control={
-                <Toggle
-                  checked={saved}
-                  onChange={handleToggle}
-                  aria-label="Prefer power saving"
-                />
-              }
-            />
-
-            {needsRestart && (
-              <div className="px-3 py-2 rounded-lg bg-inset flex items-center justify-between gap-3">
-                <span className="text-xs text-fg-2">⟳ Restart YouCoded to apply.</span>
-                <Button
-                  type="button"
-                  onClick={handleRestart}
-                  disabled={restarting}
+              {needsRestart && (
+                <Callout
+                  tone="info"
+                  actions={
+                    <Button type="button" size="sm" onClick={handleRestart} disabled={restarting}>
+                      {restarting ? 'Restarting…' : 'Restart now'}
+                    </Button>
+                  }
                 >
-                  {restarting ? 'Restarting…' : 'Restart now'}
-                </Button>
-              </div>
-            )}
+                  Restart YouCoded to apply.
+                </Callout>
+              )}
 
-            {gpuList.length > 0 && (
-              <p className="text-2xs text-fg-muted">
-                Detected GPUs: {gpuList.join(', ')}
-              </p>
-            )}
+              {gpuList.length > 0 && (
+                <p className="text-2xs text-fg-muted">
+                  Detected GPUs: {gpuList.join(', ')}
+                </p>
+              )}
+            </div>
 
-            <p className="text-xs text-fg-2 leading-relaxed">{PERFORMANCE_EXPLAINER.intro}</p>
-
-            {PERFORMANCE_EXPLAINER.sections.map((section, i) => (
-              <section key={i}>
-                <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                  {section.heading}
-                </h3>
-                {section.paragraphs?.map((p, j) => (
-                  <p key={j} className="text-xs text-fg-2 leading-relaxed mb-2 last:mb-0">{p}</p>
+            <section>
+              <SectionLabel className="mb-2">How GPU choice works</SectionLabel>
+              <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+                <p className="text-xs text-fg-2 leading-relaxed">{PERFORMANCE_EXPLAINER.intro}</p>
+                {PERFORMANCE_EXPLAINER.sections.map((section, i) => (
+                  <FoldRow key={i} title={section.heading}>
+                    <div className="px-1 space-y-2">
+                      {section.paragraphs?.map((p, j) => (
+                        <p key={j} className="text-xs text-fg-2 leading-relaxed">{p}</p>
+                      ))}
+                      {section.bullets && (
+                        <ul className="space-y-1.5">
+                          {section.bullets.map((b, j) => (
+                            <li key={j} className="text-xs text-fg-2 leading-relaxed pl-3 relative before:content-['•'] before:absolute before:left-0 before:text-fg-faint">
+                              {b.term && <span className="font-semibold text-fg">{b.term}</span>}
+                              {b.term && ' — '}
+                              {b.text}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </FoldRow>
                 ))}
-                {section.bullets && (
-                  <ul className="space-y-1.5 mt-1">
-                    {section.bullets.map((b, j) => (
-                      <li key={j} className="text-xs text-fg-2 leading-relaxed pl-3 relative before:content-['•'] before:absolute before:left-0 before:text-fg-faint">
-                        {b.term && <span className="font-semibold text-fg">{b.term}</span>}
-                        {b.term && ' — '}
-                        {b.text}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-            ))}
+              </div>
+            </section>
       </Dialog>
     </>
   );
