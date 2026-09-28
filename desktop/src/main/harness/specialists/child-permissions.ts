@@ -18,7 +18,21 @@ import type { PermissionDecision } from '../../../shared/permission-types';
  *  (the cold-start contract), so an MCP tool name can never reach this check;
  *  when 1b gives children MCP access this set stops being sufficient and the
  *  charter check must consult the server's own declared annotations. */
-const WRITE_TOOLS = new Set(['Write', 'Edit', 'Bash']);
+// T8 review F2 (doc-comments build, 2026-09-27, latent — not exploitable
+// today): the five comment-MUTATION tools write DIRECTLY into a Word/Excel
+// file's own XML/note bytes when targeted at one (design §3.3/§4.3a) —
+// functionally the same class of write as Edit. Neither NATIVE_CHILD_TOOLS
+// (definition-files.ts) nor any built-in's allowedTools (specialists/
+// builtins.ts) currently names any of these six, so a specialist cannot be
+// granted one at all yet — step 1's allowlist check refuses it before this
+// set is ever consulted. Added now anyway so a FUTURE change that grants a
+// specialist one of these tools (T9a's MCP surface, or a deliberate decision
+// to let specialists comment) doesn't silently let a read-only charter mutate
+// a real file's bytes — this is where that charter violation is meant to stop
+// being exploitable, per this file's own module comment above.
+// ReadFileComments is deliberately absent: it never mutates anything, same
+// as Read/Glob/Grep, which also aren't in this set.
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'Bash', 'ReplyToComment', 'ResolveComment', 'ReopenComment', 'AddComment', 'MoveComment']);
 
 export interface ChildPermissionInputs {
   /** The parent session's decide() — the full configured stack (preset rules,

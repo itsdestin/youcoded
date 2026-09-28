@@ -32,6 +32,33 @@ describe('buildChildDecide', () => {
     expect(d.message).toMatch(/read-only/i);
   });
 
+  // T8 review F2: the five comment-mutation tools write real Word/Excel bytes
+  // when targeted at one, so a read-only charter must refuse them exactly
+  // like it already refuses Write — even though neither NATIVE_CHILD_TOOLS
+  // nor a builtin's allowedTools currently offers a specialist any of these
+  // tools (this test exercises WRITE_TOOLS directly, the layer that would
+  // still catch it if a FUTURE change ever did).
+  it.each(['ReplyToComment', 'ResolveComment', 'ReopenComment', 'AddComment', 'MoveComment'])(
+    'a read-only charter refuses %s even if listed, same as Write',
+    async (tool) => {
+      const decide = buildChildDecide({
+        parentDecide: async () => allow,
+        charter: 'read-only', allowedTools: [tool], envelopeGranted: true,
+      });
+      const d = await decide(tool, 'docs/brief.docx');
+      expect(d.action).toBe('deny');
+      expect(d.message).toMatch(/read-only/i);
+    },
+  );
+
+  it('ReadFileComments is not treated as a write — a read-only charter still allows it', async () => {
+    const decide = buildChildDecide({
+      parentDecide: async () => allow,
+      charter: 'read-only', allowedTools: ['ReadFileComments'], envelopeGranted: true,
+    });
+    expect((await decide('ReadFileComments', 'docs/brief.docx')).action).toBe('allow');
+  });
+
   it('parent DENY always wins over the envelope, message passed through', async () => {
     const decide = buildChildDecide({
       parentDecide: async () => deny,

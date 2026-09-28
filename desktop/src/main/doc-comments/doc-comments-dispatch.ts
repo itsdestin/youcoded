@@ -54,10 +54,40 @@ export type NativeFormat = 'docx' | 'xlsx';
  *  operation, so it refuses here instead. */
 export type UntrackedSourceRefusal = { ok: false; error: 'path-not-tracked' };
 
+/**
+ * T8 review F4: Windows' own filesystem API strips trailing '.'/' ' characters
+ * off a path component when it resolves one — `report.docx.` and
+ * `report.docx ` on disk both open as `report.docx` there (the same
+ * normalization `fs.realpath` eventually inherits on that platform). A naive
+ * `path.extname` knows nothing about this, so a caller naming
+ * `report.docx.`/`report.docx ` on a real Windows machine would see this
+ * function say "not native" while the OS itself opens the real Word/Excel
+ * file underneath — a data-integrity gap (§3.2's dispatch and §5.2a's
+ * permission-subject decision would BOTH agree "not native" here, so it is
+ * not an ask/write mismatch, but the comment would silently land in the
+ * inert JSON sidecar instead of the file's own `comments.xml`/note, per the
+ * review's own write-up).
+ *
+ * Gated to `process.platform === 'win32'` because a trailing dot/space is
+ * NOT insignificant on POSIX — `report.docx.` and `report.docx` are two
+ * genuinely different files there, and stripping unconditionally would be
+ * the over-matching bug in the opposite direction (a plain-text file that
+ * happens to end in a dot getting treated as a Word file). Matches
+ * guards.ts's `canonicalize` own `process.platform === 'win32'` gate for the
+ * same class of platform-specific normalization.
+ */
+function stripWindowsTrailingDotsAndSpaces(filePath: string): string {
+  return process.platform === 'win32' ? filePath.replace(/[. ]+$/, '') : filePath;
+}
+
 /** Extension-based dispatch decision — the ONE place that decides "does this
- *  path have its comments inside the file itself." */
+ *  path have its comments inside the file itself." Both `doc-comments-tools.ts`'s
+ *  `permissionSubject` (the ask decision) and its `execute()` (the actual write
+ *  dispatch) call this SAME function on the SAME string, so the two can never
+ *  disagree about a given path — F4's trailing-dot/space fix lives here once,
+ *  not duplicated at each call site. */
 export function nativeFormatFor(filePath: string): NativeFormat | null {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = path.extname(stripWindowsTrailingDotsAndSpaces(filePath)).toLowerCase();
   if (ext === '.docx') return 'docx';
   if (ext === '.xlsx') return 'xlsx';
   return null;

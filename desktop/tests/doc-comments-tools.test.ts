@@ -129,7 +129,7 @@ describe('dispatch by extension — Word/Excel targets route through the native 
   });
 });
 
-describe('path containment refusal at the tool-argument surface (review 3, F1 / review 2, F1)', () => {
+describe('path containment refusal at the tool-argument surface', () => {
   const evil = '../../../../../../etc/passwd';
 
   it('AddComment refuses a ../../etc/passwd-shaped path', async () => {
@@ -236,9 +236,27 @@ describe('permission gate: a Word/Excel-targeted mutation is subject-matched by 
     expect(mdSubject).toBeUndefined();
     expect(decidePermission('ReplyToComment', mdSubject, layers)).toEqual({ action: 'ask', denyListed: false });
   });
+
+  // T8 review F4: permissionSubject and execute() both dispatch through the
+  // SAME nativeFormatFor(args.path) call, so fixing its trailing-dot/space
+  // handling once (doc-comments-dispatch.ts) fixes both sides at once — this
+  // pins that the ask decision specifically still sees the trailing-dot path
+  // as a Word file on win32, matching doc-comments-dispatch.test.ts's own
+  // dispatch-side pin for the identical input.
+  describe('a trailing dot/space (Windows filename normalization) is still gated as Word/Excel', () => {
+    const realPlatform = process.platform;
+    afterEach(() => { Object.defineProperty(process, 'platform', { value: realPlatform }); });
+
+    it('on win32, the permission subject for a "brief.docx." path is still the real path (gated), not undefined', () => {
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      const trailingDotPath = path.join(root, 'docs', 'brief.docx.');
+      expect(ReplyToCommentTool.permissionSubject({ path: trailingDotPath, commentId: 'w-1', text: 'x' } as any))
+        .toBe(trailingDotPath);
+    });
+  });
 });
 
-describe('a comment never list()-ed in THIS process is still reachable by {path, commentId, ...} alone (review 3, F1)', () => {
+describe('a comment never list()-ed in THIS process is still reachable by {path, commentId, ...} alone', () => {
   it('reply/resolve/reopen/move all succeed against a cold id — no warm per-process cache', async () => {
     const seeded = await addComment({ path: 'docs/cold.md', projectRoot: root, selector: CELL_SELECTOR, text: 'seed', author: 'user' });
     expect(seeded.ok).toBe(true);

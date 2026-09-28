@@ -42,6 +42,32 @@ describe('nativeFormatFor', () => {
     expect(nativeFormatFor('notes/todo.md')).toBeNull();
     expect(nativeFormatFor('src/app.ts')).toBeNull();
   });
+
+  // T8 review F4: Windows' own filesystem API strips a trailing '.'/' ' off a
+  // path component when it resolves one, so `report.docx.`/`report.docx ` on
+  // disk really is `report.docx` there. Stubbing process.platform since this
+  // suite runs on Linux and the real behavior is platform-specific.
+  describe('a trailing dot/space (Windows filename normalization)', () => {
+    const realPlatform = process.platform;
+    afterEach(() => { Object.defineProperty(process, 'platform', { value: realPlatform }); });
+
+    it('on win32: a trailing dot or space is stripped before the extension check, so it is still native', () => {
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      expect(nativeFormatFor('docs/brief.docx.')).toBe('docx');
+      expect(nativeFormatFor('docs/brief.docx ')).toBe('docx');
+      expect(nativeFormatFor('reports/q3.xlsx.')).toBe('xlsx');
+      // Multiple trailing dots/spaces (Windows strips the whole trailing run).
+      expect(nativeFormatFor('docs/brief.docx.. ')).toBe('docx');
+      // An actual non-native file with a trailing dot stays non-native.
+      expect(nativeFormatFor('notes/todo.md.')).toBeNull();
+    });
+
+    it('on POSIX: a trailing dot/space is significant — a genuinely different file, never coerced to native', () => {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      expect(nativeFormatFor('docs/brief.docx.')).toBeNull();
+      expect(nativeFormatFor('docs/brief.docx ')).toBeNull();
+    });
+  });
 });
 
 describe('refuseNativeMutation', () => {

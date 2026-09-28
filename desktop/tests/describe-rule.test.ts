@@ -204,6 +204,22 @@ describe('describeRule', () => {
       expect(describeRule({ tool: 'Task', action: 'allow' }).width).toBe('tool-wide');
     });
 
+    it('a remembered grant for a comment-mutation tool files under "files", same as Edit/Write', () => {
+      // T8 review F1: every one of these tools' remembered rules is, by
+      // construction, a Word/Excel-targeted write (the plain-text case never
+      // prompts, so no "Always allow" ever exists for it) — so it should sit
+      // next to a remembered Edit/Write grant on the same file, not under the
+      // `other` catch-all a specialist or unrecognized future tool falls into.
+      for (const tool of ['ReplyToComment', 'ResolveComment', 'ReopenComment', 'AddComment', 'MoveComment']) {
+        expect(ruleKind({ tool, pattern: 'docs/brief.docx', action: 'allow' }), tool).toBe('files');
+      }
+    });
+
+    it('ReadFileComments stays uncategorized, same as Read — it never mutates anything', () => {
+      expect(ruleKind({ tool: 'ReadFileComments', action: 'allow' })).toBe('other');
+      expect(ruleKind({ tool: 'Read', action: 'allow' })).toBe('other');
+    });
+
     it('no description ever contains rule syntax', () => {
       const rules = [
         { tool: 'Bash', pattern: 'git push*origin master', action: 'allow' as const, match: 'glob' as const },
