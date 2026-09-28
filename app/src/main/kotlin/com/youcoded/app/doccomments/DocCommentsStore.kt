@@ -462,3 +462,66 @@ suspend fun moveComment(path: String, projectRoot: String?, id: String, newSelec
         Apply.Applied(replaceComment(file, id, comment.copy(selector = newSelector)), Unit)
     }
 }
+
+/** Edit/delete build (2026-09-28, design doc §"Edit and delete"): mirrors
+ *  desktop's own `editComment`/`deleteComment`/`editReply`/`deleteReply`
+ *  (doc-comments-store.ts) field-for-field — anyone's comment/reply can be
+ *  edited or deleted (no author check: decisions.json,
+ *  `doc-comments.edit-delete.questions.answers.json`, is explicit: "anyone's
+ *  comment/reply can be edited or deleted"). No "edited" marker is stored or
+ *  shown, so this is a plain text overwrite — never a history-append the way
+ *  resolve/reopen's audit trail works. */
+suspend fun editComment(path: String, projectRoot: String?, id: String, text: String, homeDir: File): StoreResult<Unit> {
+    val resolved = resolveSidecarPath(path, projectRoot, homeDir)
+    if (resolved is StoreResult.Err) return resolved
+    val sidecarPath = (resolved as StoreResult.Ok).value
+    return mutateSidecar(sidecarPath) { file ->
+        val comment = findComment(file, id) ?: return@mutateSidecar Apply.NotFound
+        Apply.Applied(replaceComment(file, id, comment.copy(text = text)), Unit)
+    }
+}
+
+/** Deleting a THREAD's first comment deletes the whole thread (decision doc:
+ *  "deleting a thread's first comment deletes the whole thread") — this
+ *  channel always removes the whole `PersistedComment` row, replies
+ *  included; a single reply is removed by `deleteReply` below instead. */
+suspend fun deleteComment(path: String, projectRoot: String?, id: String, homeDir: File): StoreResult<Unit> {
+    val resolved = resolveSidecarPath(path, projectRoot, homeDir)
+    if (resolved is StoreResult.Err) return resolved
+    val sidecarPath = (resolved as StoreResult.Ok).value
+    return mutateSidecar(sidecarPath) { file ->
+        findComment(file, id) ?: return@mutateSidecar Apply.NotFound
+        Apply.Applied(CommentsSidecarFile(file.version, file.comments.filter { it.id != id }, file.raw), Unit)
+    }
+}
+
+/** Mirrors `replyToComment`'s own enrichment (§1.6, T5 review F2): returns
+ *  the edited reply so a caller's optimistic edit can be confirmed/corrected
+ *  in place, the same wire shape every reply-shaped mutation here already
+ *  uses. */
+suspend fun editReply(path: String, projectRoot: String?, id: String, replyId: String, text: String, homeDir: File): StoreResult<CommentReply> {
+    val resolved = resolveSidecarPath(path, projectRoot, homeDir)
+    if (resolved is StoreResult.Err) return resolved
+    val sidecarPath = (resolved as StoreResult.Ok).value
+    return mutateSidecar(sidecarPath) { file ->
+        val comment = findComment(file, id) ?: return@mutateSidecar Apply.NotFound
+        val idx = comment.replies.indexOfFirst { it.id == replyId }
+        if (idx == -1) return@mutateSidecar Apply.NotFound
+        val reply = comment.replies[idx].copy(text = text)
+        val replies = comment.replies.toMutableList()
+        replies[idx] = reply
+        Apply.Applied(replaceComment(file, id, comment.copy(replies = replies)), reply)
+    }
+}
+
+suspend fun deleteReply(path: String, projectRoot: String?, id: String, replyId: String, homeDir: File): StoreResult<Unit> {
+    val resolved = resolveSidecarPath(path, projectRoot, homeDir)
+    if (resolved is StoreResult.Err) return resolved
+    val sidecarPath = (resolved as StoreResult.Ok).value
+    return mutateSidecar(sidecarPath) { file ->
+        val comment = findComment(file, id) ?: return@mutateSidecar Apply.NotFound
+        if (comment.replies.none { it.id == replyId }) return@mutateSidecar Apply.NotFound
+        val next = comment.copy(replies = comment.replies.filter { it.id != replyId })
+        Apply.Applied(replaceComment(file, id, next), Unit)
+    }
+}

@@ -375,6 +375,149 @@ class DocCommentsBridgeTest {
         assertEquals("newSelector", response.getString("field"))
     }
 
+    // ── Edit/delete build (2026-09-28, design doc §"Edit and delete") ───────
+
+    @Test
+    fun `edit edit-reply delete-reply and delete round trip through the sidecar, matching desktop's own response shapes`() = runTest {
+        val root = tempRoot()
+        val id = handleDocCommentsMessage(
+            "docComments:add",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("text", "original").put("selector", TEXT_SELECTOR_JSON),
+            root, listOf(root.path),
+        )!!.getString("id")
+        val replyId = handleDocCommentsMessage(
+            "docComments:reply",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("id", id).put("text", "a reply"),
+            root, listOf(root.path),
+        )!!.getJSONObject("reply").getString("id")
+
+        val editResponse = handleDocCommentsMessage(
+            "docComments:edit",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("id", id).put("text", "edited text"),
+            root, listOf(root.path),
+        )!!
+        assertEquals(setOf("ok"), editResponse.keys().asSequence().toSet())
+        assertEquals(true, editResponse.getBoolean("ok"))
+
+        val editReplyResponse = handleDocCommentsMessage(
+            "docComments:edit-reply",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("id", id).put("replyId", replyId).put("text", "edited reply"),
+            root, listOf(root.path),
+        )!!
+        assertEquals(setOf("ok", "reply"), editReplyResponse.keys().asSequence().toSet())
+        assertEquals(true, editReplyResponse.getBoolean("ok"))
+        assertEquals("edited reply", editReplyResponse.getJSONObject("reply").getString("text"))
+        assertEquals(replyId, editReplyResponse.getJSONObject("reply").getString("id"))
+
+        val listAfterEdits = handleDocCommentsMessage(
+            "docComments:list",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path),
+            root, listOf(root.path),
+        )!!
+        val comment = listAfterEdits.getJSONArray("comments").getJSONObject(0)
+        assertEquals("edited text", comment.getString("text"))
+        assertEquals("edited reply", comment.getJSONArray("replies").getJSONObject(0).getString("text"))
+        assertEquals(0, comment.getJSONArray("history").length()) // no "edited" marker is ever stored
+
+        val deleteReplyResponse = handleDocCommentsMessage(
+            "docComments:delete-reply",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("id", id).put("replyId", replyId),
+            root, listOf(root.path),
+        )!!
+        assertEquals(setOf("ok"), deleteReplyResponse.keys().asSequence().toSet())
+        assertEquals(true, deleteReplyResponse.getBoolean("ok"))
+
+        val listAfterDeleteReply = handleDocCommentsMessage(
+            "docComments:list",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path),
+            root, listOf(root.path),
+        )!!
+        assertEquals(0, listAfterDeleteReply.getJSONArray("comments").getJSONObject(0).getJSONArray("replies").length())
+
+        val deleteResponse = handleDocCommentsMessage(
+            "docComments:delete",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("id", id),
+            root, listOf(root.path),
+        )!!
+        assertEquals(setOf("ok"), deleteResponse.keys().asSequence().toSet())
+        assertEquals(true, deleteResponse.getBoolean("ok"))
+
+        val listAfterDelete = handleDocCommentsMessage(
+            "docComments:list",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path),
+            root, listOf(root.path),
+        )!!
+        assertEquals(0, listAfterDelete.getJSONArray("comments").length())
+    }
+
+    @Test
+    fun `edit against an unknown comment id refuses comment-not-found`() = runTest {
+        val root = tempRoot()
+        val response = handleDocCommentsMessage(
+            "docComments:edit",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("id", "c-nope").put("text", "x"),
+            root, listOf(root.path),
+        )!!
+        assertEquals("comment-not-found", response.getString("error"))
+    }
+
+    @Test
+    fun `edit edit-reply delete and delete-reply refuse missing-field for their own required fields`() = runTest {
+        val root = tempRoot()
+        val id = handleDocCommentsMessage(
+            "docComments:add",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("text", "x").put("selector", TEXT_SELECTOR_JSON),
+            root, listOf(root.path),
+        )!!.getString("id")
+
+        val editNoText = handleDocCommentsMessage(
+            "docComments:edit",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("id", id),
+            root, listOf(root.path),
+        )!!
+        assertEquals("missing-field", editNoText.getString("error"))
+        assertEquals("text", editNoText.getString("field"))
+
+        val editReplyNoReplyId = handleDocCommentsMessage(
+            "docComments:edit-reply",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("id", id).put("text", "x"),
+            root, listOf(root.path),
+        )!!
+        assertEquals("missing-field", editReplyNoReplyId.getString("error"))
+        assertEquals("replyId", editReplyNoReplyId.getString("field"))
+
+        val deleteNoId = handleDocCommentsMessage(
+            "docComments:delete",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path),
+            root, listOf(root.path),
+        )!!
+        assertEquals("missing-field", deleteNoId.getString("error"))
+        assertEquals("id", deleteNoId.getString("field"))
+
+        val deleteReplyNoReplyId = handleDocCommentsMessage(
+            "docComments:delete-reply",
+            JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("id", id),
+            root, listOf(root.path),
+        )!!
+        assertEquals("missing-field", deleteReplyNoReplyId.getString("error"))
+        assertEquals("replyId", deleteReplyNoReplyId.getString("field"))
+    }
+
+    @Test
+    fun `edit against a docx target dispatches to the real native write pipeline, never the sidecar store`() = runTest {
+        val root = tempRoot()
+        val docsDir = File(root, "docs").apply { mkdirs() }
+        File(docsDir, "report.docx").writeText("not a real docx, just bytes for this test")
+        val response = handleDocCommentsMessage(
+            "docComments:edit",
+            JSONObject().put("path", "docs/report.docx").put("projectRoot", root.path).put("id", "w-1").put("text", "x"),
+            root, listOf(root.path),
+        )!!
+        assertEquals(false, response.getBoolean("ok"))
+        assertEquals("invalid-docx", response.getString("error"))
+        assertTrue(!File(root, ".youcoded/comments/docs/report.docx.json").exists())
+    }
+
     @Test
     fun `watch and unwatch both answer not-implemented-on-mobile`() = runTest {
         for (type in listOf("docComments:watch", "docComments:unwatch")) {

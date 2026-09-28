@@ -344,4 +344,71 @@ class DocCommentsDispatchTest {
         assertEquals(NativeMutateResult.Err(DocxWriteError.INVALID_DOCX.wire), result)
         assertTrue(docx.readBytes().contentEquals(before))
     }
+
+    // ── Edit/delete build (2026-09-28, design doc §"Edit and delete") ───────
+
+    @Test
+    fun `editNativeDocxComment and deleteNativeDocxComment dispatch to the real T17 write pipeline`() = runTest {
+        val home = Files.createTempDirectory("ycd-dispatch-edit-").toFile().apply { deleteOnExit() }
+        val docx = fixtureFile("launch-brief.docx")
+        WorkingDirStore(home).add(WorkingDir(label = "edit-delete fixture", path = docx.parentFile!!.canonicalPath))
+
+        val edited = editNativeDocxComment(docx.absolutePath, null, "w-1", "edited via dispatch", home)
+        assertTrue(edited is NativeMutateResult.Ok, "expected Ok, got $edited")
+        assertEquals("edited via dispatch", (edited as NativeMutateResult.Ok).value)
+
+        val deleted = deleteNativeDocxComment(docx.absolutePath, null, "w-0", home)
+        assertTrue(deleted is NativeMutateResult.Ok, "expected Ok, got $deleted")
+
+        val relisted = listNativeComments(NativeFormat.DOCX, docx.absolutePath, null, home)
+        assertTrue(relisted is NativeListResult.Ok, "expected Ok, got $relisted")
+        val comments = (relisted as NativeListResult.Ok).comments
+        assertTrue(comments.none { it.id == "w-0" })
+        assertEquals("edited via dispatch", comments.find { it.id == "w-1" }?.text)
+    }
+
+    @Test
+    fun `editNativeXlsxComment and deleteNativeXlsxComment dispatch to the real T19 write pipeline`() = runTest {
+        val home = Files.createTempDirectory("ycd-dispatch-edit-xlsx-").toFile().apply { deleteOnExit() }
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
+        WorkingDirStore(home).add(WorkingDir(label = "edit-delete xlsx fixture", path = xlsx.parentFile!!.canonicalPath))
+        val before = listNativeComments(NativeFormat.XLSX, xlsx.absolutePath, null, home)
+        assertTrue(before is NativeListResult.Ok, "expected Ok, got $before")
+        val f7 = (before as NativeListResult.Ok).comments.find {
+            it.selector is CommentSelector.Cell && (it.selector as CommentSelector.Cell).selector.cell == "F7"
+        }
+        assertTrue(f7 != null, "expected the F7 fixture thread")
+
+        val edited = editNativeXlsxComment(xlsx.absolutePath, null, f7!!.id, "edited via dispatch", home)
+        assertTrue(edited is NativeMutateResult.Ok, "expected Ok, got $edited")
+
+        val deleted = deleteNativeXlsxComment(xlsx.absolutePath, null, f7.id, home)
+        assertTrue(deleted is NativeMutateResult.Ok, "expected Ok, got $deleted")
+
+        val relisted = listNativeComments(NativeFormat.XLSX, xlsx.absolutePath, null, home)
+        assertTrue(relisted is NativeListResult.Ok, "expected Ok, got $relisted")
+        assertTrue((relisted as NativeListResult.Ok).comments.none { it.id == f7.id })
+    }
+
+    @Test
+    fun `editNativeDocxComment refuses invalid-docx instead of crashing when comments xml is not well-formed XML`() = runTest {
+        val home = Files.createTempDirectory("ycd-dispatch-corrupt-edit-").toFile().apply { deleteOnExit() }
+        val docx = buildDocxWithMalformedCommentsXml()
+        WorkingDirStore(home).add(WorkingDir(label = "corrupt-edit", path = docx.parentFile!!.canonicalPath))
+        val before = docx.readBytes()
+        val result = editNativeDocxComment(docx.absolutePath, null, "w-0", "x", home)
+        assertEquals(NativeMutateResult.Err(DocxWriteError.INVALID_DOCX.wire), result)
+        assertTrue(docx.readBytes().contentEquals(before))
+    }
+
+    @Test
+    fun `deleteNativeDocxComment refuses invalid-docx instead of crashing when comments xml is a corrupted (bad-CRC) entry`() = runTest {
+        val home = Files.createTempDirectory("ycd-dispatch-corrupt-delete-").toFile().apply { deleteOnExit() }
+        val docx = buildDocxWithCorruptCommentsPartCrc()
+        WorkingDirStore(home).add(WorkingDir(label = "corrupt-delete", path = docx.parentFile!!.canonicalPath))
+        val before = docx.readBytes()
+        val result = deleteNativeDocxComment(docx.absolutePath, null, "w-0", home)
+        assertEquals(NativeMutateResult.Err(DocxWriteError.INVALID_DOCX.wire), result)
+        assertTrue(docx.readBytes().contentEquals(before))
+    }
 }

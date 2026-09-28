@@ -513,4 +513,122 @@ class DocCommentsStoreTest {
         )
         assertEquals(StoreResult.Err(DocCommentsError.SIDECAR_WRITE_FAILED), result)
     }
+
+    // ── Edit/delete build (2026-09-28, design doc §"Edit and delete") ───────
+    // Mirrors desktop's own doc-comments-store.test.ts `describe('edit /
+    // delete', ...)` block.
+
+    @Test
+    fun `editComment overwrites text and leaves everything else unchanged, no history entry`() = runTest {
+        val root = tempProjectRoot()
+        val added = addComment("docs/plan.md", root.path, TEXT_SELECTOR, "original text", "user", root)
+        assertTrue(added is StoreResult.Ok, "expected Ok, got $added")
+        val id = (added as StoreResult.Ok).value
+
+        val edited = editComment("docs/plan.md", root.path, id, "edited text", root)
+        assertEquals(StoreResult.Ok(Unit), edited)
+
+        val listed = listComments("docs/plan.md", root.path, root)
+        assertTrue(listed is StoreResult.Ok)
+        val comment = (listed as StoreResult.Ok).value.single()
+        assertEquals(id, comment.id)
+        assertEquals("edited text", comment.text)
+        assertEquals("user", comment.author)
+        assertEquals(TEXT_SELECTOR, comment.selector)
+        // No "edited" marker is ever stored (decisions.json) — a plain text
+        // overwrite, never a history-append the way resolve/reopen works.
+        assertTrue(comment.history.isEmpty())
+    }
+
+    @Test
+    fun `editComment on an unknown id refuses comment-not-found`() = runTest {
+        val root = tempProjectRoot()
+        val result = editComment("docs/plan.md", root.path, "c-does-not-exist", "x", root)
+        assertEquals(StoreResult.Err(DocCommentsError.COMMENT_NOT_FOUND), result)
+    }
+
+    @Test
+    fun `deleteComment removes the whole thread including replies, a sibling thread survives, the id refuses cleanly afterward`() = runTest {
+        val root = tempProjectRoot()
+        val added = addComment("docs/plan.md", root.path, TEXT_SELECTOR, "root", "user", root)
+        val id = (added as StoreResult.Ok).value
+        replyToComment("docs/plan.md", root.path, id, "a reply", "assistant", root)
+
+        val siblingAdded = addComment("docs/plan.md", root.path, TEXT_SELECTOR, "sibling", "user", root)
+        val siblingId = (siblingAdded as StoreResult.Ok).value
+
+        val deleted = deleteComment("docs/plan.md", root.path, id, root)
+        assertEquals(StoreResult.Ok(Unit), deleted)
+
+        val listed = listComments("docs/plan.md", root.path, root)
+        assertTrue(listed is StoreResult.Ok)
+        val remaining = (listed as StoreResult.Ok).value
+        assertEquals(1, remaining.size)
+        assertEquals(siblingId, remaining[0].id)
+        assertEquals("sibling", remaining[0].text)
+
+        assertEquals(StoreResult.Err(DocCommentsError.COMMENT_NOT_FOUND), editComment("docs/plan.md", root.path, id, "x", root))
+    }
+
+    @Test
+    fun `deleteComment on an unknown id refuses comment-not-found`() = runTest {
+        val root = tempProjectRoot()
+        val result = deleteComment("docs/plan.md", root.path, "c-does-not-exist", root)
+        assertEquals(StoreResult.Err(DocCommentsError.COMMENT_NOT_FOUND), result)
+    }
+
+    @Test
+    fun `editReply overwrites only the target reply's text, other replies untouched`() = runTest {
+        val root = tempProjectRoot()
+        val added = addComment("docs/plan.md", root.path, TEXT_SELECTOR, "root", "user", root)
+        val id = (added as StoreResult.Ok).value
+        val reply1 = (replyToComment("docs/plan.md", root.path, id, "first reply", "assistant", root) as StoreResult.Ok).value
+        val reply2 = (replyToComment("docs/plan.md", root.path, id, "second reply", "user", root) as StoreResult.Ok).value
+
+        val edited = editReply("docs/plan.md", root.path, id, reply1.id, "edited first reply", root)
+        assertTrue(edited is StoreResult.Ok, "expected Ok, got $edited")
+        assertEquals(CommentReply(reply1.id, "assistant", "edited first reply", reply1.createdAt), (edited as StoreResult.Ok).value)
+
+        val listed = (listComments("docs/plan.md", root.path, root) as StoreResult.Ok).value.single()
+        assertEquals(2, listed.replies.size)
+        assertEquals("edited first reply", listed.replies[0].text)
+        assertEquals(reply2.id, listed.replies[1].id)
+        assertEquals("second reply", listed.replies[1].text)
+    }
+
+    @Test
+    fun `editReply on an unknown reply id refuses comment-not-found`() = runTest {
+        val root = tempProjectRoot()
+        val added = addComment("docs/plan.md", root.path, TEXT_SELECTOR, "root", "user", root)
+        val id = (added as StoreResult.Ok).value
+        val result = editReply("docs/plan.md", root.path, id, "$id-r99", "x", root)
+        assertEquals(StoreResult.Err(DocCommentsError.COMMENT_NOT_FOUND), result)
+    }
+
+    @Test
+    fun `deleteReply removes one reply — the parent and other replies survive`() = runTest {
+        val root = tempProjectRoot()
+        val added = addComment("docs/plan.md", root.path, TEXT_SELECTOR, "root", "user", root)
+        val id = (added as StoreResult.Ok).value
+        val reply1 = (replyToComment("docs/plan.md", root.path, id, "first reply", "assistant", root) as StoreResult.Ok).value
+        val reply2 = (replyToComment("docs/plan.md", root.path, id, "second reply", "user", root) as StoreResult.Ok).value
+
+        val deleted = deleteReply("docs/plan.md", root.path, id, reply1.id, root)
+        assertEquals(StoreResult.Ok(Unit), deleted)
+
+        val listed = (listComments("docs/plan.md", root.path, root) as StoreResult.Ok).value.single()
+        assertEquals(id, listed.id)
+        assertEquals("root", listed.text)
+        assertEquals(1, listed.replies.size)
+        assertEquals(reply2.id, listed.replies[0].id)
+    }
+
+    @Test
+    fun `deleteReply on an unknown reply id refuses comment-not-found`() = runTest {
+        val root = tempProjectRoot()
+        val added = addComment("docs/plan.md", root.path, TEXT_SELECTOR, "root", "user", root)
+        val id = (added as StoreResult.Ok).value
+        val result = deleteReply("docs/plan.md", root.path, id, "$id-r99", root)
+        assertEquals(StoreResult.Err(DocCommentsError.COMMENT_NOT_FOUND), result)
+    }
 }

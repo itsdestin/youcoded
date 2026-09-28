@@ -500,6 +500,179 @@ class DocxCommentsWriteTest {
         assertEquals(DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND), result)
     }
 
+    // ── Edit/delete build (2026-09-28, design doc §"Edit and delete") ───────
+    // Mirrors desktop's own docx-comments.test.ts `describe('docx-comments
+    // write — edit', ...)` / `describe('docx-comments write — delete (whole
+    // thread) leaves a document Word opens', ...)` / `describe('docx-comments
+    // write — delete-reply', ...)` blocks. launch-brief.docx: w-1 has exactly
+    // one reply from Marcus Lee; w-0 starts resolved with no replies.
+
+    @Test
+    fun `editDocxComment replaces the comment paragraph text, keeping author date and the document anchor untouched`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val before = readDocxComments(target, "docs/launch-brief.docx")
+        assertTrue(before is DocxReadResult.Ok, "expected Ok, got $before")
+        val beforeComment = (before as DocxReadResult.Ok).comments.find { it.id == "w-1" }
+        assertNotNull(beforeComment)
+
+        val result = editDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-1", "Rewritten note.", home)
+        assertEquals(DocxWriteResult.Ok("Rewritten note."), result)
+
+        val after = readDocxComments(target, "docs/launch-brief.docx")
+        assertTrue(after is DocxReadResult.Ok, "expected Ok, got $after")
+        val edited = (after as DocxReadResult.Ok).comments.find { it.id == "w-1" }
+        assertNotNull(edited)
+        assertEquals("Rewritten note.", edited.text)
+        // Author/date (and the anchor selector/replies/resolve state) survive
+        // an edit unchanged — only the text itself changed.
+        assertEquals(beforeComment.author, edited.author)
+        assertEquals(beforeComment.createdAt, edited.createdAt)
+        assertEquals(beforeComment.selector, edited.selector)
+        assertEquals(beforeComment.replies, edited.replies)
+
+        val documentXml = partText(target, "word/document.xml")!!
+        assertEquals(1, Regex("w:commentRangeStart w:id=\"1\"").findAll(documentXml).count())
+        assertEquals(1, Regex("w:commentReference w:id=\"1\"").findAll(documentXml).count())
+
+        assertPartsWellFormed(target) // F5
+    }
+
+    @Test
+    fun `editDocxComment refuses an id this file does not have`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val result = editDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-999", "x", home)
+        assertEquals(DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND), result)
+    }
+
+    @Test
+    fun `editDocxReply replaces one reply's text, leaving the parent and its own author date untouched`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val before = readDocxComments(target, "docs/launch-brief.docx")
+        assertTrue(before is DocxReadResult.Ok, "expected Ok, got $before")
+        val beforeParent = (before as DocxReadResult.Ok).comments.find { it.id == "w-1" }
+        assertNotNull(beforeParent)
+        val beforeReply = beforeParent.replies[0]
+
+        val result = editDocxReply(target.absolutePath, "docs/launch-brief.docx", "w-1", beforeReply.id, "Edited reply.", home)
+        assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
+        assertEquals(
+            CommentReply(beforeReply.id, beforeReply.author, "Edited reply.", beforeReply.createdAt),
+            (result as DocxWriteResult.Ok).value,
+        )
+
+        val after = readDocxComments(target, "docs/launch-brief.docx")
+        assertTrue(after is DocxReadResult.Ok, "expected Ok, got $after")
+        val parent = (after as DocxReadResult.Ok).comments.find { it.id == "w-1" }
+        assertNotNull(parent)
+        assertEquals(beforeParent.text, parent.text) // parent untouched
+        assertEquals(1, parent.replies.size)
+        assertEquals(beforeReply.copy(text = "Edited reply."), parent.replies[0])
+
+        assertPartsWellFormed(target) // F5
+    }
+
+    @Test
+    fun `editDocxReply refuses an unknown replyId`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val result = editDocxReply(target.absolutePath, "docs/launch-brief.docx", "w-1", "w-1-r9", "x", home)
+        assertEquals(DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND), result)
+    }
+
+    @Test
+    fun `deleteDocxComment removes the root, its reply, and BOTH document xml anchors, with no dangling relationships content-types`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val before = readDocxComments(target, "docs/launch-brief.docx")
+        assertTrue(before is DocxReadResult.Ok && (before as DocxReadResult.Ok).comments.any { it.id == "w-1" })
+
+        val result = deleteDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-1", home)
+        assertEquals(DocxWriteResult.Ok(Unit), result)
+
+        val after = readDocxComments(target, "docs/launch-brief.docx")
+        assertTrue(after is DocxReadResult.Ok, "expected Ok, got $after")
+        val comments = (after as DocxReadResult.Ok).comments
+        assertFalse(comments.any { it.id == "w-1" }) // thread gone
+        assertTrue(comments.any { it.id == "w-0" }) // sibling survives — surgical removal, not a rebuild
+
+        val documentXml = partText(target, "word/document.xml")!!
+        assertFalse(Regex("w:id=\"1\"").containsMatchIn(documentXml)) // no dangling range/reference markers
+
+        // Every r:id document.xml still references resolves in rels, with a
+        // matching [Content_Types].xml Override for every comments part left
+        // standing — re-run here directly as an independent structural pin,
+        // the same sanity check deleteDocxComment's own verify step already
+        // ran before reporting success.
+        val relsXml = partText(target, "word/_rels/document.xml.rels")!!
+        val relIds = Regex("Id=\"([^\"]+)\"").findAll(relsXml).map { it.groupValues[1] }.toSet()
+        for (m in Regex("r:id=\"([^\"]+)\"").findAll(documentXml)) {
+            assertTrue(relIds.contains(m.groupValues[1]), "dangling r:id ${m.groupValues[1]}")
+        }
+        val contentTypesXml = partText(target, "[Content_Types].xml")!!
+        assertTrue(contentTypesXml.contains("/word/comments.xml"))
+
+        assertPartsWellFormed(target) // F5
+    }
+
+    @Test
+    fun `deleteDocxComment on a comment with no replies removes only its own range reference, leaving siblings untouched`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val result = deleteDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-0", home)
+        assertEquals(DocxWriteResult.Ok(Unit), result)
+        val after = readDocxComments(target, "docs/launch-brief.docx")
+        assertTrue(after is DocxReadResult.Ok, "expected Ok, got $after")
+        val comments = (after as DocxReadResult.Ok).comments
+        assertFalse(comments.any { it.id == "w-0" })
+        assertTrue(comments.any { it.id == "w-1" }) // untouched sibling, replies and all
+    }
+
+    @Test
+    fun `deleteDocxComment refuses an id this file does not have, leaving the file byte-identical`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val before = target.readBytes()
+        val result = deleteDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-999", home)
+        assertEquals(DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND), result)
+        assertTrue(target.readBytes().contentEquals(before))
+    }
+
+    @Test
+    fun `deleteDocxReply removes ONE reply, leaving the root comment and its document anchor intact`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val before = readDocxComments(target, "docs/launch-brief.docx")
+        assertTrue(before is DocxReadResult.Ok, "expected Ok, got $before")
+        val replyId = (before as DocxReadResult.Ok).comments.find { it.id == "w-1" }?.replies?.get(0)?.id
+        assertNotNull(replyId)
+
+        val result = deleteDocxReply(target.absolutePath, "docs/launch-brief.docx", "w-1", replyId, home)
+        assertEquals(DocxWriteResult.Ok(Unit), result)
+
+        val after = readDocxComments(target, "docs/launch-brief.docx")
+        assertTrue(after is DocxReadResult.Ok, "expected Ok, got $after")
+        val root = (after as DocxReadResult.Ok).comments.find { it.id == "w-1" }
+        assertNotNull(root) // the thread itself survives
+        assertTrue(root.replies.isEmpty())
+
+        // The root's own document.xml anchor is untouched — a reply never had one.
+        val documentXml = partText(target, "word/document.xml")!!
+        assertEquals(1, Regex("w:commentRangeStart w:id=\"1\"").findAll(documentXml).count())
+
+        assertPartsWellFormed(target) // F5
+    }
+
+    @Test
+    fun `deleteDocxReply refuses an unknown replyId`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val result = deleteDocxReply(target.absolutePath, "docs/launch-brief.docx", "w-1", "w-1-r9", home)
+        assertEquals(DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND), result)
+    }
+
     // ── step 0: refuses a file open elsewhere, before backup (T17 follow-up,
     // design §3.3's new step 0, design review round 3 F4) ───────────────────
 

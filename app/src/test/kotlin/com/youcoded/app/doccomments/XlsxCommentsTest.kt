@@ -884,6 +884,249 @@ class XlsxCommentsTest {
         assertTrue(result is XlsxReadResult.Ok, "expected Ok exactly AT the ceiling, got $result")
         assertEquals(20000, (result as XlsxReadResult.Ok).comments.size)
     }
+
+    // ── Edit/delete build (2026-09-28, design doc §"Edit and delete") ───────
+    // Mirrors desktop's own xlsx-comments.test.ts `describe('xlsx-comments —
+    // edit', ...)` / `describe('xlsx-comments — delete (whole thread)', ...)`
+    // / `describe('xlsx-comments — delete-reply', ...)` blocks. F7 has a
+    // root+1 reply thread; G12 is root-only; A1/B2 are genuine Notes.
+
+    @Test
+    fun `editXlsxComment overwrites the ROOT thread's text and rebuilds the legacy placeholder, leaving ref dT personId id untouched`() = runTest {
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
+        val home = tempHome()
+        val before = (readXlsxComments(xlsx, "reports/docling.xlsx") as XlsxReadResult.Ok).comments
+        val f7 = commentAt(before, "F7").single()
+
+        val result = editXlsxComment(xlsx.absolutePath, "reports/docling.xlsx", f7.id, "Rewritten root.", home)
+        assertEquals(XlsxWriteResult.Ok("Rewritten root."), result)
+
+        val read = readXlsxComments(xlsx, "reports/docling.xlsx")
+        assertTrue(read is XlsxReadResult.Ok, "expected Ok, got $read")
+        val edited = (read as XlsxReadResult.Ok).comments.find { it.id == f7.id }
+        assertNotNull(edited)
+        assertEquals("Rewritten root.", edited.text)
+        assertEquals(f7.author, edited.author) // person/date untouched
+        assertEquals(f7.createdAt, edited.createdAt)
+        assertEquals(f7.selector, edited.selector)
+        assertEquals(f7.replies.map { it.text }, edited.replies.map { it.text })
+
+        // §4.2: the placeholder is rebuilt whole from the CURRENT transcript.
+        val commentsXml = readZipEntryText(xlsx, "xl/comments1.xml")!!
+        assertTrue(commentsXml.contains("Comment:\n    Rewritten root."))
+    }
+
+    @Test
+    fun `editXlsxComment refuses comment-not-found for an id with a well-formed shape but no matching thread`() = runTest {
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
+        val result = editXlsxComment(
+            xlsx.absolutePath, "reports/docling.xlsx", "xt-1-Z99-00000000-0000-0000-0000-000000000000", "x", tempHome(),
+        )
+        assertEquals(XlsxWriteResult.Err(XlsxWriteError.COMMENT_NOT_FOUND), result)
+    }
+
+    @Test
+    fun `editXlsxReply overwrites one reply and returns the persisted CommentReply, leaving the root untouched`() = runTest {
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
+        val home = tempHome()
+        val before = (readXlsxComments(xlsx, "reports/docling.xlsx") as XlsxReadResult.Ok).comments
+        val f7 = commentAt(before, "F7").single()
+        val reply = f7.replies[0]
+
+        val result = editXlsxReply(xlsx.absolutePath, "reports/docling.xlsx", f7.id, reply.id, "Edited reply.", home)
+        assertTrue(result is XlsxWriteResult.Ok, "expected Ok, got $result")
+        assertEquals(
+            CommentReply(reply.id, reply.author, "Edited reply.", reply.createdAt),
+            (result as XlsxWriteResult.Ok).value,
+        )
+
+        val read = readXlsxComments(xlsx, "reports/docling.xlsx")
+        assertTrue(read is XlsxReadResult.Ok, "expected Ok, got $read")
+        val parent = (read as XlsxReadResult.Ok).comments.find { it.id == f7.id }
+        assertNotNull(parent)
+        assertEquals(f7.text, parent.text) // root untouched
+        assertEquals(listOf(reply.copy(text = "Edited reply.")), parent.replies)
+    }
+
+    @Test
+    fun `editXlsxReply refuses an unknown replyId`() = runTest {
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
+        val before = (readXlsxComments(xlsx, "reports/docling.xlsx") as XlsxReadResult.Ok).comments
+        val f7 = commentAt(before, "F7").single()
+        val result = editXlsxReply(xlsx.absolutePath, "reports/docling.xlsx", f7.id, "${f7.id}-r9", "x", tempHome())
+        assertEquals(XlsxWriteResult.Err(XlsxWriteError.COMMENT_NOT_FOUND), result)
+    }
+
+    @Test
+    fun `deleteXlsxComment removes the root plus its reply and the ONE legacy placeholder, leaving G12 and the genuine Notes untouched`() = runTest {
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
+        val home = tempHome()
+        val before = (readXlsxComments(xlsx, "reports/docling.xlsx") as XlsxReadResult.Ok).comments
+        val f7 = commentAt(before, "F7").single()
+
+        val result = deleteXlsxComment(xlsx.absolutePath, "reports/docling.xlsx", f7.id, home)
+        assertEquals(XlsxWriteResult.Ok(Unit), result)
+
+        val read = readXlsxComments(xlsx, "reports/docling.xlsx")
+        assertTrue(read is XlsxReadResult.Ok, "expected Ok, got $read")
+        val comments = (read as XlsxReadResult.Ok).comments
+        assertFalse(comments.any { it.id == f7.id })
+        assertEquals(1, commentAt(comments, "G12").size) // G12's own independent thread survives untouched
+
+        val commentsXml = readZipEntryText(xlsx, "xl/comments1.xml")!!
+        assertFalse(commentsXml.contains("F7")) // the deleted thread's own placeholder is gone
+    }
+
+    @Test
+    fun `deleting the sheet's LAST comment removes the now-empty comment parts, their rels, content-type overrides and legacyDrawing`() = runTest {
+        val target = buildMinimalXlsx()
+        val home = tempHome()
+        ZipFile(target).use { zip -> assertNull(zip.getEntry("xl/comments1.xml")) }
+
+        val added = addXlsxComment(target.absolutePath, "fresh.xlsx", cellSelector("A1"), "only comment", "user", home)
+        assertTrue(added is XlsxWriteResult.Ok, "expected Ok, got $added")
+        val newId = (added as XlsxWriteResult.Ok).value
+        ZipFile(target).use { zip ->
+            assertNotNull(zip.getEntry("xl/comments1.xml"))
+            assertNotNull(zip.getEntry("xl/drawings/vmlDrawing1.vml"))
+            assertNotNull(zip.getEntry("xl/threadedComments/threadedComment1.xml"))
+        }
+
+        val deleted = deleteXlsxComment(target.absolutePath, "fresh.xlsx", newId, home)
+        assertEquals(XlsxWriteResult.Ok(Unit), deleted)
+
+        ZipFile(target).use { zip ->
+            assertNull(zip.getEntry("xl/comments1.xml"))
+            assertNull(zip.getEntry("xl/drawings/vmlDrawing1.vml"))
+            assertNull(zip.getEntry("xl/threadedComments/threadedComment1.xml"))
+        }
+
+        // No dangling rels/content-types/legacyDrawing pointing at the parts
+        // just removed — "exactly as if it never had comments on that sheet".
+        val worksheetXml = readZipEntryText(target, "xl/worksheets/sheet1.xml")!!
+        assertFalse(worksheetXml.contains("legacyDrawing"))
+        val relsXml = readZipEntryText(target, "xl/worksheets/_rels/sheet1.xml.rels")!!
+        assertFalse(relsXml.contains("comments1.xml"))
+        assertFalse(relsXml.contains("vmlDrawing1.vml"))
+        assertFalse(relsXml.contains("threadedComment1.xml"))
+        val contentTypesXml = readZipEntryText(target, "[Content_Types].xml")!!
+        assertFalse(contentTypesXml.contains("/xl/comments1.xml"))
+        assertFalse(contentTypesXml.contains("/xl/threadedComments/threadedComment1.xml"))
+
+        // A re-read confirms this is not just an empty ceremony — the file is
+        // genuinely back to "no comments" as readXlsxComments itself sees it.
+        val reread = readXlsxComments(target, "fresh.xlsx")
+        assertEquals(XlsxReadResult.Ok(emptyList()), reread)
+    }
+
+    @Test
+    fun `deleting one of FIVE independent threads on the same cell never disturbs its siblings`() = runTest {
+        val xlsx = fixtureFile("elden-ring-completionist-checklist.xlsx")
+        val home = tempHome()
+        val before = readXlsxComments(xlsx, "reports/elden.xlsx")
+        assertTrue(before is XlsxReadResult.Ok, "expected Ok, got $before")
+        val atB19 = commentAt((before as XlsxReadResult.Ok).comments, "B19")
+        assertEquals(5, atB19.size)
+        val victim = atB19[0]
+        val others = atB19.drop(1)
+
+        val result = deleteXlsxComment(xlsx.absolutePath, "reports/elden.xlsx", victim.id, home)
+        assertEquals(XlsxWriteResult.Ok(Unit), result)
+
+        val after = readXlsxComments(xlsx, "reports/elden.xlsx")
+        assertTrue(after is XlsxReadResult.Ok, "expected Ok, got $after")
+        val comments = (after as XlsxReadResult.Ok).comments
+        assertFalse(comments.any { it.id == victim.id })
+        for (o in others) {
+            val stillThere = comments.find { it.id == o.id }
+            assertNotNull(stillThere)
+            assertEquals(o.text, stillThere.text)
+            assertEquals(o.replies.map { it.text }, stillThere.replies.map { it.text })
+        }
+    }
+
+    @Test
+    fun `deleteXlsxComment refuses comment-not-found for an id with a well-formed shape but no matching thread, leaving the file byte-identical`() = runTest {
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
+        val before = xlsx.readBytes()
+        val result = deleteXlsxComment(
+            xlsx.absolutePath, "reports/docling.xlsx", "xt-1-Z99-00000000-0000-0000-0000-000000000000", tempHome(),
+        )
+        assertEquals(XlsxWriteResult.Err(XlsxWriteError.COMMENT_NOT_FOUND), result)
+        assertTrue(xlsx.readBytes().contentEquals(before))
+    }
+
+    @Test
+    fun `deleteXlsxReply removes ONE reply and rebuilds the placeholder, leaving the root and its resolve state intact`() = runTest {
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
+        val home = tempHome()
+        val before = (readXlsxComments(xlsx, "reports/docling.xlsx") as XlsxReadResult.Ok).comments
+        val f7 = commentAt(before, "F7").single()
+        val reply = f7.replies[0]
+
+        val result = deleteXlsxReply(xlsx.absolutePath, "reports/docling.xlsx", f7.id, reply.id, home)
+        assertEquals(XlsxWriteResult.Ok(Unit), result)
+
+        val read = readXlsxComments(xlsx, "reports/docling.xlsx")
+        assertTrue(read is XlsxReadResult.Ok, "expected Ok, got $read")
+        val root = (read as XlsxReadResult.Ok).comments.find { it.id == f7.id }
+        assertNotNull(root) // the thread itself survives
+        assertTrue(root.replies.isEmpty())
+        assertEquals(f7.text, root.text)
+
+        val commentsXml = readZipEntryText(xlsx, "xl/comments1.xml")!!
+        assertFalse(commentsXml.contains("Reply:")) // the placeholder was rebuilt with no reply block left
+    }
+
+    @Test
+    fun `deleteXlsxReply refuses an unknown replyId`() = runTest {
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
+        val before = (readXlsxComments(xlsx, "reports/docling.xlsx") as XlsxReadResult.Ok).comments
+        val f7 = commentAt(before, "F7").single()
+        val result = deleteXlsxReply(xlsx.absolutePath, "reports/docling.xlsx", f7.id, "${f7.id}-r9", tempHome())
+        assertEquals(XlsxWriteResult.Err(XlsxWriteError.COMMENT_NOT_FOUND), result)
+    }
+}
+
+/** Edit/delete build (2026-09-28): a genuinely minimal, from-scratch .xlsx
+ *  with NO comments of any kind — built by hand (Kotlin has no exceljs
+ *  equivalent), mirroring desktop's own `writeMinimalXlsxTo` test helper
+ *  (xlsx-comments.test.ts). Used ONLY for the "sheet's last comment removed
+ *  → parts cleaned up" positive test, which needs a genuine zero-comments
+ *  starting point to prove the parts are truly GONE afterward, not merely
+ *  unchanged. */
+private fun buildMinimalXlsx(): File {
+    val dir = Files.createTempDirectory("ycd-xlsx-minimal-").toFile()
+    dir.deleteOnExit()
+    val target = File(dir, "fresh.xlsx")
+    ZipOutputStream(target.outputStream()).use { zos ->
+        fun entry(name: String, content: String) {
+            zos.putNextEntry(ZipEntry(name))
+            zos.write(content.toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+        }
+        entry(
+            "[Content_Types].xml",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>""",
+        )
+        entry(
+            "_rels/.rels",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>""",
+        )
+        entry(
+            "xl/workbook.xml",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>""",
+        )
+        entry(
+            "xl/_rels/workbook.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>""",
+        )
+        entry(
+            "xl/worksheets/sheet1.xml",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>""",
+        )
+    }
+    return target
 }
 
 // Test-only helper mirroring `buildXlsxThreadId`'s own (private) shape —

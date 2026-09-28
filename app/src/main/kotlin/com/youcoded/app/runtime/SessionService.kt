@@ -4216,7 +4216,14 @@ class SessionService : Service() {
             // DO need a live Service (`homeDir`, this session's own live cwds)
             // and hand the message off.
             "docComments:list", "docComments:add", "docComments:reply", "docComments:resolve",
-            "docComments:reopen", "docComments:move", "docComments:watch", "docComments:unwatch" -> {
+            "docComments:reopen", "docComments:move",
+            // Edit/delete build (2026-09-28, design doc §"Edit and delete") —
+            // appended after "docComments:move" and before the watch/unwatch
+            // pair, matching desktop's own ipc-channels.ts ordering (EDIT,
+            // EDIT_REPLY, DELETE, DELETE_REPLY, then WATCH/UNWATCH). Existing
+            // labels are never reordered.
+            "docComments:edit", "docComments:edit-reply", "docComments:delete", "docComments:delete-reply",
+            "docComments:watch", "docComments:unwatch" -> {
                 val homeDir = docCommentsHomeDir()
                 val sessionRoots = sessionRegistry.sessions.value.values.map { it.cwd.absolutePath }
                 // F2 (T17 implementation review, major/crash risk): a

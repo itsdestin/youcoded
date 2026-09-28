@@ -1135,6 +1135,207 @@ private fun removeCommentRangeAndReference(doc: Document, id: String): Boolean {
     return true
 }
 
+// -----------------------------------------------------------------------
+// Edit/delete build (2026-09-28, design doc §"Edit and delete"): anyone's
+// comment/reply can be edited or deleted, no "edited" marker is ever stored
+// or shown, and deleting a THREAD's first comment deletes the whole thread
+// — decisions.json (doc-comments.edit-delete.questions.answers.json).
+// Mirrors docx-comments.ts's own "Edit/delete build" section field-for-field.
+// -----------------------------------------------------------------------
+
+/** Shared across every reply-id convention this feature mints (the plain
+ *  JSON sidecar's `${commentId}-r${n}`, docx's `w-{id}-r{n}`, xlsx's
+ *  `xt-...-r{n}`) — the ordinal is always the trailing `-r<N>`. Mirrors
+ *  `replyOrdinalFromId` (docx-comments.ts). */
+private fun replyOrdinalFromId(replyId: String): Int? = Regex("-r(\\d+)$").find(replyId)?.groupValues?.get(1)?.toIntOrNull()
+
+/** Removes every `w:p` child from `commentEl` and rewrites it with ONE
+ *  paragraph carrying `text` — mirrors `appendCommentEntry`'s own shape
+ *  exactly, so an edited comment/reply round-trips through the read path
+ *  identically to a freshly-added one. Only CHILDREN are touched: `w:id`/
+ *  `w:author`/`w:date` (and any `w:initials` a real Word file carries) stay
+ *  on the element's own attributes, untouched — "keep author/date/initials"
+ *  per the task brief, satisfied by never looking at attributes at all. The
+ *  original `w14:paraId` is preserved (never re-minted) since every OTHER
+ *  part (commentsExtended.xml, commentsIds.xml, commentsExtensible.xml) is
+ *  keyed off it. Mirrors `replaceCommentParagraphText` (docx-comments.ts). */
+private fun replaceCommentParagraphText(commentsDoc: Document, commentEl: Element, text: String) {
+    val paras = elementsByTag(commentEl, "w:p")
+    val paraId = paras.firstOrNull()?.let { if (it.hasAttribute("w14:paraId")) it.getAttribute("w14:paraId") else null }
+    for (p in paras) {
+        (p.parentNode as? Element)?.removeChild(p)
+    }
+    val pEl = commentsDoc.createElement("w:p")
+    if (paraId != null) pEl.setAttribute("w14:paraId", paraId)
+    val rEl = commentsDoc.createElement("w:r")
+    val tEl = commentsDoc.createElement("w:t")
+    tEl.setAttribute("xml:space", "preserve")
+    tEl.textContent = text
+    rEl.appendChild(tEl)
+    pEl.appendChild(rEl)
+    commentEl.appendChild(pEl)
+}
+
+/** Mirrors `buildExtendedMap` (docx-comments.ts). */
+private fun buildExtendedMap(extendedDoc: Document): Map<String, ExtendedInfo> {
+    val map = LinkedHashMap<String, ExtendedInfo>()
+    for (el in elementsByTag(extendedDoc, "w15:commentEx")) {
+        if (!el.hasAttribute("w15:paraId")) continue
+        val paraId = el.getAttribute("w15:paraId")
+        val done = el.hasAttribute("w15:done") && el.getAttribute("w15:done") == "1"
+        val paraIdParent = if (el.hasAttribute("w15:paraIdParent")) el.getAttribute("w15:paraIdParent") else null
+        map[paraId] = ExtendedInfo(done, paraIdParent)
+    }
+    return map
+}
+
+/** Ordered list of a root's reply `<w:comment>` elements, in the SAME file
+ *  order `readDocxComments`/`nextReplyOrdinal` assign ordinals in — shared
+ *  by `nextReplyOrdinal` (count), edit-reply/delete-reply (index by
+ *  ordinal), and delete-thread (collect all, order irrelevant there).
+ *  Mirrors `collectReplyEntries` (docx-comments.ts). */
+private fun collectReplyEntries(archive: LoadedArchive, rootParaId: String): List<Element> {
+    val extended = buildExtendedMap(archive.extendedDoc)
+    val out = mutableListOf<Element>()
+    for (el in elementsByTag(archive.commentsDoc, "w:comment")) {
+        val p = elementsByTag(el, "w:p").firstOrNull()
+        val paraId = p?.let { if (it.hasAttribute("w14:paraId")) it.getAttribute("w14:paraId") else null }
+        if (paraId == null || paraId == rootParaId) continue
+        if (resolveRootParaId(paraId, extended) == rootParaId) out.add(el)
+    }
+    return out
+}
+
+private fun removeElement(el: Element) {
+    (el.parentNode as? Element)?.removeChild(el)
+}
+
+private fun removeExtendedEntry(extendedDoc: Document, paraId: String) {
+    val el = findByAttr(extendedDoc, "w15:commentEx", "w15:paraId", paraId)
+    if (el != null) removeElement(el)
+}
+
+/** Mirrors `recordCommentExtensionParts`'s own pairing (F4): `commentsIds.xml`
+ *  keys an entry by `w14:paraId` directly, and `commentsExtensible.xml` keys
+ *  its OWN entry by the durable id that `commentsIds.xml`'s entry paired
+ *  with that same paraId — so the extensible entry can only be found by
+ *  reading the durable id back off the ids entry first. Both parts are only
+ *  ever edited when already present (this module never creates either).
+ *  Mirrors `removeCommentExtensionEntries` (docx-comments.ts). */
+private fun removeCommentExtensionEntries(archive: LoadedArchive, paraId: String) {
+    var durableId: String? = null
+    archive.commentsIdsDoc?.let { doc ->
+        val el = findByAttr(doc, "w16cid:commentId", "w16cid:paraId", paraId)
+        if (el != null) {
+            durableId = if (el.hasAttribute("w16cid:durableId")) el.getAttribute("w16cid:durableId") else null
+            removeElement(el)
+            archive.commentsIdsChanged = true
+        }
+    }
+    val did = durableId
+    if (did != null) {
+        archive.commentsExtensibleDoc?.let { doc ->
+            val el = findByAttr(doc, "w16cex:commentExtensible", "w16cex:durableId", did)
+            if (el != null) {
+                removeElement(el)
+                archive.commentsExtensibleChanged = true
+            }
+        }
+    }
+}
+
+/** Edit build (2026-09-28): replaces the ROOT `<w:comment>`'s own paragraph
+ *  text in place — author/date/w:id/paraId untouched, no "edited" marker
+ *  (decisions.json). Never touches document.xml: the anchor range doesn't
+ *  move just because the words changed. Mirrors `mutateEditComment`
+ *  (docx-comments.ts). */
+private fun mutateEditComment(archive: LoadedArchive, id: String, rawText: String): DocxWriteResult<String> {
+    val text = stripIllegalXmlChars(rawText)
+    val rawId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val commentEl = findByAttr(archive.commentsDoc, "w:comment", "w:id", rawId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    replaceCommentParagraphText(archive.commentsDoc, commentEl, text)
+    archive.commentsChanged = true
+    return DocxWriteResult.Ok(text)
+}
+
+/** Edit build: `id` names the THREAD's root (matches every other
+ *  reply/resolve/reopen/move call shape); `replyId` (`w-{id}-r{n}`, its
+ *  ordinal read via `replyOrdinalFromId`) selects which reply within it.
+ *  Mirrors `mutateEditReply` (docx-comments.ts). */
+private fun mutateEditReply(archive: LoadedArchive, id: String, replyId: String, rawText: String): DocxWriteResult<CommentReply> {
+    val text = stripIllegalXmlChars(rawText)
+    val rawRootId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val ordinal = replyOrdinalFromId(replyId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val rootParaId = findCommentParaId(archive.commentsDoc, rawRootId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val target = collectReplyEntries(archive, rootParaId).getOrNull(ordinal - 1) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val author = target.getAttribute("w:author")
+    val date = target.getAttribute("w:date")
+    replaceCommentParagraphText(archive.commentsDoc, target, text)
+    archive.commentsChanged = true
+    return DocxWriteResult.Ok(CommentReply(id = replyId, author = toCommentAuthor(author), text = text, createdAt = parseDate(date)))
+}
+
+/** Delete build: removes the ROOT `<w:comment>` AND every reply chained to
+ *  it (`w15:paraIdParent`), their `commentsExtended.xml`/`commentsIds.xml`/
+ *  `commentsExtensible.xml` entries, and the root's OWN
+ *  `w:commentRangeStart`/`End` + `w:commentReference` run from
+ *  document.xml — a reply never has its own range (only the root gets one),
+ *  so there is nothing to remove from document.xml for any reply.
+ *  Decisions.json: "deleting a thread's first comment deletes the whole
+ *  thread." Mirrors `mutateDeleteThread` (docx-comments.ts). */
+private fun mutateDeleteThread(archive: LoadedArchive, id: String): DocxWriteResult<Unit> {
+    val rawId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val rootEl = findByAttr(archive.commentsDoc, "w:comment", "w:id", rawId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val rootP = elementsByTag(rootEl, "w:p").firstOrNull()
+    val rootParaId = rootP?.let { if (it.hasAttribute("w14:paraId")) it.getAttribute("w14:paraId") else null }
+        ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+
+    // Only the root has a document.xml anchor — removed here, mirroring
+    // mutateMoveComment's own ordering. A comment whose range was already
+    // dropped by a prior edit (e.g. mammoth-dropped run) simply has nothing
+    // to remove here; the delete still proceeds.
+    removeCommentRangeAndReference(archive.documentDoc, rawId)
+    archive.documentChanged = true
+
+    for (replyEl in collectReplyEntries(archive, rootParaId)) {
+        val p = elementsByTag(replyEl, "w:p").firstOrNull()
+        val paraId = p?.let { if (it.hasAttribute("w14:paraId")) it.getAttribute("w14:paraId") else null }
+        removeElement(replyEl)
+        if (paraId != null) {
+            removeExtendedEntry(archive.extendedDoc, paraId)
+            removeCommentExtensionEntries(archive, paraId)
+        }
+    }
+    removeElement(rootEl)
+    removeExtendedEntry(archive.extendedDoc, rootParaId)
+    removeCommentExtensionEntries(archive, rootParaId)
+    archive.commentsChanged = true
+    archive.extendedChanged = true
+
+    return DocxWriteResult.Ok(Unit)
+}
+
+/** Delete build: removes ONE reply — its `<w:comment>` and its own
+ *  extended/ids/extensible entries — never touching document.xml (a reply
+ *  has no range of its own) or the root/other replies. Mirrors
+ *  `mutateDeleteReply` (docx-comments.ts). */
+private fun mutateDeleteReply(archive: LoadedArchive, id: String, replyId: String): DocxWriteResult<Unit> {
+    val rawRootId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val ordinal = replyOrdinalFromId(replyId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val rootParaId = findCommentParaId(archive.commentsDoc, rawRootId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val target = collectReplyEntries(archive, rootParaId).getOrNull(ordinal - 1) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
+    val p = elementsByTag(target, "w:p").firstOrNull()
+    val paraId = p?.let { if (it.hasAttribute("w14:paraId")) it.getAttribute("w14:paraId") else null }
+    removeElement(target)
+    archive.commentsChanged = true
+    if (paraId != null) {
+        removeExtendedEntry(archive.extendedDoc, paraId)
+        archive.extendedChanged = true
+        removeCommentExtensionEntries(archive, paraId)
+    }
+    return DocxWriteResult.Ok(Unit)
+}
+
 private fun countAttrOccurrences(xml: String, tag: String, attr: String, value: String): Int {
     val escaped = Regex.escape(value)
     val re = Regex("<$tag\\b[^>]*\\b$attr=\"$escaped\"")
@@ -1387,20 +1588,11 @@ private fun mutateAddComment(archive: LoadedArchive, selector: CommentSelector, 
  * (docx-comments.ts) mints for its own enriched response.
  */
 private fun nextReplyOrdinal(archive: LoadedArchive, targetParaId: String): Int {
-    val extended = HashMap<String, ExtendedInfo>()
-    for (el in elementsByTag(archive.extendedDoc, "w15:commentEx")) {
-        val paraId = el.getAttribute("w15:paraId")
-        if (paraId.isNotEmpty()) {
-            extended[paraId] = ExtendedInfo(el.getAttribute("w15:done") == "1", el.getAttribute("w15:paraIdParent").ifEmpty { null })
-        }
-    }
-    var count = 0
-    for (el in elementsByTag(archive.commentsDoc, "w:comment")) {
-        val paraId = elementsByTag(el, "w:p").firstOrNull()?.getAttribute("w14:paraId")
-        if (paraId.isNullOrEmpty() || paraId == targetParaId) continue
-        if (resolveRootParaId(paraId, extended) == targetParaId) count++
-    }
-    return count + 1
+    // Edit/delete build (2026-09-28): reuses `collectReplyEntries` (added for
+    // edit-reply/delete-reply/delete-thread) instead of a second copy of the
+    // same paraIdParent-chain walk — mirrors docx-comments.ts's own
+    // `nextReplyOrdinal`, which made the identical refactor.
+    return collectReplyEntries(archive, targetParaId).size + 1
 }
 
 /** T5 review parity (design §1.6, F2): returns the real persisted
@@ -1915,3 +2107,108 @@ suspend fun moveDocxComment(
         },
     )
 }
+
+// -----------------------------------------------------------------------
+// Edit/delete build (2026-09-28, design doc §"Edit and delete"). Same
+// write-pipeline/verify shape as every mutation above. Mirrors
+// docx-comments.ts's own "Edit/delete build" public-orchestration section.
+// -----------------------------------------------------------------------
+
+suspend fun editDocxComment(
+    absolutePath: String,
+    path: String,
+    id: String,
+    text: String,
+    homeDir: File,
+): DocxWriteResult<String> = writeDocxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerialize(workCopy, outFile) { archive -> mutateEditComment(archive, id, text) } },
+    verify = { outFile, extraText, originalFile ->
+        verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile)) &&
+            run {
+                val r = readDocxComments(outFile, path)
+                (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }?.text == extraText
+            }
+    },
+)
+
+suspend fun editDocxReply(
+    absolutePath: String,
+    path: String,
+    id: String,
+    replyId: String,
+    text: String,
+    homeDir: File,
+): DocxWriteResult<CommentReply> = writeDocxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerialize(workCopy, outFile) { archive -> mutateEditReply(archive, id, replyId, text) } },
+    verify = { outFile, reply, originalFile ->
+        verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile)) &&
+            run {
+                val r = readDocxComments(outFile, path)
+                (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }?.replies?.any { it.id == reply.id && it.text == reply.text } == true
+            }
+    },
+)
+
+suspend fun deleteDocxComment(
+    absolutePath: String,
+    path: String,
+    id: String,
+    homeDir: File,
+): DocxWriteResult<Unit> = writeDocxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerialize(workCopy, outFile) { archive -> mutateDeleteThread(archive, id) } },
+    verify = { outFile, _, originalFile ->
+        val wiringOk = verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile))
+        val rawId = stripWPrefix(id)
+        // "No dangling range markers remain" — a low-level marker COUNT, the
+        // same structural check Move's own verify uses for "the old range is
+        // gone," here requiring a count of ZERO rather than exactly one.
+        val marksOk = wiringOk && rawId != null && run {
+            val zip = try { ZipFile(outFile) } catch (_: Exception) { null }
+            if (zip == null) {
+                false
+            } else {
+                zip.use { z ->
+                    val documentEntry = z.getEntry("word/document.xml")
+                    if (documentEntry == null) {
+                        true
+                    } else {
+                        val documentXml = readEntryBounded(z, documentEntry).toString(Charsets.UTF_8)
+                        countAttrOccurrences(documentXml, "w:commentRangeStart", "w:id", rawId) == 0 &&
+                            countAttrOccurrences(documentXml, "w:commentRangeEnd", "w:id", rawId) == 0 &&
+                            countAttrOccurrences(documentXml, "w:commentReference", "w:id", rawId) == 0
+                    }
+                }
+            }
+        }
+        marksOk && run {
+            val r = readDocxComments(outFile, path)
+            (r as? DocxReadResult.Ok)?.comments?.none { it.id == id } == true
+        }
+    },
+)
+
+suspend fun deleteDocxReply(
+    absolutePath: String,
+    path: String,
+    id: String,
+    replyId: String,
+    homeDir: File,
+): DocxWriteResult<Unit> = writeDocxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerialize(workCopy, outFile) { archive -> mutateDeleteReply(archive, id, replyId) } },
+    verify = { outFile, _, originalFile ->
+        verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile)) &&
+            run {
+                val r = readDocxComments(outFile, path)
+                val target = (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }
+                target != null && target.replies.none { it.id == replyId }
+            }
+    },
+)

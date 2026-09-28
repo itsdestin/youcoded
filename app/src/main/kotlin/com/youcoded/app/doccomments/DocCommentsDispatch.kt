@@ -352,6 +352,77 @@ suspend fun moveNativeDocxComment(
     }
 }
 
+// Edit/delete build (2026-09-28, design doc §"Edit and delete") — same
+// resolveNativeWriteTarget gate every other native docx mutation already
+// uses. Mirrors desktop's own `editNativeDocxComment`/etc. (doc-comments-
+// dispatch.ts).
+suspend fun editNativeDocxComment(
+    path: String,
+    projectRoot: String?,
+    id: String,
+    text: String,
+    homeDir: File,
+): NativeMutateResult<String> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary {
+        when (val r = editDocxComment(absolutePath, path, id, text, homeDir)) {
+            is DocxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
+            is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+suspend fun editNativeDocxReply(
+    path: String,
+    projectRoot: String?,
+    id: String,
+    replyId: String,
+    text: String,
+    homeDir: File,
+): NativeMutateResult<CommentReply> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary {
+        when (val r = editDocxReply(absolutePath, path, id, replyId, text, homeDir)) {
+            is DocxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
+            is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+suspend fun deleteNativeDocxComment(path: String, projectRoot: String?, id: String, homeDir: File): NativeMutateResult<Unit> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary {
+        when (val r = deleteDocxComment(absolutePath, path, id, homeDir)) {
+            is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+            is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+suspend fun deleteNativeDocxReply(
+    path: String,
+    projectRoot: String?,
+    id: String,
+    replyId: String,
+    homeDir: File,
+): NativeMutateResult<Unit> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary {
+        when (val r = deleteDocxReply(absolutePath, path, id, replyId, homeDir)) {
+            is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+            is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
 // -----------------------------------------------------------------------
 // T19: Android's real `.xlsx` write dispatch — the Kotlin equivalent of
 // desktop's `addNativeXlsxComment`/etc. (doc-comments-dispatch.ts), calling
@@ -461,6 +532,77 @@ suspend fun moveNativeXlsxComment(
     return nativeMutateExceptionBoundary(XlsxWriteError.INVALID_XLSX.wire) {
         when (val r = moveXlsxComment(absolutePath, path, id, newSelector, homeDir)) {
             is XlsxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
+            is XlsxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+// Edit/delete build (2026-09-28, design doc §"Edit and delete") — same
+// resolveNativeWriteTarget gate every other native xlsx mutation already
+// uses. Mirrors desktop's own `editNativeXlsxComment`/etc. (doc-comments-
+// dispatch.ts).
+suspend fun editNativeXlsxComment(
+    path: String,
+    projectRoot: String?,
+    id: String,
+    text: String,
+    homeDir: File,
+): NativeMutateResult<String> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary(XlsxWriteError.INVALID_XLSX.wire) {
+        when (val r = editXlsxComment(absolutePath, path, id, text, homeDir)) {
+            is XlsxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
+            is XlsxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+suspend fun editNativeXlsxReply(
+    path: String,
+    projectRoot: String?,
+    id: String,
+    replyId: String,
+    text: String,
+    homeDir: File,
+): NativeMutateResult<CommentReply> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary(XlsxWriteError.INVALID_XLSX.wire) {
+        when (val r = editXlsxReply(absolutePath, path, id, replyId, text, homeDir)) {
+            is XlsxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
+            is XlsxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+suspend fun deleteNativeXlsxComment(path: String, projectRoot: String?, id: String, homeDir: File): NativeMutateResult<Unit> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary(XlsxWriteError.INVALID_XLSX.wire) {
+        when (val r = deleteXlsxComment(absolutePath, path, id, homeDir)) {
+            is XlsxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+            is XlsxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+suspend fun deleteNativeXlsxReply(
+    path: String,
+    projectRoot: String?,
+    id: String,
+    replyId: String,
+    homeDir: File,
+): NativeMutateResult<Unit> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary(XlsxWriteError.INVALID_XLSX.wire) {
+        when (val r = deleteXlsxReply(absolutePath, path, id, replyId, homeDir)) {
+            is XlsxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
             is XlsxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
         }
     }

@@ -727,6 +727,16 @@ private class WriteArchive(
     var personsChanged: Boolean = false,
     val worksheetContexts: MutableMap<String, WorksheetCtx> = mutableMapOf(),
     var parsedBytesTotal: Long = 0L,
+    // Edit/delete build (2026-09-28): part names `cleanupEmptyCommentPartsIfNeeded`
+    // has removed outright (`commentsN.xml`/`vmlDrawingN.vml`/`threadedCommentN.xml`,
+    // once a worksheet's last comment of any kind is deleted). Desktop's JSZip
+    // has a real `zip.remove(path)` that makes a part vanish from the archive
+    // outright (xlsx-comments.ts's own `cleanupEmptyCommentPartsIfNeeded`);
+    // Kotlin's `ZipFile` is read-only and `serializeArchiveToFile` streams
+    // untouched entries straight from it, so this set is what tells that
+    // function "never write this entry back, from either `overrides` or the
+    // original archive" — the Kotlin-side equivalent of a genuine removal.
+    val removedPartNames: MutableSet<String> = mutableSetOf(),
 )
 
 /** Reads (and, in `tracker`, REMEMBERS) one named part's raw bytes — the lazy
@@ -1219,6 +1229,129 @@ private fun removeThreadFromWorksheet(ctx: WorksheetCtx, cell: String, rootEl: E
     }
 }
 
+// -----------------------------------------------------------------------
+// Edit/delete build (2026-09-28, design doc §"Edit and delete"): anyone's
+// comment/reply can be edited or deleted, no "edited" marker is ever stored
+// or shown, and deleting a THREAD's first comment deletes the whole thread
+// — decisions.json (doc-comments.edit-delete.questions.answers.json).
+// Mirrors xlsx-comments.ts's own "Edit/delete build" section field-for-field.
+// -----------------------------------------------------------------------
+
+/** Shared across every reply-id convention this feature mints — see
+ *  `DocxComments.kt`'s own copy of this helper for the full reasoning (kept
+ *  as a small per-module, file-private duplicate rather than shared: neither
+ *  module otherwise depends on the other, and the shape is one line).
+ *  Mirrors `replyOrdinalFromId` (xlsx-comments.ts). */
+private fun replyOrdinalFromId(replyId: String): Int? = Regex("-r(\\d+)$").find(replyId)?.groupValues?.get(1)?.toIntOrNull()
+
+/** Overwrites a `<threadedComment>` element's OWN `<text>` child in place —
+ *  `ref`/`dT`/`personId`/`id`/`parentId`/`done` all stay untouched, so "keep
+ *  author/date" (equally true here: `personId`+`dT` are this format's
+ *  author/date) holds simply by never touching them. Mirrors
+ *  `setThreadedCommentText` (xlsx-comments.ts). */
+private fun setThreadedCommentText(doc: Document, el: Element, text: String) {
+    val existing = elementsByLocalName(el, "text").firstOrNull()
+    if (existing != null) {
+        existing.textContent = text
+        return
+    }
+    val prefix = detectPrefix(doc)
+    val textEl = doc.createElement(tcTag(prefix, "text"))
+    textEl.textContent = text
+    el.appendChild(textEl)
+}
+
+/** The legacy placeholder is REBUILT WHOLE from the thread's current full
+ *  transcript after ANY edit or delete, never patched — the same rule
+ *  `mutateReplyToXlsxComment` already follows for a new reply, reused here
+ *  so edit/delete can never leave root/reply text out of sync with the
+ *  placeholder a legacy Excel reader still shows. Mirrors
+ *  `rebuildPlaceholderForRoot` (xlsx-comments.ts). */
+private fun rebuildPlaceholderForRoot(ctx: WorksheetCtx, rootEl: Element) {
+    val commentsDoc = ctx.commentsDoc ?: return
+    val threadedDoc = ctx.threadedDoc ?: return
+    val rootId = rootEl.getAttribute("id")
+    val commentEl = findTcComment(commentsDoc, rootId) ?: return
+    val repliesSorted = repliesOfRoot(threadedDoc, rootId).sortedBy { parseThreadedDate(it.getAttribute("dT")) }
+    val body = buildPlaceholderBody(textOfThreadedComment(rootEl), repliesSorted.map { textOfThreadedComment(it) })
+    setXlsxCommentBody(commentsDoc, commentEl, body)
+    ctx.commentsChanged = true
+}
+
+/** §4.2's own `providerId="YouCoded"`/`displayName`-reuse person entries,
+ *  looked up the same way `readXlsxCommentsFromZip` builds its own person
+ *  map — duplicated narrowly here since edit-reply is the only write path
+ *  that needs a reply's AUTHOR back out (every other write already knows the
+ *  author it's writing; this one only ever changes text). Mirrors
+ *  `personDisplayName` (xlsx-comments.ts). */
+private fun personDisplayName(archive: WriteArchive, personIdBraced: String): String {
+    val doc = archive.personsDoc ?: return "Unknown"
+    val target = normalizeGuid(personIdBraced)
+    for (el in elementsByLocalName(doc, "person")) {
+        if (normalizeGuid(el.getAttribute("id")) == target) {
+            return el.getAttribute("displayName").ifEmpty { "Unknown" }
+        }
+    }
+    return "Unknown"
+}
+
+/** Task brief: "if that was the sheet's last comment, remove the now-empty
+ *  parts, their rels, content-type overrides and the `<legacyDrawing>`,
+ *  leaving the workbook exactly as if it never had comments on that sheet."
+ *  Never built for Move (which always re-inserts the thread elsewhere, so a
+ *  worksheet it vacates is never checked for this) — genuinely new for
+ *  Delete. "No comments left" means neither a threaded comment NOR a legacy
+ *  `<comment>` of ANY kind remains — a genuine Note on this same worksheet
+ *  (§4.1, never touched by this module) keeps the parts alive. Mirrors
+ *  `cleanupEmptyCommentPartsIfNeeded` (xlsx-comments.ts); see
+ *  `WriteArchive.removedPartNames`'s own doc comment for how a genuine
+ *  removal is represented on this read-only-`ZipFile` platform. */
+private fun cleanupEmptyCommentPartsIfNeeded(archive: WriteArchive, ctx: WorksheetCtx) {
+    val threadedDoc = ctx.threadedDoc ?: return
+    val commentsDoc = ctx.commentsDoc ?: return
+    if (ctx.vmlDoc == null) return
+    val anyThreaded = elementsByLocalName(threadedDoc, "threadedComment").isNotEmpty()
+    val anyLegacyComment = elementsByTag(commentsDoc, "comment").isNotEmpty()
+    if (anyThreaded || anyLegacyComment) return
+
+    ctx.commentsPartPath?.let { archive.removedPartNames.add(it) }
+    ctx.vmlPartPath?.let { archive.removedPartNames.add(it) }
+    ctx.threadedPartPath?.let { archive.removedPartNames.add(it) }
+
+    for (el in elementsByTag(ctx.relsDoc, "Relationship")) {
+        val type = el.getAttribute("Type")
+        if (type == COMMENTS_REL_TYPE || type == VML_REL_TYPE || type == THREADED_COMMENT_REL_TYPE) {
+            el.parentNode?.removeChild(el)
+        }
+    }
+    ctx.relsChanged = true
+
+    // The shared `vml` Default extension entry in [Content_Types].xml is left
+    // alone — it may still be needed by another worksheet's own vmlDrawing
+    // part; only the two per-worksheet Overrides this sheet minted are removed.
+    for (el in elementsByTag(archive.contentTypesDoc, "Override")) {
+        val name = el.getAttribute("PartName")
+        if (name == "/${ctx.commentsPartPath}" || name == "/${ctx.threadedPartPath}") {
+            el.parentNode?.removeChild(el)
+        }
+    }
+    archive.contentTypesChanged = true
+
+    val legacyDrawingEl = elementsByTag(ctx.worksheetDoc, "legacyDrawing").firstOrNull()
+    legacyDrawingEl?.parentNode?.removeChild(legacyDrawingEl)
+    ctx.worksheetChanged = true
+
+    // Nulled so `serializeArchiveToFile`'s own `ctx.commentsDoc != null &&
+    // commentsPath != null`-shaped gates never try to write a part this
+    // function just removed outright.
+    ctx.commentsPartPath = null
+    ctx.vmlPartPath = null
+    ctx.threadedPartPath = null
+    ctx.commentsDoc = null
+    ctx.vmlDoc = null
+    ctx.threadedDoc = null
+}
+
 private class ThreadSnapshotReply(val id: String, val personId: String, val dT: String, val text: String)
 private class ThreadSnapshot(val id: String, val personId: String, val dT: String, val done: Boolean, val text: String, val replies: List<ThreadSnapshotReply>)
 
@@ -1457,6 +1590,11 @@ private fun serializeArchiveToFile(archive: WriteArchive, outFile: File) {
         for (entry in Collections.list(archive.zip.entries())) {
             if (entry.isDirectory) continue
             val name = entry.name
+            // Edit/delete build: a part `cleanupEmptyCommentPartsIfNeeded`
+            // removed outright is skipped here entirely — never re-emitted
+            // from `overrides` or the original archive, the Kotlin-side
+            // equivalent of desktop's `zip.remove(path)`.
+            if (name in archive.removedPartNames) continue
             writtenNames.add(name)
             val overrideBytes = overrides[name]
             when {
@@ -1466,7 +1604,7 @@ private fun serializeArchiveToFile(archive: WriteArchive, outFile: File) {
             }
         }
         for ((name, bytes) in overrides) {
-            if (name !in writtenNames) zos.writeXlsxEntry(name, bytes) // a brand-new part
+            if (name !in writtenNames && name !in archive.removedPartNames) zos.writeXlsxEntry(name, bytes) // a brand-new part
         }
     }
 }
@@ -1630,6 +1768,82 @@ private fun mutateMoveXlsxComment(archive: WriteArchive, id: String, newSelector
     // returning the FRESH id lets a caller skip the fallback scan on its own
     // next call.
     return XlsxWriteResult.Ok(buildXlsxThreadId(newCtx.sheetId, newCell, snapshot.id))
+}
+
+/** Edit build (2026-09-28): overwrites the ROOT thread's own `<text>`, then
+ *  rebuilds the legacy placeholder from the thread's current transcript
+ *  (the placeholder is always rebuilt whole, never patched). Mirrors
+ *  `mutateEditXlsxComment` (xlsx-comments.ts). */
+private fun mutateEditXlsxComment(archive: WriteArchive, id: String, rawText: String): XlsxWriteResult<String> {
+    val text = stripIllegalXmlChars(rawText)
+    val found = resolveXlsxThreadTarget(archive, id)
+    if (found is XlsxWriteResult.Err) return found
+    val target = (found as XlsxWriteResult.Ok).value
+    setThreadedCommentText(target.ctx.threadedDoc!!, target.rootEl, text)
+    target.ctx.threadedChanged = true
+    rebuildPlaceholderForRoot(target.ctx, target.rootEl)
+    return XlsxWriteResult.Ok(text)
+}
+
+/** Edit build: `id` names the thread's root (matches every other
+ *  reply/resolve/reopen/move call shape); `replyId`'s trailing `-r{n}`
+ *  (`replyOrdinalFromId`) selects which reply within it, sorted by `dT` the
+ *  SAME way the read path assigns ordinals. Mirrors `mutateEditXlsxReply`
+ *  (xlsx-comments.ts). */
+private fun mutateEditXlsxReply(archive: WriteArchive, id: String, replyId: String, rawText: String): XlsxWriteResult<CommentReply> {
+    val text = stripIllegalXmlChars(rawText)
+    val ordinal = replyOrdinalFromId(replyId) ?: return XlsxWriteResult.Err(XlsxWriteError.COMMENT_NOT_FOUND)
+    val found = resolveXlsxThreadTarget(archive, id)
+    if (found is XlsxWriteResult.Err) return found
+    val target = (found as XlsxWriteResult.Ok).value
+    val ctx = target.ctx
+    val rootId = target.rootEl.getAttribute("id")
+    val repliesSorted = repliesOfRoot(ctx.threadedDoc!!, rootId).sortedBy { parseThreadedDate(it.getAttribute("dT")) }
+    val replyEl = repliesSorted.getOrNull(ordinal - 1) ?: return XlsxWriteResult.Err(XlsxWriteError.COMMENT_NOT_FOUND)
+    setThreadedCommentText(ctx.threadedDoc!!, replyEl, text)
+    ctx.threadedChanged = true
+    rebuildPlaceholderForRoot(ctx, target.rootEl)
+    val personId = replyEl.getAttribute("personId")
+    val reply = CommentReply(
+        id = replyId,
+        author = toCommentAuthor(personDisplayName(archive, personId)),
+        text = text,
+        createdAt = parseThreadedDate(replyEl.getAttribute("dT")),
+    )
+    return XlsxWriteResult.Ok(reply)
+}
+
+/** Delete build: removes the root + every reply, its legacy placeholder and
+ *  VML shape (`removeThreadFromWorksheet`, already built for Move), then —
+ *  new here — cleans up the worksheet's own now-empty comment parts if this
+ *  was its last comment of any kind. Mirrors `mutateDeleteXlsxComment`
+ *  (xlsx-comments.ts). */
+private fun mutateDeleteXlsxComment(archive: WriteArchive, id: String): XlsxWriteResult<Unit> {
+    val found = resolveXlsxThreadTarget(archive, id)
+    if (found is XlsxWriteResult.Err) return found
+    val target = (found as XlsxWriteResult.Ok).value
+    removeThreadFromWorksheet(target.ctx, target.cell, target.rootEl)
+    cleanupEmptyCommentPartsIfNeeded(archive, target.ctx)
+    return XlsxWriteResult.Ok(Unit)
+}
+
+/** Delete build: removes ONE reply and rebuilds the placeholder from what's
+ *  left — never touches the root, other replies, or the VML shape/legacy
+ *  `<comment>`'s own existence (the thread itself still has its root).
+ *  Mirrors `mutateDeleteXlsxReply` (xlsx-comments.ts). */
+private fun mutateDeleteXlsxReply(archive: WriteArchive, id: String, replyId: String): XlsxWriteResult<Unit> {
+    val ordinal = replyOrdinalFromId(replyId) ?: return XlsxWriteResult.Err(XlsxWriteError.COMMENT_NOT_FOUND)
+    val found = resolveXlsxThreadTarget(archive, id)
+    if (found is XlsxWriteResult.Err) return found
+    val target = (found as XlsxWriteResult.Ok).value
+    val ctx = target.ctx
+    val rootId = target.rootEl.getAttribute("id")
+    val repliesSorted = repliesOfRoot(ctx.threadedDoc!!, rootId).sortedBy { parseThreadedDate(it.getAttribute("dT")) }
+    val replyEl = repliesSorted.getOrNull(ordinal - 1) ?: return XlsxWriteResult.Err(XlsxWriteError.COMMENT_NOT_FOUND)
+    replyEl.parentNode?.removeChild(replyEl)
+    ctx.threadedChanged = true
+    rebuildPlaceholderForRoot(ctx, target.rootEl)
+    return XlsxWriteResult.Ok(Unit)
 }
 
 private fun findByThreadIdPrefix(comments: List<PersistedComment>, id: String): PersistedComment? {
@@ -2023,5 +2237,73 @@ suspend fun moveXlsxComment(
                 false
             }
         }
+    },
+)
+
+// -----------------------------------------------------------------------
+// Edit/delete build (2026-09-28, design doc §"Edit and delete"). Same
+// write-pipeline/verify shape as every mutation above. Mirrors
+// xlsx-comments.ts's own "Edit/delete build" public-orchestration section.
+// -----------------------------------------------------------------------
+
+suspend fun editXlsxComment(
+    absolutePath: String,
+    path: String,
+    id: String,
+    text: String,
+    homeDir: File,
+): XlsxWriteResult<String> = writeXlsxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerializeXlsx(workCopy, outFile) { archive -> mutateEditXlsxComment(archive, id, text) } },
+    verify = { outFile, extraText, _ ->
+        val r = readXlsxComments(outFile, path)
+        val target = (r as? XlsxReadResult.Ok)?.comments?.let { findByThreadIdPrefix(it, id) }
+        target?.text == extraText
+    },
+)
+
+suspend fun editXlsxReply(
+    absolutePath: String,
+    path: String,
+    id: String,
+    replyId: String,
+    text: String,
+    homeDir: File,
+): XlsxWriteResult<CommentReply> = writeXlsxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerializeXlsx(workCopy, outFile) { archive -> mutateEditXlsxReply(archive, id, replyId, text) } },
+    verify = { outFile, reply, _ ->
+        val r = readXlsxComments(outFile, path)
+        val target = (r as? XlsxReadResult.Ok)?.comments?.let { findByThreadIdPrefix(it, id) }
+        target?.replies?.any { it.id == reply.id && it.text == reply.text } == true
+    },
+)
+
+suspend fun deleteXlsxComment(absolutePath: String, path: String, id: String, homeDir: File): XlsxWriteResult<Unit> = writeXlsxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerializeXlsx(workCopy, outFile) { archive -> mutateDeleteXlsxComment(archive, id) } },
+    verify = { outFile, _, _ ->
+        val r = readXlsxComments(outFile, path)
+        (r as? XlsxReadResult.Ok)?.comments?.let { findByThreadIdPrefix(it, id) } == null
+    },
+)
+
+suspend fun deleteXlsxReply(
+    absolutePath: String,
+    path: String,
+    id: String,
+    replyId: String,
+    homeDir: File,
+): XlsxWriteResult<Unit> = writeXlsxMutation(
+    absolutePath,
+    homeDir,
+    mutate = { workCopy, outFile -> loadMutateSerializeXlsx(workCopy, outFile) { archive -> mutateDeleteXlsxReply(archive, id, replyId) } },
+    verify = { outFile, _, _ ->
+        val r = readXlsxComments(outFile, path)
+        val target = (r as? XlsxReadResult.Ok)?.comments?.let { findByThreadIdPrefix(it, id) }
+        target != null && target.replies.none { it.id == replyId }
     },
 )
