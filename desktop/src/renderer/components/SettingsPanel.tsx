@@ -433,7 +433,7 @@ function PresetSelector({ selectedId, onSelect, customName }: {
       value={selectedId}
       onChange={onSelect}
       aria-label="Notification sound"
-      className="space-y-1"
+      className="space-y-2" /* WHY 8px: one gap between neighbouring boxes app-wide (popup-spacing SP-5) */
     >
       {STOCK_PRESETS.map((p) => (
         <SettingRow
@@ -1876,7 +1876,7 @@ function RemoteButton(props: RemoteButtonProps) {
 
                     {/* Server settings */}
                     <section>
-                      {/* WHY SectionLabel + space-y-1.5 (fix batch 1, 2026-09-24):
+                      {/* WHY SectionLabel + space-y-2 (fix batch 1, 2026-09-24; 8px since popup-spacing#SP-5):
                           design guide small label (normal case) and Settings
                           spacing (6px between rows) — was a hand-typed uppercase
                           eyebrow (mb-3) over rows separated by py-2 wrappers. */}
@@ -2097,7 +2097,7 @@ function RemoteButton(props: RemoteButtonProps) {
                       <SectionLabel className="mb-2">Tailscale</SectionLabel>
 
                       {tailscale?.installed ? (
-                        // space-y-1.5 (6px, Settings spacing rule) replaces the
+                        // space-y-2 (8px between neighbouring boxes, popup-spacing#SP-5) replaces the
                         // py-2 each bare row used to carry its own spacing with —
                         // the rows are carded now, so the gap belongs between
                         // them, not inside them.
@@ -2502,7 +2502,7 @@ export function ConnectToDesktopButton() {
               {pairedDevices.length > 0 && (
                 <section>
                   <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Saved Devices</h3>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     {pairedDevices.map(device => (
                       // K6. The row was already two controls in a flex box: a
                       // borderless <button> wrapping the name so the whole thing
