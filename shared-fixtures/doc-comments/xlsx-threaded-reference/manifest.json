@@ -13,7 +13,7 @@
     "threadedComments": "xl/threadedComments/threadedComment{N}.xml",
     "persons": "xl/persons/person.xml",
     "legacyComments": "xl/comments{N}.xml",
-    "numberingScheme": "N is shared across comments{N}.xml, threadedComment{N}.xml and sheet{N}.xml for a given worksheet position -- NOT a separate global counter for threaded parts. A worksheet with no comments of any kind has no commentsN.xml/threadedCommentN.xml pair at all (N is skipped, not reused). Confirmed: docling sample uses N=1 for its single sheet; elden sample has 10 sheets, only sheets 1 and 5 (of the ones inspected) have comments, and use N=1 and N=4 respectively -- matching each sheet's own worksheet.xml.rels, not a 1:1 sheet-index mapping.",
+    "numberingScheme": "CORRECTED 2026-09-27 (design review 1, F2) -- the original text here, based on inspecting only 2 of elden's 9 commented sheets, wrongly claimed 'only sheets 1 and 5 have comments'. Re-verified directly against every sheet's own worksheet.xml.rels: elden has 10 sheets, and 9 of them carry comments (only sheet 4, 'Sorceries & Incantations List', has none). N runs 1 through 9 in the SEQUENTIAL ORDER of sheets that have any comment, skipping the one uncommented sheet's number entirely rather than reserving it: sheet1->N=1, sheet2->N=2, sheet3->N=3, sheet4->(no parts), sheet5->N=4, sheet6->N=5, sheet7->N=6, sheet8->N=7, sheet9->N=8, sheet10->N=9. N is shared between comments{N}.xml and threadedComment{N}.xml for a given worksheet, but is NOT tied to that worksheet's own position/sheetId -- docling's single-sheet file (N=1) is consistent with this but too small to show the gap-skipping behavior on its own.",
     "personsPartIsSingular": "Exactly one xl/persons/person.xml per workbook (not per worksheet), shared by every threadedComment part via personId. Confirmed in both fixtures."
   },
 
@@ -49,7 +49,7 @@
 
   "threadedCommentAttributes": {
     "root": "First message of a thread: has personId + id (both required GUIDs), ref (optional per XSD but always present in real samples), dT, optional done (\"1\"=resolved; real Excel samples OMIT done entirely when false, real Google Sheets samples write done=\"0\" explicitly when false), text child element. Never has parentId.",
-    "reply": "Has parentId set to the ROOT's id -- confirmed with a 3-reply thread and an 8-reply/9-message-total cell (see multipleThreadsPerCell below) that ALL replies point at the same root id, never chained reply-to-reply, even when replies span many days from different authors. done never observed on a reply element.",
+    "reply": "Has parentId set to the ROOT's id -- confirmed with a 3-reply thread and a 4-reply/5-root/9-message-total cell (B19; see multipleThreadsPerCell below -- CORRECTED 2026-09-27, design review 1 F2: previously miscounted as '8-reply/9-message', which is arithmetically inconsistent with itself; recounted directly from elden-threadedComment1-B19-excerpt.xml's 9 ref=\"B19\" elements: 5 have no parentId (the roots), 4 have one) that ALL replies point at the same root id, never chained reply-to-reply, even when replies span many days from different authors. done never observed on a reply element.",
     "textElement": "<text> (default-ns) or <x18tc:text> (prefixed) child element holds the plain-text comment body; xml:space=\"preserve\" is written explicitly by Google Sheets, omitted by Excel (both preserve whitespace correctly regardless since XML default is to preserve unless told otherwise by the consuming app's own trimming)."
   },
 
