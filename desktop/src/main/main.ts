@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, protocol, safeStorage, screen, shell, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, protocol, safeStorage, screen, shell, webContents } from 'electron';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
 // an uncaught exception that kills the whole main process — the app dies with
@@ -106,6 +106,7 @@ import { cleanupStaleDownloads } from './update-installer';
 import { startDailyHeartbeat } from './analytics-service';
 import { loadConfigSync, setAppliedAtLaunch, setCachedGpu } from './performance-config';
 import { perfMark } from './perf-marks';
+import { loadDefaultAppIcon } from './app-icon';
 
 // Perf lab instrumentation: perfMark() is a no-op unless YOUCODED_PERF_LOG is
 // set, so these calls cost nothing in a normal launch. The names below are a
@@ -719,8 +720,8 @@ function wireDevLoadRecovery(win: BrowserWindow, devUrl: string): void {
 }
 
 function createAppWindow(opts?: { x?: number; y?: number; width?: number; height?: number; maximize?: boolean; inactive?: boolean; buddy?: 'mascot' | 'chat' | 'bar'; buddyTitle?: string }): BrowserWindow {
-  const iconPath = path.join(__dirname, '../../assets/icon.png');
-  const icon = nativeImage.createFromPath(iconPath);
+  // WHY app-icon.ts: Windows gets the crisp multi-size .ico the installer uses.
+  const icon = loadDefaultAppIcon(path.join(__dirname, '../../assets'));
   const isMac = process.platform === 'darwin';
 
   // Buddy windows use a pure-transparent Electron surface — the "glass"

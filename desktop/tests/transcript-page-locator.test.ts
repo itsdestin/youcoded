@@ -119,6 +119,15 @@ describe('transcript:page locator memory', () => {
 
   const evt = { sender: { id: 1 } };
 
+  it('a native transcript that cannot be read is unresolved (retry), never an empty beginning', async () => {
+    const history = vi.spyOn(NativeSessionHost.prototype, 'getHistoryPageAsync')
+      .mockRejectedValue(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    try {
+      const page = await pageHandler()(evt, { sessionId: 'native-1', beforeCursor: null });
+      expect(page).toMatchObject({ events: [], hasMore: false, unresolved: true });
+    } finally { history.mockRestore(); }
+  });
+
   it('does not interrupt a native turn that starts while history is being read', async () => {
     const history = vi.spyOn(NativeSessionHost.prototype, 'getHistoryPageAsync').mockResolvedValue({
       events: [{ type: 'tool-use', sessionId: 'native-1', uuid: 'u1', timestamp: 1,

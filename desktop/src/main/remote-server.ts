@@ -1074,7 +1074,7 @@ export class RemoteServer {
     // switch defaults to null on this unknown type, so even if a live client
     // saw it broadcast, it is a harmless no-op — nothing here required a
     // renderer change.
-    if (event.type === 'PermissionResolved') {
+    if (event.type === 'PermissionResolved' || event.type === 'PasswordResolved') {
       const requestId = (event.payload as Record<string, unknown> | undefined)?._requestId;
       const buf = this.hookBuffers.get(sessionId);
       if (buf && typeof requestId === 'string') {
@@ -1083,6 +1083,14 @@ export class RemoteServer {
       }
       return;
     }
+    // admin-password design §2.5: a PasswordRequest is never buffered at all
+    // — not even transiently. Unlike a PermissionRequest (which the buffer
+    // exists to replay to a reconnecting phone), a password ask's own
+    // re-announce heartbeat (permission-broker.ts, every 3s) plus this same
+    // live broadcast already cover a reconnect within a few seconds, and this
+    // rolling log must not hold a password ask's command line/tries any
+    // longer than the ask is actually live.
+    if (event.type === 'PasswordRequest') return;
     const buf = this.hookBuffers.get(sessionId) || [];
     buf.push(event);
     // Perf: drop the overflow IN PLACE. This was `buf = buf.slice(...)`, which
@@ -1999,6 +2007,31 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         break;
       }
+      case 'native:submit-admin-password': {
+        // admin-password design §2.5, contract R6: a paired phone or browser
+        // may answer the password card too — same "not gated on
+        // native.supported" posture as native:kill-shell above.
+        //
+        // WHY no logging anywhere near this case, and why `payload.password`
+        // is never assigned to a local outside this one expression:
+        // `password` is the one secret this whole feature exists to keep out
+        // of every log, transcript and store (design R13) — this case reads
+        // it once, passes it straight to submitAdminPassword(), and nothing
+        // here retains a reference to it afterward.
+        // T4-2 (review): an authenticated-but-buggy or malicious remote peer
+        // controls this payload — a non-string `password` would otherwise
+        // throw synchronously inside submit()'s `Buffer.from`, an
+        // unnecessary throw path reachable over the WS hop specifically
+        // (nothing awaits this handler's promise, so it would only surface
+        // via the process-wide unhandledRejection log). Refused here
+        // instead, matching submit()'s own "unknown/expired requestId
+        // returns false" contract.
+        const result = this.nativeRuntime && typeof payload.password === 'string' && payload.password.length > 0
+          ? this.nativeRuntime.nativeHost.submitAdminPassword(payload.requestId, payload.password)
+          : false;
+        this.respond(client.ws, type, id, result);
+        break;
+      }
       case 'native:session-context-text': {
         // "What the assistant was given" — one file's text, read on the DESKTOP,
         // where the session and its files live. Without this case the panel opens
@@ -2851,7 +2884,10 @@ export class RemoteServer {
         // native id", so CC's transcript file is the source.
         // Async form (2026-09-16 C2 review): the desktop's page handler was
         // converted; the phone's scroll-up read the whole transcript sync too.
-        const nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null;
+        let nativePage: Awaited<ReturnType<NativeSessionHost['getHistoryPageAsync']>> = null;
+        // An existing-but-unreadable native transcript throws: `unresolved` (retry), as ipc-handlers' page.
+        try { nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null; }
+        catch { this.respond(client.ws, type, id, { ...emptyPage, unresolved: true }); break; }
         if (nativePage) {
           this.respond(client.ws, type, id, {
             events: nativePage.events,

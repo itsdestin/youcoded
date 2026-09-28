@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
+import { loadDefaultAppIcon, fitForMacDock } from './app-icon';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
@@ -65,6 +66,8 @@ import { detectEndpoints } from './models/endpoint-detectors';
 import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
+import { adminCapabilityReady } from './harness/admin-capability';
+import { startAdminPassword } from './harness/admin-password-startup';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
@@ -370,6 +373,44 @@ export function buddyShowRefusal(status: HelperStatus | null): string | null {
   return status.reason ?? 'The buddy needs its KDE helper on this desktop, and the helper is not running.';
 }
 
+/** admin-password design §2.1/§11 tasks 5+review: the ONE resolver for both
+ *  askpass paths, so `SUDO_ASKPASS` (the wrapper) and `helperScriptRealpath`
+ *  (the verifier's argv[1] check, `askpass.cjs`) can never drift apart —
+ *  T5-1 shipped with SUDO_ASKPASS pointed at `askpass.cjs` directly (no
+ *  execute bit, no shebang: sudo's execve() of it fails outright, and even
+ *  fixing that by making askpass.cjs itself executable would silently
+ *  delete the wrapper's `env -i` scrub, the actual control against a
+ *  command-supplied `NODE_OPTIONS` reaching the verified helper — design
+ *  review 1, D1). `wrapperRealpath` is resolved as a SIBLING of
+ *  `helperScriptRealpath`'s own real directory (never re-derived from `base`
+ *  independently), so the two can never name files in different directories.
+ *  dev is the worktree files under `desktop/scripts/askpass/`
+ *  (`app.getAppPath()` is `desktop/` itself in dev, where `package.json`
+ *  lives); packaged is `process.resourcesPath/app.asar.unpacked/scripts/
+ *  askpass/` (electron-builder.yml's `asarUnpack: scripts/**\/*`). Returns
+ *  null (never throws) when either file genuinely isn't there — the caller
+ *  logs plainly and skips the whole feature, exactly like a failed
+ *  self-test (design §2.2: "no fallback to a self-reported pid").
+ *
+ *  T5-3: async (`fs.promises.realpath`) — a startup-only `fs.*Sync` call
+ *  needs no `main-blocking-calls.allowlist.json` entry (that list may only
+ *  shrink, `.claude/rules/performance.md` rule 1) when the async form is
+ *  just as easy at this one call site. */
+export async function resolveAskpassPaths(): Promise<{ helperScriptRealpath: string; wrapperRealpath: string } | null> {
+  const rel = path.join('scripts', 'askpass', 'askpass.cjs');
+  try {
+    // Test doubles for `app` (many suites construct a minimal fake) may
+    // lack `getAppPath`/`isPackaged` entirely — never let that throw before
+    // this feature has a chance to be genuinely unavailable, exactly like a
+    // missing file below.
+    const base = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', rel) : path.join(app.getAppPath(), rel);
+    const helperScriptRealpath = await fs.promises.realpath(base);
+    const wrapperRealpath = await fs.promises.realpath(path.join(path.dirname(helperScriptRealpath), 'youcoded-askpass'));
+    return { helperScriptRealpath, wrapperRealpath };
+  } catch {
+    return null;
+  }
+}
 
 export function registerIpcHandlers(
   ipcMain: IpcMain,
@@ -575,17 +616,16 @@ export function registerIpcHandlers(
   //   1. theme-asset://<slug>/<relative-path>  — a file in a community/user theme's
   //      asset dir (server resolves the path and confines reads to that dir, so
   //      renderer cannot read arbitrary files).
-  //   2. data:image/png;base64,<...>            — an in-memory PNG synthesized by
-  //      the renderer (theme-default-icon.ts), used for every theme that doesn't
-  //      declare its own appIcon. Capped at MAX_DATA_ICON_BYTES to prevent a
-  //      compromised renderer from flooding main with huge buffers.
-  // Anything else (or null, or failure) resets to the bundled default icon.
-  const DEFAULT_ICON_PATH = path.join(__dirname, '../../assets/icon.png');
+  //   2. data:image/png;base64,<...> — an icon the renderer draws (unused since the
+  //      tint was retired 2026-09-10; kept for theme-matched icons). Size-capped.
+  // null or failure resets to the platform's bundled default (app-icon.ts — it was
+  // icon.png, whose edge-to-edge tile looked oversized in the Mac Dock).
+  const ASSETS_DIR = path.join(__dirname, '../../assets');
   const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'wecoded-themes');
   const MAX_DATA_ICON_BYTES = 1024 * 1024; // 1 MB — a 256px PNG is typically <100KB
   ipcMain.handle(IPC.WINDOW_SET_ICON, (_e, url: string | null) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    let iconImg = nativeImage.createFromPath(DEFAULT_ICON_PATH);
+    let iconImg = loadDefaultAppIcon(ASSETS_DIR);
     if (url && typeof url === 'string') {
       try {
         if (url.startsWith('theme-asset://')) {
@@ -607,7 +647,8 @@ export function registerIpcHandlers(
       } catch { /* fall through to default */ }
     }
     mainWindow.setIcon(iconImg);
-    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(iconImg);
+    // WHY fitForMacDock: edge-to-edge theme art is shrunk onto Apple's grid, as shipped.
+    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(fitForMacDock(iconImg));
   });
 
   // Zoom controls — each returns the new zoom percentage for the overlay UI
@@ -853,6 +894,14 @@ export function registerIpcHandlers(
     // The window can close while admission or native startup is awaiting I/O.
     const checkWindow = () => { attemptCheck?.(); if (event?.sender.isDestroyed?.()) throw new Error('The window closed before this conversation opened.'); };
     checkWindow();
+    // Task 1 (Destin, 2026-09-26): no session may exist before this
+    // machine's admin capability is settled — a session created in the
+    // first moments of app start would otherwise read the Bash
+    // description's placeholder default and keep it, byte-identical, for
+    // its own whole life (prompt cache). Resolves instantly once settled;
+    // pending only in the brief window right after app launch.
+    await adminCapabilityReady();
+    checkWindow();
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
@@ -965,6 +1014,8 @@ export function registerIpcHandlers(
             // a fresh session under the same id so the renderer isn't left with a
             // SessionInfo backed by no live HarnessSession.
             const fallbackBinding = opts.binding;
+            // WHY: an EXISTING file with no readable header was never "not persisted" — create() appended a 2nd header.
+            if (!resumed && nativeTranscriptExists(info.cwd, opts.resumeSessionId)) throw new Error('This conversation could not be resumed — its saved data could not be read.');
             if (!resumed && fallbackBinding) {
               await nativeHost.create({ sessionId: info.id, cwd: info.cwd, binding: fallbackBinding, presetId: opts.preset });
             } else if (!resumed && !opts.binding) {
@@ -3059,6 +3110,11 @@ export function registerIpcHandlers(
     { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
   );
 
+  // admin-password: the password card's app-start wiring and its quit teardown
+  // (harness/admin-password-startup.ts). Always settles this machine's capability,
+  // which session creation below awaits.
+  const stopAdminPassword = startAdminPassword(nativeHost, resolveAskpassPaths);
+
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref
   // noteModelUsed persists — thin async wrapper around bindingToPortableModel
   // (portable-model.ts) closed over the live nativeHost/providerRegistry.
@@ -3379,12 +3435,18 @@ export function registerIpcHandlers(
     // later, unrelated page read. See WindowRegistry.markInheritedByTransfer.
     const inherited = !beforeCursor
       && !!windowRegistry?.consumeInheritedByTransfer(sessionId, evt.sender.id);
+    // A rebuilt renderer missed the live stream too (TranscriptPageRequest.toEnd). Not a
+    // one-shot mark like `inherited`, and native reconcile stays keyed to real transfers.
+    const readToEnd = inherited || (!beforeCursor && req.toEnd === true);
 
     // Native sessions page over the merged event array; getHistoryPage returns
     // null for non-native ids, so CC's watcher stays the source for claude
     // sessions — the same discrimination the replay handler uses.
     const idleBeforeRead = nativeHost.isLive(sessionId) && nativeHost.isIdle(sessionId);
-    const nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null);
+    let nativePage: Awaited<ReturnType<typeof nativeHost.getHistoryPageAsync>>;
+    // An existing-but-unreadable native transcript throws: answer `unresolved` (retry), never an empty beginning.
+    try { nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null); }
+    catch { if (inherited) windowRegistry?.markInheritedByTransfer(sessionId, evt.sender.id); return { ...empty, unresolved: true }; }
     if (nativePage !== null) {
       return {
         events: nativePage.events,
@@ -3417,11 +3479,11 @@ export function registerIpcHandlers(
         return { ...empty, unresolved: true };
       }
     }
-    // The first page stops at the watcher cutoff; zero or an inherited window reads to EOF.
+    // The first page stops at the watcher cutoff; zero, an inherited window or a rebuilt renderer reads to EOF.
     // HISTORY_PAGE_LOADED dedups any overlap against the live seenUuids.
     const saved = resumePageBoundaries.get(sessionId);
     const resumeOffset = saved?.jsonlPath === source.jsonlPath ? saved.offset : null;
-    const endOffset = beforeCursor ? beforeCursor.offset : (inherited ? null : (source.startOffset || null));
+    const endOffset = beforeCursor ? beforeCursor.offset : (readToEnd ? null : (source.startOffset || null));
     const page = await readTranscriptPage({
       jsonlPath: source.jsonlPath, sessionId, endOffset, subagentsDir: source.subagentsDir,
     });
@@ -4846,6 +4908,22 @@ export function registerIpcHandlers(
     return hookRelay ? hookRelay.respond(requestId, decision) : false;
   });
 
+  // admin-password design §2.5: the card's Confirm button. `password` is never
+  // logged, echoed, or stored on this hop — it goes straight into
+  // nativeHost.submitAdminPassword() (AdminPasswordService.submit() under
+  // it), which converts it to a Buffer and hands it to the verified askpass
+  // socket without holding it beyond that call.
+  // T4-2 (review): a malformed/malicious payload's `password` is only typed
+  // as `string` at compile time — nothing upstream of this line actually
+  // checks it. A non-string reaching `Buffer.from(password, 'utf8')` inside
+  // submit() throws synchronously; Electron rejects the ipcMain.handle
+  // promise for that (no crash), but it's an unnecessary throw path a
+  // buggy/malicious renderer can trigger. Refused here instead, matching
+  // submit()'s own "unknown/expired requestId returns false" contract —
+  // never logs `password` (a non-string value included).
+  ipcMain.handle(IPC.NATIVE_SUBMIT_ADMIN_PASSWORD, (_event, { requestId, password }: { requestId: string; password: string }) =>
+    typeof password === 'string' && password.length > 0 ? nativeHost.submitAdminPassword(requestId, password) : false);
+
   // --- Settings → Development feature handlers (see dev-tools.ts) ---
 
   ipcMain.handle(IPC.DEV_LOG_TAIL, async (_event, maxLines: number) => {
@@ -5620,6 +5698,7 @@ export function registerIpcHandlers(
     // is synchronous and callers don't await it, so this mirrors the async
     // stopSyncSpaces() teardown pattern in main.ts window-all-closed.
     void nativeHost.destroyAll().catch(() => {});
+    stopAdminPassword(); // refuse open password asks; final forget sweep
     // Awaited by the caller: never leave an orphaned llama-server on quit.
     const engineStopped = engineManager.stopAll().catch(() => {});
     for (const watcher of topicWatchers.values()) {

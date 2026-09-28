@@ -34,8 +34,11 @@ export const HOVER_CAP_PX = 120;
 /** Trailing room inside the label box past the text, in px. It is what the
  *  fade mask fades over when the name fits, so the last letter is never the
  *  thing being faded. Must match `.session-pill__name`'s padding-right and the
- *  mask stop in globals.css — pinned by animation-frame-budget.test.ts. */
-export const LABEL_TAIL_PX = 12;
+ *  mask stop in globals.css — pinned by animation-frame-budget.test.ts.
+ *  It doubles as the pill's right padding (the pill has none of its own), so
+ *  it is the 7px that sits left of the visible dot: 12 left the right side of
+ *  every named pill visibly wider (Destin, 2026-09-27). */
+export const LABEL_TAIL_PX = 7;
 
 /** Extra px the label box opens past text + tail. The text width comes from a
  *  canvas measurement of the same font; canvas and layout can still disagree by

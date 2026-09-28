@@ -17,6 +17,9 @@ import { takeHeadLines, takeTailLines } from './truncate';
 import type { ToolResultPayload } from './types';
 import { spawnDetached, killTree, formatElapsed, MAX_EXPLICIT_RUNNING } from '../shell-registry';
 import { CWD_SENTINEL, ENV_SENTINEL, stripAnsi, stripSentinelLines } from './shell-text';
+import { forgetOnCallExit } from '../askpass/admin-forget';
+import { getSettledAdminCapability } from '../admin-capability';
+import { adminRefusedModelLine } from '../../../shared/admin-password-copy';
 // Why re-exported: harness-tools-core.test.ts and other callers import
 // stripAnsi from here; moving the implementation into shell-text.ts (so the
 // ShellRegistry can use it without an import cycle) must not move the import
@@ -34,6 +37,11 @@ const MAX_TIMEOUT_MS = 600_000;
  *  fight ctx.shellCwd, which already owns directory persistence exclusively. */
 const ENV_PERSIST_DENYLIST = new Set([
   'PWD', 'OLDPWD', 'SHLVL', '_', 'RANDOM', 'SECONDS', 'LINENO', 'PPID', 'BASH', 'BASHPID',
+  // admin-password design §2.3/§11 task 5: never persisted, so a command
+  // that `export`s over these to poison a LATER call's askpass wiring
+  // cannot make that override outlive its own call — see spawnEnv's own
+  // comment for why overriding them for THIS command's own process is fine.
+  'SUDO_ASKPASS', 'YOUCODED_ASKPASS_SOCKET', 'YOUCODED_ASKPASS_RUNTIME',
 ]);
 
 /** A command whose first word is `sleep` is never handed off (spec §4.1):
@@ -136,6 +144,17 @@ export function getShell(): ShellInfo {
 export function resetShellCache(): void {
   cachedShell = null;
 }
+
+// admin-password design, code review F1, redesigned 2026-09-26 (Destin,
+// "the model's guidance must always be true on the machine in use") — which
+// of THREE sentences this sudo paragraph shows is now `admin-capability.ts`'s
+// settled value, not a boolean this file owns: 'card' (macOS stays off while
+// MAC_ENABLED is; Windows is its own third sentence; Linux needs both a
+// passed peer-cred self-test AND a supported sudo flavour). Settled exactly
+// once, from ipc-handlers.ts's app-start wiring, BEFORE any session may be
+// created (`adminCapabilityReady()` gates session creation there) — so this
+// file states only the OUTCOME, never re-derives the platform/flavour logic
+// that decided it, and no session can ever read a stale placeholder.
 
 /** Only the bash shells get cwd tracking. The PowerShell fallback would need a
  *  different sentinel AND an $LASTEXITCODE dance to preserve exit codes, and it
@@ -416,8 +435,36 @@ function bashDescription(): string {
     // sits until the timeout hands it to the background, and nothing ever
     // answers it.
     'A command that might prompt for input hangs: pass its non-interactive flag ' +
-    '(`-y`, `--yes`, `--non-interactive`, or the tool\'s equivalent) whenever a command could ask a question.'
+    '(`-y`, `--yes`, `--non-interactive`, or the tool\'s equivalent) whenever a command could ask a question. ' +
+    // admin-password design §8, code review F1, redesigned 2026-09-26: what
+    // the model needs to know about sudo on THIS machine — one true sentence
+    // per settled AdminCapability value, never a guess. 'card': it WORKS,
+    // who types the password, and the two things never to do (both would
+    // leak the password to the model's own stdout, or bypass the app's own
+    // verification entirely). 'windows': sudo there, when the user enabled
+    // it, opens Windows' own permission window — nothing this app shows or
+    // controls. 'no-password-only': telling the model sudo "works" would be
+    // false — a sudo needing a password fails or hangs with no explanation.
+    // Passwordless (NOPASSWD) sudo keeps working on EVERY platform either
+    // way — nothing about this feature refuses it; this paragraph only ever
+    // changes the model's own expectations, never behavior.
+    adminSudoSentence() +
+    '`doas`, `su`, `pkexec`, and `run0` are refused; use `sudo` instead.'
   );
+}
+
+function adminSudoSentence(): string {
+  const capability = getSettledAdminCapability();
+  if (capability === 'card') {
+    return '`sudo` works: the user types their admin password in a card inside the app itself, never in this ' +
+      'output — do not pass a password, `-S`, or `-A`, and do not set `SUDO_ASKPASS` yourself. ';
+  }
+  if (capability === 'windows') {
+    return '`sudo`, if enabled on this PC, opens Windows\' own permission window for the user; it never asks ' +
+      'for a password here. ';
+  }
+  return '`sudo` only works here when the command needs no password (NOPASSWD) — this computer can\'t show ' +
+    'a password card, so a `sudo` that asks for one will fail or hang with no further explanation. ';
 }
 
 // Spill paths live in ./spill-paths so guards.ts can recognize one without
@@ -493,6 +540,36 @@ export const BashTool = defineTool({
     // process.env (identical before/after) never crosses into shellEnv.
     const shellEnvIn = ctx.shellEnv ?? {};
     const spawnEnv: NodeJS.ProcessEnv = { ...process.env, ...shellEnvIn, NO_COLOR: '1', FORCE_COLOR: '0' };
+    // ELECTRON_RUN_AS_NODE is the app's own launch mode, never the user's —
+    // a leaked copy would turn any Electron app the command starts into
+    // plain node. NODE_OPTIONS / NODE_REPL_EXTERNAL_MODULE are deliberately
+    // KEPT (2026-09-26): they are the user's own settings (a memory limit in
+    // their shell profile, say), and the askpass helper doesn't need them
+    // gone — its wrapper runs under `env -i` and the server refuses any
+    // helper whose environment isn't exactly the allowlist (verify.ts).
+    delete spawnEnv.ELECTRON_RUN_AS_NODE;
+    // NODE_V8_COVERAGE is NOT a plain `delete` (verified empirically,
+    // Node 26): when the APP's own process has real coverage collection
+    // active, `child_process.spawn` force-re-adds this ONE variable to the
+    // child's environment whenever the given `env` object omits it —
+    // deleting it here is therefore silently undone by Node itself. Setting
+    // it to an explicit empty string IS respected (Node only overrides an
+    // ABSENT key), which is what actually keeps it out of the child's env.
+    spawnEnv.NODE_V8_COVERAGE = '';
+    // admin-password design §2.3: applied AFTER shellEnvIn so a
+    // `persistent_env`-carried value from an earlier call can never point
+    // these elsewhere (diffPersistableEnv's own denylist is the other half
+    // of that guarantee). A command CAN still override them for itself
+    // (`SUDO_ASKPASS=x sudo -A …`) — that only means its own helper runs and
+    // the app is never asked; nothing leaks. Absent entirely when the app's
+    // AskpassServer never started (self-test failed, Windows, macOS off):
+    // sudo then simply fails as it did before this feature existed.
+    if (ctx.adminPasswordEnv) Object.assign(spawnEnv, ctx.adminPasswordEnv);
+    // admin-password design §6/§11 task 5: every return below that means
+    // "this call is over and nothing was ever spawned for it" wipes a held
+    // up-front password rather than leave it to survive past its own call
+    // — a cheap no-op unless askUpFront actually ran for this toolCallId.
+    const wipeAdminUpfront = () => ctx.adminPasswordService?.wipeUpfront(ctx.toolCallId ?? 'unknown');
     let launch = shell;
     if (process.env.YOUCODED_LUNA_EXPERIMENT === '1') {
       const script = process.env.LUNA_SHELL_JAIL_SCRIPT;
@@ -500,6 +577,7 @@ export const BashTool = defineTool({
       // WHY: a model-controlled persisted shell env must not swap the trusted
       // fixture root or bypass the same wrapper in background execution.
       if (process.platform !== 'linux' || !script || !path.isAbsolute(script) || !root || !path.isAbsolute(root)) {
+        wipeAdminUpfront();
         return { text: 'Luna experiment shell isolation is unavailable.', isError: true };
       }
       spawnEnv.LUNA_FIXTURE_ROOT = root;
@@ -520,9 +598,11 @@ export const BashTool = defineTool({
     // finished notice arrives on its own at the next idle boundary.
     if (args.run_in_background) {
       if (args.persistent_env) {
+        wipeAdminUpfront();
         return { text: 'Bash rejected: persistent_env cannot be combined with run_in_background — a background command never reports its environment back. Drop one of the two.', isError: true };
       }
       if (!ctx.shells) {
+        wipeAdminUpfront();
         return { text: 'Bash rejected: background execution is not available in this session.', isError: true };
       }
       const started = ctx.shells.start({
@@ -530,11 +610,17 @@ export const BashTool = defineTool({
         shellCmd: launch.cmd, shellArgs: launch.args, env: spawnEnv,
       });
       if (!started.ok) {
+        wipeAdminUpfront(); // nothing was spawned — ShellRegistry never got a chance to
         if (started.reason === 'cap') {
           return { text: `${MAX_EXPLICIT_RUNNING} background commands are already running (${started.running.join(', ')}). Stop one with KillShell before starting another.`, isError: true };
         }
         return { text: `Failed to start shell: ${started.detail} (shell=${shell.cmd}; cwd=${startCwd})`, isError: true };
       }
+      // Started successfully: ShellRegistry.register() just ran (and, when
+      // this call's password was already ACCEPTED, seeded `admin: true`
+      // from its own `acceptedToolCallIds` — review fix T5-4, never from a
+      // bare delivery) — the up-front hold, if any, survives for
+      // ShellRegistry.onExit to wipe on THIS run's own eventual exit.
       return {
         text: `Started in the background (shell id ${started.run.shellId}). You'll be told when it finishes. BashOutput reads new output (or lists runs); KillShell stops it. Running now: ${started.runningExplicit} of ${MAX_EXPLICIT_RUNNING}.`,
       };
@@ -563,8 +649,18 @@ export const BashTool = defineTool({
           env: spawnEnv,
         });
       } catch (e: any) {
+        wipeAdminUpfront(); // nothing was spawned
         resolve({ text: `Failed to start shell: ${e?.message ?? e} (shell=${shell.cmd}; cwd=${startCwd})`, isError: true });
         return;
+      }
+      // admin-password design §2.3/§11 task 5: registered for the foreground
+      // path here — a hand-off (the timeout branch below) lets
+      // ctx.shells.adopt() re-register the SAME pid into the SAME RunningCalls,
+      // then removes this call's close/error listeners without firing them, so
+      // registration survives the hand-off. A FAILED adopt keeps them attached:
+      // the kill that follows reaches onCallExit and unregisters normally.
+      if (ctx.runningCalls && child.pid) {
+        void ctx.runningCalls.registerPid(child.pid, { sessionId: ctx.sessionId, toolCallId: ctx.toolCallId ?? 'unknown' });
       }
       // Bounded head + rolling tail + an UNCONDITIONAL byte counter.
       //
@@ -914,7 +1010,12 @@ export const BashTool = defineTool({
         // everything below it should be interpreted, so it goes above it.
         // `notice` carries a leading \n for the trailing position; strip it here.
         const leadNotice = notice ? notice.replace(/^\n/, '') + '\n\n' : '';
-        const text = (leadNotice + combined + shellCwdMiss + envNotice).trim() + `\n[${meta.join(' · ')}]`;
+        // Never fail silently (2026-09-26): if YouCoded turned down a password
+        // request from this command, say so in the result the assistant reads —
+        // the card finds this same line in the saved result and explains it.
+        const refusedReason = ctx.adminPasswordService?.takeRefusal?.(ctx.toolCallId ?? 'unknown');
+        const refusedNote = refusedReason ? `\n${adminRefusedModelLine(refusedReason)}` : '';
+        const text = (leadNotice + combined + shellCwdMiss + envNotice + refusedNote).trim() + `\n[${meta.join(' · ')}]`;
         const payload: ToolResultPayload & { truncated: boolean; outputPath?: string; timedOut: boolean; handedOffTo?: string } = {
           text,
           isError,
@@ -1016,16 +1117,39 @@ export const BashTool = defineTool({
       ctx.signal.addEventListener('abort', onAbort, { once: true });
       // If the signal already fired before we attached (once:true won't replay), kill now.
       if (ctx.signal.aborted) onAbort();
+      // admin-password design §2.3/§5/§6/§11 task 5: the ONLY two listeners
+      // that mean "this foreground call's own root pid is truly done" —
+      // removed by the hand-off branch above once adopt() succeeds, so this
+      // unregister/forget/wipe never double-fires once ownership moves to
+      // ShellRegistry (its own onExit does the equivalent there).
+      const onCallExit = () => {
+        if (ctx.runningCalls && child.pid) {
+          ctx.runningCalls.unregister(child.pid);
+          forgetOnCallExit(ctx.runningCalls, ctx.toolCallId ?? 'unknown');
+        }
+        wipeAdminUpfront();
+        // Review fix F2: a plain foreground admin command never registers a
+        // ShellRun (ShellRegistry.onExit's own clear never runs for it) — so
+        // this is the ONLY place its "accepted" mark (if any) is ever removed.
+        // A cheap no-op when nothing was ever accepted for this toolCallId.
+        ctx.shells?.clearAccepted(ctx.toolCallId ?? 'unknown');
+      };
       // Async spawn failure (the path Windows takes for a bad cwd): name the
       // shell + cwd actually used, not just Node's bare `spawn <cmd> <CODE>` —
       // same diagnosability contract as the sync catch above.
-      const onError = (err: Error) => finish(`Failed to start shell: ${err.message} (shell=${shell.cmd}; cwd=${startCwd})\n`, true);
+      const onError = (err: Error) => {
+        onCallExit();
+        finish(`Failed to start shell: ${err.message} (shell=${shell.cmd}; cwd=${startCwd})\n`, true);
+      };
       child.on('error', onError);
       // WHY no exit-code prefix here anymore: the metadata line above now states
       // `exit N` for every result, so a leading "(exit code N)" duplicated the
       // same fact in two places. The timeout/abort handlers keep their prefixes —
       // those are messages, not exit codes.
-      const onClose = (code: number | null) => finish('', code !== 0, code);
+      const onClose = (code: number | null) => {
+        onCallExit();
+        finish('', code !== 0, code);
+      };
       child.on('close', onClose);
     });
   },

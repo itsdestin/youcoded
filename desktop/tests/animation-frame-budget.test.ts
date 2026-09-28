@@ -137,7 +137,7 @@ describe('motion vocabulary', () => {
   it('lays the name out once and fades what does not fit', () => {
     // The label box clips; the name inside is max-content so it never
     // re-ellipsises mid-animation ("theme …", "theme cont…", "theme contra…").
-    // The 12px tail is LABEL_TAIL_PX: the mask stop, the name's padding and the
+    // The 7px tail is LABEL_TAIL_PX: the mask stop, the name's padding and the
     // module constant must agree or the fade lands on the last letter.
     // SessionStrip's half is ast-grep: session-strip-name-laid-out-once.
     // WHY still a text read: the tail width is READ from pill-label-style.ts at

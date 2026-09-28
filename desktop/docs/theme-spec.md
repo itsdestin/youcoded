@@ -9,10 +9,9 @@ updated: 2026-07-22
 
 > **The colour/token half of this spec was deleted on 2026-07-22.** It documented
 > a pre-engine workflow that no longer exists — hand-written `[data-theme]` CSS
-> blocks, a `ThemeName` union, a `DARK_THEMES` array — plus the wrong product
-> name ("DestinCode") and the wrong localStorage key (`destincode-theme`; the
-> real key is `youcoded-theme`). Following it would have produced a theme the
-> engine never loads.
+> blocks, a `ThemeName` union, a `DARK_THEMES` array — plus the app's old
+> pre-rename name and localStorage key (the real key is `youcoded-theme`).
+> Following it would have produced a theme the engine never loads.
 >
 > The mascot-rig sections below were re-verified against code on the same date
 > and are kept: every file and type they cite still exists.

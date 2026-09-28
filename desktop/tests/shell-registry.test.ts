@@ -1,7 +1,7 @@
 // ShellRegistry (G-1 background Bash): the one owner of every command that
 // outlives its call. Process tests need /bin/bash and skip on Windows; the
 // Windows kill path is unit-mocked in shell-registry-win-kill.test.ts.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -9,6 +9,7 @@ import {
   ShellRegistry, MAX_EXPLICIT_RUNNING, RING_LINES, WIRE_TAIL_LINES, READ_MAX_BYTES, LONG_RUN_NOTICE_MS, EXIT_DRAIN_GRACE_MS,
   formatElapsed, formatFinishedNotice, formatLongRunningNotice, stateText, spawnDetached,
 } from '../src/main/harness/shell-registry';
+import { RunningCalls } from '../src/main/harness/askpass/running-calls';
 import { spillRoot, spillDirFor, sweepOldSpillFiles } from '../src/main/harness/tools/spill-paths';
 import { CWD_SENTINEL, ENV_SENTINEL, stripSentinelLines, normalizeNewlines } from '../src/main/harness/tools/shell-text';
 
@@ -309,8 +310,138 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
     if (!r.ok) throw new Error('start failed');
     await r.run.exited;
     const v = reg.toView(r.run);
-    expect(Object.keys(v).sort()).toEqual(['detached', 'endedAt', 'exitCode', 'logPath', 'shellId', 'startedAt', 'status', 'stopReason', 'tail', 'toolUseId']);
+    expect(Object.keys(v).sort()).toEqual(['admin', 'detached', 'endedAt', 'exitCode', 'logPath', 'shellId', 'startedAt', 'status', 'stopReason', 'tail', 'toolUseId']);
     expect(v.detached).toBe(false);
+  });
+});
+
+// admin-password design §2.3/§5/§6/§7, §11 task 5. `runningCalls` here is a
+// REAL RunningCalls instance (register()/onExit() call concrete methods on
+// it), but `recordSudoPath` is never called — so `forgetOnCallExit`'s own
+// `-K` branch always early-returns and no real `sudo` is ever invoked by
+// this suite (CI runs it on Windows/macOS too).
+describe.skipIf(!posix)('ShellRegistry — admin-password wiring', () => {
+  let dir: string;
+  let rc: RunningCalls;
+  let reg: ShellRegistry;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shell-reg-admin-'));
+    rc = new RunningCalls();
+  });
+  afterEach(async () => {
+    await reg.killAll('app-quit', { graceMs: 0 });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+  });
+
+  it('registers the spawned root pid into RunningCalls on start()', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    await waitFor(() => rc.lookup(r.run.child.pid!) !== undefined);
+    expect(rc.lookup(r.run.child.pid!)?.toolCallId).toBe('tu-1');
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('unregisters the root pid, and calls the wipeUpfront callback, when the run exits', async () => {
+    const wipeUpfront = vi.fn();
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc, wipeUpfront });
+    const r = reg.start(startSpec('echo done', dir));
+    if (!r.ok) throw new Error('start failed');
+    const pid = r.run.child.pid!;
+    await r.run.exited;
+    expect(rc.lookup(pid)).toBeUndefined();
+    expect(wipeUpfront).toHaveBeenCalledWith('tu-1');
+  });
+
+  // Review fix T5-4: admin must come ONLY from acceptance (markAdmin), never
+  // from a bare delivery — a delivered-but-wrong password is still "granted"
+  // in RunningCalls' own bookkeeping, and seeding from that would show
+  // "Running as admin" before sudo ever actually took the password.
+  it('seeds admin: true at registration when the password was already ACCEPTED (the up-front-then-background race)', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    reg.markAdmin('tu-1'); // acceptance arrives BEFORE the run is registered
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(reg.toView(r.run).admin).toBe(true);
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('does NOT seed admin: true from a bare RunningCalls delivery that was never accepted', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    rc.markGranted('tu-1'); // delivered — but never accepted (could still be wrong)
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(reg.toView(r.run).admin).toBe(false);
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  // F2 (code review): the common case (a plain foreground admin command)
+  // never registers a ShellRun at all, so onExit's own clear never runs for
+  // it — clearAccepted() is the ONLY thing that removes that entry, and
+  // tools/bash.ts calls it directly on its own foreground exit path.
+  it('clearAccepted() removes an acceptance directly, for a call that never reaches ShellRegistry at all', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    reg.markAdmin('tu-1'); // simulates the "accepted" signal for a plain foreground call
+    reg.clearAccepted('tu-1'); // simulates bash.ts's own foreground exit handler
+
+    // A LATER, unrelated call somehow reusing the same toolUseId string
+    // must NOT come up admin: true — proving the earlier mark was actually
+    // cleared, not just shadowed.
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(reg.toView(r.run).admin).toBe(false);
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('clearAccepted() for a toolUseId that was never marked is a no-op', () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`);
+    expect(() => reg.clearAccepted('never-marked')).not.toThrow();
+  });
+
+  it('markAdmin() turns the flag on for a matching RUNNING toolUseId and emits a change', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    const changes: any[] = [];
+    reg.on('change', (v) => changes.push(v));
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(reg.toView(r.run).admin).toBe(false);
+
+    reg.markAdmin('tu-1');
+
+    expect(reg.toView(r.run).admin).toBe(true);
+    expect(changes.some((v) => v.admin === true)).toBe(true);
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('markAdmin() for an unknown toolUseId is a no-op', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(() => reg.markAdmin('no-such-tool-use-id')).not.toThrow();
+    expect(reg.toView(r.run).admin).toBe(false);
+    await reg.kill(r.run.shellId, 'user', { graceMs: 0 });
+  });
+
+  it('the admin flag is cleared when the run exits', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    reg.markAdmin('tu-1');
+    const r = reg.start(startSpec('echo done', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(reg.toView(r.run).admin).toBe(true);
+    await r.run.exited;
+    expect(reg.toView(r.run).admin).toBe(false);
+  });
+
+  it('a SECOND run for the same toolCallId does not inherit acceptedToolCallIds after the first exited and cleared it', async () => {
+    reg = new ShellRegistry(`t-${path.basename(dir)}`, { runningCalls: rc });
+    reg.markAdmin('tu-1');
+    const first = reg.start(startSpec('echo done', dir));
+    if (!first.ok) throw new Error('start failed');
+    await first.run.exited; // clears acceptedToolCallIds for 'tu-1'
+
+    const second = reg.start(startSpec('echo done again', dir, 'tu-1'));
+    if (!second.ok) throw new Error('start failed');
+    expect(reg.toView(second.run).admin).toBe(false);
   });
 });
 

@@ -984,19 +984,19 @@ body[data-mode="buddy-chat"] #theme-bg {
    the name inside is laid out ONCE at its full width so it never re-wraps or
    re-ellipsises mid-animation. Whatever does not fit fades out over the last
    LABEL_TAIL_PX, the way Chrome fades a tab title — a squeezed active pill and
-   a pill mid-reveal are the same treatment at two moments. The 12px here is
-   LABEL_TAIL_PX in pill-label-style.ts; the test pins them together. */
+   a pill mid-reveal are the same treatment at two moments. The 7px is LABEL_TAIL_PX
+   (test-pinned) and the pill's right padding: it matches the left (12 did not). */
 .session-pill__label {
   display: block;
   min-width: 0;
   overflow: hidden;
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 7px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 7px), transparent);
 }
 .session-pill__name {
   display: block;
   width: max-content;
-  padding-right: 12px;
+  padding-right: 7px;
   white-space: nowrap;
 }
 

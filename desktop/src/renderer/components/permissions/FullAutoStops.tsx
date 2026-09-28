@@ -1,6 +1,6 @@
 import type { ReactNode, RefObject } from 'react';
 import { PERMISSION_DISPLAY } from '../StatusBar';
-import { fullAutoStopCopy } from './deny-list-copy';
+import { fullAutoStopCopy, adminStopCopy } from './deny-list-copy';
 import type { FloorStop } from '../../../shared/types';
 
 // WHY: every broad permission choice, including the generic card, has the
@@ -10,7 +10,7 @@ export const BROAD_ALLOW_COLORS = 'bg-blue-600/60 hover:bg-blue-600/80 text-blue
 /** Full Auto's exceptional asks share the same status-colored explanation and
  * one-time-first button order. The outside-folder grant alone has a second,
  * explicit confirmation because it widens consent for the rest of this session. */
-export function FullAutoStops({ kind, confirmingExternal, toolName, command, floorStop, suppressAlwaysAllow, specialistName, folderName,
+export function FullAutoStops({ kind, confirmingExternal, toolName, command, floorStop, suppressAlwaysAllow, adminOutsideFullAuto, specialistName, folderName,
   responding, focusIdx, buttonsRef, pad, ring, unconfirmedNote, onAllow, onDeny, onAlways,
   onOpenExternal, onBackExternal, onGrantExternal,
 }: {
@@ -20,6 +20,9 @@ export function FullAutoStops({ kind, confirmingExternal, toolName, command, flo
   command?: string;
   floorStop?: FloorStop;
   suppressAlwaysAllow?: boolean;
+  /** An admin command's stop outside Full auto (admin-password design): same
+   *  band, but its subline must not claim "Full auto still stops here". */
+  adminOutsideFullAuto?: boolean;
   specialistName?: string;
   folderName?: string;
   responding: boolean;
@@ -54,7 +57,7 @@ export function FullAutoStops({ kind, confirmingExternal, toolName, command, flo
 
   const fa = PERMISSION_DISPLAY['full-auto'];
   const isEdit = toolName === 'Edit';
-  const stop = kind === 'danger' ? fullAutoStopCopy(command, floorStop) : null;
+  const stop = kind === 'danger' ? (adminOutsideFullAuto ? adminStopCopy() : fullAutoStopCopy(command, floorStop)) : null;
   const header = stop?.header ?? (kind === 'budget'
     ? toolName === 'doom_loop' ? 'Stopped before repeating a tool call' : 'Stopped at the tool-call limit'
     : `Stopped before ${isEdit ? 'editing' : 'writing'} outside this project`);
@@ -75,6 +78,12 @@ export function FullAutoStops({ kind, confirmingExternal, toolName, command, flo
         <p className="text-xs font-medium" style={{ color: fa.color }}>{header}</p>
         <p className="text-2xs text-fg-dim leading-relaxed">{subline}</p>
       </div>
+      {/* An admin command shows its exact command line before the buttons
+          (admin-password design, UX review 1 U1): the header carries only the
+          assistant's summary, and this asks for full control of the computer. */}
+      {floorStop === 'admin' && command && (
+        <p className="text-2xs leading-relaxed text-fg-2 bg-inset/70 px-2 py-1.5 rounded-sm break-all font-mono">{command}</p>
+      )}
       <div className="flex items-center gap-2 flex-wrap">
         <button ref={el => { buttonsRef.current[0] = el; }} disabled={responding} onClick={onAllow} className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-400/60 hover:bg-green-400/80 text-green-100 transition-colors disabled:opacity-50 ${focusIdx === 0 ? ring : ''}`}>{action}</button>
         <button ref={el => { buttonsRef.current[1] = el; }} disabled={responding} onClick={onDeny} className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}>Deny</button>

@@ -108,6 +108,21 @@ describe('readTranscriptPage — CC transcript', () => {
     expect(page.cursor).toBeNull();
   });
 
+  it('a file that exists but cannot be opened is unresolved, never "no history"', async () => {
+    // A Windows sharing lock (antivirus, backup) cannot be staged portably, so
+    // fake the exact error Windows returns for it.
+    jsonlPath = writeTranscript(3);
+    const busy = Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    const spy = vi.spyOn(fsModule.promises, 'open').mockRejectedValueOnce(busy);
+    try {
+      const page = await readTranscriptPage({ jsonlPath, sessionId: 's1', endOffset: null });
+      expect(page.events).toEqual([]);
+      expect(page.unresolved).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('includes subagent events only for Agent tool_uses inside the page', async () => {
     // Agent tool_use in turn 45 (inside the last PAGE_TURNS of 50) and in turn 3
     // (outside it). Both have agent-*.jsonl + .meta.json on disk; only the

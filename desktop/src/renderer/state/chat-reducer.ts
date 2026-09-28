@@ -11,7 +11,7 @@ import {
   abnormalStopReason,
   SerializedChatState,
 } from './chat-types';
-import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
+import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState, type PasswordAsk } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
@@ -652,10 +652,13 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
     if (idx >= 0 && segments[idx].type === 'tool') {
       const existing = segments[idx] as Extract<SubagentSegment, { type: 'tool' }>;
       existingToolSegment = existing;
+      // passwordAsk dropped on settle, same reasoning as the top-level
+      // TRANSCRIPT_TOOL_RESULT branch (coordinator, 2026-09-26).
+      const { passwordAsk: _resolved, ...base } = existing;
       segments[idx] = action.isError
-        ? { ...existing, status: 'failed', error: action.result }
+        ? { ...base, status: 'failed', error: action.result }
         : {
-            ...existing,
+            ...base,
             status: 'complete',
             response: action.result,
             ...(action.structuredPatch ? { structuredPatch: action.structuredPatch } : {}),
@@ -2077,7 +2080,11 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // KEPT card ends (the user answered Claude Code's menu in the terminal,
         // the tool ran, its result landed here). A card is either kept
         // (awaiting-approval + expired) or settled — never both.
-        const { expired: _settled, ...base } = existing;
+        // `passwordAsk` goes too, for the same reason (coordinator, 2026-09-26):
+        // the command can't finish before sudo gets the password, so this is
+        // not a real race in practice — but a settled card must never still
+        // carry an ask ToolCard would try to render on top of a finished tool.
+        const { expired: _settled, passwordAsk: _resolved, ...base } = existing;
         if (action.isError) {
           toolCalls.set(action.toolUseId, {
             ...base, status: 'failed', error: action.result,
@@ -2664,6 +2671,127 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
+    // admin-password design §2.5/§2.6: a running Bash call's sudo is waiting
+    // for the password. Unlike PERMISSION_REQUEST, `toolUseId` names the
+    // exact card directly — no name/input matching, because the broker/
+    // askpass-server already know exactly which call is asking.
+    case 'PASSWORD_REQUEST': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const ask: PasswordAsk = {
+        requestId: action.requestId,
+        command: action.command,
+        ...(action.via ? { via: action.via } : {}),
+        ...(typeof action.triesLeft === 'number' ? { triesLeft: action.triesLeft } : {}),
+      };
+
+      // Specialists 1c: a child's OWN sudo nests under the Task card that
+      // hired it, exactly like a routed permission ask (findSpecialistCard,
+      // used by PERMISSION_REQUEST above) — the card's toolUseId lives inside
+      // that Task card's subagentSegments, never in session.toolCalls.
+      if (action.specialist) {
+        const cardId = findSpecialistCard(session.toolCalls, {
+          parentToolCallId: action.specialist.parentToolCallId,
+          childId: action.specialist.childId,
+        });
+        if (cardId) {
+          const card = session.toolCalls.get(cardId)!;
+          const segs = card.subagentSegments;
+          const idx = segs?.findIndex((s) => s.type === 'tool' && s.toolUseId === action.toolUseId) ?? -1;
+          if (idx >= 0) {
+            const seg = segs![idx] as Extract<SubagentSegment, { type: 'tool' }>;
+            // Repeatable like PERMISSION_REQUEST's own heartbeat — an
+            // unchanged requestId is a no-op so a 3s re-announce doesn't
+            // rebuild the whole Map for nothing.
+            if (seg.passwordAsk?.requestId === action.requestId) return state;
+            // Bug (Destin, real-machine test): the command looked like it was
+            // still running while the password card waited — nothing marked
+            // it as needing input. Flips this row to 'awaiting-approval' the
+            // same way a nested permission ask does (PERMISSION_REQUEST
+            // above) — every existing 'awaiting-approval' consumer that also
+            // needs to recognize a password ask now goes through
+            // needsUserAnswer() (specialist-cards.ts) instead of a bare
+            // requestId check.
+            const nextSegs = [...segs!];
+            nextSegs[idx] = { ...seg, passwordAsk: ask, status: 'awaiting-approval' };
+            const toolCalls = new Map(session.toolCalls);
+            toolCalls.set(cardId, { ...card, subagentSegments: nextSegs });
+            next.set(action.sessionId, { ...session, toolCalls });
+            return next;
+          }
+        }
+        // No segment to nest under yet (a routed ask replayed onto a
+        // timeline without its Task card, or the child's own tool-use event
+        // hasn't landed) — fall through to the top-level path below, which
+        // still carries the specialist label via ToolCallState.specialist.
+      }
+
+      const existing = session.toolCalls.get(action.toolUseId);
+      if (existing?.passwordAsk?.requestId === action.requestId) return state; // heartbeat no-op
+      const toolCalls = new Map(session.toolCalls);
+      if (existing) {
+        toolCalls.set(action.toolUseId, {
+          ...existing,
+          passwordAsk: ask,
+          // Same flip as the nested branch above — a top-level password ask
+          // must look and act exactly like a pending permission ask.
+          status: 'awaiting-approval',
+          ...(action.specialist
+            ? { specialist: { childId: action.specialist.childId, agentType: action.specialist.agentType, title: action.specialist.title } }
+            : {}),
+        });
+      } else {
+        // A password ask necessarily happens strictly AFTER its Bash call's
+        // own tool-use event (sudo cannot run before the shell exists), so
+        // this is a genuine race/replay edge rather than the ordinary case
+        // PERMISSION_REQUEST's synthetic-card fallback exists for — but drop
+        // it rather than fabricate a card with an empty toolName/input that
+        // the real tool-use event would then have to reconcile with.
+        return state;
+      }
+      next.set(action.sessionId, { ...session, toolCalls });
+      return next;
+    }
+
+    case 'PASSWORD_RESOLVED': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+
+      // Nested (specialist) segment first.
+      for (const [id, tool] of session.toolCalls) {
+        const segs = tool.subagentSegments;
+        if (!segs) continue;
+        const idx = segs.findIndex((s) => s.type === 'tool' && s.passwordAsk?.requestId === action.requestId);
+        if (idx < 0) continue;
+        const seg = segs[idx] as Extract<SubagentSegment, { type: 'tool' }>;
+        const { passwordAsk: _drop, ...rest } = seg;
+        const nextSegs = [...segs];
+        // Back to 'running' — the mirror of PASSWORD_REQUEST's flip. If the
+        // command already finished by the time this lands (a genuine result
+        // beat the resolution — see TRANSCRIPT_TOOL_RESULT's own passwordAsk
+        // drop), `rest.status` is already 'complete'/'failed' and this would
+        // wrongly revive it, so only flip a row this action's OWN ask is
+        // still holding open.
+        nextSegs[idx] = (rest.status === 'awaiting-approval' ? { ...rest, status: 'running' } : rest) as typeof seg;
+        const toolCalls = new Map(session.toolCalls);
+        toolCalls.set(id, { ...tool, subagentSegments: nextSegs });
+        next.set(action.sessionId, { ...session, toolCalls });
+        return next;
+      }
+
+      for (const [id, tool] of session.toolCalls) {
+        if (tool.passwordAsk?.requestId !== action.requestId) continue;
+        const { passwordAsk: _drop, ...rest } = tool;
+        // Same guard as the nested branch above.
+        const settled = rest.status === 'awaiting-approval' ? { ...rest, status: 'running' as const } : rest;
+        const toolCalls = new Map(session.toolCalls);
+        toolCalls.set(id, settled);
+        next.set(action.sessionId, { ...session, toolCalls });
+        return next;
+      }
+      return state;
+    }
+
     case 'PERMISSION_RESPONDED': {
       const session = next.get(action.sessionId);
       if (!session) return state;
@@ -2993,6 +3121,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       });
       for (const ev of action.events) {
         const pageAction = pageEventToAction(ev);
+        // WHY: an EOF page (toEnd, a transfer) overlaps live events; tool cards dedup by toolUseId, which
+        // scratch cannot see, so a tool already on screen doubled. Skip ones the live session holds.
+        if (pageAction?.type === 'TRANSCRIPT_TOOL_USE' && !pageAction.parentAgentToolUseId
+          && session.toolCalls.has(pageAction.toolUseId)) continue;
         if (pageAction) scratch = chatReducer(scratch, pageAction);
       }
       // Reap on scratch BEFORE merging: live tool ids are not copied from history and must survive.

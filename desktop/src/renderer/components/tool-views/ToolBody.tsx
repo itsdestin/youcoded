@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { AdminRefusedNote } from '../permissions/AdminRefusedNote';
 import { ToolCallState, type ShellRunView } from '../../../shared/types';
 import { UnifiedDiff, FILE_BOX_CHUNK } from '../diff/UnifiedDiff';
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
@@ -323,7 +324,7 @@ function WriteView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
 // G-1 (background Bash): a ticking "2m 14s" for a running command, frozen at
 // its end time once it exits or is stopped. Rides the shared seconds clock
 // (useSecondsTick) only while running, so a finished card costs nothing.
-function useElapsed(startedAt: number | undefined, endedAt: number | undefined): string {
+export function useElapsed(startedAt: number | undefined, endedAt: number | undefined): string {
   const now = useSecondsTick(startedAt != null && endedAt == null);
   if (startedAt == null) return '';
   const ms = Math.max(0, (endedAt ?? now) - startedAt);
@@ -391,6 +392,8 @@ function ShellView({ tool, commandField, sessionId }: {
   return (
     <div className="space-y-2">
       {chips.length > 0 && <div className="flex items-center gap-1.5">{chips}</div>}
+      {/* Inside the details like any failed command's output — not pinned (Destin, review 5). */}
+      <AdminRefusedNote tool={tool} />
       <div className="relative group">
         <pre className="text-xs font-mono bg-canvas border border-edge rounded-sm px-2 py-1 pr-14 overflow-auto whitespace-pre-wrap break-all text-fg">
           {cmd || <span className="text-fg-muted italic">(no command)</span>}
@@ -401,7 +404,9 @@ function ShellView({ tool, commandField, sessionId }: {
           </div>
         )}
       </div>
-      {run?.status === 'running' && (
+      {/* An admin run's strip lives on the card itself (AdminRunStrip), outside
+          this body, so it is not drawn twice. */}
+      {run?.status === 'running' && !run.admin && (
         // G-1: the state in motion and the one action that resolves it. Stop
         // ends the command AND everything it launched (process family), so a
         // stopped `npm run dev` never leaves the real server behind.

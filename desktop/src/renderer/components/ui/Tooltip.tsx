@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { OverlayPanel } from '../overlays/Overlay';
+import { OverlayPanel, TOOLTIP_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { placeBubble } from './anchor-position';
 
@@ -316,7 +316,9 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
             // pointer-events-none so a hint can never swallow a click meant for
             // what is underneath it.
             className="tooltip-in fixed pointer-events-none px-2 py-1 max-w-[min(20rem,calc(100vw-1.5rem))] text-2xs text-fg-2 leading-snug"
-            style={{ left: pos.left, top: pos.top }}
+            // TOOLTIP_Z, not L4's z-100: see Overlay.tsx — a hint must clear
+            // the z-9000 menus it can be opened from.
+            style={{ left: pos.left, top: pos.top, zIndex: TOOLTIP_Z }}
           >
             {text}
           </OverlayPanel>,

@@ -119,7 +119,8 @@ export function nearestSlotId(
 /** How early a neighbour gets out of the way, in px.
  *  - `margin`: the neighbour AHEAD of the pill (in the direction it is moving)
  *    yields when the pill's leading edge is this far short of its near edge.
- *    NEGATIVE means past it: −14 is a dot's CENTRE (dots are 28px) — Chrome's
+ *    NEGATIVE means past it: −12 is a dot's CENTRE (dots are 24px since
+ *    2026-09-27, when their off-centre 4px went; −14 while they were 28) — Chrome's
  *    rule, a tab swaps with its neighbour when it has crossed half of it. It
  *    was +6 ("before contact") while dots slid aside and needed a head start,
  *    then −27 (1px short of the far edge) while the dot ahead was hidden and
@@ -129,7 +130,7 @@ export function nearestSlotId(
  *    a whole pitch — and at the row's end, where the clamped pill can reach
  *    a dot's far edge by only 1px, a hand let go a few px short and the pill
  *    "moved back rightward a bit" (Destin, R7). At the centre the drop travels
- *    at most half a dot, and the end slot has 13px of margin, not 1. The dot
+ *    at most half a dot, and the end slot has 11px of margin, not 1. The dot
  *    flows (SessionStrip): before the swap it is drawn shrinking at its old
  *    spot with a growing image at its new one, after the swap the other way
  *    round — the two sizes always sum to one, so the swap itself shows
@@ -143,7 +144,7 @@ export function nearestSlotId(
  *    having REVERSED. The rules only ever move the neighbour ahead, so nothing
  *    can flap while the direction holds; the dead-band is what keeps a shaky
  *    hand at rest from counting as a reversal every other frame. */
-export const DRAG_TUNE = { margin: -14, early: 20, deadband: 4 };
+export const DRAG_TUNE = { margin: -12, early: 20, deadband: 4 };
 
 /** The slot the pill in hand is heading for, given the slot it is heading for
  *  NOW and the direction it is moving. Only the neighbour AHEAD ever yields:
