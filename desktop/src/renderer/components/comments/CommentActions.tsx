@@ -115,25 +115,18 @@ function EditDeleteButtons({ onEdit, onDelete, editLabel, deleteLabel, className
   );
 }
 
-/** Same fill as `<Button variant="primary" size="sm">` (`bg-accent
- *  text-on-accent`, `text-2xs px-2.5 py-1`, the one shared `FOCUS_RING`) —
- *  the exact classes BUTTON_VARIANT.primary/BUTTON_SIZE.sm emit, copied
- *  rather than reached through `<Button className="rounded-full gap-1">`:
- *  `lint:design`'s `shadcn/no-restyle` refuses a caller overriding
- *  `<Button>`'s own shape/spacing groups even under this file's allowed
- *  "layout" contract (Button.tsx's own `rounded-full` className precedent
- *  is size-driven, not a caller override) — the SAME reason `ICON_BUTTON`
- *  above is a raw `<button>` rather than `<Button>` for its hover-reveal.
- *  A pill is a shape Button's `sm` size doesn't have. */
+/** Destin, 2026-09-28 review deck (D-2): "undo my dark editing pill idea.
+ *  keep editing and the icon, but leave as bare text without pill/container."
+ *  So: quiet muted text + pencil, no fill, no border — the same look as the
+ *  name line's other muted text. Still a button (clicking it cancels the edit),
+ *  with the row's steady cursor. */
 const EDITING_PILL =
-  'inline-flex items-center gap-1 shrink-0 rounded-full px-2.5 py-1 text-2xs font-medium ' +
-  'bg-accent text-on-accent hover:bg-accent/90 active:bg-accent/80 cursor-pointer coarse-hit transition-colors ' +
+  'inline-flex items-center gap-1 shrink-0 text-2xs text-fg-muted hover:text-fg-2 cursor-pointer coarse-hit transition-colors ' +
   FOCUS_RING;
 
 /** Ask 3 (Destin, 2026-09-28, restyle round): while a row is being edited,
  *  its Edit pencil (and, for CommentRowActions below, Delete/Resolve too)
- *  sit exactly where they'd otherwise be, replaced by this one dark pill —
- *  same filled look as InlineEditField's own Save. Clicking it cancels the
+ *  sit exactly where they'd otherwise be, replaced by this one quiet "Editing ✎" label. Clicking it cancels the
  *  edit — same effect as InlineEditField's Cancel button, just reachable
  *  from the exact spot the eye is already on.
  *
