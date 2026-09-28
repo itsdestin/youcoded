@@ -42,8 +42,9 @@ import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
 import { registerOfficeProtocol } from './office/office-protocol';
-import { officeRoot } from './office/office-root';
-import { initOfficeSessionsSafely, quitOfficeSessions } from './office/office-session-registry';
+import { registerOfficeIpc } from './office/office-ipc';
+import { officeAvailable, officeRoot } from './office/office-root';
+import { getOfficeSessions, initOfficeSessionsSafely, quitOfficeSessions } from './office/office-session-registry';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
 import { pickSuggestedModel } from './first-run-local';
@@ -1936,6 +1937,9 @@ void app.whenReady().then(async () => {
   // abort the rest of startup and leave the app with no window.
   const officeSessions = await initOfficeSessionsSafely();
   if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions });
+  // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
+  // handler. WHY the getter: the registry goes away at quit, and each request must see that.
+  registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot() });
   perfMark('main:chore:office-protocol:done');
 
   // Marketplace auth store — instantiated once at startup, passed to IPC handlers.

@@ -24,7 +24,7 @@ import { EditorFrame, stripExt } from './EditorFrame';
 import { ScreenMark } from '../../shoot-mode';
 
 function officeBridge(): OfficeBridge | undefined {
-  return (window as unknown as { claude?: { office?: OfficeBridge } }).claude?.office;
+  return window.claude?.office;
 }
 
 type StatusLoad = { state: 'loading' } | { state: 'ready'; status: OfficeStatus } | { state: 'failed' };
@@ -35,7 +35,8 @@ export function OfficeView() {
   const reloadStatus = () => {
     const b = officeBridge();
     if (!b) { setLoad({ state: 'failed' }); return; }
-    b.status().then((status) => setLoad({ state: 'ready', status }), () => setLoad({ state: 'failed' }));
+    // null project until Task 8 threads the focused conversation's folder through.
+    b.status(null).then((status) => setLoad({ state: 'ready', status }), () => setLoad({ state: 'failed' }));
   };
   useEffect(reloadStatus, []);
 
@@ -47,7 +48,7 @@ export function OfficeView() {
   ];
 
   const create = async (kind: OfficeKind) => {
-    const r = await officeBridge()?.create(kind);
+    const r = await officeBridge()?.create(kind, null);
     if (r?.ok) openDoc(r.file);
   };
   const pick = async () => {
@@ -79,7 +80,7 @@ export function OfficeView() {
             others are hidden (performance rule 2 — a hidden editor sits idle).
             An asleep one is not mounted at all: that is what saves the memory. */}
         {load.state === 'ready' && docs.filter((d) => !d.asleep).map((d) => (
-          <EditorFrame key={d.file.path} file={d.file} origin={load.status.editorOrigin} hidden={d.file.path !== active} screen={`office/${d.file.kind}`} />
+          <EditorFrame key={d.file.path} file={d.file} hidden={d.file.path !== active} screen={`office/${d.file.kind}`} />
         ))}
       </div>
 

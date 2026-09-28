@@ -2,7 +2,7 @@
 // (performance rule 3: a slice store, not a Context) so the tabs outlive the
 // page view: going back to chat and returning finds the same documents.
 import { useSyncExternalStore } from 'react';
-import type { OfficeBridge, OfficeFile } from '../../../shared/office-types';
+import type { OfficeFile } from '../../../shared/office-types';
 
 export const HOME_TAB = 'home';
 
@@ -63,8 +63,7 @@ function setOfficeTabsForPreview(docs: OpenDoc[], active: string, versionsFor: O
 /** Photo-only (`shoot`): three recent files open, the third asleep, the given
  *  one in front — optionally with its Versions window open. */
 export async function previewOfficeTabs(front: number, withVersions = false): Promise<void> {
-  const b = (window as unknown as { claude?: { office?: OfficeBridge } }).claude?.office;
-  const recent = (await b?.status())?.recent ?? [];
+  const recent = (await window.claude?.office?.status(null))?.recent ?? [];
   const docs = recent.slice(0, 3).map((file, i) => ({ file, asleep: i === 2 }));
   const f = docs[front]?.file;
   setOfficeTabsForPreview(docs, f?.path ?? HOME_TAB, withVersions && f ? f : null);

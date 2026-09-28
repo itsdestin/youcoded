@@ -216,8 +216,10 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
   // Pages Phase 2 (connections) — designed ahead of the backend; rows in mock-only.ts.
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
-  // Office (design stage) — rows in mock-only.ts.
-  'office.status', 'office.create', 'office.pick', 'office.source', 'office.versions', 'office.restore',
+  // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
+  // workbench has files to list and versions to show without the add-on or a disk.
+  'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
+  'office.versions', 'office.restore',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -477,6 +479,7 @@ import { seedPages } from './fixtures/pages';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeSampleUrl } from './fixtures/office';
 import { OFFICE_PAGE_ID } from '../../../shared/pages-types';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
+import type { OfficeWorkbenchPreview } from '../../components/office/EditorFrame';
 import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
@@ -3543,17 +3546,18 @@ const OFFICE_PAGE: PageDocument = {
   html: '', data: null,
 };
 
-/** `window.claude.office` for the workbench (design stage — every channel is a
- *  mock-only.ts row). Files are the three neutral fixtures, served by the editor
- *  add-on's origin; see fixtures/office.ts for how to run it. */
-function createOfficeMock(empty: boolean): OfficeBridge {
+/** `window.claude.office` for the workbench (v2 shape, build plan Task 5). Files are the
+ *  three neutral fixtures, served by the editor add-on's origin; see fixtures/office.ts for
+ *  how to run it. open/invoke are stand-ins until Task 6 builds the editor relay; meanwhile
+ *  `workbenchPreview` keeps the old URL shortcut so the Office screens still show a document. */
+function createOfficeMock(empty: boolean): OfficeBridge & { workbenchPreview: OfficeWorkbenchPreview } {
   const HOUR = 3_600_000;
   const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
   const recent = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
   let created = 0;
   return {
     status: async () => ({
-      editorOrigin: OFFICE_EDITOR_ORIGIN,
+      available: true,
       recent,
       // Two files beyond Recent, so the "In <project>" list has something of its own to show
       // (Recent's files are not repeated there). They open the fixture of their kind.
@@ -3570,11 +3574,20 @@ function createOfficeMock(empty: boolean): OfficeBridge {
       return { ok: true, file: { ...base, path: `/home/you/Documents/${name}`, name, folder: 'Documents', at: new Date().toISOString() } };
     },
     pick: async () => OFFICE_FILES[0],
+    // Stand-ins until Task 6: the workbench has no main process to open a document in or to
+    // answer the editor's requests. EditorFrame uses workbenchPreview below instead.
+    open: async () => ({ ok: false, message: "The workbench can't open documents in Office yet." }),
+    invoke: async () => { throw new Error('refused'); },
+    close: async () => {},
+    // WORKBENCH ONLY, removed in Task 6 (see OfficeWorkbenchPreview in EditorFrame.tsx).
     // A new file opens the fixture of its kind (the add-on has no blank templates yet).
-    source: async (path) => {
-      const ext = path.slice(path.lastIndexOf('.'));
-      const f = OFFICE_FILES.find((x) => x.path === path) ?? OFFICE_FILES.find((x) => x.name.endsWith(ext)) ?? OFFICE_FILES[0];
-      return { ok: true, url: officeSampleUrl(OFFICE_EDITOR_ORIGIN, f.name) };
+    workbenchPreview: {
+      origin: OFFICE_EDITOR_ORIGIN,
+      sampleUrl: (path) => {
+        const ext = path.slice(path.lastIndexOf('.'));
+        const f = OFFICE_FILES.find((x) => x.path === path) ?? OFFICE_FILES.find((x) => x.name.endsWith(ext)) ?? OFFICE_FILES[0];
+        return officeSampleUrl(OFFICE_EDITOR_ORIGIN, f.name);
+      },
     },
     versions: async () => {
       if (empty) return [];

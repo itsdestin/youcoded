@@ -9,10 +9,9 @@
 // press is forwarded to the editor, which does exactly what its own toolbar
 // button would. Anything beyond the basics is one press away in Office — the
 // briefcase in the panel header (office-review#B-inline), not a button in this bar.
-import React, { useEffect, useRef, useState } from 'react';
-import { Button, LoadingState, Tooltip } from '../ui';
+import React, { useRef, useState } from 'react';
+import { Button, Tooltip } from '../ui';
 import type { ArtifactViewProps } from '../artifact-views/types';
-import type { OfficeBridge } from '../../../shared/office-types';
 import { officeFileFor } from './office-files';
 import { EditorFrame } from './EditorFrame';
 import type { EditorFrameHandle, OfficeCommand, OfficeCommandState } from './EditorFrame';
@@ -27,13 +26,8 @@ const GROUPS: { cmd: OfficeCommand; label: string }[][] = [
 
 export function OfficeInlineEditor({ absolutePath, artifactId }: ArtifactViewProps) {
   const frame = useRef<EditorFrameHandle>(null);
-  const [origin, setOrigin] = useState<string | null>(null);
   const [state, setState] = useState<OfficeCommandState>({});
   const file = officeFileFor(absolutePath);
-  useEffect(() => {
-    const b = (window as unknown as { claude?: { office?: OfficeBridge } }).claude?.office;
-    b?.status().then((s) => setOrigin(s.editorOrigin), () => setOrigin(null));
-  }, []);
 
   // Lists only exist in documents and slides; slides align through a menu, so
   // those three stay out of a presentation's bar rather than doing nothing.
@@ -71,9 +65,9 @@ export function OfficeInlineEditor({ absolutePath, artifactId }: ArtifactViewPro
         ))}
       </div>
       <div className="relative flex-1 min-h-0">
-        {origin === null
-          ? <LoadingState what="the editor" verb="Starting" />
-          : <EditorFrame ref={frame} file={file} origin={origin} slim onCommandState={setState} screen={artifactId ? `chat/files/edit/${artifactId}` : undefined} />}
+        {/* WHY no wait for an origin here any more (Task 5): each document gets its own,
+            which the frame asks main for itself, showing its own loading state meanwhile. */}
+        <EditorFrame ref={frame} file={file} slim onCommandState={setState} screen={artifactId ? `chat/files/edit/${artifactId}` : undefined} />
       </div>
     </div>
   );

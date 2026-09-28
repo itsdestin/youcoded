@@ -91,21 +91,20 @@
 // goes. They are deliberately desktop-only, which ipc-channels.test.ts's DESKTOP_ONLY set
 // enforces rather than leaving implicit.
 //
+// The six Office rows (office.status, office.create, office.pick, office.source,
+// office.versions, office.restore) came off 2026-09-28 when the real channels landed
+// (build plan Task 5: main/office/office-ipc.ts, preload, remote-shim, SessionService.kt).
+// office.source did not survive the move: the v2 bridge opens a document with office.open
+// and relays the editor's own requests through office.invoke. status, create, pick,
+// versions and restore answer placeholders in main until Tasks 7 and 8 fill them; the
+// fake in mock-shim.ts stays so the workbench can still show the start screen and history.
+//
 // Add a row the moment you design a channel ahead of its backend; delete the row, never the
 // guard, when it ships. An empty list is the healthy state.
 export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
-  // Office (design stage, 2026-09-28 — docs/active/design/2026-09-27-office): the
-  // Office page, its tabs and version history are designed here ahead of the
-  // add-on and its backend. Each row comes off when its real channel lands.
-  { channel: 'office.status', feature: 'Office — start screen lists (recent, project files) and the editor origin' },
-  { channel: 'office.create', feature: 'Office — new blank document/spreadsheet/presentation' },
-  { channel: 'office.pick', feature: 'Office — open a file with the system picker' },
-  { channel: 'office.source', feature: 'Office — hand a file to the editor' },
-  { channel: 'office.versions', feature: 'Office — kept versions of a file' },
-  { channel: 'office.restore', feature: 'Office — restore a kept version' },
   // Welcome back's session.reopenList/session.forgetReopen rows are GONE
   // (T2, 2026-09-24): main + preload + remote-shim now carry the real
   // channels; the mock implementations in mock-shim.ts stay (the workbench

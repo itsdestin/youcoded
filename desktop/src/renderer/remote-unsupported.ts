@@ -50,6 +50,9 @@ const FEATURE_NAMES: Array<[string, string]> = [
   // phone; the names are for the remaining, user-initiated calls in each family.
   ['syncspaces:', 'Syncing across your devices'],
   ['transcript:', 'Older messages'],
+  // Desktop only (R28). The remote client and the phone carry the office namespace so a
+  // call is refused rather than crashing, and this is the name that refusal reads.
+  ['office:', 'Office'],
 ];
 
 /** Which host refused: a desktop reached over remote access, or the phone's

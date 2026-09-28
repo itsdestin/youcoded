@@ -1475,6 +1475,39 @@ describe('git:* IPC parity (git surface)', () => {
   });
 });
 
+// Office (build plan Task 5): real on desktop, refused on the remote client and the phone.
+// Each surface must carry every channel — preload so the desktop can call it, remote-shim so
+// a remote call is refused rather than being "not a function", office-ipc so main answers,
+// and SessionService.kt so the phone answers unsupported at once instead of hanging.
+describe('office:* channel parity', () => {
+  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
+  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
+  const handlers = readSourceFile(path.join(__dirname, '../src/main/office/office-ipc.ts'));
+  const unsupported = readSourceFile(path.join(__dirname, '../src/renderer/remote-unsupported.ts'));
+  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
+  const kotlin = fs.existsSync(kotlinPath) ? readSourceFile(kotlinPath) : null;
+
+  const channels = [
+    'office:status', 'office:create', 'office:pick', 'office:open',
+    'office:invoke', 'office:close', 'office:versions', 'office:restore',
+  ];
+
+  for (const ch of channels) {
+    it(`${ch} is carried by preload, remote-shim and the main-process handlers`, () => {
+      expect(preload).toContain(`'${ch}'`);
+      expect(shim).toContain(`'${ch}'`);
+      expect(handlers).toContain(`'${ch}'`);
+    });
+    it(`${ch} has an Android not-implemented-on-mobile stub`, () => {
+      if (kotlin) expect(kotlin).toContain(`"${ch}"`);
+    });
+  }
+
+  it('a refused office call is named Office, not by its channel id', () => {
+    expect(unsupported).toContain(`'office:'`);
+  });
+});
+
 // Four-surface parity for the native:* channels.
 //
 // GAP THIS CLOSES (found 2026-07-28): shim/Android coverage in this file is

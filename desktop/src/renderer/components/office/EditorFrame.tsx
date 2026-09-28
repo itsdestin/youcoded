@@ -18,7 +18,20 @@ export type OfficeCommandState = Partial<Record<OfficeCommand, { on: boolean; en
 export interface EditorFrameHandle { command(cmd: OfficeCommand): void }
 
 function officeBridge(): OfficeBridge | undefined {
-  return (window as unknown as { claude?: { office?: OfficeBridge } }).claude?.office;
+  return window.claude?.office;
+}
+
+/** WORKBENCH ONLY, removed in Task 6. The v2 bridge opens a document with `open` and relays
+ *  the editor's own requests through `invoke`; Task 6 builds that relay. Until then the
+ *  workbench fake carries this old-style shortcut — the editors served on a local origin,
+ *  handed a fixture by URL — so its Office screens (office/document, office/spreadsheet,
+ *  chat/files/edit/a-sent-plan) still show a document. No real host has it. */
+export interface OfficeWorkbenchPreview {
+  origin: string;
+  sampleUrl(path: string): string;
+}
+function workbenchPreview(b: OfficeBridge | undefined): OfficeWorkbenchPreview | undefined {
+  return (b as { workbenchPreview?: OfficeWorkbenchPreview } | undefined)?.workbenchPreview;
 }
 
 // Slim mode: the frame is drawn a little LARGER than its pane and the pane crops it, so the
@@ -37,7 +50,6 @@ export function stripExt(name: string): string {
 
 interface EditorFrameProps {
   file: OfficeFile;
-  origin: string;
   hidden?: boolean;
   slim?: boolean;
   /** Slim mode: which commands are on / available, for the host's bar. */
@@ -47,19 +59,53 @@ interface EditorFrameProps {
 }
 
 export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(function EditorFrame(
-  { file, origin, hidden = false, slim = false, onCommandState, screen }, handleRef,
+  { file, hidden = false, slim = false, onCommandState, screen }, handleRef,
 ) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [phase, setPhase] = useState<'starting' | 'open' | 'failed'>('starting');
   const [failure, setFailure] = useState('');
-  const src = `${origin}/editor?embed=1&embedOrigin=${encodeURIComponent(location.origin)}`;
+  // WHY the frame asks for its own origin (Task 5): every open document has its own sealed
+  // office://<token> origin now, handed out by office.open, so there is no shared editor
+  // origin for a parent to pass down. null until main has answered.
+  const [origin, setOrigin] = useState<string | null>(null);
+  // Bumped by Retry, to open the document again from the start.
+  const [attempt, setAttempt] = useState(0);
+  const preview = workbenchPreview(officeBridge());
+  const src = origin === null ? undefined
+    : preview ? `${origin}/editor?embed=1&embedOrigin=${encodeURIComponent(location.origin)}`
+    : `${origin}/index.html`;
   // Escape the editor itself had no use for closes the app's top layer, as a page's does.
   const dismissTop = useDismissTop();
   const dismissRef = useRef(dismissTop);
   dismissRef.current = dismissTop;
   const stateCb = useRef(onCommandState);
   stateCb.current = onCommandState;
-  const post = (msg: unknown) => ref.current?.contentWindow?.postMessage(msg, origin);
+  const post = (msg: unknown) => { if (origin) ref.current?.contentWindow?.postMessage(msg, origin); };
+
+  // Open the document in main, and close it again when this frame goes away, so its
+  // temporary files do not outlive the tab. WHY a late answer is NOT closed: a frame for the
+  // same file mounted meanwhile gets the same token (one session per file), and closing it
+  // would pull the document out from under that frame. Main reuses the session for the next
+  // open of this file, and removes it when the window closes.
+  useEffect(() => {
+    const b = officeBridge();
+    const wb = workbenchPreview(b);
+    if (wb) { setOrigin(wb.origin); return; }
+    let gone = false;
+    let token: string | null = null;
+    const failWith = (message: string) => { if (!gone) { setFailure(message); setPhase('failed'); } };
+    if (!b) { failWith("Office couldn't open this file."); return; }
+    b.open(file.path).then((r) => {
+      if (!r.ok) { failWith(r.message); return; }
+      if (gone) return;
+      token = r.token;
+      setOrigin(r.origin);
+    }, () => failWith("Office couldn't open this file."));
+    return () => {
+      gone = true;
+      if (token) void b.close(token).catch(() => {});
+    };
+  }, [file.path, attempt]);
 
   // The shown document takes focus on a tab switch, so keyboard and screen
   // reader follow what is on screen (UX review 1, U4).
@@ -68,15 +114,16 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   useImperativeHandle(handleRef, () => ({ command: (cmd) => post({ type: 'yc:office-cmd', cmd }) }), [origin]);
 
   useEffect(() => {
-    const onMessage = async (e: MessageEvent) => {
-      if (e.origin !== origin || e.source !== ref.current?.contentWindow) return;
+    const onMessage = (e: MessageEvent) => {
+      if (!origin || e.origin !== origin || e.source !== ref.current?.contentWindow) return;
       const d = e.data as { type?: string; payload?: { message?: string }; state?: OfficeCommandState } | null;
       if (d?.type === 'document:ready') {
         post({ type: OFFICE_THEME_MESSAGE, theme: readOfficeTheme() });
         post({ type: OFFICE_MODE_MESSAGE, slim });
-        const source = await officeBridge()?.source(file.path);
-        if (!source?.ok) { setFailure(source?.message ?? 'The file could not be read.'); setPhase('failed'); return; }
-        post({ id: 'open', type: 'document:open-url', payload: { url: source.url, fileName: file.name } });
+        // Workbench only until Task 6 (see OfficeWorkbenchPreview): the real editor is handed
+        // its document through the relay instead.
+        const url = workbenchPreview(officeBridge())?.sampleUrl(file.path);
+        if (url) post({ id: 'open', type: 'document:open-url', payload: { url, fileName: file.name } });
       }
       // The bridge says when the document is really drawn — "opened" only means accepted.
       if (d?.type === 'yc:office-loaded') setPhase('open');
@@ -106,7 +153,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       {phase === 'starting' && <div className="absolute inset-0"><LoadingState what={stripExt(file.name)} verb="Opening" /></div>}
       {phase === 'failed' && (
         <div className="p-6 max-w-xl mx-auto">
-          <ErrorState message={failure} onRetry={() => { setPhase('starting'); if (ref.current) ref.current.src = src; }} />
+          <ErrorState message={failure} onRetry={() => { setPhase('starting'); setOrigin(null); setAttempt((n) => n + 1); }} />
         </div>
       )}
     </div>

@@ -1935,6 +1935,19 @@ contextBridge.exposeInMainWorld('claude', {
       return () => ipcRenderer.removeListener('git:changed', handler);
     },
   },
+  // Office (design §3a): the editor frame's requests reach main only through invoke, and
+  // main re-checks the command and that this window opened the document.
+  // Shape: shared/office-types.ts (OfficeBridge); handlers: main/office/office-ipc.ts.
+  office: {
+    status: (projectRoot: string | null) => ipcRenderer.invoke('office:status', projectRoot),
+    create: (kind: string, projectRoot: string | null) => ipcRenderer.invoke('office:create', kind, projectRoot),
+    pick: () => ipcRenderer.invoke('office:pick'),
+    open: (p: string) => ipcRenderer.invoke('office:open', p),
+    invoke: (token: string, cmd: string, args: unknown) => ipcRenderer.invoke('office:invoke', token, cmd, args),
+    close: (token: string) => ipcRenderer.invoke('office:close', token),
+    versions: (p: string) => ipcRenderer.invoke('office:versions', p),
+    restore: (p: string, id: string) => ipcRenderer.invoke('office:restore', p, id),
+  },
   // Project View IPC — sibling to artifacts. Backs the project overlay's
   // conversations / repo / context tabs.
   project: {

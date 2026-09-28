@@ -2586,6 +2586,21 @@ export function installShim(): void {
         return () => removeListener('git:changed', handler);
       },
     },
+    // Office is desktop only (R28): a phone keeps the quick preview. WHY every member routes
+    // through invoke() instead of the namespace being left out: the host has no handler, so
+    // it answers unsupported, the call rejects, and the user reads "Office isn't available
+    // via remote access yet." — a refusal, not a "not a function" crash (same as
+    // dev.setupWorkspace below). Positional arguments go in a named object, as elsewhere here.
+    office: {
+      status: (projectRoot: string | null) => invoke('office:status', { projectRoot }),
+      create: (kind: string, projectRoot: string | null) => invoke('office:create', { kind, projectRoot }),
+      pick: () => invoke('office:pick'),
+      open: (filePath: string) => invoke('office:open', { path: filePath }),
+      invoke: (token: string, cmd: string, args: unknown) => invoke('office:invoke', { token, cmd, args }),
+      close: (token: string) => invoke('office:close', { token }),
+      versions: (filePath: string) => invoke('office:versions', { path: filePath }),
+      restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
+    },
     // Project View IPC — sibling to artifacts. Object-payload invoke style
     // mirrors the artifacts namespace above; the literal 'project:*' channel
     // strings are required by the IPC parity test.

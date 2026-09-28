@@ -1,12 +1,13 @@
-// Office — shared shapes (design stage, 2026-09-28).
+// Office — shared shapes (v2, Task 5 of the build plan, 2026-09-28).
 // Investigation: youcoded-dev/docs/active/investigations/2026-09-24-office-suite.md
 // Decisions: youcoded-dev/docs/active/design/2026-09-27-office/*.answers.json
+// Build design: youcoded-dev/docs/active/specs/2026-09-28-office-build-design.md
 //
-// Office is the Euro-Office editors (an AGPL add-on on its own sealed origin)
-// inside a built-in page. These shapes are the UI's contract: the backend
-// (serving the editors, reading/writing files, keeping versions) is built AFTER
-// the screens are approved, so today only the workbench fake answers them —
-// every channel is listed in dev/workbench/mock-only.ts.
+// Office is the Euro-Office editors (an AGPL add-on) inside a built-in page. Each open
+// document gets its own sealed origin, office://<token>, and the editor's requests reach
+// main only through window.claude.office.invoke, where main re-checks the command and that
+// the asking window opened the document (design section 3a). The channels live in
+// main/office/office-ipc.ts; the workbench fake is dev/workbench/mock-shim.ts.
 
 export type OfficeKind = 'document' | 'spreadsheet' | 'presentation';
 
@@ -34,27 +35,31 @@ export interface OfficeVersion {
   bytes: number;
 }
 
+/** The answer to opening a document: its token and the sealed origin its editor runs on.
+ *  The renderer frames `${origin}/index.html`. */
+export type OfficeOpen = { ok: true; token: string; origin: string } | { ok: false; message: string };
+
 export interface OfficeStatus {
-  /** Where the editors are served from (the add-on's sealed origin). */
-  editorOrigin: string;
+  /** False when this build carries no Office add-on (e.g. a platform without a bundle yet). */
+  available: boolean;
   recent: OfficeFile[];
   /** Office files in the project of the focused conversation. */
   project: { name: string; files: OfficeFile[] } | null;
 }
 
-/** How the editor gets a file's bytes. A URL on the editor's own origin
- *  (workbench fixtures); the real host hands bytes across the frame. */
-type OfficeSource =
-  | { ok: true; url: string }
-  | { ok: false; message: string };
-
 export interface OfficeBridge {
-  status(): Promise<OfficeStatus>;
-  /** A new blank file in the focused project (or Documents), opened at once. */
-  create(kind: OfficeKind): Promise<{ ok: true; file: OfficeFile } | { ok: false; message: string }>;
+  /** projectRoot: the focused conversation's project folder, or null for none. */
+  status(projectRoot: string | null): Promise<OfficeStatus>;
+  /** A new blank file in the given project (or Documents), opened at once. */
+  create(kind: OfficeKind, projectRoot: string | null): Promise<{ ok: true; file: OfficeFile } | { ok: false; message: string }>;
   /** The system's file picker, Office files only. null when cancelled. */
   pick(): Promise<OfficeFile | null>;
-  source(path: string): Promise<OfficeSource>;
+  /** Start editing a file. Opening a file this window already has open returns the same token. */
+  open(path: string): Promise<OfficeOpen>;
+  /** One editor request (its bridge's command name and arguments), relayed for the frame. */
+  invoke(token: string, cmd: string, args: unknown): Promise<unknown>;
+  /** Stop editing; the document's temporary files are removed. */
+  close(token: string): Promise<void>;
   versions(path: string): Promise<OfficeVersion[]>;
   /** Replace the file with a kept copy; the current file is kept first. */
   restore(path: string, versionId: string): Promise<{ ok: true } | { ok: false; message: string }>;
