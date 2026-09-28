@@ -103,7 +103,18 @@ export function checkNamedEntriesWithinCeiling(zip: JSZip, names: string[]): Zip
 // ceiling is ever held in memory — never the full oversized output.
 // =============================================================================
 
-export type DecompressionGuardResult = { ok: true; text: string } | { ok: false; error: 'archive-too-large' };
+// Code review 2026-09-27, desktop F2: `'archive-too-large'` used to also
+// cover the stream's 'error' event below — a truncated/corrupted zip entry
+// has nothing to do with size, but was reported with the exact same code as
+// a genuine overflow. `error-message-standards.md` ("never invent an error
+// cause"): a caller that later turns this into user- or assistant-facing text
+// (docx-comments.ts's/xlsx-comments.ts's own `invalid-docx`/`invalid-xlsx`
+// codes already exist for "this archive doesn't look valid" — see their own
+// mapping of `'decompress-failed'` below) must not be handed a lie about
+// WHICH failure happened. `'decompress-failed'` is the honest, format-neutral
+// code for "the stream itself broke" — every real caller maps it to its own
+// already-existing corrupt-archive code, never treats it as a size problem.
+export type DecompressionGuardResult = { ok: true; text: string } | { ok: false; error: 'archive-too-large' | 'decompress-failed' };
 
 /**
  * Decompresses `file` (a JSZip entry already resolved via `zip.file(name)`)
@@ -150,6 +161,10 @@ export function decompressBounded(
       chunks.push(chunk);
     });
     stream.on('end', () => finish({ ok: true, text: Buffer.concat(chunks).toString('utf8') }));
-    stream.on('error', () => finish({ ok: false, error: 'archive-too-large' }));
+    // A genuine stream error (truncated DEFLATE data, a corrupted entry) —
+    // NOT a size overflow, which the `data` handler above already caught on
+    // its own branch. See this file's own `DecompressionGuardResult` header
+    // for why this must be its own code, never `'archive-too-large'`.
+    stream.on('error', () => finish({ ok: false, error: 'decompress-failed' }));
   });
 }

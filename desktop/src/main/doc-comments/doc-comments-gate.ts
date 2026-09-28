@@ -51,3 +51,47 @@ export async function refuseUnknownProjectRoot(
   if (projectRoot === undefined) return null;
   return (await isKnownRoot(projectRoot, extraSessionRoots)) ? null : { ok: false, error: 'unknown-project-root' };
 }
+
+// ---------------------------------------------------------------------------
+// docComments:add's `selector` shape — Android/desktop parity (code review
+// 2026-09-27, Android F1).
+//
+// WHY: Android's `DocCommentsBridge.kt` already does
+// `CommentSelector.fromJson(payload.optJSONObject("selector")) ?:
+// return missingField("selector")` before ever calling `addComment` — a
+// request with a missing or malformed `selector` is refused with
+// `{ok:false, error:"missing-field", field:"selector"}`. Desktop's own
+// `ipc-handlers.ts`/`remote-server.ts` ADD handlers used to cast
+// `payload?.selector as CommentSelector` straight through with NO check at
+// all — a compile-time-only TS assertion that does nothing at runtime — so a
+// caller that omitted `selector` got a silent success on desktop (a
+// persisted comment with no `selector` field) and a refusal on Android for
+// the IDENTICAL request shape on the IDENTICAL channel. `ipc-bridge.md`'s
+// parity rule says every channel must agree; this is the shared check both
+// desktop surfaces now run before dispatching, so they can't drift apart
+// again.
+//
+// This mirrors Android's OWN leniency, not a stricter desktop-only check:
+// `CommentSelector.fromJson` only validates the OUTER shape (`kind` is
+// literally 'text' or 'cell', and a `selector` sub-object is present) —
+// `TextQuoteSelector.fromJson`/`CellSelector.fromJson` default every MISSING
+// inner field (`exact`, `cell`, ...) to an empty string rather than refuse.
+// Validating inner fields here would make desktop STRICTER than Android for
+// the same channel, which is its own parity gap in the other direction.
+export function isValidCommentSelectorShape(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const rec = v as Record<string, unknown>;
+  if (rec.kind !== 'text' && rec.kind !== 'cell') return false;
+  const inner = rec.selector;
+  return typeof inner === 'object' && inner !== null && !Array.isArray(inner);
+}
+
+export type MissingSelectorFieldRefusal = { ok: false; error: 'missing-field'; field: 'selector' };
+
+/** Same refusal shape Android's `missingField("selector")` and desktop's own
+ *  `ipc-handlers.ts`-local `missingField()` both produce — exported here too
+ *  so `remote-server.ts` (which has no local `missingField` helper of its
+ *  own) doesn't need to hand-roll a second copy of the literal object shape. */
+export function missingSelectorField(): MissingSelectorFieldRefusal {
+  return { ok: false, error: 'missing-field', field: 'selector' };
+}

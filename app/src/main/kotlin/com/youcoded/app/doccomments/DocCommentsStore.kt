@@ -55,6 +55,20 @@ enum class DocCommentsError(val wire: String) {
     // renderer now mints and sends the comment id (see `addComment` below).
     INVALID_ID("invalid-id"),
     DUPLICATE_ID("duplicate-id"),
+    // Code review 2026-09-27, Android F3: `mutateSidecar`'s catch used to map
+    // EVERY `java.io.IOException` escaping `mutateFileUnderLock` to
+    // SIDECAR_CORRUPT, including one thrown from the WRITE side (`ch.force
+    // (true)` failing on a full disk, or `Files.move` failing) — nothing to
+    // do with an unreadable sidecar. This is deliberately Android-only
+    // (no desktop wire string to mirror by name): desktop's own
+    // `mutateSidecar` (doc-comments-store.ts) doesn't catch a write-side
+    // exception AT ALL — it lets it throw uncaught, which the renderer's
+    // generic top-level catch (`e?.message`) turns into whatever raw OS
+    // error text Node's fs threw, never a fixed code. Android's bridge
+    // contract always returns a typed `StoreResult`, so letting an
+    // exception propagate here isn't an option — this is the accurate
+    // equivalent given that structural difference, not a literal mirror.
+    SIDECAR_WRITE_FAILED("sidecar-write-failed"),
 }
 
 sealed class StoreResult<out T> {
@@ -260,8 +274,18 @@ private sealed class Apply<out T> {
 private suspend fun <T> mutateSidecar(sidecarPath: String, apply: (CommentsSidecarFile) -> Apply<T>): StoreResult<T> {
     return lockFor(sidecarPath).withLock {
         var outcome: StoreResult<T>? = null
+        // Code review 2026-09-27, Android F3: `mutateFileUnderLock`'s own
+        // callback (below) only ever RUNS once its internal read has already
+        // succeeded (CasWrite.kt's `mutateFileUnderLock` reads `onDisk`
+        // BEFORE invoking this lambda, rethrowing any non-ENOENT read
+        // IOException before we ever get here). So an IOException caught
+        // below, if `enteredCallback` is already true, can only have come
+        // from the WRITE side (`ch.force(true)` / `Files.move`, both AFTER
+        // this lambda returns) — never from an unreadable existing sidecar.
+        var enteredCallback = false
         val acquired = try {
             com.youcoded.app.artifacts.mutateFileUnderLock(sidecarPath) { onDisk ->
+                enteredCallback = true
                 // WHY a read failure on an EXISTING file refuses rather than
                 // falling back to an empty sidecar: silently treating "exists
                 // but unreadable" the same as "doesn't exist yet" would let
@@ -295,6 +319,14 @@ private suspend fun <T> mutateSidecar(sidecarPath: String, apply: (CommentsSidec
                 }
             }
         } catch (_: java.io.IOException) {
+            if (enteredCallback) {
+                // The read (and `apply`) already succeeded — this can only be
+                // a WRITE-side failure (disk full, a failed atomic rename).
+                // Reporting it as "sidecar-corrupt" would send someone
+                // chasing file corruption that isn't there
+                // (error-message-standards.md: never invent an error cause).
+                return@withLock StoreResult.Err(DocCommentsError.SIDECAR_WRITE_FAILED)
+            }
             // An EXISTING-but-unreadable sidecar (permissions, a torn read) —
             // refuse here rather than let mutateFileUnderLock's own read
             // exception propagate uncaught; same outcome the pre-F1

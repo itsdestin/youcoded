@@ -82,3 +82,44 @@ describe('a decoded summary-chip reference opens the comment panel on click', ()
     expect(detail.handled).toBe(false);
   });
 });
+
+// Code review 2026-09-27, desktop F3 (renderer-lists.md): CommentsMargin.tsx's
+// own header comment claimed comment counts are "small (a handful per file)"
+// to justify skipping renderer-lists.md's 1,000-item stress pin, and
+// ReadingHighlights shares the exact same anchoring hook (useQuoteMarks) and
+// therefore the same per-mark listener-attachment cost — this is that pin's
+// twin for THIS component. See CommentsMargin.tsx's header for the measured
+// numbers (this hook's cost, not this component's own render, dominates
+// either way) and `CommentsMargin.test.tsx`'s matching describe block for the
+// real-fixture (elden-ring, 315 cell comments) case.
+describe('ReadingHighlights — render cost at a realistic high comment count', () => {
+  it('mounts against 1,000 comments in one pass within a generous CPU budget', () => {
+    const path = 'stress/1000-comments.md';
+    const COUNT = 1000;
+    // One <p> per quote — see CommentsMargin.test.tsx's own note on why a
+    // rendered document is many block elements, not one flat text blob.
+    const content = document.createElement('div');
+    for (let i = 0; i < COUNT; i++) {
+      const p = document.createElement('p');
+      p.textContent = `filler filler Q${i}filler filler`;
+      content.appendChild(p);
+    }
+    document.body.appendChild(content);
+    for (let i = 0; i < COUNT; i++) {
+      addComment(path, `Q${i}filler`, 'label', { prefix: '', suffix: '', occurrence: 0 });
+    }
+
+    const containerRef = createRef<HTMLDivElement>();
+    (containerRef as { current: HTMLElement | null }).current = content;
+    const startedCpu = process.cpuUsage();
+    render(<ReadingHighlights containerRef={containerRef} path={path} onOpenComments={vi.fn()} />);
+    const usedCpu = process.cpuUsage(startedCpu);
+    const cpuMs = (usedCpu.user + usedCpu.system) / 1000;
+
+    // Every comment anchored — proves the full 1,000-comment pass actually
+    // ran, not an early bail-out.
+    expect(content.querySelectorAll('mark')).toHaveLength(COUNT);
+    // Same generous, measured-not-guessed budget as CommentsMargin's own pin.
+    expect(cpuMs).toBeLessThan(5_000);
+  });
+});

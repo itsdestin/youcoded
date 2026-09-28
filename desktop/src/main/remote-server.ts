@@ -38,7 +38,7 @@ import {
   reopenNativeXlsxComment,
   moveNativeXlsxComment,
 } from './doc-comments/doc-comments-dispatch';
-import { refuseUnknownProjectRoot } from './doc-comments/doc-comments-gate';
+import { refuseUnknownProjectRoot, isValidCommentSelectorShape, missingSelectorField } from './doc-comments/doc-comments-gate';
 // Shared cap so a local folder's description (set via a remote browser client)
 // can't drift from the synced registry's limit — same constant project-registry.ts
 // and ipc-handlers.ts use.
@@ -2263,6 +2263,10 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
+        // Code review 2026-09-27, Android F1: same refusal ipc-handlers.ts's
+        // desktop surface now runs, before this remote-only surface could
+        // otherwise diverge from it (see doc-comments-gate.ts's own header).
+        if (!isValidCommentSelectorShape(payload?.selector)) { this.respond(client.ws, type, id, missingSelectorField()); break; }
         // Review finding #5: resolved real path, not the raw string.
         const format = await resolveNativeFormat(filePath, projectRoot);
         if (format === 'docx') {

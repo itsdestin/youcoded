@@ -280,6 +280,16 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
     case 'lock-timeout': return 'Another change is being saved to this file right now.';
     case 'comment-not-found': return "This comment couldn't be found anymore.";
     case 'sidecar-corrupt': return "This file's saved comments can't be read right now.";
+    // Code review 2026-09-27, Android F3: Android-only wire string — its
+    // DocCommentsStore.mutateSidecar now distinguishes a write-time failure
+    // (disk full, a failed atomic rename) from an unreadable existing
+    // sidecar ('sidecar-corrupt' above), since reporting the former as
+    // corruption would send someone chasing a problem that isn't there.
+    // Desktop's own equivalent failure currently has no typed code at all
+    // (it throws uncaught, caught only by this file's generic top-level
+    // catch as a raw OS error string) — this case exists so Android's honest
+    // distinction isn't lost to the generic default below.
+    case 'sidecar-write-failed': return "This file's saved comments couldn't be saved right now.";
     case 'path-not-tracked': return "This file isn't part of an open project or tracked file.";
     case 'invalid-id': return "Couldn't save this comment — its id wasn't valid.";
     case 'duplicate-id': return 'A comment with this id already exists.';
@@ -287,6 +297,12 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
     case 'invalid-docx': return "This Word file doesn't look valid.";
     case 'invalid-xlsx': return "This Excel file doesn't look valid.";
     case 'missing-document-part': return 'This Word document is missing a part comments need.';
+    // Code review 2026-09-27, desktop F2: this code now ONLY ever means a
+    // genuine size overflow (zip-size-guard.ts's `decompressBounded` maps
+    // every other stream failure to 'invalid-docx'/'invalid-xlsx' above,
+    // never here) — safe to state specifically rather than falling through
+    // to the generic default below.
+    case 'archive-too-large': return 'This file is too large to open safely.';
     // xlsx T12/T13 review F7 (Low): 'invalid-selector'/'selector-not-found'
     // also fire for an Excel CellSelector (a malformed cell address, a
     // missing `sheet` on a multi-tab workbook, a chartsheet named as if it

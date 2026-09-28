@@ -749,7 +749,7 @@ interface XlsxArchive {
   parsedBytesTotal: number;
 }
 
-type PartReadResult = { ok: true; text: string | null } | { ok: false; error: 'archive-too-large' };
+type PartReadResult = { ok: true; text: string | null } | { ok: false; error: 'archive-too-large' | 'invalid-xlsx' };
 
 /** Reads a NAMED zip entry (or `{ok:true, text:null}` if it doesn't exist),
  *  checked against the size guard BEFORE decompression and decompressed via
@@ -764,7 +764,15 @@ async function readOptionalPart(zip: JSZip, name: string): Promise<PartReadResul
   const sizeCheck = checkNamedEntriesWithinCeiling(zip, [name]);
   if (!sizeCheck.ok) return { ok: false, error: sizeCheck.error };
   const bounded = await decompressBounded(file);
-  if (!bounded.ok) return { ok: false, error: bounded.error };
+  if (!bounded.ok) {
+    // Code review 2026-09-27, desktop F2: `decompressBounded`'s own
+    // `'decompress-failed'` (a genuinely broken/truncated stream, nothing to
+    // do with size) isn't a value this module's callers know — it maps to
+    // the SAME code this module already uses for "this archive doesn't look
+    // valid" (`'invalid-xlsx'`), never to `'archive-too-large'`, which now
+    // means ONLY a genuine size overflow.
+    return { ok: false, error: bounded.error === 'archive-too-large' ? 'archive-too-large' : 'invalid-xlsx' };
+  }
   return { ok: true, text: bounded.text };
 }
 
@@ -850,7 +858,7 @@ async function loadXlsxArchiveForWrite(bytes: Buffer): Promise<{ ok: true; archi
 async function getWorksheetContext(
   archive: XlsxArchive,
   sheetMeta: SheetMeta
-): Promise<{ ok: true; ctx: WorksheetContext } | { ok: false; error: 'invalid-selector' | 'archive-too-large' }> {
+): Promise<{ ok: true; ctx: WorksheetContext } | { ok: false; error: 'invalid-selector' | 'archive-too-large' | 'invalid-xlsx' }> {
   const cached = archive.worksheetContexts.get(sheetMeta.partPath);
   if (cached) return { ok: true, ctx: cached };
 
@@ -1218,7 +1226,7 @@ async function resolveXlsxThreadTarget(
   target: ThreadTarget;
 } | {
   ok: false;
-  error: 'comment-not-found' | 'ambiguous-comment-id' | 'ambiguous-comment-wiring' | 'archive-too-large' | 'comment-scan-too-large';
+  error: 'comment-not-found' | 'ambiguous-comment-id' | 'ambiguous-comment-wiring' | 'archive-too-large' | 'invalid-xlsx' | 'comment-scan-too-large';
 }> {
   const parsed = parseXlsxThreadId(id);
   if (!parsed) return { ok: false, error: 'comment-not-found' };
@@ -1228,7 +1236,12 @@ async function resolveXlsxThreadTarget(
   if (hintedSheet) {
     const ctxResult = await getWorksheetContext(archive, hintedSheet);
     if (!ctxResult.ok) {
-      if (ctxResult.error === 'archive-too-large') return { ok: false, error: 'archive-too-large' };
+      // Code review 2026-09-27, desktop F2: 'invalid-xlsx' (a genuinely
+      // broken/truncated part) is an equally hard stop as 'archive-too-large'
+      // — both mean "this archive can't be trusted," never "part missing" —
+      // so it gets the same immediate propagation, not the 'invalid-selector'
+      // fallthrough below.
+      if (ctxResult.error === 'archive-too-large' || ctxResult.error === 'invalid-xlsx') return { ok: false, error: ctxResult.error };
       // 'invalid-selector' here means the worksheet part itself is missing —
       // fall through to the workbook-wide scan below rather than failing
       // outright, since the hint is only ever a locate-first shortcut.
@@ -1264,7 +1277,8 @@ async function resolveXlsxThreadTarget(
     }
     const ctxResult = await getWorksheetContext(archive, sheetMeta);
     if (!ctxResult.ok) {
-      if (ctxResult.error === 'archive-too-large') return { ok: false, error: 'archive-too-large' };
+      // Same hard-stop reasoning as the hinted-sheet branch above.
+      if (ctxResult.error === 'archive-too-large' || ctxResult.error === 'invalid-xlsx') return { ok: false, error: ctxResult.error };
       continue;
     }
     const ctx = ctxResult.ctx;
@@ -1292,7 +1306,7 @@ async function resolveXlsxThreadTarget(
 async function resolveWorksheetForSelector(
   archive: XlsxArchive,
   sel: CellSelector
-): Promise<{ ok: true; ctx: WorksheetContext } | { ok: false; error: 'sheet-not-found' | 'invalid-selector' | 'ambiguous-comment-wiring' | 'archive-too-large' }> {
+): Promise<{ ok: true; ctx: WorksheetContext } | { ok: false; error: 'sheet-not-found' | 'invalid-selector' | 'ambiguous-comment-wiring' | 'archive-too-large' | 'invalid-xlsx' }> {
   if (!isValidCellAddress(sel.cell)) return { ok: false, error: 'invalid-selector' };
   const realSheets = archive.sheets.filter((s) => !s.isChartsheet);
   let sheetMeta: SheetMeta;
@@ -1306,7 +1320,10 @@ async function resolveWorksheetForSelector(
   }
   const ctxResult = await getWorksheetContext(archive, sheetMeta);
   if (!ctxResult.ok) {
-    if (ctxResult.error === 'archive-too-large') return ctxResult;
+    // Same hard-stop reasoning as resolveXlsxThreadTarget above: neither
+    // 'archive-too-large' nor 'invalid-xlsx' means "part missing," so neither
+    // gets reinterpreted as 'invalid-selector'.
+    if (ctxResult.error === 'archive-too-large' || ctxResult.error === 'invalid-xlsx') return ctxResult;
     return { ok: false, error: 'invalid-selector' };
   }
   if (ctxResult.ctx.ambiguous) return { ok: false, error: 'ambiguous-comment-wiring' };

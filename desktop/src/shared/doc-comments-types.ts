@@ -150,9 +150,12 @@ export interface PendingMutationRequest {
 
 /** The applier's own outcome, one field wider than `PersistedComment[]`
  *  alone: `kind: 'list'` returns `comments`, `kind: 'add'` returns the new
- *  `id`, and the remaining four kinds return a bare `{ok:true}` — the exact
- *  same per-operation shape doc-comments-dispatch.ts's own functions already
- *  return, just carried through a file instead of a return value. */
+ *  `id`, `kind: 'move'` ALSO returns `id` but only for an xlsx target whose
+ *  fresh cell-embedded id changed (code review 2026-09-27, F1 — a docx move's
+ *  id never changes, so that branch omits it), and the remaining three kinds
+ *  return a bare `{ok:true}` — the exact same per-operation shape
+ *  doc-comments-dispatch.ts's own functions already return, just carried
+ *  through a file instead of a return value. */
 export type PendingMutationResult =
   // `reply` (design commit 6c612cb9, §1.5/§1.6/§7): a docx/xlsx `reply`'s
   // persisted CommentReply, once docx-comments.ts's/xlsx-comments.ts's own

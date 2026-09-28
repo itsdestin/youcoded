@@ -161,7 +161,57 @@ describe('queue round-trip — request written, result appears, and the original
 });
 
 describe('a move request round-trips through the queue', () => {
-  it('relocates a real comment and the applied result confirms it', async () => {
+  // Code review 2026-09-27, desktop F1: the queue's own 'move' branch used to
+  // discard `moveNativeXlsxComment`'s returned fresh id (`result.ok ? {ok:
+  // true} : ...` never read `result.id`), so the MCP script's MoveComment
+  // handler — the only real consumer of this queue's move result — always
+  // fell back to echoing the caller's OLD id, forcing a follow-up call to pay
+  // for the full-workbook fallback scan the fresh-id fix exists to avoid.
+  // This pins that the queue's result file now carries the new id for an
+  // xlsx move (never for docx — see the existing test above, whose id
+  // legitimately never changes).
+  it('an xlsx move forwards the fresh id in the result (F1 fix)', async () => {
+    await newRoot();
+    await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3.xlsx'));
+    const realRoot = await fs.promises.realpath(root);
+    const sessionId = 'sess-move-xlsx';
+    await start(sessionId, root);
+
+    const addId = await writeRequest(realRoot, {
+      kind: 'add',
+      format: 'xlsx',
+      path: 'reports/q3.xlsx',
+      selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1', sheet: 'Q3' } },
+      text: 'assistant note',
+      author: 'assistant',
+    });
+    const addResult = await waitForResult(realRoot, addId);
+    expect(addResult.ok).toBe(true);
+    const oldId = addResult.ok ? addResult.id! : '';
+    expect(oldId).toMatch(/^xt-/);
+
+    const moveId = await writeRequest(realRoot, {
+      kind: 'move',
+      format: 'xlsx',
+      path: 'reports/q3.xlsx',
+      commentId: oldId,
+      // D10: not one of this fixture's own genuine legacy Notes (xl/
+      // comments1.xml's B2/B18/B19/B20 on this sheet) — see
+      // doc-comments-tools.test.ts's matching note.
+      newSelector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'D10', sheet: 'Q3' } },
+    });
+    const moveResult = await waitForResult(realRoot, moveId);
+    expect(moveResult.ok).toBe(true);
+    if (moveResult.ok) {
+      // The whole point of the fix: a fresh id is present, and it differs
+      // from the id the request named (the cell hint it embeds changed).
+      expect(moveResult.id).toBeDefined();
+      expect(moveResult.id).not.toBe(oldId);
+    }
+  });
+
+  it('a docx move never carries an id in the result — a docx id does not change on move', async () => {
     await newRoot();
     await withDocxFixture('docs/launch-brief.docx');
     const realRoot = await fs.promises.realpath(root);

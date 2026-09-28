@@ -23,10 +23,25 @@ import { useDocComments, type DocComment } from '../../state/doc-comments-store'
 import { useQuoteMarks, ACTIVE_CLASSES } from './use-quote-marks';
 
 const GAP_PX = 10;
-// Fixed estimates rather than a measure-then-reflow pass: comment counts here
-// are small (a handful per file, never a "list of the user's things" that
-// renderer-lists.md governs), so an exact per-card height isn't worth a
-// second render pass — an approximate stack that never overlaps is enough.
+// Fixed estimates rather than a measure-then-reflow pass: an exact per-card
+// height isn't worth a second render pass — an approximate stack that never
+// overlaps is enough. This used to justify itself by claiming comment counts
+// are "small (a handful per file)" — a guess, not a measurement, per code
+// review 2026-09-27 (F3): the elden-ring golden fixture (a REAL captured
+// spreadsheet, not a seeded worst case) has 315 comments on its single
+// busiest sheet. `tests/CommentsMargin.test.tsx`'s "render cost at a
+// realistic high comment count" describe block is the actual measurement:
+// mounting this component (markAll's tree walk, useAnchorTops's
+// ResizeObserver, useQuoteMarks's per-mark listeners) against that real
+// 315-cell-comment sheet costs ~0.5s of CPU time, and a synthetic 1,000-
+// comment document (renderer-lists.md's own stress-pin bar) costs ~1.6s —
+// both in jsdom, which is slower than a real browser at DOM mutation. This is
+// a ONE-TIME cost paid once per file open/re-anchor (comment text edits don't
+// retrigger it — see use-quote-marks.ts's own `signature` WHY), not a
+// per-frame or per-keystroke cost, so renderer-lists.md's chunked-reveal
+// treatment (built for a per-scroll/per-frame cost) doesn't apply here; if a
+// real file ever needs materially more than ~1,000 comments, re-measure
+// against this pin before assuming it's still fine.
 const OPEN_CARD_H = 150;
 const REPLY_H = 46;
 const RESOLVED_CARD_H = 46;

@@ -42,7 +42,7 @@ import {
   reopenNativeXlsxComment,
   moveNativeXlsxComment,
 } from './doc-comments-dispatch';
-import { refuseUnknownProjectRoot } from './doc-comments-gate';
+import { refuseUnknownProjectRoot, isValidCommentSelectorShape } from './doc-comments-gate';
 import type { CommentAuthor, CommentSelector } from '../../shared/doc-comments-types';
 
 export interface DocCommentsHandlerDeps {
@@ -137,6 +137,12 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     if (refused) return refused;
     const text = reqStr(payload?.text);
     if (text === null) return missingField('text');
+    // Code review 2026-09-27, Android F1: Android's DocCommentsBridge.kt
+    // already refuses a missing/malformed `selector` before ever calling
+    // addComment (`missingField("selector")`) — this brings desktop's IPC
+    // surface to the same refusal, on the same channel, for the same shape
+    // (doc-comments-gate.ts's own header has the full parity reasoning).
+    if (!isValidCommentSelectorShape(payload?.selector)) return missingField('selector');
     // Review finding #5: resolved real path, not the raw string — see
     // `resolveNativeFormat`'s own doc comment.
     const format = await resolveNativeFormat(filePath, projectRoot);

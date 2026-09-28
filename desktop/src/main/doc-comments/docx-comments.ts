@@ -66,6 +66,16 @@ import { stripIllegalXmlChars } from './xml-text-safety';
 type DocxReadError = 'invalid-docx' | 'missing-document-part' | 'archive-too-large';
 export type DocxReadResult = { ok: true; comments: PersistedComment[] } | { ok: false; error: DocxReadError };
 
+// Code review 2026-09-27, desktop F2: `decompressBounded`'s own
+// `'decompress-failed'` (a genuinely broken/truncated stream, nothing to do
+// with size) isn't a `DocxReadError` — it maps to the SAME code this module
+// already uses for "this archive doesn't look valid" (`'invalid-docx'`,
+// e.g. `missing-document-part`'s sibling case below), never to
+// `'archive-too-large'`, which now means ONLY a genuine size overflow.
+function mapDecompressError(error: 'archive-too-large' | 'decompress-failed'): DocxReadError {
+  return error === 'archive-too-large' ? 'archive-too-large' : 'invalid-docx';
+}
+
 // ~32 chars, per §1.1's TextQuoteSelector doc comment ("~32 chars before,
 // whitespace-collapsed"). A generous raw window is sliced first so
 // `collapseWhitespace` never has to scan more than a few hundred characters
@@ -397,13 +407,13 @@ export async function readDocxComments(bytes: Uint8Array | Buffer, path: string)
   // `Promise.all` so a bomb on an EARLIER part is caught without also paying
   // to decompress the later ones first.
   const commentsResult = await decompressBounded(commentsFile);
-  if (!commentsResult.ok) return { ok: false, error: commentsResult.error };
+  if (!commentsResult.ok) return { ok: false, error: mapDecompressError(commentsResult.error) };
   const documentResult = await decompressBounded(documentFile);
-  if (!documentResult.ok) return { ok: false, error: documentResult.error };
+  if (!documentResult.ok) return { ok: false, error: mapDecompressError(documentResult.error) };
   let extendedXml: string | null = null;
   if (extendedFile) {
     const extendedResult = await decompressBounded(extendedFile);
-    if (!extendedResult.ok) return { ok: false, error: extendedResult.error };
+    if (!extendedResult.ok) return { ok: false, error: mapDecompressError(extendedResult.error) };
     extendedXml = extendedResult.text;
   }
   const commentsXml = commentsResult.text;

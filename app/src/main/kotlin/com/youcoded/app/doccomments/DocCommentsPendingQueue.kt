@@ -368,7 +368,22 @@ object DocCommentsPendingQueue {
                     NativeFormat.XLSX -> moveNativeXlsxComment(path, trustedProjectRoot, commentId, newSelector, homeDir)
                 }
                 when (r) {
-                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    // Code review 2026-09-27, desktop/Android F1 parity: mirrors
+                    // desktop's own pending-mutation-queue.ts fix (same review,
+                    // same finding) — an xlsx move's FRESH id (its old id's
+                    // embedded-cell hint goes stale the instant it moves) is
+                    // forwarded in the result file so the MCP script's
+                    // MoveComment handler can state it in the tool result text,
+                    // letting a follow-up call skip the full-workbook fallback
+                    // scan. `moveNativeDocxComment` returns `NativeMutateResult
+                    // <Unit>` (a docx id never changes on move), so the cast
+                    // below is a no-op there — same shape as
+                    // DocCommentsBridge.kt's own direct-dispatch `move` branch.
+                    is NativeMutateResult.Ok -> {
+                        val result = JSONObject().put("ok", true)
+                        (r.value as? String)?.let { result.put("id", it) }
+                        result
+                    }
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
                 }
             }

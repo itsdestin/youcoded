@@ -130,6 +130,44 @@ describe('dispatch by extension — Word/Excel targets route through the native 
     expect(listed.isError).toBeFalsy();
     expect(listed.text).toContain('assistant note');
   });
+
+  // Code review 2026-09-27, desktop F1: MoveCommentTool used to always echo
+  // back `args.commentId` — the OLD id — even for an xlsx move, whose fresh
+  // id it never read off `moveNativeXlsxComment`'s own return value. A
+  // follow-up ReplyToComment/ResolveComment reusing that stale id then always
+  // paid for the full-workbook fallback scan the fresh-id fix exists to
+  // avoid. This pins that the tool's success text now states the NEW id.
+  it('MoveComment on a .xlsx target states the fresh id in its success text (F1 fix)', async () => {
+    await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3-move.xlsx'));
+    const ctx = makeCtx(root);
+    const cellSelector: CommentSelector = { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1', sheet: 'Q3' } as CellSelector };
+    const added = await AddCommentTool.execute({ path: 'reports/q3-move.xlsx', selector: cellSelector, text: 'assistant note' }, ctx);
+    expect(added.isError).toBeFalsy();
+    const oldId = added.text.match(/id: (xt-[^)]+)\)/)![1];
+
+    // D10: deliberately NOT one of this fixture's own genuine legacy Notes
+    // (xl/comments1.xml's B2/B18/B19/B20 on this sheet) — a move onto a Note
+    // cell correctly refuses `cell-has-note`, which isn't what this test is
+    // pinning.
+    const newSelector: CommentSelector = { kind: 'cell', selector: { type: 'CellSelector', cell: 'D10', sheet: 'Q3' } as CellSelector };
+    const moved = await MoveCommentTool.execute({ path: 'reports/q3-move.xlsx', commentId: oldId, newSelector }, ctx);
+    expect(moved.isError).toBeFalsy();
+    const newIdMatch = moved.text.match(/repointed \(new id: (xt-[^)]+)\)\.$/);
+    expect(newIdMatch, moved.text).toBeTruthy();
+    const newId = newIdMatch![1];
+    // The whole point of the fix: the returned id changed, and it's stated
+    // in the text a follow-up tool call can read.
+    expect(newId).not.toBe(oldId);
+    expect(moved.text).toBe(`Comment ${oldId} on reports/q3-move.xlsx repointed (new id: ${newId}).`);
+
+    // A follow-up call by the FRESH id resolves without re-scanning the
+    // whole workbook (correctness check, not a perf assertion) — the old id
+    // still also works via the documented fallback scan, but the fix's whole
+    // point is that a caller doesn't have to rely on that path.
+    const resolved = await ResolveCommentTool.execute({ path: 'reports/q3-move.xlsx', commentId: newId }, ctx);
+    expect(resolved).toEqual({ text: `Comment ${newId} on reports/q3-move.xlsx marked resolved.` });
+  });
 });
 
 describe('path containment refusal at the tool-argument surface', () => {

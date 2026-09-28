@@ -191,6 +191,83 @@ class DocCommentsPendingQueueTest {
             assertTrue(waitFor { resultFile.exists() }, "move result never appeared")
             val result = JSONObject(resultFile.readText())
             assertTrue(result.optBoolean("ok"), "expected ok:true, got $result")
+            // Code review 2026-09-27, Android F2 (fixed alongside the stale
+            // WHY comment on moveNativeXlsxComment): a docx move's id never
+            // changes, so — unlike the xlsx case pinned below — this result
+            // carries no `id` at all.
+            assertFalse(result.has("id"))
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    /** `q3-sales-by-rep.xlsx`'s own genuine legacy Notes sit at B2/B18/B19/B20
+     *  on this sheet (xl/comments1.xml) — D10 is deliberately NOT one of
+     *  them, same caveat as desktop's matching test. */
+    private fun xlsxFixtureFile(name: String): File {
+        val resourceStream = object {}.javaClass.getResourceAsStream("/doc-comments/$name")
+            ?: error("missing test resource doc-comments/$name")
+        val tmp = Files.createTempFile("ycd-queue-xlsx-", "-$name").toFile()
+        tmp.deleteOnExit()
+        resourceStream.use { input -> tmp.outputStream().use { output -> input.copyTo(output) } }
+        return tmp
+    }
+
+    // Code review 2026-09-27, Android F2 / desktop F1 parity: mirrors
+    // desktop's pending-mutation-queue.test.ts's own "an xlsx move forwards
+    // the fresh id in the result (F1 fix)" — pins that
+    // DocCommentsPendingQueue.kt's `move` branch (fixed alongside the stale
+    // WHY comment above `moveNativeXlsxComment`) now forwards the fresh id,
+    // matching desktop's own queue and keeping the two platforms' MCP-facing
+    // behavior in sync.
+    @Test
+    fun `an xlsx move forwards the fresh id in the result`() {
+        val project = tempDir("ycd-queue-move-xlsx-")
+        val home = tempDir("ycd-queue-move-xlsx-home-")
+        val fixture = xlsxFixtureFile("q3-sales-by-rep.xlsx")
+        val target = File(project, "q3.xlsx")
+        fixture.copyTo(target, overwrite = true)
+        val scope = startQueue(project, home)
+        try {
+            val pending = pendingDir(project)
+            val token = "tok-session-1"
+
+            val added = kotlinx.coroutines.runBlocking {
+                addNativeXlsxComment(
+                    target.absolutePath, project.absolutePath,
+                    CommentSelector.Cell(CellSelector("A1", "Q3")),
+                    "assistant note", "assistant", home,
+                )
+            }
+            assertTrue(added is NativeMutateResult.Ok<String>)
+            val oldId = added.value
+            assertTrue(oldId.startsWith("xt-"))
+
+            val moveReq = JSONObject()
+                .put("id", "req-move-xlsx")
+                .put("kind", "move")
+                .put("format", "xlsx")
+                .put("path", "q3.xlsx")
+                .put("projectRoot", "/nonsense")
+                .put("token", token)
+                .put("createdAt", System.currentTimeMillis())
+                .put("commentId", oldId)
+                .put(
+                    "newSelector",
+                    JSONObject().put("kind", "cell").put(
+                        "selector",
+                        JSONObject().put("type", "CellSelector").put("cell", "D10").put("sheet", "Q3"),
+                    ),
+                )
+            writeRequest(pending, "req-move-xlsx", moveReq)
+
+            val resultFile = File(pending, "req-move-xlsx.result.json")
+            assertTrue(waitFor { resultFile.exists() }, "move result never appeared")
+            val result = JSONObject(resultFile.readText())
+            assertTrue(result.optBoolean("ok"), "expected ok:true, got $result")
+            assertTrue(result.has("id"), "expected the fresh id to be forwarded, got $result")
+            assertTrue(result.getString("id").isNotEmpty())
+            assertFalse(result.getString("id") == oldId, "the whole point of the fix: the id must be the FRESH one")
         } finally {
             scope.cancel()
         }

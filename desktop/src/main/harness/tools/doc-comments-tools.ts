@@ -345,7 +345,25 @@ export const MoveCommentTool = defineTool({
         ? await moveNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, newSelector })
         : await moveComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, newSelector });
     if (!result.ok) return { text: `MoveComment failed: ${describeError(result)}`, isError: true };
-    return { text: `Comment ${args.commentId} on ${args.path} repointed.` };
+    // Code review 2026-09-27, desktop F1: an xlsx move mints a FRESH id (its
+    // old id's embedded-cell hint goes stale the instant the comment moves —
+    // xlsx-comments.ts's own WHY on `moveNativeXlsxComment`), and this tool is
+    // the other of the two real callers that must forward it (the
+    // pending-mutation queue's own 'move' branch is fixed alongside this).
+    // Before this fix the success text always echoed `args.commentId` — the
+    // now-stale OLD id — so a follow-up ReplyToComment/ResolveComment call
+    // reusing that id always paid for the full-workbook fallback scan the
+    // fresh-id fix existed to avoid. `moveNativeDocxComment` and the plain-
+    // text/markdown sidecar `moveComment` never return `id` (their ids don't
+    // change on move), so `newId` is `undefined` there and the text stays
+    // exactly as before — only an xlsx move, whose id DID change, gets the
+    // new id stated so a follow-up call can use it.
+    const newId = (result as { ok: true; id?: string }).id;
+    return {
+      text: newId !== undefined
+        ? `Comment ${args.commentId} on ${args.path} repointed (new id: ${newId}).`
+        : `Comment ${args.commentId} on ${args.path} repointed.`,
+    };
   },
 });
 

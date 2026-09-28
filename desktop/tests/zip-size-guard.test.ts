@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
 import { Readable } from 'stream';
+import { EventEmitter } from 'events';
 import { decompressBounded } from '../src/main/doc-comments/zip-size-guard';
 
 /** A Node Readable of `totalBytes` zero bytes, generated on demand in small
@@ -70,5 +71,32 @@ describe('zip-size-guard — decompressBounded', () => {
     // Fast — proves the abort fired well before the full 8MB was
     // decompressed, not after a decompress-then-check pass over everything.
     expect(elapsedMs).toBeLessThan(2000);
+  });
+
+  // Code review 2026-09-27, desktop F2: a genuinely broken/truncated stream
+  // (a corrupted DEFLATE entry — nothing to do with size) used to come out
+  // of the SAME `'archive-too-large'` branch as a real overflow. This
+  // exercises the stream's own 'error' event directly (a fake JSZipObject,
+  // rather than hand-crafting corrupted DEFLATE bytes real zlib would choke
+  // on — the exact shape being pinned is "what code does a stream `error`
+  // event map to", independent of what real-world byte corruption looks
+  // like) — see docx-comments.test.ts's/xlsx-comments.test.ts's own tests
+  // for the format-level mapping this backs (`'invalid-docx'`/`'invalid-
+  // xlsx'`, never `'archive-too-large'`).
+  it("a genuine stream error reports 'decompress-failed', never 'archive-too-large'", async () => {
+    const stream = new EventEmitter() as EventEmitter & { destroy?: () => void };
+    stream.destroy = () => {};
+    const fakeFile = {
+      nodeStream: () => stream,
+    } as unknown as JSZip.JSZipObject;
+
+    const resultPromise = decompressBounded(fakeFile);
+    // Some real bytes arrive fine before the stream breaks — proves this
+    // isn't just "no data ever arrived", but a genuine mid-stream failure.
+    stream.emit('data', Buffer.from('partial'));
+    stream.emit('error', new Error('invalid distance too far back'));
+
+    const result = await resultPromise;
+    expect(result).toEqual({ ok: false, error: 'decompress-failed' });
   });
 });

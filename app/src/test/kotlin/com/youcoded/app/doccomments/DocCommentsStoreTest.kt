@@ -461,4 +461,56 @@ class DocCommentsStoreTest {
         assertEquals(1, onDisk.comments.size)
         assertEquals("first", onDisk.comments[0].text)
     }
+
+    // ── mutateSidecar's IOException mapping (code review 2026-09-27, F3) ──
+    // Before this fix, EVERY java.io.IOException escaping mutateFileUnderLock
+    // — from the READ side (an unreadable existing sidecar) or the WRITE side
+    // (a failed atomic rename) — was reported as SIDECAR_CORRUPT. These two
+    // tests pin that the two are now told apart.
+
+    @Test
+    fun `malformed JSON content in an existing sidecar still refuses as SIDECAR_CORRUPT`() = runTest {
+        val root = tempProjectRoot()
+        // A real, readable, regular file — just not valid sidecar JSON.
+        // `CommentsSidecarFile.parse` returning null (not an exception) is
+        // the common real-world "sidecar corrupt" shape (a torn write, hand
+        // edited by mistake); this pins it's still SIDECAR_CORRUPT and was
+        // NEVER routed through the IOException catch this review's F3
+        // finding is about — it must stay unaffected by that fix.
+        val sidecarFile = File(root, ".youcoded/comments/docs/plan.md.json")
+        sidecarFile.parentFile!!.mkdirs()
+        sidecarFile.writeText("{ not valid json at all")
+
+        val result = addComment("docs/plan.md", root.path, TEXT_SELECTOR, "x", "user", root)
+        assertEquals(StoreResult.Err(DocCommentsError.SIDECAR_CORRUPT), result)
+    }
+
+    @Test
+    fun `a write-time failure (not a read failure) refuses as SIDECAR_WRITE_FAILED, never SIDECAR_CORRUPT`() = runTest {
+        val root = tempProjectRoot()
+        // A real, valid, READABLE sidecar first — the read (and `apply`)
+        // succeed; only the SUBSEQUENT write must fail.
+        val added = addComment("docs/plan.md", root.path, TEXT_SELECTOR, "first", "user", root)
+        assertTrue(added is StoreResult.Ok, "expected Ok, got $added")
+
+        // `mutateFileUnderLock` (CasWrite.kt) writes its new content to
+        // "<target>.tmp" before the atomic rename onto `target` — a
+        // DIRECTORY already sitting at exactly that ".tmp" path makes that
+        // specific write step fail (`writeText` onto a directory throws),
+        // strictly AFTER the read and `apply` have already succeeded. This
+        // is more precise than a permission-bit trick: this codebase's own
+        // mkdir-based lock (`acquireLock`) ALSO creates something inside the
+        // SAME parent directory the tmp/rename step writes into, so making
+        // that whole directory non-writable fails lock ACQUISITION instead
+        // (a different, pre-existing failure this fix doesn't change) —
+        // confirmed empirically while writing this test.
+        val sidecarFile = File(root, ".youcoded/comments/docs/plan.md.json")
+        val tmpPath = File(sidecarFile.parentFile, "${sidecarFile.name}.tmp")
+        assertTrue(tmpPath.mkdirs(), "test setup: could not pre-create the .tmp collision directory")
+
+        val result = replyToComment(
+            "docs/plan.md", root.path, (added as StoreResult.Ok).value, "a reply", "user", root,
+        )
+        assertEquals(StoreResult.Err(DocCommentsError.SIDECAR_WRITE_FAILED), result)
+    }
 }

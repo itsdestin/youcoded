@@ -49,7 +49,7 @@ import {
   moveXlsxComment,
 } from '../src/main/doc-comments/xlsx-comments';
 import { backupPathFor } from '../src/main/doc-comments/write-pipeline';
-import { buildDeclaredOversizeZip } from './fixtures/doc-comments/oversized-zip';
+import { buildDeclaredOversizeZip, corruptLocalFileData } from './fixtures/doc-comments/oversized-zip';
 import type { CommentSelector } from '../src/shared/doc-comments-types';
 
 const execFileAsync = promisify(execFile);
@@ -360,6 +360,21 @@ describe('xlsx-comments — decompression-bomb / size guards', () => {
     );
     const result = await readXlsxComments(bytes, 'bomb.xlsx');
     expect(result).toEqual({ ok: false, error: 'archive-too-large' });
+  });
+
+  // Code review 2026-09-27, desktop F2: a truncated/corrupted entry has
+  // NOTHING to do with size and must not come back as 'archive-too-large' —
+  // that code now means only a genuine overflow (the test above). Corrupts
+  // the REAL docling fixture's own xl/persons/person.xml compressed bytes
+  // (never its declared size, and never d.xlsx's other parts — everything
+  // else stays a valid, readable archive), so `readOptionalPart`'s
+  // `decompressBounded` call hits a genuine stream error — proves it maps to
+  // 'invalid-xlsx', this module's existing "not a real workbook" code.
+  it("a genuinely corrupted xl/persons/person.xml entry reports 'invalid-xlsx', never 'archive-too-large'", async () => {
+    const original = await readFile(DOCLING_FIXTURE);
+    const bytes = corruptLocalFileData(original, 'xl/persons/person.xml');
+    const result = await readXlsxComments(bytes, 'd.xlsx');
+    expect(result).toEqual({ ok: false, error: 'invalid-xlsx' });
   });
 });
 

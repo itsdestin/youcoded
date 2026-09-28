@@ -433,10 +433,21 @@ suspend fun reopenNativeXlsxComment(path: String, projectRoot: String?, id: Stri
 
 /** T19's own `MoveComment` — returns the moved thread's FRESH id (§4.2/§4.3's
  *  own "never guessing at a stale hint" reasoning), unlike docx's move (a
- *  `TextQuoteSelector`-anchored comment's own id never changes on move). The
- *  IPC response shape (`DocCommentsBridge.kt`) stays `{ok:true}` either way,
- *  per §1.6's own reasoning — no tool or IPC caller currently reads a move's
- *  returned id back. */
+ *  `TextQuoteSelector`-anchored comment's own id never changes on move).
+ *
+ *  Code review 2026-09-27, Android F2: the previous version of this comment
+ *  claimed the IPC response stays `{ok:true}` either way and that no caller
+ *  reads a move's id back — both false. `DocCommentsBridge.kt`'s direct
+ *  `move` dispatch DOES put `id` on the JSON response for the xlsx branch
+ *  (`.put("id", r.value)`, right next to its own "Coordinator review fix"
+ *  comment); `DocCommentsPendingQueue.kt`'s `move` branch now ALSO forwards
+ *  it (fixed alongside this comment, mirroring desktop's own
+ *  pending-mutation-queue.ts fix from the SAME review round — before this,
+ *  Android's queue silently dropped it even after desktop's did not,
+ *  reintroducing the exact staleness bug across the assistant's MCP path).
+ *  Both real callers now read the fresh id; only a caller that never
+ *  bothered to read the response at all would still pay for the
+ *  full-workbook fallback scan on its next lookup. */
 suspend fun moveNativeXlsxComment(
     path: String,
     projectRoot: String?,

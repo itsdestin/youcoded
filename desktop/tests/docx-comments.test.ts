@@ -26,7 +26,7 @@ import {
   DOCX_BACKUP_SUFFIX,
 } from '../src/main/doc-comments/docx-comments';
 import { backupPathFor } from '../src/main/doc-comments/write-pipeline';
-import { buildDeclaredOversizeZip, buildRealZipBomb } from './fixtures/doc-comments/oversized-zip';
+import { buildDeclaredOversizeZip, buildRealZipBomb, buildCorruptedEntryZip } from './fixtures/doc-comments/oversized-zip';
 import type { CommentSelector } from '../src/shared/doc-comments-types';
 
 async function exists(path: string): Promise<boolean> {
@@ -234,6 +234,22 @@ describe('docx-comments — a decompression-bomb-shaped archive', () => {
     );
     const result = await readDocxComments(bytes, 'docs/real-bomb.docx');
     expect(result).toEqual({ ok: false, error: 'archive-too-large' });
+  });
+
+  // Code review 2026-09-27, desktop F2: a truncated/corrupted entry has
+  // NOTHING to do with size and must not come back as 'archive-too-large' —
+  // that code now means only a genuine overflow (the two tests above). This
+  // scrambles word/comments.xml's own compressed bytes (never its declared
+  // size), so `decompressBounded`'s stream 'error' event fires — proves it
+  // maps to this module's own 'invalid-docx', matching `readDocxComments`'s
+  // existing "not a docx at all" case just above.
+  it("a genuinely corrupted word/comments.xml entry reports 'invalid-docx', never 'archive-too-large'", async () => {
+    const bytes = await buildCorruptedEntryZip(
+      { 'word/document.xml': '<w:document><w:body/></w:document>', 'word/comments.xml': '<w:comments><w:comment w:id="0"/></w:comments>' },
+      'word/comments.xml',
+    );
+    const result = await readDocxComments(bytes, 'docs/corrupt.docx');
+    expect(result).toEqual({ ok: false, error: 'invalid-docx' });
   });
 });
 

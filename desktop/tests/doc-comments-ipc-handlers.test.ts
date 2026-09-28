@@ -77,6 +77,57 @@ describe('registerDocCommentsHandlers', () => {
     expect(listed.comments).toHaveLength(1);
   });
 
+  // Code review 2026-09-27, Android F1 (cross-platform parity gap):
+  // Android's DocCommentsBridge.kt already refuses a missing/malformed
+  // `selector` on docComments:add with `{ok:false, error:"missing-field",
+  // field:"selector"}` before ever calling addComment — desktop's IPC
+  // handler used to cast `payload?.selector as CommentSelector` straight
+  // through with no check at all, silently persisting a comment with no
+  // selector. This pins that desktop now refuses the SAME shapes, the same
+  // way, on the same channel.
+  describe('a missing or malformed selector is refused (Android parity)', () => {
+    it('refuses when selector is entirely absent', async () => {
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      const result = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+        path: 'docs/plan.md', projectRoot: root, text: 'hello', author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'missing-field', field: 'selector' });
+      const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
+      expect(listed.comments ?? []).toHaveLength(0);
+    });
+
+    it('refuses when selector has no recognized `kind`', async () => {
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      const result = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+        path: 'docs/plan.md', projectRoot: root, selector: { kind: 'bogus', selector: {} }, text: 'hello', author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'missing-field', field: 'selector' });
+    });
+
+    it('refuses when selector.selector (the inner object) is missing', async () => {
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      const result = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+        path: 'docs/plan.md', projectRoot: root, selector: { kind: 'cell' }, text: 'hello', author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'missing-field', field: 'selector' });
+    });
+
+    it('still accepts a selector missing only INNER fields — Android defaults those, never refuses', async () => {
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      // No `exact`/`prefix`/`suffix`/`occurrence` — Android's
+      // TextQuoteSelector.fromJson defaults every one of these rather than
+      // refusing, so desktop must not be STRICTER than Android here.
+      const result = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+        path: 'docs/plan.md', projectRoot: root, selector: { kind: 'text', selector: {} }, text: 'hello', author: 'user',
+      });
+      expect(result.ok).toBe(true);
+    });
+  });
+
   // F4 (T5 implementation review): the renderer mints the comment id and
   // sends it on the `add` payload — this IPC handler forwards it through to
   // the store rather than always minting its own.

@@ -100,6 +100,28 @@ describe('docComments over remote access', () => {
     expect(sent[1].payload.comments).toHaveLength(1);
   });
 
+  // Code review 2026-09-27, Android F1 (cross-platform parity gap): mirrors
+  // doc-comments-ipc-handlers.test.ts's own new describe block — the remote
+  // WS surface used to pass `payload?.selector` straight through with NO
+  // validation at all (not even a TS cast), so this surface too could
+  // silently persist a comment with no selector where Android refuses.
+  it('refuses docComments:add over the WS surface when selector is missing (Android parity)', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
+    const sent: any[] = [];
+    const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    const client = { id: 'phone-a', ws };
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:add', id: 'req-1',
+      payload: { path: 'docs/plan.md', projectRoot: root, text: 'hi', author: 'user' },
+    }));
+    expect(sent[0].payload).toEqual({ ok: false, error: 'missing-field', field: 'selector' });
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:list', id: 'req-2', payload: { path: 'docs/plan.md', projectRoot: root },
+    }));
+    expect(sent[1].payload.comments ?? []).toHaveLength(0);
+  });
+
   // F4 (T5 implementation review): the renderer mints the comment id and
   // sends it — the WS surface forwards it through, same as desktop IPC.
   it('forwards a caller-supplied id straight through over the WS surface (F4, T5 review)', async () => {

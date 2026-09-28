@@ -200,7 +200,22 @@ async function applyRequest(req: PendingMutationRequest, trustedProjectRoot: str
   if (req.kind === 'move') {
     const args = { ...base, id: req.commentId!, newSelector: req.newSelector! };
     const result = format === 'docx' ? await moveNativeDocxComment(args) : await moveNativeXlsxComment(args);
-    return result.ok ? { ok: true } : { ok: false, error: result.error };
+    if (!result.ok) return { ok: false, error: result.error };
+    // Code review 2026-09-27, desktop F1: an xlsx move's OWN id changes (its
+    // old id's embedded-cell hint goes stale the instant the comment moves —
+    // xlsx-comments.ts's own WHY on `moveNativeXlsxComment`'s return type),
+    // and this queue is one of only two real callers of that function
+    // (the other is MoveCommentTool.execute, fixed alongside this). Before
+    // this fix, the fresh id was computed and then silently dropped right
+    // here, so a follow-up Reply/Resolve on the same comment always paid for
+    // the full-workbook fallback scan the fix existed to avoid — the
+    // optimization was dead at both of its call sites. `moveNativeDocxComment`
+    // never sets `id` (a docx comment's id doesn't embed position, so it
+    // never changes), so the narrow cast below reads `undefined` there and
+    // this returns plain `{ok:true}` exactly as before — same no-op-when-
+    // absent shape as the adjacent 'reply' branch's own `result.reply` cast.
+    const id = (result as { ok: true; id?: string }).id;
+    return id !== undefined ? { ok: true, id } : { ok: true };
   }
   // Adversarial review 2026-09-27, finding #3: an unrecognized or malformed
   // `kind` (a bug in a future caller, a truncated/corrupted write racing the

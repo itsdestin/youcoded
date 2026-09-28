@@ -783,7 +783,19 @@ function callTool(id, params) {
   } else if (name === 'MoveComment') {
     handler = (requireString(args, 'path') && requireString(args, 'commentId') && args.newSelector && typeof args.newSelector === 'object')
       ? moveComment(args).then(function (r) {
-          return r.ok ? textResult('Comment ' + args.commentId + ' on ' + args.path + ' repointed.') : formatOpError('MoveComment', r);
+          if (!r.ok) return formatOpError('MoveComment', r);
+          // Code review 2026-09-27, desktop F1: an xlsx move's queue result
+          // carries the FRESH id (its old id's embedded-cell hint goes stale
+          // the instant the comment moves — pending-mutation-queue.ts's own
+          // WHY on its 'move' branch); stating it here is what lets a
+          // follow-up ReplyToComment/ResolveComment call use the new id
+          // instead of paying for the full-workbook fallback scan. A docx
+          // move (or a plain-text sidecar move, neither of which changes its
+          // id) never sets r.id, so this falls back to the unchanged text
+          // exactly as before — same shape as ReplyToComment's own replyId
+          // handling just above.
+          var newId = r.id || null;
+          return textResult('Comment ' + args.commentId + ' on ' + args.path + ' repointed.' + (newId ? ' New id: ' + newId + '.' : ''));
         })
       : Promise.resolve(textResult('MoveComment failed: path, commentId and newSelector are required.', true));
   } else {
