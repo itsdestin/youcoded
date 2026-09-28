@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { exitCodeFor, planFetch, stageAndReplace } from '../../scripts/fetch-office.mjs';
+import { exitCodeFor, planFetch, stageAndReplace, sweepStaleStaging } from '../../scripts/fetch-office.mjs';
 
 // Pins the fetch-vs-skip decision fetch-office.mjs makes at dev/build time, without touching
 // the network: office comes down as a real tar.gz (~104MB) that a unit test should never fetch.
@@ -154,3 +154,58 @@ describe('stageAndReplace', () => {
     await rm(path.dirname(dest), { recursive: true, force: true });
   });
 });
+
+// Pins the leak fix: a run killed mid-extraction must not leave its ~104MB staging directory
+// behind forever, but a sweep must never touch a directory another still-running fetch owns.
+describe('sweepStaleStaging', () => {
+  async function tempDest() {
+    const dir = await mkdtemp(path.join(tmpdir(), 'office-sweep-test-'));
+    return path.join(dir, 'office-addon');
+  }
+
+  it('removes a staging directory whose pid is no longer alive', async () => {
+    const dest = await tempDest();
+    // A pid this high is not a real running process in a normal test run — process.kill(pid, 0)
+    // reliably throws ESRCH for it, standing in for "the run that made this dir is gone".
+    const deadPidDir = `${dest}.staging-999999`;
+    await mkdir(deadPidDir, { recursive: true });
+    await sweepStaleStaging(dest);
+    expect(await readdirOrEmpty(path.dirname(dest))).not.toContain(path.basename(deadPidDir));
+    await rm(path.dirname(dest), { recursive: true, force: true });
+  });
+
+  it('keeps this process\'s own staging directory', async () => {
+    const dest = await tempDest();
+    const ownDir = `${dest}.staging-${process.pid}`;
+    await mkdir(ownDir, { recursive: true });
+    await sweepStaleStaging(dest);
+    expect(await readdirOrEmpty(path.dirname(dest))).toContain(path.basename(ownDir));
+    await rm(path.dirname(dest), { recursive: true, force: true });
+  });
+
+  it('keeps a fresh staging directory belonging to a different, still-alive pid', async () => {
+    const dest = await tempDest();
+    // process.ppid is a real, live pid distinct from this test process — the parent that
+    // launched it — standing in for "some other concurrent fetch, still running".
+    const liveDir = `${dest}.staging-${process.ppid}`;
+    await mkdir(liveDir, { recursive: true });
+    await sweepStaleStaging(dest);
+    expect(await readdirOrEmpty(path.dirname(dest))).toContain(path.basename(liveDir));
+    await rm(path.dirname(dest), { recursive: true, force: true });
+  });
+
+  it('removes a directory older than an hour even with a live pid', async () => {
+    const dest = await tempDest();
+    const oldDir = `${dest}.staging-${process.ppid}`;
+    await mkdir(oldDir, { recursive: true });
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(oldDir, twoHoursAgo, twoHoursAgo);
+    await sweepStaleStaging(dest);
+    expect(await readdirOrEmpty(path.dirname(dest))).not.toContain(path.basename(oldDir));
+    await rm(path.dirname(dest), { recursive: true, force: true });
+  });
+});
+
+async function readdirOrEmpty(dir: string): Promise<string[]> {
+  return readdir(dir).catch(() => []);
+}
