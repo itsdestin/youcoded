@@ -14,12 +14,13 @@
 // back to (Q-save); the editor wears the theme — colours, font, glass and
 // roundness (Q-theme). The editors are Euro-Office (office-base#Q-base-final),
 // on their own sealed origin; only files and small messages cross.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState } from '../ui';
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
 import { HistoryGlyph, HomeGlyph, KIND_LABEL, OfficeKindGlyph } from './office-icons';
-import { HOME_TAB, cancelClose, closeDoc, finishClose, openDoc, selectTab, showVersions, useOfficeTabs, useSaveState } from './office-store';
+import { HOME_TAB, cancelClose, closeDoc, finishClose, markCopied, noteCloseFailedWhileHidden, openDoc, replaceDoc, selectTab, showVersions, useOfficeTabs, useSaveState } from './office-store';
+import { officeFileFor } from './office-files';
 import type { OfficeSaveState } from './office-store';
 import { OfficeSaveFailed } from './OfficeSaveFailed';
 import { EditorFrame, stripExt } from './EditorFrame';
@@ -57,6 +58,18 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
 
   const front = docs.find((d) => d.file.path === active && !d.closing) ?? null;
   const saveState = useSaveState(front?.file.path ?? null);
+  const frontPath = front?.file.path ?? null;
+  // Stable per front file (fix round 2): a fresh object each render re-asked main whether a copy
+  // can be saved on every render of the strip.
+  const frontFrame = useMemo(() => ({ get current() { return frontPath ? frames.current.get(frontPath) : undefined; } }), [frontPath]);
+  // Kept but hidden (fix round 2): whatever the editor had focused must not keep the keyboard —
+  // typing in chat would otherwise land in a document nobody can see.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (visible) return;
+    const a = document.activeElement as HTMLElement | null;
+    if (a && rootRef.current?.contains(a)) a.blur();
+  }, [visible]);
   const tabs: DocumentTab[] = [
     { id: HOME_TAB, label: 'Home', icon: <HomeGlyph />, closable: false },
     // A closing tab is gone from the strip at once; its editor finishes saving out of sight.
@@ -73,7 +86,7 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
   };
 
   return (
-    <div className="absolute inset-0 flex flex-col">
+    <div ref={rootRef} className="absolute inset-0 flex flex-col">
       {/* min-h, not h: a failed save's message and Retry (below) are taller than the strip's
           44px; every other state keeps exactly that height. */}
       <div className="min-h-11 shrink-0 flex items-center gap-2 px-2 border-b border-edge-dim">
@@ -86,7 +99,8 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
               ? <OfficeSaveFailed
                   className="max-w-xl"
                   message={saveState.message ?? "Office couldn't save this file."}
-                  frame={{ get current() { return frames.current.get(front.file.path); } }}
+                  frame={frontFrame}
+                  visible={visible}
                   onCloseWithoutSaving={() => closeDoc(front.file.path)}
                 />
               : <span className="text-2xs text-fg-muted">{saveLabel(saveState)}</span>}
@@ -117,12 +131,22 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
             screen={visible ? `office/${d.file.kind}` : undefined}
             closing={d.closing}
             onClosed={() => finishClose(d.file.path)}
-            onCloseFailed={() => cancelClose(d.file.path)}
+            onCloseFailed={() => {
+              // The tab comes back with its reason and actions (the frame marked it failed). If
+              // the page is not on view, say so outside it (fix round 2) — never a silent bounce.
+              cancelClose(d.file.path);
+              if (!visible) noteCloseFailedWhileHidden(d.file.path);
+            }}
+            onSwitchTo={(copyPath, folder) => {
+              replaceDoc(d.file.path, officeFileFor(copyPath));
+              markCopied(copyPath, folder);
+            }}
           />
         ))}
       </div>
 
-      <VersionsDialog file={versionsFor} onClose={() => showVersions(null)} />
+      {/* Only while on view: a mounted dialog would otherwise show over chat and hold Escape. */}
+      <VersionsDialog file={visible ? versionsFor : null} onClose={() => showVersions(null)} />
     </div>
   );
 }
@@ -130,7 +154,7 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
 function saveLabel(s: OfficeSaveState): string {
   if (s.phase !== 'saved') return 'Saving…';
   // After "Save a copy…", say where it went — the folder's name only, never a full path.
-  return s.copiedTo ? `Saved a copy to ${s.copiedTo}` : 'Saved';
+  return s.copiedTo ? `Saved a copy to ${s.copiedTo} — now editing the copy.` : 'Saved';
 }
 
 function OfficeHome({ load, onRetry, onCreate, onPick, onOpen }: {

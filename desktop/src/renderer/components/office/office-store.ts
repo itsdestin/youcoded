@@ -86,9 +86,39 @@ function answerFlushRequests(): void {
   if (answering || !office?.onFlushRequest || !office.flushDone) return;
   answering = true;
   office.onFlushRequest((id) => {
-    void Promise.all([...flushers.values()].map((f) => f().catch(() => null))).then(() => office.flushDone?.(id));
+    const entries = [...flushers.entries()];
+    void Promise.all(entries.map(([, f]) => f().catch(() => null))).then((results) => {
+      // WHY report failures (fix round 2): a document whose save failed must not be closed with
+      // its window without the person choosing that. Main keeps the window (or the quit) waiting
+      // on the answer; the prompt below offers Review or Close anyway.
+      const failed = entries.filter((_, i) => results[i]?.ok === false).map(([path]) => path);
+      office.flushDone?.(id, { failed: failed.length });
+      if (failed.length > 0) setAlerts({ ...alerts, unsaved: { count: failed.length, firstPath: failed[0] } });
+    });
   });
 }
+
+// ── Alerts shown outside the Office page (fix round 2) ──
+// The page may be closed (kept invisible), so these render beside it (OfficeAlerts).
+//   unsaved       a window close or quit found documents whose save failed
+//   closeFailed   a tab closed while the page was hidden could not save, so it came back
+interface OfficeAlertsState {
+  unsaved: { count: number; firstPath: string } | null;
+  closeFailed: string | null;
+}
+let alerts: OfficeAlertsState = { unsaved: null, closeFailed: null };
+const alertListeners = new Set<() => void>();
+function setAlerts(next: OfficeAlertsState) { alerts = next; alertListeners.forEach((l) => l()); }
+export function useOfficeAlerts(): OfficeAlertsState {
+  return useSyncExternalStore((l) => { alertListeners.add(l); return () => { alertListeners.delete(l); }; }, () => alerts, () => alerts);
+}
+export function clearUnsavedPrompt(): void { setAlerts({ ...alerts, unsaved: null }); }
+/** Photo-only (`shoot`): the prompt as a window close with two unsaved documents shows it. */
+export function previewUnsavedPrompt(): void {
+  setAlerts({ ...alerts, unsaved: { count: 2, firstPath: state.docs[0]?.file.path ?? '' } });
+}
+export function noteCloseFailedWhileHidden(path: string): void { setAlerts({ ...alerts, closeFailed: path }); }
+export function clearCloseFailed(): void { setAlerts({ ...alerts, closeFailed: null }); }
 
 /** The file's Office tab, if it has one (a closing tab still counts: its editor is mounted). */
 export function officeDocFor(path: string): OpenDoc | null {
@@ -150,6 +180,17 @@ export function cancelClose(path: string): void {
   set({ ...state, docs: state.docs.map((d) => (d.file.path === path ? { ...d, closing: false } : d)), active: path });
 }
 
+/** "Save a copy…" landed (fix round 2): the tab now edits the copy — same place in the strip,
+ *  in front if it was. The original's editor unmounts with nothing left to save. */
+export function replaceDoc(oldPath: string, file: OfficeFile): void {
+  set({
+    ...state,
+    docs: state.docs.map((d) => (d.file.path === oldPath ? { file, asleep: false } : d)),
+    active: state.active === oldPath ? file.path : state.active,
+  });
+  forgetSaveState(oldPath);
+}
+
 /** The closing tab's editor has saved (or given up after 5 s): remove it for good. */
 export function finishClose(path: string): void {
   if (!state.docs.some((d) => d.file.path === path && d.closing)) return;
@@ -202,7 +243,10 @@ export function markChanged(path: string): void {
 /** "Save a copy…" landed: the changes are in the copy, and the file itself is left as it was. */
 export function markCopied(path: string, folder: string): void {
   setSave(path, { phase: 'saved', savedAt: saves[path]?.savedAt, copiedTo: folder });
+  // "Briefly" (fix round 2): the note goes after a few seconds, or with the next save state.
+  setTimeout(() => { if (saves[path]?.copiedTo === folder && saves[path]?.phase === 'saved') setSave(path, { phase: 'saved', savedAt: saves[path]?.savedAt }); }, COPIED_NOTE_MS);
 }
+const COPIED_NOTE_MS = 8_000;
 /** The editor says nothing is unsaved after all (see EditorFrame): back to the last save. */
 export function markUnchanged(path: string): void {
   setSave(path, { phase: 'saved', savedAt: saves[path]?.savedAt });
@@ -238,6 +282,7 @@ export function resetOfficeStoreForTests(): void {
   inlineHolders.clear();
   flushers.clear();
   answering = false;
+  alerts = { unsaved: null, closeFailed: null };
   listeners.forEach((l) => l());
   saveListeners.forEach((l) => l());
 }

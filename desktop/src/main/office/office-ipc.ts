@@ -234,7 +234,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     try {
       await run.saveCopy(s.token, target);
       // The folder's name only — never a full path on screen (the owner's rule for this message).
-      return { ok: true, folder: path.basename(path.dirname(target)) };
+      return { ok: true, folder: path.basename(path.dirname(target)), path: target };
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : MSG.couldNotCopy };
     }

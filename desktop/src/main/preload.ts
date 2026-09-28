@@ -1945,7 +1945,7 @@ contextBridge.exposeInMainWorld('claude', {
     close: (token: string) => ipcRenderer.invoke('office:close', token),
     versions: (p: string) => ipcRenderer.invoke('office:versions', p),
     restore: (p: string, id: string) => ipcRenderer.invoke('office:restore', p, id),
-    saveCopy: (token: string, mode: string) => ipcRenderer.invoke('office:save-copy', token, mode), flushDone: (id: string) => ipcRenderer.send('office:flush-done', id),
+    saveCopy: (token: string, mode: string) => ipcRenderer.invoke('office:save-copy', token, mode), flushDone: (id: string, result: unknown) => ipcRenderer.send('office:flush-done', id, result), proceedClose: () => ipcRenderer.send('office:proceed'),
     onFlushRequest: (cb: (id: string) => void) => { const h = (_e: IpcRendererEvent, id: string) => cb(id); ipcRenderer.on('office:flush-request', h); return () => { ipcRenderer.off('office:flush-request', h); }; },
   },
   // Project View IPC — sibling to artifacts. Backs the project overlay's

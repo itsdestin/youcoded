@@ -159,13 +159,25 @@ describe('when an Office save fails', () => {
     expect(officeDocFor(FILE.path)).not.toBeNull();
   });
 
-  it('says where a copy went — the folder name only — and then closes normally', async () => {
-    const { office } = await failedTab();
+  it('after Save a copy the tab edits the copy: typing then lands in the copy, not the original', async () => {
+    const COPY = '/home/you/Documents/plan (copy).docx';
+    const invoke = vi.fn(async () => 'ok');
+    const { office, container } = await failedTab({
+      open: vi.fn(async (p: string) => (p === COPY ? { ok: true as const, token: 't2', origin: 'office://t2' } : { ok: true as const, token: 't1', origin: 'office://t1' })),
+      invoke,
+      saveCopy: vi.fn(async (_t: string, mode: string) => (mode === 'check' ? { ok: true as const, possible: true } : { ok: true as const, folder: 'Documents', path: COPY })),
+    });
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
-    expect(await screen.findByText('Saved a copy to Documents')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /close plan/i }));
-    await waitFor(() => expect(officeDocFor(FILE.path)).toBeNull());
+    expect(await screen.findByText('Saved a copy to Documents — now editing the copy.')).toBeInTheDocument();
+    // Same tab, now the copy; the original's session is handed back with nothing to save.
+    expect(officeDocFor(FILE.path)).toBeNull();
+    expect(officeDocFor(COPY)).not.toBeNull();
     await waitFor(() => expect(office.close).toHaveBeenCalledWith('t1'));
+    const copyFrame = await waitFor(() => { const f = container.querySelector('iframe[title="plan (copy).docx"]') as HTMLIFrameElement; expect(f?.getAttribute('src')).toBe('office://t2/index.html'); return f; });
+    vi.spyOn(copyFrame.contentWindow!, 'postMessage').mockImplementation(() => {});
+    act(() => { window.dispatchEvent(new MessageEvent('message', { data: { yc: 'rpc', id: 9, cmd: 'save_file', args: { data: '' } }, origin: 'office://t2', source: copyFrame.contentWindow })); });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('t2', 'save_file', { data: '' }));
+    expect(invoke).not.toHaveBeenCalledWith('t1', 'save_file', expect.anything());
   });
 
   it('closes without saving only after the person confirms, and discards the changes', async () => {
@@ -180,5 +192,26 @@ describe('when an Office save fails', () => {
     await waitFor(() => expect(office.close).toHaveBeenCalledWith('t1'));
     // Discarded: the close did not ask the editor to save again.
     expect(posted.mock.calls.filter((c) => (c[0] as { type?: string }).type === 'yc:office-save')).toHaveLength(0);
+  });
+});
+
+describe('the header briefcase ("Open in Office") on an in-place edit', () => {
+  it("does nothing while the in-place edit's save is failing: no cancel, no Office tab", async () => {
+    withOffice();
+    const { officeHeaderAction } = await import('../../src/renderer/components/office/use-office-edit-screen');
+    const { resetOfficeAvailabilityForTests: reset, useOfficeAvailable } = await import('../../src/renderer/components/office/office-availability');
+    reset();
+    const { result } = renderHook(() => useOfficeAvailable());
+    await waitFor(() => expect(result.current).toBe(true));
+    const { registerFlush } = await import('../../src/renderer/components/office/office-store');
+    registerFlush(FILE.path, async () => ({ ok: false, message: "Office doesn't have permission to save this file." }));
+    const dispatch = vi.fn();
+    const beforeOpen = vi.fn();
+    const action = officeHeaderAction(FILE.path, dispatch, beforeOpen)!;
+    act(() => action.onClick());
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(beforeOpen).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(officeDocFor(FILE.path)).toBeNull();
   });
 });

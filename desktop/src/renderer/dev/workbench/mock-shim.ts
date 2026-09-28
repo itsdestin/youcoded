@@ -3596,7 +3596,7 @@ function createOfficeMock(empty: boolean): OfficeBridge {
     },
     close: async () => {},
     // "Save a copy…" answers as main would for a failed save whose translation worked.
-    saveCopy: async (_token, mode) => (mode === 'check' ? { ok: true, possible: true } : { ok: true, folder: 'Documents' }),
+    saveCopy: async (_token, mode) => (mode === 'check' ? { ok: true, possible: true } : { ok: true, folder: 'Documents', path: '/home/you/Documents/Garden plan (copy).docx' }),
     versions: async () => {
       if (empty) return [];
       const v = (id: string, h: number, reason: OfficeVersion['reason']): OfficeVersion => ({ id, at: ago(h * HOUR), reason, bytes: 37_000 });

@@ -7,8 +7,10 @@ import React, { useEffect, useState, type RefObject } from 'react';
 import { Button, Dialog, ErrorState } from '../ui';
 import type { EditorFrameHandle } from './EditorFrame';
 
-export function OfficeSaveFailed({ message, frame, onCloseWithoutSaving, className = '' }: {
+export function OfficeSaveFailed({ message, frame, onCloseWithoutSaving, className = '', visible = true }: {
   message: string;
+  /** false while the Office page is kept but not on view: no confirm may open (or hold Escape). */
+  visible?: boolean;
   frame: RefObject<EditorFrameHandle | null> | { current: EditorFrameHandle | null | undefined };
   /** Runs after the person confirmed: the host closes the tab or leaves the in-place edit. */
   onCloseWithoutSaving: () => void;
@@ -39,7 +41,7 @@ export function OfficeSaveFailed({ message, frame, onCloseWithoutSaving, classNa
   return (
     <>
       <ErrorState variant="inline" className={className} message={copyError ?? message} moreActions={more} onRetry={() => frame.current?.save()} />
-      {confirming && (
+      {confirming && visible && (
         <CloseWithoutSavingConfirm
           onCancel={() => setConfirming(false)}
           onConfirm={() => { setConfirming(false); frame.current?.discard(); onCloseWithoutSaving(); }}

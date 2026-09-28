@@ -45,7 +45,7 @@ import { registerOfficeProtocol } from './office/office-protocol';
 import { registerOfficeIpc } from './office/office-ipc';
 import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
-import { flushThenQuitOfficeSessions, holdCloseForOfficeSave } from './office/office-flush';
+import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate } from './office/office-flush';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
 import { pickSuggestedModel } from './first-run-local';
@@ -2614,8 +2614,8 @@ app.on('before-quit', (e) => {
   // Second pass: shutdownApp() already ran (or is running) and re-issued the
   // quit below — let it proceed rather than cancelling forever.
   if (shuttingDown) return;
-  e.preventDefault();
-  void shutdownApp().finally(() => app.quit());
+  e.preventDefault(); // Office first: an unsaved document asks the person before any teardown (office-flush.ts).
+  void officeQuitGate().then((go) => { if (go) void shutdownApp().finally(() => app.quit()); });
 });
 
 // Route 3: OS shutdown, logout, `kill`, or Ctrl+C in a dev terminal. These

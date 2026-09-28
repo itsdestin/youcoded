@@ -15,7 +15,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markCopied, markFailed, markSaved, markSaving, markUnchanged, registerFlush } from './office-store';
+import { markChanged, markFailed, markSaved, markSaving, markUnchanged, registerFlush } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -43,6 +43,11 @@ const AUTOSAVE_DELAY_MS = 3_000;
  *  Main still drains a save it already has (office-sessions close), so this only bounds how
  *  long the hidden editor lingers. */
 const CLOSE_SAVE_WAIT_MS = 5_000;
+/** WHY 60 s (fix round 2): the longest an asked-for save may go without its save_file before it
+ *  counts as failed. The editor's own save ends in save_file within milliseconds (measured);
+ *  anything this late means the editor gave up without telling the host (a failed
+ *  get_current_path, an exception in its save path), and "Saving…" must not stay up forever. */
+const REQUESTED_SAVE_LIMIT_MS = 60_000;
 
 /** The theme as the editor gets it. WHY no fontLinks (build plan Task 6): the editor's CSP
  *  (font-src 'self' data:) blocks the Google stylesheets they point at; Task 9 serves the
@@ -80,6 +85,8 @@ interface EditorFrameProps {
   onClosed?: () => void;
   /** The close's save failed: the tab stays, its strip showing the reason with Retry. */
   onCloseFailed?: (message: string) => void;
+  /** "Save a copy…" landed: the host moves this slot to the copy (same tab / same in-place slot). */
+  onSwitchTo?: (copyPath: string, folder: string) => void;
 }
 
 interface RpcMessage { yc: 'rpc'; id: unknown; cmd: string; args?: unknown }
@@ -89,7 +96,7 @@ interface RpcMessage { yc: 'rpc'; id: unknown; cmd: string; args?: unknown }
 const isSaveCmd = (cmd: string) => cmd === 'save_file';
 
 export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(function EditorFrame(
-  { file, hidden = false, slim = false, onCommandState, screen, closing = false, onClosed, onCloseFailed }, handleRef,
+  { file, hidden = false, slim = false, onCommandState, screen, closing = false, onClosed, onCloseFailed, onSwitchTo }, handleRef,
 ) {
   const ref = useRef<HTMLIFrameElement>(null);
   // 'unavailable': this host refuses Office outright (remote, phone) — a fact, not a failure.
@@ -113,6 +120,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   closedCb.current = onClosed;
   const closeFailedCb = useRef(onCloseFailed);
   closeFailedCb.current = onCloseFailed;
+  const switchToCb = useRef(onSwitchTo);
+  switchToCb.current = onSwitchTo;
   const originRef = useRef<string | null>(null);
   originRef.current = origin;
   const post = (msg: unknown) => { const o = originRef.current; if (o) ref.current?.contentWindow?.postMessage(msg, o); };
@@ -129,18 +138,32 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   // save (coalescing, design §3 "one save in flight").
   const save = useRef({
     dirty: false, requested: false, saving: false, failed: false, failMessage: '',
-    // The editor's last word on "modified": false while a requested save runs means it
-    // considers the document saved even if save_file never comes (see flush's cap).
-    editorClean: true,
     timer: 0 as ReturnType<typeof setTimeout> | 0,
+    requestTimer: 0 as ReturnType<typeof setTimeout> | 0,
     waiters: [] as Array<() => void>,
   });
+  // A save that failed without save_file failing (fix round 2): the editor's write_editor_bin
+  // was refused, the editor's save path gave up, or no save_file ever came. Same outcome as a
+  // failed save_file — the strip shows the reason with the save-failed actions.
+  const failRequested = (message: string) => {
+    const s = save.current;
+    if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
+    if (!s.requested || s.saving) return;
+    s.requested = false;
+    s.dirty = true;
+    s.failed = true;
+    s.failMessage = message;
+    markFailed(file.path, message);
+    wake();
+  };
   const requestSave = () => {
     const s = save.current;
     if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
     s.dirty = false;
     s.failed = false;
     s.requested = true;
+    if (s.requestTimer) clearTimeout(s.requestTimer);
+    s.requestTimer = setTimeout(() => { s.requestTimer = 0; failRequested("Office didn't finish saving this file."); }, REQUESTED_SAVE_LIMIT_MS);
     post({ type: 'yc:office-save' });
   };
   const armAutosave = () => {
@@ -163,9 +186,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   /**
    * Save whatever is unsaved. Resolves ok only once nothing is dirty, requested or saving —
    * including any follow-up save — and with main's message when a save failed (the caller then
-   * keeps the editor open with that error and Retry). After 5 s it resolves ok if a save_file
-   * is already with main (main drains it before the document closes) or the editor reports the
-   * document unmodified; otherwise it reports that the save did not finish.
+   * keeps the editor open with that error and Retry). After 5 s it resolves ok only if a
+   * save_file is with main and nothing changed since (main drains that save before the document
+   * closes) — never while anything is dirty (fix round 2); otherwise the save counts as failed.
    */
   const flush = (): Promise<FlushResult> => {
     const s = save.current;
@@ -182,8 +205,13 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         else if (settled()) finish({ ok: true });
       };
       const cap = setTimeout(() => {
-        if (s.saving || (s.requested && s.editorClean && !s.dirty)) finish({ ok: true });
-        else finish({ ok: false, message: "Office didn't finish saving this file." });
+        if (s.saving && !s.dirty) { finish({ ok: true }); return; }
+        const message = "Office didn't finish saving this file.";
+        // Recorded as a failed save, so the tab (or in-place editor) shows it with its actions.
+        s.failed = true; s.failMessage = message; s.dirty = true;
+        if (s.requested) { s.requested = false; if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; } }
+        markFailed(file.path, message);
+        finish({ ok: false, message });
       }, CLOSE_SAVE_WAIT_MS);
       s.waiters.push(check);
       if ((s.dirty || s.failed) && !s.saving && !s.requested) requestSave();
@@ -194,6 +222,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   const discardPending = () => {
     const s = save.current;
     if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
+    if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
     s.dirty = false; s.failed = false; s.requested = false;
     wake();
   };
@@ -225,6 +254,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       gone = true;
       const s = save.current;
       if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
+      if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
       if (token) void b.close(token).catch(() => {});
     };
   }, [file.path, attempt]);
@@ -271,9 +301,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       await flushRef.current();
       const r = await b.saveCopy(t, 'save').catch((e: unknown) => ({ ok: false as const, message: plainMessage(e, "Office couldn't save a copy of this file.") }));
       if (r.ok && 'folder' in r) {
-        // The changes now live in the copy; the file's own unsaved state is resolved by it.
+        // "Save As" (the owner's decision, fix round 2): the changes now live in the copy, and
+        // the tab carries on editing the COPY — the original has nothing left to save, and later
+        // typing must land in the copy, not in a file that cannot be saved.
         discardPending();
-        markCopied(file.path, r.folder);
+        switchToCb.current?.(r.path, r.folder);
       }
       return r;
     },
@@ -290,7 +322,6 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (m.cmd === 'set_document_modified' && args.modified === true) {
         const s = save.current;
         s.dirty = true;
-        s.editorClean = false;
         // WHY not a new change after a failed save (measured in the dev window, fix round 1):
         // the editor answers its own failed save by marking the document modified again. Taking
         // that as typing retried a read-only file every 3 s and flipped the strip between the
@@ -308,7 +339,6 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       // A save already running, or one that failed, keeps its own state.
       if (m.cmd === 'set_document_modified' && args.modified === false) {
         const s = save.current;
-        s.editorClean = true;
         // Not while a requested save is on its way: the editor's own save reports "not
         // modified" BEFORE its save_file (measured), and that save must still be waited for.
         if (s.dirty && !s.saving && !s.failed && !s.requested) {
@@ -323,6 +353,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         s.saving = true;
         // A save is running now; a pending timer would only start a second one behind it.
         s.requested = false;
+        if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
         if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
         markSaving(file.path);
       }
@@ -336,6 +367,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       }, (e: unknown) => {
         const message = plainMessage(e, saving ? "Office couldn't save this file." : "Office couldn't finish that.");
         post({ yc: 'rpc-result', id: m.id, error: message });
+        // Any refused step of an asked-for save (write_editor_bin, get_current_path) ends that
+        // save without a save_file: it failed, with main's reason (fix round 2).
+        if (!saving && (m.cmd === 'write_editor_bin' || m.cmd === 'get_current_path')) {
+          failRequested(m.cmd === 'write_editor_bin' ? message : "Office couldn't save this file.");
+        }
         if (saving) {
           // Main's message is already written for a person (office-commands.ts), so the strip
           // shows it as is, with Retry (docs/error-message-standards.md: specific + Retry).

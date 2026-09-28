@@ -57,7 +57,10 @@ export function officeHeaderAction(
     onClick: () => {
       // One editor per file: an in-place edit closes before the file moves to a full tab —
       // after its last changes are saved, so the tab opens the file with them in it.
-      void flushOffice(absolutePath).then(() => {
+      void flushOffice(absolutePath).then((r) => {
+        // A save that failed stops here (fix round 2): the in-place editor stays, showing its
+        // reason with Retry / Save a copy… / Close without saving — nothing is dropped or moved.
+        if (!r.ok) return;
         beforeOpen?.();
         openDoc(officeFileFor(absolutePath));
         dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID });

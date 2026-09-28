@@ -69,12 +69,18 @@ export interface OfficeBridge {
   /** Window close / app quit (design §4): main asks this window to save every open document,
    *  and waits for flushDone with the same id (or 5 s). Desktop only — absent elsewhere. */
   onFlushRequest?(cb: (id: string) => void): () => void;
-  flushDone?(id: string): void;
+  /** failed: how many documents could not be saved — main then keeps the window (or quit)
+   *  waiting for the person's choice instead of closing. */
+  flushDone?(id: string, result: { failed: number }): void;
+  /** "Close anyway" on that prompt: main goes ahead with the close or quit it held. */
+  proceedClose?(): void;
 }
 
 export type OfficeSaveCopyResult =
   | { ok: true; possible: boolean }
-  | { ok: true; folder: string }
+  /** Saved: `path` is where the copy went (the tab switches to it); `folder` is its folder's
+   *  name, the only part of the path ever shown. */
+  | { ok: true; folder: string; path: string }
   | { ok: false; cancelled: true }
   | { ok: false; message: string };
 

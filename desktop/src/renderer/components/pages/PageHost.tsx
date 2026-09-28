@@ -48,7 +48,8 @@ import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
-import { previewOfficeTabs, useOfficeTabs } from '../office/office-store';
+import { previewOfficeTabs, selectTab, useOfficeTabs } from '../office/office-store';
+import { OfficeAlerts } from '../office/OfficeAlerts';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
@@ -302,7 +303,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // the page view (or showing another page) used to unmount every Office editor, and an editor
   // unmounted inside autosave's 3 s window lost its last changes. Kept mounted, the editors
   // also come back instantly. Everything else in the view still goes when it closes.
-  if (!open && !officeKept) return null;
+  // Review (the unsaved prompt, a failed hidden close): the Office page, in front, on that tab.
+  const reviewOffice = (path: string) => { selectTab(path); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); };
+  // The alerts stay mounted either way: a close or quit can ask while no page is open.
+  if (!open && !officeKept) return <OfficeAlerts onReview={reviewOffice} />;
 
   const builtin = pages.filter((p) => p.home.kind === 'builtin');
   const personal = pages.filter((p) => p.home.kind === 'personal');
@@ -326,7 +330,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     // Closed but kept for Office: invisible, not display:none — an editor laid out at zero size
     // (opened, or shown again, while hidden) came back blank or mis-scrolled (dev window, fix
     // round 1). visibility:hidden keeps its size, takes no clicks and is not painted.
-    <div className={`screen-view fixed inset-0 bg-panel z-40 flex flex-col ${open ? '' : 'invisible pointer-events-none'}`} aria-hidden={open ? undefined : true} data-screen-frame={workbenchScreenFrame()}>
+    // inert (fix round 2): kept but closed, nothing inside may take focus or the keyboard.
+    <>
+    <OfficeAlerts onReview={reviewOffice} />
+    <div className={`screen-view fixed inset-0 bg-panel z-40 flex flex-col ${open ? '' : 'invisible pointer-events-none'}`} aria-hidden={open ? undefined : true} inert={!open} data-screen-frame={workbenchScreenFrame()}>
       {open && <ScreenBand
         settingsOpen={settingsOpen}
         onToggleSettings={onToggleSettings}
@@ -395,7 +402,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
           {/* First, so its place in the tree never changes whatever else shows (see officeKept). */}
           {(isOffice || officeKept) && (
-            <div className={`absolute inset-0 ${open && isOffice ? '' : 'invisible pointer-events-none'}`} aria-hidden={open && isOffice ? undefined : true}>
+            <div className={`absolute inset-0 ${open && isOffice ? '' : 'invisible pointer-events-none'}`} aria-hidden={open && isOffice ? undefined : true} inert={!(open && isOffice)}>
               <OfficeView projectRoot={projectRoot} visible={open && isOffice} />
             </div>
           )}
@@ -443,6 +450,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         </div>
       </div>
     </div>
+    </>
   );
 }
 
