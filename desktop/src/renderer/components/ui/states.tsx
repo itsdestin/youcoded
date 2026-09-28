@@ -104,6 +104,9 @@ type ErrorStateCommon = {
    *  at the right-hand end. They do not count toward "at least one action": the type still
    *  demands one of the three. */
   moreActions?: ReadonlyArray<{ label: string; onClick: () => void }>;
+  /** Every action is disabled while a choice already made is running (Office's "Save a copy…",
+   *  fix round 5: pressing Retry or Close without saving mid-copy would race it). */
+  busy?: boolean;
 };
 
 /**
@@ -166,20 +169,20 @@ export function ErrorState(props: ErrorStateProps) {
   const actions = (
     <>
       {props.moreActions?.map((a) => (
-        <Button key={a.label} variant="secondary" size="sm" onClick={a.onClick}>{a.label}</Button>
+        <Button key={a.label} variant="secondary" size="sm" onClick={a.onClick} disabled={props.busy}>{a.label}</Button>
       ))}
       {props.onReportBug && (
-        <Button variant={primary === 'report' ? 'primary' : 'secondary'} size="sm" onClick={props.onReportBug}>
+        <Button variant={primary === 'report' ? 'primary' : 'secondary'} size="sm" onClick={props.onReportBug} disabled={props.busy}>
           Report bug
         </Button>
       )}
       {props.onDiagnose && (
-        <Button variant={primary === 'diagnose' ? 'primary' : 'secondary'} size="sm" onClick={props.onDiagnose}>
+        <Button variant={primary === 'diagnose' ? 'primary' : 'secondary'} size="sm" onClick={props.onDiagnose} disabled={props.busy}>
           Diagnose with the assistant
         </Button>
       )}
       {props.onRetry && (
-        <Button variant={primary === 'retry' ? 'primary' : 'secondary'} size="sm" onClick={props.onRetry}>
+        <Button variant={primary === 'retry' ? 'primary' : 'secondary'} size="sm" onClick={props.onRetry} disabled={props.busy}>
           Retry
         </Button>
       )}

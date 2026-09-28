@@ -4,9 +4,9 @@
 // back, and decides when to save (design §3a, §4, §5).
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
 import { EditorFrame } from '../../src/renderer/components/office/EditorFrame';
-import { closeDoc, openDoc, resetOfficeStoreForTests, saveStateFor } from '../../src/renderer/components/office/office-store';
+import { closeDoc, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts } from '../../src/renderer/components/office/office-store';
 import type { OfficeBridge, OfficeFile } from '../../src/shared/office-types';
 
 const FILE: OfficeFile = { path: '/home/you/plan.docx', name: 'plan.docx', kind: 'document', folder: 'you', at: '2026-09-28T00:00:00Z' };
@@ -129,6 +129,36 @@ describe('EditorFrame hosting the editor', () => {
     reset(); // the tab closed: nothing is recorded for this file
     await act(async () => { answer('ok'); await Promise.resolve(); await Promise.resolve(); });
     expect(saveStateFor(FILE.path)).toEqual({ phase: 'saved' }); // the default: no entry was recreated
+  });
+
+  // Fix round 5: a close lets go of a save still with main (the 5 s cap); main drains it. If it
+  // then fails, the tab is gone — the "An Office document couldn't be saved." toast says so.
+  it('says so when a save the close let go of fails after the frame has gone', async () => {
+    let fail!: (e: Error) => void;
+    fakeBridge({ invoke: vi.fn((_t: string, cmd: string) => (cmd === 'save_file' ? new Promise((_r, rej) => (fail = rej)) : Promise.resolve(null))) });
+    const onClosed = vi.fn();
+    const { fromEditor, rerender, unmount } = await mountFrame({ onClosed });
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'save_file', args: { data: '' } });
+    vi.useFakeTimers();
+    rerender(<EditorFrame file={FILE} closing onClosed={onClosed} />);
+    await act(async () => { vi.advanceTimersByTime(5_000); });
+    expect(onClosed).toHaveBeenCalled();
+    unmount();
+    const alerts = renderHook(() => useOfficeAlerts());
+    expect(alerts.result.current.closeFailed).toBeNull();
+    await act(async () => { fail(new Error("Office doesn't have permission to save this file.")); await Promise.resolve(); await Promise.resolve(); });
+    expect(alerts.result.current.closeFailed).toBe(FILE.path);
+  });
+
+  it('says nothing when a save fails after "Close without saving" let the frame go', async () => {
+    let fail!: (e: Error) => void;
+    fakeBridge({ invoke: vi.fn((_t: string, cmd: string) => (cmd === 'save_file' ? new Promise((_r, rej) => (fail = rej)) : Promise.resolve(null))) });
+    const { fromEditor, unmount } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'save_file', args: { data: '' } });
+    unmount();
+    const alerts = renderHook(() => useOfficeAlerts());
+    await act(async () => { fail(new Error('x')); await Promise.resolve(); await Promise.resolve(); });
+    expect(alerts.result.current.closeFailed).toBeNull();
   });
 
   it('hands the document back to main when the frame goes away', async () => {

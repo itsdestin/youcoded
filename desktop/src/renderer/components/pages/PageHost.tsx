@@ -48,7 +48,7 @@ import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
-import { officeDocFor, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
+import { HOME_TAB, officeDocFor, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
 import { OfficeAlerts } from '../office/OfficeAlerts';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
@@ -307,7 +307,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // A document edited in place is brought forward where it is (fix round 3), never as a tab.
   const reviewOffice = (path: string) => {
     if (!officeDocFor(path) && revealInline(path)) return;
-    selectTab(path); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true });
+    // A document with no tab any more (its closed tab's last save failed later, fix round 5)
+    // opens Office on Home, where Recent has it — never on a tab that does not exist.
+    selectTab(officeDocFor(path) ? path : HOME_TAB); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true });
   };
   // The alerts stay mounted either way: a close or quit can ask while no page is open.
   if (!open && !officeKept) return <OfficeAlerts onReview={reviewOffice} />;

@@ -19,7 +19,7 @@ import { Button, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState } fr
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
 import { HistoryGlyph, HomeGlyph, KIND_LABEL, OfficeKindGlyph } from './office-icons';
-import { HOME_TAB, cancelClose, closeDoc, finishClose, markCopied, noteCloseFailedWhileHidden, openDoc, replaceDoc, selectTab, showVersions, useOfficeTabs, useSaveState } from './office-store';
+import { HOME_TAB, cancelClose, closeDoc, finishClose, markCopied, noteCloseFailedWhileHidden, openDoc, replaceDoc, selectTab, showVersions, useCopying, useOfficeTabs, useSaveState } from './office-store';
 import { officeFileFor } from './office-files';
 import type { OfficeSaveState } from './office-store';
 import { OfficeSaveFailed } from './OfficeSaveFailed';
@@ -58,6 +58,8 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
 
   const front = docs.find((d) => d.file.path === active && !d.closing) ?? null;
   const saveState = useSaveState(front?.file.path ?? null);
+  // While Save a copy runs, the strip's buttons wait for it (fix round 5; the tab won't close).
+  const copying = useCopying(front?.file.path ?? null);
   const frontPath = front?.file.path ?? null;
   // Stable per front file (fix round 2): a fresh object each render re-asked main whether a copy
   // can be saved on every render of the strip.
@@ -97,6 +99,7 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
                 failed, says main's own reason with Retry (design §4; error-message-standards). */}
             {saveState.phase === 'failed'
               ? <OfficeSaveFailed
+                  path={front.file.path}
                   className="max-w-xl"
                   message={saveState.message ?? "Office couldn't save this file."}
                   frame={frontFrame}
@@ -104,7 +107,7 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
                   onCloseWithoutSaving={() => closeDoc(front.file.path)}
                 />
               : <span className="text-2xs text-fg-muted">{saveLabel(saveState)}</span>}
-            <Button variant="ghost" size="sm" onClick={() => showVersions(front.file)}>
+            <Button variant="ghost" size="sm" onClick={() => showVersions(front.file)} disabled={copying}>
               <HistoryGlyph />
               Versions
             </Button>

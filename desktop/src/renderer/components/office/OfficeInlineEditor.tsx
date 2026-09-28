@@ -118,7 +118,7 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
       )}
       {saveState.phase === 'failed' && (
         <div className="shrink-0 p-2 border-b border-edge-dim">
-          <OfficeSaveFailed message={saveState.message ?? "Office couldn't save this file."} frame={frame} onCloseWithoutSaving={() => cancelRef.current?.()} />
+          <OfficeSaveFailed path={file.path} message={saveState.message ?? "Office couldn't save this file."} frame={frame} onCloseWithoutSaving={() => cancelRef.current?.()} />
         </div>
       )}
       <div className="relative flex-1 min-h-0">

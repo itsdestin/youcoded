@@ -15,7 +15,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markSaved, markSaving, markUnchanged, registerFlush } from './office-store';
+import { markChanged, markFailed, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, registerFlush } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -111,10 +111,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   openedRef.current = opened;
   // Bumped by Retry, to open the document again from the start.
   const [attempt, setAttempt] = useState(0);
-  // Taken down before its window goes (office-store, fix round 3): no frame, so no editor page
-  // can veto the window's unload. It comes back (and reloads the document) if the window stays.
-  // I2 (fix round 4): while Save a copy runs, an overlay takes the pointer and the keyboard, so
-  // nothing typed mid-copy can be left out of it.
+  // I2 (fix round 4): while Save a copy runs, an overlay takes the pointer and the keyboard (and
+  // the frame is inert, fix round 5), so nothing typed mid-copy can be left out of it.
   const [copying, setCopying] = useState(false);
   const mountedRef = useRef(true);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
@@ -148,8 +146,14 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   // save (coalescing, design §3 "one save in flight").
   const save = useRef({
     dirty: false, requested: false, saving: false, failed: false, failMessage: '',
-    // The editor's last hand-over of its bytes (write_editor_bin) failed (I3, fix round 4).
-    writeFailed: false,
+    // Which asked-for save the editor's bytes last reached main for (fix round 5): each request
+    // gets the next number, and a write_editor_bin that succeeds records the number that was
+    // current when the editor sent it. Save a copy needs a hand-over for ITS OWN request — a
+    // failed one, or none at all before the cap, would copy the older Editor.bin.
+    requestSeq: 0, handedOverSeq: 0,
+    // The cap let go of a save still with main (a close, a Done): main drains it, and if it then
+    // fails, this frame is gone — so the toast says so (fix round 5).
+    drainPending: false,
     timer: 0 as ReturnType<typeof setTimeout> | 0,
     requestTimer: 0 as ReturnType<typeof setTimeout> | 0,
     waiters: [] as Array<() => void>,
@@ -174,6 +178,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     s.dirty = false;
     s.failed = false;
     s.requested = true;
+    s.requestSeq += 1;
     if (s.requestTimer) clearTimeout(s.requestTimer);
     s.requestTimer = setTimeout(() => { s.requestTimer = 0; failRequested("Office didn't finish saving this file."); }, REQUESTED_SAVE_LIMIT_MS);
     post({ type: 'yc:office-save' });
@@ -217,7 +222,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         else if (settled()) finish({ ok: true });
       };
       const cap = setTimeout(() => {
-        if (s.saving && !s.dirty) { finish({ ok: true }); return; }
+        if (s.saving && !s.dirty) { s.drainPending = true; finish({ ok: true }); return; }
         const message = "Office didn't finish saving this file.";
         // Recorded as a failed save, so the tab (or in-place editor) shows it with its actions.
         s.failed = true; s.failMessage = message; s.dirty = true;
@@ -231,17 +236,22 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   };
   const flushRef = useRef(flush);
   flushRef.current = flush;
-  /** Ask the editor to save now (its bytes reach main even when the save itself fails again). */
-  const saveOnce = (): Promise<FlushResult> => {
+  /** Ask the editor to save now (its bytes reach main even when the save itself fails again).
+   *  Resolves true only when the editor handed its bytes over for a request made by this call
+   *  (fix round 5). WHY always dirty: a save already under way was asked for before this call,
+   *  so its bytes may predate the newest typing — marking dirty makes it follow up with one more. */
+  const handOver = async (): Promise<boolean> => {
     const s = save.current;
-    if (!s.saving && !s.requested) s.dirty = true;
-    return flush();
+    const before = s.requestSeq;
+    s.dirty = true;
+    await flush();
+    return s.requestSeq > before && s.handedOverSeq === s.requestSeq;
   };
   const discardPending = () => {
     const s = save.current;
     if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
     if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
-    s.dirty = false; s.failed = false; s.requested = false;
+    s.dirty = false; s.failed = false; s.requested = false; s.drainPending = false;
     wake();
   };
 
@@ -279,7 +289,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
 
   // Registered so a file panel's Done and the header briefcase can wait for the last save
   // before this editor goes (office-store flushOffice).
-  useEffect(() => registerFlush(file.path, (capMs) => flushRef.current(capMs)), [file.path]);
+  // `unsaved` feeds the window's unload guard (office-store, fix round 5): changed, asked to
+  // save, saving, or failed — anything a reload would lose.
+  useEffect(() => registerFlush(file.path, (capMs) => flushRef.current(capMs), {
+    unsaved: () => { const s = save.current; return s.dirty || s.requested || s.saving || s.failed || !!s.timer; },
+  }), [file.path]);
 
   // The closed tab saves first, then lets go (design §4: "on tab close").
   useEffect(() => {
@@ -317,16 +331,18 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       // when the save itself fails again, so the copy holds every change — not only those up
       // to the last save attempt.
       setCopying(true);
+      noteCopying(file.path, true);
       try {
         // Always a fresh hand-over (not just "save if dirty"): the copy is made from these bytes.
-        await saveOnce();
-        // I3 (fix round 4): the copy is made from the bytes that save handed over; if handing
-        // them over failed, the copy would miss edits — refuse rather than switch.
+        // I3 (fix round 4) / fix round 5: if they did not reach main for this very request (the
+        // hand-over failed, or none came before the cap), the copy would miss edits — refuse
+        // rather than switch or discard anything.
         // Said on the strip itself (the save-failed actions stay): the strip re-renders between
         // "Saving…" and the failure while this runs, which would drop a message kept only here.
         const refuse = (message: string) => { save.current.failMessage = message; markFailed(file.path, message); return { ok: false as const, message }; };
-        if (save.current.writeFailed) return refuse("Office couldn't save a copy of this file.");
-        const failCopy = (e: unknown) => ({ ok: false as const, message: plainMessage(e, "Office couldn't save a copy of this file.") });
+        const COPY_FAILED = "Office couldn't save a copy of this file.";
+        if (!(await handOver())) return refuse(COPY_FAILED);
+        const failCopy = (e: unknown) => ({ ok: false as const, message: plainMessage(e, COPY_FAILED) });
         let r: OfficeSaveCopyResult = await b.saveCopy(t, 'save').catch(failCopy);
         // Main refused the copy (e.g. the target is open in Office): say so on the strip.
         if (!r.ok && 'message' in r) return refuse(r.message);
@@ -335,12 +351,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         // slipped in before the overlay took the keyboard. One more hand-over and 'again' (main
         // compares the bytes) covers that; if it still differs, nothing is switched or discarded.
         if (r.ok && 'folder' in r) {
-          await saveOnce();
-          const again: OfficeSaveCopyResult = save.current.writeFailed
-            ? { ok: false, message: "Office couldn't save a copy of this file." }
-            : await b.saveCopy(t, 'again').catch(failCopy);
+          const again: OfficeSaveCopyResult = (await handOver())
+            ? await b.saveCopy(t, 'again').catch(failCopy)
+            : { ok: false, message: COPY_FAILED };
           // 'again' rewrote the copy if the bytes differed, so on success the copy is current.
-          if (!again.ok) return refuse('message' in again ? again.message : "Office couldn't save a copy of this file.");
+          if (!again.ok) return refuse('message' in again ? again.message : COPY_FAILED);
         }
         if (r.ok && 'folder' in r) {
           // "Save As" (the owner's decision, fix round 2): the changes now live in the copy, and
@@ -352,6 +367,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         return r;
       } finally {
         setCopying(false);
+        noteCopying(file.path, false);
       }
     },
     discard: () => { discardPending(); markUnchanged(file.path); },
@@ -393,6 +409,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         }
       }
       const saving = isSaveCmd(m.cmd);
+      // The request this hand-over answers (see requestSeq): the one current when it arrived.
+      const seq = save.current.requestSeq;
       if (saving) {
         const s = save.current;
         s.saving = true;
@@ -407,8 +425,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         // M4 (fix round 4): an answer that lands after this frame unmounted must not write a
         // save state for a file no editor holds any more (it would linger in the store).
         if (!mountedRef.current) return;
-        if (m.cmd === 'write_editor_bin') save.current.writeFailed = false;
+        if (m.cmd === 'write_editor_bin') save.current.handedOverSeq = seq;
         if (saving) {
+          save.current.drainPending = false;
           // WHY clear `failed` (fix round 3): the 5 s cap or the 60 s guard may already have
           // called this save failed; it landed after all. Anything still dirty is then an
           // ordinary follow-up save (saveSettled re-arms autosave), never a stuck tab.
@@ -420,10 +439,15 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       }, (e: unknown) => {
         const message = plainMessage(e, saving ? "Office couldn't save this file." : "Office couldn't finish that.");
         post({ yc: 'rpc-result', id: m.id, error: message });
-        if (!mountedRef.current) return; // see M4 above
+        if (!mountedRef.current) {
+          // See M4 above. But a save the close let go of (drainPending) that then failed in
+          // main's drain is said, with the toast a hidden close uses (fix round 5): the tab is
+          // gone, and without it the edits would vanish without a word.
+          if (saving && save.current.drainPending) noteCloseFailedWhileHidden(file.path);
+          return;
+        }
         // Any refused step of an asked-for save (write_editor_bin, get_current_path) ends that
         // save without a save_file: it failed, with main's reason (fix round 2).
-        if (m.cmd === 'write_editor_bin') save.current.writeFailed = true;
         if (!saving && (m.cmd === 'write_editor_bin' || m.cmd === 'get_current_path')) {
           failRequested(m.cmd === 'write_editor_bin' ? message : "Office couldn't save this file.");
         }
@@ -472,6 +496,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals"
         className={`absolute border-0 ${slim ? '' : 'inset-0 w-full h-full'} ${phase === 'open' ? '' : 'invisible'}`}
         style={slim ? SLIM_OVERSCAN : undefined}
+        // Fix round 5: inert while a copy is written, so no click, key or focus reaches the
+        // editor behind the overlay (the overlay alone left keyboard focus reachable by Tab).
+        inert={copying}
       />
       {copying && (
         <div ref={overlayRef} tabIndex={-1} className="absolute inset-0 bg-panel/70 flex items-center justify-center outline-none" aria-busy="true">

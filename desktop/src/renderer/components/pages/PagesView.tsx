@@ -22,6 +22,8 @@ import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PageConnectionsDialog } from './page-connections';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+// WHY (Office fix round 5): Retry reloads the window, so any open Office document saves first.
+import { reloadAfterOfficeSave } from '../office/office-store';
 
 interface PagesViewProps {
   /** Starts the creator: a new conversation that builds a page. Owned by
@@ -96,7 +98,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
           {loaded && failed && (
             <ErrorState
               message="The list of pages could not be read."
-              onRetry={() => window.location.reload()}
+              onRetry={() => reloadAfterOfficeSave()}
             />
           )}
           {loaded && !failed && builtin.length > 0 && (

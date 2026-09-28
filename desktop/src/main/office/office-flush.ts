@@ -12,10 +12,11 @@
 // quit) and asks the person through OFFICE_UNSAVED_PROMPT — one prompt, counting every window's
 // failed documents — until they choose Review or Close anyway (OFFICE_PROCEED).
 //
-// WHY main never overrides a window's unload veto (fix round 3): the renderer takes its Office
-// editors down itself once they are saved (or the person chose Close anyway), so an editor page
-// can no longer cancel the unload — and every veto that remains (an unsaved text-file edit) is
-// legitimate and must keep the window open.
+// WHY main never overrides a window's unload veto (fix round 3; updated fix round 5): an editor
+// page cannot veto — the add-on neutralises every beforeunload path in its frames — and the
+// renderer's own Office veto (office-store) holds only while a document has unsaved work and no
+// close was approved; answering this request approves it. Every veto that remains (an unsaved
+// text-file edit, typing after the approval) is legitimate and must keep the window open.
 import { BrowserWindow, app, ipcMain } from 'electron';
 import { getOfficeSessions, quitOfficeSessions } from './office-session-registry';
 
@@ -163,8 +164,8 @@ export async function officeQuitGate(
   return false;
 }
 
-/** Quit's teardown: every window saves once more and takes its editors down (all at once,
- *  capped; 'final' never prompts — the person already chose), then the office sessions are
+/** Quit's teardown: every window saves once more (all at once, capped; 'final' never prompts —
+ *  the person already chose — and lets the window unload), then the office sessions are
  *  stopped and their temp folders removed (quitOfficeSessions). */
 export async function flushThenQuitOfficeSessions(
   windows: ClosingWindow[] = BrowserWindow.getAllWindows() as unknown as ClosingWindow[],

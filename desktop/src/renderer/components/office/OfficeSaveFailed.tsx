@@ -6,8 +6,11 @@
 import React, { useEffect, useState, type RefObject } from 'react';
 import { Button, Dialog, ErrorState } from '../ui';
 import type { EditorFrameHandle } from './EditorFrame';
+import { useCopying } from './office-store';
 
-export function OfficeSaveFailed({ message, frame, onCloseWithoutSaving, className = '', visible = true }: {
+export function OfficeSaveFailed({ path, message, frame, onCloseWithoutSaving, className = '', visible = true }: {
+  /** The file this strip is for (its copy-in-progress state). */
+  path: string;
   message: string;
   /** false while the Office page is kept but not on view: no confirm may open (or hold Escape). */
   visible?: boolean;
@@ -22,6 +25,9 @@ export function OfficeSaveFailed({ message, frame, onCloseWithoutSaving, classNa
   const [canCopy, setCanCopy] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // Fix round 5: while a copy is written, every action here is disabled — a Retry or a Close
+  // without saving pressed mid-copy would race the copy's own save and switch.
+  const copying = useCopying(path);
   useEffect(() => {
     let live = true;
     void frame.current?.canSaveCopy().then((ok) => { if (live) setCanCopy(ok); });
@@ -40,7 +46,7 @@ export function OfficeSaveFailed({ message, frame, onCloseWithoutSaving, classNa
   ];
   return (
     <>
-      <ErrorState variant="inline" className={className} message={copyError ?? message} moreActions={more} onRetry={() => frame.current?.save()} />
+      <ErrorState variant="inline" className={className} message={copyError ?? message} moreActions={more} busy={copying} onRetry={() => frame.current?.save()} />
       {confirming && visible && (
         <CloseWithoutSavingConfirm
           onCancel={() => setConfirming(false)}
