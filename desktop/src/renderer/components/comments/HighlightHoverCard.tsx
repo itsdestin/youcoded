@@ -239,9 +239,14 @@ function Entry({ author, createdAt, text, clamp, trailing, editing, onSaveEdit, 
     <div className="flex items-start gap-2 group">
       <Avatar author={author} />
       <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-1.5">
-          <span className="font-medium text-fg">{authorName(author)}</span>
-          <span className="text-2xs text-fg-muted">{formatRelativeTime(createdAt)}</span>
+        {/* WHY `trailing` rides the name line (Destin, 2026-09-28: the edit
+            box was squeezed to half the card and "Cancel" spilled out of it):
+            as a third column beside the text it took the width the text and
+            the edit box need — the same fix CommentCard's header got. */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="font-medium text-fg truncate">{authorName(author)}</span>
+          <span className="text-2xs text-fg-muted shrink-0">{formatRelativeTime(createdAt)}</span>
+          {trailing && <div className="ml-auto shrink-0">{trailing}</div>}
         </div>
         {editing && onSaveEdit && onCancelEdit ? (
           // Ask 4: onRequestDelete falls back to onCancelEdit only so a
@@ -254,7 +259,6 @@ function Entry({ author, createdAt, text, clamp, trailing, editing, onSaveEdit, 
         )}
         {below}
       </div>
-      {trailing}
     </div>
   );
 }

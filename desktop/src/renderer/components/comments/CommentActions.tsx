@@ -232,7 +232,7 @@ export function InlineEditField({ text, onSave, onCancel, onRequestDelete, class
     // built here rather than through InputGroup itself: that primitive's
     // own §11.9 sub-rule limits it to a single submit action inside, and
     // this box deliberately carries both, on Destin's explicit ask.
-    <div className={`${className} rounded-lg border border-edge-dim bg-inset focus-within:border-accent`}>
+    <div className={`${className} w-full rounded-lg border border-edge-dim bg-inset focus-within:border-accent`}>
       <textarea
         ref={ref}
         rows={2}
