@@ -65,4 +65,95 @@ describe('shouldAutoApproveDocComment', () => {
     expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 42 as unknown as string })).toBe(false);
     expect(shouldAutoApproveDocComment(REPLY_TOOL, undefined)).toBe(false);
   });
+
+  // Claude Code's own live `permission_mode` (verified against the installed
+  // 2.1.283 CLI binary's embedded hook-input schema — see
+  // youcoded/docs/cc-dependencies.md's "Hook payload permission_mode field"
+  // entry) is what §5.2a's "same tier as Edit/Write" actually turns on for a
+  // Word/Excel target. A plain-text target ignores it entirely (already
+  // covered above with no mode argument at all — these cases confirm mode
+  // still doesn't matter there either).
+  describe('with Claude Code\'s live permission_mode', () => {
+    it('auto-approves a Word/Excel target in acceptEdits mode — matches Edit/Write\'s own auto-accept', () => {
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'acceptEdits')).toBe(true);
+      expect(shouldAutoApproveDocComment(ADD_TOOL, { path: 'reports/q3.xlsx' }, 'acceptEdits')).toBe(true);
+      expect(shouldAutoApproveDocComment(MOVE_TOOL, { path: 'docs/report.DOCX' }, 'acceptEdits')).toBe(true);
+    });
+
+    it('auto-approves a Word/Excel target in bypassPermissions mode too (defensive — Claude Code normally never fires this hook under bypass at all)', () => {
+      expect(shouldAutoApproveDocComment(RESOLVE_TOOL, { path: 'docs/report.docx' }, 'bypassPermissions')).toBe(true);
+    });
+
+    it('never auto-approves a Word/Excel target in plan mode — no execution happens there', () => {
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'plan')).toBe(false);
+    });
+
+    it('never auto-approves a Word/Excel target in default mode — that is the ordinary "always ask" mode', () => {
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'default')).toBe(false);
+    });
+
+    it('never auto-approves a Word/Excel target for dontAsk or auto — neither is a documented unconditional file-edit accept', () => {
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'dontAsk')).toBe(false);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'auto')).toBe(false);
+    });
+
+    it('never auto-approves a Word/Excel target for an unrecognized mode string or a missing field — never guessed', () => {
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'some-future-mode')).toBe(false);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, undefined)).toBe(false);
+    });
+
+    it('a plain-text target stays auto-approved regardless of mode, including plan', () => {
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.md' }, 'plan')).toBe(true);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.md' }, 'default')).toBe(true);
+    });
+
+    // A real-shaped PermissionRequest hook payload (per the CLI's own
+    // embedded schema: the common base fields intersected with the
+    // PermissionRequest-specific ones) — proves the exact snake_case field
+    // name main.ts reads (`permission_mode`) against something closer to
+    // what actually arrives on the wire, not just a bare string argument.
+    it('reads a realistic full PermissionRequest hook payload the same way main.ts extracts it', () => {
+      const realShapedPayload = {
+        session_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        transcript_path: '/home/user/.claude/projects/-home-user-project/a1b2c3d4.jsonl',
+        cwd: '/home/user/project',
+        permission_mode: 'acceptEdits',
+        hook_event_name: 'PermissionRequest',
+        tool_name: `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ReplyToComment`,
+        tool_input: { path: 'docs/quarterly-report.docx', commentId: 'w-3', text: 'Addressed in the latest revision.' },
+      };
+      const toolName = realShapedPayload.tool_name;
+      const toolInput = realShapedPayload.tool_input as Record<string, unknown>;
+      const permissionMode = realShapedPayload.permission_mode as string | undefined;
+      expect(shouldAutoApproveDocComment(toolName, toolInput, permissionMode)).toBe(true);
+    });
+
+    it('the same realistic payload in plan mode falls through to the ordinary ask', () => {
+      const realShapedPayload = {
+        session_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        transcript_path: '/home/user/.claude/projects/-home-user-project/a1b2c3d4.jsonl',
+        cwd: '/home/user/project',
+        permission_mode: 'plan',
+        hook_event_name: 'PermissionRequest',
+        tool_name: `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__AddComment`,
+        tool_input: { path: 'docs/quarterly-report.docx', selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'Q3 revenue', prefix: '', suffix: '', occurrence: 0 } }, text: 'Double-check this figure.' },
+      };
+      expect(shouldAutoApproveDocComment(realShapedPayload.tool_name, realShapedPayload.tool_input as Record<string, unknown>, realShapedPayload.permission_mode)).toBe(false);
+    });
+
+    // A payload with `permission_mode` absent entirely (the CLI's own schema
+    // marks it optional — some hosts/versions may omit it) fails closed.
+    it('a payload with no permission_mode field at all falls through to the ordinary ask', () => {
+      const payloadWithoutMode = {
+        session_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        transcript_path: '/home/user/.claude/projects/-home-user-project/a1b2c3d4.jsonl',
+        cwd: '/home/user/project',
+        hook_event_name: 'PermissionRequest',
+        tool_name: `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ResolveComment`,
+        tool_input: { path: 'docs/quarterly-report.docx', commentId: 'w-3' },
+      } as Record<string, unknown>;
+      const permissionMode = (payloadWithoutMode as { permission_mode?: string }).permission_mode;
+      expect(shouldAutoApproveDocComment(payloadWithoutMode.tool_name as string, payloadWithoutMode.tool_input as Record<string, unknown>, permissionMode)).toBe(false);
+    });
+  });
 });

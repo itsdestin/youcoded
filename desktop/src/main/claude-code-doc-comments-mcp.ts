@@ -41,37 +41,43 @@
 // hook Claude Code fires for ANY tool it decides needs asking, not a
 // bespoke one): when `nativeFormatFor(path)` is `null` (plain-text/markdown/
 // code), it auto-approves unconditionally — matching a plain-text mutation's
-// "never prompt" requirement regardless of permission mode. When the target IS
-// `.docx`/`.xlsx`, this hook deliberately does NOT auto-approve: the call
-// falls through to Claude Code's own normal ask, so the user sees the same
-// permission card any other unlisted tool would raise.
+// "never prompt" requirement regardless of permission mode.
 //
-// --- The one gap this mechanism does NOT close (reported, not silently
-//     patched, per this task's own instruction to stop and report rather
-//     than invent a compromise) ---
+// --- Matching "the same tier as Edit/Write" for a Word/Excel target ---
 //
 // §5.2a's wording is "the same tier as Edit/Write... so in accept-edits/
-// bypass modes it doesn't [prompt]." That holds for BYPASS: main.ts's own
-// comment on this same hook path notes Claude Code's bypass mode already
-// skips `PermissionRequest` for ordinary tools (an MCP tool call is not one
-// of the handful of categories it still fires for under bypass), so a
-// Word/Excel comment mutation is already frictionless there with no code
-// needed here. It does NOT hold for ACCEPT-EDITS: that mode's own built-in
-// auto-approval is scoped to Claude Code's native Edit/Write/NotebookEdit
-// tools specifically — it does not extend to arbitrary MCP tool calls, and
-// this app has no live channel carrying a Claude Code CLI session's CURRENT
-// permission mode into the main process at all (`session-manager.ts`'s
-// `SessionInfo.permissionMode` is written ONCE at spawn — 'bypass' or
-// 'normal' — and never updated again; the mode a user cycles to afterward
-// with Shift+Tab is detected only by the RENDERER scraping PTY text
-// (`App.tsx`'s `permissionModes` map) and is never sent back to main).
-// Building a faithful match for accept-edits specifically would mean adding a
-// new renderer-to-main channel carrying that PTY-scraped (and therefore
-// occasionally stale-for-a-tick, per desktop/CLAUDE.md's own note) mode value
-// — real, cross-cutting plumbing well beyond "wire this task's permission
-// gate," not a same-shaped fix. Left as a known, reported gap: a Word/Excel
-// comment mutation still raises an ordinary permission ask in accept-edits
-// mode, where an Edit/Write call to the same file would not.
+// bypass modes it doesn't [prompt]." An initial pass here left accept-edits
+// as a reported, unclosed gap, reasoning that this app has no channel
+// carrying a Claude Code CLI session's LIVE permission mode into main
+// (`SessionInfo.permissionMode` is written once at spawn; the mode a user
+// later cycles to is only ever scraped from PTY text in the renderer).
+// That reasoning missed a simpler path: Claude Code's own hook payload
+// ALREADY carries its live mode. Confirmed 2026-09-27 by reading the
+// installed 2.1.283 CLI binary's own embedded Zod schema (no reachable
+// official published doc for this specific field) — every hook event's
+// common base shape includes an OPTIONAL `permission_mode` string
+// ('default'|'acceptEdits'|'bypassPermissions'|'plan'|'dontAsk'|'auto', per
+// the CLI's own describe() text for the equivalent CLI flag), ANDed into
+// BOTH `PreToolUse` and `PermissionRequest`'s own schemas — the exact two
+// hook events this app already relays. `relay-blocking.js` forwards the
+// CLI's whole hook JSON verbatim (only adding `_desktop_session_id`/
+// `_claude_pid`), and `hook-relay.ts`'s `parseHookPayload` keeps the whole
+// parsed object as `event.payload` — so `permission_mode` was ALREADY
+// reaching main.ts's hook-event handler, just unread until now. No new IPC,
+// no new hook registration, no renderer-to-main channel: main.ts reads
+// `event.payload.permission_mode` and passes it to
+// `shouldAutoApproveDocComment` (permission-auto-approve.ts), which
+// auto-approves a Word/Excel target when that mode is one Claude Code
+// itself already treats as a frictionless file-edit mode (`acceptEdits`;
+// `bypassPermissions` too, defensively, though bypass already gets this for
+// free since Claude Code's own engine skips firing this hook at all for an
+// ordinary tool under bypass — see the "PermissionRequest hook timeout"
+// cc-dependencies.md entry). `plan` mode, `default` mode, an unrecognized
+// future mode string, and a payload that omits the field altogether (it is
+// the CLI's own schema that marks it `.optional()` — some hosts/versions may
+// not send it) ALL fall through to the ordinary ask, never guessed into an
+// approval. See cc-dependencies.md's own "hook payload permission_mode
+// field" entry for the full evidence trail.
 import fs from 'fs';
 import path from 'path';
 import {

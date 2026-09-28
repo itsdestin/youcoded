@@ -1197,6 +1197,14 @@ function createWindow(firstRunManager?: FirstRunManager) {
       const toolName = event.payload?.tool_name as string;
       const toolInput = event.payload?.tool_input as Record<string, unknown> | undefined;
       const requestId = event.payload?._requestId as string;
+      // Claude Code's OWN live permission mode ('default'|'acceptEdits'|
+      // 'bypassPermissions'|'plan'|'dontAsk'|'auto') — part of every hook
+      // payload's common base shape (confirmed against the installed CLI
+      // binary's embedded schema, cc-dependencies.md), so it was already
+      // riding in `event.payload` with nothing reading it until now. Optional
+      // by the CLI's own schema — absent reads as `undefined`, which
+      // shouldAutoApproveDocComment treats as "don't know, don't approve."
+      const permissionMode = event.payload?.permission_mode as string | undefined;
 
       // The whole decision lives in permission-auto-approve.ts (pure, tested).
       // It NEVER allows AskUserQuestion or ExitPlanMode: both need the user's
@@ -1209,10 +1217,12 @@ function createWindow(firstRunManager?: FirstRunManager) {
       // plain-text/markdown/code file is auto-approved UNCONDITIONALLY — not
       // gated behind `permissionOverrides` the way the categories below are,
       // because that case is meant to never prompt in any mode. A Word/Excel
-      // target is deliberately excluded and falls through to the ordinary ask
-      // below (see permission-auto-approve.ts's own header for the mode gap
-      // this cannot close on this surface).
-      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput) || shouldAutoApprove(toolName, toolInput, permissionOverrides))) {
+      // target is auto-approved only when `permissionMode` is one Claude Code
+      // itself already treats as a frictionless file-edit mode (acceptEdits/
+      // bypassPermissions); `plan`, `default`, an unrecognized mode, or a
+      // missing `permissionMode` all fall through to the ordinary ask below
+      // (see permission-auto-approve.ts's own header for the full reasoning).
+      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, permissionMode) || shouldAutoApprove(toolName, toolInput, permissionOverrides))) {
         hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
         return;
       }

@@ -55,6 +55,33 @@ const NEEDS_THE_USERS_OWN_ANSWER = new Set(['AskUserQuestion', 'ExitPlanMode']);
 const DOC_COMMENTS_MUTATOR_TOOL_SET = new Set(DOC_COMMENTS_MCP_MUTATOR_TOOLS);
 
 /**
+ * The Claude Code CLI's own live permission mode, as it names its values
+ * (verified 2026-09-27 against the installed 2.1.283 binary's embedded Zod
+ * schema and its own `--help`/documentation strings — see
+ * youcoded/docs/cc-dependencies.md's "hook payload permission_mode field"
+ * entry for the exact evidence, since no official published schema doc was
+ * reachable from this session). This is Claude Code's OWN vocabulary, never
+ * this app's `PermissionMode` (`shared/types.ts`: 'normal'|'auto-accept'|
+ * 'plan'|'auto'|'bypass') — the two are related but not the same strings, and
+ * this file must classify what actually rides on the wire, not what the
+ * StatusBar chip is labelled.
+ *
+ * Modes that behave like Edit/Write already does for a real file write
+ * (Claude Code auto-accepts a native file edit with no ask): `acceptEdits`
+ * is the direct match; `bypassPermissions` is included for defensiveness
+ * even though Claude Code's own engine already skips firing this hook at all
+ * for an ordinary tool under bypass (see the "PermissionRequest hook
+ * timeout" cc-dependencies.md entry), so this branch is normally moot for
+ * that mode, not load-bearing. `dontAsk`/`auto` are deliberately EXCLUDED:
+ * neither is documented as an unconditional file-edit auto-accept the way
+ * `acceptEdits` is (`auto` is a model classifier that can still deny;
+ * `dontAsk` denies anything not pre-approved rather than approving it) —
+ * this list only grows to a mode independently confirmed to already
+ * auto-accept a real Edit/Write with no ask.
+ */
+const FRICTIONLESS_DOC_COMMENT_MODES = new Set(['acceptEdits', 'bypassPermissions']);
+
+/**
  * §5.2a of the doc-comments build design (decided option 1, Destin "fine w
  * A"): a comment mutation aimed at a plain-text/markdown/code file only ever
  * touches the inert `.youcoded/comments/<path>.json` sidecar (never the
@@ -65,19 +92,32 @@ const DOC_COMMENTS_MUTATOR_TOOL_SET = new Set(DOC_COMMENTS_MCP_MUTATOR_TOOLS);
  * needs an explicit Advanced Settings override): the design's own intent is
  * that this case never prompts in ANY mode, not just bypass.
  *
- * A Word/Excel target writes the file's own XML/note bytes directly — that
- * is deliberately NOT auto-approved here; it falls through to Claude Code's
- * ordinary ask. See claude-code-doc-comments-mcp.ts's own header for why this
- * is the closest match this MCP surface can give to "the same tier as
- * Edit/Write" (bypass mode already gets this for free from Claude Code's own
- * engine; accept-edits mode does not, and this app has no live channel
- * carrying a Claude Code CLI session's current permission mode into main to
- * close that specific gap — reported, not silently patched).
+ * A Word/Excel target writes the file's own XML/note bytes directly — the
+ * goal is "the same tier as Edit/Write": auto-approved only when Claude
+ * Code's OWN live permission mode is one that already auto-accepts a native
+ * file edit (`FRICTIONLESS_DOC_COMMENT_MODES`, above), and asked ordinarily
+ * otherwise — `'plan'` explicitly falls through to the ordinary ask (Claude
+ * Code's own no-execution-in-plan-mode posture), and so does `'default'`, an
+ * unrecognized future mode string, or `permissionMode` being absent
+ * altogether (the hook payload's own base schema marks this field
+ * `.optional()` — a caller-vetted YES is required, never assumed).
+ * `permissionMode` reaches this function from the SAME PermissionRequest
+ * hook payload `toolName`/`toolInput` already come from (main.ts reads
+ * `event.payload.permission_mode`) — no new IPC, no new hook registration:
+ * relay-blocking.js already forwards the CLI's whole hook JSON verbatim, and
+ * hook-relay.ts's `parseHookPayload` already keeps the whole parsed object
+ * as `event.payload`, so this field was already flowing through unused.
  */
-export function shouldAutoApproveDocComment(toolName: string, toolInput?: Record<string, unknown>): boolean {
+export function shouldAutoApproveDocComment(
+  toolName: string,
+  toolInput: Record<string, unknown> | undefined,
+  permissionMode?: string,
+): boolean {
   if (!DOC_COMMENTS_MUTATOR_TOOL_SET.has(toolName)) return false;
   const path = toolInput?.path;
-  return typeof path === 'string' && nativeFormatFor(path) === null;
+  if (typeof path !== 'string') return false;
+  if (nativeFormatFor(path) === null) return true;
+  return permissionMode !== undefined && FRICTIONLESS_DOC_COMMENT_MODES.has(permissionMode);
 }
 
 /** Should main answer this PermissionRequest "allow" without showing a card? */
