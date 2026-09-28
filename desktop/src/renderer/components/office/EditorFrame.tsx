@@ -11,6 +11,7 @@ import { ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
 import { ScreenMark } from '../../shoot-mode';
+import { useDismissTop } from '../../hooks/use-esc-close';
 
 export type OfficeCommand = 'undo' | 'redo' | 'bold' | 'italic' | 'underline' | 'markers' | 'numbering' | 'align-left' | 'align-center' | 'align-right';
 export type OfficeCommandState = Partial<Record<OfficeCommand, { on: boolean; enabled: boolean }>>;
@@ -42,9 +43,17 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   const [phase, setPhase] = useState<'starting' | 'open' | 'failed'>('starting');
   const [failure, setFailure] = useState('');
   const src = `${origin}/editor?embed=1&embedOrigin=${encodeURIComponent(location.origin)}`;
+  // Escape the editor itself had no use for closes the app's top layer, as a page's does.
+  const dismissTop = useDismissTop();
+  const dismissRef = useRef(dismissTop);
+  dismissRef.current = dismissTop;
   const stateCb = useRef(onCommandState);
   stateCb.current = onCommandState;
   const post = (msg: unknown) => ref.current?.contentWindow?.postMessage(msg, origin);
+
+  // The shown document takes focus on a tab switch, so keyboard and screen
+  // reader follow what is on screen (UX review 1, U4).
+  useEffect(() => { if (!hidden && phase === 'open') ref.current?.focus(); }, [hidden, phase]);
 
   useImperativeHandle(handleRef, () => ({ command: (cmd) => post({ type: 'yc:office-cmd', cmd }) }), [origin]);
 
@@ -62,6 +71,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       // The bridge says when the document is really drawn — "opened" only means accepted.
       if (d?.type === 'yc:office-loaded') setPhase('open');
       if (d?.type === 'yc:office-state' && d.state) stateCb.current?.(d.state);
+      if (d?.type === 'yc:office-esc') dismissRef.current();
       if (d?.type === 'document:error') { setFailure(d.payload?.message ?? 'The file could not be opened.'); setPhase('failed'); }
     };
     window.addEventListener('message', onMessage);

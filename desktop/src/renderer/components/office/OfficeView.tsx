@@ -94,6 +94,7 @@ function OfficeHome({ load, onRetry, onCreate, onPick, onOpen }: {
   if (load.state === 'loading') return <LoadingState what="Office" />;
   if (load.state === 'failed') return <div className="p-6 max-w-xl mx-auto"><ErrorState message="Office could not be started." onRetry={onRetry} /></div>;
   const { recent, project } = load.status;
+  const projectFiles = (project?.files ?? []).filter((f) => !recent.some((r) => r.path === f.path));
   return (
     <div className="absolute inset-0 overflow-y-auto">
       <ScreenMark name="office" />
@@ -115,13 +116,14 @@ function OfficeHome({ load, onRetry, onCreate, onPick, onOpen }: {
           </div>
           {recent.length === 0
             ? <EmptyState message="Files you open in Office will show up here." />
-            : <FileList files={recent} onOpen={onOpen} />}
+            : <FileList files={recent} verb="Opened" onOpen={onOpen} />}
         </section>
 
-        {project && project.files.length > 0 && (
+        {/* A file already under Recent is not repeated here (UX review 1, U3). */}
+        {projectFiles.length > 0 && project && (
           <section className="flex flex-col gap-2">
             <Eyebrow>In {project.name}</Eyebrow>
-            <FileList files={project.files} onOpen={onOpen} />
+            <FileList files={projectFiles} verb="Changed" onOpen={onOpen} />
           </section>
         )}
       </div>
@@ -161,7 +163,7 @@ function NewCard({ kind, onClick }: { kind: OfficeKind; onClick: () => void }) {
 
 /** Files rows (guide G-17: icon · name · meta). Short lists — Recent keeps 12,
  *  the project list shows its first 12 — so no chunked reveal is needed here. */
-function FileList({ files, onOpen }: { files: readonly OfficeFile[]; onOpen: (f: OfficeFile) => void }) {
+function FileList({ files, verb, onOpen }: { files: readonly OfficeFile[]; verb: string; onOpen: (f: OfficeFile) => void }) {
   return (
     <div className="flex flex-col">
       {files.slice(0, 12).map((f) => (
@@ -178,7 +180,8 @@ function FileList({ files, onOpen }: { files: readonly OfficeFile[]; onOpen: (f:
             <div className="text-sm text-fg truncate">{f.name}</div>
             <div className="text-2xs text-fg-muted truncate">{f.folder}</div>
           </div>
-          <span className="shrink-0 text-2xs text-fg-muted">{relative(f.at)}</span>
+          {/* Says WHICH time it is: Recent shows when you opened it, the project list when it changed (U3). */}
+          <span className="shrink-0 text-2xs text-fg-muted">{verb} {relative(f.at)}</span>
         </div>
       ))}
     </div>

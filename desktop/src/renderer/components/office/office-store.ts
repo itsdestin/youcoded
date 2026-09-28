@@ -6,7 +6,7 @@ import type { OfficeBridge, OfficeFile } from '../../../shared/office-types';
 
 export const HOME_TAB = 'home';
 
-export interface OpenDoc {
+interface OpenDoc {
   file: OfficeFile;
   /** Closed in the background to save memory (office-questions#Q-sleep). */
   asleep: boolean;
@@ -56,7 +56,7 @@ export function showVersions(file: OfficeFile | null): void {
 }
 
 /** Workbench and screenshots only: lay out a given set of tabs at once. */
-export function setOfficeTabsForPreview(docs: OpenDoc[], active: string, versionsFor: OfficeFile | null = null): void {
+function setOfficeTabsForPreview(docs: OpenDoc[], active: string, versionsFor: OfficeFile | null = null): void {
   set({ docs, active, versionsFor });
 }
 

@@ -64,13 +64,12 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
               return (
                 <Tooltip key={cmd} text={label} placement="bottom">
                   <Button
-                    variant="ghost"
+                    variant="toggle"
                     size="icon"
                     aria-label={label}
                     aria-pressed={cmd === 'undo' || cmd === 'redo' ? undefined : !!s?.on}
                     disabled={s ? !s.enabled : false}
                     onClick={() => frame.current?.command(cmd)}
-                    className={s?.on ? 'bg-inset text-fg' : ''}
                   >
                     <CommandGlyph cmd={cmd} />
                   </Button>

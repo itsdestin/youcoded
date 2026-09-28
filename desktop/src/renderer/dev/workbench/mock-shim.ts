@@ -3451,7 +3451,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {
   // Office is built in, so it is listed in every scenario — even the empty one.
-  let pages: PageDocument[] = [{ ...OFFICE_PAGE, pinned: !empty }, ...(empty ? [] : seedPages())];
+  // Unpinned, as a new install has it: pinning it filled the header's fourth slot,
+  // and the resume journey's All Sessions click then raced the session strip
+  // re-packing under verify.sh's load (failed 2 of 4 runs, 2026-09-28).
+  let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : seedPages())];
   // One key is saved from the start (Trip board uses it), so the Weather page
   // can show "Uses your saved OpenWeather key".
   const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);

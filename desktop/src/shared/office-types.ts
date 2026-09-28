@@ -44,7 +44,7 @@ export interface OfficeStatus {
 
 /** How the editor gets a file's bytes. A URL on the editor's own origin
  *  (workbench fixtures); the real host hands bytes across the frame. */
-export type OfficeSource =
+type OfficeSource =
   | { ok: true; url: string }
   | { ok: false; message: string };
 
