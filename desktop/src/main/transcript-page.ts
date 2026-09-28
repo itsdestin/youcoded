@@ -125,7 +125,15 @@ export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPage
   // WHY fs.promises (B1): this was `async` with no `await` — openSync/fstatSync
   // /readSync/closeSync all ran on the main thread. Same open-fail → empty page.
   let handle: fs.promises.FileHandle;
-  try { handle = await fs.promises.open(jsonlPath, 'r'); } catch { return empty; }
+  try { handle = await fs.promises.open(jsonlPath, 'r'); } catch (err) {
+    // WHY: only a MISSING file means "no history". Any other open failure
+    // (Windows EBUSY/EPERM from antivirus or a sharing lock, EMFILE) is
+    // "cannot read it right now" — answered as empty, the renderer recorded it
+    // as the beginning of the conversation and the chat stayed blank for the
+    // life of the session. `unresolved` is the answer callers already retry.
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return empty;
+    return { ...empty, unresolved: true };
+  }
 
   try {
     const size = (await handle.stat()).size;

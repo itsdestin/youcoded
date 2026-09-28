@@ -291,6 +291,9 @@ export interface TranscriptPageRequest {
    */
   claudeSessionId?: string;
   projectSlug?: string;
+  /** First page only: read to EOF, not the tailer's start — a renderer rebuilt while the
+   *  session ran missed the live stream, so recent messages vanished (2026-09-27). */
+  toEnd?: boolean;
 }
 
 export interface PageCursor {

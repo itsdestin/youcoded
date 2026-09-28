@@ -315,6 +315,27 @@ describe('transcript:page — a window that INHERITED a session reads to the end
     expect(promptsIn(second)).toEqual(['prompt 0', 'prompt 1', 'prompt 2']);
   });
 
+  // 2026-09-27: messages vanished MID-conversation. A renderer rebuilt while
+  // the session kept running (reload, crash recovery, remount) got the short
+  // page above — everything said since the watcher attached disappeared from
+  // the chat, while Claude and the terminal still had it.
+  it('a rebuilt renderer that asks toEnd gets the tail, with no transfer mark', async () => {
+    buildResumedTranscript(3, 4);
+    const { pageHandler } = buildHandlers();
+    const page = await pageHandler({ sender: { id: 1 } }, { sessionId: 's1', beforeCursor: null, toEnd: true });
+    expect(promptsIn(page).at(-1)).toBe('prompt 6');
+    expect(promptsIn(page)).toHaveLength(7);
+  });
+
+  it('toEnd never changes a scroll-back page', async () => {
+    buildResumedTranscript(3, 4);
+    const { pageHandler } = buildHandlers();
+    const cursor = { path: watcherState.jsonlPath, offset: watcherState.startOffset, sizeAtRead: 0 };
+    const plain = await pageHandler({ sender: { id: 1 } }, { sessionId: 's1', beforeCursor: cursor });
+    const flagged = await pageHandler({ sender: { id: 1 } }, { sessionId: 's1', beforeCursor: cursor, toEnd: true });
+    expect(promptsIn(flagged)).toEqual(promptsIn(plain));
+  });
+
   it('paging BACKWARD never consumes the mark — only a first page can', async () => {
     buildResumedTranscript(3, 4);
     const { pageHandler, registry } = buildHandlers();

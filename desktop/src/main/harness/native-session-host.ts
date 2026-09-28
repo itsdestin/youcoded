@@ -103,6 +103,8 @@ const NOOP_REMEMBERED_STORE: RememberedRuleStore = {
 type SendUnit = { text: string; attachments: string[] };
 
 const SEND_QUEUE_LIMIT = 10;
+/** Resume could not read the saved conversation. No cause named: a lock, EMFILE and a bad disk look alike. */
+export const TRANSCRIPT_UNREADABLE_MESSAGE = "This conversation's saved data couldn't be read just now. Try again in a moment.";
 
 // Specialists (Task 7) — the ONLY child transcript event types that are
 // re-emitted as stamped DISPLAY copies under the parent's session id.
@@ -966,7 +968,7 @@ export class NativeSessionHost extends EventEmitter {
     if (loc.live) return { status: 'still-running' };
     const { record } = loc;
     const workDir = record.workDir;
-    const header = this.store.readHeader(opts.childId, workDir);
+    const header = await this.store.readHeaderAsync(opts.childId, workDir);
     if (!header) throw new Error(`Cannot resume specialist ${opts.childId}: its transcript could not be read.`);
     const agentType = header.agentType ?? record.agentType;
     // Task 4 (plan 1c) — resolved against the PARENT's own per-cwd roster
@@ -3207,8 +3209,9 @@ export class NativeSessionHost extends EventEmitter {
    *
    * Called AFTER the session object exists (its assemblyDigest is what the
    * checkpoint was published against) and instead of the bare seedHistory the
-   * two resume paths used to do. Never throws: a signed-out ChatGPT makes
-   * continuationIdentityFor throw, which is just another fallback.
+   * two resume paths used to do. A signed-out ChatGPT makes
+   * continuationIdentityFor throw, which is just another fallback. The ONE
+   * throw is a transcript that exists but cannot be read (see below).
    */
   private async seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): Promise<void> {
     const store = this.continuationStore();
@@ -3216,7 +3219,15 @@ export class NativeSessionHost extends EventEmitter {
     // click and read the whole transcript synchronously. (restore() below
     // reads it once more to verify the checkpoint's digest — also async since
     // 2026-09-24, blocking-calls B8.)
-    const persisted = await this.store.readEventsAsync(sessionId, cwd);
+    let persisted: TranscriptEvent[];
+    try {
+      persisted = await this.store.readEventsAsync(sessionId, cwd);
+    } catch (err) {
+      // WHY fail (2026-09-27): [] here resumed with NO model memory, silently, and the next turn
+      // republished that as the checkpoint. Both resume paths release what they acquired on a throw.
+      log('ERROR', 'NativeSessionHost', 'resume could not read the transcript', { sessionId, error: String(err) });
+      throw new Error(TRANSCRIPT_UNREADABLE_MESSAGE);
+    }
     // WHY: the portable record also needs pre-reopen event references even when
     // there is no private continuation sidecar to restore or publish.
     this.store.hydrateReferences(sessionId, persisted);
@@ -3944,7 +3955,7 @@ export class NativeSessionHost extends EventEmitter {
       log('WARN', 'NativeSessionHost', 'resume found a live session under the same id — destroying the orphan first', { sessionId });
       await this.destroy(sessionId);
     }
-    const header = this.store.readHeader(sessionId, cwd);
+    const header = await this.store.readHeaderAsync(sessionId, cwd);
     if (!header) return false;
     // Task 6 — a specialist child can never come back through the ROOT resume
     // path: it would get the resolved PRESET's prompt (never its own

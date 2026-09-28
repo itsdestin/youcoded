@@ -108,7 +108,7 @@ import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionP
 import type { NativePermissionMode } from '../shared/permission-types';
 import { detectPermissionMode, syncKeyedSubscriptions, clearKeyedSubscriptions } from './state/permission-mode-scan';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
-import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './state/first-page-retry';
+import { createFirstPageLoader, type FirstPageLoader, type PageHint } from './state/first-page-loader';
 
 import FirstRunView from './components/FirstRunView';
 import { getPlatform, isAndroid, isRemoteMode, onConnectionModeChange } from './platform';
@@ -690,6 +690,22 @@ function AppInner() {
 
   const dispatch = useChatDispatch();
   const chatStore = useChatStore();
+  // One first-page load per session (asking twice would prepend the newest page
+  // twice) — but a load that FAILED is forgotten and re-asked by the session's
+  // next live event, and a resume's locator reaches a load already running. The
+  // old one-shot guard left a live conversation blank ("Start a conversation")
+  // whenever its only load lost the resume race or hit a Windows file lock.
+  // See first-page-loader.ts.
+  const firstPagesRef = useRef<FirstPageLoader | null>(null);
+  if (!firstPagesRef.current) firstPagesRef.current = createFirstPageLoader({
+    request: async (req) => (window as any).claude?.detach?.requestTranscriptPage?.(req),
+    dispatch,
+    // Batch 2 (§4): the computer's copy is the only source on a remote client — wait for
+    // it, and never load a page on top of a session it delivered. Not recorded as asked,
+    // so the sessions effect retries when the hydrate lands (hydrateTick).
+    mayLoad: (sid) => shouldLoadFirstPage({ remote: isRemoteMode(), placeDecided: placeDecidedRef.current, hydrated: !!chatStore.getState().get(sid)?.history.hydrated }),
+  });
+  const firstPages = firstPagesRef.current;
   // Artifact tracker — global reducer for session/project artifact state.
   // WHY a store created once (perf, 2026-09-23): a `{ state, dispatch }` context
   // value changed on every artifact dispatch and redrew every reader (each open
@@ -1400,6 +1416,8 @@ function AppInner() {
 
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
       if (!event?.type || !event?.sessionId) return;
+      // Live event = main can read this transcript: re-ask a failed first page (first-page-loader.ts).
+      firstPages.noteLiveActivity(event.sessionId);
 
       switch (event.type) {
         case 'user-message':
@@ -2106,70 +2124,24 @@ function AppInner() {
   // claudeSessionId/projectSlug are the fallback locator for a session the
   // transcript watcher does not know yet (a just-resumed CC session) — see
   // TranscriptPageRequest.
-  // Sessions whose first page has already been asked for — asking twice would
-  // prepend the newest page a second time. An id is removed only when its
-  // session leaves the list (the effect below), never on the strength of the
-  // ANSWER: for the life of a session, the first request to arrive is the only
-  // one that ever runs.
-  const firstPageAsked = useRef<Set<string>>(new Set());
-
-  const loadFirstPage = useCallback(async (sid: string, locator?: { claudeSessionId: string; projectSlug: string }) => {
-    if (firstPageAsked.current.has(sid)) return;
-    // Batch 2 (§4): the computer's copy is the only source on a remote client — wait for
-    // it, and never load a page on top of a session it delivered. Not recorded as asked,
-    // so the sessions effect retries when the hydrate lands (hydrateTick).
-    if (!shouldLoadFirstPage({ remote: isRemoteMode(), placeDecided: placeDecidedRef.current, hydrated: !!chatStore.getState().get(sid)?.history.hydrated })) return;
-    firstPageAsked.current.add(sid);
-    dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId: sid });
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const page = await (window as any).claude?.detach?.requestTranscriptPage?.({
-          sessionId: sid,
-          beforeCursor: null,
-          claudeSessionId: locator?.claudeSessionId,
-          projectSlug: locator?.projectSlug,
-        });
-        if (!page) { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid }); return; }
-        // An empty page used to be ambiguous: either the session genuinely has
-        // no history, or main could not resolve its transcript YET (a
-        // just-started session is not watched until Claude Code's hook reports
-        // its path). Main now says which — `unresolved` — so the two get
-        // different budgets, and an unresolved one is never RECORDED: writing
-        // hasMore:false + a null cursor is what permanently removes the
-        // scroll-up sentinel (Destin, 2026-09-07). See first-page-retry.ts.
-        const decision = decideFirstPage(page, attempt);
-        if (decision === 'accept') {
-          dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: sid, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
-          return;
-        }
-        if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid }); return; }
-      } catch {
-        // The scroll sentinel can retry; a failed first page leaves an empty
-        // view rather than a wrong one.
-        dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid });
-        return;
-      }
-      await new Promise((r) => setTimeout(r, FIRST_PAGE_RETRY_MS));
-    }
-  }, [dispatch, chatStore]);
+  const loadFirstPage = useCallback((sid: string, hint?: PageHint) => firstPages.load(sid, hint), [firstPages]);
 
   // Every session this window knows about gets its most recent page — not just
   // the paths that happen to create one. History used to arrive as a side effect
   // of the live tailer replaying from byte 0, which covered every entry point by
   // accident; now that the tailer starts at EOF, a session that appears by any
   // OTHER route (adopted from the directory, created through the session API
-  // directly) would render EMPTY. Guarded by firstPageAsked, so the explicit
-  // resume calls below — which carry a locator — win the race and this skips them.
+  // directly) would render EMPTY. A resume's locator-carrying call that arrives
+  // while this one is running is picked up by it (first-page-loader.ts).
   useEffect(() => {
     // Forget closed sessions first. A native session is keyed by the id it
     // resumes, so the same id can legitimately come back — and a stale entry
     // here would silently deny it any history at all.
-    const live = new Set(sessions.map((s) => s.id));
-    for (const id of firstPageAsked.current) if (!live.has(id)) firstPageAsked.current.delete(id);
+    firstPages.retainOnly(new Set(sessions.map((s) => s.id)));
     // WHY: session:created may precede the attempt's admitted reply. Its
     // unlocated first page must not consume the receiver's one locator read.
     if (!pendingRef.current?.active) for (const s of sessions) if (!String(s.id).startsWith('pending-handoff:')) void loadFirstPage(s.id);
-  }, [sessions, loadFirstPage, hydrateTick]);
+  }, [sessions, loadFirstPage, firstPages, hydrateTick]);
 
   useEffect(() => {
     window.claude.session.list().then((list: any[]) => {
@@ -2191,6 +2163,8 @@ function AppInner() {
       // and never clobbers what session:created already seeded.
       for (const s of list) {
         dispatch({ type: 'SESSION_INIT', sessionId: s.id });
+        // WHY toEnd: it streamed while no chat listened (reload/remount) — read to EOF or recent messages vanish.
+        void loadFirstPage(s.id, { toEnd: true });
         setViewModes((vm) => vm.has(s.id) ? vm : new Map(vm).set(s.id, 'chat'));
         setPermissionModes((pm) => pm.has(s.id) ? pm : new Map(pm).set(s.id, matchPermissionMode(s.permissionMode)));
         // These sessions were already running before this window's event
@@ -2229,11 +2203,10 @@ function AppInner() {
       // Ordering: the transcript:event listener is registered by an effect
       // declared ABOVE this one, so it is already attached when these replayed
       // events stream back; uuid dedup absorbs any overlap with live events.
-      // History is requested by the session-list effect above, which covers every
-      // entry point rather than only this one. Remote/Android hydrate via
-      // chat:hydrate on connect instead.
+      // History: requested in the loop above; the session-list effect covers every
+      // other entry point. Remote/Android hydrate via chat:hydrate on connect instead.
     }).catch(() => {});
-  }, [dispatch]);
+  }, [dispatch, loadFirstPage]);
 
   // Multi-window ownership wiring (Phase 2 of detach feature).
   // Subscribes to directory/leader/ownership pushes from main and mutates
@@ -2311,7 +2284,7 @@ function AppInner() {
       // through the newest message, which the stop-at-startOffset page was not.
       //
       // Called here rather than left to the sessions effect below so the order
-      // is deterministic: this claims `firstPageAsked` first, and replayLiveState
+      // is deterministic: this claims the first-page load first, and replayLiveState
       // is chained AFTER the page resolves. That ordering is load-bearing —
       // replayLiveState ends with the replay-complete marker, which reaps tool
       // cards the history left 'running', and it must not run before the page
