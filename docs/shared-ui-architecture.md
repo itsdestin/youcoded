@@ -26,7 +26,7 @@ Most features work on both platforms automatically because the UI is shared. Onl
 2. **Desktop side** (`youcoded/desktop/src/main/ipc-handlers.ts`): Add `ipcMain.handle(IPC.CHANNEL, handler)` for request-response, or `ipcMain.on()` for fire-and-forget
 3. **Android side** (`youcoded/app/.../runtime/SessionService.kt`): Add a `when` case in `handleBridgeMessage()` matching the same type string. Respond with `bridgeServer.respond(ws, msg.type, msg.id, payload)` if `msg.id` is present
 
-The message type string (e.g., `"skills:install"`) must be **identical across all three files**. `SessionService.handleBridgeMessage()` currently has ~200 `when` branches.
+Two more surfaces carry the same string on desktop: `youcoded/desktop/src/main/preload.ts` (the Electron `window.claude` + the `IPC` constant) and `youcoded/desktop/src/main/remote-server.ts` (the WebSocket host a remote browser talks to — its `default:` answers `{unsupported:true}`, so a channel skipped there is dead over remote). The message type string (e.g., `"skills:install"`) must be **identical across all five files**. `SessionService.handleBridgeMessage()` has a `when` branch per channel — hundreds; the workspace `ipc-bridge.md` rule carries the latest count.
 
 ## Critical parity requirement
 

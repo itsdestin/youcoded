@@ -49,6 +49,12 @@ function parseSessionLines(raw: string): unknown[] {
   return out;
 }
 
+/** Read errors worth a quick retry — a lock or descriptor pressure that clears
+ *  on its own (readSessionLinesAsync). */
+const TRANSIENT_READ_ERRORS = new Set(['EBUSY', 'EPERM', 'EACCES', 'EMFILE', 'ENFILE', 'EAGAIN']);
+const SESSION_READ_RETRIES = 2;
+const SESSION_READ_RETRY_MS = 150;
+
 export class NativeHome {
   private readonly dir: string;
 
@@ -179,13 +185,20 @@ export class NativeHome {
     await fs.promises.appendFile(p, JSON.stringify(obj) + '\n', 'utf8');
   }
 
+  /** Whole-file read. A MISSING file is an empty transcript (no such session
+   *  yet); any OTHER error THROWS. WHY (2026-09-27): every error used to read as
+   *  []. A Windows sharing lock, EMFILE or a file too big for one string then
+   *  meant a blank chat recorded as the conversation's beginning, a resume
+   *  seeded with NO model memory (later republished as the checkpoint), and a
+   *  compaction record digested over nothing. Same rule as readJson above. */
   readSessionLines(slug: string, sessionId: string): unknown[] {
     const p = this.sessionFilePath(slug, sessionId);
     let raw: string;
     try {
       raw = fs.readFileSync(p, 'utf8');
-    } catch {
-      return []; // no such session yet — empty transcript, not an error
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return [];
+      throw e;
     }
     return parseSessionLines(raw);
   }
@@ -196,11 +209,19 @@ export class NativeHome {
    *  every window frozen for it. Same parse, same skip rules. */
   async readSessionLinesAsync(slug: string, sessionId: string): Promise<unknown[]> {
     const p = this.sessionFilePath(slug, sessionId);
-    let raw: string;
-    try {
-      raw = await fs.promises.readFile(p, 'utf8');
-    } catch {
-      return []; // no such session yet — empty transcript, not an error
+    let raw: string | undefined;
+    // Same ENOENT-only rule as readSessionLines. A TRANSIENT error (antivirus
+    // or backup holding the file, too many open files) gets two quick retries
+    // first — those locks usually last milliseconds; a permanent one (a file
+    // too big for one string) is thrown at once rather than read three times.
+    for (let attempt = 0; raw === undefined; attempt++) {
+      try {
+        raw = await fs.promises.readFile(p, 'utf8');
+      } catch (e: any) {
+        if (e?.code === 'ENOENT') return [];
+        if (attempt >= SESSION_READ_RETRIES || !TRANSIENT_READ_ERRORS.has(e?.code)) throw e;
+        await new Promise((r) => setTimeout(r, SESSION_READ_RETRY_MS));
+      }
     }
     return parseSessionLines(raw);
   }

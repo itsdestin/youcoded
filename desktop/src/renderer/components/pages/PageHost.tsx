@@ -40,7 +40,7 @@
 // First-run refinement (2026-09-23): keep the quoted decision above for pages
 // that exist; with none, the frame carries the former Manage pages welcome card.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useArtifact } from '../../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
@@ -58,6 +58,7 @@ import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
   PAGE_REFRESH_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss,
 } from './page-theme';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 function pagesBridge(): PagesBridge | undefined {
   return (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
@@ -88,13 +89,16 @@ type Load =
   | { state: 'failed'; failure: PageLoadFailure };
 
 export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage }: PageHostProps) {
-  const { state, dispatch } = useArtifact();
-  const open = state.pageViewOpen;
-  const pageId = state.openPageId;
+  // Narrow selectors (perf, 2026-09-23): only the page flags this host shows.
+  const dispatch = useArtifactDispatch();
+  const open = useArtifactSelector((s) => s.pageViewOpen);
+  const pageId = useArtifactSelector((s) => s.openPageId);
+  const pagesViewOpen = useArtifactSelector((s) => s.pagesViewOpen);
+  const pageFocus = useArtifactSelector((s) => s.pageFocus);
   // Back to chat leaves pages altogether (the library over this view goes too).
   const backToChat = () => dispatch({ type: 'PAGE_VIEW_CLOSED' });
   const managePages = () => dispatch({ type: 'PAGES_VIEW_OPENED' });
-  useEscClose(open && !state.pagesViewOpen && !settingsOpen, backToChat);
+  useEscClose(open && !pagesViewOpen && !settingsOpen, backToChat);
   // Esc pressed INSIDE the page (the frame swallows the key) is forwarded by
   // the page's bootstrap; it dismisses whatever is on top exactly as the key
   // would — Settings or the library over the view, else the view itself.
@@ -102,6 +106,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // closed by Esc with the page focused — Destin, 2026-09-17.)
   const dismissTop = useDismissTop();
   const { pages, loaded, failed } = usePages();
+  // Photo-only build: `shoot` opens a page by id, in the panel or focused (the pinned-button view).
+  const pageIds = pages.map((p) => p.id);
+  useScreenOpen('pages/page', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id }); }, pageIds);
+  useScreenOpen('pages/focus', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id, focus: true }); }, pageIds);
   const summary = pages.find((p) => p.id === pageId) ?? null;
   const pinnedCount = pages.filter((p) => p.pinned).length;
   // The frame reloads when page.html was rewritten (the stamp moves) and not
@@ -116,6 +124,17 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     () => (summary?.connections ?? []).map((c) => `${c.id}:${c.approved ? 1 : 0}`).join('|'),
     [summary],
   );
+
+  // WHY: a page deleted while it is open (through chat) used to stay in the
+  // frame until another page was picked — nothing told the view its id was
+  // gone. Every way of opening a page picks it FROM this list, so once a
+  // loaded, healthy list lacks the open id, the page no longer exists: fall
+  // back to "No page selected". A list that has not loaded or failed to proves
+  // nothing, so it is left alone.
+  const openPageMissing = open && pageId !== null && loaded && !failed && !summary;
+  useEffect(() => {
+    if (openPageMissing) dispatch({ type: 'PAGE_CLOSED' });
+  }, [openPageMissing, dispatch]);
 
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   // Only the confirmed first-run state replaces the rail, not loading, errors, or an open page.
@@ -289,7 +308,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         onToggleSettings={onToggleSettings}
         settingsBadge={settingsBadge}
         settingsDangerBadge={settingsDangerBadge}
-        active={state.pageFocus ? null : 'pages'}
+        active={pageFocus ? null : 'pages'}
         onBack={backToChat}
         title={<>
           {summary && <PageGlyph icon={summary.icon} className="w-4 h-4 text-fg-muted shrink-0" />}
@@ -306,7 +325,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
       <div className="screen-body flex-1 min-h-0 flex">
-        {!state.pageFocus && !emptyPages && (
+        {!pageFocus && !emptyPages && (
         <aside className="screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
           <div className="flex-1 overflow-y-auto p-2">
             {personal.length > 0 && (
@@ -340,6 +359,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         </aside>
         )}
         <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
+          {/* Photo-only marks: the view once its list has loaded, or the page once it is ready. */}
+          {load.state === 'idle' && loaded && !failed && <ScreenMark name="pages" />}
+          {load.state === 'ready' && pageId && <ScreenMark name={`pages/${pageFocus ? 'focus' : 'page'}/${pageId}`} />}
           {/* WHY: first-run belongs where the Pages button lands, not a second click into Manage pages. */}
           {load.state === 'idle' && !loaded && <LoadingState what="pages" />}
           {load.state === 'idle' && loaded && failed && <ErrorState message="The list of pages could not be read." onRetry={() => void refreshPages()} />}
@@ -365,7 +387,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               Q-own-pages, S-change). "Not now" leaves the page unselected — or, from
               a pinned button (no panel to fall back to), goes back to chat. */}
           {load.state === 'ready' && awaitingApproval && (
-            <PageApproval page={load.page} onNotNow={() => dispatch({ type: state.pageFocus ? 'PAGE_VIEW_CLOSED' : 'PAGE_CLOSED' })} />
+            <PageApproval page={load.page} onNotNow={() => dispatch({ type: pageFocus ? 'PAGE_VIEW_CLOSED' : 'PAGE_CLOSED' })} />
           )}
           {load.state === 'ready' && !awaitingApproval && (
             <iframe

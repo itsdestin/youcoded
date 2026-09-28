@@ -37,7 +37,7 @@ import path from 'path';
 import { randomBytes } from 'crypto';
 import { canonicalize } from '../shared/artifacts/canonicalize';
 import { isSensitivePath } from './artifacts/read-binary-access';
-import { authorizeBytesRead } from './artifacts/read-service';
+import { authorizeBytesRead, judgeRecordLocation } from './artifacts/read-service';
 import { readSidecarShared } from './artifacts/artifact-store';
 import { authorizeArtifactRead } from './artifacts/write-authorization';
 
@@ -308,7 +308,12 @@ export class RemoteDownloads {
     if (!sidecar || 'corrupted' in sidecar) return false;
     const artifact = sidecar.artifacts.find((a) => a.id === artifactId);
     if (!artifact) return false;
-    const fullPath = artifact.kind === 'internal' ? path.join(projectRoot, artifact.path) : artifact.absolutePath;
+    // A `../` record is judged the way artifacts:get judges it (re-review C5);
+    // without this its relative location resolved against the app's own folder.
+    const judged = await judgeRecordLocation(projectRoot, artifact).catch(() => null);
+    if (judged && !judged.ok) return false;
+    const fullPath = judged?.ok ? judged.realPath
+      : artifact.kind === 'internal' ? path.join(projectRoot, artifact.path) : artifact.absolutePath;
     if (!fullPath) return false;
     const auth = await authorizeArtifactRead(projectRoot, fullPath, artifact.kind === 'internal').catch(() => null);
     return !!auth && auth.ok && auth.realPath === realPath;

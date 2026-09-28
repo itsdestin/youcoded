@@ -9,6 +9,9 @@
 // Because a null can never worsen a verdict (see fit-estimator), being wrong in
 // the null direction is always safe; being wrong in the non-null direction
 // over-promises. So we bias hard toward null.
+// Two exceptions report SHARED memory, flagged `sharedMemory: true` so the
+// estimator never counts it twice: Apple Silicon, and (2026-09-23) an AMD APU
+// on Linux confirmed as one by the kfd topology — see amdLinuxPool.
 //
 // Every probe is wrapped in try/catch and NEVER throws. Result is cached at
 // module level (VRAM is fixed for the process lifetime) so repeat calls — one
@@ -165,6 +168,67 @@ export function parseSystemProfilerVram(stdout: string): number | null {
   return best;
 }
 
+/** One kfd topology node, as far as the APU question needs it. */
+export interface KfdNodeInfo { simdCount: number; cpuCoresCount: number; localMemSize: number | null; }
+
+/** Pull the three counters out of one kfd node's `properties` file. */
+export function parseKfdNode(properties: string): KfdNodeInfo {
+  const num = (key: string): number | null => {
+    const m = new RegExp(`^${key}\\s+(\\d+)\\s*$`, 'm').exec(properties);
+    return m ? Number(m[1]) : null;
+  };
+  return { simdCount: num('simd_count') ?? 0, cpuCoresCount: num('cpu_cores_count') ?? 0, localMemSize: num('local_mem_size') };
+}
+
+/** One AMD drm card's two memory figures, in bytes (null = file absent). */
+export interface AmdCardMemory { vramTotal: number | null; gttTotal: number | null; }
+
+/**
+ * The graphics pool on an AMD Linux machine, and whether it is shared memory.
+ *
+ * WHY (2026-09-23, investigation 2026-09-07-unified-memory-fit-estimate): on an
+ * APU (Strix Halo here) `mem_info_vram_total` is only the BIOS carve-out — 4 GiB
+ * on a 128 GB laptop — while the chip can really reach carve-out + the driver's
+ * GTT allowance (`mem_info_gtt_total`, 80 GiB): 86016 MiB, exactly what the
+ * engine's own device list reports. Scoring against the carve-out made a 2B
+ * model read "Will be tight". That pool is system RAM, so it is marked shared.
+ *
+ * WHY the kfd topology decides "APU": a discrete card's GPU node always reports
+ * its own `local_mem_size`; an APU's reads 0 (measured here: node 1, 80 SIMDs,
+ * local_mem_size 0), and older kernels fold an APU into the CPU node
+ * (`cpu_cores_count` and `simd_count` both non-zero). Calling a discrete card
+ * shared would add its GTT allowance and over-promise, so ANY discrete-looking
+ * GPU node — or no kfd at all — keeps the old dedicated reading.
+ *
+ * Returns null when there is no usable figure. Pure; callers pass the readings.
+ */
+export function amdLinuxPool(
+  cards: ReadonlyArray<AmdCardMemory>,
+  kfdNodes: ReadonlyArray<KfdNodeInfo> | null,
+  totalMemBytes: number,
+): { bytes: number; shared: boolean } | null {
+  const gpuNodes = (kfdNodes ?? []).filter((n) => n.simdCount > 0);
+  const allApu = gpuNodes.length > 0
+    && gpuNodes.every((n) => n.cpuCoresCount > 0 || n.localMemSize === 0);
+  if (allApu) {
+    let best = 0;
+    for (const c of cards) {
+      const sum = (c.vramTotal ?? 0) + (c.gttTotal ?? 0);
+      if (Number.isFinite(sum) && sum > best) best = sum;
+    }
+    // Never more than the machine physically has — the GTT allowance is a
+    // permission, not extra memory.
+    const bytes = Math.min(best, totalMemBytes);
+    return bytes > 0 ? { bytes, shared: true } : null;
+  }
+  let best: number | null = null;
+  for (const c of cards) {
+    const n = c.vramTotal;
+    if (n != null && Number.isFinite(n) && n > 0 && (best === null || n > best)) best = n;
+  }
+  return best === null ? null : { bytes: best, shared: false };
+}
+
 // ---------- impure probes (best-effort, never throw) ----------
 
 function runCmd(file: string, args: string[]): string | null {
@@ -291,9 +355,11 @@ function detectMac(): GpuInfo {
   if (process.arch === 'arm64') {
     // 'apple' with no gfxTarget: there is nothing faster to offer — Metal is
     // already the vendor's own backend and is what macOS installs by default.
+    // sharedMemory: this pool IS system RAM, so the estimator must not add it to
+    // free RAM or skip its physical-memory cap (2026-09-23).
     return {
       name: 'Apple Silicon (unified memory)', totalVramBytes: Math.floor(os.totalmem() * 0.7),
-      vendor: 'apple', gfxTarget: null,
+      vendor: 'apple', gfxTarget: null, sharedMemory: true,
     };
   }
   // Intel Mac: a discrete/embedded GPU reports VRAM via system_profiler. The
@@ -305,23 +371,32 @@ function detectMac(): GpuInfo {
   return { name: null, totalVramBytes: vram, vendor: null, gfxTarget: null };
 }
 
-function readAmdSysfsVram(): number | null {
-  // AMD discrete cards expose total VRAM in BYTES at
-  // /sys/class/drm/card*/device/mem_info_vram_total. Take the max across cards.
+function readAmdSysfsPool(): { bytes: number; shared: boolean } | null {
+  // AMD cards expose memory in BYTES at /sys/class/drm/card*/device/
+  // mem_info_vram_total (+ mem_info_gtt_total). amdLinuxPool decides what they mean.
   try {
     const base = '/sys/class/drm';
     const cards = fs.readdirSync(base).filter((d) => /^card\d+$/.test(d));
-    let best: number | null = null;
-    for (const card of cards) {
+    const readNum = (p: string): number | null => {
       try {
-        const raw = fs.readFileSync(`${base}/${card}/device/mem_info_vram_total`, 'utf8').trim();
-        const n = Number(raw);
-        if (Number.isFinite(n) && n > 0 && (best === null || n > best)) best = n;
-      } catch {
-        /* card without the file (iGPU / non-AMD) — skip. */
-      }
-    }
-    return best;
+        const n = Number(fs.readFileSync(p, 'utf8').trim());
+        return Number.isFinite(n) && n > 0 ? n : null;
+      } catch { return null; }   // card without the file (iGPU / non-AMD) — skip.
+    };
+    const mems: AmdCardMemory[] = cards
+      .map((card) => ({
+        vramTotal: readNum(`${base}/${card}/device/mem_info_vram_total`),
+        gttTotal: readNum(`${base}/${card}/device/mem_info_gtt_total`),
+      }))
+      .filter((m) => m.vramTotal !== null || m.gttTotal !== null);
+    let nodes: KfdNodeInfo[] | null = null;
+    try {
+      const kfd = '/sys/class/kfd/kfd/topology/nodes';
+      nodes = fs.readdirSync(kfd).filter((n) => /^\d+$/.test(n)).flatMap((n) => {
+        try { return [parseKfdNode(fs.readFileSync(`${kfd}/${n}/properties`, 'utf8'))]; } catch { return []; }
+      });
+    } catch { nodes = null; }   // no amdkfd loaded — cannot tell an APU apart
+    return amdLinuxPool(mems, nodes, os.totalmem());
   } catch {
     return null;
   }
@@ -342,9 +417,12 @@ function detectLinux(): GpuInfo {
     // named something else (a hybrid laptop whose panel hangs off the iGPU).
     return { name: readNvidiaSmiName(), totalVramBytes: smi, vendor: 'nvidia', gfxTarget: null };
   }
-  const amd = readAmdSysfsVram();
-  if (amd != null && amd >= MIN_DEDICATED_VRAM_BYTES) {
-    return { name: null, totalVramBytes: amd, vendor: vendor ?? 'amd', gfxTarget };
+  const amd = readAmdSysfsPool();
+  if (amd != null && amd.bytes >= MIN_DEDICATED_VRAM_BYTES) {
+    return {
+      name: null, totalVramBytes: amd.bytes, vendor: vendor ?? 'amd', gfxTarget,
+      ...(amd.shared ? { sharedMemory: true } : {}),
+    };
   }
   return { ...NULL_GPU, vendor, gfxTarget };
 }

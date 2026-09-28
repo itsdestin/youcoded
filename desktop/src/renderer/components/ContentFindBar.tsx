@@ -8,6 +8,7 @@
 // matched by the search.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, TextInput, Tooltip } from './ui';
+import { ScreenMark } from '../shoot-mode';
 
 function highlightsSupported(): boolean {
   return typeof CSS !== 'undefined' && 'highlights' in CSS && typeof (window as any).Highlight === 'function';
@@ -227,6 +228,7 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
       // up with the chrome above it. shrink-0: it is a flex-column sibling of the
       // scroll container and must never be squeezed by it.
       <div className="find-row shrink-0 flex justify-end px-2 sm:px-3 py-1">
+        <ScreenMark name="chat/find" />
         <div className={pill}>{controls}</div>
       </div>
     );

@@ -114,6 +114,19 @@ describe('transient native usage progress', () => {
     expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(10));
   });
 
+  it('an unrelated update that returns the chat to ok also drops the stall warning', () => {
+    let s = dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'hi', timestamp: 1 } as ChatAction);
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION, stallWarning: { retryInMs: 15_000, willRetry: true } });
+    expect(s.get(SESSION)!.attentionState).toBe('stuck');
+    expect(s.get(SESSION)!.stallWarning).not.toBeNull();
+    // A tool event (e.g. a helper's) writes 'ok'. Keeping the warning there made
+    // ChatView swap the amber card for a "Retrying in 15s…" countdown.
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-t1', toolUseId: 't1',
+      toolName: 'Read', toolInput: { file_path: 'a.ts' }, timestamp: 2 } as ChatAction);
+    expect(s.get(SESSION)!.attentionState).toBe('ok');
+    expect(s.get(SESSION)!.stallWarning).toBeNull();
+  });
+
   it('rejects stale attach progress and duplicate UUID without changing references', () => {
     let s = dispatch(initState(), heartbeat(SESSION, 30, 102, 'new'));
     expect(dispatch(s, heartbeat(SESSION, 10, 100, 'old'))).toBe(s);
@@ -716,6 +729,33 @@ describe('TRANSCRIPT_USER_MESSAGE suppresses the redundant /compact bubble', () 
     expect(users.map((e) => e.message.content)).toEqual(['first question', 'second question']);
     // The assistant turn either side of it must survive untouched.
     expect(state.get(SESSION)!.timeline.filter((e) => e.kind === 'assistant-turn')).toHaveLength(1);
+  });
+});
+
+// A resumed conversation's first page can land before the session's chat
+// state exists: App creates that state from the session:created announcement,
+// which is applied at the next render, while the resume fetches the page at
+// once. Dropping the page there opened resumed sessions EMPTY, depending on
+// which won (Destin, 2026-09-24: "whether the messages/history loads or not is
+// inconsistent"; a dev instance logged page-before-init for 2 of 3 sessions).
+describe('HISTORY_PAGE_LOADED for a session with no chat state yet', () => {
+  const ev = (type: string, uuid: string, text: string, ts: number) =>
+    ({ type, sessionId: SESSION, uuid, timestamp: ts, data: { text } }) as any;
+  const page: ChatAction = {
+    type: 'HISTORY_PAGE_LOADED', sessionId: SESSION, cursor: null, hasMore: false,
+    events: [ev('user-message', 'p1', 'hi', 1), ev('assistant-text', 'p2', 'Hi! What can I help with?', 2)],
+  };
+
+  it('keeps the page instead of dropping it', () => {
+    const state = dispatch(new Map(), page);
+    const users = state.get(SESSION)?.timeline.filter((e) => e.kind === 'user') as any[] | undefined;
+    expect(users?.map((e) => e.message.content)).toEqual(['hi']);
+  });
+
+  it('a SESSION_INIT that arrives afterwards leaves the loaded history in place', () => {
+    let state = dispatch(new Map(), page);
+    state = dispatch(state, { type: 'SESSION_INIT', sessionId: SESSION });
+    expect(state.get(SESSION)!.timeline.filter((e) => e.kind === 'user')).toHaveLength(1);
   });
 });
 
@@ -1387,5 +1427,229 @@ describe('reducer session totals', () => {
     const legacy: any = { sessions: [[SID, { ...createSessionChatState(), toolCalls: [], toolGroups: [], assistantTurns: [], activeTurnToolIds: [], seenUuids: [], totals: undefined }]] };
     const back = deserializeChatState(legacy);
     expect(back.get(SID)!.totals.inputTokens).toBe(0);
+  });
+});
+
+// A Claude Code ask that ends without a user decision carries WHY
+// (hook-relay.ts / EventBridge.kt). Only 'hook-closed' — the hook's far end went
+// away while Claude Code's own menu may still be on screen — KEEPS the card.
+describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
+  function withAsk(toolName = 'Bash'): ChatState {
+    return dispatch(initState(), { type: 'PERMISSION_REQUEST', sessionId: SESSION, toolName, input: {}, requestId: 'r1' } as ChatAction);
+  }
+  const expire = (s: ChatState, reason?: 'app-timeout' | 'delivery-failed' | 'hook-closed') =>
+    dispatch(s, { type: 'PERMISSION_EXPIRED', sessionId: SESSION, requestId: 'r1', ...(reason ? { reason } : {}) } as ChatAction);
+  const card = (s: ChatState, id = 'perm-r1') => s.get(SESSION)!.toolCalls.get(id)!;
+
+  it("'hook-closed' keeps the card waiting: awaiting-approval, expired, no requestId, no error", async () => {
+    const { hasPendingInteraction, canRetrySubmit } = await import('../src/renderer/state/pty-input-gate');
+    const s = expire(withAsk(), 'hook-closed');
+    expect(card(s)).toMatchObject({ status: 'awaiting-approval', expired: true });
+    expect(card(s).requestId).toBeUndefined();
+    expect(card(s).error).toBeUndefined();
+    // Still counts as pending: nothing may be typed into Claude Code's live menu.
+    expect(hasPendingInteraction(s.get(SESSION)!)).toBe(true);
+    expect(canRetrySubmit(s.get(SESSION)!)).toBe(false);
+  });
+
+  it("'app-timeout' fails the card and says YouCoded declined it", () => {
+    const t = card(expire(withAsk(), 'app-timeout'));
+    expect(t.status).toBe('failed');
+    expect(t.expired).toBeUndefined();
+    expect(t.error).toMatch(/No answer came in time, so YouCoded declined this request/);
+  });
+
+  it("a reason this build does not know ('unroutable' from an older host) settles the card like no reason", () => {
+    const s = dispatch(withAsk(), { type: 'PERMISSION_EXPIRED', sessionId: SESSION, requestId: 'r1', reason: 'unroutable' } as unknown as ChatAction);
+    expect(card(s)).toMatchObject({ status: 'failed' });
+    expect(card(s).expired).toBeUndefined();
+  });
+
+  it("no reason (native broker, older client) and 'delivery-failed' settle the card, never keep it", () => {
+    for (const reason of [undefined, 'delivery-failed'] as const) {
+      const t = card(expire(withAsk(), reason));
+      expect(t.status).toBe('failed');
+      expect(t.expired).toBeUndefined();
+      expect(t.error).toMatch(/closed before an answer reached it/);
+    }
+  });
+
+  it('the hook dispatcher passes a known reason through and drops an unknown one', () => {
+    const evt = (r: unknown) => ({ type: 'PermissionExpired', sessionId: SESSION, payload: { _requestId: 'r1', _reason: r }, timestamp: 0 } as unknown as HookEvent);
+    expect(hookEventToAction(evt('hook-closed'))).toMatchObject({ type: 'PERMISSION_EXPIRED', reason: 'hook-closed' });
+    expect(hookEventToAction(evt('something-new'))).not.toHaveProperty('reason');
+    expect(hookEventToAction(evt(undefined))).not.toHaveProperty('reason');
+  });
+
+  it('PERMISSION_CARD_RESOLVED quietly completes a kept card, and leaves a live ask alone', () => {
+    const settled = dispatch(expire(withAsk(), 'hook-closed'), { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(settled)).toMatchObject({ status: 'complete' });
+    expect(card(settled).expired).toBeUndefined();
+    expect(card(settled).error).toBeUndefined();
+    const live = dispatch(withAsk(), { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(live).status).toBe('awaiting-approval');
+  });
+
+  it('a kept card the turn then fails keeps its failure — a late settle cannot erase it', () => {
+    let s = expire(withAsk(), 'hook-closed');
+    s = dispatch(s, { type: 'SESSION_PROCESS_EXITED', sessionId: SESSION, exitCode: 1 } as ChatAction);
+    expect(card(s)).toMatchObject({ status: 'failed' });
+    expect(card(s).expired).toBeUndefined();
+    const before = card(s).error;
+    s = dispatch(s, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(s)).toMatchObject({ status: 'failed', error: before });
+  });
+
+  it('PERMISSION_CARD_RESOLVED requires awaiting-approval, not just the flag', () => {
+    const s = withAsk();
+    const toolCalls = new Map(s.get(SESSION)!.toolCalls);
+    toolCalls.set('perm-r1', { ...toolCalls.get('perm-r1')!, status: 'failed', error: 'real failure', expired: true });
+    const stale = new Map(s); stale.set(SESSION, { ...s.get(SESSION)!, toolCalls });
+    const after = dispatch(stale, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(after)).toMatchObject({ status: 'failed', error: 'real failure' });
+  });
+
+  it('a kept placeholder stays kept when the real tool-use replaces it, and can still be settled', () => {
+    let s = expire(withAsk(), 'hook-closed');
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
+    expect([...s.get(SESSION)!.toolCalls.keys()].filter((k) => k.startsWith('perm-'))).toEqual([]);
+    expect(card(s, 'toolu_1')).toMatchObject({ status: 'awaiting-approval', expired: true });
+    s = dispatch(s, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'toolu_1' });
+    expect(card(s, 'toolu_1').status).toBe('complete');
+  });
+
+  it('a re-emitted tool-use does not reset a kept card to running (the send gates must keep holding)', async () => {
+    const { hasPendingInteraction } = await import('../src/renderer/state/pty-input-gate');
+    let s = expire(withAsk(), 'hook-closed');
+    const use = { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction;
+    s = dispatch(dispatch(s, use), use);
+    expect(card(s, 'toolu_1')).toMatchObject({ status: 'awaiting-approval', expired: true });
+    expect(hasPendingInteraction(s.get(SESSION)!)).toBe(true);
+  });
+
+  it("the tool's own result settles a kept card and clears the flag (answered in the terminal)", () => {
+    let s = expire(withAsk(), 'hook-closed');
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
+    const ok = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u2', toolUseId: 'toolu_1', result: 'ok', isError: false } as ChatAction);
+    expect(card(ok, 'toolu_1')).toMatchObject({ status: 'complete' });
+    expect(card(ok, 'toolu_1').expired).toBeUndefined();
+    const bad = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u3', toolUseId: 'toolu_1', result: 'no', isError: true } as ChatAction);
+    expect(card(bad, 'toolu_1').expired).toBeUndefined();
+  });
+
+  it('a kept card survives the remote-client snapshot round trip', () => {
+    const s = expire(withAsk(), 'hook-closed');
+    const back = deserializeChatState(serializeChatState(s));
+    expect(back.get(SESSION)!.toolCalls.get('perm-r1')).toMatchObject({ status: 'awaiting-approval', expired: true });
+  });
+});
+
+// The chat reducer must not copy a session's
+// whole Maps (toolCalls, toolGroups, assistantTurns — none of which ever shrink)
+// before knowing whether anything will change. These pin the copy-on-write
+// contract that replaced it:
+//   • a no-op returns the SAME state object (nothing re-renders), and
+//   • a change that leaves a Map untouched keeps that Map's identity, while
+//   • the change itself still lands, and the PREVIOUS state is never mutated.
+
+const COW = 'cow-session';
+
+function cowInit(): ChatState {
+  return chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: COW });
+}
+
+const cowToolUse = (toolUseId: string, toolName = 'Bash', toolInput: Record<string, unknown> = { command: toolUseId }): ChatAction => ({
+  type: 'TRANSCRIPT_TOOL_USE', sessionId: COW, uuid: `u-${toolUseId}`, toolUseId, toolName, toolInput, timestamp: 1,
+} as ChatAction);
+
+const cowPreparing = (toolCallId: string, chars: number, cleared?: boolean): ChatAction => ({
+  type: 'NATIVE_TOOL_PREPARING', sessionId: COW, toolCallId, toolName: 'Bash', chars, ...(cleared ? { cleared } : {}),
+} as ChatAction);
+
+// Deep snapshot of the parts a copy-on-write bug would corrupt in place.
+function cowSnapshot(state: ChatState) {
+  const s = state.get(COW)!;
+  return JSON.stringify({
+    toolCalls: [...s.toolCalls.entries()],
+    toolGroups: [...s.toolGroups.entries()],
+    assistantTurns: [...s.assistantTurns.entries()],
+    timeline: s.timeline,
+    active: [...s.activeTurnToolIds],
+  });
+}
+
+describe('chat reducer copy-on-write', () => {
+  it('a second tool joining the open group keeps the assistantTurns Map (the turn did not change)', () => {
+    const one = chatReducer(cowInit(), cowToolUse('t1'));
+    const before = cowSnapshot(one);
+    const two = chatReducer(one, cowToolUse('t2'));
+    const a = one.get(COW)!;
+    const b = two.get(COW)!;
+
+    expect(b.assistantTurns).toBe(a.assistantTurns);
+    expect(b.timeline).toBe(a.timeline);
+    // The group DID change: new Map, both ids, same group.
+    expect(b.toolGroups).not.toBe(a.toolGroups);
+    expect(b.currentGroupId).toBe(a.currentGroupId);
+    expect(b.toolGroups.get(b.currentGroupId!)!.toolIds).toEqual(['t1', 't2']);
+    expect(b.toolCalls.get('t2')!.status).toBe('running');
+    // And the earlier state was not written through.
+    expect(cowSnapshot(one)).toBe(before);
+  });
+
+  it('a re-emitted tool-use keeps both the toolGroups and assistantTurns Maps', () => {
+    const one = chatReducer(chatReducer(cowInit(), cowToolUse('t1')), cowToolUse('t2'));
+    const again = chatReducer(one, cowToolUse('t1'));
+    expect(again.get(COW)!.toolGroups).toBe(one.get(COW)!.toolGroups);
+    expect(again.get(COW)!.assistantTurns).toBe(one.get(COW)!.assistantTurns);
+    expect(again.get(COW)!.toolGroups.get(again.get(COW)!.currentGroupId!)!.toolIds).toEqual(['t1', 't2']);
+  });
+
+  it('a tool opening a new group in an EXISTING turn copies assistantTurns without mutating the old one', () => {
+    let s = chatReducer(cowInit(), {
+      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: COW, uuid: 'txt-1', text: 'hi', timestamp: 1,
+    } as ChatAction);
+    const before = cowSnapshot(s);
+    const prev = s;
+    s = chatReducer(s, cowToolUse('t1'));
+    const turnId = s.get(COW)!.currentTurnId!;
+    expect(turnId).toBe(prev.get(COW)!.currentTurnId);
+    expect(s.get(COW)!.assistantTurns).not.toBe(prev.get(COW)!.assistantTurns);
+    expect(s.get(COW)!.assistantTurns.get(turnId)!.segments.map((x) => x.type)).toEqual(['text', 'tool-group']);
+    expect(cowSnapshot(prev)).toBe(before);
+  });
+
+  it('NATIVE_TOOL_PREPARING no-ops return the same state object', () => {
+    const real = chatReducer(cowInit(), cowToolUse('t1'));
+    // Progress tick for a card the real tool-use already superseded.
+    expect(chatReducer(real, cowPreparing('t1', 40))).toBe(real);
+    // Clear of a card that is not preparing, and of an unknown card.
+    expect(chatReducer(real, cowPreparing('t1', 0, true))).toBe(real);
+    expect(chatReducer(real, cowPreparing('nope', 0, true))).toBe(real);
+  });
+
+  it('NATIVE_TOOL_PREPARING still updates and clears a preparing card without touching the old state', () => {
+    const prep = chatReducer(cowInit(), cowPreparing('p1', 5));
+    const before = cowSnapshot(prep);
+    const ticked = chatReducer(prep, cowPreparing('p1', 50));
+    expect(ticked.get(COW)!.toolCalls.get('p1')!.preparingChars).toBe(50);
+    const cleared = chatReducer(ticked, cowPreparing('p1', 0, true));
+    expect(cleared.get(COW)!.toolCalls.has('p1')).toBe(false);
+    expect(cowSnapshot(prep)).toBe(before);
+  });
+
+  it('an orphan tool result keeps the toolCalls Map', () => {
+    const s = chatReducer(cowInit(), cowToolUse('t1'));
+    const out = chatReducer(s, {
+      type: 'TRANSCRIPT_TOOL_RESULT', sessionId: COW, uuid: 'r-x', timestamp: 2, toolUseId: 'never-seen', toolName: 'Bash', result: 'ok', isError: false,
+    } as ChatAction);
+    expect(out.get(COW)!.toolCalls).toBe(s.get(COW)!.toolCalls);
+  });
+
+  it('a PERMISSION_REQUEST heartbeat for an ask already awaiting is a same-object no-op', () => {
+    let s = chatReducer(cowInit(), cowToolUse('t1', 'Read', { file_path: '/a' }));
+    s = chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: COW, toolName: 'Read', input: { file_path: '/a' }, requestId: 'req-1' } as ChatAction);
+    expect(s.get(COW)!.toolCalls.get('t1')!.status).toBe('awaiting-approval');
+    expect(chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: COW, toolName: 'Read', input: { file_path: '/a' }, requestId: 'req-1' } as ChatAction)).toBe(s);
   });
 });

@@ -34,3 +34,13 @@ describe('fullAutoStopCopy', () => {
     });
   });
 });
+
+describe('fullAutoStopCopy for a floor below the rules', () => {
+  it('uses the floor when the deny-list has no family for the command', () => {
+    expect(fullAutoStopCopy('cat .env', 'secret-path').header).toBe('Stopped before using a secret file');
+    expect(fullAutoStopCopy('Remove-Item -Recurse C:\\Windows', 'removal').header).toBe('Stopped before deleting files');
+  });
+  it('a deny-list family still wins, since it names what the command does', () => {
+    expect(fullAutoStopCopy('sudo cat /root/.ssh/id_rsa', 'secret-path').header).toBe('Stopped before an admin command');
+  });
+});

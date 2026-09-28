@@ -1,0 +1,15 @@
+{
+ "screen": "                                        \n────────────────────────────────────────\n  New MCP server found in this          \n  project: demo                         \n                                        \n  MCP servers may execute code or       \n  access system resources. All tool     \n  calls require approval. Learn more    \n  in the MCP documentation.             \n                                        \n    Use this MCP server                 \n    Use this and all future MCP servers \n    in this project                     \n  ❯ Continue without using this MCP     \n    server                              \n                                        \n  Enter to confirm · Esc to cancel      \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n",
+ "expected": {
+  "title": "New MCP Server Found",
+  "options": [
+   "Use this MCP server",
+   "Use this and all future MCP servers in this project",
+   "Continue without using this MCP server"
+  ],
+  "selectedIndex": 2,
+  "signature": "Use this MCP server␞Use this and all future MCP servers in this project␞Continue without using this MCP server",
+  "heading": "New MCP server found in this project: demo",
+  "picks": true
+ }
+}

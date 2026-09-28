@@ -15,13 +15,16 @@ import { TagNoteEditor } from './TagNoteEditor';
 import { PRIORITY_TAG, PRIORITY_HINT } from './built-in-tags';
 import { TagManagerPopup } from './TagManagerPopup';
 import { Tooltip } from '../ui';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
   const [open, setOpen] = useState(false);
+  useScreenOpen('chat/tags', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   // Tag registry editing moved out of TagPicker into its own surface; this is
   // the route to it from the in-session chip. Layer 3 because this popup is
   // itself layer 2.
   const [manageOpen, setManageOpen] = useState(false);
+  useScreenOpen('chat/tags/manage', () => setManageOpen(true)); // photo-only build
   const registry = useTagRegistry();
   const meta = useSessionMeta(sessionId);
   useEscClose(open, () => setOpen(false));
@@ -52,7 +55,9 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
         // the popup never accepts an edit that would be refused. See
         // META_UNSUPPORTED_FALLBACK.
         disabled={!sessionId || !meta.supported}
-        className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim enabled:hover:bg-inset transition-colors max-w-[220px] disabled:opacity-50 disabled:cursor-not-allowed"
+        // `status-chip`: float chrome styles every status chip alike; this one
+        // is nested, so `.status-bar > button` alone never reached it.
+        className="status-chip flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim enabled:hover:bg-inset transition-colors max-w-[220px] disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {hasContent ? (
           <span className="flex items-center gap-1 overflow-hidden">
@@ -80,6 +85,7 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
               className="w-full max-w-[360px] max-h-[80vh] flex flex-col pointer-events-auto"
               style={{ position: 'relative', zIndex: 'auto' }}
             >
+              <ScreenMark name="chat/tags" />
               <div data-tag-note-header className="flex items-center justify-between px-4 py-3">
                 <h2 className="text-base font-medium text-fg">Tags &amp; note</h2>
                 <button onClick={() => setOpen(false)}

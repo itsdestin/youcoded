@@ -7,6 +7,7 @@ import { triggerTip } from '../guide/tips';
 import { SearchFilterPill } from '../ui/SearchFilterPill';
 import { POPOVER_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import type { PortableModelRef } from '../../../shared/types';
 
 // ONE model list, used everywhere a model gets chosen. Replaces four shapes for
@@ -392,6 +393,22 @@ export default function ModelPicker({
   // above), horizontally centred on it, and clamp into the viewport. It must
   // stay tied to its field rather than appearing as a viewport-centred modal.
   const measure = useCallback(() => {
+    // The filter popover is PORTALED too. `.layer-surface` sets
+    // `overflow: hidden` (unlayered, globals.css:886) to clip scroll-fades to
+    // its rounded corners, so a popover rendered inside the panel gets cut off
+    // at the panel edge — which is exactly what happened. Positioning it from
+    // the pill's own rect keeps it under the sliders button without depending
+    // on the panel's clipping.
+    // WHY first, before the trigger check (2026-09-26): the 'inline' layout
+    // draws no trigger, so this used to be skipped there and "Filter and sort"
+    // in the Model & Effort dialog opened nothing (found by `explore`).
+    const pill = pillRef.current?.getBoundingClientRect();
+    if (pill) {
+      setFilterPos({
+        top: pill.bottom + 8,
+        left: Math.max(8, Math.min(pill.right - FILTER_W, window.innerWidth - FILTER_W - 8)),
+      });
+    }
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
@@ -418,19 +435,6 @@ export default function ModelPicker({
       width,
       maxHeight: Math.max(180, (opensUpward ? spaceAbove : spaceBelow) - gap),
     });
-    // The filter popover is PORTALED too. `.layer-surface` sets
-    // `overflow: hidden` (unlayered, globals.css:886) to clip scroll-fades to
-    // its rounded corners, so a popover rendered inside the panel gets cut off
-    // at the panel edge — which is exactly what happened. Positioning it from
-    // the pill's own rect keeps it under the sliders button without depending
-    // on the panel's clipping.
-    const pill = pillRef.current?.getBoundingClientRect();
-    if (pill) {
-      setFilterPos({
-        top: pill.bottom + 8,
-        left: Math.max(8, Math.min(pill.right - FILTER_W, window.innerWidth - FILTER_W - 8)),
-      });
-    }
   }, []);
 
   /**
@@ -467,12 +471,19 @@ export default function ModelPicker({
     return () => { off?.(); };
   }, []);
 
+  // A remote reconnect asks again even with the panel closed. WHY: the first load runs
+  // closed (the pill's model name, a prefill), and a request lost during a phone's drop
+  // left the list empty until the panel was opened (2026-09-11 phone pass sweep).
+  const reconnectReloadRef = useRef(false);
+  useOnRemoteReconnect(() => { reconnectReloadRef.current = true; setReload((n) => n + 1); });
+
   useEffect(() => {
     // The very first fetch happens while the panel is still closed (the pill has
     // to show the model's name, and a prefill has to resolve). After that, only
-    // an open or a finished download is worth re-asking for — closing the panel
-    // is not.
-    if (everLoadedRef.current && !open) return;
+    // an open, a finished download or a remote reconnect is worth re-asking for —
+    // closing the panel is not.
+    if (everLoadedRef.current && !open && !reconnectReloadRef.current) return;
+    reconnectReloadRef.current = false;
     everLoadedRef.current = true;
     let cancelled = false;
     // WHY no per-call `.catch(() => [])` (error inventory 2026-09-10, false message 9):
@@ -526,8 +537,11 @@ export default function ModelPicker({
     }
   }, [open]);
 
-  // Layered ESC: close the filter popover first, then the panel.
-  useEscClose(open, useCallback(() => {
+  // Layered ESC: close the filter popover first, then the panel. In 'inline'
+  // layout the list IS the dialog's content, with no closed state (see the
+  // trigger below), so there Escape only closes the filter and otherwise
+  // reaches the dialog itself.
+  useEscClose(open && (layout !== 'inline' || filterOpen), useCallback(() => {
     if (filterOpen) setFilterOpen(false); else setOpen(false);
   }, [filterOpen]));
 
@@ -545,7 +559,14 @@ export default function ModelPicker({
   }, [open, measure]);
 
   useEffect(() => {
+    // WHY not in 'inline' layout (2026-09-26): there the list is the dialog's
+    // content, so "click outside closes it" collapsed the list on the press
+    // of any other control in the dialog — the dialog shrank, the pressed
+    // button moved out from under the pointer, and that click was lost
+    // (Effort, Fast mode, even Close needed two clicks). Found by `explore`.
+    // Only the filter popover still closes on an outside press there.
     if (!open) return;
+    const inline = layout === 'inline';
     const onDown = (e: Event) => {
       const t = e.target as Node;
       if (triggerRef.current?.contains(t)) return;
@@ -553,7 +574,7 @@ export default function ModelPicker({
       // The filter popover portals OUT of the panel, so panelRef can't see it —
       // without this check a click on a filter chip closed the whole picker.
       if (filterPopRef.current?.contains(t)) return;
-      setOpen(false);
+      if (!inline) setOpen(false);
       setFilterOpen(false);
     };
     document.addEventListener('mousedown', onDown);
@@ -562,7 +583,7 @@ export default function ModelPicker({
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('touchstart', onDown);
     };
-  }, [open]);
+  }, [open, layout]);
 
   const entries: Entry[] = useMemo(() => {
     const out: Entry[] = [];

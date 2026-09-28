@@ -92,6 +92,13 @@ export interface GpuInfo {
    *  this chip and dies at the first token. Null everywhere else — Windows does
    *  not publish it, and no other vendor has the concept. */
   gfxTarget: string | null;
+  /** True when `totalVramBytes` is SHARED system memory the graphics chip may
+   *  use (Apple Silicon, an AMD APU on Linux) rather than a discrete card's own
+   *  memory. WHY it exists (2026-09-23): the fit estimator must never add a
+   *  shared pool to free system RAM — they are the same bytes — and it read
+   *  "any number here" as dedicated, so a 4 GB APU carve-out both became the
+   *  pool and switched the physical-memory cap off. Absent = dedicated. */
+  sharedMemory?: boolean;
 }
 
 export interface HFSearchHit { repo: string; downloads: number; likes: number; }

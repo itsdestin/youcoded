@@ -41,6 +41,7 @@ object MessageRouter {
         skipPermissions: Boolean,
         createdAt: Long = 0L,
         model: String? = null,
+        awaitingStart: Boolean = false,
     ): JSONObject {
         return JSONObject().apply {
             put("id", id)
@@ -55,6 +56,9 @@ object MessageRouter {
             // of falling back to 'sonnet' until the first assistant-text transcript
             // event reconciles it (App.tsx line 520 reads info.model).
             if (model != null) put("model", model)
+            // Desktop parity (SessionInfo.awaitingStart): still on its startup
+            // dialogs — a WebView that reloads must not treat it as running.
+            if (awaitingStart) put("awaitingStart", true)
         }
     }
 

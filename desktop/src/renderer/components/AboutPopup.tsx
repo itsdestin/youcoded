@@ -95,7 +95,7 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
 
   return createPortal(
     <>
-      <Dialog open onClose={onClose} title="About" size="panel">
+      <Dialog screen="settings/about" open onClose={onClose} title="About" size="panel">
           {/* WHY: keep the chosen one-line header without dropping the version;
               it appears first in the scrolling About body on both platforms. */}
           <div className="text-3xs text-fg-muted">{versionLine}</div>

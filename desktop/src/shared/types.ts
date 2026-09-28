@@ -69,6 +69,35 @@ export interface PortableModelRef {
 // Task 11 (cancel/edit queued messages): the 'queued' arm carries the host-
 // minted queueId (NativeSessionHost.send()'s randomUUID()) so the renderer can
 // target this exact entry later with native:queue-remove.
+/** Why a native Bash ask was forced below every stored rule, so no saved grant
+ *  could ever skip it (and the card offers no "Always allow"):
+ *  - 'removal': the command would remove the workspace, home folder, disk root
+ *    or a system folder (harness/tools/rm-target.ts); 'removal-if-empty': only
+ *    if a variable in the path is empty; 'removal-unknown': the folder is a
+ *    command's output or reached by a cd the text cannot follow;
+ *  - 'secret-path': the command reads a secret or credential file — the same
+ *    list the file tools refuse (harness/tools/bash-secret-paths.ts);
+ *    'secret-maybe': it could (a glob, a find with no usable filter).
+ *  The card's wording comes from this, so it never claims more than the check
+ *  knows (review N11). */
+export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe' | 'admin';
+
+/** A running Bash call whose `sudo` is waiting for the computer password
+ *  (admin-password design, 2026-09-25). The card asks for it; the password
+ *  itself never enters this state, a transcript or the model's view. */
+export interface PasswordAsk {
+  requestId: string;
+  /** The exact admin step sudo will run, read from the sudo process itself —
+   *  never the prompt text the command supplied (a command can choose its own
+   *  prompt, e.g. "Enter your Google password"). */
+  command: string;
+  /** Set when the admin step is inside another command (an install script):
+   *  that command's name, so the card can say who is asking. */
+  via?: string;
+  /** Set after a wrong password: how many tries sudo has left. */
+  triesLeft?: number;
+}
+
 export type NativeSendResult =
   | { status: 'sent' }
   | { status: 'queued'; queueId: string }
@@ -77,7 +106,19 @@ export type NativeSendResult =
   // created, 'starting' is one that has not finished starting yet (a big local
   // model can take a minute to load). One code for both is what told Destin a
   // brand-new session was "no longer running" — see NativeSessionHost.startingSends.
-  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' };
+  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' | 'compacting' };
+
+/** U11 — the model picker's native switch (`native:switch-model`). 'needs-summary'
+ *  means nothing changed yet: the chat is too long for the chosen model and the
+ *  renderer asks before summarizing. Every failure leaves the current model. */
+export type NativeSwitchFailure =
+  | 'not-live' | 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed'
+  | 'interrupted' | 'cannot-fit' | 'too-small' | 'error';
+export type NativeSwitchResult =
+  // `summarized`: a summary committed first, so its marker ends the chat's card.
+  | { status: 'switched'; summarized?: true }
+  | { status: 'needs-summary' }
+  | { status: 'failed'; reason: NativeSwitchFailure; detail?: string };
 
 export interface SessionInfo {
   id: string;
@@ -100,6 +141,9 @@ export interface SessionInfo {
   harnessId?: string;
   /** Model alias the session was started with (e.g. 'claude-sonnet-4-6') */
   model?: string;
+  /** The saved conversation this session resumed, when it resumed one. Lets a
+   *  pending handoff tab recognise its own session's creation push exactly. */
+  resumeSessionId?: string;
   /** Native runtime only: which KIND of provider the bound model runs on
    *  ('chatgpt' | 'openrouter' | 'local-engine' | …), as main already resolves
    *  it in conversations/portable-model.ts.
@@ -117,7 +161,24 @@ export interface SessionInfo {
    *  Consumed once by InputBar on first render after session switch; cleared via
    *  a consumed-set ref so it never re-fires on re-renders. */
   initialInput?: string;
+  /** Claude Code session that has NOT yet run its first hook — it is still on
+   *  its startup dialogs (trust, bypass, MCP approval). The HOST knows this; a
+   *  window or phone that connects mid-startup must not assume "already
+   *  running" and open the chat box onto a live dialog (dev-instance finding,
+   *  2026-09-24). Absent = started (older hosts). */
+  awaitingStart?: boolean;
 }
+
+// A refused resume creates no session. Keep it distinct from both startup
+// errors and offline access (which may still produce a real SessionInfo).
+export type SessionCreateResult = (SessionInfo & { reused?: true }) | { status: 'lease-denied'; device?: string };
+
+// WHY: only admitted attempts carry a real session; saved-copy is explicit consent, not confirmation.
+export type HandoffAttemptResult =
+  | { id: string; status: 'waiting' | 'incomplete' | 'cancelled' | 'failed'; cause?: string;
+      holder?: { deviceId: string; device: string } }
+  | { id: string; status: 'admitted'; source: 'confirmed' | 'saved-copy'; session: SessionInfo };
+export type HandoffCreateParams = { name: string; cwd: string; skipPermissions: boolean; resumeSessionId: string; provider: 'claude' | 'native'; model?: string; binding?: { providerId: string; modelId: string }; cols?: number; rows?: number; preset?: string };
 
 export interface HookEvent {
   type: string;
@@ -189,7 +250,26 @@ export type TranscriptEventType =
   // reducer and attribute the child's model to the parent. Bookkeeping only — it
   // never enters the timeline and never enters model history (history-rebuild.ts's
   // default branch drops it).
-  | 'subagent-usage';
+  | 'subagent-usage'
+  // Claude Code only: a background helper/command ended — parsed from its
+  // <task-notification>. The launching card's tool result is only "launched",
+  // so this is the ONLY signal the work is over (2026-09-24). Carries
+  // `data.backgroundTask`, and `data.toolUseId` when Claude Code names the call.
+  | 'background-task';
+
+/** A Claude Code background task's end state, as its <task-notification> says.
+ *  Claude Code writes 'completed' | 'failed' | 'killed' | 'stopped'; 'killed'
+ *  (the user or the model stopped it) is folded into 'stopped' here. */
+type CcBackgroundStatus = 'running' | 'completed' | 'failed' | 'stopped';
+
+/** See ToolCallState.ccBackground. `result` is a helper's final report;
+ *  `summary` is Claude Code's one-line account of how it ended. */
+export interface CcBackgroundRun {
+  taskId: string;
+  status: CcBackgroundStatus;
+  summary?: string;
+  result?: string;
+}
 
 /**
  * Opaque-to-the-renderer handle for "the page before this one". `offset` is the
@@ -211,6 +291,9 @@ export interface TranscriptPageRequest {
    */
   claudeSessionId?: string;
   projectSlug?: string;
+  /** First page only: read to EOF, not the tailer's start — a renderer rebuilt while the
+   *  session ran missed the live stream, so recent messages vanished (2026-09-27). */
+  toEnd?: boolean;
 }
 
 export interface PageCursor {
@@ -262,6 +345,19 @@ export interface TranscriptEvent {
     stopReason?: string;
     /** Edit/MultiEdit tool-result payloads carry structuredPatch hunks. */
     structuredPatch?: StructuredPatchHunk[];
+    /** Claude Code tool-result only: this call started work that keeps going
+     *  in the background (an Agent's `agentId`, or a Bash command's
+     *  `backgroundTaskId`), so the result is a launch receipt, not the outcome.
+     *  The outcome arrives later as a 'background-task' event. */
+    backgroundTaskId?: string;
+    /** Claude Code SendMessage tool-result only: the finished helper it resumed
+     *  (`toolUseResult.resumedAgentId`) — that helper's card works again. */
+    resumedTaskId?: string;
+    /** 'background-task' only: which task(s) ended and how. `taskIds` is a list
+     *  because Claude Code reports several orphaned commands in one notice on
+     *  resume. `result` is a helper's final report; `summary` is Claude Code's
+     *  one-line description ("Agent \"X\" finished", "... (exit code 0)"). */
+    backgroundTask?: { taskIds: string[]; status: Exclude<CcBackgroundStatus, 'running'>; summary?: string; result?: string };
     /** Native user-message events: absolute composer attachment paths, persisted so
      *  resume can re-read the pixels (events carry no binary). #290 follow-up fix 2. */
     attachments?: string[];
@@ -492,6 +588,22 @@ export interface TranscriptEvent {
      * unchanged.
      */
     autoCompaction?: boolean;
+    /** Native compact-summary only: the user-message event opening the kept
+     *  tail's turn (null = unknown). Its PRESENCE tells the renderer this
+     *  compaction kept a tail, so only entries above that message dim. */
+    retainedFromUuid?: string | null;
+    /** Persisted coalesced-part UUID/range witness; no duplicate text or private metadata. */
+    deltaReferences?: Array<{ eventUuid: string; start: number; end: number }>;
+    /** Native compact-summary portable checkpoint; references cite persisted parts. */
+    compactionRecord?: {
+      v: 1;
+      generation: number;
+      sourceRevision: number;
+      /** Hash of the source transcript plus the claimed cut; no copied text. */
+      sourceDigest?: string;
+      resumeFrom: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+      coveredThrough: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+    };
     /** `skill-invoked` only (M3 item 1). `skillId` is the resolved, qualified id
      *  (wecoded-themes-plugin:theme-builder); `body` is the SKILL.md text that
      *  enters model history on rebuild and is deliberately NOT rendered;
@@ -585,10 +697,16 @@ export type SubagentSegment =
       requestId?: string;
       denyListed?: boolean;
       external?: boolean;
+      floorStop?: FloorStop;
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
       resolvedRequestId?: string;
+      /** admin-password design §2.5/§2.6: this nested Bash call's sudo is
+       *  waiting for the computer password — mirrors ToolCallState.passwordAsk
+       *  so a specialist's own sudo nests under its Task card exactly like a
+       *  permission ask does, instead of showing at the top level. */
+      passwordAsk?: PasswordAsk;
     }
   | {
       /** A steer — "send a note" — from the user (card action) or the parent
@@ -752,11 +870,34 @@ export interface ToolCallState {
   /** Native broker only: winning rule came from the destructive deny-list →
    *  the "Always allow" button shows a consequence-gated confirm. Task 13. */
   denyListed?: boolean;
+  /** A Claude Code ask whose hook socket died while Claude Code's own menu may
+   *  still be on screen ('hook-closed' expiry). The card STAYS awaiting-approval
+   *  so the session dot and the send gates keep holding — the bug this fixes was
+   *  the card flipping to 'failed' so the session looked idle while Claude Code
+   *  was still blocked. requestId is cleared (the socket is gone). Settled by
+   *  the tool's transcript result, the prompt detector's menu-gone rule, or
+   *  Dismiss (PERMISSION_CARD_RESOLVED). */
+  expired?: true;
   /** Native broker only: the ask was forced by a path outside the session
    *  folder → the "Always allow" button is HIDDEN. The engine forces an ask on
    *  every external path and never consults the stored rules there, so a
    *  remembered rule could not fire. Spec 2026-08-11, finding 3. */
   external?: boolean;
+  /** Native broker only: the ask was forced by a floor below every stored rule
+   *  → the "Always allow" button is HIDDEN (for the same reason as `external`)
+   *  and Full auto's stop band names which floor. See FloorStop. */
+  floorStop?: FloorStop;
+  /** Native runtime only: this command's sudo is waiting for the computer
+   *  password. Status flip (Destin, 2026-09-26 dogfood: while the password
+   *  card waits, the card looked like it was still running, with nothing
+   *  marking the session as needing input): the card's own `status` flips to
+   *  'awaiting-approval' for as long as this is set (chat-reducer.ts
+   *  PASSWORD_REQUEST/PASSWORD_RESOLVED) — exactly like a permission ask,
+   *  so it can't be mistaken for a running command. A password ask has no
+   *  `requestId` of its own on this field (only nested inside `passwordAsk`
+   *  itself), so a consumer that used to gate on `!!requestId` alone must
+   *  use `needsUserAnswer()` (specialist-cards.ts) instead. */
+  passwordAsk?: PasswordAsk;
   /** Native broker only: the session's permission mode when the ask fired.
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */
@@ -805,6 +946,16 @@ export interface ToolCallState {
   subagentSegments?: SubagentSegment[];
   agentType?: string;
   agentId?: string;
+  /**
+   * Claude Code only: this call started work that outlives it — an Agent
+   * (every CC Agent call runs in the background as of 2026-09) or a Bash
+   * `run_in_background` command. Its tool result is only the launch receipt,
+   * so `status: 'complete'` alone read "done" the instant the helper started.
+   * This record is the work's real state: 'running' from the receipt until the
+   * 'background-task' notice says how it ended. The CC counterpart of
+   * `specialistRun` / `shellRun` below, and drives the card the same way.
+   */
+  ccBackground?: CcBackgroundRun;
   /**
    * Native specialists (1c): the live run record for the hire THIS Task call
    * started, keyed to the card by parentToolCallId. Drives the card's real
@@ -947,6 +1098,10 @@ export interface ShellRunView {
   /** True when the command was moved to the background at its time limit
    *  rather than started there — the card says so. */
   detached?: boolean;
+  /** Something this command started is still running with admin rights (it
+   *  passed the admin password card). The card keeps a "Running as admin"
+   *  strip with Stop in view until it ends (admin-password design, Q-still-running). */
+  admin?: boolean;
   startedAt: number;
   endedAt?: number;
   /** The last lines of output so far (the full log lives at logPath). */
@@ -1444,8 +1599,8 @@ export interface BuddyApi {
   // preload, remote-shim, and renderer callers all agree on one contract.
   /** Fire-and-forget: mascot renderer signals drag release (edge-snap check). */
   dragEnded(): void;
-  /** Restore + focus the main window, switching to the buddy's viewed session. */
-  openMain(): Promise<void>;
+  /** Restore + focus main; a buddy resume is re-resolved through main's admission flow. */
+  openMain(request?: { resume: string }): Promise<void>;
   /** Hide the buddy for this app run only (preference stays enabled). */
   dismiss(): Promise<void>;
   getStatus(): Promise<{ dismissed: boolean; visible: boolean }>;
@@ -1610,6 +1765,15 @@ export interface IntegrationInfo {
 export const IPC = {
   // Renderer -> Main
   SESSION_CREATE: 'session:create',
+  // WHY: pending handoff is not a started session; keep its actions off session:create.
+  HANDOFF_BEGIN: 'handoff:begin',
+  HANDOFF_STATUS: 'handoff:status',
+  HANDOFF_WAIT: 'handoff:wait',
+  HANDOFF_RETRY: 'handoff:retry',
+  HANDOFF_SAVED_COPY: 'handoff:saved-copy',
+  HANDOFF_FORCE: 'handoff:force',
+  HANDOFF_CANCEL: 'handoff:cancel',
+  HANDOFF_CREATE_PARAMS: 'handoff:create-params',
   SESSION_DESTROY: 'session:destroy',
   SESSION_INPUT: 'session:input',
   SESSION_RESIZE: 'session:resize',
@@ -1716,6 +1880,7 @@ export const IPC = {
   SESSION_HISTORY: 'session:history',
   // Mark/unmark a session flag (complete, priority, helpful, …)
   SESSION_SET_FLAG: 'session:set-flag',
+  SESSION_MENU_LOCK: 'session:menu-lock',
   // Broadcast when session metadata changes (carries a flag + value)
   SESSION_META_CHANGED: 'session:meta-changed',
   // Custom session tags (registry CRUD + application) and per-session notes.
@@ -1733,6 +1898,10 @@ export const IPC = {
   SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
   SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
   SESSION_GET_META: 'session:get-meta', // (sessionId) → { tags, note, supported }
+  // Welcome back (design 2026-09-24 §3): the per-install "open at last
+  // shutdown" list. Desktop-only — Android always answers []/{ok:true}.
+  SESSION_REOPEN_LIST: 'session:reopen-list',     // () → string[] (conversation ids)
+  SESSION_FORGET_REOPEN: 'session:forget-reopen', // (ids: string[]) → { ok: true }
   TAGS_LIST: 'tags:list',
   TAGS_CREATE: 'tags:create',           // (label, color)
   TAGS_UPDATE: 'tags:update',           // (id, { label?, color?, archived? })
@@ -1758,6 +1927,13 @@ export const IPC = {
   // Repositions macOS traffic lights so they sit inside the floating chrome's
   // rounded header; null restores OS default. Called from theme-engine.
   WINDOW_SET_TRAFFIC_LIGHT_POS: 'window:set-traffic-light-pos',
+  // Welcome back's in-app quit warning (design §4, plan T3). Electron-only
+  // (window.claude.window) — no remote-shim/Android twin, same as the other
+  // WINDOW_* entries above: a phone or browser tab never owns a desktop
+  // session for this to ask about.
+  WINDOW_CLOSE_REQUEST: 'window:close-request',                       // Main -> Renderer (push): {requestId, sessions}
+  WINDOW_ANSWER_CLOSE: 'window:answer-close',                         // Renderer -> Main: {requestId, close, reopen?}
+  WINDOW_CLOSE_REQUEST_CANCELLED: 'window:close-request-cancelled',   // Main -> Renderer (push): {requestId}
   // Zoom controls
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',
@@ -1986,6 +2162,8 @@ export const IPC = {
   NATIVE_CLEAR: 'native:clear',
   NATIVE_INVOKE_SKILL: 'native:invoke-skill',
   NATIVE_SET_BINDING: 'native:set-binding',
+  // U11: fit-checked switch from the model picker (NativeSwitchResult).
+  NATIVE_SWITCH_MODEL: 'native:switch-model',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   // Read the session's current native permission mode. Seeds the StatusBar chip
   // on create/resume so a fresh Coder session shows AUTO EDIT (not the default ASK).
@@ -2000,6 +2178,9 @@ export const IPC = {
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',   // G-1: the Bash card's Stop button
+  // admin-password design §2.5: the card's Confirm button. Request-response —
+  // the card needs the boolean to know whether to show the ask as ended.
+  NATIVE_SUBMIT_ADMIN_PASSWORD: 'native:submit-admin-password',
   // "What the assistant was given" (2026-09-10): the session-start push carrying
   // the inventory, and the on-demand read of ONE file's text. Two channels
   // because file bodies do not belong in a push — see SessionContext above.

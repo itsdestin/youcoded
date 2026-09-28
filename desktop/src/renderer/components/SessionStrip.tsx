@@ -15,8 +15,9 @@ import { pillSurfaceClass } from './header/control-states';
 import { ProviderIcon } from './ProviderIcon';
 import { nextSlotId, clampFloatLeft, layoutRects, reorderIndices, neighbourOffsets, mapToSettled, DRAG_TUNE, type PillRect } from './header/drag-order';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
+import { useEscClose } from '../hooks/use-esc-close';
 import { useScrollFade } from '../hooks/useScrollFade';
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactDispatch } from '../state/ArtifactContext';
 import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -37,6 +38,7 @@ import type { MenuEntry } from './context-menu/build-menu';
 import { SkipPermissionsCaption } from './SkipPermissionsCaption';
 import { useFirstTimeGate } from './FirstTimeWarning';
 import { isSmallModel } from './first-time-warnings';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // Stable empty map for the non-dragging render, so a new Map is not allocated
 // on every frame the strip re-renders.
@@ -66,11 +68,9 @@ function motionWindowMs(el: Element | null): number {
   return Number.isFinite(reveal) && reveal > 0 ? Math.round(reveal + EXPAND_WINDOW_SLACK_MS) : EXPAND_WINDOW_FALLBACK_MS;
 }
 
-/** A collapsed pill (dot only): px-1.5 (12) + dot (10) + border (2) + the
- *  gap-1 (4) that sits between the dot and its zero-width label. Measured
- *  2026-09-01 at 28px; the packer had budgeted 24 since it was written, so a
- *  row of N dots was under-reserved by 4N px and the active name got squeezed. */
-const COLLAPSED_PILL_PX = 28;
+/** A collapsed pill: pl-1.5 (6) + dot (10) + gap-1.5 (6) + border (2). It was 28 with the
+ *  dot 4px off-centre until 2026-09-27; the gap is now its right padding (pillClass). */
+const COLLAPSED_PILL_PX = 24;
 
 /** The "+N" overflow chip's room: min-w-[18px] + px-1 fits two digits at
  *  ~24px, plus its ml-1 (4). Reserved by the packer only when something
@@ -166,8 +166,8 @@ interface Props {
   myWindowId?: number | null;
 }
 
-/* ── Status dot color maps ───────────────────────────────── */
-
+/* Status dot colors. WHY data-status on the dot: float chrome swaps each colour
+   for one tuned to the wallpaper behind it (styles/float-chrome.css). */
 const DOT_BG: Record<SessionStatusColor, string> = {
   green: 'bg-green-400',
   red: 'bg-red-400',
@@ -196,7 +196,7 @@ function SessionDot({ color, isActive }: { color: SessionStatusColor; isActive: 
   return (
     <span className="relative inline-flex items-center justify-center w-2.5 h-2.5 shrink-0">
       <span
-        className={`relative w-2 h-2 rounded-full ${DOT_BG[color]}`}
+        data-status={color} className={`session-dot relative w-2 h-2 rounded-full ${DOT_BG[color]}`}
         // Perf: steps(8) instead of ease-in-out. This dot breathes whenever the
         // session isn't gray — i.e. for every non-idle session, in the
         // always-visible header — and on a 180Hz panel a smoothly-animating
@@ -362,7 +362,7 @@ export default function SessionStrip({
   // Artifact dispatch — SessionStrip renders only in the main window, inside
   // the ArtifactContext provider, so calling the hook at top level is safe.
   // Used by the FolderSwitcher "Manage projects…" footer to open Project View.
-  const { dispatch: artifactDispatch } = useArtifact();
+  const artifactDispatch = useArtifactDispatch(); // dispatch only: never redraws for artifact state (perf, 2026-09-23)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   // THE DRAG VISUALS ARE STATE, NOT THE isDragging REF (2026-09-03, R10). The
   // twin, the neighbours' step-aside and the hidden in-flow box used to read
@@ -391,6 +391,10 @@ export default function SessionStrip({
   const [menuOpen, setMenuOpen] = useState(false);
   const [shiftNavIdx, setShiftNavIdx] = useState<number>(-1);
   const shiftNavActive = useRef(false);
+  // Photo-only build: `shoot` opens the list, or the Shift-hold switcher (the same list, Shift-navigation armed).
+  useScreenOpen('chat/sessions', () => setMenuOpen(true));
+  useScreenOpen('chat/switcher', () => { shiftNavActive.current = true; const i = sessions.findIndex((s) => s.id === activeSessionId); setShiftNavIdx(i >= 0 ? i : 0); setMenuOpen(true); });
+  useScreenOpen('chat/rename-session', () => setRenameId(activeSessionId));
   const [showNewForm, setShowNewForm] = useState(false);
   const [newCwd, setNewCwd] = useState('');
   const [dangerous, setDangerous] = useState(false);
@@ -800,6 +804,8 @@ export default function SessionStrip({
     setMenuOpen(prev => !prev);
     setShowNewForm(false);
   }, []);
+  // WHY: Escape left the All Sessions menu open — only the arrow closed it (UX tester, 2026-09-26).
+  useEscClose(menuOpen, useCallback(() => { setMenuOpen(false); setShowNewForm(false); }, []));
 
   const handleCreate = useCallback(() => {
     // Native runtime carries a provider/model binding; a missing binding is
@@ -1969,8 +1975,10 @@ export default function SessionStrip({
           const hoverPeek = !isActive && !displayPack.expanded.has(s.id);
           const isDot = !displayPack.expanded.has(s.id);
 
+          // WHY pr-0 (2026-09-27): a dot ends in the 6px gap, a name in its 7px tail —
+          // each matching the left side. px-1.5 left the right visibly wider.
           const pillClass = `
-                  relative flex items-center gap-1 rounded-full px-1.5 py-px
+                  relative flex items-center gap-1.5 rounded-full pl-1.5 pr-0 py-px
                   border select-none touch-none overflow-hidden
                   ${pillSurfaceClass(showName && (isActive || !displayPack.expanded.has(s.id)), dragging)}`;
           const pillBody = (
@@ -2132,7 +2140,7 @@ export default function SessionStrip({
                   }}
                 >
                   <SessionDot color={color} isActive={isActive} />
-                  <span className="session-pill__label text-xs font-medium text-fg-2 px-0.5">{s.name}</span>
+                  <span className="session-pill__label text-xs font-medium text-fg-2"><span className="session-pill__name">{s.name}</span></span>
                 </div>,
                 document.body,
               )}
@@ -2180,10 +2188,10 @@ export default function SessionStrip({
       {menuOpen && createPortal(
         <div
           ref={dropdownRef}
-          // P-8 (2026-08-28): w-72 (288px) was too narrow for a session name and
-          // its project side by side. 24rem retains that two-line row at a more
-          // compact desktop width, while the 88vw ceiling keeps it inside a phone.
-          className="glass-overlay overlay-no-drag fixed flex flex-col w-[min(24rem,88vw)] bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden"
+          // P-8 (2026-08-28): w-72 was too narrow for a name and its project side by
+          // side; 24rem fits both, 88vw keeps it inside a phone. session-menu: class
+          // hook only, for the 'float' chrome style's matching surface (float-chrome.css).
+          className="session-menu glass-overlay overlay-no-drag fixed flex flex-col w-[min(24rem,88vw)] bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden"
           style={(() => {
             const triggerRect = triggerBtnRef.current?.getBoundingClientRect();
             const pillRect = pillBarRef.current?.getBoundingClientRect();
@@ -2216,6 +2224,8 @@ export default function SessionStrip({
             };
           })()}
         >
+          <ScreenMark name="chat/sessions" />
+          {shiftNavActive.current && <ScreenMark name="chat/switcher" />}
           {/* Android only ever has one window, so the "in this window" scoping label is meaningless there */}
           {sessions.length > 0 && !isAndroid() && (
             <>

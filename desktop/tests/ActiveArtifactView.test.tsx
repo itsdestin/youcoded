@@ -7,7 +7,8 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act, fireEvent, cleanup, renderHook, waitFor, within } from '@testing-library/react';
 import { ActiveArtifactView, type ActiveArtifactHandle } from '../src/renderer/components/artifact-views/ActiveArtifactView';
-import { useArtifactContent } from '../src/renderer/components/artifact-views/useArtifactContent';
+import { setConnectionMode } from '../src/renderer/platform';
+import { useArtifactContent, contentPathFor } from '../src/renderer/components/artifact-views/useArtifactContent';
 
 // Pins the D4-unlock safety behavior of ActiveArtifactView (plan step 4):
 // 1. THE §2.2 EMPTY-FILE GUARANTEE — while content is null (fetch transient /
@@ -177,6 +178,38 @@ describe('edit and save guards', () => {
       await act(async () => { ok = await ref.current!.saveEdit(); });
       expect(ok).toBe(false);
       expect(utils.getByText(/changed on disk while you were editing/i)).toBeTruthy();
+    });
+
+    // Typing in the editor used to unsubscribe and resubscribe the on-disk watcher
+    // on every keystroke. It now subscribes once per file — and an external change
+    // that lands after typing still compares against the LATEST draft.
+    it('keeps one change-watcher subscription while typing, and still flags an external change against the latest draft', async () => {
+      let subscribes = 0;
+      const onChanged = (window as any).claude.artifacts.onChanged;
+      (window as any).claude.artifacts.onChanged = (cb: any) => { subscribes++; return onChanged(cb); };
+      const { ref, utils } = mountView();
+      await act(async () => { ref.current!.startEdit(); });
+      await waitFor(() => expect(ref.current!.editing).toBe(true));
+      const before = subscribes;
+      const textarea = utils.container.querySelector('textarea')!;
+      for (const value of ['h', 'he', 'hel', 'hell', 'hello!']) {
+        await act(async () => { fireEvent.change(textarea, { target: { value } }); });
+      }
+      expect(ref.current!.dirty).toBe(true);
+      expect(subscribes).toBe(before);
+
+      // Disk now equals the latest draft: no conflict (a stale closure would compare
+      // against an older draft and raise one).
+      get.mockResolvedValue({ ok: true, content: 'hello!', orphan: false, mtimeMs: 50 });
+      await act(async () => { changedCb!({ projectRoot: '/proj', artifactId: 'a1', kind: 'change' }); });
+      await waitFor(() => expect(get).toHaveBeenLastCalledWith('/proj', 'a1'));
+      await act(async () => {});
+      expect(utils.queryByText(/changed on disk while you were editing/i)).toBeNull();
+
+      // Disk differs from the draft: the conflict banner appears.
+      get.mockResolvedValue({ ok: true, content: 'someone else', orphan: false, mtimeMs: 60 });
+      await act(async () => { changedCb!({ projectRoot: '/proj', artifactId: 'a1', kind: 'change' }); });
+      await waitFor(() => expect(utils.getByText(/changed on disk while you were editing/i)).toBeTruthy());
     });
 
     // WHY: the conflict banner's "View diff" wraps UnifiedDiff in its own scroll
@@ -364,6 +397,70 @@ describe('read lifecycle through useArtifactContent', () => {
       expect(utils.queryByText(LOADING_MSG)).toBeNull();
     });
 
+    it('says a file outside the project folders is refused for exactly that — no location, no promise', async () => {
+      // A file the assistant wrote through `../`: it exists, so "no longer on
+      // disk" would be false. The host sends no location (it reaches remote
+      // browsers too), so the pane names none.
+      const utils = render(<Host artifact={mdArtifact} />);
+      await settle(() => pending[0].resolve({ ok: false, error: 'outside-projects' }));
+      expect(utils.queryByText(MISSING_MSG)).toBeNull();
+      expect(utils.getByText('YouCoded won’t open this file because it’s outside your project folders.')).toBeTruthy();
+      expect(utils.getByText('Retry')).toBeTruthy();
+    });
+
+    it('hands an image recorded through ../ to the viewer at the location the host judged', async () => {
+      // The record still holds `../notes/shot.png`; reading that by path would
+      // resolve against the app's own folder (F3, review 2026-09-23).
+      const readBinary = vi.fn(() => new Promise(() => {}));
+      (window as any).claude.artifacts.readBinary = readBinary;
+      const shot = { id: 'img', kind: 'external', path: 'shot.png', absolutePath: '../notes/shot.png' } as any;
+      function ImgHost() {
+        const r = useArtifactContent('/proj', shot.id, contentPathFor(shot));
+        return <ActiveArtifactView artifact={shot} content={r.content} contentInfo={r.contentInfo} contentState={r.contentState}
+          onRetryRead={r.retryRead} projectRoot="/proj" projectId="p1" projectName="Proj" sessionId="s1" onContentChange={r.setContent} />;
+      }
+      render(<ImgHost />);
+      await settle(() => pending[0].resolve({ ok: true, content: null, orphan: false, binary: true, sizeBytes: 3, resolvedPath: '/home/u/notes/shot.png' }));
+      await waitFor(() => expect(readBinary).toHaveBeenCalledWith('/home/u/notes/shot.png'));
+    });
+
+    it('offers a phone Download of a too-large ../ file at the location the host judged', async () => {
+      // Re-review C5: the Download used the record's relative location.
+      setConnectionMode('remote');
+      try {
+        const download = vi.fn().mockResolvedValue({ ok: true });
+        (window as any).claude.artifacts.download = download;
+        const big = { id: 'big', kind: 'external', path: 'report.pdf', absolutePath: '../notes/report.pdf' } as any;
+        function BigHost() {
+          const r = useArtifactContent('/proj', big.id, contentPathFor(big));
+          return <ActiveArtifactView artifact={big} content={r.content} contentInfo={r.contentInfo} contentState={r.contentState}
+            onRetryRead={r.retryRead} projectRoot="/proj" projectId="p1" projectName="Proj" sessionId="s1" onContentChange={r.setContent} />;
+        }
+        const utils = render(<BigHost />);
+        await settle(() => pending[0].resolve({ ok: false, error: 'too-large', sizeBytes: 24e6, limitBytes: 10e6, resolvedPath: '/home/u/notes/report.pdf' }));
+        await settle(() => { fireEvent.click(utils.getByText('Download')); });
+        expect(download).toHaveBeenCalledWith('/home/u/notes/report.pdf', { projectRoot: '/proj', artifactId: 'big' });
+      } finally { setConnectionMode('local'); }
+    });
+
+    it('says a file in a project outside the home folder is refused by the rule, not as "outside"', async () => {
+      const utils = render(<Host artifact={mdArtifact} />);
+      await settle(() => pending[0].resolve({ ok: false, error: 'not-in-home-project' }));
+      expect(utils.getByText('YouCoded only opens files like this when they’re inside a project folder in your home folder.')).toBeTruthy();
+    });
+
+    it('says the check failed, with the filesystem’s own reason', async () => {
+      const utils = render(<Host artifact={mdArtifact} />);
+      await settle(() => pending[0].resolve({ ok: false, error: 'record-unreadable', code: 'EACCES' }));
+      expect(utils.getByText('YouCoded couldn’t check this file (permission denied).')).toBeTruthy();
+    });
+
+    it('words a protected location plainly', async () => {
+      const utils = render(<Host artifact={mdArtifact} />);
+      await settle(() => pending[0].resolve({ ok: false, error: 'protected-path' }));
+      expect(utils.getByText('YouCoded won’t open this file because it’s in a protected location (like saved passwords, keys or settings folders).')).toBeTruthy();
+    });
+
     it('surfaces a failed read as the real error with Retry — never as "no longer on disk"', async () => {
       const utils = render(<Host artifact={mdArtifact} />);
       await settle(() => pending[0].resolve({ ok: false, error: 'protected-path' }));
@@ -516,6 +613,19 @@ describe('read lifecycle through useArtifactContent', () => {
 
     it('still calls artifacts.get for svg, which is editable', async () => {
       renderHook(() => useArtifactContent('/proj', 'a2', 'logo.svg'));
+      await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+    });
+
+    it('asks the host about an image recorded through ../ instead of reading it by a relative path', async () => {
+      // Unrepaired `../` record: the byte viewer would resolve it against the
+      // app's own folder and say "no longer exists on disk" for a file that is
+      // there. contentPathFor withholds the path so get() gives the real answer.
+      const rec = { kind: 'external', path: 'shot.png', absolutePath: '../elsewhere/shot.png' };
+      expect(contentPathFor(rec)).toBeNull();
+      expect(contentPathFor({ ...rec, absolutePath: '/home/u/elsewhere/shot.png' })).toBe('shot.png');
+      expect(contentPathFor({ ...rec, absolutePath: 'C:\\u\\shot.png' })).toBe('shot.png');
+      expect(contentPathFor({ kind: 'internal', path: 'a/shot.png', absolutePath: null })).toBe('a/shot.png');
+      renderHook(() => useArtifactContent('/proj', 'a4', contentPathFor(rec)));
       await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
     });
 

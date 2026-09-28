@@ -65,3 +65,48 @@ describe('Pages first-run placement', () => {
     expect(manager).toHaveTextContent('Make a page');
   });
 });
+
+describe('a page deleted while it is open', () => {
+  it('falls back to "No page selected" once the list no longer has it', async () => {
+    // Deleted through chat: the host's list drops it, but the view still held
+    // its id and kept the old page in the frame until another was picked.
+    snapshot.current.pages = [{ id: 'personal:other', name: 'Other', description: '', icon: 'sparkles', home: { kind: 'personal' }, updatedAt: new Date().toISOString(), pinned: false }];
+    const dispatch = vi.fn();
+    (window as any).claude = { pages: { get: vi.fn(() => new Promise(() => {})) } };
+    render(
+      <ArtifactProvider value={{ state: { ...state, openPageId: 'personal:gone', pageFocus: true }, dispatch }}>
+        <PageHost settingsOpen={false} onToggleSettings={() => {}} onCreatePage={onCreatePage} />
+      </ArtifactProvider>,
+    );
+    expect(dispatch).toHaveBeenCalledWith({ type: 'PAGE_CLOSED' });
+    delete (window as any).claude;
+  });
+
+  it('leaves an open page alone while the list still has it', () => {
+    snapshot.current.pages = [{ id: 'personal:here', name: 'Here', description: '', icon: 'sparkles', home: { kind: 'personal' }, updatedAt: new Date().toISOString(), pinned: false }];
+    const dispatch = vi.fn();
+    (window as any).claude = { pages: { get: vi.fn(() => new Promise(() => {})) } };
+    render(
+      <ArtifactProvider value={{ state: { ...state, openPageId: 'personal:here' }, dispatch }}>
+        <PageHost settingsOpen={false} onToggleSettings={() => {}} onCreatePage={onCreatePage} />
+      </ArtifactProvider>,
+    );
+    expect(dispatch).not.toHaveBeenCalledWith({ type: 'PAGE_CLOSED' });
+    delete (window as any).claude;
+  });
+
+  it('does not close the page on a list that has not loaded, or failed to', () => {
+    snapshot.current = { pages: [], loaded: false, failed: false };
+    const dispatch = vi.fn();
+    (window as any).claude = { pages: { get: vi.fn(() => new Promise(() => {})) } };
+    render(
+      <ArtifactProvider value={{ state: { ...state, openPageId: 'personal:here' }, dispatch }}>
+        <PageHost settingsOpen={false} onToggleSettings={() => {}} onCreatePage={onCreatePage} />
+      </ArtifactProvider>,
+    );
+    expect(dispatch).not.toHaveBeenCalledWith({ type: 'PAGE_CLOSED' });
+    snapshot.current = { pages: [], loaded: true, failed: false };
+    delete (window as any).claude;
+  });
+});
+

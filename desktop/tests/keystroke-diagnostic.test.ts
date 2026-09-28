@@ -134,22 +134,22 @@ Enter to confirm`;
       expect(inputsFor(2)).toEqual(['1', '2', '3']);
     });
 
-    it('the arrow fallback still submits in a separate write', () => {
-      // Unnumbered menus can only be hand-built — the parser needs a numeric
-      // prefix to see an option line at all. Pinned so the fallback can't quietly
-      // regrow a mixed arrows+CR write.
+    it('an unnumbered menu gets NO fixed keystroke — it is answered by verified navigation', () => {
+      // CC 2.1.281's startup dialogs have no numbers and ignore typed digits.
+      // A fixed "DOWN × n, then Enter" from the cursor seen when the card was
+      // drawn was blind (a moved cursor → the wrong option, which here can mean
+      // trusting a folder), so these buttons carry `pick` and type nothing
+      // until state/ink-menu-driver.ts has checked the screen.
       const buttons = menuToButtons({
         id: 'test',
         title: 'test',
         options: ['first', 'second', 'third'],
         selectedIndex: 1,
       });
-
-      expect(buttons[0].input).toBe(DOWN.repeat(2)); // 1 -> 0, wrapping
-      expect(buttons[1].input).toBe('');
-      expect(buttons[2].input).toBe(DOWN.repeat(1));
-      buttons.forEach((b) => {
-        expect(b.submitInput).toBe('\r');
+      buttons.forEach((b, i) => {
+        expect(b.input).toBe('');
+        expect(b.submitInput).toBeUndefined();
+        expect(b.pick).toEqual({ signature: expect.any(String), index: i });
         expectNoMixedWrite(b.input, b.submitInput);
       });
     });

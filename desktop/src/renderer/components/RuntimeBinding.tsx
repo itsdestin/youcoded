@@ -3,6 +3,7 @@ import { isAndroid, isRemoteMode } from '../platform';
 import { PRESETS } from '../../shared/harness-manifest';
 import { FieldError, SettingRow, Toggle } from './ui';
 import { plainMessage } from '../utils/ipc-error';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 // The two built-in native harness presets (personality profiles, not capability
 // tiers). A native session is stamped with one at create time; it drives the
@@ -193,7 +194,12 @@ export function useNativeBinding({ active, runtime, binding, setBinding }: {
   const [memVerdict, setMemVerdict] = useState<MemVerdict | null>(null);
   const [memDetailOpen, setMemDetailOpen] = useState(false);
 
-  // Load providers + catalog when the native runtime is selected in an open form.
+  // Load providers + catalog when the native runtime is selected in an open form, and
+  // again after a remote reconnect (a read lost during a drop left the form's provider
+  // list empty until it was reopened — 2026-09-11 phone pass sweep). Inert while the
+  // native runtime is switched off for remote clients (isNativeSupported).
+  const [reconnects, setReconnects] = useState(0);
+  useOnRemoteReconnect(() => setReconnects((n) => n + 1));
   useEffect(() => {
     if (!nativeSupported || runtime !== 'native' || !active) return;
     let cancelled = false;
@@ -206,7 +212,7 @@ export function useNativeBinding({ active, runtime, binding, setBinding }: {
       setModelCatalog(Array.isArray(cat) ? (cat as CatalogRow[]) : []);
     });
     return () => { cancelled = true; };
-  }, [nativeSupported, runtime, active]);
+  }, [nativeSupported, runtime, active, reconnects]);
 
   const readyProviders = providersList.filter((p) => p.ready);
   // NOTHING IS SUBSTITUTED (Destin, 2026-09-07 — "nothing should be overridden.

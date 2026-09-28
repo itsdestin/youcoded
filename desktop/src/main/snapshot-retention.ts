@@ -61,14 +61,17 @@ function deleteAllButNewest(group: string[]): string[] {
 
 /**
  * Decide whether to stamp today's daily snapshot marker after a push() cycle.
- * Only stamp when a new snapshot was DUE today AND at least one snapshot backend
- * (Drive/iCloud) completed with ZERO errors. A total-failure cycle (rclone
- * missing, network down) must leave the marker UNWRITTEN so the next hourly
- * snapshot poll retries the same day instead of silently burning it. Pure so it's
+ * The marker is ONE stamp for every destination, so it may close the day only
+ * when the cycle covered every sync-enabled snapshot backend (Drive/iCloud) and
+ * EACH finished with zero errors. WHY every, not any: Drive succeeding used to
+ * stamp the day while iCloud had failed, so iCloud never retried; likewise a
+ * manual Upload now to one destination closed the day for the others. A
+ * failure leaves the marker unwritten and the next hourly poll retries (rclone
+ * --update makes re-copying the finished destinations cheap). Pure so it's
  * unit-tested.
  */
-export function shouldStampDailyMarker(due: boolean, anySnapshotSucceeded: boolean): boolean {
-  return due && anySnapshotSucceeded;
+export function shouldStampDailyMarker(due: boolean, coveredAll: boolean, snapshotOutcomes: boolean[]): boolean {
+  return due && coveredAll && snapshotOutcomes.length > 0 && snapshotOutcomes.every(Boolean);
 }
 
 export function snapshotsToDelete(folderNames: string[], today: Date): string[] {
@@ -103,5 +106,8 @@ export function snapshotsToDelete(folderNames: string[], today: Date): string[] 
 
   for (const group of weekBuckets.values()) toDelete.push(...deleteAllButNewest(group));
   for (const group of monthBuckets.values()) toDelete.push(...deleteAllButNewest(group));
-  return toDelete;
+  // WHY: the newest snapshot is the last known-good copy — kept past any age,
+  // so months of failed backups can never leave zero.
+  const newest = folderNames.filter((n) => parseSnapshotName(n)).reduce((a, b) => (a > b ? a : b), '');
+  return toDelete.filter((n) => n !== newest);
 }

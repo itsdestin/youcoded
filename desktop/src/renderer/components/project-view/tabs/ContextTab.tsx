@@ -73,6 +73,7 @@ function FileGlyph({ scope, size = 17 }: { scope: ContextScope; size?: number })
 
 // Info-circle glyph (an "i", not a status glyph) — shared module.
 import { InfoIcon } from '../icons';
+import { useScreenOpen } from '../../../shoot-mode';
 
 // Outer clips, inner scrolls with FilesTab's exact `p-2 -m-2` offset. This tab
 // used to scroll the PADDED element itself, which put its scrollbar hard against
@@ -89,6 +90,9 @@ function ContextTabShell({ children }: { children: React.ReactNode }) {
 }
 
 export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) {
+  // Photo-only build: `shoot` opens the first context file's editor, or the explainer.
+  useScreenOpen('projects/context/editor', () => { const f = groups?.flatMap((g) => g.files)[0]; if (f) onEditFile(f); });
+  useScreenOpen('projects/context/how', () => onOpenInfo('project'));
   if (groups === null) {
     return (
       <ContextTabShell>

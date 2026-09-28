@@ -13,7 +13,7 @@
 // than filtered, so a person sees both at once and the project name on each
 // card says which folder owns it (scope §1: explicit source bindings).
 import React, { useEffect, useState } from 'react';
-import { useArtifact } from '../../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, CloseButton, LoadingState, ErrorState, Tooltip } from '../ui';
 import type { PageSummary } from '../../../shared/pages-types';
@@ -21,6 +21,7 @@ import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PageConnectionsDialog } from './page-connections';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface PagesViewProps {
   /** Starts the creator: a new conversation that builds a page. Owned by
@@ -32,13 +33,17 @@ interface PagesViewProps {
 }
 
 export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
-  const { state, dispatch } = useArtifact();
-  const open = state.pagesViewOpen;
+  // Narrow selector (perf, 2026-09-23): redraws only when the library opens or closes.
+  const dispatch = useArtifactDispatch();
+  const open = useArtifactSelector((s) => s.pagesViewOpen);
   useEscClose(open, () => dispatch({ type: 'PAGES_VIEW_CLOSED' }));
   const { pages, loaded, failed } = usePages();
   // Fresh list on every open (see refreshPages).
   useEffect(() => { if (open) void refreshPages(); }, [open]);
   const [connectionsFor, setConnectionsFor] = useState<string | null>(null);
+  // Photo-only build: `shoot` opens a page's connections, or its editor (fixture pages).
+  useScreenOpen('pages/library/connections', () => setConnectionsFor('page-headlines'));
+  useScreenOpen('pages/library/edit', () => { const p = pages.find((x) => x.id === 'page-week-planner') ?? pages[0]; if (p) onEditPage(p); });
   if (!open) return null;
 
   const close = () => dispatch({ type: 'PAGES_VIEW_CLOSED' });
@@ -58,6 +63,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   return (
     // z-50: above the page view (z-40) it opens from.
     <div className="fixed inset-0 bg-canvas z-50 flex flex-col">
+      {loaded && <ScreenMark name="pages/library" />}
       <header className="flex items-center gap-3 px-4 py-2.5 border-b border-edge shrink-0">
         <h2 className="text-base font-semibold text-fg shrink-0 flex items-center gap-2">
           <PagesIcon className="w-4 h-4 text-fg-muted" />

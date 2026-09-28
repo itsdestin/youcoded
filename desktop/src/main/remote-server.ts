@@ -24,6 +24,7 @@ import type { PageFetchRequest } from '../shared/pages-types';
 // and ipc-handlers.ts use.
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
+import { readDefaults, writeDefaults, getFavorites, setFavorites, getIncognito, setIncognito } from './prefs-service';
 import { staticAssetPolicy } from './remote-static-policy';
 import fs from 'fs';
 import path from 'path';
@@ -32,12 +33,14 @@ import { randomUUID } from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isAllowedWsOrigin } from './remote-origin';
 import type { SessionManager } from './session-manager';
+import { handleRemoteHandoff, type createHandoffTransport } from './conversations/handoff-transport';
 // Value import (not type-only): the "Run in terminal" case below runs the SAME
 // validation the desktop handler runs — a remote client's payload is the least
 // trusted input either of them sees.
 import { prepareRunInTerminal, shellDisplayName } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
+import type { RequesterTakeoverType } from './conversations/takeover';
 import { RemoteConfig as RemoteConfigStatics } from './remote-config';
 import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
@@ -84,6 +87,7 @@ import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import { getField, setField } from './claude-settings';
 import { resolveStaticFile } from './remote-static-path';
+import { menuAnswerLock } from './menu-answer-lock';
 
 // 4M UTF-16 units per session — enough for full conversation replay. Named for what it
 // counts (batch 2): JavaScript string length, not bytes.
@@ -351,7 +355,7 @@ export class RemoteServer {
   // way the desktop handlers do (free/error) so a remote resume never hard-blocks.
   private leaseWiring: {
     client: import('./conversations/lease-client').LeaseClient;
-    requester: import('./conversations/takeover').RequesterTakeoverType;
+    requester: RequesterTakeoverType;
     deviceId: string;  // per-INSTALL — leases only
     machineId: string; // per-MACHINE — device-registry self-marking only
   } | null = null;
@@ -379,6 +383,14 @@ export class RemoteServer {
        *  home folder instead of the private place the desktop gives it. main.ts wires it;
        *  tests that pass nothing get the payload untouched. */
       prepareCreate?: <T extends { cwd?: string }>(payload: T) => T;
+      /** Welcome back (design 2026-09-24 §2): a phone/remote browser's own X on a
+       *  session must untrack it too — the desktop's SESSION_DESTROY IPC handler
+       *  does this for the Electron path, but this WS host answers session:destroy
+       *  for remote clients independently and never reaches that handler. Wired
+       *  from main.ts to the (later-constructed) welcome-back-store, the same lazy
+       *  closure-over-a-module-var pattern as `prepareCreate` above. Absent in
+       *  tests that don't care — every call site is optional-chained. */
+      untrackWelcomeBack?: (desktopId: string) => void;
     },
   ) {
     this.devices = new RemoteDeviceStore();
@@ -391,11 +403,22 @@ export class RemoteServer {
     this.prepareCreate = opts?.prepareCreate ?? ((p) => p);
     this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
     this.serveBuiltPage = opts?.serveBuiltPage ?? true;
+    this.untrackWelcomeBack = opts?.untrackWelcomeBack;
   }
   private serveBuiltPage: boolean;
   private listCommands: (() => Promise<unknown[]>) | null;
   private prepareCreate: <T extends { cwd?: string }>(payload: T) => T;
   private listThemes: () => string[];
+  private untrackWelcomeBack?: (desktopId: string) => void;
+  private sessionCreate?: (opts: Parameters<SessionManager['createSession']>[0]) => Promise<import('../shared/types').SessionCreateResult>;
+  private handoffRoute?: ReturnType<typeof createHandoffTransport>;
+  /** WHY: remote requests share the exact Electron backend; no connection may supply another owner's identity. */
+  setHandoffRoute(route: ReturnType<typeof createHandoffTransport>): void { this.handoffRoute = route; }
+
+  /** WHY: a phone must go through the same admission and native startup as IPC. */
+  setSessionCreate(create: (opts: Parameters<SessionManager['createSession']>[0]) => Promise<import('../shared/types').SessionCreateResult>): void {
+    this.sessionCreate = create;
+  }
 
   /** One line per connection event in the host's log. WHY (2026-09-11 phone pass): an empty
    *  project list and a flashing password screen could not be traced, because the host recorded
@@ -467,7 +490,7 @@ export class RemoteServer {
    *  deviceId is the per-INSTALL lease id and must NOT be used for that. */
   setLeaseWiring(w: {
     client: import('./conversations/lease-client').LeaseClient;
-    requester: import('./conversations/takeover').RequesterTakeoverType;
+    requester: RequesterTakeoverType;
     deviceId: string;
     machineId: string;
   }): void {
@@ -759,6 +782,8 @@ export class RemoteServer {
     this.sessionManager.off('session-created', this.onSessionCreated);
 
     for (const client of this.clients) {
+      // WHY: stop clears clients before close events run; invalidate pending starts now.
+      this.handoffRoute?.cancelOwner(`remote:${client.id}`);
       client.ws.close(1001, 'Server shutting down');
     }
     this.clients.clear();
@@ -842,6 +867,8 @@ export class RemoteServer {
    *  can stand down when the last one leaves (simplification audit W14). */
   private removeClient(client: AuthenticatedClient): void {
     if (!this.clients.delete(client)) return;
+    // WHY: close/error/liveness drops must invalidate in-flight starts for this connection only.
+    this.handoffRoute?.cancelOwner(`remote:${client.id}`);
     if (this.clients.size === 0 && this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
     this.emitStatus(); // clientCount changed — see RemoteStatus.clientCount
   }
@@ -1003,9 +1030,11 @@ export class RemoteServer {
    *  so a reconnecting phone was replayed the dead ask as open. Purge it from the buffer
    *  (the same purge a resolution does) and tell connected clients it expired — for the
    *  relay, "socket closed before a response was sent" is literally what happened. */
-  private onPermissionExpired = (sessionId: string, requestId: string) => {
+  private onPermissionExpired = (sessionId: string, requestId: string, reason?: string) => {
     this.bufferHookEvent({ type: 'PermissionResolved', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent);
-    const expired = { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent;
+    // _reason travels to phones too, so a 'hook-closed' ask stays answerable
+    // there exactly as it does on the computer (hook-relay.ts).
+    const expired = { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId, _reason: reason }, timestamp: Date.now() } as HookEvent;
     // Buffered too, so a phone that was away hears "expired" on reconnect instead of a
     // replay-complete that would clear the card as answered (T2 re-review, 7).
     this.bufferHookEvent(expired);
@@ -1045,7 +1074,7 @@ export class RemoteServer {
     // switch defaults to null on this unknown type, so even if a live client
     // saw it broadcast, it is a harmless no-op — nothing here required a
     // renderer change.
-    if (event.type === 'PermissionResolved') {
+    if (event.type === 'PermissionResolved' || event.type === 'PasswordResolved') {
       const requestId = (event.payload as Record<string, unknown> | undefined)?._requestId;
       const buf = this.hookBuffers.get(sessionId);
       if (buf && typeof requestId === 'string') {
@@ -1054,6 +1083,14 @@ export class RemoteServer {
       }
       return;
     }
+    // admin-password design §2.5: a PasswordRequest is never buffered at all
+    // — not even transiently. Unlike a PermissionRequest (which the buffer
+    // exists to replay to a reconnecting phone), a password ask's own
+    // re-announce heartbeat (permission-broker.ts, every 3s) plus this same
+    // live broadcast already cover a reconnect within a few seconds, and this
+    // rolling log must not hold a password ask's command line/tries any
+    // longer than the ask is actually live.
+    if (event.type === 'PasswordRequest') return;
     const buf = this.hookBuffers.get(sessionId) || [];
     buf.push(event);
     // Perf: drop the overflow IN PLACE. This was `buf = buf.slice(...)`, which
@@ -1749,6 +1786,13 @@ export class RemoteServer {
         // and gets no answer, as a push never does.
         break;
       // --- Request/response ---
+      case 'handoff:begin': case 'handoff:status': case 'handoff:wait':
+      case 'handoff:retry': case 'handoff:saved-copy': case 'handoff:force': case 'handoff:cancel':
+      case 'handoff:create-params': {
+        await handleRemoteHandoff(this.handoffRoute, `remote:${client.id}`, type, payload,
+          () => this.clients.has(client), result => this.respond(client.ws, type, id, result));
+        break;
+      }
       case 'session:create': {
         // This payload is passed to createSession unfiltered, so without this
         // guard a remote browser could ask for `{provider:'shell', cwd:'/'}`.
@@ -1767,9 +1811,14 @@ export class RemoteServer {
           this.respond(client.ws, type, id, { ok: false, error: 'A terminal session can only be opened from the app itself.' });
           break;
         }
-        const info = this.sessionManager.createSession(this.prepareCreate(payload));
-        this.respond(client.ws, type, id, info);
-        // session:created broadcast is handled by the onSessionCreated event listener
+        // WHY: every remote opening must pass admission, and every startup
+        // failure must answer the request (not become an unhandled rejection).
+        try {
+          if (!this.sessionCreate) throw new Error('Session opening is not ready. Try again.');
+          this.respond(client.ws, type, id, await this.sessionCreate(this.prepareCreate(payload)));
+        } catch (error) {
+          this.respond(client.ws, type, id, { ok: false, error: error instanceof Error ? error.message : 'Could not open this conversation.' });
+        }
         break;
       }
       case 'session:destroy': {
@@ -1781,9 +1830,28 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         if (result) {
           this.broadcast({ type: 'session:destroyed', payload: { sessionId: payload.sessionId || payload, focus: { sessionId: this.getFocusSessionId() } } });
+          // Welcome back (design §2): this IS a phone/remote browser's own X —
+          // the same "explicit destroy" case Electron's SESSION_DESTROY handler
+          // untracks for. Without this, a session closed from a phone was wrongly
+          // offered back on the desktop's next launch.
+          this.untrackWelcomeBack?.(payload.sessionId || payload);
         }
         break;
       }
+      // Welcome back (design 2026-09-24 §3, S-phone): the per-install "open at
+      // last shutdown" screen is desktop-only — a phone or remote browser
+      // never shows it — so this host always answers as if nothing is
+      // offered, with no dependency on the desktop-only welcome-back-store.
+      case 'session:reopen-list': {
+        this.respond(client.ws, type, id, []);
+        break;
+      }
+      case 'session:forget-reopen': {
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      // The SAME lock the desktop window uses (menu-answer-lock.ts, review F4).
+      case 'session:menu-lock': this.respond(client.ws, type, id, menuAnswerLock.handle(payload.sessionId, payload.holder, payload.action)); break;
       case 'session:list': {
         const sessions = this.sessionManager.listSessions();
         this.respond(client.ws, type, id, sessions);
@@ -1822,6 +1890,19 @@ export class RemoteServer {
       case 'native:set-binding': {
         const ok = this.nativeRuntime ? await this.nativeRuntime.nativeHost.setBinding(payload.sessionId, payload.binding) : false;
         this.respond(client.ws, type, id, ok);
+        break;
+      }
+      // U11 — same fit-checked switch as the desktop picker, so a phone can't
+      // move an overfull chat onto a model it does not fit.
+      case 'native:switch-model': {
+        try {
+          const result = this.nativeRuntime
+            ? await this.nativeRuntime.nativeHost.switchModel(payload.sessionId, payload.binding, payload.summarize === true)
+            : { status: 'failed', reason: 'not-live' };
+          this.respond(client.ws, type, id, result);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { status: 'failed', reason: 'error', detail: err?.message ?? String(err) });
+        }
         break;
       }
       case 'native:set-permission-mode': {
@@ -1881,10 +1962,29 @@ export class RemoteServer {
         }
         break;
       }
+      case 'native:compact': {
+        // WHY: /compact with optional focus is shared by the desktop and remote
+        // renderer; answer from the same live host rather than silently rejecting
+        // the phone's request after it has already shown a compaction spinner.
+        try {
+          const result = this.nativeRuntime
+            ? await this.nativeRuntime.nativeHost.compact(payload.sessionId, payload.focus)
+            : { ok: false, reason: 'not-live' };
+          this.respond(client.ws, type, id, result);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, reason: 'error', detail: err?.message ?? String(err) });
+        }
+        break;
+      }
+      // WHY attachments are passed: the shim sends them (host paths the phone's picker
+      // already uploaded here), and dropping them meant a phone's attached files never
+      // reached the assistant — only the text did. Same argument the desktop handler
+      // passes; anything that is not a string is ignored rather than handed to the host.
+      // M1: mirrors the desktop invoke — never throw (transport-parity rule).
       case 'native:send': {
-        // M1: mirrors the desktop invoke — never throw (transport-parity rule).
         const notLive = { status: 'failed', reason: 'not-live' } satisfies NativeSendResult;
-        const result = this.nativeRuntime ? this.nativeRuntime.nativeHost.send(payload.sessionId, payload.text) : notLive;
+        const files = (Array.isArray(payload?.attachments) ? payload.attachments : []).filter((a: unknown) => typeof a === 'string');
+        const result = this.nativeRuntime ? this.nativeRuntime.nativeHost.send(payload.sessionId, payload.text, files) : notLive;
         this.respond(client.ws, type, id, result);
         break;
       }
@@ -1904,6 +2004,31 @@ export class RemoteServer {
         const result = this.nativeRuntime
           ? await this.nativeRuntime.nativeHost.killShell(payload.sessionId, payload.shellId)
           : { ok: false, reason: 'not-live' };
+        this.respond(client.ws, type, id, result);
+        break;
+      }
+      case 'native:submit-admin-password': {
+        // admin-password design §2.5, contract R6: a paired phone or browser
+        // may answer the password card too — same "not gated on
+        // native.supported" posture as native:kill-shell above.
+        //
+        // WHY no logging anywhere near this case, and why `payload.password`
+        // is never assigned to a local outside this one expression:
+        // `password` is the one secret this whole feature exists to keep out
+        // of every log, transcript and store (design R13) — this case reads
+        // it once, passes it straight to submitAdminPassword(), and nothing
+        // here retains a reference to it afterward.
+        // T4-2 (review): an authenticated-but-buggy or malicious remote peer
+        // controls this payload — a non-string `password` would otherwise
+        // throw synchronously inside submit()'s `Buffer.from`, an
+        // unnecessary throw path reachable over the WS hop specifically
+        // (nothing awaits this handler's promise, so it would only surface
+        // via the process-wide unhandledRejection log). Refused here
+        // instead, matching submit()'s own "unknown/expired requestId
+        // returns false" contract.
+        const result = this.nativeRuntime && typeof payload.password === 'string' && payload.password.length > 0
+          ? this.nativeRuntime.nativeHost.submitAdminPassword(payload.requestId, payload.password)
+          : false;
         this.respond(client.ws, type, id, result);
         break;
       }
@@ -2759,7 +2884,10 @@ export class RemoteServer {
         // native id", so CC's transcript file is the source.
         // Async form (2026-09-16 C2 review): the desktop's page handler was
         // converted; the phone's scroll-up read the whole transcript sync too.
-        const nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null;
+        let nativePage: Awaited<ReturnType<NativeSessionHost['getHistoryPageAsync']>> = null;
+        // An existing-but-unreadable native transcript throws: `unresolved` (retry), as ipc-handlers' page.
+        try { nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null; }
+        catch { this.respond(client.ws, type, id, { ...emptyPage, unresolved: true }); break; }
         if (nativePage) {
           this.respond(client.ws, type, id, {
             events: nativePage.events,
@@ -3069,29 +3197,15 @@ export class RemoteServer {
         }
         break;
       }
+      // Session defaults: the SAME functions the desktop handlers call (prefs-service.ts —
+      // WHY there: the copies that lived here had drifted, and a permission setting saved
+      // from a phone was not enforced until the desktop re-read the file).
       case 'defaults:get': {
-        const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
-        const DEFAULTS_INITIAL = { skipPermissions: false, model: 'sonnet', projectFolder: '' };
-        try {
-          const raw = await fs.promises.readFile(defaultsPrefPath, 'utf8');
-          this.respond(client.ws, type, id, { ...DEFAULTS_INITIAL, ...JSON.parse(raw) });
-        } catch {
-          this.respond(client.ws, type, id, { ...DEFAULTS_INITIAL });
-        }
+        this.respond(client.ws, type, id, readDefaults());
         break;
       }
       case 'defaults:set': {
-        const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
-        const DEFAULTS_INITIAL = { skipPermissions: false, model: 'sonnet', projectFolder: '' };
-        try {
-          let current = { ...DEFAULTS_INITIAL };
-          try { current = { ...current, ...JSON.parse(await fs.promises.readFile(defaultsPrefPath, 'utf8')) }; } catch {}
-          const merged = { ...current, ...payload };
-          await fs.promises.writeFile(defaultsPrefPath, JSON.stringify(merged, null, 2));
-          this.respond(client.ws, type, id, merged);
-        } catch {
-          this.respond(client.ws, type, id, null);
-        }
+        this.respond(client.ws, type, id, writeDefaults(payload && typeof payload === 'object' ? payload : {}));
         break;
       }
       case 'get-home-path': {
@@ -3173,42 +3287,22 @@ export class RemoteServer {
         catch { this.respond(client.ws, type, id, false); }
         break;
       }
+      // Game favorites + incognito: the same functions main.ts's handlers call
+      // (prefs-service.ts). favorites:get used to answer the whole file here but a list there.
       case 'favorites:get': {
-        const favPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        try {
-          const data = await fs.promises.readFile(favPath, 'utf8');
-          this.respond(client.ws, type, id, JSON.parse(data));
-        } catch {
-          this.respond(client.ws, type, id, { favorites: [] });
-        }
+        this.respond(client.ws, type, id, getFavorites());
         break;
       }
       case 'favorites:set': {
-        const favPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        let existing: Record<string, any> = {};
-        try { existing = JSON.parse(await fs.promises.readFile(favPath, 'utf8')); } catch {}
-        existing.favorites = payload.favorites ?? payload;
-        await fs.promises.writeFile(favPath, JSON.stringify(existing, null, 2));
-        this.respond(client.ws, type, id, { ok: true });
+        this.respond(client.ws, type, id, setFavorites(payload?.favorites ?? payload));
         break;
       }
       case 'game:getIncognito': {
-        const gPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        try {
-          const data = JSON.parse(await fs.promises.readFile(gPath, 'utf8'));
-          this.respond(client.ws, type, id, data.incognito ?? false);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
+        this.respond(client.ws, type, id, getIncognito());
         break;
       }
       case 'game:setIncognito': {
-        const gPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        let existing: Record<string, any> = {};
-        try { existing = JSON.parse(await fs.promises.readFile(gPath, 'utf8')); } catch {}
-        existing.incognito = payload;
-        await fs.promises.writeFile(gPath, JSON.stringify(existing, null, 2));
-        this.respond(client.ws, type, id, { ok: true });
+        this.respond(client.ws, type, id, setIncognito(payload));
         break;
       }
       case 'transcript:read-meta': {
@@ -3930,7 +4024,10 @@ export class RemoteServer {
   private readonly fileReads: Record<string, (payload: any) => Promise<unknown>> = {
     'artifacts:list-session': async (p) => {
       if (typeof p.sessionId !== 'string') return { ok: false, error: 'bad-request' };
-      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot);
+      // Same conversation-id match as the desktop's LIST_SESSION (resolve = the id map).
+      const resolved = this.sessionMetaWiring?.resolve?.(p.sessionId);
+      const conversationId = resolved !== p.sessionId ? resolved : undefined;
+      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot, conversationId);
     },
     'artifacts:list-project': async (p) =>
       (await this.refuseUnknownProject(p.projectId, { records: true })) ?? listProjectFiles(p.projectId, p.opts),

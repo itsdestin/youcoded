@@ -115,6 +115,19 @@ asarUnpack:
   - node_modules/pdfjs-dist/standard_fonts/**
   - node_modules/pdfjs-dist/cmaps/**
   - scripts/**/*
+  # WHY: askpass.cjs (scripts/askpass/, unpacked by the entry above) calls
+  # koffi (prctl/ptrace, admin-password design §2.1, review 2 E1) via a
+  # plain ancestor-walk require reaching two directories up from itself.
+  # Without this, koffi stays packed inside app.asar, which is a SIBLING of
+  # app.asar.unpacked, not an ancestor Node's module resolution ever
+  # reaches from unpacked code — proven empirically with this repo's own
+  # @electron/asar + electron binary (design review 3, F1): the exact same
+  # require that works when the requiring file is itself inside app.asar
+  # (window-exclude-capture.ts's existing koffi use) fails with "Cannot
+  # find module 'koffi'" for a file living in app.asar.unpacked. This entry
+  # makes app.asar.unpacked/node_modules/koffi a real sibling directory of
+  # app.asar.unpacked/scripts/askpass/, which the plain require then finds.
+  - node_modules/koffi/**
   - hook-scripts/**/*
   # The KWin script the Linux buddy installs into the user's own
   # ~/.local/share/kwin/scripts/. `assets/**` is packaged INSIDE app.asar, and

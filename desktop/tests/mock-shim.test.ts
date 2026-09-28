@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Workbook } from 'exceljs';
 import { createStore } from '../src/renderer/dev/workbench/mock-store';
 import { createMockShim, setLatency, getLatency } from '../src/renderer/dev/workbench/mock-shim';
+import { CS_RESUMABLE } from '../src/renderer/dev/workbench/fixtures/chatsearch';
 import { validateTheme } from '../src/renderer/themes/theme-validator';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatState } from '../src/renderer/state/chat-types';
@@ -357,10 +358,12 @@ describe('proxy semantics', () => {
     it('nested namespaces resolve to any depth, including under a real impl', async () => {
       const c = shim();
       // `theme.marketplace.list` and `skills.getFeatured` have fixtures since
-      // 2026-08-25; `detail`/`getShareLink` are the still-unimplemented siblings.
+      // 2026-08-25; `theme.marketplace.detail` is still an unimplemented sibling.
       await expect(c.theme.marketplace.detail()).resolves.toEqual([]);
-      await expect(c.skills.getShareLink()).resolves.toEqual([]);
       await expect(c.a.b.c.d()).resolves.toEqual([]);
+      // `skills.getShareLink` got a real impl (ShareSheet's mount-time call,
+      // 2026-09-26) — it now returns a real string, not the catch-all's `[]`.
+      await expect(c.skills.getShareLink('civic-report')).resolves.toBe('https://youcoded.app/skill/civic-report');
       // And the fixture-backed nested member returns real rows, not the catch-all.
       await expect(c.theme.marketplace.list()).resolves.toContainEqual(expect.objectContaining({ slug: 'meadow-mist' }));
       // And the hand-written members of that same namespace still work.
@@ -540,6 +543,21 @@ describe('proxy semantics', () => {
       expect(transcript.at(-1)).toMatchObject({ type: 'turn-complete' });
       vi.useRealTimers();
     });
+    // A Claude Code session's typed message is recorded in the transcript first, as Claude
+    // Code does. Without it the sent bubble stayed "pending" — the timeline's tail — and every
+    // reply drew ABOVE the message it answered (seen in the practice app, 2026-09-26).
+    it('session.sendInput records the typed message before the reply', async () => {
+      vi.useFakeTimers();
+      try {
+        const c = createMockShim(createStore('default')) as any;
+        const transcript: any[] = [];
+        c.on.transcriptEvent((e: any) => transcript.push(e));
+        c.session.sendInput('s1', 'hello there');
+        await vi.advanceTimersByTimeAsync(15000);
+        expect(transcript[0]).toMatchObject({ type: 'user-message', data: { text: 'hello there' } });
+        expect(transcript.slice(1).some((e) => e.type === 'assistant-text')).toBe(true);
+      } finally { vi.useRealTimers(); }
+    });
   });
 
   describe('site mode additions', () => {
@@ -715,8 +733,26 @@ describe('promo fakes', () => {
     it('?lease=held:Pixel%209 reports another device and lets the takeover succeed', async () => {
       const c = await shim('?scenario=site&lease=held%3APixel%209');
       expect(await c.syncSpaces.leaseQuery('wb-past-1')).toEqual({ held: true, device: 'Pixel 9', self: false, source: 'workbench' });
-      expect(await c.syncSpaces.leaseTakeover('wb-past-1')).toEqual({ outcome: 'acquired' });
+      expect(await c.syncSpaces.leaseTakeover('wb-past-1')).toEqual({ outcome: 'ready' });
       expect(await c.syncSpaces.leaseForce('wb-past-1')).toEqual({ ok: true });
+    });
+  });
+
+  describe('admission race fake', () => {
+    it('a raced claim denies session creation without adding a session', async () => {
+      const c = await shim('?lease=raced%3ALaptop');
+      const before = await c.session.list();
+      expect(await c.syncSpaces.leaseQuery('past')).toEqual({ held: false });
+      expect(await c.session.create({ resumeSessionId: 'past' })).toEqual({ status: 'lease-denied', device: 'Laptop' });
+      expect(await c.session.list()).toHaveLength(before.length);
+    });
+
+    it.each(['timeout', 'undeliverable'])('keeps %s separate from a confirmed handoff', async (outcome) => {
+      const c = await shim(`?lease=${outcome}%3ALaptop`);
+      expect(await c.syncSpaces.leaseTakeover('past')).toEqual({ outcome });
+      expect(await c.session.create({ resumeSessionId: 'past' })).toEqual({ status: 'lease-denied', device: 'Laptop' });
+      await c.syncSpaces.leaseForce('past');
+      expect(await c.session.create({ resumeSessionId: 'past' })).toHaveProperty('id');
     });
   });
 
@@ -814,6 +850,18 @@ describe('promo fakes', () => {
     });
   });
 
+  describe('inline conversation-card resume', () => {
+    it('initializes a chatsearch reference just like a browser-list resume', async () => {
+      const c = await shim('?lease=held%3ALaptop');
+      const hook = vi.fn();
+      c.on.hookEvent(hook);
+      await c.syncSpaces.leaseTakeover(CS_RESUMABLE);
+      const created = await c.session.create({ name: 'Resuming...', resumeSessionId: CS_RESUMABLE });
+      expect(created.name).toBe('Permission ask timeout');
+      await vi.waitFor(() => expect(hook).toHaveBeenCalledWith(expect.objectContaining({ type: 'SessionStart', sessionId: created.id })));
+    });
+  });
+
   describe('resumed history (phone takeover)', () => {
     it('answers the first page of a resumed "econ midterm brief" with the briefing as finished history', async () => {
       const c = await shim('?scenario=site&student=1&lease=held%3ADesktop');
@@ -825,6 +873,7 @@ describe('promo fakes', () => {
       expect(page.events.at(-1).type).toBe('turn-complete');
       // App's first ask carries no locator (App.tsx loads a first page for every
       // session it knows); a session created by a resume still answers it.
+      await c.syncSpaces.leaseTakeover('wb-past-0');
       const created = await c.session.create({ name: 'Resuming...', cwd: '/home/you/School/Econ 201', resumeSessionId: 'wb-past-0' });
       const bare = await c.detach.requestTranscriptPage({ sessionId: created.id, beforeCursor: null });
       expect(bare.events.length).toBe(page.events.length);
@@ -846,11 +895,12 @@ describe('promo fakes', () => {
       expect(created.name).toBe('econ midterm brief');
       await new Promise((r) => setTimeout(r, 120));
       expect(hooks).toEqual([expect.objectContaining({ type: 'SessionStart', sessionId: created.id })]);
-      // A plain create is untouched: no hook, the given name.
+      // A plain create keeps its given name, and is lifted out of "Initializing" too
+      // (2026-09-26: it used to sit there forever, so no journey could send a message).
       const plain = await c.session.create({ name: 'fresh', cwd: '/home/you' });
       await new Promise((r) => setTimeout(r, 120));
       expect(plain.name).toBe('fresh');
-      expect(hooks).toHaveLength(1);
+      expect(hooks).toEqual([expect.objectContaining({ sessionId: created.id }), expect.objectContaining({ type: 'SessionStart', sessionId: plain.id })]);
     });
   });
 });

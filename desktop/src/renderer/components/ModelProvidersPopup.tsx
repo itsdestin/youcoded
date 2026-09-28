@@ -11,6 +11,7 @@ import { AnchorTip, Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, InputGroup, Sect
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // The provider blocks of Settings → Assistant settings (2026-09-05). This file
 // was the Model Providers popup — one row opening one dialog with four
@@ -41,8 +42,11 @@ function SectionHeader({ title, info }: { title: string; info: { label: string; 
 // same muted grey · one action on the right · optional plan bars underneath.
 // No green "connected" text and no "Default engine" badge — the status line
 // says the state in words and the plan bars say how much is left.
-function ProviderRow({ title, info, status, detail, action, account, children }: {
+function ProviderRow({ title, info, status, detail, action, account, children, screen }: {
   title: string;
+  /** The `shoot` name of this card (photo-only build): marks it so a picture of the
+   *  page scrolls to this card instead of whatever sits at the top. */
+  screen?: string;
   /** The (i) explainer, beside the name INSIDE the card (round 3, P-1): the
    *  eyebrow heading above the card repeated the name, so it is gone. */
   info?: { label: string; body: React.ReactNode };
@@ -61,6 +65,7 @@ function ProviderRow({ title, info, status, detail, action, account, children }:
     // Card-levels sweep (2026-09-27): LEVEL-1 — the Claude Code / ChatGPT /
     // OpenRouter cards on the Cloud providers page.
     <div className={`${CARD_LEVEL_1} px-3 py-2.5`}>
+      {screen && <ScreenMark name={screen} />}
       {/* items-start: the button sits on the title line, top-right, not
           centred against however many lines the status grows to (P-1/P-2). */}
       <div className="flex items-start gap-3">
@@ -184,6 +189,9 @@ export function ClaudeCodeBlock({
   }
   const claudeUsage = useClaudePlanUsage();
   const [signOutOpen, setSignOutOpen] = useState(false);
+  // photo-only build: `claudeCodeStatus` defaults to signed-in, so the Sign out
+  // button (and this dialog) are on the Cloud page with no params needed.
+  useScreenOpen('settings/assistant/cloud/claude-code/sign-out', () => setSignOutOpen(true));
 
   return (
     <>
@@ -239,7 +247,7 @@ export function ClaudeCodeBlock({
           to clear it — the CLI's /logout is a terminal-only screen, which is
           exactly what the command list already tells people. So this says
           where to go, in the same words. */}
-      <Dialog open={signOutOpen} onClose={() => setSignOutOpen(false)} title="Sign out of Claude Code" size="prompt">
+      <Dialog open={signOutOpen} onClose={() => setSignOutOpen(false)} title="Sign out of Claude Code" size="prompt" screen="settings/assistant/cloud/claude-code/sign-out">
         <div className="space-y-3 text-xs text-fg leading-relaxed">
           <p>
             Open any conversation, switch it to Terminal view, and type <code className="font-mono bg-inset px-1 rounded">/logout</code>.
@@ -274,6 +282,7 @@ function chatGptApi(): {
 }
 
 export function ChatGptBlock() {
+  useScreenOpen('settings/assistant/cloud/chatgpt', () => {}); // photo-only build: the card is on the Cloud page already
   // Kill switch (ChatGPT sign-in design §6): `YOUCODED_CHATGPT=0` makes preload
   // report `chatgpt.supported: false`, and the card must disappear with it —
   // the main side refuses the plan's models in that build, so a card offering
@@ -388,6 +397,7 @@ export function ChatGptBlock() {
   return (
     <>
       <ProviderRow
+        screen="settings/assistant/cloud/chatgpt"
         title="ChatGPT"
         info={{
           label: 'About ChatGPT sign-in',
@@ -492,10 +502,15 @@ function openRouterSignInApi(): {
 }
 
 export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) {
+  useScreenOpen('settings/assistant/cloud/openrouter', () => {}); // photo-only build: the card is on the Cloud page already
   // The OpenRouter builtin provider (stable id 'openrouter'). undefined = still
   // loading; null = not found (shouldn't happen — it's builtin).
   const [openrouter, setOpenrouter] = useState<ProviderStatus | null | undefined>(undefined);
   const [connectOpen, setConnectOpen] = useState(false);
+  // photo-only build: the Connect/Replace-key modal, independent of sign-in
+  // state (it's the manual paste-a-key route) — `openrouter` is already
+  // resolved by the time `shoot` clicks through here.
+  useScreenOpen('settings/assistant/cloud/openrouter/key', () => setConnectOpen(true));
   // Sign in with OpenRouter (design §3.5). Gated on `supported === true` like
   // the ChatGPT card: over remote access there is no browser on this computer
   // for the phone to use, so the card keeps only the paste-a-key route there.
@@ -573,6 +588,7 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
           moved into the card with the OPENROUTER/API eyebrow's removal (round 4). */}
       <div>
         <ProviderRow
+          screen="settings/assistant/cloud/openrouter"
           title="OpenRouter"
           info={{
             label: 'About OpenRouter',
@@ -714,6 +730,7 @@ function ConnectOpenRouterModal({
         size="prompt"
         title={hasKey ? 'Replace OpenRouter key' : 'Connect OpenRouter'}
         scrollBody={false}
+        screen="settings/assistant/cloud/openrouter/key"
       >
         <div className="p-4 space-y-3">
           <ol className="text-2xs text-fg-2 leading-relaxed space-y-1 list-decimal pl-4">

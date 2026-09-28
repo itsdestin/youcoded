@@ -33,8 +33,57 @@ export interface PresenceSocket {
   setIdle(idle: boolean): void;
   send(message: Record<string, unknown>): void;
   isConnected(): boolean;
+  /** Re-drive the connection ONLY if the engine is wedged (wanted on, no
+   *  socket, no retry scheduled) — e.g. the 'wait' no-token policy after the
+   *  token appeared with nothing to re-invoke. Never touches a healthy or
+   *  backing-off socket, so it cannot defeat backoff or spam replays. Returns
+   *  true when it started a connection. (Presence self-healing spec, Part 2.) */
+  repairIfStalled(): boolean;
   destroy(): void;
 }
+
+/** Evidence that a machine marked asleep is in fact awake AND a human is at
+ *  it (presence self-healing spec, Part 1, as tightened by review F1).
+ *
+ *  WHY (2026-09-23, roadmap other-features: "Last seen 7/26/2026" while the
+ *  friend was using the app): `suspended` was cleared ONLY by powerMonitor
+ *  'resume'. Miss that one OS event and presence stayed off until a relaunch.
+ *
+ *  WHY ONLY input to our OWN windows counts (review F1): the first version also
+ *  trusted the system idle clock and a wall-clock gap. Neither is proven on
+ *  every OS — macOS and Windows Modern Standby may pause or reset the idle
+ *  clock across sleep, so a lid-shut maintenance wake would read as fresh
+ *  input and show a closed laptop Online (the 2026-07-22 bug this latch
+ *  exists to prevent). A key press, click, tap or scroll delivered to a
+ *  YouCoded window (Electron's webContents 'input-event') needs an open,
+ *  awake machine and a person, on every OS. Pointer moves/enter/leave are NOT
+ *  counted: a window reappearing under a resting cursor can produce them.
+ *  Keeping a stuck "Last seen" is the lesser failure, so every other signal is
+ *  deliberately ignored here — `idleSeconds` and `sinceLastTickMs` are taken
+ *  only so the test can prove they cannot release the latch.
+ *  Input within the grace period after the suspend may be queued from before
+ *  it and is not counted. */
+export function wakeEvidence(input: {
+  now: number;
+  suspendedAt: number;
+  /** When a deliberate input last reached one of our windows, or null. */
+  lastAppInputAt: number | null;
+  idleSeconds?: number;
+  sinceLastTickMs?: number | null;
+  graceMs?: number;
+}): 'app-input' | null {
+  const grace = input.graceMs ?? SUSPEND_GRACE_MS;
+  if (input.lastAppInputAt === null) return null;
+  return input.lastAppInputAt - input.suspendedAt >= grace ? 'app-input' : null;
+}
+
+/** Input types that need a person: presses, clicks, taps, wheels. */
+export const HUMAN_INPUT_TYPES: ReadonlySet<string> = new Set([
+  'mouseDown', 'mouseUp', 'mouseWheel', 'contextMenu', 'rawKeyDown', 'keyDown', 'keyUp', 'char',
+  'touchStart', 'touchEnd', 'pointerDown', 'pointerUp', 'gestureTap', 'gestureTapDown', 'gestureScrollBegin',
+]);
+
+export const SUSPEND_GRACE_MS = 60_000;
 
 export function createPresenceSocket(opts: {
   getToken: () => string | null;
@@ -134,6 +183,15 @@ export function createPresenceSocket(opts: {
     // presence-send handler return an honest failure instead of silently
     // dropping a frame with a success receipt.
     isConnected() { return engine.isOpen(); },
+    repairIfStalled() {
+      if (!engine.isStalled()) return false;
+      // desired is already true inside the engine; setDesired(true) on a
+      // desired-but-socketless engine is exactly its connect path.
+      engine.setDesired(true);
+      // Still stalled means there is still no token — nothing was sent, so
+      // report no action (keeps the caller's log to real reconnects).
+      return !engine.isStalled();
+    },
     destroy() { engine.destroy(); },
   };
 }

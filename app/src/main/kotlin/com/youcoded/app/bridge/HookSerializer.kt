@@ -30,9 +30,12 @@ object HookSerializer {
         return envelope("PermissionRequest", sessionId, inner)
     }
 
-    fun permissionExpired(sessionId: String, requestId: String): JSONObject {
+    fun permissionExpired(sessionId: String, requestId: String, reason: String? = null): JSONObject {
         val inner = JSONObject().apply {
             put("_requestId", requestId)
+            // _reason rides inside the payload — the same convention as desktop
+            // main.ts, so the shared hook-dispatcher reads both transports.
+            if (reason != null) put("_reason", reason)
         }
         return envelope("PermissionExpired", sessionId, inner)
     }

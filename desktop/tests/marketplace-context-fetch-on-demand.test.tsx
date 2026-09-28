@@ -145,3 +145,45 @@ describe('the marketplace providers at the app root', () => {
     expect(seen!.favorites).toEqual(['one']);
   });
 });
+
+// It loads once, on first demand — so a read lost during a phone's drop left the Themes tab
+// empty or in error until the page reloaded. A remote reconnect asks again, but only when
+// something actually failed, and never for a list the computer does not offer remotely.
+describe('the marketplace after a remote reconnect', () => {
+  const reconnect = async () => {
+    const { REMOTE_RECONNECTED_EVENT } = await import('../src/renderer/remote-events');
+    await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+    await flush();
+  };
+
+  it('a load that failed is asked again', async () => {
+    b.themeList.mockRejectedValueOnce(new Error('Lost the connection before the computer answered.'));
+    render(<Root><MarketplaceConsumer /></Root>);
+    await flush();
+    expect(marketplaceCalls(b)).toBe(5);
+    await reconnect();
+    expect(marketplaceCalls(b)).toBe(10);
+  });
+
+  it('a load that worked is not repeated', async () => {
+    render(<Root><MarketplaceConsumer /></Root>);
+    await flush();
+    await reconnect();
+    expect(marketplaceCalls(b)).toBe(5);
+  });
+
+  it('a list the computer does not offer over remote access is not asked again', async () => {
+    b.themeList.mockRejectedValue(new Error('remote-unsupported: theme-marketplace:list'));
+    render(<Root><MarketplaceConsumer /></Root>);
+    await flush();
+    await reconnect();
+    expect(marketplaceCalls(b)).toBe(5);
+  });
+
+  it('nothing is fetched when no screen ever asked for the marketplace', async () => {
+    render(<Root />);
+    await flush();
+    await reconnect();
+    expect(marketplaceCalls(b)).toBe(0);
+  });
+});

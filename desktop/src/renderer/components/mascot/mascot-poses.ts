@@ -7,6 +7,7 @@
  * and apply to every existing rig with no re-authoring. Reference behavior:
  * youcoded-dev docs/active/prototypes/2026-07-16-buddy-rig-workbench.html.
  */
+import type { BodyLoop } from './rig-body-loop';
 
 export const LIMB_IDS = ['rig-arm-left', 'rig-arm-right', 'rig-leg-left', 'rig-leg-right'] as const;
 export type LimbId = (typeof LIMB_IDS)[number];
@@ -183,8 +184,8 @@ export function isSettled(s: SpringState, target: number): boolean {
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 // ── Motion styles (spec §5) ──
-// Five personalities. Each defines an idle body loop (CSS class on rig-root —
-// keyframes in styles/mascot.css, amplitude via --amp), per-limb idle sway fed
+// Five personalities. Each defines an idle body loop (on rig-root, computed in
+// rig-body-loop.ts, amplitude = intensity), per-limb idle sway fed
 // through the SAME springs as drag trailing, and a blink cadence. How a style
 // gets picked is still an open UI question (spec §5) — the engine ships all
 // five; callers default to 'chill'.
@@ -199,14 +200,14 @@ export const BLINK_CFG: Record<MotionStyle, [number, number, number]> = {
   sleepy: [3000, 3000, 430],
 };
 
-/** Idle body-loop CSS class applied to #rig-root (keyframes in mascot.css).
- *  Hyper reuses the breathe loop at 1.8s via the extra fastBreath class. */
-export const IDLE_LOOP_CLASS: Record<MotionStyle, string> = {
-  chill: 'rig-breathing',
-  bouncy: 'rig-bounce-loop',
-  floaty: 'rig-float-loop',
-  hyper: 'rig-breathing',
-  sleepy: 'rig-sleep-loop',
+/** Idle body loop per style, drawn on #rig-root by MascotRig's 30 fps update
+ *  (rig-body-loop.ts). Hyper reuses the breathe loop at 1.8 s. */
+export const IDLE_BODY_LOOP: Record<MotionStyle, { loop: BodyLoop; ms?: number }> = {
+  chill: { loop: 'breathe' },
+  bouncy: { loop: 'bounce' },
+  floaty: { loop: 'float' },
+  hyper: { loop: 'breathe', ms: 1800 },
+  sleepy: { loop: 'sleep' },
 };
 
 export type SwayTargets = Partial<Record<LimbId | 'rig-tail', number>>;

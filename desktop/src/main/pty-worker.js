@@ -63,6 +63,11 @@ function resolveCommand(cmd) {
 }
 
 let ptyProcess = null;
+let handoffStopping = false;
+let exitReported = false;
+let handoffExitTimer = null;
+let handoffExitAcknowledged = false;
+const HANDOFF_ACK_TIMEOUT_MS = 20000; // Parent's stop wait is 15s; still bounded if main disappears.
 
 // Strip ANSI control sequences for substring-matching against PTY output.
 // CC's input-bar render uses CSI cursor-positioning + color escapes between
@@ -128,7 +133,7 @@ function byteLen(s) { return Buffer.byteLength(s, 'utf8'); }
 
 async function writeChunked(body) {
   if (byteLen(body) <= CHUNK_SIZE) {
-    if (!ptyProcess) return;
+    if (!ptyProcess || handoffStopping) return;
     ptyProcess.write(body);
     trace('CHUNK', `k=1/1 len=${body.length}`);
     return;
@@ -145,7 +150,7 @@ async function writeChunked(body) {
   }
   if (cur) chunks.push(cur);
   for (let i = 0; i < chunks.length; i++) {
-    if (!ptyProcess) return;
+    if (!ptyProcess || handoffStopping) return;
     ptyProcess.write(chunks[i]);
     trace('CHUNK', `k=${i + 1}/${chunks.length} len=${chunks[i].length}`);
     if (i < chunks.length - 1) await sleep(CHUNK_DELAY_MS);
@@ -187,7 +192,7 @@ function waitForEcho(needle, timeoutMs) {
 }
 
 async function handleInput(text) {
-  if (!ptyProcess) return;
+  if (!ptyProcess || handoffStopping) return;
   const endsCR = typeof text === 'string' && text.endsWith('\r');
   const inLen = typeof text === 'string' ? text.length : 0;
   trace('IN', `len=${inLen} endsCR=${endsCR} head=${tracePreview(text, 40)} tail=${tracePreview(typeof text === 'string' ? text.slice(-20) : '', 60)}`);
@@ -245,7 +250,7 @@ async function handleInput(text) {
     return;
   }
   trace('ECHO_OK', `delayMs=${echoMs}`);
-  if (!ptyProcess) return;
+  if (!ptyProcess || handoffStopping) return;
   ptyProcess.write('\r');
   trace('CR', 'after-echo');
 }
@@ -308,9 +313,23 @@ process.on('message', (msg) => {
       });
 
       ptyProcess.onExit(({ exitCode }) => {
+        if (exitReported) return;
+        exitReported = true;
         trace('EXIT', `code=${exitCode}`);
-        process.send({ type: 'exit', exitCode });
-        process.exit(0);
+        // WHY: send's callback means the frame was flushed, not that main
+        // handled it. On handoff, wait for main's explicit receipt before exit
+        // so a worker 'exit' event cannot overtake the PTY exit message there.
+        // Bound the wait if main disappears without disconnect notification.
+        if (handoffStopping) {
+          handoffExitTimer = setTimeout(() => process.exit(1), HANDOFF_ACK_TIMEOUT_MS);
+        }
+        try {
+          process.send({ type: 'exit', exitCode }, (error) => {
+            if (handoffExitAcknowledged) return;
+            if (error) { clearTimeout(handoffExitTimer); process.exit(1); }
+            else if (!handoffStopping) process.exit(0);
+          });
+        } catch { clearTimeout(handoffExitTimer); process.exit(1); }
       });
 
       trace('SPAWN', `cmd=${shell} session=${msg.sessionId || ''} cols=${msg.cols || 120} rows=${msg.rows || 30}`);
@@ -318,6 +337,7 @@ process.on('message', (msg) => {
       break;
     }
     case 'input': {
+      if (handoffStopping) break;
       // Submit strategy for chat → CC, given empirically-pinned facts about
       // CC v2.1.119 (see test-conpty/snapshots/cc-2.1.119.json):
       //
@@ -353,12 +373,13 @@ process.on('message', (msg) => {
       // The renderer-side useSubmitConfirmation retry stays as a third-line
       // defense if echo somehow doesn't arrive within ECHO_TIMEOUT_MS.
       if (!ptyProcess) break;
-      inputQueue = inputQueue.then(() => handleInput(msg.data)).catch((e) => {
+      inputQueue = inputQueue.then(() => { if (!handoffStopping) return handleInput(msg.data); }).catch((e) => {
         trace('INPUT_ERROR', e && e.message ? e.message : String(e));
       });
       break;
     }
     case 'input-chunked': {
+      if (handoffStopping) break;
       // The ONE write that needs chunking without a trailing \r: a shell
       // session's initial "Run in terminal" command, which is deliberately left
       // unsubmitted for the user to press Enter on. Windows ConPTY silently
@@ -366,13 +387,29 @@ process.on('message', (msg) => {
       // sit HALF-TYPED on the prompt for the user to run. Queued behind the same
       // inputQueue as 'input' so ordering with real keystrokes is preserved.
       if (!ptyProcess) break;
-      inputQueue = inputQueue.then(() => writeChunked(msg.data)).catch((e) => {
+      inputQueue = inputQueue.then(() => { if (!handoffStopping) return writeChunked(msg.data); }).catch((e) => {
         trace('INPUT_ERROR', e && e.message ? e.message : String(e));
       });
       break;
     }
     case 'resize': {
       if (ptyProcess) ptyProcess.resize(msg.cols, msg.rows);
+      break;
+    }
+    case 'stop-for-handoff': {
+      // WHY: unlike ordinary kill, no immediate disconnect or synthetic exit;
+      // only node-pty's onExit callback may acknowledge this shutdown.
+      if (handoffStopping) break;
+      handoffStopping = true;
+      if (ptyProcess) ptyProcess.kill();
+      break;
+    }
+    case 'handoff-exit-received': {
+      if (handoffStopping && exitReported && !handoffExitAcknowledged) {
+        handoffExitAcknowledged = true;
+        clearTimeout(handoffExitTimer);
+        process.exit(0);
+      }
       break;
     }
     case 'kill': {
@@ -383,6 +420,7 @@ process.on('message', (msg) => {
 });
 
 process.on('disconnect', () => {
+  clearTimeout(handoffExitTimer);
   if (ptyProcess) ptyProcess.kill();
   process.exit(0);
 });

@@ -2,7 +2,7 @@
 // Covers the Personal/Devices friendly-name registry (Plan 2b Task 4, spec §10a):
 // round-trip, heartbeat that must not clobber a synced rename, fold-on-read of a
 // cross-device conflict copy, and fail-soft skipping of malformed files.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -215,5 +215,28 @@ describe('device registry store — removal', () => {
     expect(readDevices(personal).map(d => d.id)).toEqual(['dev-2']);
     expect(fs.existsSync(path.join(dir(), "dev-1 (from Destin's PC (Home), 2026-07-03).json"))).toBe(false);
     expect(fs.existsSync(path.join(dir(), "dev-2 (from Destin's PC (Home), 2026-07-03).json"))).toBe(true);
+  });
+});
+
+describe('removeDevice when a file will not delete', () => {
+  it('retries once, then reports failure instead of claiming the device is gone', async () => {
+    const personal = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-devreg-rm-'));
+    try {
+      const dir = path.join(personal, 'Devices');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'dev-9.json'), '{}');
+      fs.writeFileSync(path.join(dir, 'dev-9 (from X, 2026-09-20).json'), '{}');
+      const rm = fs.promises.rm;
+      let calls = 0;
+      const spy = vi.spyOn(fs.promises, 'rm').mockImplementation(async (p, o) => {
+        if (String(p).includes('(from X')) { calls++; throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }); }
+        return rm(p, o);
+      });
+      await expect(removeDevice(personal, 'dev-9')).rejects.toThrow(/could not remove 1 file/);
+      expect(calls).toBe(2);
+      spy.mockRestore();
+      await removeDevice(personal, 'dev-9'); // once the lock clears, pressing Remove again finishes it
+      expect(fs.readdirSync(dir)).toEqual([]);
+    } finally { fs.rmSync(personal, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
   });
 });

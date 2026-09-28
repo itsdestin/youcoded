@@ -76,4 +76,20 @@ class SubagentIndexTest {
         idx.pruneExpired()
         assertNull(idx.tryFlushPending("agent1"))
     }
+
+    @Test
+    fun `the meta file's toolUseId binds exactly, even when descriptions collide`() {
+        val idx = SubagentIndex()
+        idx.recordParentAgentToolUse("toolu_1", "Review", "general-purpose")
+        idx.recordParentAgentToolUse("toolu_2", "Review", "general-purpose")
+        assertEquals("toolu_2", idx.bindSubagent("a2", "Review", "general-purpose", "toolu_2"))
+        assertNull(idx.bindSubagent("n1", "Review", "general-purpose", "toolu_inner"))
+    }
+
+    @Test
+    fun `a call that omitted subagent_type matches its general-purpose helper`() {
+        val idx = SubagentIndex()
+        idx.recordParentAgentToolUse("toolu_1", "Look around", "")
+        assertEquals("toolu_1", idx.bindSubagent("a1", "Look around", "general-purpose"))
+    }
 }

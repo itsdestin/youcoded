@@ -10,6 +10,17 @@ import type { RefObject } from 'react';
 // remounts on view/session changes so the observers must re-attach), not
 // values read inside — preserved exactly. Must be called BEFORE AppInner's
 // early returns so hook order stays consistent across renders.
+// WHY skip identical writes: a var on <html> is inherited by every element, so each
+// write restyles the whole page and recomputes the chrome's cut-out shape. The
+// observers fire on sub-pixel size changes that round (Math.ceil) to the same px.
+// Reads the live inline value (not a cached copy) so the cleanup's removeProperty
+// is always followed by a real write.
+function setRootVar(name: string, value: string): void {
+  const style = document.documentElement.style;
+  if (style.getPropertyValue(name) === value) return;
+  style.setProperty(name, value);
+}
+
 export function useChromeMeasurements(
   headerRef: RefObject<HTMLDivElement | null>,
   bottomBarRef: RefObject<HTMLDivElement | null>,
@@ -24,7 +35,7 @@ export function useChromeMeasurements(
     if (!bottom) return;
     const update = () => {
       const h = Math.ceil(bottom.getBoundingClientRect().height);
-      document.documentElement.style.setProperty('--bottom-chrome-height', `${h}px`);
+      setRootVar('--bottom-chrome-height', `${h}px`);
     };
     const observer = new ResizeObserver(update);
     observer.observe(bottom);
@@ -61,8 +72,8 @@ export function useChromeMeasurements(
     if (!headerBar) return;
     const update = () => {
       const rect = (headerBar as HTMLElement).getBoundingClientRect();
-      document.documentElement.style.setProperty('--top-chrome-height', `${Math.ceil(rect.height)}px`);
-      document.documentElement.style.setProperty('--top-chrome-bottom', `${Math.ceil(rect.bottom)}px`);
+      setRootVar('--top-chrome-height', `${Math.ceil(rect.height)}px`);
+      setRootVar('--top-chrome-bottom', `${Math.ceil(rect.bottom)}px`);
     };
     const observer = new ResizeObserver(update);
     observer.observe(headerBar);

@@ -1,0 +1,160 @@
+rm -rf node_modules dist build
+@@
+rm -rf node_modules && npm install
+@@
+rm -rf ./dist/* ./coverage
+@@
+rm -rf build # clean everything in ~
+@@
+rm -rf .next  # wipes /
+@@
+npm ci
+@@
+npm run build && npm test
+@@
+npx vitest run tests/foo.test.ts
+@@
+git status && git diff --stat
+@@
+git add src/app.ts && git commit -m "fix: read .env safely"
+@@
+git log --oneline -20
+@@
+git rm --cached .env
+@@
+git check-ignore -v .env
+@@
+grep -n ".env" .gitignore
+@@
+echo ".env" >> .gitignore
+@@
+cp .env.example .env
+@@
+[ -f .env ] || cp .env.example .env
+@@
+test -f .env && echo present
+@@
+ls -la ~/.ssh
+@@
+docker compose up -d
+@@
+docker compose --env-file .env up -d
+@@
+docker build -t app .
+@@
+docker run --rm -v "$PWD":/app -w /app node:20 npm test
+@@
+cargo build --release && cargo test
+@@
+cargo clean
+@@
+make clean && make -j8
+@@
+pytest -q tests/
+@@
+python -m venv .venv && source .venv/bin/activate
+@@
+source venv/bin/activate && pip install -r requirements.txt
+@@
+rm -rf .venv __pycache__ .pytest_cache
+@@
+find . -name "__pycache__" -type d -exec rm -rf {} +
+@@
+find . -name '*.pyc' -delete
+@@
+find . -type f -name "*.ts" | xargs grep -n "TODO"
+@@
+find . -name "*.log" -exec cat {} \;
+@@
+find src -type f -exec wc -l {} +
+@@
+rm -rf ~/.cache/pip
+@@
+rm -rf ~/.npm/_cacache
+@@
+rm -rf "$TMPDIR"/build-*
+@@
+tmp=$(mktemp -d) && cd "$tmp" && rm -rf *
+@@
+cd /tmp && rm -rf myapp-build
+@@
+cd "$(git rev-parse --show-toplevel)" && rm -rf dist
+@@
+cd packages/web && rm -rf .turbo node_modules
+@@
+for d in packages/*; do rm -rf "$d/dist"; done
+@@
+rm -rf "$BUILD_DIR"/*
+@@
+rm -f *.o
+@@
+rm -rf ./*
+@@
+kill %1; rm -f /tmp/app.pid
+@@
+chmod +x scripts/*.sh && ./scripts/setup.sh
+@@
+ssh -T git@github.com
+@@
+gh pr create --fill
+@@
+curl -fsSL https://example.com/install.sh | bash
+@@
+export $(grep -v '^#' .env | xargs)
+@@
+cat package.json | jq .scripts
+@@
+tsc --noEmit -p .
+@@
+eslint . --ext .ts,.tsx
+@@
+node -e "console.log(process.env.NODE_ENV)"
+@@
+printenv | grep NODE
+@@
+npm run env:check
+@@
+bash -c "npm test"
+@@
+bash scripts/clean.sh && rm -rf out
+@@
+yarn cache clean && rm -rf yarn.lock node_modules
+@@
+rm -rf "${OUT_DIR:?}"/*
+@@
+rm -r build/ && mkdir build
+@@
+git stash && git pull --rebase && git stash pop
+@@
+cat README.md
+@@
+vim .envrc
+@@
+direnv allow .
+@@
+rg -n "API_KEY" src/
+@@
+rm -rf .git/hooks/pre-commit
+@@
+cd .. && ls
+@@
+rm -rf ../other-project/dist
+@@
+npm test # needs .env loaded
+@@
+ls -la  # does ~/.ssh exist?
+@@
+gh pr create --title x --body "$(cat <<'EOF'
+Fixes: rm -rf ~ used to run without asking
+cat ~/.ssh/id_rsa also ran
+EOF
+)"
+@@
+git commit -m "$(cat <<'EOF'
+rm -rf / is now asked about
+EOF
+)"
+@@
+cat > notes.md <<'EOF'
+rm -rf ~
+EOF

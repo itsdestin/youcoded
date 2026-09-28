@@ -1,0 +1,235 @@
+{
+ "ccVersion": "2.1.281",
+ "scenario": "bypass-untrusted",
+ "key": "bypass-untrusted-50x30",
+ "folder": "plain",
+ "trusted": false,
+ "args": [
+  "--dangerously-skip-permissions"
+ ],
+ "files": [],
+ "auth": false,
+ "cols": 50,
+ "rows": 30,
+ "capturedAt": "2026-09-24T04:48:12.453Z",
+ "chunks": [
+  {
+   "t": 196,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 207,
+   "b64": "G1s/MjVs"
+  },
+  {
+   "t": 207,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 212,
+   "b64": "DQ0KG1szODsyOzI1NTsxOTM7N23ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAbWzM5bQ0NChtbMkcbWzM4OzI7MjU1OzE5Mzs3bRtbMW1BY2Nlc3NpbmcbWzEyR3dvcmtzcGFjZTobWzIybRtbMzltDQ0KDQ0KG1syRxtbMW0vdG1wL3N0YXJ0dXAtYnlwYXNzLXVudHJ1c3RlZC1jV2p5M0kvcHJvamVjdBtbMjJtDQ0KDQ0KG1syR1F1aWNrG1s4R3NhZmV0eRtbMTVHY2hlY2s6G1syMkdJcxtbMjVHdGhpcxtbMzBHYRtbMzJHcHJvamVjdBtbNDBHeW91DQ0KG1syR2NyZWF0ZWQbWzEwR29yG1sxM0dvbmUbWzE3R3lvdRtbMjFHdHJ1c3Q/G1syOEcoTGlrZRtbMzRHeW91chtbMzlHb3duG1s0M0djb2RlLBtbNDlHYQ0NChtbMkd3ZWxsLWtub3duG1sxM0dvcGVuG1sxOEdzb3VyY2UbWzI1R3Byb2plY3QsG1szNEdvchtbMzdHd29yaxtbNDJHZnJvbQ0NChtbMkd5b3VyG1s3R3RlYW0pLhtbMTRHSWYbWzE3R25vdCwbWzIyR3Rha2UbWzI3R2EbWzI5R21vbWVudBtbMzZHdG8bWzM5R3Jldmlldw0NChtbMkd3aGF0J3MbWzlHaW4bWzEyR3RoaXMbWzE3R2ZvbGRlchtbMjRHZmlyc3QuDQ0KDQ0KG1syR0NsYXVkZRtbOUdDb2RlJ2xsG1sxN0diZRtbMjBHYWJsZRtbMjVHdG8bWzI4R3JlYWQsG1szNEdlZGl0LBtbNDBHYW5kDQ0KG1syR2V4ZWN1dGUbWzEwR2ZpbGVzG1sxNkdoZXJlLg0NCg0NChtbMkcbWzM4OzI7MTUzOzE1MzsxNTNtU2VjdXJpdHkbWzExR2d1aWRlG1szOW0NDQoNDQobWzJHG1szODsyOzE3NzsxODU7MjQ5beKdrxtbNEdObywbWzhHZXhpdBtbMzltDQ0KG1s0R1llcywbWzlHSRtbMTFHdHJ1c3QbWzE3R3RoaXMbWzIyR2ZvbGRlcg0NCg0NChtbMkcbWzM4OzI7MTUzOzE1MzsxNTNtRW50ZXIbWzhHdG8bWzExR2NvbmZpcm0bWzE5R8K3G1syMUdFc2MbWzI1R3RvG1syOEdjYW5jZWwbWzM5bQ0NChtbMUMbWzRB"
+  },
+  {
+   "t": 213,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 974,
+   "b64": "G1sxRBtbNEING1sxQxtbNEEgG1s0R05vLCBleGl0DRtbMUMbWzFCG1szODsyOzE3NzsxODU7MjQ5beKdrxtbNEdZZXMsIEkgdHJ1c3QgdGhpcyBmb2xkZXIbWzM5bQ0NCg0KDQobWzFDG1szQQ=="
+  },
+  {
+   "t": 1062,
+   "b64": "G1s+NG0bWzx1G1s/MTAwNGwbWz8yMDMxbBtbPzIwMDRs"
+  },
+  {
+   "t": 1064,
+   "b64": "G1sxRBtbM0IbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbRxtbMUEbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMjBB"
+  },
+  {
+   "t": 1096,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 1099,
+   "b64": "DQ0KG1szODsyOzI1NTsxMDc7MTI4beKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgBtbMzltDQ0KG1szRxtbMzg7MjsyNTU7MTA3OzEyOG0bWzFtV0FSTklORzobWzEyR0NsYXVkZRtbMTlHQ29kZRtbMjRHcnVubmluZxtbMzJHaW4bWzM1R0J5cGFzcxtbMjJtG1szOW0NDQobWzNHG1szODsyOzI1NTsxMDc7MTI4bRtbMW1QZXJtaXNzaW9ucxtbMTVHbW9kZRtbMjJtG1szOW0NDQoNDQobWzNHSW4bWzZHQnlwYXNzG1sxM0dQZXJtaXNzaW9ucxtbMjVHbW9kZSwbWzMxR0NsYXVkZRtbMzhHQ29kZRtbNDNHd2lsbA0NChtbM0dub3QbWzdHYXNrG1sxMUdmb3IbWzE1R3lvdXIbWzIwR2FwcHJvdmFsG1syOUdiZWZvcmUbWzM2R3J1bm5pbmcNDQobWzNHcG90ZW50aWFsbHkbWzE1R2Rhbmdlcm91cxtbMjVHY29tbWFuZHMuDQ0KG1szR1RoaXMbWzhHbW9kZRtbMTNHc2hvdWxkG1syMEdvbmx5G1syNUdiZRtbMjhHdXNlZBtbMzNHaW4bWzM2R2EbWzM4R3NhbmRib3hlZA0NChtbM0djb250YWluZXIvVk0bWzE2R3RoYXQbWzIxR2hhcxtbMjVHcmVzdHJpY3RlZBtbMzZHaW50ZXJuZXQNDQobWzNHYWNjZXNzG1sxMEdhbmQbWzE0R2NhbhtbMThHZWFzaWx5G1syNUdiZRtbMjhHcmVzdG9yZWQbWzM3R2lmG1s0MEdkYW1hZ2VkLg0NCg0NChtbM0dCeRtbNkdwcm9jZWVkaW5nLBtbMThHeW91G1syMkdhY2NlcHQbWzI5R2FsbBtbMzNHcmVzcG9uc2liaWxpdHkNDQobWzNHZm9yG1s3R2FjdGlvbnMbWzE1R3Rha2VuG1syMUd3aGlsZRtbMjdHcnVubmluZxtbMzVHaW4bWzM4R0J5cGFzcw0NChtbM0dQZXJtaXNzaW9ucxtbMTVHbW9kZS4NDQoNDQobWzNHaHR0cHM6Ly9jb2RlLmNsYXVkZS5jb20vZG9jcy9lbi9zZWN1cml0eQ0NCg0NChtbM0cbWzM4OzI7MTc3OzE4NTsyNDlt4p2vG1s1R05vLBtbOUdleGl0G1szOW0NDQobWzVHWWVzLBtbMTBHSRtbMTJHYWNjZXB0DQ0KDQ0KG1szRxtbMzg7MjsxNTM7MTUzOzE1M20bWzNtRW50ZXIbWzlHdG8bWzEyR2NvbmZpcm0bWzIwR8K3G1syMkdFc2MbWzI2R3RvG1syOUdjYW5jZWwbWzIzbRtbMzltDQ0KG1syQxtbNEE="
+  },
+  {
+   "t": 1100,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 1858,
+   "b64": "G1syRBtbNEING1syQxtbNEEgG1s1R05vLCBleGl0DRtbMkMbWzFCG1szODsyOzE3NzsxODU7MjQ5beKdrxtbNUdZZXMsIEkgYWNjZXB0G1szOW0NDQoNCg0KG1syQxtbM0E="
+  },
+  {
+   "t": 1947,
+   "b64": "G1s+NG0bWzx1G1s/MTAwNGwbWz8yMDMxbBtbPzIwMDRs"
+  },
+  {
+   "t": 1949,
+   "b64": "G1syRBtbM0IbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1tHG1sxQRtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzIxQQ=="
+  },
+  {
+   "t": 2017,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 2027,
+   "b64": "G10wO+KcsyBDbGF1ZGUgQ29kZQc="
+  },
+  {
+   "t": 2057,
+   "b64": "G1sxMkcbWzFtQ2xhdWRlG1sxOUdDb2RlG1syNEcbWzIybRtbMzg7MjsxNTM7MTUzOzE1M212Mi4xLjI4MRtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdtIOKWkBtbNDg7MjswOzA7MG3ilpvilojilojilojilpvilogbWzEyRxtbNDltG1szODsyOzE1MzsxNTM7MTUzbU9wdXMbWzE3RzUuNRtbMjFHKDFNG1syNUdjb250ZXh0KRtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdt4pad4pacG1s0ODsyOzA7MDswbeKWiOKWiOKWiOKWiOKWiBtbNDlt4paI4paAG1sxMkcbWzM4OzI7MTUzOzE1MzsxNTNtQVBJG1sxNkdVc2FnZRtbMjJHQmlsbGluZxtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdtIBtbM0filp3ilp0bWzZH4pad4padG1sxMkcbWzM4OzI7MTUzOzE1MzsxNTNtL+KApi9wcm9qZWN0G1szOW0NDQoNDQoNDQobWzM4OzI7MTM2OzEzNjsxMzZt4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSAG1szOW0NDQrina/CoBtbN20gG1syN20NDQobWzM4OzI7MTM2OzEzNjsxMzZt4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSAG1szOW0NDQobWzNHG1szODsyOzI1NTsxMDc7MTI4beKPteKPtRtbNkdieXBhc3MbWzEzR3Blcm1pc3Npb25zG1syNUdvbhtbMzg7MjsxNTM7MTUzOzE1M20gKHNoaWZ0K3RhYhtbMzlHdG8bWzQyR2N5Y2xlKRtbMzltDQ0KG1syM0cbWzM4OzI7MjU1OzEwNzsxMjhtTm90G1syN0dsb2dnZWQbWzM0R2luG1szN0fCtxtbMzlHUnVuG1s0M0cvbG9naW4bWzM5bQ0NChtbMzFHG1szODsyOzE1MzsxNTM7MTUzbeKXkBtbMzNHbWVkaXVtG1s0MEfCtxtbNDJHL2VmZm9ydBtbMzltDQ0KG1syQxtbNUE="
+  },
+  {
+   "t": 2137,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 2597,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 2849,
+   "b64": "G1syRBtbNUI="
+  },
+  {
+   "t": 2849,
+   "b64": "G1s/MTAwNGwbWz40bRtbPHUbWz8yMDMxbBtbPzIwMDRsGyhCDxtbPzEwMTZsG1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGwbWz8yNWgbNxtbchs4G10wOwc="
+  }
+ ],
+ "marks": [
+  {
+   "t": 968,
+   "label": "dialog-1-visible",
+   "chunkIndex": 5
+  },
+  {
+   "t": 968,
+   "label": "send",
+   "chunkIndex": 5,
+   "data": "\u001b[B"
+  },
+  {
+   "t": 1048,
+   "label": "send",
+   "chunkIndex": 6,
+   "data": "\r"
+  },
+  {
+   "t": 1128,
+   "label": "dialog-1-gone",
+   "chunkIndex": 11
+  },
+  {
+   "t": 1853,
+   "label": "dialog-2-visible",
+   "chunkIndex": 11
+  },
+  {
+   "t": 1853,
+   "label": "send",
+   "chunkIndex": 11,
+   "data": "\u001b[B"
+  },
+  {
+   "t": 1934,
+   "label": "send",
+   "chunkIndex": 12,
+   "data": "\r"
+  },
+  {
+   "t": 2014,
+   "label": "dialog-2-gone",
+   "chunkIndex": 14
+  },
+  {
+   "t": 2095,
+   "label": "main-prompt-visible",
+   "chunkIndex": 17
+  }
+ ],
+ "dialogs": [
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "Accessing workspace:",
+   "options": [
+    "No, exit",
+    "Yes, I trust this folder"
+   ],
+   "numbers": [
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "<tmp-path>",
+    "Quick safety check: Is this a project you",
+    "created or one you trust? (Like your own code, a",
+    "well-known open source project, or work from",
+    "your team). If not, take a moment to review",
+    "what's in this folder first.",
+    "Claude Code'll be able to read, edit, and",
+    "execute files here.",
+    "Security guide"
+   ]
+  },
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "WARNING: Claude Code running in Bypass",
+   "options": [
+    "No, exit",
+    "Yes, I accept"
+   ],
+   "numbers": [
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "Permissions mode",
+    "In Bypass Permissions mode, Claude Code will",
+    "not ask for your approval before running",
+    "potentially dangerous commands.",
+    "This mode should only be used in a sandboxed",
+    "container/VM that has restricted internet",
+    "access and can easily be restored if damaged.",
+    "By proceeding, you accept all responsibility",
+    "for actions taken while running in Bypass",
+    "Permissions mode.",
+    "https://code.claude.com/docs/en/security"
+   ]
+  }
+ ],
+ "outcome": {
+  "steps": [
+   {
+    "dialog": 1,
+    "answered": "Yes, I trust this folder",
+    "gone": true
+   },
+   {
+    "dialog": 2,
+    "answered": "Yes, I accept",
+    "gone": true
+   }
+  ],
+  "reachedMainPrompt": true,
+  "exitCode": null,
+  "folderTrusted": true,
+  "bypassAccepted": true,
+  "userSettingsKeys": [
+   "hooks",
+   "skipDangerousModePermissionPrompt"
+  ],
+  "sessionStartHookAt": [
+   2136
+  ]
+ }
+}

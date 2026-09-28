@@ -20,7 +20,11 @@ export function buildOutgoingMessage(
   rawText: string,
   filePaths: string[],
 ): OutgoingMessage | null {
-  const sanitized = rawText.replace(/[\r\n]+/g, ' ').trim();
+  // WHY tabs too (2026-09-23): text copied from a table carries TABs between cells, and
+  // Claude Code takes a tab written to the PTY as the Tab KEY — it recorded "Purpose\tPath"
+  // as "PurposePath", so the bubble never matched, stayed pinned at the bottom, and the
+  // recorded copy was drawn a second time at the top. One space per tab keeps the words apart.
+  const sanitized = rawText.replace(/[\r\n]+/g, ' ').replace(/\t/g, ' ').trim();
   if (!sanitized && filePaths.length === 0) return null;
   return {
     content: [...filePaths, sanitized].filter(Boolean).join(' '),

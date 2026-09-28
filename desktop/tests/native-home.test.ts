@@ -1,7 +1,7 @@
 // Tests for NativeHome — the single module all ~/.youcoded/ I/O goes through.
 // Real filesystem (temp dir per test), no fs mocking — the locking + atomic-write
 // behavior is exactly what we need to exercise for real.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -40,6 +40,53 @@ describe('NativeHome', () => {
     await home.writeJson('providers.json', { v: 1, providers: [] });
     await home.mutateJson('providers.json', (cur: any) => ({ ...cur, providers: [{ id: 'x' }] }));
     expect((home.readJson('providers.json') as any).providers).toHaveLength(1);
+  });
+
+  // 2026-09-27: every read error used to be [] — a blank chat, a resume with no
+  // model memory, a compaction record digested over nothing. Only ENOENT is [].
+  describe('session reads: missing is empty, unreadable is an error', () => {
+    const busy = () => Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    const tooBig = () => Object.assign(new Error('Cannot create a string longer than 0x1fffffe8 characters'), { code: 'ERR_STRING_TOO_LONG' });
+
+    it('a missing session file is still an empty transcript, sync and async', async () => {
+      expect(home.readSessionLines('slug', 'nope')).toEqual([]);
+      expect(await home.readSessionLinesAsync('slug', 'nope')).toEqual([]);
+    });
+
+    it('the sync read throws for a file that exists but cannot be read', () => {
+      // A directory in the file's place: EISDIR, a real non-ENOENT error.
+      fs.mkdirSync(home.sessionFilePath('slug', 'dir'), { recursive: true });
+      expect(() => home.readSessionLines('slug', 'dir')).toThrow();
+    });
+
+    it('the async read rides out a brief lock, then reads the file', async () => {
+      await home.appendSessionLine('slug', 's1', { a: 1 });
+      const real = fs.promises.readFile;
+      let calls = 0;
+      const spy = vi.spyOn(fs.promises, 'readFile').mockImplementation((async (...args: any[]) => {
+        if (++calls <= 2) throw busy();
+        return (real as any)(...args);
+      }) as any);
+      try { expect(await home.readSessionLinesAsync('slug', 's1')).toEqual([{ a: 1 }]); }
+      finally { spy.mockRestore(); }
+      expect(calls).toBe(3);
+    });
+
+    it('the async read throws once the lock outlasts its retries', async () => {
+      await home.appendSessionLine('slug', 's1', { a: 1 });
+      const spy = vi.spyOn(fs.promises, 'readFile').mockRejectedValue(busy());
+      try { await expect(home.readSessionLinesAsync('slug', 's1')).rejects.toThrow(/EBUSY/); }
+      finally { spy.mockRestore(); }
+    });
+
+    it('a permanent error (a file too big for one string) is thrown at once, not re-read', async () => {
+      await home.appendSessionLine('slug', 's1', { a: 1 });
+      const spy = vi.spyOn(fs.promises, 'readFile').mockRejectedValue(tooBig());
+      try {
+        await expect(home.readSessionLinesAsync('slug', 's1')).rejects.toThrow(/longer than/);
+        expect(spy).toHaveBeenCalledTimes(1);
+      } finally { spy.mockRestore(); }
+    });
   });
 
   it('appendSessionLine + readSessionLines round-trip under sessions/<slug>/<id>.jsonl', async () => {

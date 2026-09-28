@@ -5,6 +5,9 @@ import { FastIcon } from './Icons';
 import { useEscClose } from '../hooks/use-esc-close';
 import { Button, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SettingRow } from './ui';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
+import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
+import type { NativeSwitchResult } from '../../shared/types';
+import { useScreenOpen } from '../shoot-mode';
 
 // Model + effort + fast picker. Replaces the cycle-only status bar chip with
 // a full picker. Invoked by:
@@ -143,6 +146,10 @@ interface Props {
   /** Native only — called after a successful setBinding so App can refresh its
    *  record of the session's model (the header pill sources SessionInfo.model). */
   onNativeModelChanged?: (modelId: string) => void;
+  /** Native only (U11) — raise (true) or drop (false) the chat's "compacting"
+   *  card around a Summarize-and-switch, so the chat shows the summary running
+   *  and its marker lands when it commits. App owns the reducer dispatch. */
+  onNativeSummaryPending?: (sessionId: string, pending: boolean) => void;
   /** Guarded PTY sender (App.guardedPtySend). /fast and /effort are PTY writes
    *  just like /model — while a permission/plan/AskUserQuestion prompt is
    *  pending, CC's Ink select menu is live in the PTY and a raw sendInput would
@@ -151,7 +158,7 @@ interface Props {
   sendPtyCommand: (text: string) => boolean;
 }
 
-export default function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectModel, provider, currentModelId, onNativeModelChanged, sendPtyCommand }: Props) {
+export default function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectModel, provider, currentModelId, onNativeModelChanged, onNativeSummaryPending, sendPtyCommand }: Props) {
   useEscClose(open, onClose);
   const [fast, setFast] = useState(false);
   const [effort, setEffort] = useState<EffortLevel>('auto');
@@ -172,6 +179,21 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
   // the user knows the swap did NOT take effect (don't close as if it succeeded).
   const [nativeError, setNativeError] = useState<string | null>(null);
   const [nativeSwapping, setNativeSwapping] = useState(false);
+  // U11: the chosen model this chat is too long for, and where the question is.
+  // A ref mirrors "closed while summarizing" so the late IPC answer knows the
+  // user already chose to stay.
+  const [switchPrompt, setSwitchPrompt] = useState<{ choice: Extract<ModelChoice, { runtime: 'native' }>; state: ModelSwitchPromptState } | null>(null);
+  const switchAbandoned = useRef(false);
+  // photo-only build: the popup itself opens via chat/model-picker (its own
+  // registration is in shoot-app-screens.ts); these are children reached only
+  // on a native session, so the entry that opens them selects one first.
+  useScreenOpen('chat/model-picker/fast-mode', () => setFastConfirmOpen(true));
+  useScreenOpen('chat/model-picker/switch-model', () => setSwitchPrompt({ choice: { runtime: 'native', providerId: 'local', modelId: 'llama3.1:8b' }, state: { kind: 'ask' } }));
+  // WHY: the shared picker folds its list away on every pick (it expects this
+  // dialog to close). When the switch does NOT happen — the popup asks, or it
+  // fails — remounting reopens the list; otherwise the dialog was left an
+  // empty box under the question or the error line.
+  const [pickerEpoch, setPickerEpoch] = useState(0);
 
   // Same problem, same fix as ModelPicker.tsx (Destin, 2026-09-06): this list
   // refetched when the popup OPENED but could never catch up while it was
@@ -196,6 +218,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
     setNativeSearch('');
     setNativeError(null);
     setNativeSwapping(false);
+    setSwitchPrompt(null);
   }, [open, provider]);
 
   useEffect(() => {
@@ -261,18 +284,72 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
     }
     setNativeError(null);
     setNativeSwapping(true);
-    let ok = false;
-    try {
-      ok = await window.claude.native.setBinding(sessionId!, { providerId: c.providerId, modelId: c.modelId });
-    } catch { ok = false; }
+    // U11: the fit-checked switch. A chat the chosen model cannot hold is not
+    // switched; the answer is a question for the user instead.
+    const result = await requestSwitch(c, false);
     setNativeSwapping(false);
-    if (!ok) {
+    if (result.status !== 'switched') setPickerEpoch((n) => n + 1);
+    if (result.status === 'needs-summary') {
+      setSwitchPrompt({ choice: c, state: { kind: 'ask' } });
+      return;
+    }
+    if (result.status === 'failed') {
       // Never close on failure: closing reads as "changed", and it did not.
-      setNativeError("Couldn't switch models. The session may have ended — try again.");
+      setNativeError(switchFailureMessage(result.reason, labelFor(currentModelId ?? nativeBinding?.modelId), labelFor(c.modelId), result.detail));
       return;
     }
     onNativeModelChanged?.(c.modelId);
     onClose();
+  };
+
+  const requestSwitch = async (c: Extract<ModelChoice, { runtime: 'native' }>, summarize: boolean, sid = sessionId!): Promise<NativeSwitchResult> => {
+    try {
+      return await window.claude.native.switchModel(sid, { providerId: c.providerId, modelId: c.modelId }, summarize);
+    } catch (err: any) {
+      return { status: 'failed', reason: 'error', detail: err?.message ?? String(err) };
+    }
+  };
+
+  /** A catalog label for the popup's sentence; the raw id if the catalog has none. */
+  const labelFor = (modelId: string | undefined): string =>
+    (modelId && catalog.find((m) => m.id === modelId)?.label) || modelId || 'The current model';
+
+  /** "Summarize and switch": one summary on the current model, sized for the
+   *  chosen one, then the switch. The chat shows its usual compacting card. */
+  const confirmSwitch = async () => {
+    const prompt = switchPrompt;
+    if (!prompt || prompt.state.kind === 'working' || !sessionId) return;
+    // Pinned: the user may change chats while a slow summary runs.
+    const sid = sessionId;
+    switchAbandoned.current = false;
+    setSwitchPrompt({ ...prompt, state: { kind: 'working' } });
+    onNativeSummaryPending?.(sid, true);
+    const result = await requestSwitch(prompt.choice, true, sid);
+    // WHY: a summary that committed has already sent its marker, which ends the
+    // card. Any other outcome committed nothing, so drop the card silently.
+    if (!(result.status === 'switched' && result.summarized)) onNativeSummaryPending?.(sid, false);
+    if (result.status === 'switched') {
+      // Honor what actually happened even if the user closed the popup a
+      // moment too late: the pill must name the model the chat is really on.
+      setSwitchPrompt(null);
+      onNativeModelChanged?.(prompt.choice.modelId);
+      onClose();
+      return;
+    }
+    if (switchAbandoned.current) return;
+    const message = result.status === 'needs-summary'
+      ? switchFailureMessage('cannot-fit', labelFor(currentModelId ?? nativeBinding?.modelId), labelFor(prompt.choice.modelId))
+      : switchFailureMessage(result.reason, labelFor(currentModelId ?? nativeBinding?.modelId), labelFor(prompt.choice.modelId), result.detail);
+    setSwitchPrompt({ ...prompt, state: { kind: 'error', message } });
+  };
+
+  /** X / Esc: stay on the current model. While summarizing, that means Stop. */
+  const dismissSwitch = () => {
+    if (switchPrompt?.state.kind === 'working') {
+      switchAbandoned.current = true;
+      window.claude.native.interrupt?.(sessionId!);
+    }
+    setSwitchPrompt(null);
   };
 
   const applyFast = (v: boolean) => {
@@ -362,7 +439,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
   return createPortal(
     // Overlay layer L2 — theme-driven scrim/surface via Scrim/OverlayPanel.
     <>
-      <Dialog open onClose={onClose} title={isNative ? "Model" : "Model & Effort"} size="panel" scrollBody={false}>
+      <Dialog screen="chat/model-picker" open onClose={onClose} title={isNative ? "Model" : "Model & Effort"} size="panel" scrollBody={false}>
 
         {!loaded ? (
           <LoadingState what="models" />
@@ -379,6 +456,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 duplicated text once the picker opens straight into view. */}
             <section>
               <ModelPicker
+                key={pickerEpoch}
                 value={isNative ? nativeValue : (currentModel ? { runtime: 'claude', alias: currentModel } : null)}
                 onSelect={(c) => { void applyChoice(c); }}
                 includeClaude={!isNative}
@@ -466,6 +544,17 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
         )}
       </Dialog>
 
+      {switchPrompt && (
+        <ModelSwitchPrompt
+          open
+          currentLabel={labelFor(currentModelId ?? nativeBinding?.modelId)}
+          targetLabel={labelFor(switchPrompt.choice.modelId)}
+          state={switchPrompt.state}
+          onConfirm={() => { void confirmSwitch(); }}
+          onClose={dismissSwitch}
+        />
+      )}
+
       {/* Fast mode confirmation — L3 (critical/destructive) because enabling
          Fast mode bills per-token on top of any Pro/Max subscription. */}
       {fastConfirmOpen && (
@@ -478,6 +567,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
             size="prompt"
             aria-label="Enable Fast mode?"
             scrollBody={false}
+            screen="chat/model-picker/fast-mode"
           >
             <div className="p-5 space-y-4">
               <div className="flex items-start gap-3">

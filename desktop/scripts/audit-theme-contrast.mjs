@@ -52,7 +52,7 @@ const builtinDir = resolve(scriptDir, '..', 'src', 'renderer', 'themes', 'builti
 //
 // Bump these deliberately when adding rules to contrast-rules.js. If a change
 // LOWERS them, that is the review conversation this guard exists to force.
-const EXPECTED_RULES = { HARD: 32, SURFACE: 6, SOFT: 3 };
+const EXPECTED_RULES = { HARD: 32, SURFACE: 6, SOFT: 4 }; // SOFT 4: + Minimalist control outline (2026-09-24)
 
 const coverage = { HARD: new Set(), SURFACE: new Set(), SOFT: new Set() };
 const skippedEverywhere = new Map(); // rule name -> how many themes skipped it

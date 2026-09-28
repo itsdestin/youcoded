@@ -16,8 +16,9 @@
 // here (project-scoped). The "+ Add external file" affordance moved into
 // FilesTab (artifact-scoped) since it operates on the active project's artifacts.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useArtifact } from '../../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { ScreenBand } from '../ScreenBand';
 import { workbenchScreenFrame } from '../../workbench-mode';
@@ -86,6 +87,7 @@ function readStoredFileView(): FileViewMode {
 import { Button, Checkbox, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
 import { isRemoteMode } from '../../platform';
+import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface ProjectViewProps {
   // cwd of the conversation that is focused RIGHT NOW (undefined on the welcome
@@ -167,7 +169,11 @@ export function matchProjectByPath<T extends { path: string }>(
 }
 
 export function ProjectView(props: ProjectViewProps) {
-  const { state, dispatch } = useArtifact();
+  // WHY narrow selectors (perf, 2026-09-23): Project View stays mounted all
+  // run; reading the whole artifact state redrew it (and its tab bar) whenever
+  // any session wrote a file. It now redraws only for its own two values.
+  const dispatch = useArtifactDispatch();
+  const projectViewOpen = useArtifactSelector((s) => s.projectViewOpen);
   const [projects, setProjects] = useState<CentralIndexProject[]>([]);
   // WHY a separate flag: `projects` starts as `[]`, which is ALSO what a
   // brand-new install's index returns. Without this the first-run explainer
@@ -240,10 +246,10 @@ export function ProjectView(props: ProjectViewProps) {
   const onFilesMutated = useCallback(() => setCountsKey((k) => k + 1), []);
   const onFilesClearSearch = useCallback(() => setArtifactSearch(''), []);
   // WHY: ProjectView is the ONE reader of the app-wide file state for this screen.
-  // It re-renders on every file any session writes; FilesTab is handed only the
-  // single value it shows, so that render stops here instead of redrawing up to
-  // 2,000 hidden cards. `dispatch` from useReducer is stable.
-  const pvActiveId = state.activeArtifactBySession[PV_SESSION] ?? null;
+  // FilesTab is handed only the single value it shows, so any render of this
+  // view stops here instead of redrawing up to 2,000 hidden cards. `dispatch`
+  // is the artifact store's, stable for the app's lifetime.
+  const pvActiveId = useArtifactSelector((s) => s.activeArtifactBySession[PV_SESSION] ?? null);
   // Files picked from the native dialog, staged for the Move/Copy confirm
   // dialog. collisions = basenames among sources that already exist in the
   // destination folder, computed BEFORE the dialog opens (see importFiles).
@@ -302,11 +308,20 @@ export function ProjectView(props: ProjectViewProps) {
   // ContextEditorOverlay / HowContextWorksPopup render them below.
   const [editingContext, setEditingContext] = useState<ContextFile | null>(null);
   const [infoScope, setInfoScope] = useState<ContextScope | null>(null);
+  // Photo-only build: `shoot` opens a tab, the file filter, the switcher or Add project by name.
+  useScreenOpen('projects/files', () => setTab('files'));
+  useScreenOpen('projects/files/filter', () => { setTab('files'); setFilterOpen(true); });
+  useScreenOpen('projects/conversations', () => setTab('conversations'));
+  useScreenOpen('projects/context', () => setTab('context'));
+  useScreenOpen('projects/switcher', () => setSwitcherOpen(true));
+  useScreenOpen('projects/add', () => { setSwitcherOpen(false); setAddOpen(true); });
+  // Same modal the hero's "Turn on sync" button opens, seeded from the active project.
+  useScreenOpen('projects/turn-on-sync', () => { if (activeProject) setTurnOnSyncFor({ path: activeProject.path, name: activeProject.name }); });
 
   // ESC closes the browser via the shared LIFO stack — the header says
   // "Esc · Back to chat", so the key must actually work. Child overlays
   // (detail, switcher, editor, delete modal) register later → they pop first.
-  useEscClose(state.projectViewOpen, () => dispatch({ type: 'PROJECT_VIEW_CLOSED' }));
+  useEscClose(projectViewOpen, () => dispatch({ type: 'PROJECT_VIEW_CLOSED' }));
   // The delete-confirm modal takes Esc priority while open (registered after
   // the browser's own handler because it mounts later — LIFO).
   useEscClose(!!deletingProject, () => { setDeletingProject(null); setAlsoDeleteSidecar(false); });
@@ -318,7 +333,7 @@ export function ProjectView(props: ProjectViewProps) {
   // any early return — Rules of Hooks. Don't move below the projectViewOpen guard
   // or React throws "Rendered more hooks than during the previous render".
   useEffect(() => {
-    if (!state.projectViewOpen) return;
+    if (!projectViewOpen) return;
     // Fresh data each time the browser is opened — the caches only de-duplicate
     // within a single open session (project switches / tab toggles), so clear
     // them on open so newly-created conversations/context show up.
@@ -349,10 +364,35 @@ export function ProjectView(props: ProjectViewProps) {
       (window.claude as any).artifacts.listProjectsIndex({ withCounts: true }).then((res2: any) => {
         if (cancelled || !res2?.ok) return;
         setProjects(res2.projects);
-      });
-    });
+      }).catch(() => { /* the fast list above already shows; reopening or a reconnect asks again */ });
+    }).catch(() => { /* reopening the view, or a remote reconnect (below), asks again */ });
     return () => { cancelled = true; };
-  }, [state.projectViewOpen]);
+  }, [projectViewOpen]);
+
+  // After a remote reconnect, an open Project View asks again for its project list and
+  // the chosen project's conversations and counts. WHY: each was read once per open, so a
+  // read lost during a phone's drop left the list or the Conversations tab empty until the
+  // view was closed and reopened (2026-09-11 phone pass sweep). It does NOT re-home: the
+  // project being browsed stays chosen (only a first answer, when none was chosen, picks
+  // one). The Files tab reloads itself (useProjectWatch).
+  useOnRemoteReconnect(() => {
+    // (Combined branch: master's perf work replaced `state` with narrow selectors;
+    // the callback is re-read every render, so this is the current value.)
+    if (!projectViewOpen) return;
+    convCache.current.clear();
+    ctxCache.current.clear();
+    Promise.resolve((window.claude as any).artifacts.listProjectsIndex({ withCounts: true })).then((res: any) => {
+      if (!res?.ok) return;
+      setProjects(res.projects);
+      setIndexLoaded(true);
+      setActiveProject((prev) => prev
+        ?? matchProjectByPath(res.projects, activeCwdRef.current)
+        ?? (res.projects.length > 0 ? res.projects[0] : null));
+    }).catch(() => { /* the next reconnect, or reopening the view, asks again */ });
+    // Re-runs the hero/tab fetch below in place (no reset to zeros): with the caches
+    // cleared it reads conversations and context afresh.
+    setCountsKey((k) => k + 1);
+  });
 
   // Compute hero data + tab data whenever the active project changes. The four
   // IPC calls run in PARALLEL (Promise.all) so first paint waits on the slowest,
@@ -478,13 +518,13 @@ export function ProjectView(props: ProjectViewProps) {
   // changes. catch → null (Android has no syncspaces handlers; the UI simply
   // shows no sync affordances when status is unavailable).
   useEffect(() => {
-    if (!state.projectViewOpen) return;
+    if (!projectViewOpen) return;
     let cancelled = false;
     (window.claude as any).syncSpaces.status()
       .then((s: SyncStatusData) => { if (!cancelled) setSyncStatus(s); })
       .catch(() => { if (!cancelled) setSyncStatus(null); });
     return () => { cancelled = true; };
-  }, [state.projectViewOpen, refreshKey, countsKey, activeProject?.path]);
+  }, [projectViewOpen, refreshKey, countsKey, activeProject?.path]);
 
   // Live refresh: "Sync now"/background syncs must update the hero line + dots
   // live; the open-gated fetch alone goes stale (the red→green flip and "Last
@@ -495,7 +535,7 @@ export function ProjectView(props: ProjectViewProps) {
   // subscription and any pending timer so a late tick can't setState after
   // close/unmount. catch → null, same convention as the fetch above.
   useEffect(() => {
-    if (!state.projectViewOpen) return;
+    if (!projectViewOpen) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let listChanged = false; // a coalesced 'projects-changed' arrived this batch
@@ -539,9 +579,9 @@ export function ProjectView(props: ProjectViewProps) {
       if (timer) clearTimeout(timer);
       unsubscribe();
     };
-  }, [state.projectViewOpen]);
+  }, [projectViewOpen]);
 
-  if (!state.projectViewOpen) return null;
+  if (!projectViewOpen) return null;
 
   // Add a project = open the unified AddProjectModal (spec §3). It routes to
   // create-new / keep-in-place / move+sync itself — this just opens it (and
@@ -729,6 +769,7 @@ export function ProjectView(props: ProjectViewProps) {
     // view has (Destin, 2026-09-17: "add the same styled frame/header in
     // projects view. we will unify these separate page/menu styles").
     <div className="screen-view fixed inset-0 bg-panel z-40 flex flex-col" data-screen-frame={workbenchScreenFrame()}>
+      <ScreenMark name="projects" />
       <ScreenBand
         settingsOpen={props.settingsOpen}
         onToggleSettings={props.onToggleSettings}
@@ -940,6 +981,10 @@ export function ProjectView(props: ProjectViewProps) {
               model this must take its NATURAL height and let the page scroll,
               not clamp itself to the viewport and scroll internally. */}
           <div className="flex-1 overflow-hidden min-h-0 w-full max-w-[1100px] mx-auto max-sm:flex-none max-sm:overflow-visible">
+            {/* Each tab is marked once its content has loaded. */}
+            {activeProject && tab === 'files' && <ScreenMark name="projects/files" />}
+            {activeProject && tab === 'conversations' && conversations && <ScreenMark name="projects/conversations" />}
+            {activeProject && tab === 'context' && context && <ScreenMark name="projects/context" />}
             {/* Files stays MOUNTED and hides when another tab is active. It is
                 the only tab that holds a main-process project watcher, and
                 dropping it on the way out means rebuilding it (a full tree walk

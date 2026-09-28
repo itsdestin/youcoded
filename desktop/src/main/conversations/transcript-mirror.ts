@@ -96,7 +96,7 @@ async function copyInto(src: string, dest: string, shouldCommit?: () => boolean)
 // inside the chain makes the decision and the rename atomic with respect to
 // every other call on that dest.
 const destChain = new Map<string, Promise<unknown>>();
-function runSerialized<T>(dest: string, op: () => Promise<T>): Promise<T> {
+export function runSerializedTranscriptDestination<T>(dest: string, op: () => Promise<T>): Promise<T> {
   const prev = (destChain.get(dest) ?? Promise.resolve()) as Promise<unknown>;
   const settled = prev.then(op, op); // run after prev settles, regardless of prev's own outcome
   // The map only needs to know WHEN the previous op finished, never whether it
@@ -112,7 +112,7 @@ function runSerialized<T>(dest: string, op: () => Promise<T>): Promise<T> {
 // Local → space. Copies only when the local file is STRICTLY LARGER than the
 // space copy (append-only growth) or when no space copy exists yet.
 export function mirrorIn(opts: { localJsonlPath: string; spaceTranscriptPath: string }): Promise<MirrorResult> {
-  return runSerialized(opts.spaceTranscriptPath, async () => {
+  return runSerializedTranscriptDestination(opts.spaceTranscriptPath, async () => {
     const localSize = await sizeOf(opts.localJsonlPath);
     // Local gone (CC cleanup) — NEVER propagate deletion into the durable copy.
     if (localSize === null) return { copied: false };
@@ -144,7 +144,7 @@ export function mirrorIn(opts: { localJsonlPath: string; spaceTranscriptPath: st
 // re-checks liveness right before the rename, as late as possible, so a
 // session that started mid-copy still aborts the commit.
 export function materializeOut(opts: { spaceTranscriptPath: string; localJsonlPath: string; shouldCommit?: () => boolean }): Promise<MirrorResult> {
-  return runSerialized(opts.localJsonlPath, async () => {
+  return runSerializedTranscriptDestination(opts.localJsonlPath, async () => {
     const spaceSize = await sizeOf(opts.spaceTranscriptPath);
     // No space copy — nothing to materialize (and we never delete the local one).
     if (spaceSize === null) return { copied: false };

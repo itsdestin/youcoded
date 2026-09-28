@@ -21,7 +21,7 @@ import { claudeAliasForModelId } from '../../shared/model-ids';
  *  launch (App has already said why), so the caller stays open for a retry. */
 export type ResumeHandler = (
   sessionId: string, projectSlug: string, projectPath: string, model: string, dangerous: boolean,
-  launchInNewWindow?: boolean, provider?: string, nativeBinding?: ModelBinding,
+  launchInNewWindow?: boolean, provider?: string, nativeBinding?: ModelBinding, savedName?: string,
 ) => void | boolean | Promise<void | boolean>;
 
 /** The launch choices, held for as long as the host is open — moving between
@@ -89,7 +89,9 @@ export function useResumeOptions(defaultModel?: string, defaultSkipPermissions?:
   const resume = async (s: PastSession, onResume: ResumeHandler): Promise<boolean> => {
     setResumingId(s.sessionId);
     try {
-      const result = await onResume(s.sessionId, s.projectSlug, s.projectPath, model, dangerous, newWindow, s.provider, bindingFor(s) ?? undefined);
+      // WHY: show the selected saved title while backend creation keeps its
+      // recognizable placeholder for auto-naming on resume.
+      const result = await onResume(s.sessionId, s.projectSlug, s.projectPath, model, dangerous, newWindow, s.provider, bindingFor(s) ?? undefined, s.name);
       return result !== false; // undefined (non-awaiting wiring) or true → launched
     } finally {
       setResumingId(null);

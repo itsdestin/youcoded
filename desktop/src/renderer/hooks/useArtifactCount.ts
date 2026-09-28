@@ -15,12 +15,15 @@
 // cache before the drawer is ever opened — see useMissingArtifacts.ts for why
 // that ordering is what removes the drawer's deleted-row flash.
 
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactSelector } from '../state/ArtifactContext';
 import { useMissingArtifacts } from './useMissingArtifacts';
 
 export function useArtifactCount(activeSessionId: string | null, projectRoot?: string): number {
-  const { state } = useArtifact();
-  const sessionArtifacts = activeSessionId ? (state.sessionArtifacts[activeSessionId] ?? []) : [];
+  // WHY a narrow selector (perf, 2026-09-23): the badge redraws only when the
+  // active session's file list changes. The `?? []` stays OUTSIDE the selector —
+  // a fresh array inside it would read as a change on every dispatch.
+  const selected = useArtifactSelector((s) => (activeSessionId ? s.sessionArtifacts?.[activeSessionId] : undefined));
+  const sessionArtifacts = selected ?? [];
 
   const liveIds = sessionArtifacts.filter((a) => a.status !== 'deleted').map((a) => a.id);
   // Re-checking when the drawer OPENS used to live here; it now lives in the

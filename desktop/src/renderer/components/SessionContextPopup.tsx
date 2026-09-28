@@ -384,6 +384,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
       fill
       title="What the assistant was given"
       subtitle="Its instructions, skills and tools for this chat."
+      screen="chat/session-context"
     >
       <div className="space-y-5">
         {/* The tab strip scrolls sideways rather than squeezing, so no label is

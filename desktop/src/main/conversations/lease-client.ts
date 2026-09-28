@@ -44,13 +44,13 @@ export interface LeaseClientOpts {
   leaseDir: () => string | null;
   // Injected transport (the SyncHub socket's request()). Resolves a LeaseResult,
   // or null when the hub is disconnected / timed out — never rejects.
-  hubRequest: (op: string, sessionId: string, deviceId: string) => Promise<LeaseResult | null>;
+  hubRequest: (op: string, sessionId: string, deviceId: string, transferNonce?: string) => Promise<LeaseResult | null>;
   // Upward callback the caller (Task 8 service) supplies to trigger holder-side
   // teardown (interrupt -> mirror -> release -> destroy). `from` is OPTIONAL — a
   // deliberate deviation from the plan's non-optional shape: renew-failure
   // teardowns attribute the takeover from the reply's holder when the hub
   // reports one, but a race where the holder is unknown still has no `from`.
-  onTakeoverRequest: (sessionId: string, from?: { deviceId: string; device: string }) => void;
+  onTakeoverRequest: (sessionId: string, from?: { deviceId: string; device: string }, transferNonce?: string) => void;
 }
 
 export interface LeaseQueryResult {
@@ -72,11 +72,11 @@ export interface LeaseClient {
   acquire(sessionId: string): Promise<LeaseResult | null>;
   release(sessionId: string): Promise<void>;
   query(sessionId: string): Promise<LeaseQueryResult>;
-  takeover(sessionId: string): Promise<LeaseResult | null>;
+  takeover(sessionId: string, transferNonce?: string): Promise<LeaseResult | null>;
   // Inbound: the service calls this when the hub delivers a takeover-request
   // lease-event. Filtered HERE because the client is the only thing that knows
   // which sessions THIS device holds.
-  handleTakeoverRequest(sessionId: string, from?: { deviceId: string; device: string }): void;
+  handleTakeoverRequest(sessionId: string, from?: { deviceId: string; device: string }, transferNonce?: string, senderDeviceId?: string | null): void;
   isHeld(sessionId: string): boolean;
   destroy(): void;
 }
@@ -157,6 +157,9 @@ export function sweepLegacyLeaseDir(personalRoot: string): number {
 export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
   // sessionId -> renew timer. Membership IS "this device holds the lease".
   const held = new Map<string, NodeJS.Timeout>();
+  // A takeover can arrive after the hub granted, but before acquire's reply.
+  // Forward it to admission too; it owns cancellation/cleanup of the opening.
+  const acquiring = new Map<string, number>();
   // sessionId -> monotonically-increasing generation. Bumped on every acquire /
   // fresh renew loop. A renew tick captures the gen it was scheduled under and
   // bails if the current gen has moved on — this is what makes a re-acquire
@@ -206,7 +209,7 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       ? async () => {
         console.log(`[lease-debug] ${debugTag} start ${sessionId} dir=${opts.leaseDir()} <- ${caller}`);
         try { await op(); } finally {
-          // Async check: this module must never call sync fs (ast-grep no-sync-fs-in-main-hot-path).
+          // Async check: this module must never call sync fs (PROTECTED in tests/main-blocking-calls.test.ts).
           const exists = await fs.promises.access(leaseFile(sessionId) ?? '').then(() => true, () => false);
           console.log(`[lease-debug] ${debugTag} end   ${sessionId} exists=${exists}`);
         }
@@ -395,6 +398,7 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       // function, so a release() fired back-to-back (no await between) can
       // never enqueue its delete ahead of this write.
       const slot = reserveFileSlot(sessionId);
+      acquiring.set(sessionId, (acquiring.get(sessionId) ?? 0) + 1);
 
       // WHY try/finally: the reserved slot blocks every LATER file op for this
       // session until it is settled. If anything between here and the settle
@@ -413,10 +417,10 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
           // Released while the hub was thinking. Hold nothing, write nothing,
           // and — because the hub may have granted the lease AFTER it processed
           // that release — tell it once more, best-effort, that we do not want
-          // it. The reply is handed back unchanged for the caller's record; the
-          // session it was for is already gone.
+          // it. A cancelled claim is a denial, not a successful grant that a
+          // caller could accidentally use to launch a writer.
           void opts.hubRequest('release', sessionId, opts.deviceId).catch(() => { /* best-effort */ });
-          return res ?? { ok: true, op: 'acquire', sessionId, holder: null };
+          return { ok: false, op: 'acquire', sessionId, holder: null };
         }
 
         if (res && !res.ok) {
@@ -447,9 +451,14 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
         // resolves — awaiting a promise here does not block the event loop, only
         // the caller.
         await slot.done;
-        return res ?? { ok: true, op: 'acquire', sessionId, holder: { deviceId: opts.deviceId, device: opts.deviceName, expiresAt } };
+        // WHY: an optimistic local hold is not a confirmed hub grant. Keep null
+        // distinguishable for admission; callers may still open while offline.
+        return res;
       } finally {
         slot.settle(null);
+        const remaining = acquiring.get(sessionId)! - 1;
+        if (remaining) acquiring.set(sessionId, remaining);
+        else acquiring.delete(sessionId);
       }
     },
 
@@ -503,17 +512,21 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       return { held: false, self: false, source: 'none' };
     },
 
-    async takeover(sessionId) {
+    async takeover(sessionId, transferNonce) {
       // Thin passthrough: the DO relays this as a takeover-request to the current
       // holder, who answers by releasing. The requester (Task 9) then polls query.
-      try { return await opts.hubRequest('takeover', sessionId, opts.deviceId); }
+      try { return await opts.hubRequest('takeover', sessionId, opts.deviceId, transferNonce); }
       catch { return null; }
     },
 
-    handleTakeoverRequest(sessionId, from) {
-      // Only act if THIS device currently holds the session — otherwise the
-      // request isn't for us (the hub broadcasts to the whole account).
-      if (!held.has(sessionId)) {
+    handleTakeoverRequest(sessionId, from, transferNonce, senderDeviceId) {
+      // WHY: the Worker resolves sender from its CURRENT lease record. A nonce
+      // for a different holder cannot become evidence at this install; legacy
+      // events without nonce still follow the old teardown path.
+      if (transferNonce && (senderDeviceId !== opts.deviceId || from?.deviceId === undefined)) return;
+      // Ignore other conversations, but include our opening attempts: the hub
+      // may already consider us the holder while its grant is still in flight.
+      if (!held.has(sessionId) && !acquiring.has(sessionId)) {
         console.log(`[lease] takeover-request for ${sessionId.slice(0, 8)} ignored — not held here (held: ${held.size})`);
         return;
       }
@@ -521,7 +534,10 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       // The callback is caller-supplied (untrusted) and dispatched synchronously
       // from the service's hub-event handler — a throw here would propagate to
       // Electron main. Swallow so a bad handler can never crash the process.
-      try { opts.onTakeoverRequest(sessionId, from); } catch { /* never crash main */ }
+      try {
+        if (transferNonce === undefined) opts.onTakeoverRequest(sessionId, from);
+        else opts.onTakeoverRequest(sessionId, from, transferNonce);
+      } catch { /* never crash main */ }
     },
 
     isHeld(sessionId) { return held.has(sessionId); },

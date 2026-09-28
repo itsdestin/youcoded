@@ -155,3 +155,41 @@ describe('MarkdownHeadPreview is inert', () => {
     expect(container.textContent).toContain('docs');
   });
 });
+
+// A preview whose read failed (a phone's connection dropping mid-read) used to stay failed
+// for the page's life: the failure was cached with the path.
+describe('AttachmentChip after a failed read', () => {
+  const PATH = '/home/destin/Documents/notes.txt';
+
+  it('the next chip for the same file asks again', async () => {
+    readHead.mockRejectedValueOnce(new Error('lost'));
+    const first = render(<AttachmentChip path={PATH} onRemove={() => {}} />);
+    await flush();
+    first.unmount();
+    render(<AttachmentChip path={PATH} onRemove={() => {}} />);
+    await flush();
+    expect(readHead).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/Call Sam/)).toBeTruthy();
+  });
+
+  it('a mounted chip asks again after a remote reconnect', async () => {
+    const { REMOTE_RECONNECTED_EVENT } = await import('../src/renderer/remote-events');
+    readHead.mockRejectedValueOnce(new Error('lost'));
+    render(<AttachmentChip path={PATH} onRemove={() => {}} />);
+    await flush();
+    expect(screen.queryByText(/Call Sam/)).toBeNull();
+    await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+    await flush();
+    expect(screen.getByText(/Call Sam/)).toBeTruthy();
+  });
+
+  it('a successful read is still shared, and a reconnect does not repeat it', async () => {
+    const { REMOTE_RECONNECTED_EVENT } = await import('../src/renderer/remote-events');
+    render(<AttachmentChip path={PATH} onRemove={() => {}} />);
+    await flush();
+    await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+    render(<AttachmentChip path={PATH} onRemove={() => {}} />);
+    await flush();
+    expect(readHead).toHaveBeenCalledTimes(1);
+  });
+});

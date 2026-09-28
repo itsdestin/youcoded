@@ -4,7 +4,20 @@ package com.youcoded.app.parser
  *  [submitInput] is a rare SECOND pty write, sent ~120ms after [input], used only
  *  by the arrow-navigation fallback: arrows and "\r" must never share one write
  *  (see [InkSelectParser.toPromptButtons]). */
-data class PromptButton(val label: String, val input: String, val submitInput: String? = null)
+data class PromptButton(
+    val label: String,
+    val input: String,
+    val submitInput: String? = null,
+    /** Answer by VERIFIED navigation instead of a fixed keystroke: option [Pick.index]
+     *  of the menu whose option set is [Pick.signature]. Set for menus with no printed
+     *  numbers (CC 2.1.281's trust / bypass / MCP dialogs, where a typed digit does
+     *  nothing). The shared React UI's state/ink-menu-driver.ts does the typing — one
+     *  arrow per write, each confirmed on the WebView's own terminal, Enter alone —
+     *  and refuses if its own parse's signature differs from this one. */
+    val pick: Pick? = null,
+)
+
+data class Pick(val signature: String, val index: Int)
 
 data class ParsedMenu(
     val id: String,
@@ -15,6 +28,12 @@ data class ParsedMenu(
     // The number CC prints in front of each option ("1. Yes" -> 1), index-aligned
     // with [options]. This is what toPromptButtons sends.
     val optionNumbers: List<Int?> = emptyList(),
+    /** The first line of the dialog's own box ("Accessing workspace:"), wrapped rows joined. */
+    val heading: String? = null,
+    /** Claude Code's dialog footer ("Enter to confirm · Esc to cancel") sits under the options. */
+    val dialog: Boolean = false,
+    /** Labels in order joined with U+241E — MUST equal desktop's signatureOf(). */
+    val signature: String = "",
 )
 
 object InkSelectParser {
@@ -41,8 +60,10 @@ object InkSelectParser {
     // conversation can't contain it — a single common word is never acceptable (the old
     // "trust" key relabeled ANY menu whenever the word appeared nearby; fixed 2026-07-16
     // in lockstep with desktop's ink-select-parser.ts — keep the two maps in sync).
-    // Note: bypass permissions prompt is handled by a hardcoded handler in ManagedSession,
-    // not by the generic InkSelectParser, because it uses Enter/Esc (not arrow navigation).
+    // The bypass-permissions warning is read HERE like any other dialog (the
+    // "running in bypass permissions mode" entry below → "Skip Permissions Warning");
+    // the hardcoded ManagedSession handler that typed a blind DOWN+Enter was removed
+    // 2026-09-24, because on CC 2.1.281 the dialog is unnumbered and "No, exit" first.
     private val TITLE_OVERRIDES = mapOf(
         // Folder-trust prompt — anchored on the "Quick safety check:" opener of the
         // CC ~2.1.2xx rewrite. The previous anchor ("files you trust", from the old
@@ -73,7 +94,27 @@ object InkSelectParser {
         // Key on "limit to reset" (unique to option 1) rather than the generic
         // "What do you want to do?" title to avoid false matches on future menus.
         "limit to reset" to "Usage Limit Reached",
+        // CC 2.1.281's bypass warning heading ("WARNING: Claude Code running in Bypass
+        // Permissions mode"). Replaces ManagedSession's hardcoded handler, which typed a
+        // blind "DOWN, then Enter" (2026-09-24).
+        "running in bypass permissions mode" to "Skip Permissions Warning",
+        // Project MCP-server approval (a folder with .mcp.json), CC 2.1.281.
+        "mcp servers may execute code" to "New MCP Server Found",
     )
+
+    // Keyed on the sorted, lower-cased option set — for dialogs whose single labels
+    // are too generic ("Yes, I accept"). Keep in sync with desktop's
+    // OPTION_SET_TITLE_OVERRIDES.
+    private val OPTION_SET_TITLE_OVERRIDES = mapOf(
+        "no, exit|yes, i accept" to "Skip Permissions Warning",
+    )
+
+    /** Claude Code's dialog footer (desktop: DIALOG_FOOTER). */
+    private val DIALOG_FOOTER = Regex("""(enter to confirm|esc to (cancel|exit|reject)|space to select)""", RegexOption.IGNORE_CASE)
+    /** A multi-select checkbox row ("[✔] demo") — never modelled as buttons. */
+    private val CHECKBOX_ROW = Regex("""^\[[ ✔✓x×]\]\s""")
+    private val CURSOR_ROW = Regex("""^(\s*)([❯>])(\s+)(\S.*)$""")
+    private const val SIG_SEP = "␞"
 
     // Overrides keyed on an OPTION LABEL rather than on body text above the menu.
     // Body text is fragile: extractTitle only looks 10 lines up, and CC's dialogs grow
@@ -106,6 +147,12 @@ object InkSelectParser {
             SELECTED_LINE.matches(line.trimEnd())
         }
         if (selectorIndex < 0) return null
+
+        // CC 2.1.281 draws its trust, bypass and MCP-approval dialogs with NO numbers.
+        // Those get the stricter reader (desktop: parseUnnumbered) — the lenient walk
+        // below would take any indented text for an option (2026-09-24).
+        val selectedRest = cleanLines[selectorIndex].trimEnd().replace(Regex("""^\s*[❯>]\s*"""), "")
+        if (OPTION_NUMBER.find(selectedRest) == null) return parseUnnumbered(cleanLines, selectorIndex)
 
         // Gather contiguous option lines around the selector
         val options = mutableListOf<String>()
@@ -202,7 +249,127 @@ object InkSelectParser {
             selectedIndex = selectedIndex,
             description = description,
             optionNumbers = optionNumbers,
+            signature = options.joinToString(SIG_SEP),
         )
+    }
+
+    /**
+     * Read a dialog whose options carry NO printed number. Port of desktop's
+     * parseUnnumbered (ink-select-parser.ts) — keep the two in step; parity is pinned
+     * by InkSelectParserStartupTest against the same real captures.
+     *
+     * Requires Claude Code's box rule above and footer below; an option row starts at
+     * exactly the cursor row's label column; a row at that column that is the wrapped
+     * tail of the previous label is told apart by the greedy-wrap rule against the
+     * dialog's width (the rule's length) and anything too close to call refuses the
+     * whole dialog. Checkbox (multi-select) dialogs and a second cursor are refused.
+     */
+    private fun parseUnnumbered(lines: List<String>, selectorIdx: Int): ParsedMenu? {
+        val selectorLine = lines[selectorIdx].trimEnd()
+        val m = CURSOR_ROW.matchEntire(selectorLine) ?: return null
+        val labelCol = m.groupValues[1].length + m.groupValues[2].length + m.groupValues[3].length
+        fun colOf(l: String) = l.length - l.trimStart().length
+
+        var top = -1
+        var width = 0
+        for (i in (selectorIdx - 1) downTo maxOf(0, selectorIdx - 120)) {
+            val t = lines[i].trim()
+            if (PROMPT_BOUNDARY.matches(t)) { top = i + 1; width = t.length; break }
+        }
+        if (top < 0) return null
+
+        var first = selectorIdx
+        for (i in (selectorIdx - 1) downTo top) {
+            val l = lines[i].trimEnd()
+            if (l.isBlank() || colOf(l) != labelCol || Regex("""^\s*[❯>]""").containsMatchIn(l)) break
+            first = i
+        }
+
+        data class Row(var text: String, var lastRow: String, val cursor: Boolean)
+        val rows = mutableListOf<Row>()
+        var last = selectorIdx
+        for (i in first until lines.size) {
+            val raw = lines[i].trimEnd()
+            if (raw.isBlank()) { if (rows.isNotEmpty() && i > selectorIdx) break; continue }
+            val isCursor = i == selectorIdx
+            if (!isCursor && (colOf(raw) != labelCol || DIALOG_FOOTER.containsMatchIn(raw))) break
+            val text = if (isCursor) m.groupValues[4].trim() else raw.trim()
+            val prev = rows.lastOrNull()
+            if (prev != null && !isCursor) {
+                when (wrapsInto(prev.lastRow, raw, width)) {
+                    "ambiguous" -> return null
+                    "yes" -> { prev.text += " $text"; prev.lastRow = raw; last = i; continue }
+                }
+            }
+            rows.add(Row(text, raw, isCursor))
+            last = i
+        }
+
+        val options = rows.map { it.text }
+        val selectedIndex = rows.indexOfFirst { it.cursor }
+        if (options.size < 2 || selectedIndex < 0) return null
+        if (options.any { it.length > 200 }) return null
+        if (options.any { CHECKBOX_ROW.containsMatchIn(it) }) return null
+        if (!hasFooterBelow(lines, last)) return null
+
+        val title = extractTitle(lines, first, lines.joinToString("\n"), options, top, boxed = true)
+        val description = extractDescription(lines, first, title, top)
+        val id = "menu_" + options.joinToString("_") { it.take(10) }
+            .lowercase().replace(Regex("[^a-z0-9_]"), "")
+        return ParsedMenu(
+            id = id,
+            title = title,
+            options = options,
+            selectedIndex = selectedIndex,
+            description = description,
+            optionNumbers = options.map { null },
+            heading = readHeading(lines, top, first, width),
+            dialog = true,
+            signature = options.joinToString(SIG_SEP),
+        )
+    }
+
+    /** Greedy word-wrap test (desktop: wrapsInto): "yes" | "no" | "ambiguous". */
+    private fun wrapsInto(prevRow: String, row: String, width: Int): String {
+        if (width == 0) return "ambiguous"
+        val word = row.trim().split(Regex("""\s+""")).firstOrNull() ?: ""
+        val need = prevRow.trimEnd().length + 1 + word.length
+        if (need > width) return "yes"
+        if (need <= width - 2) return "no"
+        return "ambiguous"
+    }
+
+    /** The first line of the dialog's box, wrapped rows joined (desktop: readHeading). */
+    private fun readHeading(lines: List<String>, top: Int, firstOptionLine: Int, width: Int): String? {
+        var i = top
+        while (i < firstOptionLine && lines[i].isBlank()) i++
+        if (i >= firstOptionLine) return null
+        var heading = lines[i].trim()
+        var prevRow = lines[i]
+        var j = i + 1
+        while (j < firstOptionLine && width > 0) {
+            val row = lines[j]
+            if (row.isBlank() || Regex("""[.:?!]$""").containsMatchIn(heading)) break
+            if (wrapsInto(prevRow, row, width) == "no") break
+            heading += " " + row.trim()
+            prevRow = row
+            j++
+        }
+        return heading.ifEmpty { null }
+    }
+
+    /** Is Claude Code's dialog footer within a few non-empty lines under the options? */
+    private fun hasFooterBelow(lines: List<String>, lastOptionLine: Int): Boolean {
+        var seen = 0
+        var i = lastOptionLine + 1
+        while (i < lines.size && seen < 4) {
+            val t = lines[i].trim()
+            i++
+            if (t.isEmpty()) continue
+            seen++
+            if (DIALOG_FOOTER.containsMatchIn(t) && t.length < 100) return true
+        }
+        return false
     }
 
     /**
@@ -257,18 +424,23 @@ object InkSelectParser {
         fullText: String,
         options: List<String> = emptyList(),
         bodyStart: Int = maxOf(0, firstOptionLine - 10),
+        boxed: Boolean = false,
     ): String {
         // Option-label overrides win: they don't depend on how far the prompt's body
         // text happens to sit above the menu (see OPTION_TITLE_OVERRIDES).
         for (option in options) {
             OPTION_TITLE_OVERRIDES[option.trim().lowercase()]?.let { return it }
         }
+        OPTION_SET_TITLE_OVERRIDES[options.map { it.trim().lowercase() }.sorted().joinToString("|")]?.let { return it }
         // Check title overrides against only the ~10 lines ABOVE the menu, not the
         // full screen text — matches desktop's ink-select-parser.ts. Full-screen
         // matching let stale content from earlier prompts (still in the buffer)
         // relabel every subsequent menu.
         // Never look above the prompt's own box, and never further than 10 lines.
-        val searchStart = maxOf(bodyStart, firstOptionLine - 10)
+        // When the box's top rule was found (`boxed`), everything below it is the
+        // prompt's own text — a long dialog on a narrow screen pushes its heading past
+        // 10 lines up (desktop: extractTitle's `boxed`).
+        val searchStart = if (boxed) bodyStart else maxOf(bodyStart, firstOptionLine - 10)
         val nearby = lines.subList(searchStart, firstOptionLine.coerceAtLeast(searchStart))
             .joinToString(" ") { stripAnsi(it) }.lowercase()
         for ((keyword, title) in TITLE_OVERRIDES) {
@@ -313,17 +485,18 @@ object InkSelectParser {
      * so both platforms emit identical keystrokes.
      */
     fun toPromptButtons(menu: ParsedMenu): List<PromptButton> {
-        val down = "\u001b[B"
-        val count = menu.options.size
+        val signature = menu.signature.ifEmpty { menu.options.joinToString(SIG_SEP) }
         return menu.options.mapIndexed { index, label ->
             val number = menu.optionNumbers.getOrNull(index)
             if (number != null && number in 1..9) {
                 PromptButton(label = label, input = number.toString())
             } else {
-                // Fallback for a menu whose options carry no usable digit: relative
-                // DOWN steps (wrap-correct), with the Enter as a SEPARATE write.
-                val steps = ((index - menu.selectedIndex) % count + count) % count
-                PromptButton(label = label, input = down.repeat(steps), submitInput = "\r")
+                // No printed number (CC 2.1.281's startup dialogs, where a typed digit
+                // does nothing): no fixed keystroke at all. The old "DOWN × steps from
+                // the cursor seen when the card appeared, then Enter" was blind — a
+                // moved cursor confirmed the wrong option, which here can mean trusting
+                // a folder. The renderer answers `pick` by verified navigation.
+                PromptButton(label = label, input = "", pick = Pick(signature, index))
             }
         }
     }

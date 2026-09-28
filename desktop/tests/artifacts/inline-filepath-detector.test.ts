@@ -108,4 +108,40 @@ describe('detectFilepaths', () => {
     expect(matches).toHaveLength(1);
     expect(matches[0].path).toBe('docs.old/file.md');
   });
+
+  it('finds a path ending in a well-known file that has no extension', () => {
+    for (const [text, path] of [
+      ['edit /repo/Dockerfile now', '/repo/Dockerfile'],
+      ['run ./Makefile', './Makefile'],
+      ['see docs/LICENSE.', 'docs/LICENSE'],
+      ['in (~/proj/Procfile)', '~/proj/Procfile'],
+      ['C:\\code\\app\\Jenkinsfile is new', 'C:\\code\\app\\Jenkinsfile'],
+    ] as const) {
+      expect(detectFilepaths(text).map((m) => m.path), text).toEqual([path]);
+    }
+  });
+
+  it('keeps extensionless and ordinary paths in source order', () => {
+    expect(detectFilepaths('see src/Makefile and src/main.ts').map((m) => m.path))
+      .toEqual(['src/Makefile', 'src/main.ts']);
+  });
+
+  it('does not make a chip of an ordinary word after a slash', () => {
+    // Only the known names count — "and/or", "input/output" and a path-like
+    // prose fragment stay text.
+    expect(detectFilepaths('either and/or works')).toEqual([]);
+    expect(detectFilepaths('the input/output layer')).toEqual([]);
+    expect(detectFilepaths('see /usr/bin/python')).toEqual([]);
+    // A known name that is only the START of a longer name is not that file.
+    expect(detectFilepaths('open src/Makefiles now')).toEqual([]);
+  });
+
+  it('does not make a chip of a bare known name with no folder', () => {
+    // Same rule as a bare "plan.md": a folder separator is required.
+    expect(detectFilepaths('update the Dockerfile')).toEqual([]);
+  });
+
+  it('prefers the extension match for a known name with an extension', () => {
+    expect(detectFilepaths('see /repo/Dockerfile.dev now').map((m) => m.path)).toEqual(['/repo/Dockerfile.dev']);
+  });
 });

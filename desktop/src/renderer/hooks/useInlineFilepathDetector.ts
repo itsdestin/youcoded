@@ -44,6 +44,29 @@ const PATH_RE = /(?:^|(?<=\s|[\(\[\{,'"\`>]))((?:[a-zA-Z]:[\\/]|~[\\/]|\.{1,2}[\
 // directory name like `docs.old/file.md` must keep working.
 const DOMAIN_FIRST_SEGMENT_RE = /^(?:[\w-]+\.)+(?:com|org|net|io|dev|ai|co|app|edu|gov|me|us|uk)$/i;
 
+// Files that conventionally have NO extension. PATH_RE above needs a `.ext`, so
+// `/repo/Dockerfile` or `./Makefile` stayed dead grey text. WHY a closed list
+// rather than "any last segment": an open rule would put a clickable pill on
+// every `and/or`, `input/output` and `/usr/bin/python` in prose. Exact,
+// case-sensitive names only; the same "at least one folder separator" rule as
+// PATH_RE applies, so a bare "Dockerfile" in a sentence stays text, just as a
+// bare "plan.md" does.
+const KNOWN_EXTENSIONLESS_NAMES = [
+  'Dockerfile', 'Containerfile', 'Makefile', 'GNUmakefile', 'makefile',
+  'Justfile', 'justfile', 'Procfile', 'Gemfile', 'Rakefile', 'Podfile', 'Pipfile',
+  'Brewfile', 'Vagrantfile', 'Jenkinsfile', 'Caddyfile', 'PKGBUILD',
+  'LICENSE', 'LICENCE', 'COPYING', 'NOTICE', 'README', 'CHANGELOG', 'AUTHORS',
+  'CONTRIBUTORS', 'CODEOWNERS',
+];
+// Same opening group and terminators as PATH_RE; the tail is an optional run of
+// folders ending in a separator, then one of the names above.
+const KNOWN_NAME_PATH_RE = new RegExp(
+  String.raw`(?:^|(?<=\s|[\(\[\{,'"\x60>]))((?:[a-zA-Z]:[\\/]|~[\\/]|\.{1,2}[\\/]|\/|[\w\-.]+[\\/])(?:[^\s\)\]\},'"\x60<:;]*[\\/])?(?:`
+    + KNOWN_EXTENSIONLESS_NAMES.join('|')
+    + String.raw`))(?=$|[\s\)\]\},'"\x60<:;]|[.!?](?:\s|$))`,
+  'g',
+);
+
 export interface FilepathMatch {
   path: string;
   start: number;
@@ -57,13 +80,27 @@ export function detectFilepaths(text: string): FilepathMatch[] {
   while ((m = PATH_RE.exec(text))) {
     if (!looksLikeExtension(m[2])) continue;
     const p = m[1];
-    // Bare-relative candidates only: absolute/tilde/drive/dot-relative paths
-    // can't be domains.
-    if (/^[\w\-.]/.test(p) && !/^[a-zA-Z]:[\\/]/.test(p) && !p.startsWith('.')) {
-      const firstSeg = p.split(/[\\/]/, 1)[0];
-      if (DOMAIN_FIRST_SEGMENT_RE.test(firstSeg)) continue;
-    }
+    if (firstSegmentIsDomain(p)) continue;
     out.push({ path: p, start: m.index, end: m.index + m[0].length });
   }
-  return out;
+  // Paths ending in a known extensionless file (see KNOWN_EXTENSIONLESS_NAMES).
+  // Their terminator lookahead refuses a following `.x`, so they can never
+  // overlap an extension match; the overlap check is belt and braces.
+  KNOWN_NAME_PATH_RE.lastIndex = 0;
+  while ((m = KNOWN_NAME_PATH_RE.exec(text))) {
+    const p = m[1];
+    const start = m.index;
+    const end = m.index + m[0].length;
+    if (firstSegmentIsDomain(p)) continue;
+    if (out.some((o) => start < o.end && o.start < end)) continue;
+    out.push({ path: p, start, end });
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+// Bare-relative candidates only: absolute/tilde/drive/dot-relative paths
+// can't be domains.
+function firstSegmentIsDomain(p: string): boolean {
+  if (!/^[\w\-.]/.test(p) || /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('.')) return false;
+  return DOMAIN_FIRST_SEGMENT_RE.test(p.split(/[\\/]/, 1)[0]);
 }

@@ -1,0 +1,14 @@
+{
+ "screen": "                                                  \n──────────────────────────────────────────────────\n Accessing workspace:                             \n                                                  \n /tmp/startup-project-settings-7ue9OH/project     \n                                                  \n Quick safety check: Is this a project you        \n created or one you trust? (Like your own code, a \n well-known open source project, or work from     \n your team). If not, take a moment to review      \n what's in this folder first.                     \n                                                  \n Claude Code'll be able to read, edit, and        \n execute files here.                              \n                                                  \n ⚠ This folder pre-approves 1 tool permission in  \n .claude/settings.json:                           \n   Bash(ls:*)                                     \n These will apply without asking. Only proceed if \n you trust this configuration.                    \n                                                  \n Security guide                                   \n                                                  \n ❯ No, exit                                       \n   Yes, I trust this folder                       \n                                                  \n Enter to confirm · Esc to cancel                 \n                                                  \n                                                  \n                                                  \n",
+ "expected": {
+  "title": "Trust This Folder?",
+  "options": [
+   "No, exit",
+   "Yes, I trust this folder"
+  ],
+  "selectedIndex": 0,
+  "signature": "No, exit␞Yes, I trust this folder",
+  "heading": "Accessing workspace:",
+  "picks": true
+ }
+}

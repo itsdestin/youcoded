@@ -3,6 +3,8 @@ import {
   parseNvidiaSmiMemory,
   parseRegistryQwMemorySize,
   parseSystemProfilerVram,
+  amdLinuxPool,
+  parseKfdNode,
 } from '../src/main/models/gpu-detector';
 
 const GB = 1024 ** 3;
@@ -343,5 +345,43 @@ describe('gpuDeviceName — the marker\'s device list', () => {
   it('a name that is nothing BUT a parenthetical keeps its original text', () => {
     // Stripping to an empty string would put a blank where a name should be.
     expect(gpuDeviceName([{ backend: 'ROCm0', name: '(unknown device)', isGpu: true }])).toBe('(unknown device)');
+  });
+});
+
+// Roadmap (local-models, 2026-09-07): on an AMD APU the drm "VRAM" file is the
+// BIOS carve-out. Readings below are this Strix Halo laptop's own, 2026-09-23:
+// card1 mem_info_vram_total 4294967296, mem_info_gtt_total 85899345920; kfd
+// node 0 = CPU (32 cores, 0 SIMDs), node 1 = GPU (80 SIMDs, local_mem_size 0).
+describe('amdLinuxPool — carve-out + GTT on an APU, VRAM on a discrete card', () => {
+  const T = 121.5 * GB;
+  const cpu = parseKfdNode('cpu_cores_count 32\nsimd_count 0\ngfx_target_version 0\n');
+  const apuGpu = parseKfdNode('cpu_cores_count 0\nsimd_count 80\ngfx_target_version 110501\nlocal_mem_size 0\n');
+  const card = { vramTotal: 4294967296, gttTotal: 85899345920 };
+
+  it('an APU scores against carve-out + GTT (= the engine\'s own 86016 MiB), marked shared', () => {
+    expect(amdLinuxPool([card], [cpu, apuGpu], T)).toEqual({ bytes: 86016 * MIB, shared: true });
+  });
+  it('an older kernel that folds the APU into the CPU node is still an APU', () => {
+    const folded = parseKfdNode('cpu_cores_count 16\nsimd_count 24\nlocal_mem_size 536870912\n');
+    expect(amdLinuxPool([card], [folded], T)?.shared).toBe(true);
+  });
+  it('never more than the machine physically has', () => {
+    expect(amdLinuxPool([{ vramTotal: 64 * GB, gttTotal: 64 * GB }], [apuGpu], 96 * GB)).toEqual({ bytes: 96 * GB, shared: true });
+  });
+  it('a discrete card keeps its own VRAM, not VRAM + GTT, and is not shared', () => {
+    const dgpu = parseKfdNode('cpu_cores_count 0\nsimd_count 96\nlocal_mem_size 25753026560\n');
+    expect(amdLinuxPool([{ vramTotal: 25753026560, gttTotal: 64 * GB }], [cpu, dgpu], T))
+      .toEqual({ bytes: 25753026560, shared: false });
+  });
+  it('an APU beside a discrete card: the discrete reading wins (never over-promise)', () => {
+    const dgpu = parseKfdNode('cpu_cores_count 0\nsimd_count 96\nlocal_mem_size 17179869184\n');
+    expect(amdLinuxPool([card, { vramTotal: 16 * GB, gttTotal: 60 * GB }], [cpu, apuGpu, dgpu], T))
+      .toEqual({ bytes: 16 * GB, shared: false });
+  });
+  it('without the kfd driver an APU cannot be told apart, so the old reading stands', () => {
+    expect(amdLinuxPool([card], null, T)).toEqual({ bytes: 4294967296, shared: false });
+  });
+  it('no card files → null', () => {
+    expect(amdLinuxPool([], [cpu, apuGpu], T)).toBeNull();
   });
 });

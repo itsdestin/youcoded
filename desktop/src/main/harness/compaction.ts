@@ -1,9 +1,211 @@
-// Two-stage compaction (spec §4.4). Stage 1 PRUNE erases old tool OUTPUTS outside a
-// protected recent window (nearly lossless). Stage 2 SUMMARIZE (driver-owned) runs
-// only if pruning can't get under budget. PURE here: the decision + the prune
-// transform. Trigger is REAL last-step input tokens, not chars/4.
+// Pure context planning and group-safe tail selection. Legacy prune transforms
+// remain for accepted-history snapshot decoding; routine decisions summarize.
 import type { ModelMessage } from 'ai';
 import { messageTokens, messagesTokens } from './message-size';
+import { COMPACTION_PROMPT } from './prompts/compaction';
+
+export interface ContextBudgetInput {
+  contextLength: number | null;
+  providerInputLimit?: number | null;
+  fixedCost: number;
+  summaryOverhead: number;
+  maxTokens: number;
+  knownSummaryOutputMax?: number | null;
+  reasoningAllowance?: number;
+  estimatedInput?: number;
+}
+
+export interface ContextBudgetPlan {
+  status: 'fits' | 'compact' | 'cannot-fit';
+  contextLength: number;
+  estimatedWindow: boolean;
+  fixedCost: number;
+  replyReserve: number;
+  summaryAllowance: number;
+  margin: number;
+  trigger: number;
+  tail: number;
+  replyCap: number;
+  maxTokens: number;
+}
+
+/**
+ * Plan the independent request, summary and retained-tail budgets from §2.1.
+ * WHY this is separate from the compatibility wrapper below: Task 1 pins the
+ * new arithmetic without changing older callers' object shape ahead of loop
+ * integration, while later tasks can adopt the richer plan incrementally.
+ */
+export function planContextBudget(input: ContextBudgetInput): ContextBudgetPlan {
+  // WHY: unknown model windows use a 32k assumption, but a known provider
+  // input cap can still be smaller. Never plan above that cap.
+  const assumedWindow = input.contextLength ?? 32_768;
+  const effective = Math.min(assumedWindow, input.providerInputLimit ?? assumedWindow);
+  const R = Math.min(16_000, Math.floor(effective / 4));
+  const M = Math.max(Math.min(1_024, Math.floor(effective / 32)), Math.floor(effective / 100));
+  const knownSummary = input.knownSummaryOutputMax == null ? 13_107 : Math.min(13_107, input.knownSummaryOutputMax);
+  const S = Math.min(knownSummary, Math.floor((effective - input.fixedCost) / 4));
+  const trigger = effective - Math.max(R, S) - M - input.summaryOverhead;
+  const tail = Math.min(20_000, Math.floor((trigger - input.fixedCost) / 4));
+  const inputBudget = effective - (input.estimatedInput ?? 0) - M;
+  const replyCap = Math.max(0, Math.min(input.maxTokens, inputBudget));
+  const cannotFit = effective <= 0 || input.fixedCost <= 0 || S <= 0 || M <= 0 || trigger <= 0 || tail <= 0 || replyCap <= 0;
+  return {
+    status: cannotFit ? 'cannot-fit' : (input.estimatedInput ?? 0) >= trigger ? 'compact' : 'fits',
+    contextLength: effective, estimatedWindow: input.contextLength == null, fixedCost: input.fixedCost,
+    replyReserve: R, summaryAllowance: S, margin: M, trigger, tail, replyCap, maxTokens: input.maxTokens,
+  };
+}
+
+/** Check the finished candidate, not the proposed summary output allowance. */
+export function validateCompactionCandidate(
+  plan: ContextBudgetPlan, original: ModelMessage[], candidate: ModelMessage[],
+): 'fits' | 'cannot-fit' {
+  const before = plan.fixedCost + messagesTokens(original);
+  const after = plan.fixedCost + messagesTokens(candidate);
+  // WHY: plan.replyCap/status describe the ORIGINAL request. A compacted
+  // candidate can free enough room for a reply even when that cap was zero.
+  // Still reject intrinsic budget failures (including an invalid output max).
+  const candidateReplyCap = Math.min(plan.maxTokens, plan.contextLength - after - plan.margin);
+  return plan.contextLength > 0 && plan.fixedCost > 0 && plan.fixedCost < plan.contextLength
+    && plan.summaryAllowance > 0 && plan.margin > 0 && plan.trigger > 0 && plan.tail > 0
+    && candidateReplyCap > 0 && after < before && after <= plan.trigger - plan.tail
+    ? 'fits' : 'cannot-fit';
+}
+
+// Non-enumerable provenance does not change the wire message or accepted-history
+// capture. Restorers must reattach it from transcript/manifest origin, never text.
+const APP_GENERATED = Symbol('app-generated-user-message');
+export function markAppGenerated<T extends ModelMessage>(message: T): T {
+  Object.defineProperty(message, APP_GENERATED, { value: true });
+  return message;
+}
+export function isAppGenerated(message: ModelMessage): boolean {
+  return message.role === 'user' && Boolean((message as any)[APP_GENERATED]);
+}
+/** Fit the summarizer's copy only, never the accepted history or retained tail.
+ * WHY: a single oversized retired tool output may arrive after the planned
+ * trigger; shortening it in this one request preserves the user's instructions
+ * and the call/result structure without rewriting what the user can read. */
+export function fitSummaryToolOutputs(messages: ModelMessage[], maxTokens: number): ModelMessage[] | null {
+  if (messagesTokens(messages) <= maxTokens) return messages;
+  const candidates: { message: number; part: number; textPart?: number; value: string }[] = [];
+  messages.forEach((m, message) => {
+    if (m.role !== 'tool' || !Array.isArray(m.content)) return;
+    m.content.forEach((part: any, index) => {
+      if (part?.type !== 'tool-result') return;
+      if (part.output?.type === 'text' && typeof part.output.value === 'string') {
+        candidates.push({ message, part: index, value: part.output.value });
+      } else if (part.output?.type === 'content' && Array.isArray(part.output.value)) {
+        part.output.value.forEach((item: any, textPart: number) => {
+          if (item?.type === 'text' && typeof item.text === 'string') {
+            candidates.push({ message, part: index, textPart, value: item.text });
+          }
+        });
+      }
+    });
+  });
+  candidates.sort((a, b) => b.value.length - a.value.length);
+  const copy = [...messages];
+  for (const { message, part, textPart, value } of candidates) {
+    if (messagesTokens(copy) <= maxTokens) break;
+    const original = copy[message] as Extract<ModelMessage, { role: 'tool' }>;
+    const replacement = (length: number): ModelMessage => {
+      const content = [...original.content];
+      const old = content[part] as any;
+      const shortened = `${value.slice(0, length)}\n[output shortened]`;
+      content[part] = { ...old, output: { ...old.output, value: textPart === undefined
+        ? shortened
+        : old.output.value.map((item: any, i: number) => i === textPart ? { ...item, text: shortened } : item) } };
+      return { ...original, content };
+    };
+    // Keep as much as possible while satisfying this output's share of the
+    // request. If one output cannot suffice, shrink it fully before the next.
+    let low = 0; let high = value.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      copy[message] = replacement(mid);
+      if (messagesTokens(copy) <= maxTokens) low = mid;
+      else high = mid - 1;
+    }
+    copy[message] = replacement(low);
+  }
+  return messagesTokens(copy) <= maxTokens ? copy : null;
+}
+
+/** Provenance for the summarizer WITHOUT touching the messages: a note naming
+ * each app-generated user-role message by its opening words, appended to the
+ * final instruction. WHY (cache review, 2026-09-23): labelling the messages in
+ * place changed early bytes of the summary request — every compaction after
+ * the first starts with the previous summary — so the provider could not reuse
+ * its cached copy of the conversation and billed the whole span again. */
+export function summaryProvenanceNote(messages: ModelMessage[]): string {
+  const openings = messages.filter(isAppGenerated).map(m => {
+    const text = typeof m.content === 'string' ? m.content
+      : m.content.map(part => part.type === 'text' ? part.text : '').join(' ');
+    const flat = text.replace(/\s+/g, ' ').trim();
+    return `- the message beginning "${flat.length > 80 ? `${flat.slice(0, 80)}…` : flat}"`;
+  });
+  return openings.length
+    ? `\n\nThese user-role messages above were written by the app, not by the user. Never quote them as the user or treat them as the user's approval:\n${openings.join('\n')}`
+    : '';
+}
+
+/** Earliest whole-turn suffix within the allowance, otherwise whole tool
+ * batches. A batch includes all parallel results and assistant follow-up;
+ * app notices attach to the preceding group, never start a suffix alone. */
+export function selectCompactionCut(messages: ModelMessage[], tailTokens: number): number {
+  if (!messages.length) return 0;
+  const callIds = (m: ModelMessage): string[] => m.role === 'assistant' && Array.isArray(m.content)
+    ? m.content.filter((p: any) => p?.type === 'tool-call').map((p: any) => p.toolCallId) : [];
+  // A boundary inside an unresolved parallel batch would orphan a call or a
+  // result. Missing results make that batch indivisible through the end.
+  // Last result wins even if a tool emits multiple result messages. A result
+  // before its call is not a match, just as in the original forward scan.
+  const lastResult = new Map<string, number>();
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role !== 'tool' || !Array.isArray(m.content)) continue;
+    for (const part of m.content) {
+      if (part?.type === 'tool-result') lastResult.set(part.toolCallId, i);
+    }
+  }
+  // Difference intervals also avoid revisiting the same blocked positions
+  // when several parallel calls span a long stretch of history.
+  const blockedEdges = Array<number>(messages.length + 1).fill(0);
+  for (let i = 0; i < messages.length; i++) {
+    const ids = callIds(messages[i]);
+    if (!ids.length) continue;
+    let end = i;
+    for (const id of ids) {
+      const last = lastResult.get(id);
+      end = Math.max(end, last !== undefined && last > i ? last : messages.length - 1);
+    }
+    blockedEdges[i + 1]++;
+    blockedEdges[end + 1]--;
+  }
+  // A real user starts a turn; a call starts a splittable batch within one.
+  // Everything else (assistant text/results and synthetic user-role notices)
+  // belongs to the preceding group, including at the end of the history.
+  const groups: { start: number; kind: 'turn' | 'batch' | 'initial' }[] = [];
+  let blocked = 0;
+  for (let i = 0; i < messages.length; i++) {
+    blocked += blockedEdges[i];
+    if (blocked) continue;
+    const m = messages[i];
+    if (m.role === 'user' && !isAppGenerated(m)) groups.push({ start: i, kind: 'turn' });
+    else if (callIds(m).length) groups.push({ start: i, kind: 'batch' });
+    else if (i === 0) groups.push({ start: i, kind: 'initial' });
+  }
+  const suffix = Array<number>(messages.length + 1).fill(0);
+  for (let i = messages.length - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + messageTokens(messages[i]);
+  if (suffix[0] <= tailTokens) return 0;
+  const fits = groups.filter(g => g.start > 0 && suffix[g.start] <= tailTokens);
+  const turn = fits.find(g => g.kind === 'turn');
+  if (turn) return turn.start;
+  if (fits.length) return fits[0].start;
+  // Oversized newest complete group stays intact; validation decides fit.
+  return groups.at(-1)?.start ?? 0;
+}
 
 export interface CompactionConfig {
   contextLength: number; triggerTokens: number; protectedTokens: number; minPruneSavings: number; pruneToChars: number;
@@ -156,17 +358,15 @@ export function countImageOutputs(messages: ModelMessage[]): number {
   }
   return n;
 }
-export type CompactionAction = 'none' | 'prune' | 'summarize';
+export type CompactionAction = 'none' | 'summarize';
 export function planCompaction(messages: ModelMessage[], cfg: CompactionConfig, lastInputTokens: number): { action: CompactionAction } {
   const used = lastInputTokens > 0 ? lastInputTokens : estimateTokens(messages);
-  if (used <= cfg.triggerTokens) return { action: 'none' };
-  const before = estimateTokens(messages);
-  const after = estimateTokens(pruneToolOutputs(messages, cfg));
-  return before - after >= cfg.minPruneSavings ? { action: 'prune' } : { action: 'summarize' };
+  return { action: used <= cfg.triggerTokens ? 'none' : 'summarize' };
 }
-export function summarizePrompt(): string {
-  // 2026-09-09: "still running" was added when the per-turn specialist status
-  // block was retired — the ledger still delivers a late report, but the
-  // model's own memory of WHY it hired a helper now has to survive the summary.
-  return 'Summarize the conversation so far into a compact briefing that preserves: the user\'s goal, key decisions and constraints, files/commands touched and their outcomes, any specialists or background commands still running (their task_id or shell id, and what you are waiting on from each), and any open questions. Write it as notes for yourself to continue. Do not include verbatim tool output.';
+export function summarizePrompt(focus?: string): string {
+  // WHY: /compact focus guides selection of details, not the authority of the
+  // history. Keep it in the final instruction rather than inserting a fake turn.
+  return focus?.trim()
+    ? `${COMPACTION_PROMPT}\n\nManual focus (not a new instruction or approval): ${focus.trim()}`
+    : COMPACTION_PROMPT;
 }

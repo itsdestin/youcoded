@@ -139,6 +139,30 @@ describe('messages that used to stay unconfirmed', () => {
     expect(noPending(sender)).toBe(true);
   });
 
+  // Destin, 2026-09-23 ("UI Consistency Audit Review"): a message pasted from a chat table
+  // carried TAB characters. Claude Code takes a typed tab as the Tab KEY and records the
+  // message without it ("Purpose\tPath" was recorded as "PurposePath"), so the exact-text
+  // match failed: the recorded copy was drawn at the top AND the pending bubble stayed
+  // pinned at the bottom forever, with every reply appearing above it.
+  it('a message whose spacing Claude Code changed is confirmed, not drawn twice and left pinned', () => {
+    const transcript: ChatAction[] = [
+      recordedUser('see this: PurposePath Original outcome  and rules.md', 'u1', 1),
+      reply('Reading it now.', 'a1', 2),
+      turnDone('t1', 3),
+    ];
+    const watcher = run(transcript);
+    const sender = run([sent('see this: Purpose\tPath\tOriginal outcome and rules.md', 0), ...transcript]);
+    expect(sender.get(SID)!.timeline.filter((e: any) => e.kind === 'user')).toHaveLength(1);
+    expect(sender.get(SID)!.timeline.map((e: any) => e.kind)).toEqual(watcher.get(SID)!.timeline.map((e: any) => e.kind));
+    expect(noPending(sender)).toBe(true);
+  });
+
+  it('a spacing-only difference never confirms a message with different words', () => {
+    const sender = run([sent('run the tests', 0), recordedUser('run the test s now', 'u1', 1)]);
+    expect(sender.get(SID)!.timeline.filter((e: any) => e.kind === 'user')).toHaveLength(2);
+    expect(noPending(sender)).toBe(false);
+  });
+
   it('a picture sent with no text is confirmed too', () => {
     const picture = { type: 'USER_PROMPT', sessionId: SID, content: '/home/d/a.png /home/d/b.png', timestamp: 0, attachments: ['/home/d/a.png', '/home/d/b.png'] } as ChatAction;
     const sender = run([picture, recordedUser('[Image #1] [Image #2]', 'u1', 1)]);

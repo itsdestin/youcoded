@@ -21,6 +21,7 @@ import type { SkillEntry, PackageInfo, FeaturedData } from '../../shared/types';
 import type { ThemeRegistryEntryWithStatus } from '../../shared/theme-marketplace-types';
 import { useTheme } from './theme-context';
 import { useSkills } from './skill-context';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 // window.claude is typed for skills but not for theme.marketplace — cast via any
 const claude = () => (window as any).claude;
@@ -266,6 +267,19 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     demanded.current = true;
     void fetchAll();
   }, [fetchAll]);
+
+  // After a remote reconnect, a marketplace that has loaded but came back with a failure
+  // (the whole load, or the theme list alone) asks again. WHY: it loads once, on first
+  // demand, so a read lost during a phone's drop left the Themes tab empty or in error until
+  // the page reloaded (2026-09-11 phone pass sweep). A load that succeeded is not re-asked —
+  // a reconnect should not cost five requests for data nothing lost. Nor is a list the
+  // computer does not offer over remote access at all (`remote-unsupported: …`, today the
+  // theme catalogue) — asking again cannot change that answer.
+  const lastLoadFailed = useRef(false);
+  lastLoadFailed.current = !!error || (!!themesError && !/^remote-unsupported:/.test(themesError));
+  useOnRemoteReconnect(() => {
+    if (demanded.current && lastLoadFailed.current) void fetchAll();
+  });
 
   // A Retry from the Library covers BOTH lists: the marketplace's own and the
   // installed one SkillContext failed to load.

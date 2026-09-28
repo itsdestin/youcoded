@@ -1,0 +1,236 @@
+{
+ "ccVersion": "2.1.281",
+ "scenario": "bypass-untrusted-signed-in",
+ "key": "bypass-untrusted-signed-in-100x35",
+ "folder": "plain",
+ "trusted": false,
+ "args": [
+  "--dangerously-skip-permissions"
+ ],
+ "files": [],
+ "auth": true,
+ "cols": 100,
+ "rows": 35,
+ "capturedAt": "2026-09-24T04:48:22.290Z",
+ "chunks": [
+  {
+   "t": 207,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 217,
+   "b64": "G1s/MjVs"
+  },
+  {
+   "t": 217,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 222,
+   "b64": "DQ0KG1szODsyOzI1NTsxOTM7N23ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAbWzM5bQ0NChtbMkcbWzM4OzI7MjU1OzE5Mzs3bRtbMW1BY2Nlc3NpbmcbWzEyR3dvcmtzcGFjZTobWzIybRtbMzltDQ0KDQ0KG1syRxtbMW0vdG1wL3N0YXJ0dXAtYnlwYXNzLXVudHJ1c3RlZC1zaWduZWQtaW4tNEdSQU5zL3Byb2plY3QbWzIybQ0NCg0NChtbMkdRdWljaxtbOEdzYWZldHkbWzE1R2NoZWNrOhtbMjJHSXMbWzI1R3RoaXMbWzMwR2EbWzMyR3Byb2plY3QbWzQwR3lvdRtbNDRHY3JlYXRlZBtbNTJHb3IbWzU1R29uZRtbNTlHeW91G1s2M0d0cnVzdD8bWzcwRyhMaWtlG1s3Nkd5b3VyG1s4MUdvd24bWzg1R2NvZGUsG1s5MUdhDQ0KG1syR3dlbGwta25vd24bWzEzR29wZW4bWzE4R3NvdXJjZRtbMjVHcHJvamVjdCwbWzM0R29yG1szN0d3b3JrG1s0Mkdmcm9tG1s0N0d5b3VyG1s1Mkd0ZWFtKS4bWzU5R0lmG1s2Mkdub3QsG1s2N0d0YWtlG1s3MkdhG1s3NEdtb21lbnQbWzgxR3RvG1s4NEdyZXZpZXcbWzkxR3doYXQncxtbOThHaW4NDQobWzJHdGhpcxtbN0dmb2xkZXIbWzE0R2ZpcnN0Lg0NCg0NChtbMkdDbGF1ZGUbWzlHQ29kZSdsbBtbMTdHYmUbWzIwR2FibGUbWzI1R3RvG1syOEdyZWFkLBtbMzRHZWRpdCwbWzQwR2FuZBtbNDRHZXhlY3V0ZRtbNTJHZmlsZXMbWzU4R2hlcmUuDQ0KDQ0KG1syRxtbMzg7MjsxNTM7MTUzOzE1M21TZWN1cml0eRtbMTFHZ3VpZGUbWzM5bQ0NCg0NChtbMkcbWzM4OzI7MTc3OzE4NTsyNDlt4p2vG1s0R05vLBtbOEdleGl0G1szOW0NDQobWzRHWWVzLBtbOUdJG1sxMUd0cnVzdBtbMTdHdGhpcxtbMjJHZm9sZGVyDQ0KDQ0KG1syRxtbMzg7MjsxNTM7MTUzOzE1M21FbnRlchtbOEd0bxtbMTFHY29uZmlybRtbMTlHwrcbWzIxR0VzYxtbMjVHdG8bWzI4R2NhbmNlbBtbMzltDQ0KG1sxQxtbNEE="
+  },
+  {
+   "t": 224,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 975,
+   "b64": "G1sxRBtbNEING1sxQxtbNEEgG1s0R05vLCBleGl0DRtbMUMbWzFCG1szODsyOzE3NzsxODU7MjQ5beKdrxtbNEdZZXMsIEkgdHJ1c3QgdGhpcyBmb2xkZXIbWzM5bQ0NCg0KDQobWzFDG1szQQ=="
+  },
+  {
+   "t": 1064,
+   "b64": "G1s+NG0bWzx1G1s/MTAwNGwbWz8yMDMxbBtbPzIwMDRs"
+  },
+  {
+   "t": 1066,
+   "b64": "G1sxRBtbM0IbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbRxtbMUEbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMTdB"
+  },
+  {
+   "t": 1102,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 1104,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 1114,
+   "b64": "DQ0KG1szODsyOzI1NTsxMDc7MTI4beKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgBtbMzltDQ0KG1szRxtbMzg7MjsyNTU7MTA3OzEyOG0bWzFtV0FSTklORzobWzEyR0NsYXVkZRtbMTlHQ29kZRtbMjRHcnVubmluZxtbMzJHaW4bWzM1R0J5cGFzcxtbNDJHUGVybWlzc2lvbnMbWzU0R21vZGUbWzIybRtbMzltDQ0KDQ0KG1szR0luG1s2R0J5cGFzcxtbMTNHUGVybWlzc2lvbnMbWzI1R21vZGUsG1szMUdDbGF1ZGUbWzM4R0NvZGUbWzQzR3dpbGwbWzQ4R25vdBtbNTJHYXNrG1s1Nkdmb3IbWzYwR3lvdXIbWzY1R2FwcHJvdmFsG1s3NEdiZWZvcmUbWzgxR3J1bm5pbmcNDQobWzNHcG90ZW50aWFsbHkbWzE1R2Rhbmdlcm91cxtbMjVHY29tbWFuZHMuDQ0KG1szR1RoaXMbWzhHbW9kZRtbMTNHc2hvdWxkG1syMEdvbmx5G1syNUdiZRtbMjhHdXNlZBtbMzNHaW4bWzM2R2EbWzM4R3NhbmRib3hlZBtbNDhHY29udGFpbmVyL1ZNG1s2MUd0aGF0G1s2NkdoYXMbWzcwR3Jlc3RyaWN0ZWQbWzgxR2ludGVybmV0G1s5MEdhY2Nlc3MNDQobWzNHYW5kG1s3R2NhbhtbMTFHZWFzaWx5G1sxOEdiZRtbMjFHcmVzdG9yZWQbWzMwR2lmG1szM0dkYW1hZ2VkLg0NCg0NChtbM0dCeRtbNkdwcm9jZWVkaW5nLBtbMThHeW91G1syMkdhY2NlcHQbWzI5R2FsbBtbMzNHcmVzcG9uc2liaWxpdHkbWzQ4R2ZvchtbNTJHYWN0aW9ucxtbNjBHdGFrZW4bWzY2R3doaWxlG1s3MkdydW5uaW5nG1s4MEdpbhtbODNHQnlwYXNzDQ0KG1szR1Blcm1pc3Npb25zG1sxNUdtb2RlLg0NCg0NChtbM0dodHRwczovL2NvZGUuY2xhdWRlLmNvbS9kb2NzL2VuL3NlY3VyaXR5DQ0KDQ0KG1szRxtbMzg7MjsxNzc7MTg1OzI0OW3ina8bWzVHTm8sG1s5R2V4aXQbWzM5bQ0NChtbNUdZZXMsG1sxMEdJG1sxMkdhY2NlcHQNDQoNDQobWzNHG1szODsyOzE1MzsxNTM7MTUzbRtbM21FbnRlchtbOUd0bxtbMTJHY29uZmlybRtbMjBHwrcbWzIyR0VzYxtbMjZHdG8bWzI5R2NhbmNlbBtbMjNtG1szOW0NDQobWzJDG1s0QQ=="
+  },
+  {
+   "t": 1871,
+   "b64": "G1syRBtbNEING1syQxtbNEEgG1s1R05vLCBleGl0DRtbMkMbWzFCG1szODsyOzE3NzsxODU7MjQ5beKdrxtbNUdZZXMsIEkgYWNjZXB0G1szOW0NDQoNCg0KG1syQxtbM0E="
+  },
+  {
+   "t": 1941,
+   "b64": "G1s+NG0bWzx1G1s/MTAwNGwbWz8yMDMxbBtbPzIwMDRs"
+  },
+  {
+   "t": 1942,
+   "b64": "G1syRBtbM0IbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbRxtbMUEbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMTdB"
+  },
+  {
+   "t": 2026,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 2036,
+   "b64": "G10wO+KcsyBDbGF1ZGUgQ29kZQc="
+  },
+  {
+   "t": 2069,
+   "b64": "G1szODsyOzIxNTsxMTk7ODdtIOKWkBtbNDg7MjswOzA7MG3ilpvilojilojilojilpvilogbWzEyRxtbMzltG1s0OW0bWzFtQ2xhdWRlG1sxOUdDb2RlG1syNEcbWzIybRtbMzg7MjsxNTM7MTUzOzE1M212Mi4xLjI4MRtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdt4pad4pacG1s0ODsyOzA7MDswbeKWiOKWiOKWiOKWiOKWiBtbNDlt4paI4paAG1sxMkcbWzM4OzI7MTUzOzE1MzsxNTNtT3B1cxtbMTdHNS41G1syMUcoMU0bWzI1R2NvbnRleHQpG1szNEfCtxtbMzZHQ2xhdWRlG1s0M0dNYXgbWzM5bQ0NChtbMzg7MjsyMTU7MTE5Ozg3bSAbWzNH4pad4padG1s2R+KWneKWnRtbMTJHG1szODsyOzE1MzsxNTM7MTUzbS90bXAvc3RhcnR1cC1ieXBhc3MtdW50cnVzdGVkLXNpZ25lZC1pbi00R1JBTnMvcHJvamVjdBtbMzltDQ0KDQ0KG1szR0dldBtbN0d0bxtbMTBHZmluaXNoZWQbWzE5R3dvcmsbWzI0R3Nvb25lchtbMzFHd2l0aBtbMzZHT3B1cxtbNDFHNS41LhtbNDZHU3dpdGNoG1s1M0dhbnl0aW1lG1s2MUd3aXRoG1s2NkcbWzM4OzI7MTc3OzE4NTsyNDltL21vZGVsG1szOW0uDQ0KDQ0KG1szODsyOzEzNjsxMzY7MTM2beKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgBtbMzltDQ0K4p2vwqAbWzdtVBtbMjdtG1sybXJ5G1s3RyJob3cbWzEyR2RvZXMbWzE3RzxmaWxlcGF0aD4bWzI4R3dvcms/IhtbMjJtDQ0KG1szODsyOzEzNjsxMzY7MTM2beKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgBtbMzltDQ0KG1szRxtbMzg7MjsyNTU7MTA3OzEyOG3ij7Xij7UbWzZHYnlwYXNzG1sxM0dwZXJtaXNzaW9ucxtbMjVHb24bWzM4OzI7MTUzOzE1MzsxNTNtIChzaGlmdCt0YWIbWzM5R3RvG1s0MkdjeWNsZSkbWzQ5R8K3G1s1MUfihpAbWzUzR2ZvchtbNTdHYWdlbnRzG1s4MUfil5AbWzgzR21lZGl1bRtbOTBHwrcbWzkyRy9lZmZvcnQbWzM5bQ0NChtbMkMbWzNB"
+  },
+  {
+   "t": 2176,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 2201,
+   "b64": "G1syRBtbM0ING1syQxtbM0EbWzdtIBtbMjdtG1tLDQ0KDQoNChtbMkMbWzNB"
+  },
+  {
+   "t": 2233,
+   "b64": "G1syRBtbM0ING1s4MEMbWzFBG1tLDQ0KG1s1NEcbWzM4OzI7MjU1OzEyMDsyMG1GYXN0G1s1OUdtb2RlG1s2NEdpcxtbNjdHbm93G1s3MUdhdmFpbGFibGUbWzgxR8K3G1s4M0cvZmFzdBtbODlHdG8bWzkyR3R1cm4bWzk3R29uG1szOW0NDQobWzJDG1s0QQ=="
+  },
+  {
+   "t": 2763,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 3014,
+   "b64": "G1syRBtbNEI="
+  },
+  {
+   "t": 3015,
+   "b64": "G1s/MTAwNGwbWz40bRtbPHUbWz8yMDMxbBtbPzIwMDRsGyhCDxtbPzEwMTZsG1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGwbWz8yNWgbNxtbchs4G10wOwc="
+  }
+ ],
+ "marks": [
+  {
+   "t": 968,
+   "label": "dialog-1-visible",
+   "chunkIndex": 5
+  },
+  {
+   "t": 969,
+   "label": "send",
+   "chunkIndex": 5,
+   "data": "\u001b[B"
+  },
+  {
+   "t": 1050,
+   "label": "send",
+   "chunkIndex": 6,
+   "data": "\r"
+  },
+  {
+   "t": 1131,
+   "label": "dialog-1-gone",
+   "chunkIndex": 11
+  },
+  {
+   "t": 1856,
+   "label": "dialog-2-visible",
+   "chunkIndex": 11
+  },
+  {
+   "t": 1857,
+   "label": "send",
+   "chunkIndex": 11,
+   "data": "\u001b[B"
+  },
+  {
+   "t": 1937,
+   "label": "send",
+   "chunkIndex": 12,
+   "data": "\r"
+  },
+  {
+   "t": 2018,
+   "label": "dialog-2-gone",
+   "chunkIndex": 14
+  },
+  {
+   "t": 2260,
+   "label": "main-prompt-visible",
+   "chunkIndex": 20
+  }
+ ],
+ "dialogs": [
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "Accessing workspace:",
+   "options": [
+    "No, exit",
+    "Yes, I trust this folder"
+   ],
+   "numbers": [
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "<tmp-path>",
+    "Quick safety check: Is this a project you created or one you trust? (Like your own code, a",
+    "well-known open source project, or work from your team). If not, take a moment to review what's in",
+    "this folder first.",
+    "Claude Code'll be able to read, edit, and execute files here.",
+    "Security guide"
+   ]
+  },
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "WARNING: Claude Code running in Bypass Permissions mode",
+   "options": [
+    "No, exit",
+    "Yes, I accept"
+   ],
+   "numbers": [
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "In Bypass Permissions mode, Claude Code will not ask for your approval before running",
+    "potentially dangerous commands.",
+    "This mode should only be used in a sandboxed container/VM that has restricted internet access",
+    "and can easily be restored if damaged.",
+    "By proceeding, you accept all responsibility for actions taken while running in Bypass",
+    "Permissions mode.",
+    "https://code.claude.com/docs/en/security"
+   ]
+  }
+ ],
+ "outcome": {
+  "steps": [
+   {
+    "dialog": 1,
+    "answered": "Yes, I trust this folder",
+    "gone": true
+   },
+   {
+    "dialog": 2,
+    "answered": "Yes, I accept",
+    "gone": true
+   }
+  ],
+  "reachedMainPrompt": true,
+  "exitCode": null,
+  "folderTrusted": true,
+  "bypassAccepted": true,
+  "userSettingsKeys": [
+   "hooks",
+   "skipDangerousModePermissionPrompt"
+  ],
+  "sessionStartHookAt": [
+   2165
+  ]
+ }
+}

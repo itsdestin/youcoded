@@ -2,7 +2,7 @@
 import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { ChatProvider, useChatDispatch } from '../state/chat-context';
+import { ChatProvider, useChatDispatch, useChatStore } from '../state/chat-context';
 import { useSessionAttention } from './useSessionAttention';
 
 const SESSIONS = [{ id: 's1' }, { id: 's2' }];
@@ -53,6 +53,31 @@ describe('useSessionAttention', () => {
     expect(result.current.attention.get('s1')?.awaitingApproval).toBe(true);
   });
 
+  it('flips to red + awaitingApproval when a password request lands on a running Bash call', () => {
+    // Bug (Destin, real-machine dogfood): the session read as still working
+    // while the password card waited — nothing marked it as needing input.
+    // PASSWORD_REQUEST flips the tool's status to 'awaiting-approval'
+    // (chat-reducer.ts), the SAME field this hook already reads generically
+    // for a permission ask — no password-specific branch needed here.
+    const { result } = renderHook(useHarness, { wrapper: Providers });
+    act(() => { result.current.dispatch({ type: 'SESSION_INIT', sessionId: 's1' }); });
+    act(() => {
+      result.current.dispatch({
+        type: 'TRANSCRIPT_TOOL_USE', sessionId: 's1', uuid: 'u1', toolUseId: 'bash-1',
+        toolName: 'Bash', toolInput: { command: 'sudo apt update' },
+      });
+    });
+    expect(result.current.attention.get('s1')?.status).toBe('green'); // running, no ask yet
+    act(() => {
+      result.current.dispatch({
+        type: 'PASSWORD_REQUEST', sessionId: 's1', requestId: 'req-1', toolUseId: 'bash-1',
+        command: 'sudo apt update',
+      });
+    });
+    expect(result.current.attention.get('s1')?.status).toBe('red');
+    expect(result.current.attention.get('s1')?.awaitingApproval).toBe(true);
+  });
+
   it('keeps Map IDENTITY stable when a dispatch changes no triple (the perf contract)', () => {
     const { result } = renderHook(useHarness, { wrapper: Providers });
     act(() => { result.current.dispatch({ type: 'SESSION_INIT', sessionId: 's1' }); });
@@ -83,5 +108,56 @@ describe('useSessionAttention', () => {
       });
     });
     expect(result.current.attention).not.toBe(before);   // gray → green
+  });
+
+  // Every store notification (each streamed word, in any tab) runs the
+  // snapshot. It used to recompute every session, walking each one's whole
+  // tool history for helper asks, only to find nothing changed.
+  it('does not re-walk any session whose colour inputs a notification left alone', () => {
+    const { result } = renderHook(() => ({ ...useHarness(), store: useChatStore() }), { wrapper: Providers });
+    act(() => { result.current.dispatch({ type: 'SESSION_INIT', sessionId: 's1' }); });
+    act(() => { result.current.dispatch({ type: 'SESSION_INIT', sessionId: 's2' }); });
+    act(() => { result.current.dispatch({ type: 'USER_PROMPT', sessionId: 's1', content: 'go', timestamp: 1 }); });
+    // Count walks of each session's tool map (the helper-ask scan iterates it).
+    let walks = 0;
+    for (const id of ['s1', 's2']) {
+      const tools = result.current.store.getState().get(id)!.toolCalls;
+      const real = tools.values.bind(tools);
+      tools.values = () => { walks++; return real(); };
+    }
+    // Timeline grows, the tool map and every colour input stay put.
+    for (let i = 0; i < 5; i++) {
+      act(() => { result.current.dispatch({ type: 'USER_PROMPT', sessionId: 's1', content: `more ${i}`, timestamp: 2 + i }); });
+    }
+    expect(walks).toBe(0);
+    expect(result.current.attention.get('s1')?.status).toBe('green');
+  });
+
+  it('still recomputes a session when a colour input changes', () => {
+    const { result } = renderHook(useHarness, { wrapper: Providers });
+    act(() => { result.current.dispatch({ type: 'SESSION_INIT', sessionId: 's1' }); });
+    act(() => { result.current.dispatch({ type: 'USER_PROMPT', sessionId: 's1', content: 'go', timestamp: 1 }); });
+    expect(result.current.attention.get('s1')?.status).toBe('green');
+    act(() => {
+      result.current.dispatch({
+        type: 'PERMISSION_REQUEST', sessionId: 's1', toolName: 'Bash',
+        input: { command: 'ls' }, requestId: 'req-1',
+      });
+    });
+    expect(result.current.attention.get('s1')?.status).toBe('red');
+  });
+
+  it('turns a session blue when it stops being the viewed/active one, with no store change', () => {
+    const ids = [{ id: 's1' }];
+    const { result, rerender } = renderHook(
+      ({ active }: { active: string }) => ({ dispatch: useChatDispatch(), attention: useSessionAttention(ids, new Set<string>(), active) }),
+      { wrapper: Providers, initialProps: { active: 's1' } },
+    );
+    act(() => { result.current.dispatch({ type: 'SESSION_INIT', sessionId: 's1' }); });
+    act(() => { result.current.dispatch({ type: 'USER_PROMPT', sessionId: 's1', content: 'go', timestamp: 1 }); });
+    act(() => { result.current.dispatch({ type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: 's1', uuid: 'u', timestamp: 2 } as any); });
+    expect(result.current.attention.get('s1')?.status).toBe('gray');
+    rerender({ active: 'other' });
+    expect(result.current.attention.get('s1')?.status).toBe('blue');
   });
 });

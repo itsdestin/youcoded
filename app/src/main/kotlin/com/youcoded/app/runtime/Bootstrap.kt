@@ -25,6 +25,61 @@ class Bootstrap(internal val context: Context) {
         // Last Claude Code release shipping cli.js. See the comment on
         // isFullySetup and installClaudeCode() for why this is pinned.
         private const val PINNED_CLAUDE_CODE_VERSION = "2.1.112"
+
+        /** Tier-3 Claude Code hook timeout (3h) — 30m above the relay asset's
+         *  2h30m so Claude Code never kills the hook first (no decision =
+         *  AskUserQuestion waits forever). Pinned by
+         *  desktop/tests/permission-timeout-margins.test.ts. */
+        const val PERMISSION_HOOK_TIMEOUT_SECONDS = 10800
+
+        /** Ensure the PermissionRequest blocking-relay entry exists AND carries
+         *  the current command + timeout. WHY: this used to append only when
+         *  missing, so every existing install kept `timeout: 300` forever — and
+         *  the relay asset redeploys on EVERY launch, so a relay-only change
+         *  would pit a 2h30m relay against Claude Code's 300s: Claude Code kills
+         *  the hook with no decision and AskUserQuestion wedges for good. Same
+         *  find-and-replace as desktop install-hooks.js. */
+        fun ensurePermissionRequestHook(
+            hooksObj: org.json.JSONObject,
+            blockingHookCommand: String,
+            timeoutSeconds: Int,
+        ) {
+            val prEvent = "PermissionRequest"
+            val prArray = hooksObj.optJSONArray(prEvent) ?: org.json.JSONArray()
+            var updated = false
+            for (i in 0 until prArray.length()) {
+                val hooks = prArray.optJSONObject(i)?.optJSONArray("hooks") ?: continue
+                for (j in 0 until hooks.length()) {
+                    val h = hooks.optJSONObject(j)
+                    if (h?.optString("command")?.contains("hook-relay-blocking.js") == true) {
+                        h.put("command", blockingHookCommand)
+                        h.put("timeout", timeoutSeconds)
+                        updated = true
+                    }
+                }
+            }
+            if (!updated) {
+                val hookDef = org.json.JSONObject()
+                    .put("type", "command")
+                    .put("command", blockingHookCommand)
+                    .put("timeout", timeoutSeconds)
+                val hookEntry = org.json.JSONObject()
+                    .put("matcher", ".*")
+                    .put("hooks", org.json.JSONArray().put(hookDef))
+                prArray.put(hookEntry)
+            }
+            hooksObj.put(prEvent, prArray)
+        }
+
+        /** Events wired to the fire-and-forget relay (see installHooks).
+         *  WHY SessionStart (2026-09-23, review F2): EventBridge's HookOwnerGate
+         *  claims a session's owner from its first SessionStart — the real
+         *  Claude Code fires it at launch, before it can start a nested
+         *  `claude`. Desktop has always registered it (install-hooks.js).
+         *  Pinned by BootstrapHookEventsTest. */
+        internal val RELAY_HOOK_EVENTS = listOf(
+            "SessionStart", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "Notification"
+        )
     }
 
     val usrDir: File get() = File(context.filesDir, "usr")
@@ -909,10 +964,8 @@ class Bootstrap(internal val context: Context) {
         val hookCommand = "$nodePath $relayPath"
         val blockingHookCommand = "$nodePath $blockingRelayPath"
 
-        // Fire-and-forget events use relay.js
-        val hookEvents = listOf(
-            "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "Notification"
-        )
+        // Fire-and-forget events use relay.js — see RELAY_HOOK_EVENTS.
+        val hookEvents = RELAY_HOOK_EVENTS
 
         // Read existing settings and merge (additive — don't overwrite user hooks)
         val existingJson = if (settingsFile.exists()) {
@@ -986,37 +1039,9 @@ class Bootstrap(internal val context: Context) {
             hooksObj.put(event, eventArray)
         }
 
-        // Register PermissionRequest with blocking relay (long timeout for user approval)
-        val prEvent = "PermissionRequest"
-        val prArray = hooksObj.optJSONArray(prEvent) ?: org.json.JSONArray()
-        var prRegistered = false
-        for (i in 0 until prArray.length()) {
-            val entry = prArray.optJSONObject(i)
-            val hooks = entry?.optJSONArray("hooks")
-            if (hooks != null) {
-                for (j in 0 until hooks.length()) {
-                    val h = hooks.optJSONObject(j)
-                    if (h?.optString("command")?.contains("hook-relay-blocking.js") == true) {
-                        prRegistered = true
-                        break
-                    }
-                }
-            }
-            if (prRegistered) break
-        }
-        if (!prRegistered) {
-            val hookEntry = org.json.JSONObject()
-            hookEntry.put("matcher", ".*")
-            val hooksList = org.json.JSONArray()
-            val hookDef = org.json.JSONObject()
-            hookDef.put("type", "command")
-            hookDef.put("command", blockingHookCommand)
-            hookDef.put("timeout", 300)
-            hooksList.put(hookDef)
-            hookEntry.put("hooks", hooksList)
-            prArray.put(hookEntry)
-        }
-        hooksObj.put(prEvent, prArray)
+        // Register PermissionRequest with the blocking relay — tier-3 timeout, see
+        // PERMISSION_HOOK_TIMEOUT_SECONDS for why the margin matters.
+        ensurePermissionRequestHook(hooksObj, blockingHookCommand, PERMISSION_HOOK_TIMEOUT_SECONDS)
 
         // Auto-title hook: always deploy the bundled asset. Post-decomposition,
         // title-update.sh is app-owned (not a toolkit hook) on both platforms —

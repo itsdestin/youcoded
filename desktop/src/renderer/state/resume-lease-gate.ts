@@ -1,69 +1,57 @@
+import type { SessionCreateResult } from '../../shared/types';
 import type { TakeoverDialogPhase } from '../components/takeover-dialog-copy';
 
-// The conversation-lease takeover gate, extracted from App.handleResumeSession
-// (2026-09-10) so a second resume surface — the buddy floater's own list —
-// cannot re-derive it slightly differently.
-//
-// WHY IT MUST BE SHARED. Three of its rules are invisible from the outside and
-// each was a bug once:
-//
-//   1. NEVER hard-block. Any lease error proceeds with the resume (spec §3).
-//      A gate that returned false on an exception would make a hub hiccup look
-//      like a broken Resume button.
-//   2. 'timeout' and 'undeliverable' get the SAME force path but DIFFERENT
-//      words. Collapsing them re-introduces the dishonest "isn't responding"
-//      framing that the 3-state redesign replaced: 'undeliverable' means the
-//      other device was never asked at all, so it must not be blamed for
-//      silence.
-//   3. A force whose `ok` is false means the lease was never overwritten — the
-//      other device may still be live. Proceed, but SAY SO. Silence here was
-//      what masked the 2026-07-18 bug.
-//
-// Also: the `self` flag is computed in the main process from the per-install
-// deviceId, NOT the hostname label. Gating on "held AND not self" is what stops
-// a lease left over from this very install (an unclean shutdown) popping a
-// confusing "active on <your own hostname>" dialog.
-//
-// Pinned by tests/resume-lease-gate.test.ts.
-
-export interface LeaseGateOptions {
-  /** The past conversation's id (the Claude/native session id, not a live one). */
+/** Shared by the main window and buddy. The backend owns admission and cleanup;
+ *  this helper only asks permission for handoff and retries a refused opening. */
+export async function runLeaseTakeoverGate(opts: {
   claudeSessionId: string;
-  /** Ask the user. Resolves true to proceed, false for "Never mind". */
   askTakeover: (device: string, phase: TakeoverDialogPhase) => Promise<boolean>;
-  /** Surface a non-blocking warning (a toast on main, an inline line in the buddy). */
   onWarn: (message: string) => void;
-}
-
-/**
- * @returns true to go ahead with the resume, false only when the USER declined.
- */
-export async function runLeaseTakeoverGate({
-  claudeSessionId, askTakeover, onWarn,
-}: LeaseGateOptions): Promise<boolean> {
-  try {
-    const q = await window.claude.syncSpaces?.leaseQuery?.(claudeSessionId);
-    if (!q?.held || q.self) return true;
-
-    const device = q.device || 'another device';
-    const confirmed = await askTakeover(device, 'confirm');
-    if (!confirmed) return false; // "Never mind" — abort the resume
-
-    const r = await window.claude.syncSpaces?.leaseTakeover?.(claudeSessionId);
-    if (r?.outcome === 'timeout' || r?.outcome === 'undeliverable') {
-      const forced = await askTakeover(device, r.outcome === 'undeliverable' ? 'undeliverable' : 'force');
-      if (!forced) return false; // "Never mind" — abort
-      const fr = await window.claude.syncSpaces?.leaseForce?.(claudeSessionId);
-      if (fr && fr.ok === false) {
-        onWarn(`Couldn't confirm the handoff from ${device} — it may still be editing this conversation, and recent turns may be missing.`);
-      }
-    } else if (r?.outcome === 'error') {
-      onWarn(`Couldn't reach ${device} to hand off this conversation — it may still be editing, and recent turns may be missing.`);
+  open: () => Promise<SessionCreateResult | null | undefined>;
+  /** Explicit handoff uses the pending attempt owner, not the legacy lease-force path. */
+  onHandoff?: (device: string) => Promise<void>;
+}): Promise<Extract<SessionCreateResult, { id: string }> | null> {
+  const { claudeSessionId, askTakeover, onWarn, open } = opts;
+  const sync = window.claude.syncSpaces;
+  // WHY share this path: a holder seen before opening and one discovered after a
+  // refused retry need the same explicit handoff and separate force consent.
+  const handoff = async (device: string): Promise<boolean> => {
+    if (!await askTakeover(device, 'confirm')) return false;
+    // WHY: the explicit transfer must wait for a nonce-bound receipt before a writer opens.
+    if (opts.onHandoff) { await opts.onHandoff(device); return false; }
+    const result = await sync?.leaseTakeover?.(claudeSessionId);
+    if (result?.outcome === 'timeout' || result?.outcome === 'undeliverable') {
+      const phase = result.outcome === 'undeliverable' ? 'undeliverable' : 'force';
+      if (!await askTakeover(device, phase)) return false;
+      const forced = await sync?.leaseForce?.(claudeSessionId);
+      if (!forced?.ok) onWarn(`Couldn't confirm the handoff from ${device}.`);
+    } else if (result?.outcome === 'error') {
+      onWarn(`Couldn't confirm the handoff from ${device}.`);
     }
-    // 'acquired' -> clean handoff, fall through and resume.
     return true;
-  } catch {
-    // Never-block: a lease query/takeover failure must not stop the resume.
-    return true;
+  };
+
+  // WHY query first: an existing holder gets the direct, explicit handoff flow.
+  // A lost race is a different outcome, detected by the backend at creation.
+  // WHY: only a failed QUERY permits ordinary offline resume. A failure
+  // starting the explicit pending route must never fall through to create.
+  const q = await sync?.leaseQuery?.(claudeSessionId).catch(() => undefined);
+  if (q?.held && !q.self && !await handoff(q.device || 'another device')) return null;
+
+  // Do not catch startup failures as lease failures. A refused Try again may
+  // offer handoff, but each subsequent open still passes backend admission.
+  let retryDenied = false;
+  for (;;) {
+    const result = await open();
+    if (!result) throw new Error('No session returned by session:create');
+    if (result.status !== 'lease-denied') return result;
+    const device = result.device || 'another device';
+    if (retryDenied) {
+      if (!await handoff(device)) return null;
+      retryDenied = false;
+    } else {
+      if (!await askTakeover(device, 'claim-denied')) return null;
+      retryDenied = true;
+    }
   }
 }

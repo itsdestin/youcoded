@@ -22,6 +22,7 @@ class SubagentIndex(
     private data class PendingEntry(
         val description: String,
         val agentType: String,
+        val toolUseId: String?,
         val events: MutableList<Any>,
         val firstSeenAt: Long,
     )
@@ -35,10 +36,18 @@ class SubagentIndex(
         unmatchedParents.add(ParentRecord(toolUseId, description, subagentType))
     }
 
+    /** `toolUseId` is the parent named in the helper's .meta.json. Exact, so it wins over
+     *  description matching — which missed calls that omit subagent_type ('' vs
+     *  'general-purpose') and could cross-bind same-named helpers. Mirrors desktop's
+     *  subagent-index.ts bindSubagent (2026-09-24). */
     @Synchronized
-    fun bindSubagent(agentId: String, description: String, agentType: String): String? {
-        val i = unmatchedParents.indexOfFirst {
-            it.description == description && it.subagentType == agentType
+    fun bindSubagent(agentId: String, description: String, agentType: String, toolUseId: String? = null): String? {
+        val i = if (toolUseId != null) {
+            unmatchedParents.indexOfFirst { it.toolUseId == toolUseId }
+        } else {
+            unmatchedParents.indexOfFirst {
+                it.description == description && it.subagentType.ifEmpty { "general-purpose" } == agentType
+            }
         }
         if (i < 0) return null
         val parent = unmatchedParents.removeAt(i)
@@ -55,19 +64,19 @@ class SubagentIndex(
     }
 
     @Synchronized
-    fun bufferPendingEvent(agentId: String, description: String, agentType: String, event: Any) {
+    fun bufferPendingEvent(agentId: String, description: String, agentType: String, event: Any, toolUseId: String? = null) {
         val existing = pending[agentId]
         if (existing != null) {
             existing.events.add(event)
             return
         }
-        pending[agentId] = PendingEntry(description, agentType, mutableListOf(event), nowMs())
+        pending[agentId] = PendingEntry(description, agentType, toolUseId, mutableListOf(event), nowMs())
     }
 
     @Synchronized
     fun tryFlushPending(agentId: String): FlushResult? {
         val entry = pending[agentId] ?: return null
-        val parentToolUseId = bindSubagent(agentId, entry.description, entry.agentType)
+        val parentToolUseId = bindSubagent(agentId, entry.description, entry.agentType, entry.toolUseId)
             ?: return null
         pending.remove(agentId)
         return FlushResult(parentToolUseId, entry.events.toList())
