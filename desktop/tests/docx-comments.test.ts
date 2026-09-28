@@ -198,6 +198,12 @@ describe('docx-comments — not a valid zip at all', () => {
 // a huge uncompressed size for one entry — the actual compressed bytes stay
 // a few dozen bytes, so this test never allocates anywhere near the declared
 // size itself; it only proves the guard trips on the declared metadata.
+// WHY a named budget: this file's one genuinely heavy test builds AND decompresses a real
+// 201 MB zip bomb (2.3 s alone, measured 2026-09-28). Under `verify.sh --full` every other
+// check runs at once and wall time inflates several-fold past the 30 s suite default;
+// 120 s is ~50x the alone measurement. (test-suite-hygiene.md: named, measured budgets.)
+const REAL_ZIP_BOMB_BUDGET_MS = 120_000;
+
 describe('docx-comments — a decompression-bomb-shaped archive', () => {
   it('refuses word/comments.xml declaring an implausible uncompressed size', async () => {
     const bytes = await buildDeclaredOversizeZip(
@@ -234,7 +240,7 @@ describe('docx-comments — a decompression-bomb-shaped archive', () => {
     );
     const result = await readDocxComments(bytes, 'docs/real-bomb.docx');
     expect(result).toEqual({ ok: false, error: 'archive-too-large' });
-  });
+  }, REAL_ZIP_BOMB_BUDGET_MS);
 
   // Code review 2026-09-27, desktop F2: a truncated/corrupted entry has
   // NOTHING to do with size and must not come back as 'archive-too-large' —

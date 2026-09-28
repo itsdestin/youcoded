@@ -162,6 +162,17 @@ describe('CommentsMargin — a comment resolveSelector could not anchor', () => 
 // count: unlike a Resume/Conversations row list, every comment here can be
 // scrolled to individually from its own highlight, so hiding rows below a
 // chunk boundary would silently break "click a highlight, see its card."
+// This test file's own wall-clock budget for the two stress tests below
+// (test-suite-hygiene.md's "budgets are measured, not guessed" — a named
+// constant, not the 30s suite default). Each does real work seven times over
+// (1 warm-up + 3 best-of-3 trials each of two sizes), and under
+// `verify.sh --full`'s own heavy concurrent load (every other check running
+// at once — 2026-09-28) ReadingHighlights.test.tsx's identical shape hit the
+// file's default 30s vitest timeout even though every individual mount
+// stayed well under its own CPU budget — wall clock under contention can
+// inflate far past CPU time alone. Same fix applied here defensively.
+const STRESS_TEST_BUDGET_MS = 90_000;
+
 describe('CommentsMargin — render cost at a realistic high comment count', () => {
   it('renders 1,000 text comments in one pass, with cost growing in line with the count', () => {
     // WHY a ratio, not a fixed ceiling: the first version asserted 1,000
@@ -172,6 +183,14 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
     // (e.g. every mark re-walking the whole document: 5x the comments → ~25x
     // the cost). Measuring 200 and 1,000 in the SAME run cancels out machine
     // load: linear work is ~5x, and anything under 12x is still near-linear.
+    //
+    // WHY best-of-3, not one sample each: a single ratio still flaked on a
+    // heavily loaded machine (2026-09-28: measured 16x against this 12x bound
+    // in ReadingHighlights.test.tsx's identical pin, one of the two mounts
+    // landing on a scheduling/GC hiccup the other didn't — same risk here).
+    // Contention can only ADD overhead to a mount, never remove it, so the
+    // MINIMUM across repeated trials of the same size is the closest any
+    // sample gets to the uncontended cost.
     const mountWith = (path: string, count: number) => {
       // One <p> per quote — a rendered markdown document is many block
       // elements, never one flat text blob, so this is the realistic DOM shape
@@ -198,46 +217,86 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
       content.remove();
       return (usedCpu.user + usedCpu.system) / 1000;
     };
+    const TRIALS = 3;
+    /** The best (minimum) of TRIALS same-size mounts, each its own path so
+     *  the store never carries duplicate comments across trials. */
+    const bestOf = (label: string, count: number) => {
+      const samples: number[] = [];
+      for (let t = 0; t < TRIALS; t++) samples.push(mountWith(`stress/${label}-${t}.md`, count));
+      return Math.min(...samples);
+    };
 
-    // Warm-up mount so one-time costs (module init, JIT) don't land on the
-    // small run and make the ratio look better than it is.
+    // Warm-up mount so one-time costs (module init, JIT) don't land on a
+    // measured trial and make the ratio look better than it is.
     mountWith('stress/warmup.md', 50);
-    const small = mountWith('stress/200-comments.md', 200);
-    const large = mountWith('stress/1000-comments.md', 1000);
+    const small = bestOf('200-comments', 200);
+    const large = bestOf('1000-comments', 1000);
     expect(large / Math.max(small, 1)).toBeLessThan(12);
-  });
+  }, STRESS_TEST_BUDGET_MS);
 
-  it('renders the elden-ring fixture\'s busiest real sheet (315 cell comments) within budget', () => {
-    const path = 'reports/elden-ring-completionist-checklist.xlsx';
-    const cellComments = eldenBossListCellComments();
-    expect(cellComments.length).toBeGreaterThan(300); // the real number this test exists to cover — see fixture read above
+  it('renders the elden-ring fixture\'s busiest real sheet (315 cell comments), with cost growing in line with the count', () => {
+    // WHY a ratio, not a fixed ceiling: same fix as the synthetic case above
+    // (fdd3db1b9) — a fixed 5s CPU ceiling here (10x the ~0.5s measured alone
+    // on 2026-09-27) still tripped in a full-suite run on a loaded machine
+    // (2026-09-28), because CPU time itself inflates under contention, not
+    // just wall clock. Measuring a real subset of this SAME fixture (the
+    // first 60 of its 315 cell comments) against the full sheet in one run
+    // cancels out machine load instead of guessing a bigger fixed number.
+    const allCellComments = eldenBossListCellComments();
+    expect(allCellComments.length).toBeGreaterThan(300); // the real number this test exists to cover — see fixture read above
+    const SMALL_COUNT = 60;
 
-    // A minimal stand-in for XlsxView's rendered grid: one <td data-cell> per
-    // commented cell, all under one data-sheet container — the exact shape
-    // use-quote-marks.ts's cellSelector/cellStatus query against.
-    const grid = document.createElement('div');
-    grid.setAttribute('data-sheet', 'Boss List');
-    for (const { cell } of cellComments) {
-      const td = document.createElement('td');
-      td.setAttribute('data-cell', cell);
-      grid.appendChild(td);
-    }
-    document.body.appendChild(grid);
+    // A distinct path per mount — same reason CommentsMargin's synthetic
+    // 1,000-comment fix uses a distinct path per size: addComment always
+    // APPENDS (never dedupes by cell), so reusing one path across mounts
+    // would pile every earlier slice's comments onto the later ones.
+    const mountWith = (pathSuffix: string, cellComments: Array<{ cell: string; sheet: string }>) => {
+      const path = `reports/elden-ring-completionist-checklist-${pathSuffix}.xlsx`;
+      // A minimal stand-in for XlsxView's rendered grid: one <td data-cell>
+      // per commented cell, all under one data-sheet container — the exact
+      // shape use-quote-marks.ts's cellSelector/cellStatus query against.
+      const grid = document.createElement('div');
+      grid.setAttribute('data-sheet', 'Boss List');
+      for (const { cell } of cellComments) {
+        const td = document.createElement('td');
+        td.setAttribute('data-cell', cell);
+        grid.appendChild(td);
+      }
+      document.body.appendChild(grid);
 
-    for (const { cell, sheet } of cellComments) {
-      addComment(path, '', 'label', { cell, sheet });
-    }
+      for (const { cell, sheet } of cellComments) {
+        addComment(path, '', 'label', { cell, sheet });
+      }
 
-    const containerRef = { current: grid };
-    const startedCpu = process.cpuUsage();
-    const { container } = render(<CommentsMargin containerRef={containerRef} path={path} narrow={false} />);
-    const usedCpu = process.cpuUsage(startedCpu);
-    const cpuMs = (usedCpu.user + usedCpu.system) / 1000;
+      const containerRef = { current: grid };
+      const startedCpu = process.cpuUsage();
+      const { container, unmount } = render(<CommentsMargin containerRef={containerRef} path={path} narrow={false} />);
+      const usedCpu = process.cpuUsage(startedCpu);
+      expect(container.querySelectorAll('[data-comments-list] > div')).toHaveLength(cellComments.length);
+      unmount();
+      grid.remove();
+      return (usedCpu.user + usedCpu.system) / 1000;
+    };
+    const TRIALS = 3;
+    /** The best (minimum) of TRIALS mounts of the same slice, each its own
+     *  path (see WHY above — addComment always appends). Contention can only
+     *  ADD overhead, never remove it, so the minimum across repeated trials
+     *  is the closest any sample gets to the uncontended cost — same fix as
+     *  the synthetic 1,000-comment case above, after a single-sample ratio
+     *  here also flaked under load. */
+    const bestOf = (label: string, cellComments: Array<{ cell: string; sheet: string }>) => {
+      const samples: number[] = [];
+      for (let t = 0; t < TRIALS; t++) samples.push(mountWith(`${label}-${t}`, cellComments));
+      return Math.min(...samples);
+    };
 
-    expect(container.querySelectorAll('[data-comments-list] > div')).toHaveLength(cellComments.length);
-    // Measured ~0.5s CPU alone (2026-09-27); 5s is 10x headroom, so it
-    // survives the ~3x CPU inflation a fully loaded machine was seen to cause
-    // on the 1,000-comment case above while still catching a real blow-up.
-    expect(cpuMs).toBeLessThan(5_000);
-  });
+    // Warm-up mount so one-time costs (module init, JIT) don't land on a
+    // measured trial and make the ratio look better than it is.
+    mountWith('warmup', allCellComments.slice(0, 20));
+    const small = bestOf('small', allCellComments.slice(0, SMALL_COUNT));
+    const large = bestOf('large', allCellComments);
+    // 315 / 60 ≈ 5.25x if linear; generous headroom over that, same bound as
+    // the synthetic 1,000-comment case above.
+    expect(large / Math.max(small, 1)).toBeLessThan(12);
+  }, STRESS_TEST_BUDGET_MS);
 });

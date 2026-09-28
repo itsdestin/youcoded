@@ -85,6 +85,13 @@ const FENCES: { name: string; md: string; code: string }[] = [
   },
 ];
 
+// WHY a named budget: the two random-streaming tests below do a FIXED amount of real
+// work (1.4 s and 4 s alone, measured 2026-09-28) on purpose — a time box would test less
+// under load. Under `verify.sh --full` every other check runs at once and wall time
+// inflates several-fold, so the 30 s suite default is too close; 120 s is ~30x the
+// slowest measurement. (test-suite-hygiene.md: budgets are measured, named constants.)
+const RANDOM_STREAM_BUDGET_MS = 120_000;
+
 describe('MarkdownContent fenced code blocks', () => {
   for (const f of FENCES) {
     it(`renders a Copy button for ${f.name}`, () => {
@@ -605,7 +612,7 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
       today.unmount();
     }
-  });
+  }, RANDOM_STREAM_BUDGET_MS);
 
   // What each streamed update costs, in characters: everything the splitter
   // parsed plus everything handed to react-markdown. Today's whole-message
@@ -922,5 +929,5 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
       today.unmount();
     }
-  });
+  }, RANDOM_STREAM_BUDGET_MS);
 });
