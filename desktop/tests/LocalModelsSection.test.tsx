@@ -686,8 +686,12 @@ describe('fields main computes', () => {
     it('a load error that arrives while the dialog is open reaches the user', async () => {
       // Same staleness, other field: a model fails on its next request, and a
       // dialog that read main once would never say so.
-      await openSettings(SETTINGS, { ...SETTINGS, lastLoadError: 'error: out of memory' });
+      // WHY holdLater: under a loaded full-suite run a real poll tick delivered the
+      // error before the "not yet" check below ran (seen 2026-09-28) — hold it
+      // until that check has passed, then let the poll bring it.
+      const { reveal } = await openSettings(SETTINGS, { ...SETTINGS, lastLoadError: 'error: out of memory' }, { holdLater: true });
       expect(screen.queryByText(LOAD_ERROR_TITLE)).toBeNull();
+      reveal();
       await waitFor(
         () => expect(screen.getByText('error: out of memory')).toBeTruthy(),
         POLLED,
