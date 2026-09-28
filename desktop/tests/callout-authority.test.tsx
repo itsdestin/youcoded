@@ -170,14 +170,9 @@ const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
     why: 'the phone\'s "Connected to X" banner (green, with a Disconnect button — not yet moved onto '
       + '<Callout actions>, outside fix batch 2\'s screens) and the Package Tier option selected state',
   },
-  // 4 -> 2 (fix batch 2, 2026-09-26): the warnings list is now <Callout actions>
-  // (a notice's buttons go INSIDE the notice — decisions.md P-2), so its two
-  // hand-rolled tints are gone.
-  'SyncPanel.tsx': {
-    count: 2,
-    why: 'the K6 backend rows\' state tints (red when failing, green when healthy) — a list row\'s '
-      + 'own state, not a notice',
-  },
+  // SyncPanel.tsx: 4 -> 2 (fix batch 2) -> 0 (2026-09-28, nothing-bare-3#N3-2): the
+  // backend rows are the plain nested box in every state now; the status light
+  // carries red/green. No exemption left.
   'SpecialistsChip.tsx': {
     count: 2,
     why: "StatusPill's Needs-you and Failed variants — rounded-full inline state badges, peers of the "
