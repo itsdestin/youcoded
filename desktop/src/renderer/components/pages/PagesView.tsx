@@ -37,7 +37,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   const dispatch = useArtifactDispatch();
   const open = useArtifactSelector((s) => s.pagesViewOpen);
   useEscClose(open, () => dispatch({ type: 'PAGES_VIEW_CLOSED' }));
-  const { pages, loaded, failed } = usePages();
+  const { pages, loaded, failed, pinnedTotal } = usePages();
   // Fresh list on every open (see refreshPages).
   useEffect(() => { if (open) void refreshPages(); }, [open]);
   const [connectionsFor, setConnectionsFor] = useState<string | null>(null);
@@ -57,7 +57,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
     list.push(p);
     byProject.set(p.home.name, list);
   }
-  const pinnedCount = pages.filter((p) => p.pinned).length;
+  const pinnedCount = pinnedTotal ?? pages.filter((p) => p.pinned).length; // hidden Office pins count too (use-pages)
   // By id, so the dialog follows the live list when a connection is removed.
   const connectionsPage = pages.find((p) => p.id === connectionsFor) ?? null;
 

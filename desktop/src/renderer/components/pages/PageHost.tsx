@@ -109,7 +109,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // (Before: ignored while Settings was open, so Settings could not be
   // closed by Esc with the page focused — Destin, 2026-09-17.)
   const dismissTop = useDismissTop();
-  const { pages, loaded, failed } = usePages();
+  const { pages, loaded, failed, pinnedTotal } = usePages();
   // Photo-only build: `shoot` opens a page by id, in the panel or focused (the pinned-button view).
   const pageIds = pages.map((p) => p.id);
   useScreenOpen('pages/page', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id }); }, pageIds);
@@ -126,7 +126,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   const isOffice = pageId === OFFICE_PAGE_ID;
   const officeKept = useOfficeTabs().docs.length > 0;
   const ownPages = pages.filter((p) => p.home.kind !== 'builtin');
-  const pinnedCount = pages.filter((p) => p.pinned).length;
+  const pinnedCount = pinnedTotal ?? pages.filter((p) => p.pinned).length; // hidden Office pins count too (use-pages)
   // The frame reloads when page.html was rewritten (the stamp moves) and not
   // when the page saved its own data (it does not) — review F7.
   const htmlStamp = summary?.htmlStamp ?? 0;

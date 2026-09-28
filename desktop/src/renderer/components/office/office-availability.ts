@@ -10,6 +10,9 @@
 //
 // WHY once: the answer cannot change while the app runs (the add-on ships with it), and
 // the entry points render on every keystroke in places like the file panel header.
+// Consequence, accepted: a single failed check (the status call rejecting for any reason)
+// hides Office for the rest of the run; restarting the app asks again. A local IPC call is not
+// expected to fail transiently, and a retry would put the question back on every render path.
 import { useSyncExternalStore } from 'react';
 
 let available = false;

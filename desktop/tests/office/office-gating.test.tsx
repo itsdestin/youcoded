@@ -112,11 +112,13 @@ describe('Office entry points', () => {
     const own = { ...OFFICE_PAGE_SUMMARY, id: 'personal:timer', name: 'Timer', home: { kind: 'personal' as const } };
     (window as unknown as { claude: unknown }).claude = {
       office: { status: () => new Promise<OfficeStatus>((r) => (answer = r)) },
-      pages: { list: async () => [OFFICE_PAGE_SUMMARY, own], onChanged: () => () => {} },
+      pages: { list: async () => [{ ...OFFICE_PAGE_SUMMARY, pinned: true }, own], onChanged: () => () => {} },
     };
     const { result } = renderHook(() => usePages());
     await waitFor(() => expect(result.current.loaded).toBe(true));
     expect(result.current.pages.map((p) => p.id)).toEqual(['personal:timer']);
+    // Hidden, but its pin still counts toward the pin limit main enforces.
+    expect(result.current.pinnedTotal).toBe(1);
     await act(async () => { answer(READY); });
     expect(result.current.pages.map((p) => p.id)).toEqual([OFFICE_PAGE_SUMMARY.id, 'personal:timer']);
   });
