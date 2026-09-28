@@ -290,10 +290,16 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (m.cmd === 'set_document_modified' && args.modified === true) {
         const s = save.current;
         s.dirty = true;
-        s.failed = false;
         s.editorClean = false;
-        markChanged(file.path);
-        if (!s.saving && !s.requested) armAutosave();
+        // WHY not a new change after a failed save (measured in the dev window, fix round 1):
+        // the editor answers its own failed save by marking the document modified again. Taking
+        // that as typing retried a read-only file every 3 s and flipped the strip between the
+        // error and "Saving…". Its "modified" flag only ever reports a change once, so while
+        // failed, only Retry, a flush or the save-failed actions try again.
+        if (!s.failed) {
+          markChanged(file.path);
+          if (!s.saving && !s.requested) armAutosave();
+        }
       }
       // WHY: the editor says "modified" and at once "not modified" while it lays a document out
       // (measured 2026-09-28 on a workbook: true then false in the same millisecond), and

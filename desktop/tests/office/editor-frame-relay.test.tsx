@@ -278,6 +278,20 @@ describe('EditorFrame autosave', () => {
     expect(calls).toEqual(['set_document_modified', 'save_changes', 'set_document_modified', 'get_current_path', 'write_editor_bin', 'save_file']);
   });
 
+  it("does not retry a failed save on its own when the editor re-marks the document modified", async () => {
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("Office doesn't have permission to save this file."); return null; }) });
+    const { fromEditor, saves } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    vi.useFakeTimers();
+    // What the editor sends after its own save failed (EndSave(1)).
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'set_document_modified', args: { modified: true } });
+    act(() => { vi.advanceTimersByTime(30_000); });
+    expect(saves()).toBe(0);
+    expect(saveStateFor(FILE.path).phase).toBe('failed');
+  });
+
   it("a failed save keeps a closing tab, with main's reason, after trying once more", async () => {
     fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("Office doesn't have permission to save this file."); return null; }) });
     const onClosed = vi.fn();
