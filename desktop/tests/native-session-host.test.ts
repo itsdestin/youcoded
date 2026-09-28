@@ -2106,6 +2106,27 @@ describe('NativeSessionHost', () => {
       expect((host as any).takeReadyBusyMessage(id, {})).toBeUndefined();
     });
 
+    it('Send now stops the running task and sends that waiting message ahead of the others', async () => {
+      const order: string[] = [];
+      let sendNow: boolean | undefined;
+      let later!: { queueId: string };
+      host.on('transcript-event', (e: any) => {
+        if (e.type === 'user-message') order.push(e.data.text);
+        if (e.type === 'user-interrupt') order.push('stopped');
+        // Pressed while the first task is genuinely running.
+        if (e.type === 'user-message' && e.data.text === 'first') sendNow = host.sendQueuedNow(id, later.queueId);
+      });
+      expect(host.send(id, 'first').status).toBe('sent');
+      expect(host.send(id, 'waiting').status).toBe('queued');
+      later = host.send(id, 'urgent') as { queueId: string };
+      await vi.waitFor(() => expect(order.filter(t => t !== 'stopped')).toEqual(['first', 'urgent', 'waiting']));
+      expect(sendNow).toBe(true);
+      expect(order.indexOf('stopped')).toBeGreaterThan(order.indexOf('first'));
+      expect(order.indexOf('stopped')).toBeLessThan(order.indexOf('urgent'));
+      // Already on its way: the same honest false as Cancel.
+      expect(host.sendQueuedNow(id, later.queueId)).toBe(false);
+    });
+
     it('keeps the ack ahead of idle and busy user-message events, including queued edits', async () => {
       const order: string[] = [];
       host.on('transcript-event', (e: any) => { if (e.type === 'user-message') order.push(`event:${e.data.text}`); });

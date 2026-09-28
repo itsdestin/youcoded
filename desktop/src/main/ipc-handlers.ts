@@ -3622,6 +3622,9 @@ export function registerIpcHandlers(
   // too late / unknown), so this is a thin pass-through like NATIVE_SEND above.
   ipcMain.handle(IPC.NATIVE_QUEUE_REMOVE, (_e, { sessionId, queueId }: { sessionId: string; queueId: string }) =>
     nativeHost.removeQueued(sessionId, queueId));
+  // "Send now" on a waiting message — same sync, never-throws boolean contract.
+  ipcMain.handle(IPC.NATIVE_QUEUE_SEND_NOW, (_e, { sessionId, queueId }: { sessionId: string; queueId: string }) =>
+    nativeHost.sendQueuedNow(sessionId, queueId));
   // Fire-and-forget I/O (no response): interrupt only. The host never throws for unknown ids.
   ipcMain.on(IPC.NATIVE_INTERRUPT, (_e, { sessionId }: { sessionId: string }) => {
     nativeHost.interrupt(sessionId);

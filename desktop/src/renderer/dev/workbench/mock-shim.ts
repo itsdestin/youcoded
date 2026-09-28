@@ -1821,6 +1821,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return mode;
     },
   };
+  let queuedSends = 0;
   const native: Ns<'native'> = {
     supported: true,
     getContextPreferences: async () => ({ ...contextPreferences }),
@@ -1851,9 +1852,19 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // Shares startReply with session.sendInput — see that helper's WHY.
     send: async (sessionId: string, text: string, _attachments?: string[]) => {
       if (store.refuseWrites) return { status: 'failed', reason: 'not-live' };
+      // `?queueSends=1`: answer as if the assistant were busy, so typed messages
+      // wait in the strip above the message box (Send now / Edit / Cancel).
+      // WHY a switch: the strip is renderer-local and a restored chat copy
+      // deliberately drops it, so it can only be shown by sending while busy.
+      if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('queueSends') === '1') {
+        return { status: 'queued', queueId: `wb-queued-${++queuedSends}` };
+      }
       startReply(sessionId, text);
       return { status: 'sent' };
     },
+    // Pretend the waiting message was found; the real host decides in main.
+    queueRemove: async () => true,
+    queueSendNow: async () => true,
     // Model picker (ModelPickerPopup.tsx:304). Real backend rebinds the
     // provider/model on the live session; here it updates the row the status
     // bar and picker read from, so the chip changes on screen. No `subs.*`

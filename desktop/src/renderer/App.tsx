@@ -851,6 +851,16 @@ function AppInner() {
     inputBarRef.current?.fillDraft(text);
   }, [dispatch]);
 
+  // "Send now": the row stays until the drain sends it (TRANSCRIPT_USER_MESSAGE
+  // removes it); false = already on its way, handled like Cancel's too-late.
+  const handleSendQueuedNow = useCallback(async (sid: string, queueId: string) => {
+    const moved = await window.claude.native.queueSendNow(sid, queueId);
+    if (!moved) {
+      setToast('Already sending.');
+      dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
+    }
+  }, [dispatch]);
+
   // Compaction watchdog: activity-aware — resets on any reducer update for a
   // session with compactionPending set. Any transcript event bumps the timer
   // forward, so long compactions (large sessions) don't trigger a false "may
@@ -3887,6 +3897,7 @@ function AppInner() {
                       onAddCredit={chatViewHandlers.addCredit}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
+                      onSendQueuedNow={handleSendQueuedNow}
                       conversationStatus={conversationStatus}
                       onRefreshConversation={handleRefreshConversation}
                       modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}

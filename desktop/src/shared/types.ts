@@ -2150,6 +2150,9 @@ export const IPC = {
   // Task 11: cancel/edit a queued-but-not-yet-sent message. invoke →
   // NativeSessionHost.removeQueued(sessionId, queueId): boolean.
   NATIVE_QUEUE_REMOVE: 'native:queue-remove',
+  // "Send now" on a waiting message: invoke → NativeSessionHost.sendQueuedNow
+  // (sessionId, queueId): boolean — stops the current task, sends this next.
+  NATIVE_QUEUE_SEND_NOW: 'native:queue-send-now',
   NATIVE_INTERRUPT: 'native:interrupt',
   // Stalled-turn Retry (fire-and-forget like interrupt above). Re-runs the ONE
   // parked step; unlike interrupt it never cascades to specialist children or

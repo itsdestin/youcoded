@@ -995,6 +995,7 @@ describe('native:*/provider:* channel parity', () => {
     'native:set-step-guard': 'IPC.NATIVE_SET_STEP_GUARD',
     'native:sessions-list': 'IPC.NATIVE_SESSIONS_LIST',
     'native:queue-remove': 'IPC.NATIVE_QUEUE_REMOVE',
+    'native:queue-send-now': 'IPC.NATIVE_QUEUE_SEND_NOW',
     'native:compact': 'IPC.NATIVE_COMPACT',
     'native:clear': 'IPC.NATIVE_CLEAR',
     'provider:list': 'IPC.PROVIDER_LIST', 'provider:upsert': 'IPC.PROVIDER_UPSERT',

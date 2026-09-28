@@ -4154,6 +4154,27 @@ export class NativeSessionHost extends EventEmitter {
     return true;
   }
 
+  /** "Send now" (Destin, 2026-09-28): Stop, then send THIS waiting message
+   *  next, ahead of the others. WHY: ordinary mid-task messages wait for the
+   *  current batch; this is for not waiting at all. Move + stop are sync, so
+   *  the drain after the stop finds it first. Contract as removeQueued. */
+  sendQueuedNow(sessionId: string, queueId: string): boolean {
+    const held = this.startingSends.get(sessionId); // still starting: reorder only
+    if (held) {
+      const i = held.findIndex((q) => q.id === queueId);
+      if (i !== -1) { held.unshift(...held.splice(i, 1)); return true; }
+    }
+    const entry = this.live.get(sessionId);
+    if (!entry) return false;
+    const idx = entry.queue.findIndex((q) => q.id === queueId);
+    if (idx === -1) return false;
+    const [item] = entry.queue.splice(idx, 1);
+    item.ready = true; // its IPC ack flushed long before a button could be pressed
+    entry.queue.unshift(item);
+    this.interrupt(sessionId);
+    return true;
+  }
+
   /** WHY: only the live root driver may remove an acknowledged FIFO head.
    * No awaits between checking generation/readiness/quiesce and the shift. */
   private takeReadyBusyMessage(sessionId: string, session: HarnessSession):

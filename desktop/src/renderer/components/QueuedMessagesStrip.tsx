@@ -39,6 +39,8 @@ interface Props {
   // sessionId + queueId through, no IPC/dispatch happens here).
   onCancel?: (queueId: string) => void;
   onEdit?: (queueId: string, text: string) => void;
+  // "Send now" — App stops the current task and sends this message next.
+  onSendNow?: (queueId: string) => void;
 }
 
 // forwardRef (review fix, post-approval): ChatView needs the strip's OWN
@@ -51,7 +53,7 @@ interface Props {
 // itself to the absolutely-positioned child's content, so measuring a
 // wrapper instead of this element would always read 0.
 const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function QueuedMessagesStrip(
-  { queuedMessages, onCancel, onEdit },
+  { queuedMessages, onCancel, onEdit, onSendNow },
   ref,
 ) {
   if (queuedMessages.length === 0) return null;
@@ -71,8 +73,21 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
             Queued
           </div>
           <div className="flex-1 min-w-0 truncate text-sm text-fg-2">{q.content}</div>
-          {(onEdit || onCancel) && (
+          {(onEdit || onCancel || onSendNow) && (
             <div className="flex items-center gap-0.5 shrink-0">
+              {/* WHY words, not an icon: this one stops the running task, so
+                  what it does must be readable before it is pressed. */}
+              {onSendNow && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Stop the current task and send this message now"
+                  title="Stops the current task and sends this message now"
+                  onClick={() => onSendNow(q.queueId)}
+                >
+                  Send now
+                </Button>
+              )}
               {onEdit && (
                 <Button
                   variant="ghost"
