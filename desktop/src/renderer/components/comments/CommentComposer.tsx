@@ -40,7 +40,10 @@ export function CommentComposer({
   value, onChange, onSubmit, onEscape, onFocus, onBlur, placeholder, ariaLabel, sendLabel, textRef, keepFocusOnSend, className = '',
 }: Props) {
   return (
-    <InputGroup size="sm" className={`${className} w-full`.trim()}>
+    // The caller's spacing goes on a plain wrapper: design lint can't check a
+    // className built at runtime on a primitive, so InputGroup's stays static.
+    <div className={className}>
+    <InputGroup size="sm" className="w-full">
       <textarea
         ref={textRef}
         rows={1}
@@ -78,5 +81,6 @@ export function CommentComposer({
         </svg>
       </Button>
     </InputGroup>
+    </div>
   );
 }
