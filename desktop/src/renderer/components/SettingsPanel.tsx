@@ -1271,9 +1271,9 @@ export function BuddyButton() {
                 <>
                   {removeError && <Callout tone="warning">{removeError}</Callout>}
                   {/* WHY a full-width outlined button (nothing-bare-2#N2-7; guide: a follow-up
-                      action under a group is never bare text, and a lone button is full width). */}
+                      action under a group is never bare text; a lone button is full width; "KDE": say which helper, N3-3). */}
                   <Button variant="secondary" onClick={removeHelper} disabled={removing} className="w-full">
-                    {removing ? 'Removing\u2026' : 'Remove helper'}
+                    {removing ? 'Removing\u2026' : 'Remove KDE helper'}
                   </Button>
                 </>
               )}

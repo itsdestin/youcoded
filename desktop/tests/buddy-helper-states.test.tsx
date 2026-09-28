@@ -102,7 +102,7 @@ async function openPopup(): Promise<void> {
 }
 
 const toggleSwitch = () => screen.queryByRole('switch', { name: 'Show buddy floater' });
-const removeButton = () => screen.queryByRole('button', { name: 'Remove helper' });
+const removeButton = () => screen.queryByRole('button', { name: 'Remove KDE helper' });
 const UNSUPPORTED_ROW = /Not yet supported on this desktop/;
 const CONSENT_CARD = 'Let the buddy be moved?';
 
@@ -288,8 +288,8 @@ describe('the two gates that would otherwise survive deletion', () => {
     const calls = fakeClaude(HELPER_IN_PLACE);
     render(<BuddyButton />);
     fireEvent.click(screen.getByRole('button', { name: /buddy floater/i }));
-    await waitFor(() => expect(screen.getByRole('button', { name: /remove helper/i })).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: /remove helper/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /remove kde helper/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /remove kde helper/i }));
     await waitFor(() => expect(calls.remove).toBe(1));
     await waitFor(() => expect(calls.hide).toBe(1));
     expect(localStorage.getItem('youcoded-buddy-enabled')).toBe('0');

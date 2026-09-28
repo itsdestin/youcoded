@@ -1503,13 +1503,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         const failure = uploadFailure[b.id];
                         return (
                           <React.Fragment key={b.id}>
-                          <div
-                            className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 ${
-                              b.lastError ? 'border-red-500/20 bg-red-500/5' :
-                              b.syncEnabled && b.connected ? 'border-green-400/20 bg-green-400/5' :
-                              CARD_LEVEL_2
-                            }`}
-                          >
+                          {/* WHY always the plain nested box (nothing-bare-3#N3-2, Destin: "styled more
+                              like typical second level cards"): the status light already carries
+                              green/red; a tinted box per state made it a one-off look. */}
+                          <div className={`flex items-center gap-3 px-3 py-2.5 ${CARD_LEVEL_2}`}>
                             {/* Type icon */}
                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shrink-0 ${BACKEND_STYLE[b.type]?.tint ?? ''}`}>
                               {BACKEND_STYLE[b.type]?.icon ?? '?'}
