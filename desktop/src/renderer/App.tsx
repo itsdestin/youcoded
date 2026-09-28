@@ -50,7 +50,7 @@ import { dispatchSlashCommand, type DispatcherCallbacks, type DispatcherResult }
 import { useStatusBarData, useStatusBarDispatch } from './hooks/useStatusBarProps';
 import { runNativeSlashAction, routeSlashResult } from './state/native-slash-actions';
 import { GameProvider, useGameState, useGameDispatch } from './state/game-context';
-import { hookEventToAction } from './state/hook-dispatcher';
+import { applyHookEvent } from './state/hook-dispatcher';
 import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from './state/usage-snapshot';
 import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
 import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy, canPtySend } from './state/pty-input-gate';
@@ -1377,25 +1377,21 @@ function AppInner() {
       }
     });
 
-    // G-1: a background command's run record changed — lands on its Bash
-    // card. MUST mirror BubbleFeed.tsx. on.shellEvent returns the unsubscribe fn.
+    // G-1: a background command's run record changed — lands on its Bash card.
+    // MUST mirror BubbleFeed.tsx. WHY the flush: same drop class as the hook
+    // handler below — this dispatches immediately, its card's own tool-use may not.
     const shellHandler = window.claude.on.shellEvent((event) => {
+      flushTranscriptActions();
       dispatch({ type: 'SHELL_RUN_CHANGED', sessionId: event.sessionId, run: event.run });
     });
 
     const hookHandler = window.claude.on.hookEvent((event) => {
-      const action = hookEventToAction(event);
-      // T2 re-review (4): a desktop window must not say "Answered on the computer" — the
-      // note would name the wrong device — but ignoring the resolution left live buttons
-      // whenever a phone's answer broadcast was lost. Clear the card quietly instead.
-      if (action?.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode()) action.silent = true;
-      if (action) {
-        // WHY: this dispatch is immediate but transcript deltas are rAF-batched (can stall
-        // a frame under load) — flush first, or a later hook action jumps ahead and splits a
-        // streaming bubble (2026-09-28, permission-approve.json step 8 flake).
-        flushTranscriptActions();
-        dispatch(action);
-      }
+      applyHookEvent(event, dispatch, (a) => {
+        // T2 re-review (4): a desktop window must not say "Answered on the computer" — the
+        // note would name the wrong device — but ignoring the resolution left live buttons
+        // whenever a phone's answer broadcast was lost. Clear the card quietly instead.
+        if (a.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode()) a.silent = true;
+      });
       // First hook event for a session = Claude is initialized
       if (event.sessionId) {
         setInitializedSessions((prev) => {

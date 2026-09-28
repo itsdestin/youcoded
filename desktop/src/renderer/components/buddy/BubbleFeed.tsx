@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useCallback, useMemo } from 'react';
-import { useChatState, useChatDispatch } from '../../state/chat-context';
-import { hookEventToAction } from '../../state/hook-dispatcher';
+import { useChatState, useChatDispatch, useChatStore } from '../../state/chat-context';
+import { applyHookEvent } from '../../state/hook-dispatcher';
+import { installTranscriptBatcher, flushTranscriptActions } from '../../state/transcript-batch';
 import { decideFirstPage, FIRST_PAGE_RETRY_MS } from '../../state/first-page-retry';
 import UserMessage from '../UserMessage';
 import SpecialistReportCard from '../SpecialistReportCard';
@@ -43,6 +44,7 @@ interface Props {
  */
 export function BubbleFeed({ sessionId }: Props) {
   const dispatch = useChatDispatch();
+  const chatStore = useChatStore();
   const state = useChatState(sessionId ?? '');
   const { showTimestamps } = useTheme();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -89,22 +91,17 @@ export function BubbleFeed({ sessionId }: Props) {
     // SESSION_INIT is idempotent (no-op if already initialized).
     dispatch({ type: 'SESSION_INIT', sessionId });
 
-    // Batch dispatches into animation frames — mirrors App.tsx batching pattern
-    // to avoid N re-renders per PTY flush.
-    const pending: any[] = [];
-    let rafId: number | null = null;
+    // Batch dispatches into animation frames via the SHARED batcher (mirrors
+    // App.tsx exactly, not just in shape) — WHY (2026-09-28): its module-level
+    // `active` pointer is what lets a hook handler's flushTranscriptActions()
+    // apply this window's own queued deltas before a synchronous hook dispatch
+    // can jump ahead of them (see the hook-event effect below). A private
+    // per-component queue could never be reached from outside this effect.
     let cancelled = false;
-
-    function flush() {
-      rafId = null;
-      if (cancelled) return;
-      const batch = pending.splice(0);
-      for (const action of batch) dispatch(action);
-    }
+    const transcriptBatcher = installTranscriptBatcher(chatStore.dispatchMany);
 
     function batchDispatch(action: any) {
-      pending.push(action);
-      if (rafId === null) rafId = requestAnimationFrame(flush);
+      transcriptBatcher.push(action);
     }
 
     const unsubTranscript = window.claude.on.transcriptEvent((event: any) => {
@@ -392,23 +389,24 @@ export function BubbleFeed({ sessionId }: Props) {
 
     return () => {
       cancelled = true;
-      if (rafId !== null) cancelAnimationFrame(rafId);
+      transcriptBatcher.dispose();
       // Unregister: preload returns the raw handler for removeListener
       window.claude.off('transcript:event', unsubTranscript);
     };
-  }, [sessionId, dispatch]);
+  }, [sessionId, dispatch, chatStore]);
 
   // ── Hook event subscription (permissions only) ────────────────────────────
-  // Permission requests from hook:event transitions tool cards to approval
-  // state. hookEventToAction maps PermissionRequest → PERMISSION_REQUEST and
-  // PermissionExpired → PERMISSION_EXPIRED; all other hook types return null.
+  // Permission requests from hook:event transition tool cards to approval
+  // state via applyHookEvent (state/hook-dispatcher.ts, shared with App.tsx),
+  // which maps PermissionRequest → PERMISSION_REQUEST and PermissionExpired →
+  // PERMISSION_EXPIRED (all other hook types return null) and flushes this
+  // window's transcript batch first — see that function's WHY.
   useEffect(() => {
     if (!sessionId) return;
 
     const unsubHook = window.claude.on.hookEvent((event: any) => {
       if (event?.sessionId !== sessionId) return;
-      const action = hookEventToAction(event);
-      if (action) dispatch(action);
+      applyHookEvent(event, dispatch);
     });
     // Specialists 1c: delegation feed — MUST mirror App.tsx. Task 10: typed
     // bridge — on.specialistEvent returns the unsubscribe function directly,
@@ -421,9 +419,12 @@ export function BubbleFeed({ sessionId }: Props) {
       }
     });
 
-    // G-1: background command records — MUST mirror App.tsx.
+    // G-1: background command records — MUST mirror App.tsx, including the flush
+    // (same drop class as the hook handler above: this dispatches immediately,
+    // its card's own tool-use may still be queued in the batcher above).
     const unsubShell = window.claude.on.shellEvent((event) => {
       if (event.sessionId !== sessionId) return;
+      flushTranscriptActions();
       dispatch({ type: 'SHELL_RUN_CHANGED', sessionId, run: event.run });
     });
 
