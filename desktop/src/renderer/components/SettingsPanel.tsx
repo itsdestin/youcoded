@@ -201,20 +201,30 @@ function timeAgo(timestamp: number): string {
 
 // ─── Keyboard Shortcuts reference popup ──────────────────────────────────────
 
-const SHORTCUTS: { keys: string; description: string }[] = [
-  { keys: 'Ctrl + `', description: 'Toggle between chat and terminal' },   // P-7: 'view' trimmed so the label holds one line at 420px
-  { keys: 'Ctrl + O', description: 'Expand / collapse all tool cards' },
-  { keys: 'Shift (hold)', description: 'Open session switcher' },
-  { keys: 'Shift + Arrow Up/Down', description: 'Navigate between sessions' },
-  { keys: 'Shift (release)', description: 'Switch to highlighted session' },
-  { keys: 'Arrow Up/Down', description: 'Scroll chat view' },
-  { keys: 'Shift + Tab', description: 'Cycle permission mode' },
-  { keys: 'Shift + Space', description: 'Cycle model' },
-  { keys: 'Shift + Enter', description: 'Insert newline in input' },
-  { keys: 'Enter', description: 'Send message' },
-  { keys: '/', description: 'Open skill/command drawer' },
-  { keys: 'Escape', description: 'Close drawer or modal' },
-  { keys: 'Arrow Left/Right', description: 'Cycle permission prompt buttons' },
+// WHY groups (nothing-bare#NB-3/NB-4): a label above every card, never a card straight
+// under the popup title, and the table split into small labelled groups.
+const SHORTCUT_GROUPS: { label: string; rows: { keys: string; description: string }[] }[] = [
+  { label: 'Views', rows: [
+    { keys: 'Ctrl + `', description: 'Toggle between chat and terminal' },   // P-7: 'view' trimmed so the label holds one line at 420px
+    { keys: 'Ctrl + O', description: 'Expand / collapse all tool cards' },
+    { keys: 'Arrow Up/Down', description: 'Scroll chat view' },
+  ] },
+  { label: 'Sessions', rows: [
+    { keys: 'Shift (hold)', description: 'Open session switcher' },
+    { keys: 'Shift + Arrow Up/Down', description: 'Navigate between sessions' },
+    { keys: 'Shift (release)', description: 'Switch to highlighted session' },
+  ] },
+  { label: 'Writing messages', rows: [
+    { keys: 'Enter', description: 'Send message' },
+    { keys: 'Shift + Enter', description: 'Insert newline in input' },
+    { keys: '/', description: 'Open skill/command drawer' },
+    { keys: 'Escape', description: 'Close drawer or modal' },
+  ] },
+  { label: 'Modes and prompts', rows: [
+    { keys: 'Shift + Tab', description: 'Cycle permission mode' },
+    { keys: 'Shift + Space', description: 'Cycle model' },
+    { keys: 'Arrow Left/Right', description: 'Cycle permission prompt buttons' },
+  ] },
 ];
 
 function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -230,14 +240,19 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
           "panel" (420px) stops the wrapping. The grid keeps the key chips in their
           own column so a long label can never push one out of line. */}
       <Dialog screen="settings/shortcuts" open onClose={onClose} size="panel" title="Keyboard Shortcuts">
-        <div className={`${CARD_LEVEL_1} px-3 py-1.5 grid grid-cols-[1fr_auto] gap-x-3 items-center`}>{/* WHY a card: the table sat bare on the popup (SP-1) */}
-          {SHORTCUTS.map(({ keys, description }) => (
-            <React.Fragment key={keys}>
-              <span className="text-2xs text-fg-dim py-1.5">{description}</span>
-              <kbd className="justify-self-end text-3xs font-mono text-fg-2 bg-inset border border-edge-dim rounded px-1.5 py-0.5">{keys}</kbd>
-            </React.Fragment>
-          ))}
-        </div>
+        {SHORTCUT_GROUPS.map((g) => (
+          <section key={g.label}>
+            <SectionLabel className="mb-2">{g.label}</SectionLabel>
+            <div className={`${CARD_LEVEL_1} px-3 py-1.5 grid grid-cols-[1fr_auto] gap-x-3 items-center`}>
+              {g.rows.map(({ keys, description }) => (
+                <React.Fragment key={keys}>
+                  <span className="text-2xs text-fg-dim py-1.5">{description}</span>
+                  <kbd className="justify-self-end text-3xs font-mono text-fg-2 bg-inset border border-edge-dim rounded px-1.5 py-0.5">{keys}</kbd>
+                </React.Fragment>
+              ))}
+            </div>
+          </section>
+        ))}
       </Dialog>
     </>,
     document.body
@@ -1203,6 +1218,7 @@ export function BuddyButton() {
               </div>
             ) : (
             <div className="px-4 py-4 space-y-2">
+              <SectionLabel>Mascot</SectionLabel>{/* WHY: a label, never a card, first under the title (nothing-bare NB-3) */}
               {/* Deck Q-2R: on a Linux desktop the helper cannot run on, this is
                   not a switch the user should be invited to flip — the buddy
                   cannot be positioned there at all. Row goes read-only and says

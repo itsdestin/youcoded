@@ -103,6 +103,8 @@ export default function PerformancePopup({
                 bare on the popup (Remote Access is the reference). The old one-line
                 intro ("GPU choice affects performance.") repeated the explainer and
                 is gone; every other word is unchanged. */}
+            <section>
+            <SectionLabel className="mb-2">Graphics</SectionLabel>
             <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
               {/* The card's own header row (no box of its own); the whole row stays
                   clickable — a bigger touch target, and SettingRow keeps the toggle's
@@ -111,7 +113,9 @@ export default function PerformancePopup({
                 header
                 variant="item"
                 title="Prefer power saving"
-                description="Use the integrated GPU instead of the discrete one. Saves battery, but UI animations may stutter."
+                // WHY the chips in the description (nothing-bare#NB-3 "clean the prefer
+                // power saving card up"): one block of grey text, not a second loose line.
+                description={<>Use the integrated GPU instead of the discrete one. Saves battery, but UI animations may stutter.{gpuList.length > 0 && <><br />Detected: {gpuList.join(', ')}</>}</>}
                 onClick={handleToggle}
                 control={
                   <Toggle
@@ -135,12 +139,8 @@ export default function PerformancePopup({
                 </Callout>
               )}
 
-              {gpuList.length > 0 && (
-                <p className="text-2xs text-fg-muted">
-                  Detected GPUs: {gpuList.join(', ')}
-                </p>
-              )}
             </div>
+            </section>
 
             <section>
               <SectionLabel className="mb-2">How GPU choice works</SectionLabel>

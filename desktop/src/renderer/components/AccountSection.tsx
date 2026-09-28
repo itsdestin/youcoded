@@ -4,7 +4,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { useAccount } from '../state/account-context';
 import type { MarketplaceUser } from '../../main/marketplace-auth-store';
 import type { BlockRow } from '../state/marketplace-api-client';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, SettingRow, Callout } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, SectionLabel, SettingRow, Callout } from './ui';
 import { ConnectedAccountsBody } from './ConnectedAccounts';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
@@ -193,6 +193,10 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
               // cards"): the two cards were bare children of the Dialog body, which
               // spaces its children wider than the guide's 16px between groups.
               <div className="space-y-4">
+                {/* WHY a label first (nothing-bare#NB-3): never a card straight under the
+                    popup's title line; the label never repeats the title. */}
+                <section>
+                <SectionLabel className="mb-2">Your profile</SectionLabel>
                 {signedIn && user ? (
                   // key on the canonical handle so SignedInBody remounts (re-seeding
                   // its useState draft initializers) if HandlePrompt saves a handle
@@ -209,6 +213,7 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
                 ) : (
                   <SignedOutBody signInPending={signInPending} startSignIn={startSignIn} />
                 )}
+                </section>
 
                 {/* Connected accounts entry — shown regardless of YouCoded
                     sign-in state (the GitHub connection is independent of it),

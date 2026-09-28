@@ -99,18 +99,9 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
               sections below a header could go in a card… make some sections
               collapsible so this is easier to navigate and more concise"). Every
               sentence is the approved copy, unchanged (privacy copy needs
-              re-approval to edit); only its arrangement moved. The version sits
-              first (its own test) with the two policy links beside it — as
+              re-approval to edit); only its arrangement moved. The policy links are
               outlined buttons, since underlined text is only for links inside a
               sentence (guide, Buttons). */}
-          <div className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2`}>
-            <p className="text-xs text-fg-2">{versionLine}</p>
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => void window.claude.shell.openExternal(PRIVACY_POLICY_URL)}>Privacy policy</Button>
-              <Button variant="secondary" size="sm" onClick={() => void window.claude.shell.openExternal(TERMS_OF_SERVICE_URL)}>Terms of service</Button>
-            </div>
-          </div>
-
           <section>
             <SectionLabel className="mb-2">Disclaimer</SectionLabel>
             <div className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-1.5`}>
@@ -191,6 +182,20 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
                   ))}
                 </div>
               </FoldRow>
+            </div>
+          </section>
+          {/* WHY at the bottom, buttons full width (nothing-bare#NB-2, Destin: text
+              and buttons inline when they fit, and when stacked "centered/full width
+              instead of right aligned"; "put it at the bottom of the page"). The
+              version still leads this card; the popup now opens on Disclaimer. */}
+          <section>
+            <SectionLabel className="mb-2">Version and policies</SectionLabel>
+            <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+              <p className="text-xs text-fg-2">{versionLine}</p>
+              <div className="flex gap-2">
+                <Button variant="secondary" size="sm" className="flex-1" onClick={() => void window.claude.shell.openExternal(PRIVACY_POLICY_URL)}>Privacy policy</Button>
+                <Button variant="secondary" size="sm" className="flex-1" onClick={() => void window.claude.shell.openExternal(TERMS_OF_SERVICE_URL)}>Terms of service</Button>
+              </div>
             </div>
           </section>
       </Dialog>

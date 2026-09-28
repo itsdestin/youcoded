@@ -51,6 +51,9 @@
         // ---- React correctness ----
         // Caught SessionDrawer's three hooks sitting below `if (!drawerOpen) return null`.
         "react/rules-of-hooks": "error",
+        // A `// comment` among JSX children renders as visible text. Put a surface-level
+        // comment inside a return's markup on 2026-09-28 and it showed on Backup & Sync.
+        "react/jsx-no-comment-textnodes": "error",
 
         // ---- Impossible / dead code ----
         "no-self-compare": "error",

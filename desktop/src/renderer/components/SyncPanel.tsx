@@ -1269,9 +1269,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   return conversations?.find(c => c.sessionId === id)?.name ?? f;
                 });
 
-              return (
-                // Card-levels trial: the old "well card" is now LEVEL-1 like every
-                // other top-level box here; `p-3 space-y-2.5` replaces `border-t` dividers.
+              // Card-levels trial: the old "well card" is now LEVEL-1 like every
+              // other top-level box here; `p-3 space-y-2.5` replaces `border-t` dividers.
+              return (<div>
+                <SectionLabel className="mb-2">Main backup</SectionLabel>{/* WHY: a label, never a card, first under the title (nothing-bare NB-3) */}
                 <div className={`${CARD_LEVEL_1} overflow-hidden`}>
                   <div className="p-3 space-y-2.5">
                     <div className="flex items-start justify-between gap-3">
@@ -1433,7 +1434,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       </div>
                     )}
                   </div>
-                </div>
+                </div></div>
               );
             })()}
 
