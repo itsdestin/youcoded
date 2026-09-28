@@ -1882,7 +1882,7 @@ function RemoteButton(props: RemoteButtonProps) {
                           eyebrow (mb-3) over rows separated by py-2 wrappers. */}
                       <SectionLabel className="mb-2">Server</SectionLabel>
 
-                      <div className="space-y-1.5">
+                      <div className="space-y-2">
                         {/* onClick keeps the whole-row hit target the <label> used
                             to give this; SettingRow stops the toggle's own click
                             from bubbling back into it. */}
@@ -2020,7 +2020,7 @@ function RemoteButton(props: RemoteButtonProps) {
                       <section>
                         <SectionLabel className="mb-2">Devices</SectionLabel>
 
-                        <div className="space-y-1.5">
+                        <div className="space-y-2">
                           {deviceRows.map(row => (
                             // K6: an item list is a K2 row with a status dot in the icon
                             // slot. One shape for the mockup and the real panel — a preview
@@ -2101,7 +2101,7 @@ function RemoteButton(props: RemoteButtonProps) {
                         // py-2 each bare row used to carry its own spacing with —
                         // the rows are carded now, so the gap belongs between
                         // them, not inside them.
-                        <div className="space-y-1.5">
+                        <div className="space-y-2">
                           {/* Distinguish "installed and connected" from "installed but VPN off" —
                               previously detection conflated the two and forced the not-installed branch. */}
                           {/* K2 value rows. Status keeps its green/muted colour —
