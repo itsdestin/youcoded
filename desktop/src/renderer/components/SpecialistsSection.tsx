@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { SpecialistDefinitionView, DelegatedModelsView, SpecialistsListResult } from '../../shared/types';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
-import { Button, Callout, EmptyState, ErrorState, FieldError, LoadingState, Pill, SectionLabel } from './ui';
+import { Button, Callout, CARD_LEVEL_1, EmptyState, ErrorState, FieldError, LoadingState, Pill, SectionLabel } from './ui';
 import type { ExplainerSection } from './SettingsExplainer';
 import { refreshSpecialistRoster, useSpecialistRoster, provenanceWithinGroup, NOT_IMPLEMENTED_ON_MOBILE } from '../hooks/useSpecialists';
 import { AUTOMATIC_SPECIALIST_MODEL_COPY, SPECIALIST_DEFAULTS_CHANGED_EVENT } from './SpecialistModelUnavailable';
@@ -215,17 +215,17 @@ export default function SpecialistsSection({ cwd }: {
             all — not just emptied, or the box would keep its padding and read
             as a blank gap. The heading plus each row's own hint carry it; the
             (i) explainer holds the longer version for anyone who wants it. */}
-        <div className="rounded-lg bg-inset/50">
+        <div className={CARD_LEVEL_1}>
           {tierLoadError ? (
             <div className="p-2.5">
               <ErrorState mode="recoverable" message={tierLoadError} onRetry={() => void loadTiers()} variant="inline" />
             </div>
           ) : (
             <>
-              {/* No `border-t` any more — the paragraph that used to sit above
-                  it is gone, so it would have drawn a stray rule across the top
-                  of the box. */}
-              <div className="divide-y divide-edge-dim">
+              {/* Card-levels sweep (2026-09-27): `divide-y`/`border-t` are gone —
+                  no full-width line inside a card. `space-y-2` on the row stack
+                  separates Budget from Frontier instead. */}
+              <div className="space-y-2 py-1">
                 <TierRow
                   tier="budget"
                   title="Budget"
@@ -254,7 +254,7 @@ export default function SpecialistsSection({ cwd }: {
                   full ErrorState below is deliberately heavier because it
                   replaces a whole missing list, not one field. */}
               {tierWriteError && (
-                <div className="border-t border-edge-dim px-3 py-2">
+                <div className="px-3 py-2">
                   <FieldError>{tierWriteError}</FieldError>
                 </div>
               )}
@@ -276,41 +276,44 @@ export default function SpecialistsSection({ cwd }: {
           </SectionLabel>
           {warningCount > 0 && <Pill tone="warning">{warningCount} warning{warningCount === 1 ? '' : 's'}</Pill>}
         </div>
-        {/* Fix (UX review 1, U27): an empty padded div sat here above the first
-            group and read as a missing row; the first group's top border now
-            starts the card. */}
-        <div className="rounded-lg bg-inset/50">
+        {/* Card-levels sweep (2026-09-27): every `border-t` band split below is
+            gone — no full-width line inside a card. `space-y-2 py-1` (plus each
+            branch's own padding) separates the roster body, the footer and any
+            folder error instead. */}
+        <div className={`${CARD_LEVEL_1} space-y-2 py-1`}>
           {roster.status === 'loading' ? (
-            <div className="border-t border-edge-dim px-3 py-3">
+            <div className="px-3 py-3">
               <LoadingState what="specialists" variant="inline" />
             </div>
           ) : roster.status === 'failed' ? (
-            <div className="border-t border-edge-dim p-2.5">
+            <div className="p-2.5">
               <ErrorState mode="recoverable" message={roster.error} onRetry={() => void refreshSpecialistRoster(cwd)} variant="inline" />
             </div>
           ) : definitions.length === 0 && skipped.length === 0 ? (
-            <div className="border-t border-edge-dim p-2.5">
+            <div className="p-2.5">
               <EmptyState message="No specialists found — even the built-ins are missing, which is a bug worth reporting." variant="inline" />
             </div>
           ) : (
-            SOURCE_ORDER.filter(src => bySource.has(src) || skippedFor(src).length > 0).map(src => (
-              <div key={src} className="border-t border-edge-dim">
-                {/* WHY SectionLabel, not the old eyebrow class (fix batch 1,
-                    2026-09-24): design guide small label — normal case, no
-                    letter-spacing. Was `text-3xs ... tracking-wider uppercase`.
-                    Padding on the wrapper: SectionLabel owns only margin
-                    (design-lint no-restyle). */}
-                <div className="px-3 pt-2 pb-1">
-                  <SectionLabel>{SOURCE_LABEL[src]}</SectionLabel>
+            <div className="space-y-2">
+              {SOURCE_ORDER.filter(src => bySource.has(src) || skippedFor(src).length > 0).map(src => (
+                <div key={src}>
+                  {/* WHY SectionLabel, not the old eyebrow class (fix batch 1,
+                      2026-09-24): design guide small label — normal case, no
+                      letter-spacing. Was `text-3xs ... tracking-wider uppercase`.
+                      Padding on the wrapper: SectionLabel owns only margin
+                      (design-lint no-restyle). */}
+                  <div className="px-3 pt-2 pb-1">
+                    <SectionLabel>{SOURCE_LABEL[src]}</SectionLabel>
+                  </div>
+                  <ul className="pb-1">
+                    {(bySource.get(src) ?? []).map(d => <RosterRow key={`${d.source}-${d.id}`} d={d} folders={folders} />)}
+                    {skippedFor(src).map(s => <SkippedRow key={s.path} s={s} />)}
+                  </ul>
                 </div>
-                <ul className="pb-1">
-                  {(bySource.get(src) ?? []).map(d => <RosterRow key={`${d.source}-${d.id}`} d={d} folders={folders} />)}
-                  {skippedFor(src).map(s => <SkippedRow key={s.path} s={s} />)}
-                </ul>
-              </div>
-            ))
+              ))}
+            </div>
           )}
-          <div className="border-t border-edge-dim px-2 py-1.5 flex items-center justify-between gap-2">
+          <div className="px-2 py-1.5 flex items-center justify-between gap-2">
             {/* Footer copy per Task 13 brief, verbatim. */}
             <span className="text-3xs text-fg-muted px-1">Files are re-read each time you send a message; Refresh to re-read now.</span>
             <div className="flex items-center gap-1 shrink-0">
@@ -327,7 +330,7 @@ export default function SpecialistsSection({ cwd }: {
             </div>
           </div>
           {folderError && (
-            <div className="border-t border-edge-dim p-2.5">
+            <div className="p-2.5">
               <ErrorState mode="recoverable" message={folderError} onRetry={openFolder} variant="inline" />
             </div>
           )}
@@ -365,6 +368,9 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
           onSelect={onPick}
           includeClaude={false}
           emptyLabel={loaded ? AUTOMATIC_SPECIALIST_MODEL_COPY : 'Loading models…'}
+          // Card-levels sweep: nested inside this section's level-1 card, so
+          // the trigger matches every other nested control (level-2 default).
+          triggerClassName=""
         />
         {value && (
           // Outlined, not bare text (fix batch 2 — decisions.md "Secondary

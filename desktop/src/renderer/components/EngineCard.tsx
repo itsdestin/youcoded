@@ -16,7 +16,7 @@
 // the two speed switches, the context length, the optional engine builds and
 // the folder.
 import { useEffect, useState } from 'react';
-import { AnchorTip, Button, Callout, ErrorState, FieldError, SettingRow, TextInput, Toggle } from './ui';
+import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, SettingRow, TextInput, Toggle } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { BackendOption, EnginePrereqs, EngineSpeedSettings } from '../../shared/engine-types';
@@ -351,7 +351,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
                 <p className="text-fg-muted">
                   Run this in a terminal{prereqs.distro ? ` (${prereqs.distro})` : ''}. It will ask for your password.
                 </p>
-                <div className="flex items-start gap-1.5 rounded-md bg-well px-2.5 py-2">
+                <div className={`${CARD_LEVEL_2} flex items-start gap-1.5 px-2.5 py-2`}>
                   <pre className="flex-1 min-w-0 text-3xs font-mono whitespace-pre-wrap break-words select-all">{prereqs.command}</pre>
                   <Button size="sm" variant="ghost" onClick={() => void copyCommand(prereqs.command!)} className="shrink-0 -my-1">
                     {copied ? 'Copied' : 'Copy'}
@@ -403,10 +403,8 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
   };
 
   return (
-    // Change 25: the in-panel row surface — bg-inset/50, borderless. Was
-    // `border border-edge-dim bg-well`. Same idiom as ProvidersSection's rows
-    // and SettingsRow, which is what the header comment above always intended.
-    <div className="mt-2 rounded-lg bg-inset/50 px-3 py-2.5">
+    // Card-levels sweep (2026-09-27): LEVEL-1, same as "Models"/"Other local apps".
+    <div className={`${CARD_LEVEL_1} mt-2 px-3 py-2.5`}>
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-xs text-fg font-medium">

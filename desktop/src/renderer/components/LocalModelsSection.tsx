@@ -5,13 +5,15 @@
 // the whole section is gated on window.claude.native.supported so production
 // builds (native.supported false until Phase 2) render nothing.
 //
-// Styling mirrors ProvidersSection: the panel's row cards are the shared
-// in-panel row surface (bg-inset/50, borderless — change 25; they were
-// bg-well + border-edge-dim), plain-word status (never ●◐○ glyphs),
-// consequence-gated destructive actions.
+// Styling mirrors ProvidersSection: plain-word status (never ●◐○ glyphs),
+// consequence-gated destructive actions. Card-levels sweep (2026-09-27):
+// top-level cards ("Models", "Other local apps") are `CARD_LEVEL_1`
+// (`bg-inset/50`); everything nested one level in (RepoCard, LocalModelRow,
+// a detected app, a quant option) is `CARD_LEVEL_2` — they used to share the
+// SAME `bg-inset/50` as their own parent card, a box wearing its box's look.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import EngineCard from './EngineCard';
-import { Button, FieldError, InputGroup, ProgressBar, Callout, ErrorState, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog, SectionLabel } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, FieldError, InputGroup, ProgressBar, Callout, ErrorState, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog, SectionLabel } from './ui';
 import type {
   CuratedModel, QuantOption, FitEstimate, DownloadProgress,
   InstalledLocalModel, DetectedEndpoint, HFSearchHit, ModelSettingsWrite, StoredModelSettings,
@@ -294,7 +296,8 @@ function ModelBrowser({
   return (
     // Change 25: in-panel row surface, matching EngineCard and "Other local
     // apps" — the three are siblings in this panel and shared one class string.
-    <div className="rounded-lg bg-inset/50 px-3 py-2.5">
+    // Card-levels sweep (2026-09-27): this is the LEVEL-1 card.
+    <div className={`${CARD_LEVEL_1} px-3 py-2.5`}>
       <p className="text-xs text-fg font-medium mb-2.5">Models</p>
 
       {/* Search — filters recommended/installed locally, searches Hugging Face. */}
@@ -460,7 +463,10 @@ export function RepoCard({
   const hiddenCount = (quants ?? []).length - visible.length;
 
   return (
-    <div className="bg-inset/50 rounded-lg px-3 py-2.5">
+    // Card-levels sweep (2026-09-27): nested inside the "Models" level-1 card
+    // above (ModelBrowser), so this is LEVEL-2 — was quietly wearing the same
+    // `bg-inset/50` as its own parent (a box-inside-box the same look hid).
+    <div className={`${CARD_LEVEL_2} px-3 py-2.5`}>
       <div className="flex items-start gap-2">
         {/* Round 2 (P-1 note): the expand affordance is the same right-hand chevron every
             navigating row has, turned down while open — never a leading "›" text toggle. */}
@@ -746,7 +752,8 @@ export function LocalModelRow({
   return (
     // No coloured border or strip any more (fix batch 2): every row is the same
     // plain card; a problem shows as the notice box inside it, below.
-    <div className="rounded-lg bg-inset/50">
+    // Card-levels sweep: nested inside the "Models" level-1 card, so LEVEL-2.
+    <div className={CARD_LEVEL_2}>
       <div className="px-3 pt-2 pb-2">
         <div className="flex items-center justify-between gap-3">
           <LocalBrandMark id={model.id} />
@@ -1163,7 +1170,9 @@ function ModelSettingsDialog({ open, modelId, name, onClose }: { open: boolean; 
               </span>
             )}
           />
-          <div className="rounded-lg bg-inset/50 px-3 py-2">
+          {/* Card-levels sweep: this is a top-level field card on its own
+              dialog page (like General's FieldRow), so LEVEL-1. */}
+          <div className={`${CARD_LEVEL_1} px-3 py-2`}>
             <p className="text-xs text-fg font-medium flex items-center gap-1">
               Extra engine flags
               <AnchorTip label="About extra engine flags" title="Extra engine flags" widthClass="w-72">
@@ -1244,7 +1253,11 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
   };
 
   return (
-    <div className="px-2 py-1.5 rounded-md bg-well">
+    // Card-levels sweep: nested inside a RepoCard (level-2), so this reuses
+    // level-2 too rather than the retired one-off `bg-well` look — a third
+    // visual level isn't earned here, it's the same "nested box" job one
+    // layer deeper.
+    <div className={`${CARD_LEVEL_2} px-2 py-1.5`}>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-2xs text-fg font-medium">{q.quant}</p>
@@ -1310,7 +1323,8 @@ function OtherLocalApps() {
 
   return (
     // Change 25: in-panel row surface — see the "Models" card above.
-    <div className="rounded-lg bg-inset/50 px-3 py-2.5">
+    // Card-levels sweep: LEVEL-1, same as "Models".
+    <div className={`${CARD_LEVEL_1} px-3 py-2.5`}>
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-fg font-medium">Other local apps</p>
         <Button
@@ -1332,7 +1346,8 @@ function OtherLocalApps() {
             {hits.map((hit) => {
               const isAdded = hit.alreadyAdded || added[hit.baseUrl];
               return (
-                <div key={hit.baseUrl} className="bg-inset/50 rounded-lg px-3 py-2.5">
+                // Card-levels sweep: nested inside "Other local apps" (level-1), so LEVEL-2.
+                <div key={hit.baseUrl} className={`${CARD_LEVEL_2} px-3 py-2.5`}>
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <p className="text-xs text-fg">

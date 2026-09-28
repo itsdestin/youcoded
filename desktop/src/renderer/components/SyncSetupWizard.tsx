@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Button, CloseButton, FieldError, TextInput, Toggle, Radio, RadioGroup, Callout } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, CloseButton, FieldError, TextInput, Toggle, Radio, RadioGroup, Callout } from './ui';
 import { isAndroid as checkIsAndroid } from '../platform';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScrollFade } from '../hooks/useScrollFade';
@@ -228,10 +228,12 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
                 key={type}
                 onClick={() => !disabled && selectType(type)}
                 disabled={disabled}
-                className={`w-full rounded-lg border border-edge-dim p-4 flex items-center gap-3 text-left transition-colors ${
+                // Card-levels sweep (2026-09-27): LEVEL-1 choice card (was a
+                // one-off bg-inset/10-30 recipe shared with nothing else).
+                className={`w-full ${CARD_LEVEL_1} p-4 flex items-center gap-3 text-left transition-colors ${
                   disabled
-                    ? 'bg-inset/10 opacity-50 cursor-not-allowed'
-                    : 'bg-inset/30 hover:bg-inset/50 cursor-pointer'
+                    ? 'opacity-50 cursor-not-allowed'
+                    : 'hover:bg-inset cursor-pointer'
                 }`}
               >
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 ${BACKEND_STYLE[type].tint}`}>
@@ -495,7 +497,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
 
           {/* iCloud: show detected path */}
           {backendType === 'icloud' && icloudPath && (
-            <div className="px-3 py-2.5 rounded-lg bg-inset/50 text-2xs text-fg-dim">
+            <div className={`${CARD_LEVEL_1} px-3 py-2.5 text-2xs text-fg-dim`}>
               Your data will be stored in iCloud Drive at:<br />
               <span className="text-fg font-mono text-3xs">{icloudPath}</span>
             </div>
@@ -555,7 +557,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
               isDup = dupes.some(b => (b.config.ICLOUD_PATH || '') === icloudPath);
             }
             return isDup ? (
-              <div className="px-3 py-2 rounded-lg bg-inset/50 text-2xs text-fg-dim">
+              <div className={`${CARD_LEVEL_1} px-3 py-2 text-2xs text-fg-dim`}>
                 Heads up: you already have a backup pointing to this exact destination (same account and folder). Adding another is safe, but it'll just duplicate what the existing one does. If you meant a different account, cancel and sign into that account first.
               </div>
             ) : null;
@@ -922,7 +924,7 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
       {(installError || !canAutoInstall) && os === 'mac' && (
         <div className="text-3xs text-fg-muted space-y-1">
           <div>On macOS, the easiest way is Homebrew. In Terminal, run:</div>
-          <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">brew install gh</div>
+          <div className={`font-mono text-fg-dim ${CARD_LEVEL_2} px-2 py-1`}>brew install gh</div>
           <div>No Homebrew? Download the installer from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>.</div>
         </div>
       )}
@@ -930,14 +932,14 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
         <div className="text-3xs text-fg-muted space-y-1">
           <div>On Windows, download the installer from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>.</div>
           <div>Or, if you use winget, open PowerShell and run:</div>
-          <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">winget install GitHub.cli</div>
+          <div className={`font-mono text-fg-dim ${CARD_LEVEL_2} px-2 py-1`}>winget install GitHub.cli</div>
         </div>
       )}
       {(installError || !canAutoInstall) && os === 'linux' && (
         <div className="text-3xs text-fg-muted space-y-1">
           <div>On Linux, install with your package manager:</div>
-          <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">sudo apt install gh  # Debian/Ubuntu</div>
-          <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">sudo dnf install gh  # Fedora</div>
+          <div className={`font-mono text-fg-dim ${CARD_LEVEL_2} px-2 py-1`}>sudo apt install gh  # Debian/Ubuntu</div>
+          <div className={`font-mono text-fg-dim ${CARD_LEVEL_2} px-2 py-1`}>sudo dnf install gh  # Fedora</div>
           <div>Full instructions: <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://github.com/cli/cli/blob/trunk/docs/install_linux.md')}>install guide</button>.</div>
         </div>
       )}
@@ -961,7 +963,7 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
 
 function PrereqRow({ label, status }: { label: string; status: 'checking' | 'ready' | 'missing' }) {
   return (
-    <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-inset/30">
+    <div className={`${CARD_LEVEL_1} flex items-center gap-3 px-3 py-2`}>
       <StatusIcon status={status} />
       <span className="text-xs text-fg">{label}</span>
       <span className="text-3xs text-fg-muted ml-auto">

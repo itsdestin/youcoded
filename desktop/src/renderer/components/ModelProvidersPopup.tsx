@@ -58,7 +58,9 @@ function ProviderRow({ title, info, status, detail, action, account, children }:
   children?: React.ReactNode;
 }) {
   return (
-    <div className="bg-inset/50 rounded-lg px-3 py-2.5">
+    // Card-levels sweep (2026-09-27): LEVEL-1 — the Claude Code / ChatGPT /
+    // OpenRouter cards on the Cloud providers page.
+    <div className={`${CARD_LEVEL_1} px-3 py-2.5`}>
       {/* items-start: the button sits on the title line, top-right, not
           centred against however many lines the status grows to (P-1/P-2). */}
       <div className="flex items-start gap-3">

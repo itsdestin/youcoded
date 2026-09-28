@@ -1139,6 +1139,27 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 hk === 'syncing' ? syncingSub :
                 syncedSub;
 
+              // Destin, 2026-09-27: "is kinda randomly thrown on the page and
+              // doesn't seem attached to anything" — this used to be a loose
+              // line between the status card and "Additional backups" with no
+              // box or heading of its own. It describes what THIS status card
+              // backs up, so it moves inside it, as a second grey hint line
+              // under the GitHub/account sub-line, in every state (not only
+              // "All synced") — text about a card lives inside that card.
+              const categoriesLine = (status?.syncedCategories?.length ?? 0) > 0 ? (
+                <div className="text-3xs mt-0.5 leading-relaxed text-fg-muted">
+                  <span className="font-medium">Includes </span>
+                  {(status!.syncedCategories ?? []).flatMap((cat, i) => {
+                    const label = (
+                      <span key={cat} title={CATEGORY_DESCRIPTIONS[cat] || ''}>
+                        {CATEGORY_LABELS[cat] || cat}
+                      </span>
+                    );
+                    return i === 0 ? [label] : [<span key={`sep-${cat}`} aria-hidden="true"> {'·'} </span>, label];
+                  })}
+                </div>
+              ) : null;
+
               // Not-enabled + error + GitHub-authed collapses to the plain 'off'
               // header (only error + UNauthed gets 'waiting-github'), which used to
               // hide the failure entirely — e.g. an enable attempt that failed for a
@@ -1234,6 +1255,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         <div className="min-w-0">
                           <div className="text-sm font-semibold text-fg">{title}</div>
                           <div className="text-2xs mt-0.5 leading-relaxed text-fg-muted">{sub}</div>
+                          {categoriesLine}
                         </div>
                       </div>
                       {/* Enable toggle — migrated to the shared Toggle (spec changes
@@ -1644,33 +1666,6 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     );
                   })}
                 </div>
-              </div>
-            )}
-
-            {/* 4. Synced Data Categories — read-only inline list.
-                Tiles used to look like buttons (border + cursor-help) but did nothing.
-                Now passive text with per-item hover tooltips on the default cursor. */}
-            {/* Fix: `status &&` alone wasn't enough — a status object missing
-                syncedCategories made `.length` throw, and because this renders
-                inside the always-mounted settings drawer the RootErrorBoundary
-                took the WHOLE APP down ("YouCoded failed to start") rather than
-                just this panel. Optional-chain every field the main process
-                could omit. */}
-            {status && (status.syncedCategories?.length ?? 0) > 0 && (
-              <div>
-                {/* WHY normal case, no letter-spacing (fix batch 1, 2026-09-24):
-                    design guide — no spaced-out capitals, even inline. */}
-                <span className="text-3xs font-medium text-fg-muted">Includes </span>
-                <span className="text-2xs text-fg-dim">
-                  {(status.syncedCategories ?? []).flatMap((cat, i) => {
-                    const label = (
-                      <span key={cat} title={CATEGORY_DESCRIPTIONS[cat] || ''}>
-                        {CATEGORY_LABELS[cat] || cat}
-                      </span>
-                    );
-                    return i === 0 ? [label] : [<span key={`sep-${cat}`} aria-hidden="true"> {'·'} </span>, label];
-                  })}
-                </span>
               </div>
             )}
 

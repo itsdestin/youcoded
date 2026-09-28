@@ -33,7 +33,7 @@ import { formatVersionLine } from '../../shared/version-line';
 import type { BuddyHelperStatus } from '../../shared/types';
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
-import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
+import { Button, CARD_LEVEL_1, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
 import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
@@ -2042,9 +2042,9 @@ function RemoteButton(props: RemoteButtonProps) {
                       </section>
                     )}
 
-                    {/* Add Device overlay */}
+                    {/* Add Device overlay — LEVEL-1 (card-levels sweep). */}
                     {showAddDevice && tailscale?.url && (
-                      <section ref={addDeviceRef} className="bg-inset/50 rounded-lg p-3">
+                      <section ref={addDeviceRef} className={`${CARD_LEVEL_1} p-3`}>
                         <div className="flex items-center justify-between mb-2">
                           <h3 className="text-xs font-medium text-fg-2">Add Device</h3>
                           {/* NOT a K6 action — this dismisses the whole

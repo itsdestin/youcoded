@@ -8,7 +8,7 @@ import type { LoadedTheme } from '../themes/theme-types';
 import { themePreviewSrc } from '../themes/builtin/previews';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../themes/theme-engine';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Select, Toggle, SectionLabel, SettingRow } from './ui';
+import { Button, CARD_LEVEL_2, Select, Toggle, SectionLabel, SettingRow } from './ui';
 
 // Plain-language explainer for the Appearance popup. Shown when the user taps
 // the (i) icon in the popup header — see ThemeScreen's `showInfo` state.
@@ -442,7 +442,7 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
     <div className="space-y-4">
         {/* Locked banner for non-user themes so it's clear why most controls are absent */}
         {!isUserTheme && (
-          <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 leading-relaxed">
+          <p className={`text-3xs text-fg-muted ${CARD_LEVEL_2} px-2.5 py-1.5 leading-relaxed`}>
             {isCommunityTheme
               ? 'Marketplace themes are kept in sync with their author\u2019s updates. Glass + terminal transparency sliders are customizable per-theme. Use "Build New Theme with Claude" to fork an editable copy.'
               : 'Built-in themes are locked. Only glass + terminal transparency sliders are customizable. Use "Build New Theme with Claude" to make an editable copy.'}
@@ -506,7 +506,7 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
           <div>
             <SectionLabel className="mb-2">Glass</SectionLabel>
             {reducedEffects && (
-              <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
+              <p className={`text-3xs text-fg-muted ${CARD_LEVEL_2} px-2.5 py-1.5 mb-2 leading-relaxed`}>
                 Reduce Visual Effects is active — blur is disabled. Opacity still applies.
               </p>
             )}
@@ -554,12 +554,12 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
           <div>
             <SectionLabel className="mb-2">Terminal</SectionLabel>
             {canTuneTerminalFilter && reducedEffects && (
-              <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
+              <p className={`text-3xs text-fg-muted ${CARD_LEVEL_2} px-2.5 py-1.5 mb-2 leading-relaxed`}>
                 Reduce Visual Effects is active — wallpaper blur is disabled. Opacity + brightness still apply.
               </p>
             )}
             {hasBakedTerminalBg && (
-              <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
+              <p className={`text-3xs text-fg-muted ${CARD_LEVEL_2} px-2.5 py-1.5 mb-2 leading-relaxed`}>
                 This theme ships a pre-blurred terminal wallpaper — blur + brightness are baked in. Only opacity is adjustable here.
               </p>
             )}

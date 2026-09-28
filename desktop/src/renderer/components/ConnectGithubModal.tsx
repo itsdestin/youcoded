@@ -11,7 +11,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
 import { getPlatform } from '../platform';
-import { Button, Dialog } from './ui';
+import { Button, CARD_LEVEL_1, Dialog } from './ui';
 
 type Stage = 'checking' | 'gh-missing' | 'code' | 'done' | 'error';
 
@@ -222,7 +222,7 @@ export default function ConnectGithubModal({ onClose, onConnected }: Props) {
             </p>
 
             {installNote?.kind === 'restart' && (
-              <div className="rounded-md border border-edge bg-inset px-3 py-2 text-xs text-fg-dim">
+              <div className={`${CARD_LEVEL_1} px-3 py-2 text-xs text-fg-dim`}>
                 {installNote.text}
               </div>
             )}

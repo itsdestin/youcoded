@@ -224,7 +224,10 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
             {/* Advanced escape hatch — opens Claude Code's native TUI for any option not covered here */}
             {/* /config drives Claude Code's own terminal config UI — native sessions have no such surface, ever (program §2.5). */}
             {showAdvanced !== false && (
-            <section className="pt-3 border-t border-edge-dim">
+            // Card-levels sweep (2026-09-27): dropped the `border-t` — no full-width
+            // line inside a popup; the Dialog body's own `space-y-5` already
+            // separates this from the section above.
+            <section>
               <Button
                 variant="secondary"
                 size="lg"

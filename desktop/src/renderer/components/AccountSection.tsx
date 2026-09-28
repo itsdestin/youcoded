@@ -4,7 +4,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { useAccount } from '../state/account-context';
 import type { MarketplaceUser } from '../../main/marketplace-auth-store';
 import type { BlockRow } from '../state/marketplace-api-client';
-import { Button, Dialog, FieldError, InputGroup, SettingRow, Callout } from './ui';
+import { Button, CARD_LEVEL_2, Dialog, FieldError, InputGroup, SettingRow, Callout } from './ui';
 import { ConnectedAccountsBody } from './ConnectedAccounts';
 
 // Settings → Account section. One self-contained row-button + popup, mounted in
@@ -677,7 +677,7 @@ function EditAccountBody({
 
         {/* Handle-change consequences + explicit confirm (existing handle only). */}
         {handleConfirming && (
-          <div className="space-y-2 rounded-lg bg-inset border border-edge-dim p-3">
+          <div className={`${CARD_LEVEL_2} space-y-2 p-3`}>
             <p className="text-2xs text-fg-dim leading-relaxed">
               Changing your handle frees @{currentHandle} for anyone else to claim after 30 days — and
               you can't take it back during those 30 days. Friends who know you by @{currentHandle} will

@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Button, FieldError } from './ui';
+import { Button, CARD_LEVEL_1, FieldError } from './ui';
 import ConnectGithubModal from './ConnectGithubModal';
 import { SavedPageKeys } from './pages/SavedPageKeys';
 
@@ -69,7 +69,9 @@ export function ConnectedAccountsBody({ status, refresh }: {
       </p>
 
       {/* ── GitHub ── (list layout: future providers append below) */}
-      <div className="rounded-lg border border-edge bg-inset/40 p-3 space-y-3">
+      {/* Card-levels sweep (2026-09-27): LEVEL-1 (was a one-off border-edge/
+          bg-inset-40 recipe shared with nothing else). */}
+      <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
         <div className="flex items-center gap-3">
           <GitHubMarkIcon className="w-6 h-6 text-fg shrink-0" />
           <div className="flex-1 min-w-0">

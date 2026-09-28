@@ -77,7 +77,7 @@ export type { FilterMenuChipProps } from './FilterMenuChip';
 export { Dialog, DIALOG_WIDTHS } from './Dialog';
 export type { DialogProps, DialogSize } from './Dialog';
 
-export { SettingRow, SETTING_ROW_BASE, RowStatus } from './SettingRow';
+export { SettingRow, RowStatus } from './SettingRow';
 export type { SettingRowProps, SettingRowVariant } from './SettingRow';
 
 export { SectionLabel } from './SectionLabel';

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Button,
+  CARD_LEVEL_1,
+  CARD_LEVEL_2,
   EmptyState,
   ErrorState,
   FieldError,
@@ -8,7 +10,6 @@ import {
   LoadingState,
   SectionLabel,
   SettingRow,
-  SETTING_ROW_BASE,
 } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
@@ -59,16 +60,19 @@ import type {
 //   CONTAINMENT — the rejected version indented an expanded folder by `pl-2` and
 //               did nothing else, so its rows floated free of the heading above
 //               them. Here each folder is ONE BORDERED CARD: the folder row is
-//               that card's top band, a rule divides it from the body, and the
-//               body sits on its own `bg-well` plane. See FOLDER_HEADER below.
+//               that card's top band, spacing separates it from the body, and
+//               the body sits on the card's own plane. See FOLDER_HEADER below.
+//               UPDATED card-levels sweep (2026-09-27): this card is nested
+//               inside the "Always allowed" level-1 card, so it is now
+//               `CARD_LEVEL_2` (`components/ui/cardLevels.ts`), and the
+//               `border-t` that used to divide its header from its body is
+//               gone — no full-width line inside a card.
 //
 // Shapes follow the settings family, NOT ProvidersSection.tsx. That file
 // hand-rolls its rows and is grandfathered as legacy — it is an explicit
 // exemption in setting-row-authority.test.tsx — so modelling on it (which the
 // rejected first version did) inherits drift that the guards will not catch.
-// The exemplars actually followed:
-//   · card         SyncPanel.tsx:1117 — rounded-lg border border-edge bg-well
-//                  overflow-hidden, header band then divided body
+// The exemplars actually followed (pre-card-levels-sweep shapes; see above):
 //   · rows         SettingsPanel Connected Devices — <SettingRow variant="item">
 //   · destructive  SyncPanel DevicesTab — outline opens, filled commits, in
 //                  place, autoFocus + Escape-to-cancel
@@ -135,21 +139,19 @@ import type {
 /**
  * The folder card's top band.
  *
- * Derived from SETTING_ROW_BASE by REPLACEMENT rather than by copying the
- * string, so there is still exactly one definition of settings-row geometry —
- * copying it is what the setting-row guards (the no-hand-rolled-setting-row
- * ast-grep rules) exist to stop. The only thing
- * removed is the tile radius: this row is the card's top EDGE, and its own
- * 12px corners would leave a visible notch inside the card's border. The
- * `bg-inset/50` tint stays, and is load-bearing — it is what makes the header
- * read as a title band over the body rather than as one more row in a stack.
+ * Card-levels sweep (2026-09-27): the folder card is now a LEVEL-2 nested box
+ * (`CARD_LEVEL_2` — opaque `bg-inset` + a visible border), so this header no
+ * longer needs its own `bg-inset/50` tint to read as "a title band over the
+ * body" — that trick was for sitting on the old `bg-well` card, which had no
+ * texture of its own to contrast against. Flat + a hover fill is enough once
+ * the card itself already has a visible edge.
  *
  * It cannot be a <SettingRow>: SettingRowProps has no `aria-expanded`
  * pass-through, its <button> branch appends a static right-chevron that cannot
  * express open/closed, and passing a caret via `control` demotes the row to a
  * non-focusable <div>.
  */
-const FOLDER_HEADER = `${SETTING_ROW_BASE.replace('rounded-lg', 'rounded-none')} hover:bg-inset cursor-pointer ${FOCUS_RING}`;
+const FOLDER_HEADER = `w-full flex items-center gap-3 px-3 py-2 text-left transition-colors stepped-hover hover:bg-inset cursor-pointer ${FOCUS_RING}`;
 
 /** Rows shown per kind before "Show all N". Hiding a single row behind a click
  *  does not pay for the click, so the cut only applies above ROWS_PER_KIND + 1. */
@@ -408,8 +410,10 @@ export default function PermissionsSection() {
         {/* Destin's 2026-08-26/27 copy review: the label is a name, not a
             sentence — the card underneath already does the explaining. */}
         <SectionLabel className="mb-2">Permission modes</SectionLabel>
-        <div className="rounded-lg bg-inset/50">
-          <div className="px-3 py-2.5 space-y-2">
+        {/* Card-levels sweep: one `${CARD_LEVEL_1} px-3 py-2.5 space-y-2.5`
+            wrapper replaces the two-band `border-t` split — no full-width
+            line inside a card; spacing separates the closing note instead. */}
+        <div className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2.5`}>
             {MODES.map((m) => (
               <div key={m.id}>
                 <p className="text-2xs text-fg-2 leading-relaxed">
@@ -444,12 +448,9 @@ export default function PermissionsSection() {
                 )}
               </div>
             ))}
-          </div>
-          <div className="border-t border-edge-dim px-3 py-2">
-            <p className="text-3xs text-fg-muted">
-              Each conversation has its own mode. Change it from the bar at the bottom of the chat.
-            </p>
-          </div>
+          <p className="text-3xs text-fg-muted">
+            Each conversation has its own mode. Change it from the bar at the bottom of the chat.
+          </p>
         </div>
       </div>
 
@@ -473,12 +474,11 @@ export default function PermissionsSection() {
             "Things", not "commands": the list also holds file edits and
             connections to other services, not just commands.
 
-            ONE card for the whole section, matching the explanation card above:
-            same `rounded-lg bg-inset/50`, copy in its own band, a rule, then the
-            folders. Both sections read as one object under their label instead
-            of a paragraph and a loose stack of cards. */}
-        <div className="rounded-lg bg-inset/50">
-          <div className="px-3 py-2.5">
+            ONE card for the whole section, matching the explanation card above
+            (card-levels sweep: `CARD_LEVEL_1`, same as it), copy then the
+            folders — spacing between them now, not a `border-t` band split
+            (no full-width line inside a card). */}
+        <div className={`${CARD_LEVEL_1} p-2.5 space-y-2.5`}>
             <p className="text-2xs text-fg-dim leading-relaxed">
               {/* Destin's 2026-08-26/27 copy review: one promise for every mode
                   instead of a per-mode breakdown; the Full auto exception keeps
@@ -487,9 +487,7 @@ export default function PermissionsSection() {
               these. Full auto never asks anyway, except for the four above &mdash; and an
               &ldquo;Always allow&rdquo; on one of those removes even that check.
             </p>
-          </div>
 
-          <div className="border-t border-edge-dim p-2.5">
             {projects === null ? (
               <LoadingState what="what you've approved" variant="inline" />
             ) : loadFailed ? (
@@ -524,7 +522,6 @@ export default function PermissionsSection() {
                 ))}
               </div>
             )}
-          </div>
         </div>
       </div>
 
@@ -596,8 +593,10 @@ function FolderCard({
     // THE CONTAINMENT. One bordered surface holds the folder and everything
     // inside it, so the boundary is drawn on all four sides instead of being
     // implied by 8px of indent. `overflow-hidden` lets the header band run edge
-    // to edge inside the border.
-    <div className="rounded-lg border border-edge bg-well overflow-hidden">
+    // to edge inside the border. Card-levels sweep: this is nested inside the
+    // "Always allowed" level-1 card, so it's LEVEL-2 (`CARD_LEVEL_2`) now,
+    // not its own one-off `bg-well` card.
+    <div className={`${CARD_LEVEL_2} overflow-hidden`}>
       {/* The card's top band. A ROW, not a section label: the folder name is
           user data, and putting it through a label's `tracking-wider uppercase`
           destroys its real casing and makes a legacy slug read as shouting. */}
@@ -634,11 +633,11 @@ function FolderCard({
       </button>
 
       {open && (
-        // The body: divided from the band above it, and sitting on the card's
-        // own `bg-well` plane rather than on the dialog's. Two cues plus the
-        // border, and NO indent — the box is what says "inside", so the rows can
-        // use the card's full width, which matters at 420px.
-        <div className="border-t border-edge-dim px-2 pt-2.5 pb-2 space-y-3">
+        // The body: no `border-t` any more (card-levels sweep — no full-width
+        // line inside a card), just spacing under the header row. NO indent —
+        // the box is what says "inside", so the rows can use the card's full
+        // width, which matters at 420px.
+        <div className="px-2 pb-2 space-y-3">
           {RULE_KIND_ORDER.filter((kind) => groups[kind].length > 0).map((kind) => (
             <KindGroup key={kind} kind={kind} rules={groups[kind]} slug={project.slug} onChanged={onChanged} />
           ))}
@@ -672,7 +671,7 @@ function FolderCard({
                 </Button>
               ) : (
                 <div
-                  className="space-y-2 rounded-lg bg-inset border border-edge-dim p-2.5"
+                  className={`${CARD_LEVEL_2} space-y-2 p-2.5`}
                   // Escape cancels, matching DevicesTab — the trigger has just
                   // unmounted, so there is nothing else to escape back to.
                   onKeyDown={(e) => {
@@ -859,7 +858,7 @@ function RuleRow({
 
       {confirming && (
         <div
-          className="mt-1.5 space-y-2 rounded-lg bg-inset border border-edge-dim p-2.5"
+          className={`${CARD_LEVEL_2} mt-1.5 space-y-2 p-2.5`}
           onKeyDown={(e) => {
             if (e.key === 'Escape') setConfirming(false);
           }}

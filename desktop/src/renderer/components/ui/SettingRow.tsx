@@ -82,11 +82,14 @@ const DENSITY: Record<SettingRowVariant, { title: string; desc: string }> = {
 // cannot express open/closed. Taking the string by reference keeps one
 // definition; copying it is what the setting-row guards (the
 // no-hand-rolled-setting-row ast-grep rules) exist to stop.
-// Card-levels trial: this background+radius pair equals `CARD_LEVEL_1`
+// Card-levels sweep: this background+radius pair equals `CARD_LEVEL_1`
 // (cardLevels.ts) — kept as a plain string literal, not a template import,
 // because the ast-grep invariant that guards `stepped-hover` on this exact
 // constant only matches a plain string node (setting-row-base-is-stepped-hover.yml).
-export const SETTING_ROW_BASE = 'w-full flex items-center gap-3 px-3 py-2 bg-inset/50 rounded-lg text-left transition-colors stepped-hover';
+// No longer exported (knip, 2026-09-27): PermissionsSection's FOLDER_HEADER
+// was the one external reader, and the card-levels sweep gave it its own
+// definition instead (a level-2 nested card no longer wants level-1's tint).
+const SETTING_ROW_BASE = 'w-full flex items-center gap-3 px-3 py-2 bg-inset/50 rounded-lg text-left transition-colors stepped-hover';
 
 /**
  * `items-center`, always — deviating from the spec's `items-start`.
