@@ -184,7 +184,10 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
                 refresh={refreshGh}
               />
             ) : (
-              <>
+              // WHY one wrapper at 16px (Destin, 2026-09-28: "big gap between the two
+              // cards"): the two cards were bare children of the Dialog body, which
+              // spaces its children wider than the guide's 16px between groups.
+              <div className="space-y-4">
                 {signedIn && user ? (
                   // key on the canonical handle so SignedInBody remounts (re-seeding
                   // its useState draft initializers) if HandlePrompt saves a handle
@@ -222,7 +225,7 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
                     description={ghSummary}
                   />
                 )}
-              </>
+              </div>
             )}
       </Dialog>
     </>,
