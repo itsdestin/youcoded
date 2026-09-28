@@ -6,6 +6,7 @@
 // contract for what the card does with it, independent of how status gets
 // set (use-quote-marks.test.tsx / use-code-comment-anchors.test.tsx already
 // pin that part).
+import '@testing-library/jest-dom/vitest';
 import React, { useState } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
@@ -257,5 +258,88 @@ describe('CommentCard — typing into a fresh draft never loses the box (focus-s
     box.focus();
     fireEvent.blur(box);
     expect(screen.getByPlaceholderText(/add a comment…/i)).toBe(box);
+  });
+});
+
+// Draft's send control (Destin, 2026-09-28): same round-arrow send button
+// ReplyField uses inside the field, instead of a Cancel/Delete row below the
+// box — so Escape and a blur-while-empty are now the ONLY ways to drop a
+// never-posted draft (the bottom "Delete" button this replaces is gone).
+describe("CommentCard — a draft's send control (no bottom Delete button)", () => {
+  // `editingDraft` only INITIALIZES true for a comment that starts empty
+  // (CommentCard.tsx's own WHY) — a real draft always starts that way, so
+  // this harness starts empty too and types via `onTextChange`, the same
+  // shape CommentsMargin/CodeCommentsRail hand it in production (and the
+  // same pattern the focus-steal regression harness above uses).
+  function DraftBox({ onDelete, onCommit }: { onDelete: () => void; onCommit: () => void }) {
+    const [comment, setComment] = useState<DocComment>(baseComment({ id: 'c-draft-2', text: '', replies: [] }));
+    return (
+      <CommentCard
+        comment={comment}
+        onTextChange={(t) => setComment((c) => ({ ...c, text: t }))}
+        onReply={noop}
+        onResolve={noop}
+        onReopen={noop}
+        onDelete={onDelete}
+        onCommit={onCommit}
+      />
+    );
+  }
+
+  function renderDraft() {
+    const onDelete = vi.fn();
+    const onCommit = vi.fn();
+    const utils = render(<DraftBox onDelete={onDelete} onCommit={onCommit} />);
+    return { ...utils, onDelete, onCommit };
+  }
+
+  it('renders no bottom "Delete" button for a draft', () => {
+    renderDraft();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
+
+  it('renders a "Post comment" arrow button instead, disabled while the draft is empty', () => {
+    renderDraft();
+    expect(screen.getByRole('button', { name: /post comment/i })).toBeDisabled();
+  });
+
+  it('typing enables the arrow; clicking it posts, same as a blur commit', () => {
+    const { onCommit } = renderDraft();
+    fireEvent.change(screen.getByPlaceholderText(/add a comment…/i), { target: { value: 'a real note' } });
+    const post = screen.getByRole('button', { name: /post comment/i });
+    expect(post).not.toBeDisabled();
+    fireEvent.click(post);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('a real note')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /post comment/i })).toBeNull();
+  });
+
+  it('Enter posts a non-empty draft, matching ReplyField', () => {
+    const { onCommit } = renderDraft();
+    const box = screen.getByPlaceholderText(/add a comment…/i);
+    fireEvent.change(box, { target: { value: 'typed before Enter' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it('Escape discards an empty draft (calls onDelete) — the replacement for the removed Delete button', () => {
+    const { onDelete } = renderDraft();
+    fireEvent.keyDown(screen.getByPlaceholderText(/add a comment…/i), { key: 'Escape' });
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('Escape on a non-empty draft does NOT discard it — only an empty draft is droppable this way', () => {
+    const { onDelete } = renderDraft();
+    const box = screen.getByPlaceholderText(/add a comment…/i);
+    fireEvent.change(box, { target: { value: 'do not lose this' } });
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText(/add a comment…/i)).toBeTruthy();
+  });
+
+  it('blurring an empty draft discards it — click-away can no longer leave a stuck empty card', () => {
+    const { onDelete } = renderDraft();
+    fireEvent.blur(screen.getByPlaceholderText(/add a comment…/i));
+    expect(onDelete).toHaveBeenCalledTimes(1);
   });
 });

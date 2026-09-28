@@ -3,7 +3,7 @@
 // Used both in the margin (desktop) and inside a popover (narrow viewport).
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/Button';
-import { Textarea } from '../ui/Textarea';
+import { InputGroup } from '../ui/InputGroup';
 import { ErrorState } from '../ui/states';
 import { CompleteToggle } from '../SessionCardDetails';
 import { formatRelativeTime } from '../../utils/format-time';
@@ -140,6 +140,18 @@ export function CommentCard({
   // states already assume no comment showing a reply/resolved treatment is
   // also mid-compose.
   const isDraft = editingDraft && comment.replies.length === 0 && !comment.resolved;
+
+  // Draft's own send/discard (Destin, 2026-09-28: same send control as
+  // replies, and the bottom-of-card Delete button goes away — Escape or a
+  // blur while still empty is now the ONLY way to drop a never-posted
+  // draft, so it can't get stuck open with nothing in it). `postDraft` is
+  // shared by Enter, the arrow button and blur; blur additionally discards
+  // an empty draft since it's the click-away path once the Delete button is
+  // gone. Neither branch touches `editingDraft` on a keystroke (still only
+  // Enter/blur/Escape), so the focus-steal regression this file's own
+  // `editingDraft` WHY describes stays closed.
+  const postDraft = () => { if (comment.text.trim()) { setEditingDraft(false); onCommit?.(); } };
+  const discardDraftIfEmpty = () => { if (!comment.text.trim()) onDelete(); };
 
   // Round 10 (Destin: "the 'resolved' button should be an icon, like the
   // complete button for resume browser, at the top right of each comment
@@ -315,29 +327,54 @@ export function CommentCard({
               onCancel={() => setIsEditingComment(false)}
             />
           ) : isDraft ? (
-            <Textarea
-              ref={textRef}
-              size="sm"
-              rows={2}
-              value={comment.text}
-              onChange={(e) => onTextChange(e.target.value)}
-              // WHY: the one place `editingDraft` ever turns off — a real
-              // blur (click/tab away), never a keystroke. Empty text stays a
-              // draft either way (nothing to "post" yet — matches the old
-              // behaviour when this card is reopened with real content).
-              // Data-loss fix (2026-09-28): a real blur is ALSO now the one
-              // moment this panel-hosted draft ever gets saved — typing no
-              // longer persists on its own (see Props' `onCommit` WHY), so
-              // without this call a comment created here (CommentsMargin's
-              // spreadsheet-cell / margin drafts) would never reach disk.
-              onBlur={() => { if (comment.text.trim()) { setEditingDraft(false); onCommit?.(); } }}
-              placeholder="Add a comment…"
-              // data-edit-menu (was the artifact-edit-textarea class, which design lint rejects on <Textarea>): reuses the artifact editor's right-click
-              // routing (build-menu.ts) — Electron ships no default context menu,
-              // so without this marker cut/copy/paste here would do nothing.
-              className="mt-1 w-full"
-              data-edit-menu
-            />
+            // Same send control as ReplyField (the round arrow inside the
+            // field, InputGroup's own "border on the wrapper, field goes
+            // bare" shape) instead of a separate Cancel/Delete row below —
+            // Destin, 2026-09-28. Enter posts, matching ReplyField; Escape
+            // discards only while still empty (the row below this used to
+            // be the only way to do that); a real blur (click/tab away)
+            // posts a non-empty draft or discards an empty one, so the card
+            // can never sit open with nothing in it once the button is gone.
+            <InputGroup size="sm" className="mt-1 w-full">
+              <textarea
+                ref={textRef}
+                rows={2}
+                value={comment.text}
+                onChange={(e) => onTextChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postDraft(); }
+                  else if (e.key === 'Escape') { e.preventDefault(); discardDraftIfEmpty(); }
+                }}
+                // WHY blur does both jobs: a real blur (click/tab away) is
+                // the one moment this panel-hosted draft ever gets saved
+                // (Data-loss fix, 2026-09-28 — typing no longer persists on
+                // its own, see Props' `onCommit` WHY) OR, now that the
+                // bottom Delete button is gone, the click-away path that
+                // drops a never-typed-in draft instead of leaving it stuck.
+                onBlur={() => { postDraft(); discardDraftIfEmpty(); }}
+                placeholder="Add a comment…"
+                // Bare, like InputGroup.Field — the wrapper above carries
+                // the border/background; a resize handle or a second border
+                // from the Textarea primitive doesn't belong inside it.
+                // data-edit-menu (was the artifact-edit-textarea class, which design lint rejects on a bare textarea): reuses the artifact editor's
+                // right-click routing (build-menu.ts) — Electron ships no
+                // default context menu, so without this marker cut/copy/
+                // paste here would do nothing.
+                className="flex-1 min-w-0 bg-transparent border-0 outline-none resize-none text-2xs text-fg placeholder:text-fg-muted py-1.5"
+                data-edit-menu
+              />
+              <Button
+                size="icon-xs"
+                aria-label="Post comment"
+                disabled={!comment.text.trim()}
+                onClick={postDraft}
+                className="mr-0.5 self-end mb-0.5"
+              >
+                <svg className="w-2.5 h-2.5 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
+              </Button>
+            </InputGroup>
           ) : (
             <p className="mt-0.5 text-fg-2 whitespace-pre-wrap">{comment.text}</p>
           )}
@@ -369,11 +406,6 @@ export function CommentCard({
 
       {/* The reply box is shared with the Reading-mode hover card (ReplyField.tsx). */}
       {!isDraft && !confirmingDeleteComment && <ReplyField onSend={onReply} />}
-      {isDraft && (
-        <div className="mt-2 flex items-center justify-end gap-1.5">
-          <Button variant="ghost" size="sm" onClick={onDelete}>Delete</Button>
-        </div>
-      )}
     </div>
   );
 }

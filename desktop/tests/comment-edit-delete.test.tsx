@@ -138,6 +138,27 @@ describe('CommentCard — Edit/Delete icons next to the Resolve toggle (E-1)', (
     expect(document.activeElement).toBe(box);
   });
 
+  // Destin, 2026-09-28: Cancel/Save move inside the field's own border,
+  // bottom-right — one bordered box, not a border on the textarea plus a
+  // separate row below it.
+  it('Cancel and Save sit INSIDE the same bordered box as the edit textarea, not below it', () => {
+    render(
+      <CommentCard
+        comment={baseComment({ text: 'Original note.' })}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={noop} onDeleteComment={noop}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText(/edit comment/i));
+    const box = screen.getByPlaceholderText(/edit…/i);
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    const save = screen.getByRole('button', { name: 'Save' });
+    const wrapper = box.parentElement;
+    expect(wrapper?.contains(cancel)).toBe(true);
+    expect(wrapper?.contains(save)).toBe(true);
+    expect(wrapper?.className).toContain('border');
+  });
+
   it('Delete shows an inline confirm naming the comment alone when it has no replies', () => {
     render(
       <CommentCard

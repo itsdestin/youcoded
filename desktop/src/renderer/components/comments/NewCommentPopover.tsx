@@ -21,8 +21,8 @@
 // placeBubble's own clamp/flip treats that band as already outside the
 // panel — the popup either sits higher or flips above, but never over it.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Textarea } from '../ui/Textarea';
 import { Button } from '../ui/Button';
+import { InputGroup } from '../ui/InputGroup';
 import { ErrorState } from '../ui/states';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { placeBubble } from '../ui/anchor-position';
@@ -114,27 +114,51 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
       <p className="text-fg-muted italic line-clamp-2 mb-1.5 border-l-2 border-edge-dim pl-2">
         {comment.cell ? `Cell ${comment.cell}${comment.sheet ? ` on ${comment.sheet}` : ''}` : <>&ldquo;{comment.quote}&rdquo;</>}
       </p>
-      <Textarea
-        ref={textRef}
-        size="sm"
-        rows={3}
-        value={comment.text}
-        placeholder="Add a comment…"
-        // data-edit-menu (was the artifact-edit-textarea class, which design lint rejects on <Textarea>): right-click here gets real cut/copy/paste
-        // (build-menu.ts) — Electron ships no default context menu.
-        className="w-full"
-        data-edit-menu
-        onChange={(e) => onTextChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            onDone();
-          } else if (e.key === 'Escape') {
-            e.preventDefault();
-            onCancel();
-          }
-        }}
-      />
+      {/* Same send control as ReplyField/CommentCard's draft box (the round
+          arrow inside the field) instead of Cancel/Comment buttons below it
+          — Destin, 2026-09-28. Enter still posts, Escape still discards,
+          and the window-level mousedown listener above still commits a
+          non-empty note or drops an empty one on click-away; only the
+          on-screen buttons are gone. */}
+      <InputGroup size="sm" className="w-full">
+        <textarea
+          ref={textRef}
+          rows={3}
+          value={comment.text}
+          placeholder="Add a comment…"
+          // Bare, like InputGroup.Field — the wrapper carries the border.
+          // data-edit-menu (was the artifact-edit-textarea class, which design lint rejects on a bare textarea): right-click here gets real
+          // cut/copy/paste (build-menu.ts) — Electron ships no default
+          // context menu.
+          className="flex-1 min-w-0 bg-transparent border-0 outline-none resize-none text-2xs text-fg placeholder:text-fg-muted py-1.5"
+          data-edit-menu
+          onChange={(e) => onTextChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              onDone();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              onCancel();
+            }
+          }}
+        />
+        {/* onMouseDown preventDefault: keeps focus (and the click-away
+            listener's target check) on the textarea/panel rather than
+            racing a blur against this button's own click. */}
+        <Button
+          size="icon-xs"
+          aria-label="Post comment"
+          disabled={!comment.text.trim()}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onDone}
+          className="mr-0.5 self-end mb-0.5"
+        >
+          <svg className="w-2.5 h-2.5 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+        </Button>
+      </InputGroup>
       {/* F7 fix (T5 review): a failed `docComments:add` now keeps the draft
           open (doc-comments-store.ts's `persistNewComment`) with the real,
           typed cause here — error-message-standards.md's "specific and
@@ -143,17 +167,6 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
       {comment.error && (
         <ErrorState className="mt-1.5" message={comment.error.message} onRetry={comment.error.onRetry} />
       )}
-      <div className="mt-1.5 flex items-center justify-end gap-1.5">
-        {/* onMouseDown preventDefault: keeps focus (and the click-away
-            listener's target check) on the textarea/panel rather than
-            racing a blur against these buttons' own click. */}
-        <Button variant="secondary" size="sm" onMouseDown={(e) => e.preventDefault()} onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button variant="primary" size="sm" onMouseDown={(e) => e.preventDefault()} onClick={onDone}>
-          Comment
-        </Button>
-      </div>
     </OverlayPanel>
   );
 }

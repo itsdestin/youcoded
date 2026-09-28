@@ -27,7 +27,6 @@
 // E-5: no "edited" marker — editing a comment/reply just replaces its text.
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/Button';
-import { Textarea } from '../ui/Textarea';
 
 /** 24×24 viewBox, stroke currentColor, the app's shared inline-icon
  *  convention (menu-icons.tsx, detail-tool-icons.tsx). */
@@ -128,10 +127,18 @@ export function InlineEditField({ text, onSave, onCancel, className = 'mt-1' }: 
   useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
   const save = () => { if (value.trim()) onSave(value.trim()); else onCancel(); };
   return (
-    <div className={className}>
-      <Textarea
+    // Destin, 2026-09-28: Cancel/Save move INSIDE the field's own border,
+    // bottom-right — one bordered box (textarea on top, buttons at the
+    // bottom) instead of a border on the textarea and a separate row below
+    // it. Same structure InputGroup.tsx's own WHY describes ("the border
+    // moves to a wrapper and the field goes bare"), just stacked instead of
+    // inline — this row is TWO buttons (Cancel + Save), which is why it's
+    // built here rather than through InputGroup itself: that primitive's
+    // own §11.9 sub-rule limits it to a single submit action inside, and
+    // this box deliberately carries both, on Destin's explicit ask.
+    <div className={`${className} rounded-lg border border-edge-dim bg-inset focus-within:border-accent`}>
+      <textarea
         ref={ref}
-        size="sm"
         rows={2}
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -140,11 +147,13 @@ export function InlineEditField({ text, onSave, onCancel, className = 'mt-1' }: 
           else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
         }}
         placeholder="Edit…"
-        className="w-full"
+        // Bare, like InputGroup.Field — FIELD_SURFACE's border/background
+        // live on the wrapper div above; the Textarea primitive would put a
+        // second border on this element instead.
+        className="w-full resize-none bg-transparent border-0 outline-none px-2.5 pt-1.5 text-2xs text-fg placeholder:text-fg-muted"
         data-edit-menu
       />
-      {/* G-28: bottom-right, full-width-or-right — never a stray bottom-left button. */}
-      <div className="mt-1.5 flex items-center justify-end gap-1.5">
+      <div className="flex items-center justify-end gap-1.5 px-1.5 pb-1.5 pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
         <Button variant="secondary" size="sm" disabled={!value.trim()} onClick={save}>Save</Button>
       </div>
