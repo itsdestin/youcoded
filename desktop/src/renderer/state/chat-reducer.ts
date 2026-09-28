@@ -2993,6 +2993,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       });
       for (const ev of action.events) {
         const pageAction = pageEventToAction(ev);
+        // WHY: an EOF page (toEnd, a transfer) overlaps live events; tool cards dedup by toolUseId, which
+        // scratch cannot see, so a tool already on screen doubled. Skip ones the live session holds.
+        if (pageAction?.type === 'TRANSCRIPT_TOOL_USE' && !pageAction.parentAgentToolUseId
+          && session.toolCalls.has(pageAction.toolUseId)) continue;
         if (pageAction) scratch = chatReducer(scratch, pageAction);
       }
       // Reap on scratch BEFORE merging: live tool ids are not copied from history and must survive.

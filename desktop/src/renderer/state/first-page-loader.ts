@@ -76,6 +76,11 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
   const failed = new Set<string>();
   const runs = new Map<string, number>();
   const hints = new Map<string, PageHint>();
+  /** The run in flight per session. WHY: a caller that ORDERS work after the
+   *  page (applyAcquired chains replayLiveState, which reaps tool cards the page
+   *  left 'running') must wait for the run already going, not get an instant
+   *  resolve because someone else started it (2026-09-27 review). */
+  const inflight = new Map<string, Promise<void>>();
 
   const fail = (sid: string) => {
     deps.dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid });
@@ -83,17 +88,23 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
     failed.add(sid);
   };
 
-  const load = async (sid: string, hint?: PageHint) => {
+  const load = (sid: string, hint?: PageHint): Promise<void> => {
     // Recorded BEFORE the guard: the attempt loop reads it each time round.
     if (hint) hints.set(sid, { ...hints.get(sid), ...hint });
-    if (busyOrDone.has(sid)) return;
-    if ((runs.get(sid) ?? 0) >= FIRST_PAGE_MAX_RUNS) return;
-    if (!deps.mayLoad(sid)) return;
+    if (busyOrDone.has(sid)) return inflight.get(sid) ?? Promise.resolve();
+    if ((runs.get(sid) ?? 0) >= FIRST_PAGE_MAX_RUNS) return Promise.resolve();
+    if (!deps.mayLoad(sid)) return Promise.resolve();
     const token = {};
     busyOrDone.set(sid, token);
     failed.delete(sid);
     runs.set(sid, (runs.get(sid) ?? 0) + 1);
     deps.dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId: sid });
+    const running = run(sid, token).finally(() => { if (inflight.get(sid) === running) inflight.delete(sid); });
+    inflight.set(sid, running);
+    return running;
+  };
+
+  const run = async (sid: string, token: object): Promise<void> => {
     for (let attempt = 0; ; attempt++) {
       let page: TranscriptPageResult | null | undefined;
       try {
@@ -134,7 +145,7 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
     noteLiveActivity: (sid) => { if (failed.has(sid)) void load(sid); },
     retainOnly: (liveIds) => {
       for (const id of failed) if (!liveIds.has(id)) failed.delete(id);
-      for (const map of [busyOrDone, runs, hints]) for (const id of map.keys()) if (!liveIds.has(id)) map.delete(id);
+      for (const map of [busyOrDone, runs, hints, inflight]) for (const id of map.keys()) if (!liveIds.has(id)) map.delete(id);
     },
   };
 }

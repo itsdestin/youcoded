@@ -41,9 +41,10 @@ describe('first-page loader', () => {
       return req.claudeSessionId ? real : unresolved;
     });
     const unlocated = r.loader.load('s');           // the sessions effect, first
-    await r.loader.load('s', LOC);                   // the resume reply, second: no second run...
+    const second = r.loader.load('s', LOC);          // the resume reply, second: no second run (it waits on the first)...
     resolveFirst(unresolved);
     await unlocated;
+    await second;
     expect(r.requests[1].claudeSessionId).toBe('cc-1');   // ...but its locator was used
     expect(r.types()).toContain('HISTORY_PAGE_LOADED');
   });
@@ -52,11 +53,26 @@ describe('first-page loader', () => {
     let resolveFirst!: (p: TranscriptPageResult) => void;
     const r = rig((_req, n) => (n === 1 ? new Promise((res) => { resolveFirst = res; }) as any : real));
     const run = r.loader.load('s', { toEnd: true });
-    await r.loader.load('s', LOC);
+    const second = r.loader.load('s', LOC);
     resolveFirst(unresolved);
     await run;
+    await second;
     expect(r.requests[0].toEnd).toBe(true);
     expect(r.requests[1]).toMatchObject({ toEnd: true, claudeSessionId: 'cc-1' });
+  });
+
+  it('a second caller waits for the load already running (work ordered after the page stays after it)', async () => {
+    let resolveFirst!: (p: TranscriptPageResult) => void;
+    const r = rig(() => new Promise((res) => { resolveFirst = res; }) as any);
+    void r.loader.load('s', { toEnd: true });            // the mount path starts it
+    let after = false;
+    const chained = r.loader.load('s').then(() => { after = true; });   // applyAcquired's .then(replayLiveState)
+    await Promise.resolve(); await Promise.resolve();
+    expect(after).toBe(false);                         // did NOT run ahead of the page
+    resolveFirst(real);
+    await chained;
+    expect(r.types().at(-1)).toBe('HISTORY_PAGE_LOADED');
+    expect(after).toBe(true);
   });
 
   it('an ordinary load never sends toEnd', async () => {
