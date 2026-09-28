@@ -342,8 +342,14 @@ export function createOfficeCommands(deps: {
         return enqueueOther(s, () => writeEditorBin(s, data));
       }
       case 'save_file':
-      case 'save_changes':
         return save(s);
+      // WHY not a save (Task 6 fix round 1): save_changes is sdkjs's crash-recovery change log
+      // (a list of edits since the last point, no document bytes). The editor's own save
+      // (asc_Save) sends it FIRST and then write_editor_bin + save_file, so treating it as a save
+      // ran x2t twice per save — the first time on the previous Editor.bin. Crash recovery is out
+      // of scope for this plan, so it is acknowledged and nothing is written.
+      case 'save_changes':
+        return Promise.resolve('ok');
     }
     return enqueueOther(s, async () => {
       switch (cmd) {

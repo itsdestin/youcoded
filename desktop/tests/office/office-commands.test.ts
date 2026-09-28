@@ -118,6 +118,18 @@ describe('office commands without the translator', () => {
     expect(from.mock.calls.filter((c) => (c as unknown[])[1] === 'base64')).toEqual([]);
   });
 
+  it("acknowledges the editor's recovery change log without translating or touching the file", async () => {
+    const s = await sessionFor(MEMO);
+    const original = await readFile(s.path);
+    const convertSpy = vi.fn(async () => { throw new Error('must not translate'); });
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: convertSpy });
+    await run(s.token, 'set_document_modified', { modified: true });
+    expect(await run(s.token, 'save_changes', { changes: ['x'], deleteIndex: 3, count: 1 })).toBe('ok');
+    expect(convertSpy).not.toHaveBeenCalled();
+    expect(await readFile(s.path)).toEqual(original);
+    expect(s.modified).toBe(true);
+  });
+
   it("leaves the user's file untouched and no tmp behind when the translation fails", async () => {
     const s = await sessionFor(MEMO);
     const original = await readFile(s.path);

@@ -84,5 +84,10 @@ export function createSessions(tempBase: string, opts: { drain?: (s: OfficeSessi
     return [...sessions.values()].find((s) => s.path === filePath);
   }
 
-  return { open, get, close, closeAllFor, byPath };
+  /** Whether this window has any document open (the close/quit flush asks only those). */
+  function hasFor(senderId: number): boolean {
+    return [...sessions.values()].some((s) => s.senderId === senderId);
+  }
+
+  return { open, get, close, closeAllFor, byPath, hasFor };
 }

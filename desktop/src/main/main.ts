@@ -44,7 +44,8 @@ import { registerThemeProtocol } from './theme-protocol';
 import { registerOfficeProtocol } from './office/office-protocol';
 import { registerOfficeIpc } from './office/office-ipc';
 import { officeAvailable, officeRoot } from './office/office-root';
-import { getOfficeSessions, initOfficeSessionsSafely, quitOfficeSessions } from './office/office-session-registry';
+import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
+import { flushThenQuitOfficeSessions, holdCloseForOfficeSave } from './office/office-flush';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
 import { pickSuggestedModel } from './first-run-local';
@@ -1006,7 +1007,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     // request THIS window had pending, and runShutdown()'s destroyAll() is
     // about to tear down every session anyway — a close event reaching here
     // once shuttingDown is set must ask nothing and let the window close.
-    if (shuttingDown) return;
+    if (shuttingDown || holdCloseForOfficeSave(win, ev)) return; // Office docs save first (≤5 s, design §4); quit already did
     const ownedSessions = windowRegistry.sessionsForWindow(wid);
     if (ownedSessions.length === 0) return; // no sessions — close freely
     ev.preventDefault();
@@ -1930,9 +1931,8 @@ void app.whenReady().then(async () => {
 
   // Office editors (design §3a): each open document gets its own sealed office://<token>
   // origin. initOfficeSessionsSafely() makes this instance's own random-suffixed temp base
-  // (office-session-registry.ts) so a dev instance and the live app never share one, then
-  // hands the same registry instance to the protocol that Task 5's IPC will also reach
-  // through getOfficeSessions(). WHY guarded, not awaited bare (fix round 2): a failed
+  // (office-session-registry.ts, never shared with the live app); the protocol and the IPC
+  // below reach the same registry through getOfficeSessions(). WHY guarded, not awaited bare (fix round 2): a failed
   // mkdtemp (full/unwritable/policy-blocked temp dir) must degrade Office to unavailable, not
   // abort the rest of startup and leave the app with no window.
   const officeSessions = await initOfficeSessionsSafely();
@@ -2544,8 +2544,8 @@ async function runShutdown(): Promise<void> {
     welcomeBackStore?.flush() ?? Promise.resolve(),
     new Promise<void>((r) => setTimeout(r, 1_000)),
   ]).catch(() => {});
-  // Office: let a save mid-translation finish (≤5s), then remove its temp base. Awaited last.
-  const officeQuit = quitOfficeSessions();
+  // Office: every window saves its open documents (≤5 s, office-flush.ts), then a save mid-translation finishes (≤5 s) and the temp base goes. Awaited last.
+  const officeQuit = flushThenQuitOfficeSessions();
   // Capture the engine-stop promise: cleanup() starts llama-server teardown and we
   // must let it finish before app.quit(), else the engine outlives the app and keeps
   // the fixed port bound for the next instance to wrongly adopt (2026-07-20 fix).
