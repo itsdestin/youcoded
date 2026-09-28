@@ -704,3 +704,62 @@ describe('closing a document, round two', () => {
     expect(await readFile(file)).toEqual(Buffer.from('PK\x03\x04last words'));
   });
 });
+
+// "Save a copy…" (the owner's decision for a save that keeps failing): the edits go to a new
+// file through the same safe path as a save, and the original is never touched.
+describe.skipIf(!HAS_ADDON)('saving a copy when the file itself cannot be saved', () => {
+  beforeAll(async () => {
+    const warm = await mkdtemp(path.join(tmpdir(), 'office-copy-warm-'));
+    await convert(ROOT, MEMO, path.join(warm, 'Editor.bin'), FORMAT.bin, warm);
+    await rm(warm, { recursive: true, force: true });
+  }, X2T_WARMUP_BUDGET_MS);
+
+  /** The edited document (NOTICE's content) handed to a session of a read-only MEMO. */
+  async function failedSaveOfReadOnly() {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    await run(s.token, 'open_file', {});
+    const bDir = path.join(dir, 'b');
+    await mkdir(bDir, { recursive: true });
+    await convert(ROOT, NOTICE, path.join(bDir, 'Editor.bin'), FORMAT.bin, bDir);
+    await run(s.token, 'write_editor_bin', { data: (await readFile(path.join(bDir, 'Editor.bin'))).toString('base64') });
+    await chmod(s.path, 0o444);
+    await expect(run(s.token, 'save_file', {})).rejects.toThrow();
+    return { s, run };
+  }
+
+  it('writes the edits to the chosen file and leaves the read-only original untouched', async () => {
+    const { s, run } = await failedSaveOfReadOnly();
+    const original = await readFile(s.path);
+    expect(run.canCopy(s.token)).toBe(true);
+    const target = path.join(dir, 'copies', 'memo (copy).docx');
+    await mkdir(path.dirname(target), { recursive: true });
+    await run.saveCopy(s.token, target);
+    expect(await readFile(s.path)).toEqual(original);
+    expect(await textOf(target)).toBe(await textOf(NOTICE));
+    expect(await readdir(path.dirname(target))).toEqual(['memo (copy).docx']);
+    await chmod(s.path, 0o644);
+  });
+
+  it('refuses to "copy" over the original itself', async () => {
+    const { s, run } = await failedSaveOfReadOnly();
+    await expect(run.saveCopy(s.token, s.path)).rejects.toThrow("Office can't save a copy there. Choose another folder.");
+    await chmod(s.path, 0o644);
+  });
+
+  it('is not offered when the save failed in the translation itself', async () => {
+    const s = await sessionFor(MEMO);
+    const failing = async () => { throw new X2tError('x2t failed (1)', 1, 'boom'); };
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: failing as never });
+    await run(s.token, 'write_editor_bin', { data: Buffer.from('bin').toString('base64') });
+    await expect(run(s.token, 'save_file', {})).rejects.toThrow();
+    expect(run.canCopy(s.token)).toBe(false);
+  });
+
+  it('is not offered before the editor has handed over any edited copy', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    await run(s.token, 'open_file', {});
+    expect(run.canCopy(s.token)).toBe(false);
+  });
+});

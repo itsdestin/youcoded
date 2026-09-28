@@ -229,3 +229,34 @@ describe('office IPC channels', () => {
     await expect(call('office:restore', win1, '/x.docx', 'v1')).resolves.toEqual({ ok: false, message: 'Not available yet.' });
   });
 });
+
+describe('office:save-copy', () => {
+  /** Re-registers with a fake save dialog that answers `target`. */
+  function withDialog(target: string | null) {
+    const pick = vi.fn(async () => target);
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), pickCopyTarget: pick });
+    return pick;
+  }
+
+  it('changes nothing when the save dialog is cancelled', async () => {
+    const pick = withDialog(null);
+    const file = await aDocx();
+    const r = (await call('office:open', win1, file)) as { token: string };
+    await expect(call('office:save-copy', win1, r.token, 'save')).resolves.toEqual({ ok: false, cancelled: true });
+    expect(pick).toHaveBeenCalledWith(win1, file);
+  });
+
+  it("refuses another window's document without asking where", async () => {
+    const pick = withDialog(path.join(dir, 'x.docx'));
+    const r = (await call('office:open', win1, await aDocx())) as { token: string };
+    await expect(call('office:save-copy', win2, r.token, 'save')).resolves.toEqual({ ok: false, message: 'refused' });
+    expect(pick).not.toHaveBeenCalled();
+  });
+
+  it('says a copy is not possible before any edited copy exists', async () => {
+    withDialog(null);
+    const r = (await call('office:open', win1, await aDocx())) as { token: string };
+    await expect(call('office:save-copy', win1, r.token, 'check')).resolves.toEqual({ ok: true, possible: false });
+  });
+});
