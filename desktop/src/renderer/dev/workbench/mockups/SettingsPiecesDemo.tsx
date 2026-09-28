@@ -26,7 +26,7 @@ function Popup({ title, children, height }: { title: string; children: React.Rea
   return (
     <Frame height={height}>
       <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>Open popup</Button>
-      <Dialog open={open} onClose={() => setOpen(false)} title={title} size="prompt">
+      <Dialog noScreen="a workbench design-review mockup, not an app screen" open={open} onClose={() => setOpen(false)} title={title} size="prompt">
         <div className="space-y-4">{children}</div>
       </Dialog>
     </Frame>

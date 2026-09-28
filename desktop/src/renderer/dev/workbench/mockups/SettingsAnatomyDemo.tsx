@@ -105,7 +105,7 @@ export function SettingsAnatomyDemo({
     <div className="relative p-4" style={{ height: 760 }}>
       <ThemeBg />
       <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>Open popup</Button>
-      <Dialog open={open} onClose={() => setOpen(false)} title="Remote Access" size="panel">
+      <Dialog noScreen="a workbench design-review mockup, not an app screen" open={open} onClose={() => setOpen(false)} title="Remote Access" size="panel">
         <div className={section} style={spacing === 'roomy' ? { padding: '4px 4px' } : undefined}>
           <div className={inner}>
             <Label>Access</Label>
