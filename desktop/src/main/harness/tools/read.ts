@@ -5,7 +5,7 @@ import { defineTool } from './registry';
 import { canonicalize, resolveP, shellCwdMissHint, lunaPathRefused } from './guards';
 import { deliverableImageMediaType, UNDELIVERABLE_IMAGE_EXTENSIONS, MAX_ATTACHMENT_BYTES } from '../image-support';
 import { readPdfAsToolResult } from '../pdf-text';
-import { fingerprintFile, fingerprintOf } from './file-fingerprint';
+import { fingerprintFile, fingerprintFileInPieces, fingerprintOf } from './file-fingerprint';
 
 const BINARY_SNIFF_BYTES = 8000;
 
@@ -207,6 +207,25 @@ export const ReadTool = defineTool({
     const prior = ctx.servedReads?.get(servedKey);
     // fs.promises (2026-09-16 C4): up to MAX_READ_BYTES used to be read
     // synchronously on the main thread, several times per turn.
+    // WHY check a repeat BEFORE loading the file: an unchanged repeat is the
+    // common case, and answering it from a piecewise fingerprint skips the
+    // whole-file decode + line split (~100 ms of main-process time at 50 MB)
+    // that would stall every window. A size mismatch skips even the hash. The
+    // bytes, not the mtime, decide: a replacement can keep mtime and size.
+    if (prior && prior.fingerprint.startsWith(`${st.size}:`)) {
+      let current: string | null = null;
+      try { current = await fingerprintFileInPieces(abs); } catch { /* fall through to the normal read and its error */ }
+      if (current === prior.fingerprint) {
+        ctx.readRegistry.set(canonical, current);
+        const ago = ctx.toolCallIndex !== undefined ? ctx.toolCallIndex - prior.callIndex : undefined;
+        const when = ago !== undefined ? `(${ago} call${ago === 1 ? '' : 's'} ago)` : '(earlier this session)';
+        return {
+          text: `Read ${args.file_path}: lines ${prior.from}–${prior.to} — `
+            + `Unchanged since your earlier Read this session ${when} — the content you already have is current. `
+            + 'Use a different offset/limit to see another part of the file.',
+        };
+      }
+    }
     const buf = await fs.promises.readFile(abs);
     if (looksBinary(buf)) return { text: `Read rejected: ${args.file_path}: it is a binary file.`, isError: true };
     const raw = buf.toString('utf8');
@@ -218,21 +237,9 @@ export const ReadTool = defineTool({
     if (offset > totalLines) {
       return { text: `Read failed: ${args.file_path}: offset ${offset} is past the end of the file (${totalLines} lines).`, isError: true };
     }
-    // WHY: mtime is not identity. A replacement can preserve both mtime and
-    // size, while a touch changes only mtime. Verify the SAME bounded async
-    // buffer that passed the binary/offset checks and supplies the text below;
-    // no stale prior fingerprint may refresh the edit gate on a refused read.
+    // The file changed (or was never served): stamp the read-before-edit gate
+    // from the SAME buffer that passed the binary/offset checks above.
     const fingerprint = fingerprintOf(buf);
-    if (prior?.fingerprint === fingerprint) {
-      ctx.readRegistry.set(canonical, fingerprint);
-      const ago = ctx.toolCallIndex !== undefined ? ctx.toolCallIndex - prior.callIndex : undefined;
-      const when = ago !== undefined ? `(${ago} call${ago === 1 ? '' : 's'} ago)` : '(earlier this session)';
-      return {
-        text: `Read ${args.file_path}: lines ${prior.from}–${prior.to} — `
-          + `Unchanged since your earlier Read this session ${when} — the content you already have is current. `
-          + 'Use a different offset/limit to see another part of the file.',
-      };
-    }
     ctx.readRegistry.set(canonical, fingerprint);
     const slice = all.slice(offset - 1, offset - 1 + limit);
     const MAX_LINE = 2000;

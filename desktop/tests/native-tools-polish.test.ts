@@ -301,7 +301,9 @@ describe('G-11: a repeat Read of an unchanged slice returns a short notice', () 
     expect(r.text).not.toContain('     1\talpha');
   });
 
-  it('uses one async file read per text call, including the repeat', async () => {
+  it('answers an unchanged repeat without loading the whole file again', async () => {
+    // WHY: loading + splitting a big file holds the main process that serves
+    // every window; an unchanged repeat is checked in pieces instead.
     const p = path.join(dir, 'a.txt');
     fs.writeFileSync(p, 'alpha\n');
     const shared = new Map();
@@ -309,8 +311,9 @@ describe('G-11: a repeat Read of an unchanged slice returns a short notice', () 
     const read = vi.spyOn(fs.promises, 'readFile');
     try {
       await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 1 });
-      await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
-      expect(read.mock.calls.filter(([name]) => name === p)).toHaveLength(2);
+      const repeat = await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
+      expect(repeat.text).toMatch(/content you already have is current/);
+      expect(read.mock.calls.filter(([name]) => name === p)).toHaveLength(1);
       expect(read.mock.results.every(r => r.type === 'return')).toBe(true);
     } finally {
       read.mockRestore();
