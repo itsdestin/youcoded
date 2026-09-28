@@ -145,7 +145,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
   // "Show resolved" toggle's UI and the header's count reads the same store,
   // so all of them share ONE boolean without threading it through
   // ActiveArtifactView.
-  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path, projectRoot);
+  const { comments, focusId, showResolved, setCommentText, commitDraft, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path, projectRoot);
   const visible = useMemo(
     () => comments.filter((c) => showResolved || !c.resolved).sort((a, b) => a.createdAt - b.createdAt),
     [comments, showResolved],
@@ -362,6 +362,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
                 comment={openComment}
                 autoFocus={openComment.id === focusId}
                 onTextChange={(t) => setCommentText(openComment.id, t)}
+                onCommit={() => commitDraft(openComment.id)}
                 onReply={(t) => addReply(openComment.id, 'user', t)}
                 onResolve={() => { resolveComment(openComment.id, 'user'); setOpenId(null); }}
                 onReopen={() => reopenComment(openComment.id)}
@@ -380,6 +381,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
                 comment={openComment}
                 autoFocus={openComment.id === focusId}
                 onTextChange={(t) => setCommentText(openComment.id, t)}
+                onCommit={() => commitDraft(openComment.id)}
                 onReply={(t) => addReply(openComment.id, 'user', t)}
                 onResolve={() => { resolveComment(openComment.id, 'user'); setOpenId(null); }}
                 onReopen={() => reopenComment(openComment.id)}
@@ -416,6 +418,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
             comment={c}
             autoFocus={c.id === focusId}
             onTextChange={(t) => setCommentText(c.id, t)}
+            onCommit={() => commitDraft(c.id)}
             onReply={(t) => addReply(c.id, 'user', t)}
             onResolve={() => resolveComment(c.id, 'user')}
             onReopen={() => reopenComment(c.id)}

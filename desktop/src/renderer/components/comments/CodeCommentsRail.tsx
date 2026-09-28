@@ -35,7 +35,7 @@ function linesRef(c: DocComment, path: string, resolved: Map<string, ResolvedLin
 }
 
 export function CodeCommentsRail({ path, projectRoot }: Props) {
-  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path, projectRoot);
+  const { comments, focusId, showResolved, setCommentText, commitDraft, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path, projectRoot);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // T14 fix: this MUST be memoized, not recomputed on every render — it now
   // feeds `useCodeCommentAnchors`'s effect deps below, and an unmemoized
@@ -93,6 +93,7 @@ export function CodeCommentsRail({ path, projectRoot }: Props) {
                 comment={c}
                 autoFocus={c.id === focusId}
                 onTextChange={(t) => setCommentText(c.id, t)}
+                onCommit={() => commitDraft(c.id)}
                 onReply={(t) => addReply(c.id, 'user', t)}
                 onResolve={() => resolveComment(c.id, 'user')}
                 onReopen={() => reopenComment(c.id)}

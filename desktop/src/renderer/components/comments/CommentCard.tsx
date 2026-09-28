@@ -15,6 +15,13 @@ interface Props {
   comment: DocComment;
   autoFocus?: boolean;
   onTextChange: (text: string) => void;
+  // Data-loss fix (Destin, 2026-09-28): typing no longer persists anything
+  // by itself (doc-comments-store.ts's `setCommentText`/`commitDraft` own
+  // WHY) — this card is the ONLY place a still-uncommitted draft's blur ever
+  // happens, so it's the one that must ask the store to actually save the
+  // typed text. Optional so fixture/test callers with no real store behind
+  // them (CommentCard.test.tsx) don't have to wire a no-op every time.
+  onCommit?: () => void;
   onReply: (text: string) => void;
   onResolve: () => void;
   onReopen: () => void;
@@ -68,7 +75,7 @@ function StatusNote({ comment }: { comment: DocComment }) {
   return null;
 }
 
-export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResolve, onReopen, onDelete }: Props) {
+export function CommentCard({ comment, autoFocus, onTextChange, onCommit, onReply, onResolve, onReopen, onDelete }: Props) {
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   // A freshly added comment (from "Add comment" on a selection) opens with
@@ -209,7 +216,12 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
               // blur (click/tab away), never a keystroke. Empty text stays a
               // draft either way (nothing to "post" yet — matches the old
               // behaviour when this card is reopened with real content).
-              onBlur={() => { if (comment.text.trim()) setEditingDraft(false); }}
+              // Data-loss fix (2026-09-28): a real blur is ALSO now the one
+              // moment this panel-hosted draft ever gets saved — typing no
+              // longer persists on its own (see Props' `onCommit` WHY), so
+              // without this call a comment created here (CommentsMargin's
+              // spreadsheet-cell / margin drafts) would never reach disk.
+              onBlur={() => { if (comment.text.trim()) { setEditingDraft(false); onCommit?.(); } }}
               placeholder="Add a comment…"
               // data-edit-menu (was the artifact-edit-textarea class, which design lint rejects on <Textarea>): reuses the artifact editor's right-click
               // routing (build-menu.ts) — Electron ships no default context menu,

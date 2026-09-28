@@ -7,11 +7,19 @@
 // that the public hook API itself didn't move.
 //
 // T5 IMPLEMENTATION REVIEW additions (2026-09-27): F3 (two projects sharing a
-// relative path must never merge), F5 (a pending debounced persist must not
-// fire after the viewer unmounts), F6 (a hidden-but-mounted viewer pauses its
-// watch), F7 (a failure lands on the COMMENT, not a page-level toast), F8
-// (an unused (project,path) entry is pruned), F9 (a stale rollback never
-// clobbers a newer server-truth refresh).
+// relative path must never merge), F5 (the last viewer closing commits a
+// non-empty draft instead of losing it — rewritten 2026-09-28, see the data-
+// loss fix below), F6 (a hidden-but-mounted viewer pauses its watch), F7 (a
+// failure lands on the COMMENT, not a page-level toast), F8 (an unused
+// (project,path) entry is pruned), F9 (a stale rollback never clobbers a
+// newer server-truth refresh).
+//
+// Data-loss fix (Destin, 2026-09-28): typing used to re-arm a 400ms debounced
+// `docComments:add` on every keystroke, so a pause mid-composition persisted
+// only what had been typed so far and silently dropped everything typed
+// after — see `commitDraft`'s own WHY in doc-comments-store.ts. Typing now
+// only ever updates local state; every test below that types into a fresh
+// draft and expects it to reach `ipc.add` now commits it explicitly first.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import {
@@ -174,7 +182,10 @@ describe('useDocComments — list on open, watch while mounted', () => {
       let id = '';
       act(() => { id = a.result.current.addComment('quote', 'README.md'); });
       act(() => { a.result.current.setCommentText(id, 'hello from A'); });
-      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      // Typing alone never persists (data-loss fix, 2026-09-28) — an explicit
+      // commit is what turns it into a real docComments:add call.
+      act(() => { a.result.current.commitDraft(id); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
       expect(ipc.add).toHaveBeenCalledWith('README.md', expect.anything(), 'hello from A', 'user', '/proj-a', id);
       expect(a.result.current.comments.map((c) => c.id)).toContain(id);
       expect(b.result.current.comments.map((c) => c.id)).not.toContain(id);
@@ -192,7 +203,33 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
     expect(id).toBeTruthy();
   });
 
-  it('mints the comment id itself (F4) and setCommentText debounces a single docComments:add with the final text and that SAME id', async () => {
+  // Data-loss fix (Destin, 2026-09-28 — "comment text gets changed/
+  // truncated/erased after saving"; on disk the saved texts were prefixes of
+  // what was actually typed: 'h', 'hiiiii ', 'cur', 'hiii as'). Cause: typing
+  // used to re-arm a 400ms debounced `docComments:add` on every keystroke —
+  // a pause mid-composition (exactly what happens while someone types a real
+  // sentence) fired it early, persisting only what had been typed so far,
+  // and every keystroke after that point had nowhere left to go (comments
+  // have no "edit" IPC) until the next unrelated `docComments:changed` push
+  // overwrote the box with that truncated saved prefix — mid-typing too.
+  it('typing never calls docComments:add by itself, however long the pause between keystrokes', async () => {
+    vi.useFakeTimers();
+    const { ipc } = installIpc();
+    const { result } = renderHook(() => useDocComments('draft.md', '/proj'));
+    let id = '';
+    act(() => { id = result.current.addComment('the quote', 'draft.md'); });
+    act(() => { result.current.setCommentText(id, 'h'); });
+    // The exact shape of the bug: the OLD 400ms keystroke debounce would
+    // have fired here and persisted just 'h'.
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(ipc.add).not.toHaveBeenCalled();
+    act(() => { result.current.setCommentText(id, 'he'); });
+    act(() => { result.current.setCommentText(id, 'hello'); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(ipc.add).not.toHaveBeenCalled();
+  });
+
+  it('mints the comment id itself (F4) and committing after a mid-typing pause persists the FULL text, not a truncated prefix', async () => {
     vi.useFakeTimers();
     const { ipc } = installIpc();
     const { result } = renderHook(() => useDocComments('draft.md', '/proj'));
@@ -201,12 +238,13 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
     expect(id).toMatch(/^c-/);
     expect(result.current.comments.map((c) => c.id)).toEqual([id]);
     act(() => { result.current.setCommentText(id, 'h'); });
+    // >400ms pause after the very first character (Destin's repro).
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
     act(() => { result.current.setCommentText(id, 'he'); });
     act(() => { result.current.setCommentText(id, 'hello'); });
-    // Still nothing sent — every keystroke reschedules the debounce rather
-    // than firing docComments:add per character (performance.md rule 5).
-    expect(ipc.add).not.toHaveBeenCalled();
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    // Enter / "Comment" / click-away — the one thing that now sends it.
+    act(() => { result.current.commitDraft(id); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(ipc.add).toHaveBeenCalledTimes(1);
     expect(ipc.add).toHaveBeenCalledWith('draft.md', expect.objectContaining({ kind: 'text' }), 'hello', 'user', '/proj', id);
     // F4: the renderer's own id IS the persisted id from the start — no swap.
@@ -225,7 +263,8 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
     let id = '';
     act(() => { id = result.current.addComment('the quote', 'brief.docx'); });
     act(() => { result.current.setCommentText(id, 'hello'); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    act(() => { result.current.commitDraft(id); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(result.current.comments).toHaveLength(1);
     expect(result.current.comments[0].id).toBe('w-42');
   });
@@ -252,7 +291,8 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
     // ordering that produced the duplicate.
     let resolveAdd!: (v: { ok: true; id: string }) => void;
     ipc.add.mockReturnValueOnce(new Promise((resolve) => { resolveAdd = resolve; }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(400); }); // fires the debounce -> ipc.add() (still pending)
+    act(() => { result.current.commitDraft(id); }); // Enter / "Comment" / click-away -> ipc.add() (still pending)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(ipc.add).toHaveBeenCalledTimes(1);
 
     ipc.list.mockResolvedValueOnce({
@@ -283,6 +323,54 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
     expect(ipc.add).not.toHaveBeenCalled();
   });
 
+  // Cancel (NewCommentPopover's Esc/Cancel button, or CommentCard's Delete)
+  // removes a never-persisted draft with no IPC round trip at all — nothing
+  // was ever sent, so there's nothing on the server to undo.
+  it('cancelling a draft (removeComment) sends no docComments:add, typed text or not', async () => {
+    vi.useFakeTimers();
+    const { ipc } = installIpc();
+    const { result } = renderHook(() => useDocComments('cancelled.md', '/proj'));
+    let id = '';
+    act(() => { id = result.current.addComment('the quote', 'cancelled.md'); });
+    act(() => { result.current.setCommentText(id, 'never mind'); });
+    act(() => { result.current.removeComment(id); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(ipc.add).not.toHaveBeenCalled();
+    expect(result.current.comments).toHaveLength(0);
+  });
+
+  // Data-loss fix regression: while a draft is still being composed, an
+  // unrelated `docComments:changed` push (someone else's write, or this same
+  // window's own watcher echo) must never clobber what's on screen — before
+  // the fix, the FIRST keystroke debounce firing removed the draft's id from
+  // `pendingLocalIds`, so a refresh landing after that point silently
+  // replaced the box's live text with the truncated saved prefix.
+  it('a docComments:changed push arriving mid-draft never alters the draft\'s own text', async () => {
+    const { ipc, emitChanged } = installIpc();
+    const { result } = renderHook(() => useDocComments('mid-draft.md', '/proj'));
+    let id = '';
+    act(() => { id = result.current.addComment('the quote', 'mid-draft.md'); });
+    act(() => { result.current.setCommentText(id, 'still typing this'); });
+
+    ipc.list.mockResolvedValueOnce({
+      ok: true,
+      comments: [{
+        id: 'c-unrelated', path: 'mid-draft.md',
+        selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'other', prefix: '', suffix: '', occurrence: 0 } },
+        text: 'someone else\'s comment', author: 'assistant', createdAt: 2, replies: [], resolved: false, history: [],
+      }],
+    });
+    await act(async () => { emitChanged('mid-draft.md', '/proj'); await Promise.resolve(); await Promise.resolve(); });
+
+    // The server has never heard of this draft (it was never committed), so
+    // it must survive the refresh untouched, with the unrelated comment
+    // merged alongside it.
+    const draft = result.current.comments.find((c) => c.id === id);
+    expect(draft?.text).toBe('still typing this');
+    expect(result.current.comments.map((c) => c.id).sort()).toEqual([id, 'c-unrelated'].sort());
+    expect(ipc.add).not.toHaveBeenCalled();
+  });
+
   // F7 (T5 implementation review): a failed add KEEPS the draft (so Retry can
   // replay it) and attaches the error to THAT comment, not a page-level toast.
   it('a failed add keeps the draft and attaches the error to it, and Retry replays the same call', async () => {
@@ -293,7 +381,8 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
     act(() => { id = result.current.addComment('the quote', 'failed-add.md'); });
     ipc.add.mockResolvedValueOnce({ ok: false, error: 'lock-timeout' });
     act(() => { result.current.setCommentText(id, 'hello'); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    act(() => { result.current.commitDraft(id); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(ipc.add).toHaveBeenCalledTimes(1);
     // The draft is STILL there (not silently discarded) with its typed text.
     expect(result.current.comments).toHaveLength(1);
@@ -617,7 +706,7 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
     expect(result.current.comments[0].error?.message).toBeTruthy();
   });
 
-  it('clearFocus flushes a pending debounced persist immediately instead of waiting it out', async () => {
+  it('clearFocus commits a still-uncommitted draft\'s typed text immediately (Enter / "Comment" / click-away)', async () => {
     const { ipc } = installIpc();
     const { result } = renderHook(() => useDocComments('flush.md', '/proj'));
     act(() => { result.current.addComment('q', 'flush.md'); });
@@ -629,23 +718,36 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
   });
 });
 
-// F5 (T5 implementation review): a pending draft persist must not fire once
-// the last viewer of a file has gone away — it is cancelled on unmount
-// (or going off-screen, F6), the same as every other exit path.
-describe('useDocComments — cancel pending persists on unmount (F5)', () => {
-  it('never calls docComments:add for a draft still mid-debounce when the last viewer unmounts', async () => {
-    vi.useFakeTimers();
+// F5 (T5 implementation review), corrected (data-loss bug, 2026-09-28): the
+// ORIGINAL F5 fix discarded ANY draft still uncommitted when the last viewer
+// unmounted — harmless for one nobody had typed into, but since typing no
+// longer auto-persists at all (this file's own data-loss fix above), that
+// window now covers the WHOLE time someone is composing a note, so a plain
+// close-the-file would have silently thrown away real typed text. Closing
+// now COMMITS a non-empty draft instead (same outcome Enter/"Comment"/
+// click-away already produce) and only discards one that's still empty.
+describe('useDocComments — the last viewer closing commits a non-empty draft instead of losing it (F5)', () => {
+  it('commits (docComments:add) a draft with real typed text when the last viewer unmounts', async () => {
     const { ipc } = installIpc();
     const { result, unmount } = renderHook(() => useDocComments('unmounted.md', '/proj'));
     let id = '';
     act(() => { id = result.current.addComment('q', 'unmounted.md'); });
     act(() => { result.current.setCommentText(id, 'typed then closed'); });
-    unmount(); // before the 400ms debounce fires
-    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    unmount();
+    await waitFor(() => expect(ipc.add).toHaveBeenCalledTimes(1));
+    expect(ipc.add).toHaveBeenCalledWith('unmounted.md', expect.anything(), 'typed then closed', 'user', '/proj', id);
+  });
+
+  it('discards (no IPC) a draft that is still empty when the last viewer unmounts', async () => {
+    const { ipc } = installIpc();
+    const { result, unmount } = renderHook(() => useDocComments('empty-unmount.md', '/proj'));
+    act(() => { result.current.addComment('q', 'empty-unmount.md'); });
+    unmount();
+    await waitFor(() => expect(ipc.unwatch).toHaveBeenCalledTimes(1));
     expect(ipc.add).not.toHaveBeenCalled();
   });
 
-  it('does NOT cancel a still-mounted SECOND viewer\'s pending persist on the same file', async () => {
+  it('a non-last viewer unmounting neither commits nor discards a shared draft', async () => {
     vi.useFakeTimers();
     const { ipc } = installIpc();
     const first = renderHook(() => useDocComments('shared-draft.md', '/proj'));
@@ -654,8 +756,11 @@ describe('useDocComments — cancel pending persists on unmount (F5)', () => {
     act(() => { id = first.result.current.addComment('q', 'shared-draft.md'); });
     act(() => { first.result.current.setCommentText(id, 'typed'); });
     first.unmount(); // NOT the last viewer — second is still mounted
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(ipc.add).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(ipc.add).not.toHaveBeenCalled();
+    // The draft is still there, with its typed text intact, for the
+    // remaining viewer to commit or cancel.
+    expect(second.result.current.comments.find((c) => c.id === id)?.text).toBe('typed');
     second.unmount();
   });
 });

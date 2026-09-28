@@ -693,17 +693,22 @@ function subscribeKey(path: string, projectRoot: string | undefined): () => void
     if (remaining <= 0) {
       refsByKey.delete(key);
       void ipc?.unwatch(path, projectRoot).catch(() => {});
-      // F5 fix (T5 review): the LAST viewer of this file just went away (or
-      // went off-screen) — a draft still mid-debounce (typed, not yet
-      // flushed) would otherwise persist several hundred ms into a file
-      // nothing is looking at anymore, exactly the stray-write class of bug
-      // `flushPersist`'s every OTHER exit path (Enter / "Comment" /
-      // click-away, via `clearCommentFocus`) already prevents. Only a
-      // draft that was NEVER actually sent (still in `pendingLocalIds`) is
-      // discarded — the same outcome Cancel / click-away-with-empty-text
-      // already produce; an already-persisted comment is untouched.
+      // F5 fix (T5 review), corrected (data-loss bug, 2026-09-28): the LAST
+      // viewer of this file just went away (or went off-screen) while a
+      // draft was still uncommitted (never sent — see `commitDraft`'s own
+      // WHY, since keystrokes no longer auto-persist). The ORIGINAL fix here
+      // discarded any such draft outright — fine for one nobody ever typed
+      // into, but for one with real typed text that silently threw away
+      // whatever the user had written (exactly the "vanishes on close" shape
+      // of the debounce bug this same file's T5 fix header now warns about).
+      // A non-empty draft is committed instead — same outcome Enter/"Comment"/
+      // click-away already produce, just triggered by the viewer closing
+      // instead of an explicit action; a still-empty one (nothing typed) has
+      // nothing to lose, so it's discarded exactly as before.
       for (const c of snap.commentsByKey[key] ?? []) {
-        if (pendingLocalIds.has(c.id)) removeComment(c.id);
+        if (!pendingLocalIds.has(c.id)) continue;
+        if (c.text.trim()) commitDraft(c.id);
+        else removeComment(c.id);
       }
       pruneKeyIfUnused(key);
     } else {
@@ -722,42 +727,39 @@ function nextLocalSuffix(): string {
 
 /** ids not yet confirmed by a `docComments:add` round trip — kept out of
  *  `mergeServerComments`'s replace-for-this-path pass (above) and out of
- *  every mutation below that needs a REAL id to address a real comment. */
+ *  every mutation below that needs a REAL id to address a real comment. Also
+ *  what `mergeServerComments`'s `keptLocal` keys off of (its own WHY): as
+ *  long as an id stays in here, a server refresh can never see it (the
+ *  server has never heard of it) and so can never overwrite its live local
+ *  text — see `commitDraft`'s own WHY for why that window now lasts the
+ *  WHOLE time a draft is being composed, not just its first keystroke. */
 const pendingLocalIds = new Set<string>();
-/** A pending local draft's debounced persist timer, and the args it will
- *  replay with — `setCommentText` reschedules this on every keystroke rather
- *  than calling `docComments:add` per keystroke (performance.md rule 5: an
- *  empty comment can't be added at all — ipc-handlers.ts refuses `text:
- *  ''` — and a live "add on every character" round trip is exactly the
- *  keystroke-frequency IPC chatter that rule exists to prevent). */
-const pendingPersist = new Map<string, { timer: ReturnType<typeof setTimeout>; run: () => void }>();
-const PERSIST_DEBOUNCE_MS = 400;
 
-function schedulePersist(id: string, run: () => void): void {
-  const existing = pendingPersist.get(id);
-  if (existing) clearTimeout(existing.timer);
-  const timer = setTimeout(() => {
-    pendingPersist.delete(id);
-    run();
-  }, PERSIST_DEBOUNCE_MS);
-  pendingPersist.set(id, { timer, run });
-}
-
-/** Fires a pending draft's persist immediately (Enter / click "Comment" /
- *  clicking away — NewCommentPopover's `onDone`, which calls `clearFocus`)
- *  instead of waiting out the debounce. */
-function flushPersist(id: string): void {
-  const existing = pendingPersist.get(id);
-  if (!existing) return;
-  clearTimeout(existing.timer);
-  pendingPersist.delete(id);
-  existing.run();
-}
-
-function cancelPersist(id: string): void {
-  const existing = pendingPersist.get(id);
-  if (existing) { clearTimeout(existing.timer); pendingPersist.delete(id); }
-  pendingLocalIds.delete(id);
+/** Data-loss bug fix (Destin, 2026-09-28 — "comment text gets changed/
+ *  truncated/erased after saving"): `setCommentText` used to re-arm a 400ms
+ *  debounced `persistNewComment` call on EVERY keystroke (performance.md
+ *  rule 5's "don't add on every character" — a reasonable goal, but the
+ *  wrong mechanism for a NEW draft with no "edit" IPC to fall back on).
+ *  Typing "h", pausing >400ms, then typing more used to persist "h" — the
+ *  debounce firing mid-composition — which also deleted the id from
+ *  `pendingLocalIds` (`persistNewComment`'s success branch): every
+ *  keystroke typed AFTER that point stayed LOCAL-ONLY (nothing left to send
+ *  it — comments have no edit-after-add channel), and the next
+ *  `docComments:changed` refresh (`mergeServerComments`'s `keptLocal` no
+ *  longer kept this id local) replaced the on-screen text with the
+ *  truncated saved prefix, even while the user was still typing. On disk
+ *  this showed up as truncated prefixes of what was actually typed ('h',
+ *  'cur', …).
+ *
+ *  Fix: a draft is no longer persisted by typing AT ALL — only by an
+ *  explicit commit (`commitDraft` below), so `pendingLocalIds` now covers
+ *  the ENTIRE composition, and a mid-typing refresh can never see (let
+ *  alone overwrite) text the server doesn't have yet. */
+function commitDraft(id: string): void {
+  if (!pendingLocalIds.has(id)) return; // already persisted (or never existed) — nothing to commit
+  const c = findComment(id);
+  if (!c || !c.text.trim()) return; // nothing typed — ipc-handlers.ts refuses text: '' anyway
+  persistNewComment(id);
 }
 
 function findComment(id: string): DocComment | undefined {
@@ -920,13 +922,18 @@ function persistNewComment(id: string): void {
 
 // Not exported: every caller reaches these through useDocComments() below
 // (knip counts a bare export nobody imports as dead code).
+//
+// WHY no persist call here at all (data-loss fix, 2026-09-28): this used to
+// arm a 400ms debounced `persistNewComment` on every keystroke — see
+// `commitDraft`'s own WHY for exactly how that lost typed text. Typing now
+// only ever updates LOCAL state; turning it into a real `docComments:add`
+// call is `commitDraft`'s job alone, fired by an explicit commit (Enter /
+// "Comment" / click-away / blur-with-text / the viewer closing with
+// something typed) — never by the act of typing itself.
 function setCommentText(id: string, text: string): void {
   updateComment(id, (c) => ({ ...c, text }));
   if (pendingLocalIds.has(id) && text.trim()) {
     clearCommentError(id); // a fresh edit retries fresh; the old failure no longer applies
-    schedulePersist(id, () => persistNewComment(id));
-  } else if (!text.trim()) {
-    cancelPersist(id);
   }
 }
 
@@ -1072,10 +1079,13 @@ function reopenComment(id: string): void {
  *  exposes no delete IPC channel — this only ever removes a NEVER-PERSISTED
  *  local draft (NewCommentPopover's Cancel / CommentCard's Delete, both of
  *  which only show while a draft's text is still empty, i.e. before
- *  `persistNewComment` could have run — plus F5's own unmount/off-screen
- *  cleanup, which reaches this for the same "never persisted" reason). */
+ *  `commitDraft` could have run — plus `subscribeKey`'s own unmount/
+ *  off-screen cleanup, for a draft that closed with nothing typed into it).
+ *  Dropping the id from `pendingLocalIds` here (never persisted, so there is
+ *  nothing on the server to undo) is what makes Cancel/Escape/Delete send
+ *  no IPC at all. */
 function removeComment(id: string): void {
-  cancelPersist(id);
+  pendingLocalIds.delete(id);
   const key = commentKeyIndex.get(id);
   if (!key) return;
   commentKeyIndex.delete(id);
@@ -1088,7 +1098,7 @@ function removeComment(id: string): void {
 function clearCommentFocus(): void {
   const id = snap.focusId;
   if (id !== null) {
-    flushPersist(id); // Enter / "Comment" / click-away — commit now, don't wait out the debounce
+    commitDraft(id); // Enter / "Comment" / click-away — see commitDraft's own WHY
     publish({ focusId: null });
   }
 }
@@ -1117,6 +1127,11 @@ export interface DocCommentsApi {
     opts?: { startLine?: number; endLine?: number; cell?: string; sheet?: string; prefix?: string; suffix?: string; occurrence?: number },
   ) => string;
   setCommentText: typeof setCommentText;
+  /** Explicit commit for a still-uncommitted draft — see `commitDraft`'s own
+   *  WHY. Wired to the panel's own inline draft (CommentCard's blur-with-
+   *  text, via CommentsMargin/CodeCommentsRail); NewCommentPopover's Enter/
+   *  "Comment"/click-away reach the same function through `clearFocus`. */
+  commitDraft: typeof commitDraft;
   addReply: typeof addReply;
   resolveComment: typeof resolveComment;
   reopenComment: typeof reopenComment;
@@ -1159,6 +1174,7 @@ export function useDocComments(path: string, projectRoot?: string): DocCommentsA
     setShowResolved: (value) => setShowResolved(key, value),
     addComment: (quote, sourceLabel, opts) => addComment(path, quote, sourceLabel, { ...opts, projectRoot }),
     setCommentText,
+    commitDraft,
     addReply,
     resolveComment,
     reopenComment,
@@ -1174,8 +1190,6 @@ export function useDocComments(path: string, projectRoot?: string): DocCommentsA
  *  the SAME comment ids/paths across cases needs a clean slate rather than
  *  relying on every case picking a never-before-used path. */
 export function __resetDocCommentsStoreForTest(): void {
-  for (const { timer } of pendingPersist.values()) clearTimeout(timer);
-  pendingPersist.clear();
   pendingLocalIds.clear();
   commentKeyIndex.clear();
   keySnapCache.clear();
