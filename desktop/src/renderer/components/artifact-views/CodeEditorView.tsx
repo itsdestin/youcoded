@@ -38,7 +38,7 @@ function vvpOffsetPx(): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-export function CodeEditorView({ path, content, editing = false, draft = '', onDraftChange }: ArtifactViewProps) {
+export function CodeEditorView({ path, content, editing = false, draft = '', onDraftChange, projectRoot }: ArtifactViewProps) {
   const { activeTheme } = useTheme();
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -161,6 +161,15 @@ export function CodeEditorView({ path, content, editing = false, draft = '', onD
         // path (registry lookup), NEVER the <pre> textContent path.
         data-artifact-viewer
         data-doc-path={path}
+        // WHY (Destin, dev instance 2026-09-28: "Add comment" on a code file
+        // did nothing): build-menu.ts files a new comment under the project
+        // it reads from THIS attribute, while ActiveArtifactView's Comments
+        // rail and its fresh-draft watcher read the store under the viewer's
+        // own `projectRoot` prop. Text documents stamp it via
+        // CommentableDocument; the code editor never did, so every code
+        // comment landed in the "no project" partition — a draft nobody
+        // looking at this file could see.
+        data-project-root={projectRoot ?? ''}
         data-artifact-source="cm6"
       />
     </div>

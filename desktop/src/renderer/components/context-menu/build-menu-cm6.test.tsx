@@ -12,6 +12,7 @@ import { render, act } from '@testing-library/react';
 import { buildContextMenu } from './build-menu';
 import { CodeEditorView } from '../artifact-views/CodeEditorView';
 import { editorViewWithin } from '../artifact-views/cm/editor-registry';
+import { commentsForPath, __resetDocCommentsStoreForTest } from '../../state/doc-comments-store';
 
 // Minimal geometry shims CM6 needs under jsdom (it measures constantly; jsdom
 // implements none of it). Zero-rects are fine — we never assert layout.
@@ -25,6 +26,7 @@ beforeAll(() => {
 
 afterEach(() => {
   document.body.innerHTML = '';
+  __resetDocCommentsStoreForTest();
   vi.restoreAllMocks();
 });
 
@@ -88,6 +90,24 @@ describe('CM6 artifact context menu (real component)', () => {
     window.removeEventListener('youcoded:compose-insert', spy);
     const ref = (spy.mock.calls[0]?.[0] as CustomEvent)?.detail?.ref ?? {};
     expect(ref.label).toContain('lines 42-45');
+  });
+
+  it('"Add comment" on a code file files the draft under the viewer\'s own project, where its Comments rail looks', () => {
+    // A code comment used to land in the "no project" partition because the
+    // editor never said which project it belonged to, so the draft never
+    // showed up in the Comments rail (which reads the project's partition).
+    const utils = render(
+      <CodeEditorView path="total.py" absolutePath="/proj/total.py" content={'a = 1\nb = 2\n'} projectRoot="/proj" isEditable />
+    );
+    const container = utils.container.querySelector('[data-artifact-viewer]') as HTMLElement;
+    const view = editorViewWithin(container)!;
+    selectLine(view, 2);
+    const add = buildContextMenu(container)!.find((e: any) => e.id === 'comment') as any;
+    expect(add, 'Add comment must exist for a CM6 selection').toBeTruthy();
+    add.run();
+    const inProject = commentsForPath('total.py', '/proj');
+    expect(inProject.map((c) => c.quote)).toContain('b = 2');
+    expect(commentsForPath('total.py', undefined)).toHaveLength(0);
   });
 
   it('read-only CM6 falls through to the artifact menu, not the editable menu', () => {
