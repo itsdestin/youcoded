@@ -3373,7 +3373,7 @@ export class NativeSessionHost extends EventEmitter {
       projectInstructions: files.length
         ? { path: files[files.length - 1].path, truncated: files[files.length - 1].truncated, note: files[files.length - 1].note ?? null }
         : null,
-      projectInstructionFiles: files.map(f => ({ path: f.path, truncated: f.truncated, note: f.note ?? null })),
+      projectInstructionFiles: files.map(f => ({ path: f.path, truncated: f.truncated, note: f.note ?? null, ...(f.notUsed ? { notUsed: f.notUsed } : {}) })),
       skills: inv.skills.map((s) => ({ id: s.id, label: skillLabel(s.id), description: s.description })),
       skillsOffered: inv.skillsOffered,
       tools: inv.toolNames,

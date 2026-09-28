@@ -50,13 +50,16 @@ describe('the Project tab is named for what it holds', () => {
 
   it('reuses file rows for every captured ancestor and marks a shortened parent', () => {
     show({ assembledBy: 'youcoded', projectInstructionFiles: [
-      { path: '/workspace/AGENTS.md', truncated: true, note: 'Outlined parent' },
+      { path: '/workspace/AGENTS.md', truncated: true, note: 'Outlined parent', notUsed: 'CLAUDE.md' },
       { path: '/workspace/repo/CLAUDE.md', truncated: false },
     ], skills: [], tools: [] });
     expect(screen.getByText('Not everything fit')).toBeInTheDocument();
+    // Short, named summary — never "file(s)" or a bare count.
+    expect(screen.getByText('Shortened · AGENTS.md')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
-    expect(screen.getByText('/workspace/AGENTS.md · Outlined parent')).toBeInTheDocument();
-    expect(screen.getByText('/workspace/repo/CLAUDE.md · Read in full')).toBeInTheDocument();
+    // Folder names, not long absolute paths; a same-folder file that was not used is named.
+    expect(screen.getByText('From the “workspace” folder · Outlined parent · CLAUDE.md here not used')).toBeInTheDocument();
+    expect(screen.getByText('This project · Read in full')).toBeInTheDocument();
   });
 
   it('counts the captured chain on Overview and keeps the same rows on Project', () => {
@@ -66,8 +69,8 @@ describe('the Project tab is named for what it holds', () => {
     ], skills: [], tools: ['Read'] });
     expect(screen.getByText(/2 rules files/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
-    expect(screen.getByText('/workspace/AGENTS.md · Read in full')).toBeInTheDocument();
-    expect(screen.getByText('/workspace/repo/CLAUDE.md · Read in full')).toBeInTheDocument();
+    expect(screen.getByText('From the “workspace” folder · Read in full')).toBeInTheDocument();
+    expect(screen.getByText('This project · Read in full')).toBeInTheDocument();
   });
 
   it('counts the legacy Claude Code single-file record on Overview and Project', () => {

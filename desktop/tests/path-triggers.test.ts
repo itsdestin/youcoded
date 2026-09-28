@@ -166,6 +166,33 @@ describe('path-scoped rules', () => {
     expect(nested).toContain('Any depth.');
   });
 
+  it('brace alternatives match each listed extension, quoted or not', async () => {
+    const root = tmpRepo();
+    write(root, '.claude/rules/quoted.md', '---\npaths:\n  - "src/**/*.{ts,tsx}"\n---\nQuoted braces.');
+    write(root, '.claude/rules/plain.md', '---\npaths:\n  - src/{api,db}/*.ts\n---\nPlain braces.');
+    const idx = await buildTriggerIndex(root);
+    expect(idx.match(path.join(root, 'src', 'ui', 'Button.tsx')).map(h => h.body)).toEqual(['Quoted braces.']);
+    expect(idx.match(path.join(root, 'src', 'db', 'x.ts')).map(h => h.body).sort()).toEqual(['Plain braces.', 'Quoted braces.']);
+    expect(idx.match(path.join(root, 'src', 'ui', 'x.js'))).toEqual([]);
+  });
+
+  it('square brackets are a character class and never a silent non-match', async () => {
+    const root = tmpRepo();
+    write(root, '.claude/rules/cls.md', '---\npaths:\n  - "logs/day[0-9].txt"\n  - "app/[[]id]/*.tsx"\n---\nBrackets.');
+    const idx = await buildTriggerIndex(root);
+    expect(idx.match(path.join(root, 'logs', 'day7.txt')).length).toBe(1);
+    expect(idx.match(path.join(root, 'logs', 'dayX.txt'))).toEqual([]);
+    expect(idx.match(path.join(root, 'app', '[id]', 'page.tsx')).length).toBe(1);
+  });
+
+  it('a leading slash or ./ anchors at the rule owner instead of disabling the rule', async () => {
+    const root = tmpRepo();
+    write(root, '.claude/rules/abs.md', '---\npaths:\n  - "/src/**"\n  - "./docs/*.md"\n---\nAnchored.');
+    const idx = await buildTriggerIndex(root);
+    expect(idx.match(path.join(root, 'src', 'a.ts')).length).toBe(1);
+    expect(idx.match(path.join(root, 'docs', 'x.md')).length).toBe(1);
+  });
+
   it('the rule BODY is injected, never its frontmatter', async () => {
     const root = tmpRepo();
     write(root, '.claude/rules/api.md', '---\npaths:\n  - "src/**"\nlast_verified: 2026-07-28\n---\nThe actual rule.');

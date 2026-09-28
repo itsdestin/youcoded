@@ -4,4 +4,6 @@ export interface ProjectInstructionSummary {
   path: string;
   truncated: boolean;
   note?: string | null;
+  /** Same-folder instructions file that was not used (only one per folder is). */
+  notUsed?: string | null;
 }

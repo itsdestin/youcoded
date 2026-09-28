@@ -67,7 +67,21 @@ function windowLabel(tokens?: number | null): string {
   return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens);
 }
 
-const basename = (p: string) => p.split('/').slice(-1)[0];
+// Both separators: a native chat on Windows reports `C:\\Users\\…` paths.
+const basename = (p: string) => p.split(/[\\/]/).slice(-1)[0];
+/** WHY a folder name, not the full path: ancestor instruction files have long
+ *  absolute paths that overflow the card on a phone. The nearest file is "This
+ *  project"; each broader one is named by the folder it lives in. */
+function instructionLabel(filePath: string, isNearest: boolean): string {
+  if (isNearest) return 'This project';
+  const folder = filePath.split(/[\\/]/).slice(-2, -1)[0];
+  return folder && !/^[A-Za-z]:$/.test(folder) ? `From the “${folder}” folder` : 'From the top-level folder';
+}
+/** "Shortened · CLAUDE.md" for one file; "2 files shortened · AGENTS.md, CLAUDE.md" for more. */
+function shortenedSummary(files: ReadonlyArray<{ path: string; truncated: boolean }>): string {
+  const cut = files.filter(f => f.truncated).map(f => basename(f.path));
+  return cut.length === 1 ? `Shortened · ${cut[0]}` : `${cut.length} files shortened · ${cut.join(', ')}`;
+}
 const countLines = (s: string) => s.split('\n').filter((l) => l.trim() !== '').length;
 /** "1 lines" is the kind of small wrongness that makes a panel look unfinished. */
 const linesLabel = (n: number) => `${n} line${n === 1 ? '' : 's'}`;
@@ -216,7 +230,7 @@ function FileText({ sessionId, kind, id, what }: { sessionId?: string; kind: 'pr
  *  its own window and we cannot see what it did. Saying "read in full" there
  *  would be a claim about someone else's work. */
 function RulesCard({ file, kind, label, sessionId, openFile, assembledByClaudeCode, id }: {
-  file: { path: string; truncated: boolean; note?: string | null };
+  file: { path: string; truncated: boolean; note?: string | null; notUsed?: string | null };
   kind: 'project' | 'user';
   id?: string;
   label: string;
@@ -237,7 +251,8 @@ function RulesCard({ file, kind, label, sessionId, openFile, assembledByClaudeCo
           className="rounded-none bg-transparent"
           icon={<Dot ok={!file.truncated} />}
           title={basename(file.path)}
-          description={`${label} · ${description}`}
+          // Only one file per folder is used; name the one that was not.
+          description={`${label} · ${description}${file.notUsed ? ` · ${file.notUsed} here not used` : ''}`}
           accessory={<Button variant="secondary" size="sm" onClick={() => { void openFile(file.path); }}>Open</Button>}
         />
       )}
@@ -444,7 +459,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
                       variant="item"
                       icon={<Dot ok={false} />}
                       title="This project’s rules"
-                      description={`${projectFiles.filter(f => f.truncated).length} instruction file(s) shortened`}
+                      description={shortenedSummary(projectFiles)}
                       onClick={() => setTab('project')}
                     />
                   )}
@@ -538,13 +553,13 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
               <p className="text-2xs text-fg-muted">There is no rules file for this project, and none of your own.</p>
             ) : (
               <div className="space-y-2">
-                {projectFiles.map((file) => (
+                {projectFiles.map((file, i) => (
                   <RulesCard
                     key={file.path}
                     file={file}
                     kind="project"
                     id={context.projectInstructionFiles ? file.path : undefined}
-                    label={context.projectInstructionFiles ? file.path : 'This project'}
+                    label={instructionLabel(file.path, i === projectFiles.length - 1)}
                     sessionId={sessionId}
                     openFile={openFile}
                     assembledByClaudeCode={cc}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { McpManager } from '../src/main/harness/mcp/mcp-manager';
+import { McpManager, redactSecrets } from '../src/main/harness/mcp/mcp-manager';
 import type { ResolvedMcpServer } from '../src/main/harness/mcp/types';
 
 function deps(connectSpy = vi.fn(), closeSpy = vi.fn()) {
@@ -556,5 +556,14 @@ describe('McpManager', () => {
     const lease = await mgr.acquire('s1');
     expect(lease.servers.map(r => r.id)).toEqual(['good']);
     expect(mgr.status().find(s => s.id === 'bad')?.error).toContain('ENOENT');
+  });
+});
+
+describe('redactSecrets', () => {
+  it('keeps the real failure reason but blanks every credential the server was given', () => {
+    const server = { env: { API_KEY: 'sk-live-123456', DEBUG: '1' }, headers: { Authorization: 'Bearer tok_abcdefgh' } };
+    const text = 'spawn node ENOENT; key sk-live-123456 rejected; token tok_abcdefgh expired; DEBUG=1';
+    expect(redactSecrets(text, server)).toBe('spawn node ENOENT; key [redacted] rejected; token [redacted] expired; DEBUG=1');
+    expect(redactSecrets(null, server)).toBeNull();
   });
 });

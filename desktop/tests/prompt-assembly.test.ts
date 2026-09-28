@@ -140,11 +140,23 @@ describe('captured ancestor instruction inventory', () => {
     const inventory = await prepareProjectInstructions(nested, 1000);
     const selected = inventory.filter(f => f.path.startsWith(dir));
     expect(selected.map(f => f.name)).toEqual(['AGENTS.md', 'CLAUDE.md', 'AGENTS.md']);
+    // The ignored same-folder CLAUDE.md is recorded for the panel, never silent.
+    expect(selected.map(f => f.notUsed ?? null)).toEqual([null, null, 'CLAUDE.md']);
     const out = assembleSystemPrompt({ presetBody: PRESET, cwd: nested, appVersion: '1', projectInstructionFiles: inventory });
     expect(out.indexOf('OUTSIDE_GIT')).toBeLessThan(out.indexOf('REPO_RULE'));
     expect(out.indexOf('REPO_RULE')).toBeLessThan(out.indexOf('CHILD_RULE'));
     expect(out).not.toContain('IGNORED_RULE');
     expect(out).toContain(`source="${path.join(dir, 'AGENTS.md')}"`);
+  });
+
+  it('describes a shortened file to the person in plain words, never the model-facing notice', async () => {
+    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
+    const body = Array.from({ length: 12 }, (_, i) => `## Section ${i}\n${'Detail line. '.repeat(80)}`).join('\n\n');
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), body);
+    const [file] = (await prepareProjectInstructions(dir, 600)).filter(f => f.path.startsWith(dir));
+    expect(file.truncated).toBe(true);
+    expect(file.note).toMatch(/^Shortened to fit this model/);
+    expect(file.note).not.toMatch(/[[\]]|Read /);
   });
 
   it('includes ancestors outside a git directory without looking up a dedicated global file or repeating one source', async () => {

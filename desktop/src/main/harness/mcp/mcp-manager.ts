@@ -110,6 +110,22 @@ function effectiveConfig(server: ResolvedMcpServer): string {
     missing: [...server.missingSecrets].sort(), credentialError: server.credentialError ?? null });
 }
 
+/** The error text with every env/header value this server was given replaced
+ *  by [redacted]. Values under 4 characters are left alone: blanking "1" or
+ *  "true" everywhere would mangle the message while protecting nothing. */
+export function redactSecrets(text: string | null, server: Pick<ResolvedMcpServer, 'env' | 'headers'>): string | null {
+  if (!text) return text;
+  const values = [...Object.values(server.env ?? {}), ...Object.values(server.headers ?? {})]
+    .filter(v => typeof v === 'string' && v.length >= 4)
+    // "Bearer abc…" headers: an error may quote only the token part.
+    .flatMap(v => [v, ...v.split(/\s+/).filter(part => part.length >= 8 && part !== v)])
+    // Longest first, so a secret that contains a shorter one is removed whole.
+    .sort((a, b) => b.length - a.length);
+  let out = text;
+  for (const v of values) out = out.split(v).join('[redacted]');
+  return out;
+}
+
 export class McpManager {
   private readonly registry: McpRegistryLike;
   private readonly connectionFactory: McpConnectionFactory;
@@ -181,11 +197,13 @@ export class McpManager {
             call: (tool, args, signal) => entry.conn.callTool(tool, args, signal),
           });
         } else {
-          // WHY: status() retains the real diagnostic, but a provider error
-          // may echo resolved credentials. Log only the ID/state, never the
-          // effective config or a possibly secret-bearing provider error.
+          // WHY: a server that fails to start must leave its REAL reason in
+          // the log (a typo'd command was otherwise invisible), but a provider
+          // error can echo a resolved credential. Log the error with every
+          // secret value this server was given blanked out.
           log('WARN', 'McpManager', 'MCP server excluded from this session — not ready', {
             sessionId, serverId: entry.server.id, state: entry.conn.state,
+            error: redactSecrets(entry.conn.lastError, entry.server),
           });
         }
       }

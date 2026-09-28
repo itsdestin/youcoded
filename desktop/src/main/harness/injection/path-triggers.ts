@@ -19,6 +19,7 @@
 // order the sync walk produced.
 import * as fs from 'fs';
 import * as path from 'path';
+import { log } from '../../logger';
 
 export interface PathTrigger {
   /** Stable identity, so a trigger is injected at most once per session. */
@@ -83,14 +84,78 @@ async function readTrigger(cwd: string, dir: string, file: string, kind: string)
   return { dir, trigger: { id: `${kind}:${file}`, source: path.relative(cwd, file), body } };
 }
 
+/** Expand `{a,b}` alternatives (nested allowed) into plain globs. WHY: rule
+ *  authors copy Claude Code/editor globs such as `src/**\/*.{ts,tsx}`; treating
+ *  the braces as literal characters meant those rules silently never fired.
+ *  Capped so a pathological pattern cannot explode into thousands of globs. */
+const MAX_BRACE_EXPANSIONS = 64;
+function expandBraces(glob: string): string[] {
+  let depth = 0, open = -1;
+  for (let i = 0; i < glob.length; i++) {
+    if (glob[i] === '{') { if (depth++ === 0) open = i; }
+    else if (glob[i] === '}' && depth > 0 && --depth === 0) {
+      const alts: string[] = [];
+      let d = 0, start = open + 1;
+      for (let k = open + 1; k < i; k++) {
+        if (glob[k] === '{') d++;
+        else if (glob[k] === '}') d--;
+        else if (glob[k] === ',' && d === 0) { alts.push(glob.slice(start, k)); start = k + 1; }
+      }
+      alts.push(glob.slice(start, i));
+      // A lone `{x}` is not an alternative list; keep it literal like bash does.
+      if (alts.length < 2) return [glob];
+      const out: string[] = [];
+      for (const alt of alts) {
+        for (const rest of expandBraces(glob.slice(0, open) + alt + glob.slice(i + 1))) {
+          out.push(rest);
+          if (out.length >= MAX_BRACE_EXPANSIONS) return out;
+        }
+      }
+      return out;
+    }
+  }
+  return [glob];
+}
+
+/** One path segment's glob as a regex: `*` and `?` stay inside the segment,
+ *  `[abc]`/`[a-z]`/`[!abc]` are character classes, everything else is literal.
+ *  An unclosed `[` is literal, so a stray bracket can never throw. */
+function segmentRegex(seg: string): RegExp {
+  let rx = '';
+  for (let i = 0; i < seg.length; i++) {
+    const c = seg[i];
+    if (c === '*') rx += '[^/]*';
+    else if (c === '?') rx += '[^/]';
+    else if (c === '[') {
+      const close = seg.indexOf(']', i + 2);
+      if (close === -1) { rx += '\\['; continue; }
+      let body = seg.slice(i + 1, close);
+      const negate = body[0] === '!' || body[0] === '^';
+      if (negate) body = body.slice(1);
+      rx += `[${negate ? '^' : ''}${body.replace(/[\\\]^]/g, '\\$&')}]`;
+      i = close;
+    } else rx += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${rx}$`);
+}
+
 /** WHY: match path SEGMENTS, not substrings: ** consumes zero or more
  * entire folders, while * and ? never cross a slash. Bash subject globs have
- * intentionally different separator semantics and cannot be reused here. */
+ * intentionally different separator semantics and cannot be reused here.
+ * A leading `/` or `./` anchors at the rule's owning folder, which is where
+ * every glob is already anchored, so it is dropped rather than rejected. */
 function pathMatches(relPosix: string, glob: string): boolean {
-  if (!glob || glob.startsWith('/') || glob.includes('\\') || glob.includes('//') || /[\[\]]/.test(glob)) return false;
+  return expandBraces(glob).some(g => pathMatchesOne(relPosix, g.replace(/^\.?\//, '')));
+}
+
+function pathMatchesOne(relPosix: string, glob: string): boolean {
+  // Backslashes are Windows separators or escapes; neither has one safe
+  // reading, so such a glob is rejected (and reported once by readRule).
+  if (!glob || glob.includes('\\') || glob.includes('//')) return false;
   const pattern = glob.split('/');
   const parts = relPosix.split('/');
   if (pattern.some(p => !p || (p.includes('**') && p !== '**'))) return false;
+  const regexes = pattern.map(p => (p === '**' ? null : segmentRegex(p)));
   const memo = new Map<string, boolean>();
   const visit = (i: number, j: number): boolean => {
     const key = `${i}:${j}`;
@@ -99,11 +164,7 @@ function pathMatches(relPosix: string, glob: string): boolean {
     let yes = false;
     if (i === pattern.length) yes = j === parts.length;
     else if (pattern[i] === '**') yes = visit(i + 1, j) || (j < parts.length && visit(i, j + 1));
-    else if (j < parts.length) {
-      const rx = pattern[i].replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]');
-      yes = new RegExp(`^${rx}$`).test(parts[j]) && visit(i + 1, j + 1);
-    }
+    else if (j < parts.length) yes = regexes[i]!.test(parts[j]) && visit(i + 1, j + 1);
     memo.set(key, yes);
     return yes;
   };
@@ -134,6 +195,7 @@ async function readRule(file: string): Promise<{ globs: string[]; body: string }
   // the glob. No declared runtime YAML parser exists; malformed entries are
   // ignored rather than throwing during discovery or every tool call.
   const globs: string[] = [];
+  const skipped: string[] = [];
   let inPaths = false;
   let itemIndent: number | undefined;
   for (const line of front.split('\n')) {
@@ -154,7 +216,7 @@ async function readRule(file: string): Promise<{ globs: string[]; body: string }
     let value: string;
     if (rawValue.startsWith('"')) {
       const quoted = rawValue.match(/^("(?:[^"\\]|\\.)*")(?:\s+#.*)?$/);
-      if (!quoted) continue;
+      if (!quoted) { skipped.push(rawValue); continue; }
       try { value = JSON.parse(quoted[1]); } catch { continue; }
     } else if (rawValue.startsWith("'")) {
       const quoted = rawValue.match(/^'((?:[^']|'')*)'(?:\s+#.*)?$/);
@@ -162,10 +224,17 @@ async function readRule(file: string): Promise<{ globs: string[]; body: string }
       value = quoted[1].replace(/''/g, "'");
     } else {
       value = rawValue.replace(/\s+#.*$/, '').trim();
-      if (/["'\[\]{}]/.test(value) || /:\s*$/.test(value)) continue;
+      // WHY only a LEADING [ or { is refused: YAML reads those as a list or
+      // map, but inside a plain value (`src/**/*.{ts,tsx}`, `app/[id]/*.tsx`)
+      // they are ordinary characters the glob matcher understands.
+      if (/^[\[{]/.test(value) || /["']/.test(value) || /:\s*$/.test(value)) { skipped.push(rawValue); continue; }
     }
+    if (value.includes('\\')) { skipped.push(value); continue; }
     if (value) globs.push(value);
   }
+  // A rule whose pattern can't be read never fires; say so in the log rather
+  // than let the author wonder why their rule is ignored.
+  if (skipped.length) log('WARN', 'PathTriggers', 'rule path pattern not understood; it will not match', { file, patterns: skipped });
   return globs.length ? { globs, body } : null;
 }
 

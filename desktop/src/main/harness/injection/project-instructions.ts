@@ -11,6 +11,19 @@ export interface ProjectInstructionFile {
   note?: string;
   /** A chain-wide omission notice is plain text, not a pretend file body. */
   unwrapped?: boolean;
+  /** A second instructions file in the SAME folder that was not used (AGENTS.md
+   *  wins over CLAUDE.md). Shown in the panel so a dropped file is never silent. */
+  notUsed?: string;
+}
+
+// WHY plain words here: `note` is shown to the PERSON in the "What the assistant
+// was given" panel. The bracketed notices the fitter writes are addressed to the
+// model ("Read X for the rest"), so they are summarized, never copied.
+const LEFT_OUT = 'Left out — too long for this model';
+const SHORTENED = 'Shortened to fit this model';
+function shortenedNote(fittedText: string): string {
+  const outline = /(\d+) of (\d+) sections above are shown as/.exec(fittedText);
+  return outline ? `${SHORTENED} · ${outline[1]} of ${outline[2]} sections shortened` : SHORTENED;
 }
 
 export function renderProjectInstructionFiles(files: readonly ProjectInstructionFile[]): string | null {
@@ -34,7 +47,7 @@ export async function prepareProjectInstructions(cwd: string, budgetTokens: numb
     if (parent === dir) break;
     dir = parent;
   }
-  const sources: Array<{ path: string; name: string; full: string }> = [];
+  const sources: Array<{ path: string; name: string; full: string; notUsed?: string }> = [];
   const seen = new Set<string>();
   for (const folder of dirs) {
     for (const name of ['AGENTS.md', 'CLAUDE.md']) {
@@ -51,7 +64,14 @@ export async function prepareProjectInstructions(cwd: string, budgetTokens: numb
       let identity: string;
       try { identity = await fs.realpath(file); }
       catch { identity = file; } // If it disappeared after reading, preserve the captured text.
-      if (!seen.has(identity)) { sources.push({ path: file, name, full }); seen.add(identity); }
+      if (!seen.has(identity)) {
+        // WHY record it: only one file per folder is used, so a CLAUDE.md next
+        // to an AGENTS.md is silently ignored unless we say so.
+        const other = name === 'AGENTS.md' ? path.join(folder, 'CLAUDE.md') : null;
+        const otherExists = other ? await fs.access(other).then(() => true, () => false) : false;
+        sources.push({ path: file, name, full, ...(otherExists ? { notUsed: 'CLAUDE.md' } : {}) });
+        seen.add(identity);
+      }
       break;
     }
   }
@@ -64,7 +84,7 @@ export async function prepareProjectInstructions(cwd: string, budgetTokens: numb
   const notices = sources.map(s => `[Read ${s.path}: shortened.]`);
   const omitted = (text: string | null): ProjectInstructionFile[] => sources.map((source, i) => ({
     ...source, text: i === 0 ? (text ?? '') : '', truncated: true,
-    note: 'Omitted from the prompt to fit this model’s context window.',
+    note: LEFT_OUT,
     ...(i === 0 && text ? { unwrapped: true } : {}),
   }));
   if (wrappers + notices.reduce((n, s) => n + s.length, 0) > budget) {
@@ -81,6 +101,6 @@ export async function prepareProjectInstructions(cwd: string, budgetTokens: numb
     const truncated = fitted.truncated || text !== source.full;
     remaining -= text.length;
     return { ...source, text, truncated,
-      ...(truncated ? { note: text === notices[index] ? 'Omitted; read the file for the full instructions.' : text.match(/\[[^\]]+\]\s*$/)?.[0] ?? 'Shortened to fit this model’s context window.' } : {}) };
+      ...(truncated ? { note: text === notices[index] ? LEFT_OUT : shortenedNote(text) } : {}) };
   });
 }
