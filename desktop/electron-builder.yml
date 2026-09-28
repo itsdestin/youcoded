@@ -154,3 +154,9 @@ files:
   - hook-scripts/**/*
   - assets/**/*
   - package.json
+# WHY a resource, not inside app.asar: x2t is a native program that must run from a real
+# folder, and the AGPL add-on stays a separate program beside the MIT app (contract R2).
+extraResources:
+  - from: office-addon
+    to: office
+    filter: ["**/*"]

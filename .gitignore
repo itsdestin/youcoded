@@ -45,6 +45,9 @@ node_modules
 desktop/dist/
 desktop/build/
 desktop/release/
+# The AGPL Office add-on bundle scripts/fetch-office.mjs downloads at dev/build time
+# (checksum-pinned by office-pin.json) — not source, never committed.
+desktop/office-addon/
 # run-dev.sh's "a dev window from this checkout is running" marker (explore --dev reads it)
 desktop/.dev-instances/
 # Gradle build output for the vendored Termux terminal-emulator module
