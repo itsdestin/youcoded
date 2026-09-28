@@ -3328,6 +3328,40 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
  *  (open/replied/resolved/Word/Excel — fixtures/doc-comments.ts). */
 function createDocCommentsMock(empty: boolean) {
   let comments: PersistedComment[] = empty ? [] : seedDocComments();
+  // `?docCommentsFail=<code>` — every `add` fails with that MutationResult
+  // error code instead of saving. WHY (review-deck V-3, doc-comments confirm-2
+  // deck, 2026-09-27): the generic `?fail=docComments.add` switch (above) only
+  // throws a made-up "Mock failure (...)" string, which `describeError` cannot
+  // recognize, so it can never show a SPECIFIC real error's wording (e.g.
+  // `file-open-elsewhere`'s "This file looks open in another app..."). This
+  // mock-only, workbench-only toggle lets the shot rig ask for a named real
+  // error code and see the exact card `describeError` (doc-comments-store.ts)
+  // produces for it — never product code, and inert unless the param is set.
+  const docCommentsFailCode = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('docCommentsFail') : null;
+  // `?docCommentsDetached=1` — adds one seed comment whose quote is not a
+  // substring of any fixture document, so the real `resolveSelector` (run
+  // client-side by use-quote-marks.ts, same as production) can never find it
+  // and marks it `detached` on its own — no fake status field, the actual
+  // "text no longer found" code path. WHY (review-deck V-2, same deck as
+  // above): every real seed comment's quote is deliberately an exact
+  // substring of its fixture (doc-comments.ts's own top comment), so none of
+  // them can show this state without one written to NOT match. Gated behind
+  // the param so ordinary (non-review-deck) workbench sessions keep seeing
+  // only genuinely anchored fixture comments.
+  const detachedDemo: PersistedComment[] = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('docCommentsDetached'))
+    ? [{
+        id: 'demo-detached',
+        path: 'docs/active/plans/2026-09-24-onboarding-redesign.md',
+        selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'This sentence was in the plan when the comment was left, but the plan moved on without it.', prefix: '', suffix: '', occurrence: 0 } },
+        text: 'Is this still the plan, or did the rewrite drop it?',
+        author: 'user',
+        createdAt: Date.now() - 60 * 60 * 1000,
+        replies: [],
+        resolved: false,
+        history: [],
+      }]
+    : [];
+  if (detachedDemo.length) comments = [...comments, ...detachedDemo];
   const subs = new Set<(evt: { path: string; projectRoot?: string }) => void>();
   // `projectRoot` on the push (F3, T5 review): mirrors the real watcher —
   // harmless here (the workbench only ever has one fixture project), but
@@ -3350,6 +3384,7 @@ function createDocCommentsMock(empty: boolean) {
       // Mirrors ipc-handlers.ts's own `reqStr` refusal — an empty `text` is
       // never written, same as the real store.
       if (!text) return { ok: false, error: 'missing-field', field: 'text' };
+      if (docCommentsFailCode) return { ok: false, error: docCommentsFailCode };
       const realId = id ?? `c-${Math.random().toString(36).slice(2, 10)}`;
       const comment: PersistedComment = { id: realId, path, selector, text, author, createdAt: Date.now(), replies: [], resolved: false, history: [] };
       comments = [...comments, comment];
