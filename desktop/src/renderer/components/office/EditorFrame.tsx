@@ -116,6 +116,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   // I2 (fix round 4): while Save a copy runs, an overlay takes the pointer and the keyboard, so
   // nothing typed mid-copy can be left out of it.
   const [copying, setCopying] = useState(false);
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
   const overlayRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (copying) overlayRef.current?.focus(); }, [copying]);
   // Escape the editor itself had no use for closes the app's top layer, as a page's does.
@@ -402,6 +404,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       }
       b.invoke(opened.token, m.cmd, m.args ?? {}).then((result) => {
         post({ yc: 'rpc-result', id: m.id, result });
+        // M4 (fix round 4): an answer that lands after this frame unmounted must not write a
+        // save state for a file no editor holds any more (it would linger in the store).
+        if (!mountedRef.current) return;
         if (m.cmd === 'write_editor_bin') save.current.writeFailed = false;
         if (saving) {
           // WHY clear `failed` (fix round 3): the 5 s cap or the 60 s guard may already have
@@ -415,6 +420,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       }, (e: unknown) => {
         const message = plainMessage(e, saving ? "Office couldn't save this file." : "Office couldn't finish that.");
         post({ yc: 'rpc-result', id: m.id, error: message });
+        if (!mountedRef.current) return; // see M4 above
         // Any refused step of an asked-for save (write_editor_bin, get_current_path) ends that
         // save without a save_file: it failed, with main's reason (fix round 2).
         if (m.cmd === 'write_editor_bin') save.current.writeFailed = true;

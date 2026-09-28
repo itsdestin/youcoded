@@ -358,11 +358,10 @@ describe('the kept, hidden Office view', () => {
     withOffice({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("Office doesn't have permission to save this file."); return null; }) });
     act(() => openDoc(FILE));
     const { container, rerender } = render(host(true));
-    const frame = await waitFor(() => { const f = frameOf(container) as HTMLIFrameElement; expect(f?.getAttribute('src')).toBe('office://t1/index.html'); return f; });
+    await waitFor(() => { const f = frameOf(container) as HTMLIFrameElement; expect(f?.getAttribute('src')).toBe('office://t1/index.html'); return f; });
     // WHY re-read the frame's window each time: jsdom can swap it after the src is set (see
     // editor-frame-relay.test.tsx), and under load that happens after this point.
     const win = () => { const w = (frameOf(container) as HTMLIFrameElement).contentWindow!; if (!vi.isMockFunction(w.postMessage)) vi.spyOn(w, 'postMessage').mockImplementation(() => {}); return w; };
-    void frame;
     const send = (data: unknown) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: win() })); });
     send({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
     rerender(host(false));

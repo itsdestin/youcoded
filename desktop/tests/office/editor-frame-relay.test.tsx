@@ -119,6 +119,18 @@ describe('EditorFrame hosting the editor', () => {
     expect(bridge.invoke).toHaveBeenCalledTimes(1);
   });
 
+  it('leaves no save state behind when a save lands after the frame has gone', async () => {
+    let answer!: (v: unknown) => void;
+    fakeBridge({ invoke: vi.fn((_t: string, cmd: string) => (cmd === 'save_file' ? new Promise((r) => (answer = r)) : Promise.resolve(null))) });
+    const { fromEditor, unmount } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'save_file', args: { data: '' } });
+    const { resetOfficeStoreForTests: reset } = await import('../../src/renderer/components/office/office-store');
+    unmount();
+    reset(); // the tab closed: nothing is recorded for this file
+    await act(async () => { answer('ok'); await Promise.resolve(); await Promise.resolve(); });
+    expect(saveStateFor(FILE.path)).toEqual({ phase: 'saved' }); // the default: no entry was recreated
+  });
+
   it('hands the document back to main when the frame goes away', async () => {
     const bridge = fakeBridge();
     const { unmount } = await mountFrame();
