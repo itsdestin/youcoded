@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, promises as fsNode } from 'node:fs';
 import { chmod, copyFile, mkdir, mkdtemp, open, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -446,4 +446,103 @@ describe('office commands at quit', () => {
     await expect(run(s.token, 'get_system_fonts', {})).rejects.toThrow('Office is closing.');
     await expect(writeBin(run, s.token)).rejects.toThrow('Office is closing.');
   });
+});
+
+describe('office saves never expose a private file while translating', () => {
+  it.skipIf(process.platform === 'win32')(
+    'translates into a private folder beside the file that only the owner can enter (POSIX modes)',
+    async () => {
+      const s = await sessionFor(MEMO);
+      await chmod(s.path, 0o600);
+      let parentMode = -1;
+      let parentDir = '';
+      const probe = async (r: string, f: string, to: string) => {
+        parentDir = path.dirname(to);
+        parentMode = (await stat(parentDir)).mode & 0o777;
+        await fakeDoc(r, f, to);
+      };
+      const run = createOfficeCommands({ root: ROOT, sessions, convert: probe });
+      await writeBin(run, s.token);
+      expect(await run(s.token, 'save_file', {})).toBe('ok');
+      expect(parentMode).toBe(0o700);
+      expect(path.dirname(parentDir)).toBe(path.dirname(s.path));
+      expect(existsSync(parentDir)).toBe(false);
+      expect((await stat(s.path)).mode & 0o777).toBe(0o600);
+    },
+  );
+
+  it('removes its private folder when the translation fails', async () => {
+    const s = await sessionFor(MEMO);
+    let parentDir = '';
+    const failing = async (_r: string, _f: string, to: string) => {
+      parentDir = path.dirname(to);
+      await writeFile(to, 'half');
+      throw new Error('x2t crashed');
+    };
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: failing });
+    await writeBin(run, s.token);
+    await expect(run(s.token, 'save_file', {})).rejects.toThrow();
+    expect(parentDir).not.toBe('');
+    expect(existsSync(parentDir)).toBe(false);
+    expect(await readdir(path.dirname(s.path))).toEqual(['file.docx']);
+  });
+
+  it('sweeps a private save folder left behind over an hour ago, and keeps a recent one', async () => {
+    const s = await sessionFor(MEMO);
+    const docs = path.dirname(s.path);
+    const stale = path.join(docs, '.file.docx.office-save-stale1');
+    const fresh = path.join(docs, '.file.docx.office-save-fresh1');
+    await mkdir(stale);
+    await writeFile(path.join(stale, 'file.docx'), 'old');
+    await mkdir(fresh);
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(stale, old, old);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    await writeBin(run, s.token);
+    await run(s.token, 'save_file', {});
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+  });
+});
+
+describe('office save errors, round two', () => {
+  const failWith = (code: string) => async () => {
+    throw Object.assign(new Error(`${code}: somewhere ${dir}`), { code });
+  };
+
+  it('says the file is on a read-only disk when saving hits EROFS', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: failWith('EROFS') });
+    await writeBin(run, s.token);
+    await expect(run(s.token, 'save_file', {})).rejects.toThrow("This file is on a read-only disk, so Office couldn't save it.");
+  });
+
+  it('says the disk is full when storing the edited document hits ENOSPC', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    vi.spyOn(fsNode, 'writeFile').mockRejectedValueOnce(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }));
+    await expect(writeBin(run, s.token)).rejects.toThrow("The disk is full, so Office couldn't save this file.");
+  });
+
+  it('says the file cannot be found when it vanishes between the checks and the translation', async () => {
+    const s = await sessionFor(MEMO);
+    const vanished = async () => {
+      throw Object.assign(new Error(`ENOENT: no such file, open '${s.path}'`), { code: 'ENOENT', path: s.path });
+    };
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: vanished });
+    await expect(run(s.token, 'open_file', {})).rejects.toThrow("Office can't find this file.");
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'refuses to replace a read-only file and leaves it as it was (POSIX, non-root)',
+    async () => {
+      const s = await sessionFor(MEMO);
+      const original = await readFile(s.path);
+      await chmod(s.path, 0o444);
+      const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+      await writeBin(run, s.token);
+      await expect(run(s.token, 'save_file', {})).rejects.toThrow("Office doesn't have permission to save this file.");
+      expect(await readFile(s.path)).toEqual(original);
+    },
+  );
 });

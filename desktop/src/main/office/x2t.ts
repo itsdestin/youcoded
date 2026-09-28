@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { type ChildProcess, execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
@@ -12,6 +12,22 @@ export function formatFor(filePath: string): number | null {
   // is not a document Office can save back to — only the three document kinds count here.
   if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx') return FORMAT[ext];
   return null;
+}
+
+// Every converter process still running, so quit can stop them (fix round 2). WHY: when quit
+// stops waiting for a save, an x2t left running would keep writing into a folder that is being
+// removed, and outlive the app.
+const running = new Set<ChildProcess>();
+const stoppedAtQuit = new WeakSet<ChildProcess>();
+
+/** Kill every running converter (quit only). Returns how many were running. */
+export function killRunningConverters(): number {
+  const n = running.size;
+  for (const child of running) {
+    stoppedAtQuit.add(child);
+    child.kill('SIGKILL');
+  }
+  return n;
 }
 
 export class X2tError extends Error {
@@ -73,13 +89,21 @@ export async function convert(root: string, from: string, to: string, formatTo: 
       // file. WHY a large maxBuffer: x2t can be chatty on stdout for a big document, and hitting
       // the default 1 MB limit would kill a translation that was working.
       const opts = { cwd: bin, env, timeout: 60_000, killSignal: 'SIGKILL' as const, maxBuffer: 64 * 1024 * 1024 };
-      execFile(path.join(bin, 'x2t'), [params], opts, (err, _stdout, stderr) => {
+      const child = execFile(path.join(bin, 'x2t'), [params], opts, (err, _stdout, stderr) => {
+        running.delete(child);
         if (!err) return resolve();
         const e = err as NodeJS.ErrnoException & { signal?: string | null; killed?: boolean };
-        // WHY 'timeout' by name: callers tell the user "took too long" for exactly this case.
-        const code = e.killed && e.signal === 'SIGKILL' ? 'timeout' : (e.code ?? e.signal ?? 'unknown');
+        // WHY three distinct codes (fix round 2): callers tell the user "took too long" ONLY for
+        // a real timeout. Node reports an output overflow with its own code, and our own kill
+        // at quit also arrives as killed+SIGKILL, so each is told apart before the timeout test.
+        let code: string | number;
+        if (stoppedAtQuit.has(child)) code = 'stopped';
+        else if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') code = e.code;
+        else if (e.killed && e.signal === 'SIGKILL') code = 'timeout';
+        else code = e.code ?? e.signal ?? 'unknown';
         reject(new X2tError(`x2t failed (${code})`, code, String(stderr ?? '')));
       });
+      running.add(child);
     });
     // WHY check the output: a translator that exits "successfully" without writing anything
     // must never be treated as a finished save — the caller would then replace the user's file

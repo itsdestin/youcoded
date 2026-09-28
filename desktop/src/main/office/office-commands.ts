@@ -1,7 +1,7 @@
 import { constants as fsc, promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { EDITOR_BIN_MAX_BYTES, OFFICE_MAX_BYTES } from '../../shared/office-types';
-import { renameReplacing, sweepStaleTmp } from '../artifacts/cas-write';
+import { renameReplacing } from '../artifacts/cas-write';
 import { noteOwnWrite } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
@@ -107,7 +107,7 @@ export async function awaitIdle(): Promise<void> {
 // WHY map at the boundary (fix round 1; docs/error-message-standards.md): a specific message
 // only where the cause is known for certain, otherwise a general one that guesses nothing. The
 // raw error (with its paths and x2t's stderr) goes to the log, never to the editor frame.
-function toEditorError(e: unknown, cmd: string): Error {
+function toEditorError(e: unknown, cmd: string, filePath: string): Error {
   if (e instanceof OfficeUserError) {
     if (!e.quiet) log('WARN', 'Office', `${cmd} refused: ${e.message}`);
     return new Error(e.message);
@@ -124,6 +124,14 @@ function toEditorError(e: unknown, cmd: string): Error {
   } else if (verb) {
     if (err?.code === 'EACCES' || err?.code === 'EPERM') return new Error(`Office doesn't have permission to ${verb} this file.`);
     if (err?.code === 'ENOSPC') return new Error(`The disk is full, so Office couldn't ${verb} this file.`);
+    if (verb === 'save' && err?.code === 'EROFS') return new Error("This file is on a read-only disk, so Office couldn't save it.");
+    // WHY only when the error names the document itself (fix round 2): the file vanished
+    // between the checks and the work. An ENOENT about anything else (a temp folder) is not
+    // "can't find this file", and saying so would send the user looking for the wrong thing.
+    if (err?.code === 'ENOENT' && err.path === filePath) return new Error(MSG.notFound);
+  } else if (cmd === 'write_editor_bin' && err?.code === 'ENOSPC') {
+    // Storing the edited document is the first half of a save, so the save wording fits.
+    return new Error("The disk is full, so Office couldn't save this file.");
   }
   return new Error(verb ? `Office couldn't ${verb} this file.` : "Office couldn't finish that.");
 }
@@ -216,7 +224,8 @@ export function createOfficeCommands(deps: {
     });
     // WHY: a read-only file stays read-only — Office reports it instead of replacing it anyway.
     if (orig) await fsp.access(s.path, fsc.W_OK);
-    await sweepStaleTmp(dir, path.basename(s.path));
+    const base = path.basename(s.path);
+    await sweepStaleSaveDirs(dir, base);
     // WHY only when someone will use it: the previous bytes are for Task 7's version history;
     // reading up to 200 MB on every autosave for nobody would be pure waste.
     let before: Buffer | null = null;
@@ -226,7 +235,13 @@ export function createOfficeCommands(deps: {
         throw e;
       });
     }
-    const tmp = `${s.path}.${process.pid}.${Date.now()}.tmp`;
+    // WHY a private folder (fix round 2): x2t creates its output with default permissions, so
+    // while it translates a 0600 file, a plain tmp beside it would be readable by other
+    // accounts. mkdtemp makes the folder 0700 — nobody else can enter it — and it sits beside
+    // the file, on the same disk, so the final rename stays one atomic step. The leading dot
+    // keeps it out of file lists and the project watcher.
+    const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
+    const tmp = path.join(priv, base);
     try {
       await convert(deps.root, editorBin(s), tmp, fmt, jobsBase(s));
       await finishCopy(tmp, orig);
@@ -237,10 +252,15 @@ export function createOfficeCommands(deps: {
       // folder is going away, so the only safe move is to keep the user's file as it was.
       if (closing) throw userError(MSG.closing, true);
       noteOwnWrite(s.path);
-      await renameReplacing(tmp, s.path);
+      // WHY the abort check (fix round 2): on Windows a busy rename is retried for a moment;
+      // if quit gives up on this save meanwhile, it must stop rather than land late.
+      await renameReplacing(tmp, s.path, process.platform, () => closing);
     } catch (e) {
-      await fsp.rm(tmp, { force: true }).catch(() => {});
+      if (closing) throw userError(MSG.closing, true);
       throw e;
+    } finally {
+      // Every path — success (the folder is then empty), failure, or abandoned at quit.
+      await fsp.rm(priv, { recursive: true, force: true }).catch(() => {});
     }
     s.modified = false;
     if (deps.onSaved) {
@@ -331,9 +351,32 @@ export function createOfficeCommands(deps: {
     try {
       return await dispatch(s, cmd, args);
     } catch (e) {
-      throw toEditorError(e, cmd);
+      throw toEditorError(e, cmd, s.path);
     }
   };
+}
+
+// Private save folders are named `.<file><SAVE_DIR_MARK><random>` beside the file.
+const SAVE_DIR_MARK = '.office-save-';
+// Same rule as cas-write's stale-tmp sweep: an hour is far longer than any real save, so a
+// folder that old was left by a crash and a live save's folder is never touched.
+const STALE_SAVE_DIR_MS = 60 * 60 * 1000;
+
+// WHY (fix round 2): a crash mid-save leaves its private folder, holding a copy of the
+// document, beside the user's file. Best-effort, like sweepStaleTmp: it must never fail a save.
+async function sweepStaleSaveDirs(dir: string, base: string): Promise<void> {
+  const prefix = `.${base}${SAVE_DIR_MARK}`;
+  try {
+    const now = Date.now();
+    for (const name of await fsp.readdir(dir)) {
+      if (!name.startsWith(prefix)) continue;
+      const full = path.join(dir, name);
+      try {
+        const st = await fsp.lstat(full);
+        if (st.isDirectory() && now - st.mtimeMs > STALE_SAVE_DIR_MS) await fsp.rm(full, { recursive: true, force: true });
+      } catch { /* vanished or unreadable — nothing to sweep */ }
+    }
+  } catch { /* folder unreadable — skip the sweep */ }
 }
 
 // WHY: docx, xlsx and pptx are all zip files, which start with "PK\x03\x04". A translation
@@ -347,9 +390,11 @@ async function finishCopy(file: string, orig: { mode: number; uid: number; gid: 
     if (bytesRead < 4 || head.toString('latin1') !== 'PK\x03\x04') throw userError(MSG.notADocument);
     if (orig) {
       await fh.chmod(orig.mode & 0o7777);
-      // WHY only as root: only root can give a file to another owner; for anyone else the new
-      // copy is already theirs, as the original must have been for the save to be allowed.
-      if (process.getuid?.() === 0) await fh.chown(orig.uid, orig.gid).catch(() => {});
+      // WHY: the new copy belongs to us with our default group. Root can restore the original
+      // owner too; anyone else can at least restore the group when they belong to it (a shared
+      // group folder). Best-effort: failing here must not fail a save that is otherwise good.
+      const uid = process.getuid?.();
+      if (uid !== undefined) await fh.chown(uid === 0 ? orig.uid : uid, orig.gid).catch(() => {});
     }
     // WHY fsync before the rename: without it, a power cut just after the rename can leave the
     // new name pointing at an empty file on some filesystems.

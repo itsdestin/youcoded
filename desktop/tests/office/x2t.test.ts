@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { convert, FORMAT, formatFor, X2tError } from '../../src/main/office/x2t';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { convert, FORMAT, formatFor, killRunningConverters, X2tError } from '../../src/main/office/x2t';
 
 const ROOT = fileURLToPath(new URL('../../office-addon/', import.meta.url));
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
@@ -82,5 +82,40 @@ describe('convert when its temp base is gone', () => {
     } finally {
       await rm(parent, { recursive: true, force: true, maxRetries: 3 });
     }
+  });
+});
+
+// A stand-in converter: a tiny shell script at <root>/converter/x2t. POSIX only (it is a
+// shell script); it lets the failure shapes be tested without the real x2t.
+describe.skipIf(process.platform === 'win32')('convert failure shapes with a stand-in converter', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'x2t-fake-'));
+    await mkdir(path.join(root, 'converter'));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  });
+  async function fakeX2t(script: string) {
+    const bin = path.join(root, 'converter', 'x2t');
+    await writeFile(bin, `#!/bin/sh\n${script}\n`);
+    await chmod(bin, 0o755);
+  }
+
+  it('reports output overflowing its buffer as its own failure, not a timeout', async () => {
+    await fakeX2t('head -c 70000000 /dev/zero');
+    const err = await convert(root, '/in.docx', path.join(root, 'out.bin'), FORMAT.bin, root).catch((e) => e);
+    expect(err).toBeInstanceOf(X2tError);
+    expect((err as X2tError).code).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+  });
+
+  it('stops a running converter at quit and reports it as stopped', async () => {
+    await fakeX2t('echo started; exec sleep 30');
+    const pending = convert(root, '/in.docx', path.join(root, 'out.bin'), FORMAT.bin, root).catch((e) => e);
+    // Wait for the child to exist (positive signal) before stopping it.
+    await vi.waitFor(() => expect(killRunningConverters()).toBeGreaterThan(0));
+    const err = await pending;
+    expect(err).toBeInstanceOf(X2tError);
+    expect((err as X2tError).code).toBe('stopped');
   });
 });
