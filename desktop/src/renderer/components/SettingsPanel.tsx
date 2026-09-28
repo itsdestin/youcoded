@@ -1218,7 +1218,7 @@ export function BuddyButton() {
               </div>
             ) : (
             <div className="px-4 py-4 space-y-2">
-              <SectionLabel>Mascot</SectionLabel>{/* WHY: a label, never a card, first under the title (nothing-bare NB-3) */}
+              {/* No label: a small popup with a single card needs none (Destin, 2026-09-28, amending NB-3). */}
               {/* Deck Q-2R: on a Linux desktop the helper cannot run on, this is
                   not a switch the user should be invited to flip — the buddy
                   cannot be positioned there at all. Row goes read-only and says
