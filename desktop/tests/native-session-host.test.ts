@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
+import fsModule from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { NativeHome } from '../src/main/native-home';
 import { SessionStore } from '../src/main/harness/session-store';
@@ -507,6 +509,39 @@ describe('NativeSessionHost', () => {
     await expect(host2.resume('s-1', root)).rejects.toThrow(TRANSCRIPT_UNREADABLE_MESSAGE);
     expect(host2.isNative('s-1')).toBe(false);   // nothing half-started
     await host2.destroyAll();
+  });
+
+  it('resume rides out a brief lock on the saved conversation instead of refusing', async () => {
+    await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    host.send('s-1', 'hello');
+    await waitForTurnComplete(host, 1);
+    await host.drain('s-1');
+    await host.destroyAll();
+
+    // The FIRST read of the session file — sync or async, whichever resume makes
+    // first — fails as a Windows sharing lock would. A sync read cannot retry, so
+    // resume must reach the file through the retrying async read.
+    const busy = () => Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+    const realAsync = fs.promises.readFile;
+    const realSync = fsModule.readFileSync;
+    let locked = 1;
+    const isSession = (file: any) => String(file).endsWith('s-1.jsonl');
+    const asyncSpy = vi.spyOn(fs.promises, 'readFile').mockImplementation((async (file: any, ...rest: any[]) => {
+      if (isSession(file) && locked-- > 0) throw busy();
+      return (realAsync as any)(file, ...rest);
+    }) as any);
+    const syncSpy = vi.spyOn(fsModule, 'readFileSync').mockImplementation(((file: any, ...rest: any[]) => {
+      if (isSession(file) && locked-- > 0) throw busy();
+      return (realSync as any)(file, ...rest);
+    }) as any);
+    syncBuiltinESMExports();
+    const host2 = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null);
+    try {
+      expect(await host2.resume('s-1', root)).toBe(true);
+      expect(locked).toBeLessThan(0);                     // the lock really was hit
+    } finally { asyncSpy.mockRestore(); syncSpy.mockRestore(); syncBuiltinESMExports(); }
+    try { expect(host2.getHistory('s-1')!.length).toBe(3); }   // with its memory, not an empty one
+    finally { await host2.destroyAll(); }
   });
 
   it('an unreadable history makes the page read throw (the caller answers unresolved), never an empty page', async () => {

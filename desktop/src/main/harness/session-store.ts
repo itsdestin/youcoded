@@ -365,6 +365,15 @@ export class SessionStore {
     return this.validateHeader(lines[0], sessionId);
   }
 
+  /** readHeader off the main thread, riding out a brief lock (readSessionLinesAsync
+   *  retries transient errors). WHY (2026-09-27 review): resume read the header
+   *  synchronously FIRST, so a momentary lock refused the resume before any retry. */
+  async readHeaderAsync(sessionId: string, cwd: string): Promise<NativeSessionHeader | null> {
+    let lines: unknown[];
+    try { lines = await this.home.readSessionLinesAsync(nativeStoreSlug(cwd), sessionId); } catch { return null; }
+    return this.validateHeader(lines[0], sessionId);
+  }
+
   /**
    * Lines 2+ of the session file. Dedups by uuid on read — the chat reducer
    * does NOT dedup native events, so a torn write or a future double-append

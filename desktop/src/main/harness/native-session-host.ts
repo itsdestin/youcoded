@@ -968,7 +968,7 @@ export class NativeSessionHost extends EventEmitter {
     if (loc.live) return { status: 'still-running' };
     const { record } = loc;
     const workDir = record.workDir;
-    const header = this.store.readHeader(opts.childId, workDir);
+    const header = await this.store.readHeaderAsync(opts.childId, workDir);
     if (!header) throw new Error(`Cannot resume specialist ${opts.childId}: its transcript could not be read.`);
     const agentType = header.agentType ?? record.agentType;
     // Task 4 (plan 1c) — resolved against the PARENT's own per-cwd roster
@@ -3955,7 +3955,7 @@ export class NativeSessionHost extends EventEmitter {
       log('WARN', 'NativeSessionHost', 'resume found a live session under the same id — destroying the orphan first', { sessionId });
       await this.destroy(sessionId);
     }
-    const header = this.store.readHeader(sessionId, cwd);
+    const header = await this.store.readHeaderAsync(sessionId, cwd);
     if (!header) return false;
     // Task 6 — a specialist child can never come back through the ROOT resume
     // path: it would get the resolved PRESET's prompt (never its own
