@@ -17,12 +17,9 @@
 @property --dialog-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
 .dialog-scroll, [data-session-files-scroll] {
   mask-image:
-    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--dialog-fade-top) / 2), #000 var(--dialog-fade-top), #000 calc(100% - var(--dialog-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--dialog-fade-bottom) / 2), transparent 100%);
-  /* WHY no 4%-side exemption any more (nothing-bare-2#N2-1, 2026-09-28 — Destin saw
-     "an odd glow" at the bottom corners): the old second gradient kept the outer 4%
-     unfaded, and since the body's 16px padding is ~4% of a 420px popup, every card's
-     left and right outline sat inside that strip — the card's middle faded while its
-     edges stayed solid, which read as glowing corners. Cards now fade evenly. */
+    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--dialog-fade-top) / 2), #000 var(--dialog-fade-top), #000 calc(100% - var(--dialog-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--dialog-fade-bottom) / 2), transparent 100%),
+    linear-gradient(to right, #000 0%, transparent 4%, transparent 96%, #000 100%);
+  mask-composite: add;
   transition: --dialog-fade-top 150ms ease-out, --dialog-fade-bottom 150ms ease-out;
 }
 .dialog-scroll[data-fade-top="true"], [data-session-files-scroll][data-fade-top="true"] { --dialog-fade-top: 42px; }
