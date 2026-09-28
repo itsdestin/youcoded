@@ -30,16 +30,17 @@
 // (everything else: `invalid-docx`/`invalid-xlsx`, the SAME wire code the
 // reader itself would have produced had `ZipFile` failed to open at all).
 //
-// WRITE (add/reply/resolve/reopen/move): T17 (this task) wires the `.docx`
-// half into `DocxComments.kt`'s own write functions below — Word comment
-// mutation on Android is now REAL, dispatched through the exact same
-// containment/allowlist gates `listNativeComments` already uses for reads (a
-// write is at least as sensitive as a read, never a looser gate). `.xlsx` is
-// still T19's not-yet-built task, so `refuseNativeMutation` now refuses ONLY
-// xlsx targets — the SAME typed `not-yet-supported` shape desktop's own
-// `refuseNativeMutation` answered before T11/T13 landed (doc-comments-
-// dispatch.ts): an honest interim answer for the one remaining unbuilt format,
-// not a silent no-op.
+// WRITE (add/reply/resolve/reopen/move): T17 wired the `.docx` half into
+// `DocxComments.kt`'s own write functions; T19 (this task) wires the `.xlsx`
+// half into `XlsxComments.kt`'s own write functions the identical way — Excel
+// comment mutation on Android is now REAL too, dispatched through the exact
+// same containment/allowlist gates `listNativeComments` already uses for
+// reads (a write is at least as sensitive as a read, never a looser gate).
+// `refuseNativeMutation` is now permanently `false` — mirrors desktop's own
+// `refuseNativeMutation`, also permanently null there since both its formats
+// shipped — kept as a single named function (rather than deleted outright) so
+// a future new native format has one place to wire a refusal into, the same
+// reasoning that already applied to it before both formats landed.
 package com.youcoded.app.doccomments
 
 import java.io.File
@@ -154,13 +155,12 @@ fun listNativeComments(format: NativeFormat, path: String, projectRoot: String?,
     }
 }
 
-/** add/reply/resolve/reopen/move against an `.xlsx` target: refused honestly
- *  until T19 builds its Kotlin write half — see this file's own header. `.docx`
- *  no longer refuses (T17, this task). Kept as a single named check (mirroring
- *  desktop's own `refuseNativeMutation`, now permanently null there since both
- *  its formats shipped) so T19 has one place to stop wiring a refusal into,
- *  rather than a per-channel special case. */
-fun refuseNativeMutation(filePath: String): Boolean = nativeFormatFor(filePath) == NativeFormat.XLSX
+/** T19: `.xlsx` writes are real now too (docx already was, T17) — neither
+ *  native format refuses a mutation any more. Kept as a single named function
+ *  (mirroring desktop's own `refuseNativeMutation`, also permanently null
+ *  there) rather than deleted outright, so a FUTURE new native format has one
+ *  place to wire a refusal into instead of a per-channel special case. */
+fun refuseNativeMutation(filePath: String): Boolean = false
 
 /** Generic Ok/Err result for a `.docx`/`.xlsx` WRITE dispatch — mirrors
  *  `NativeListResult` above, kept generic (unlike that one) because `add`
@@ -214,14 +214,25 @@ private fun resolveNativeWriteTarget(path: String, projectRoot: String?, homeDir
 // content is unusable," not a leaked stack trace. `Exception`, never
 // `Throwable` — an OOM or stack overflow is a real crash this boundary must
 // not mask, same reasoning as `listNativeComments`'s own catch.
-private suspend fun <T> nativeMutateExceptionBoundary(block: suspend () -> NativeMutateResult<T>): NativeMutateResult<T> = try {
+// T19: `invalidFormatWire` is now a parameter, not a hardcoded
+// `DocxWriteError.INVALID_DOCX.wire` — this boundary is shared by BOTH
+// native formats' dispatch functions, and reporting "invalid-docx" for a
+// corrupt `.xlsx` (the wire code every xlsx call site got before this fix)
+// would be a wrong, misleading refusal, not just an imprecise one. Defaults
+// to docx's own wire code so every existing `.docx` call site above is
+// unaffected; the new `.xlsx` dispatch functions below pass
+// `XlsxWriteError.INVALID_XLSX.wire` explicitly.
+private suspend fun <T> nativeMutateExceptionBoundary(
+    invalidFormatWire: String = DocxWriteError.INVALID_DOCX.wire,
+    block: suspend () -> NativeMutateResult<T>,
+): NativeMutateResult<T> = try {
     block()
 } catch (_: SecurityException) {
     NativeMutateResult.Err(DocxWriteError.READ_FAILED.wire)
 } catch (_: java.io.FileNotFoundException) {
     NativeMutateResult.Err(DocxWriteError.READ_FAILED.wire)
 } catch (_: Exception) {
-    NativeMutateResult.Err(DocxWriteError.INVALID_DOCX.wire)
+    NativeMutateResult.Err(invalidFormatWire)
 }
 
 /** T17: Android's real `.docx` write dispatch — the Kotlin equivalent of
@@ -310,6 +321,109 @@ suspend fun moveNativeDocxComment(
         when (val r = moveDocxComment(absolutePath, path, id, newSelector, homeDir)) {
             is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
             is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// T19: Android's real `.xlsx` write dispatch — the Kotlin equivalent of
+// desktop's `addNativeXlsxComment`/etc. (doc-comments-dispatch.ts), calling
+// straight into `XlsxComments.kt`'s own write pipeline (§4.3/§4.3a). Mirrors
+// the `.docx` dispatch functions above field-for-field; kept as its own
+// exception-boundary wrapper (`XlsxWriteError.READ_FAILED`/`INVALID_XLSX`
+// wire codes, not docx's) for the identical reason `nativeMutateExceptionBoundary`
+// itself is generic over `NativeMutateResult<T>` — a corrupt-but-openable
+// xlsx archive can throw something other than this module's own typed
+// exceptions (already caught one layer in, inside `writeXlsxMutation` itself)
+// before ever reaching a typed `XlsxWriteResult`, and this boundary is what
+// turns THAT into a clean refusal instead of a process crash, the same
+// reasoning F2 (T17 implementation review) already established for docx.
+// -----------------------------------------------------------------------
+
+suspend fun addNativeXlsxComment(
+    path: String,
+    projectRoot: String?,
+    selector: CommentSelector,
+    text: String,
+    author: CommentAuthor,
+    homeDir: File,
+): NativeMutateResult<String> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary(XlsxWriteError.INVALID_XLSX.wire) {
+        when (val r = addXlsxComment(absolutePath, path, selector, text, author, homeDir)) {
+            is XlsxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
+            is XlsxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+suspend fun replyToNativeXlsxComment(
+    path: String,
+    projectRoot: String?,
+    id: String,
+    text: String,
+    author: CommentAuthor,
+    homeDir: File,
+): NativeMutateResult<CommentReply> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary(XlsxWriteError.INVALID_XLSX.wire) {
+        when (val r = replyToXlsxComment(absolutePath, path, id, text, author, homeDir)) {
+            is XlsxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
+            is XlsxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+/** `by` accepted for call-site symmetry but not forwarded — see
+ *  `resolveXlsxComment`'s own doc comment (XlsxComments.kt). */
+suspend fun resolveNativeXlsxComment(path: String, projectRoot: String?, id: String, homeDir: File): NativeMutateResult<Unit> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary(XlsxWriteError.INVALID_XLSX.wire) {
+        when (val r = resolveXlsxComment(absolutePath, path, id, homeDir)) {
+            is XlsxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+            is XlsxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+suspend fun reopenNativeXlsxComment(path: String, projectRoot: String?, id: String, homeDir: File): NativeMutateResult<Unit> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary(XlsxWriteError.INVALID_XLSX.wire) {
+        when (val r = reopenXlsxComment(absolutePath, path, id, homeDir)) {
+            is XlsxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+            is XlsxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
+        }
+    }
+}
+
+/** T19's own `MoveComment` — returns the moved thread's FRESH id (§4.2/§4.3's
+ *  own "never guessing at a stale hint" reasoning), unlike docx's move (a
+ *  `TextQuoteSelector`-anchored comment's own id never changes on move). The
+ *  IPC response shape (`DocCommentsBridge.kt`) stays `{ok:true}` either way,
+ *  per §1.6's own reasoning — no tool or IPC caller currently reads a move's
+ *  returned id back. */
+suspend fun moveNativeXlsxComment(
+    path: String,
+    projectRoot: String?,
+    id: String,
+    newSelector: CommentSelector,
+    homeDir: File,
+): NativeMutateResult<String> {
+    val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
+    if (resolved is NativeMutateResult.Err) return resolved
+    val absolutePath = (resolved as NativeMutateResult.Ok).value
+    return nativeMutateExceptionBoundary(XlsxWriteError.INVALID_XLSX.wire) {
+        when (val r = moveXlsxComment(absolutePath, path, id, newSelector, homeDir)) {
+            is XlsxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
+            is XlsxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
         }
     }
 }

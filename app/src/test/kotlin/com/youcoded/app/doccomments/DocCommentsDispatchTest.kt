@@ -47,12 +47,13 @@ class DocCommentsDispatchTest {
     }
 
     @Test
-    // T17: docx write is now real (this task) — refuseNativeMutation no
-    // longer refuses a .docx target, only the still-unbuilt .xlsx write
-    // (T19) and never a plain-text one.
-    fun `refuseNativeMutation refuses only xlsx (docx writes for real as of T17), never a plain-text one`() {
+    // T19: xlsx write is now real too (docx already was, T17) —
+    // refuseNativeMutation no longer refuses ANY native format, mirroring
+    // desktop's own `refuseNativeMutation` (permanently null there since both
+    // its formats shipped).
+    fun `refuseNativeMutation refuses nothing now that both native formats write for real`() {
         assertTrue(!refuseNativeMutation("docs/plan.docx"))
-        assertTrue(refuseNativeMutation("reports/q3.xlsx"))
+        assertTrue(!refuseNativeMutation("reports/q3.xlsx"))
         assertTrue(!refuseNativeMutation("docs/plan.md"))
     }
 
@@ -71,9 +72,26 @@ class DocCommentsDispatchTest {
         assertTrue((result as NativeListResult.Ok).comments.isNotEmpty())
     }
 
+    // T18 (redesigned 2026-09-27, threaded-only): `q3-sales-by-rep.xlsx` is a
+    // LEGACY-NOTES-only fixture — the retired reader this file used to hold
+    // would have found comments in it, but §4.1's own decision is that Notes
+    // are never shown any more, so the real threaded-comments reader now
+    // returns ZERO comments for it (a dedicated assertion of that, not just
+    // silently switching fixtures, since it's exactly the regression a
+    // careless "keep the old fixture" port could reintroduce).
     @Test
-    fun `listNativeComments dispatches an xlsx target to T18's real Kotlin reader`() {
+    fun `listNativeComments returns zero comments for a legacy-Notes-only xlsx (never the retired reader's output)`() {
         val xlsx = fixtureFile("q3-sales-by-rep.xlsx")
+        val home = Files.createTempDirectory("ycd-dispatch-home-").toFile().apply { deleteOnExit() }
+        WorkingDirStore(home).add(WorkingDir(label = "legacy-notes fixture", path = xlsx.parentFile!!.canonicalPath))
+        val result = listNativeComments(NativeFormat.XLSX, xlsx.absolutePath, null, home)
+        assertTrue(result is NativeListResult.Ok, "expected Ok, got $result")
+        assertEquals(emptyList<PersistedComment>(), (result as NativeListResult.Ok).comments)
+    }
+
+    @Test
+    fun `listNativeComments dispatches a real threaded-comments xlsx target to T18's real Kotlin reader`() {
+        val xlsx = fixtureFile("docling-xlsx-comments.xlsx")
         val home = Files.createTempDirectory("ycd-dispatch-home-").toFile().apply { deleteOnExit() }
         WorkingDirStore(home).add(WorkingDir(label = "T18 fixture", path = xlsx.parentFile!!.canonicalPath))
         val result = listNativeComments(NativeFormat.XLSX, xlsx.absolutePath, null, home)

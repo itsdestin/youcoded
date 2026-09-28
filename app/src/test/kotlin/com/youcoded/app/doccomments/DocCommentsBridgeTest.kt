@@ -141,18 +141,27 @@ class DocCommentsBridgeTest {
         assertTrue(!File(root, ".youcoded/comments/docs/plan.docx.json").exists())
     }
 
-    // .xlsx write is still T19's not-yet-built task — this is the one
-    // remaining case that pins the OLD, still-true `not-yet-supported` shape.
+    // T19: xlsx add is now real too, dispatched to XlsxComments.kt's write
+    // pipeline instead of refusing — mirrors the docx test immediately above,
+    // field-for-field. A `.xlsx` add uses a CellSelector, never a
+    // TextQuoteSelector.
     @Test
-    fun `add against an xlsx target still refuses not-yet-supported (T19 unbuilt)`() = runTest {
+    fun `add against an xlsx target dispatches to the real T19 write pipeline, never the sidecar store`() = runTest {
         val root = tempRoot()
+        val cellSelectorJson = JSONObject().put("kind", "cell").put("selector", JSONObject().put("type", "CellSelector").put("cell", "A1"))
         val payload = JSONObject()
             .put("path", "reports/q3.xlsx")
             .put("projectRoot", root.path)
             .put("text", "x")
-            .put("selector", TEXT_SELECTOR_JSON)
+            .put("selector", cellSelectorJson)
         val response = handleDocCommentsMessage("docComments:add", payload, root, listOf(root.path))!!
-        assertEquals(JSONObject().put("ok", false).put("error", "not-yet-supported").toString(), response.toString())
+        assertEquals(false, response.getBoolean("ok"))
+        assertEquals("read-failed", response.getString("error"))
+
+        // Confirms this never silently fell through to the sidecar store: a
+        // sidecar-backed add would have created `.youcoded/comments/reports/
+        // q3.xlsx.json` — Word/Excel comments never get one (§1.1).
+        assertTrue(!File(root, ".youcoded/comments/reports/q3.xlsx.json").exists())
     }
 
     @Test

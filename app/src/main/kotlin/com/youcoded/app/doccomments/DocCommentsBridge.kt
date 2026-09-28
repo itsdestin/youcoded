@@ -39,7 +39,9 @@ suspend fun handleDocCommentsMessage(
 
     fun missingField(field: String) = JSONObject().put("ok", false).put("error", "missing-field").put("field", field)
     fun unknownRoot() = JSONObject().put("ok", false).put("error", "unknown-project-root")
-    fun notYetSupported() = JSONObject().put("ok", false).put("error", "not-yet-supported")
+    // T19 landed `.xlsx` writes for real — every docComments:* mutation now
+    // dispatches to a real reader/writer for both native formats, so this
+    // file no longer needs a "not yet supported" answer for either one.
     // A live session's own cwd counts as a known root too (§1.4's synthetic-
     // project fallback) — mirrors remote-server.ts's own sessionRoots(), so a
     // file opened from an unregistered session's drawer doesn't start
@@ -83,7 +85,11 @@ suspend fun handleDocCommentsMessage(
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("id", r.value)
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
                 }
-                NativeFormat.XLSX -> notYetSupported()
+                // T19: `.xlsx` writes for real now too.
+                NativeFormat.XLSX -> when (val r = addNativeXlsxComment(filePath, projectRoot, selector, text, author, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("id", r.value)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
                 null -> {
                     // F4 (T5 review): the renderer mints and sends this now.
                     val callerId = payload.optString("id", "").ifEmpty { null }
@@ -117,7 +123,10 @@ suspend fun handleDocCommentsMessage(
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
                 }
-                NativeFormat.XLSX -> notYetSupported()
+                NativeFormat.XLSX -> when (val r = replyToNativeXlsxComment(filePath, projectRoot, commentId, text, author, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
                 null -> when (val r = replyToComment(filePath, projectRoot, commentId, text, author, homeDir)) {
                     is StoreResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
                     is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
@@ -138,7 +147,10 @@ suspend fun handleDocCommentsMessage(
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true)
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
                 }
-                NativeFormat.XLSX -> notYetSupported()
+                NativeFormat.XLSX -> when (val r = resolveNativeXlsxComment(filePath, projectRoot, commentId, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
                 null -> when (val r = resolveComment(filePath, projectRoot, commentId, by, homeDir)) {
                     is StoreResult.Ok -> JSONObject().put("ok", true)
                     is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
@@ -159,7 +171,10 @@ suspend fun handleDocCommentsMessage(
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true)
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
                 }
-                NativeFormat.XLSX -> notYetSupported()
+                NativeFormat.XLSX -> when (val r = reopenNativeXlsxComment(filePath, projectRoot, commentId, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
                 null -> when (val r = reopenComment(filePath, projectRoot, commentId, by, homeDir)) {
                     is StoreResult.Ok -> JSONObject().put("ok", true)
                     is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
@@ -180,7 +195,14 @@ suspend fun handleDocCommentsMessage(
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true)
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
                 }
-                NativeFormat.XLSX -> notYetSupported()
+                // T19: a move's fresh id (§4.2/§4.3) is not read by any IPC
+                // caller today — §1.6's own reasoning already applies this
+                // identically to docx's move — so the response stays
+                // `{ok:true}`, matching every other mutation's shape here.
+                NativeFormat.XLSX -> when (val r = moveNativeXlsxComment(filePath, projectRoot, commentId, newSelector, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
                 null -> when (val r = moveComment(filePath, projectRoot, commentId, newSelector, homeDir)) {
                     is StoreResult.Ok -> JSONObject().put("ok", true)
                     is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
