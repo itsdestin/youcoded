@@ -3,7 +3,7 @@ import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os'
 import { EventEmitter } from 'node:events';
 import { NativeHome } from '../src/main/native-home';
 import { SessionStore } from '../src/main/harness/session-store';
-import { NativeSessionHost, SUBAGENT_DISPLAY_TYPES, mergeChildEvents } from '../src/main/harness/native-session-host';
+import { NativeSessionHost, SUBAGENT_DISPLAY_TYPES, TRANSCRIPT_UNREADABLE_MESSAGE, mergeChildEvents } from '../src/main/harness/native-session-host';
 import { PermissionStore } from '../src/main/harness/permission-store';
 import { PermissionModeStore } from '../src/main/harness/permission-mode-store';
 import { nativeStoreSlug } from '../src/main/slug-encoding';
@@ -489,6 +489,32 @@ describe('NativeSessionHost', () => {
     // Two full turns now on disk: 2 × (user-message, assistant-text, turn-complete).
     expect(host2.getHistory('s-1')!.length).toBe(6);
     await host2.destroyAll();
+  });
+
+  // 2026-09-27: a transcript that EXISTS but cannot be read (a Windows lock) used
+  // to read as no events, so the session resumed with no model memory, silently,
+  // and its next turn republished that as the checkpoint.
+  it('resume refuses, with a plain retryable message, when it cannot read the history', async () => {
+    await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    host.send('s-1', 'hello');
+    await waitForTurnComplete(host, 1);
+    await host.drain('s-1');
+    await host.destroyAll();
+
+    const store2 = new SessionStore(new NativeHome(root));
+    vi.spyOn(store2, 'readEventsAsync').mockRejectedValue(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    const host2 = new NativeSessionHost(store2, factory, NO_CONTEXT, async () => null, async () => null);
+    await expect(host2.resume('s-1', root)).rejects.toThrow(TRANSCRIPT_UNREADABLE_MESSAGE);
+    expect(host2.isNative('s-1')).toBe(false);   // nothing half-started
+    await host2.destroyAll();
+  });
+
+  it('an unreadable history makes the page read throw (the caller answers unresolved), never an empty page', async () => {
+    await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const spy = vi.spyOn((host as any).store, 'readEventsAsync').mockRejectedValue(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    await expect(host.getHistoryPageAsync('s-1', null)).rejects.toThrow('EBUSY');
+    spy.mockRestore();
+    expect(await host.getHistoryPageAsync('s-1', null)).not.toBeNull();
   });
 
   // Task 6: resume() takes an optional bindingOverride — the RESUME-TIME model

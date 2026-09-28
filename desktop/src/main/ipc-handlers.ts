@@ -965,6 +965,8 @@ export function registerIpcHandlers(
             // a fresh session under the same id so the renderer isn't left with a
             // SessionInfo backed by no live HarnessSession.
             const fallbackBinding = opts.binding;
+            // WHY: an EXISTING file with no readable header was never "not persisted" — create() appended a 2nd header.
+            if (!resumed && nativeTranscriptExists(info.cwd, opts.resumeSessionId)) throw new Error('This conversation could not be resumed — its saved data could not be read.');
             if (!resumed && fallbackBinding) {
               await nativeHost.create({ sessionId: info.id, cwd: info.cwd, binding: fallbackBinding, presetId: opts.preset });
             } else if (!resumed && !opts.binding) {
@@ -3387,7 +3389,10 @@ export function registerIpcHandlers(
     // null for non-native ids, so CC's watcher stays the source for claude
     // sessions — the same discrimination the replay handler uses.
     const idleBeforeRead = nativeHost.isLive(sessionId) && nativeHost.isIdle(sessionId);
-    const nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null);
+    let nativePage: Awaited<ReturnType<typeof nativeHost.getHistoryPageAsync>>;
+    // An existing-but-unreadable native transcript throws: answer `unresolved` (retry), never an empty beginning.
+    try { nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null); }
+    catch { if (inherited) windowRegistry?.markInheritedByTransfer(sessionId, evt.sender.id); return { ...empty, unresolved: true }; }
     if (nativePage !== null) {
       return {
         events: nativePage.events,

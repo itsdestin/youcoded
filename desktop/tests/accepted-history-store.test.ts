@@ -120,6 +120,35 @@ describe('AcceptedHistoryStore', () => {
       .toEqual({ ok: true, messages: proposal().messages, messageOrigins: [['u1'], null], eventUuids: ['u1', 'r1', 'a1'], revision });
   });
 
+  // 2026-09-27: a transcript that exists but could not be read (a Windows lock,
+  // EMFILE) made restore() DELETE the checkpoint as if the transcript were gone.
+  it('a transcript it cannot read right now fails the restore but KEEPS the checkpoint', async () => {
+    const revision = await store.invalidate(sessionId, 'history-mutation');
+    await expect(store.publish({ ...proposal(), revision })).resolves.toEqual({ ok: true });
+    const removal = vi.spyOn(store, 'remove');
+    const realReadFile = fs.promises.readFile;
+    const spy = vi.spyOn(fs.promises, 'readFile').mockImplementation((async (file: any, ...rest: any[]) => {
+      if (String(file) === transcript) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      return (realReadFile as any)(file, ...rest);
+    }) as any);
+    try {
+      expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }))
+        .toEqual({ ok: false, reason: 'transcript-unreadable' });
+    } finally { spy.mockRestore(); }
+    expect(removal).not.toHaveBeenCalled();   // restore() starts a removal synchronously when it retires one
+    expect(fs.existsSync(store.manifestPath(sessionId))).toBe(true);
+    expect((await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).ok).toBe(true);
+  });
+
+  it('a transcript that is really gone still retires the checkpoint', async () => {
+    const revision = await store.invalidate(sessionId, 'history-mutation');
+    await expect(store.publish({ ...proposal(), revision })).resolves.toEqual({ ok: true });
+    fs.rmSync(transcript);
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }))
+      .toEqual({ ok: false, reason: 'missing-transcript' });
+    await vi.waitFor(() => expect(fs.existsSync(store.manifestPath(sessionId))).toBe(false));
+  });
+
   it('returns the recorded transformation so a restored session keeps its summary anchor', async () => {
     const events: Fixture[] = [
       { type: 'compact-summary', sessionId, uuid: 'c1', data: { summary: 'SUMMARY_BODY' } },

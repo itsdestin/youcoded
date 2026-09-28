@@ -355,7 +355,13 @@ export class SessionStore {
 
   /** Line 1 of the session file, validated as a v1 header for this session. */
   readHeader(sessionId: string, cwd: string): NativeSessionHeader | null {
-    const lines = this.home.readSessionLines(nativeStoreSlug(cwd), sessionId);
+    // An UNREADABLE file (readSessionLines throws for anything but ENOENT) is
+    // still null here on purpose: every caller already answers null honestly —
+    // resume refuses with "its saved data could not be read", a specialist
+    // resume says its transcript could not be read, a title falls back to the
+    // id. None of them may treat it as a NEW, empty session.
+    let lines: unknown[];
+    try { lines = this.home.readSessionLines(nativeStoreSlug(cwd), sessionId); } catch { return null; }
     return this.validateHeader(lines[0], sessionId);
   }
 
@@ -363,6 +369,8 @@ export class SessionStore {
    * Lines 2+ of the session file. Dedups by uuid on read — the chat reducer
    * does NOT dedup native events, so a torn write or a future double-append
    * must never produce duplicate reducer entries on replay.
+   * THROWS when the file exists but cannot be read (NativeHome.readSessionLines):
+   * "no events" and "could not read the events" must never look alike.
    */
   readEvents(sessionId: string, cwd: string): TranscriptEvent[] {
     return this.eventsFromLines(this.home.readSessionLines(nativeStoreSlug(cwd), sessionId));
