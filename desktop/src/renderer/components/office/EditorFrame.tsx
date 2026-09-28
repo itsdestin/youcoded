@@ -21,6 +21,16 @@ function officeBridge(): OfficeBridge | undefined {
   return (window as unknown as { claude?: { office?: OfficeBridge } }).claude?.office;
 }
 
+// Slim mode: the frame is drawn a little LARGER than its pane and the pane crops it, so the
+// editor's own chunky scroll bars (14px, right and bottom) and the gap it keeps above the first
+// page fall just outside what shows (office-review-2#A-inline, Destin: "the scroll bars look
+// janky, as does the gap between the top of the doc and the edit bar"). The editor offers no
+// setting for either; hiding the bars in its own page leaves their strips empty instead.
+// Wheel, trackpad and touch still scroll. Numbers are the editor's own sizes at 100% UI scale.
+// An iframe does not stretch between inset edges (it keeps its 300x150 default), so the
+// overscan is an explicit size: 14px wider, 18px + 14px taller, lifted 18px.
+const SLIM_OVERSCAN: React.CSSProperties = { top: '-1.125rem', left: 0, width: 'calc(100% + 0.875rem)', height: 'calc(100% + 2rem)' };
+
 export function stripExt(name: string): string {
   return name.replace(/\.(docx|xlsx|pptx|odt|ods|odp|doc|xls|ppt|csv)$/i, '');
 }
@@ -81,7 +91,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   }, [file.path, file.name, origin]);
 
   return (
-    <div className="absolute inset-0" hidden={hidden}>
+    <div className="absolute inset-0 overflow-hidden" hidden={hidden}>
       {phase === 'open' && !hidden && screen && <ScreenMark name={screen} />}
       <iframe
         ref={ref}
@@ -90,7 +100,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         // The editor needs scripts, workers and its own storage — on ITS origin,
         // never the app's (no top navigation, no access to window.claude).
         sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals"
-        className={`absolute inset-0 w-full h-full border-0 ${phase === 'open' ? '' : 'invisible'}`}
+        className={`absolute border-0 ${slim ? '' : 'inset-0 w-full h-full'} ${phase === 'open' ? '' : 'invisible'}`}
+        style={slim ? SLIM_OVERSCAN : undefined}
       />
       {phase === 'starting' && <div className="absolute inset-0"><LoadingState what={stripExt(file.name)} verb="Opening" /></div>}
       {phase === 'failed' && (
