@@ -9,13 +9,16 @@
 // press is forwarded to the editor, which does exactly what its own toolbar
 // button would. Anything beyond the basics is one press away in Office — the
 // briefcase in the panel header (office-review#B-inline), not a button in this bar.
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, Tooltip } from '../ui';
 import type { ArtifactViewProps } from '../artifact-views/types';
 import { officeFileFor } from './office-files';
 import { EditorFrame } from './EditorFrame';
 import type { EditorFrameHandle, OfficeCommand, OfficeCommandState } from './EditorFrame';
 import { CommandGlyph } from './office-icons';
+import { holdInline, officeDocFor, openDoc } from './office-store';
+import { useArtifactDispatch } from '../../state/ArtifactContext';
+import { OFFICE_PAGE_ID } from '../../../shared/pages-types';
 
 const GROUPS: { cmd: OfficeCommand; label: string }[][] = [
   [{ cmd: 'undo', label: 'Undo' }, { cmd: 'redo', label: 'Redo' }],
@@ -24,10 +27,28 @@ const GROUPS: { cmd: OfficeCommand; label: string }[][] = [
   [{ cmd: 'align-left', label: 'Align left' }, { cmd: 'align-center', label: 'Center' }, { cmd: 'align-right', label: 'Align right' }],
 ];
 
-export function OfficeInlineEditor({ absolutePath, artifactId }: ArtifactViewProps) {
+export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: ArtifactViewProps) {
   const frame = useRef<EditorFrameHandle>(null);
   const [state, setState] = useState<OfficeCommandState>({});
   const file = officeFileFor(absolutePath);
+  const dispatch = useArtifactDispatch();
+  // One editor per file (design §5): Edit on a file that already has an Office tab brings that
+  // tab forward instead of starting a second editor on the same file. Decided once, on mount.
+  const [inOffice] = useState(() => officeDocFor(file.path) !== null);
+  const cancelRef = useRef(onCancelEdit);
+  cancelRef.current = onCancelEdit;
+  useEffect(() => {
+    if (inOffice) {
+      openDoc(file);
+      dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID });
+      cancelRef.current?.();
+      return;
+    }
+    // While this in-place editor is up, opening the file in Office from anywhere ends it first.
+    return holdInline(file.path, () => cancelRef.current?.());
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- file is derived from absolutePath
+  }, [absolutePath, inOffice]);
+  if (inOffice) return null;
 
   // Lists only exist in documents and slides; slides align through a menu, so
   // those three stay out of a presentation's bar rather than doing nothing.

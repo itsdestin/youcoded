@@ -1,8 +1,10 @@
 // The page list, shared by the header (pinned buttons), the library and the
 // host. One store, one bridge subscription, however many consumers — the
 // header renders on every keystroke and must not each hold its own copy.
-import { useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import type { PageSummary, PagesBridge } from '../../../shared/pages-types';
+import { OFFICE_PAGE_ID } from '../../../shared/pages-types';
+import { useOfficeAvailable } from '../office/office-availability';
 
 type Snapshot = { pages: PageSummary[]; loaded: boolean; failed: boolean };
 
@@ -38,7 +40,16 @@ function subscribe(l: () => void) {
 }
 
 export function usePages(): Snapshot {
-  return useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
+  const snap = useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
+  // WHY (Task 6): the host lists the built-in Office page wherever the add-on is installed —
+  // including to a remote browser, which cannot run it. Every consumer (the rail, the library,
+  // the pinned buttons, PageHost's "is the open page still listed" check) reads through here,
+  // so Office is hidden in one place until this app has confirmed it can run Office.
+  const office = useOfficeAvailable();
+  return useMemo(
+    () => (office || !snap.pages.some((p) => p.id === OFFICE_PAGE_ID) ? snap : { ...snap, pages: snap.pages.filter((p) => p.id !== OFFICE_PAGE_ID) }),
+    [snap, office],
+  );
 }
 
 /** Publish a list the bridge just answered with (approve, remove, refresh):

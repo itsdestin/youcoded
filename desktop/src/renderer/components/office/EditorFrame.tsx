@@ -3,36 +3,46 @@
 // mode (slim: the editor's own chrome hidden, YouCoded's one-row bar instead —
 // office-questions#Q-slim "YouCoded's own bar").
 //
-// Only small messages cross the frame, and only from this frame's window: the
-// theme, the mode, "open this file", a toolbar command, and the editor's
-// replies (ready, drawn, failed, which commands are on).
+// Only small messages cross the frame, and only from this frame's window on this document's
+// own origin (design §3a, §5; review 3 R3-1):
+//   editor → host  {yc:'ready'}                 the editor listens for "open-file" now
+//                  {yc:'rpc', id, cmd, args}    one request for main (the add-on's __TAURI__ relay)
+//                  {type:'yc:office-loaded' | 'yc:office-state' | 'yc:office-esc'}
+//   host → editor  {yc:'rpc-result', id, result | error}, {yc:'event', name, payload}
+//                  {type:'yc:office-theme' | 'yc:office-mode' | 'yc:office-cmd' | 'yc:office-save'}
+// The host only relays: main re-checks every command and that this window opened the document.
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
+import { markChanged, markFailed, markSaved, markSaving, markUnchanged, registerFlush } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
 import { plainMessage } from '../../utils/ipc-error';
 
 export type OfficeCommand = 'undo' | 'redo' | 'bold' | 'italic' | 'underline' | 'markers' | 'numbering' | 'align-left' | 'align-center' | 'align-right';
 export type OfficeCommandState = Partial<Record<OfficeCommand, { on: boolean; enabled: boolean }>>;
-export interface EditorFrameHandle { command(cmd: OfficeCommand): void }
+export interface EditorFrameHandle {
+  command(cmd: OfficeCommand): void;
+  /** Save now (the strip's Retry after a failed save). */
+  save(): void;
+}
+
+/** WHY 3 s (design §4): long enough that a burst of typing is one save, short enough that
+ *  closing the laptop loses almost nothing. Each change restarts it. */
+const AUTOSAVE_DELAY_MS = 3_000;
+/** WHY 5 s (design §4): the longest a closing tab waits for its last save before it lets go.
+ *  Main still drains a save it already has (office-sessions close), so this only bounds how
+ *  long the hidden editor lingers. */
+const CLOSE_SAVE_WAIT_MS = 5_000;
+
+/** The theme as the editor gets it. WHY no fontLinks (build plan Task 6): the editor's CSP
+ *  (font-src 'self' data:) blocks the Google stylesheets they point at; Task 9 serves the
+ *  theme's font from the editor's own origin instead. */
+const editorTheme = () => ({ ...readOfficeTheme(), fontLinks: [] });
 
 function officeBridge(): OfficeBridge | undefined {
   return window.claude?.office;
-}
-
-/** WORKBENCH ONLY, removed in Task 6. The v2 bridge opens a document with `open` and relays
- *  the editor's own requests through `invoke`; Task 6 builds that relay. Until then the
- *  workbench fake carries this old-style shortcut — the editors served on a local origin,
- *  handed a fixture by URL — so its Office screens (office/document, office/spreadsheet,
- *  chat/files/edit/a-sent-plan) still show a document. No real host has it. */
-export interface OfficeWorkbenchPreview {
-  origin: string;
-  sampleUrl(path: string): string;
-}
-function workbenchPreview(b: OfficeBridge | undefined): OfficeWorkbenchPreview | undefined {
-  return (b as { workbenchPreview?: OfficeWorkbenchPreview } | undefined)?.workbenchPreview;
 }
 
 // Slim mode: the frame is drawn a little LARGER than its pane and the pane crops it, so the
@@ -57,32 +67,79 @@ interface EditorFrameProps {
   onCommandState?: (s: OfficeCommandState) => void;
   /** Photo-only mark once the document is drawn. */
   screen?: string;
+  /** The tab was closed: save what is unsaved, then call onClosed (at most 5 s later). */
+  closing?: boolean;
+  onClosed?: () => void;
 }
 
+interface RpcMessage { yc: 'rpc'; id: unknown; cmd: string; args?: unknown }
+const isSaveCmd = (cmd: string) => cmd === 'save_file' || cmd === 'save_changes';
+
 export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(function EditorFrame(
-  { file, hidden = false, slim = false, onCommandState, screen }, handleRef,
+  { file, hidden = false, slim = false, onCommandState, screen, closing = false, onClosed }, handleRef,
 ) {
   const ref = useRef<HTMLIFrameElement>(null);
   // 'unavailable': this host refuses Office outright (remote, phone) — a fact, not a failure.
   const [phase, setPhase] = useState<'starting' | 'open' | 'failed' | 'unavailable'>('starting');
   const [failure, setFailure] = useState('');
-  // WHY the frame asks for its own origin (Task 5): every open document has its own sealed
-  // office://<token> origin now, handed out by office.open, so there is no shared editor
-  // origin for a parent to pass down. null until main has answered.
-  const [origin, setOrigin] = useState<string | null>(null);
+  // Every open document has its own sealed office://<token> origin, handed out by office.open.
+  // null until main has answered.
+  const [opened, setOpened] = useState<{ token: string; origin: string } | null>(null);
+  const origin = opened?.origin ?? null;
   // Bumped by Retry, to open the document again from the start.
   const [attempt, setAttempt] = useState(0);
-  const preview = workbenchPreview(officeBridge());
-  const src = origin === null ? undefined
-    : preview ? `${origin}/editor?embed=1&embedOrigin=${encodeURIComponent(location.origin)}`
-    : `${origin}/index.html`;
   // Escape the editor itself had no use for closes the app's top layer, as a page's does.
   const dismissTop = useDismissTop();
   const dismissRef = useRef(dismissTop);
   dismissRef.current = dismissTop;
   const stateCb = useRef(onCommandState);
   stateCb.current = onCommandState;
-  const post = (msg: unknown) => { if (origin) ref.current?.contentWindow?.postMessage(msg, origin); };
+  const closedCb = useRef(onClosed);
+  closedCb.current = onClosed;
+  const originRef = useRef<string | null>(null);
+  originRef.current = origin;
+  const post = (msg: unknown) => { const o = originRef.current; if (o) ref.current?.contentWindow?.postMessage(msg, o); };
+
+  // ── Autosave (design §4), per document ──
+  // WHY refs, not state: they change on every keystroke's "modified" and must never re-render.
+  // `dirty`: changes the editor has not been asked to save yet. `saving`: a save_file is out.
+  // A change while a save is out waits for its result and then triggers exactly ONE follow-up
+  // save (coalescing, design §3 "one save in flight").
+  // `failed`: the last save failed; only Retry, a new change or a close tries again.
+  const save = useRef({ dirty: false, saving: false, failed: false, timer: 0 as ReturnType<typeof setTimeout> | 0, waiters: [] as Array<() => void> });
+  const requestSave = () => {
+    const s = save.current;
+    if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
+    s.dirty = false;
+    s.failed = false;
+    post({ type: 'yc:office-save' });
+  };
+  const armAutosave = () => {
+    const s = save.current;
+    if (s.timer) clearTimeout(s.timer);
+    s.timer = setTimeout(() => { s.timer = 0; requestSave(); }, AUTOSAVE_DELAY_MS);
+  };
+  const saveSettled = () => {
+    const s = save.current;
+    s.saving = false;
+    const waiters = s.waiters.splice(0);
+    waiters.forEach((w) => w());
+    if (s.dirty && !s.failed) armAutosave();
+  };
+  /** Saves whatever is unsaved; resolves when that save's result is in, or after 5 s. */
+  const flush = (): Promise<void> => {
+    const s = save.current;
+    if (!originRef.current || (!s.dirty && !s.saving && !s.timer)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; clearTimeout(cap); resolve(); } };
+      const cap = setTimeout(finish, CLOSE_SAVE_WAIT_MS);
+      s.waiters.push(finish);
+      if (!s.saving) requestSave();
+    });
+  };
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
 
   // Open the document in main, and close it again when this frame goes away, so its
   // temporary files do not outlive the tab. A late answer (this frame already gone) is closed
@@ -90,8 +147,6 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   // never the document another frame of the same file is showing.
   useEffect(() => {
     const b = officeBridge();
-    const wb = workbenchPreview(b);
-    if (wb) { setOrigin(wb.origin); return; }
     let gone = false;
     let token: string | null = null;
     const failWith = (message: string) => { if (!gone) { setFailure(message); setPhase('failed'); } };
@@ -100,58 +155,126 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (!r.ok) { failWith(r.message); return; }
       if (gone) { void b.close(r.token).catch(() => {}); return; }
       token = r.token;
-      setOrigin(r.origin);
+      setOpened({ token: r.token, origin: r.origin });
     }, (e: unknown) => {
-      // WHY (fix rounds 1-2): on the remote client and the phone the host refuses Office
+      // WHY (Task 5 fix rounds 1-2): on the remote client and the phone the host refuses Office
       // outright. That is known for certain, so say it (plainMessage names the feature and
       // where) rather than the general "couldn't open", which would blame the file — and as a
-      // plain notice with no Retry, since retrying can never help. The shim's one-time toast
-      // stays quiet for office channels (remote-unsupported.ts), so this is said once.
+      // plain notice with no Retry, since retrying can never help.
       if (!/^remote-unsupported:/.test(String((e as Error)?.message ?? ''))) { failWith("Office couldn't open this file."); return; }
       if (!gone) { setFailure(plainMessage(e)); setPhase('unavailable'); }
     });
     return () => {
       gone = true;
+      const s = save.current;
+      if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
       if (token) void b.close(token).catch(() => {});
     };
   }, [file.path, attempt]);
+
+  // Registered so a file panel's Done and the header briefcase can wait for the last save
+  // before this editor goes (office-store flushOffice).
+  useEffect(() => registerFlush(file.path, () => flushRef.current()), [file.path]);
+
+  // The closed tab saves first, then lets go (design §4: "on tab close").
+  useEffect(() => {
+    if (!closing) return;
+    let cancelled = false;
+    void flushRef.current().then(() => { if (!cancelled) closedCb.current?.(); });
+    return () => { cancelled = true; };
+  }, [closing]);
 
   // The shown document takes focus on a tab switch, so keyboard and screen
   // reader follow what is on screen (UX review 1, U4).
   useEffect(() => { if (!hidden && phase === 'open') ref.current?.focus(); }, [hidden, phase]);
 
-  useImperativeHandle(handleRef, () => ({ command: (cmd) => post({ type: 'yc:office-cmd', cmd }) }), [origin]);
+  useImperativeHandle(handleRef, () => ({
+    command: (cmd) => post({ type: 'yc:office-cmd', cmd }),
+    save: () => { if (!save.current.saving) requestSave(); },
+  }), []);
 
   useEffect(() => {
-    const onMessage = (e: MessageEvent) => {
-      if (!origin || e.origin !== origin || e.source !== ref.current?.contentWindow) return;
-      const d = e.data as { type?: string; payload?: { message?: string }; state?: OfficeCommandState } | null;
-      if (d?.type === 'document:ready') {
-        post({ type: OFFICE_THEME_MESSAGE, theme: readOfficeTheme() });
-        post({ type: OFFICE_MODE_MESSAGE, slim });
-        // Workbench only until Task 6 (see OfficeWorkbenchPreview): the real editor is handed
-        // its document through the relay instead.
-        const url = workbenchPreview(officeBridge())?.sampleUrl(file.path);
-        if (url) post({ id: 'open', type: 'document:open-url', payload: { url, fileName: file.name } });
+    if (!opened) return;
+    const b = officeBridge();
+    const relay = (m: RpcMessage) => {
+      if (!b) return;
+      const args = m.args && typeof m.args === 'object' ? m.args as Record<string, unknown> : {};
+      // The editor says when the document changes; the host decides when to save (3 s later).
+      if (m.cmd === 'set_document_modified' && args.modified === true) {
+        save.current.dirty = true;
+        save.current.failed = false;
+        markChanged(file.path);
+        if (!save.current.saving) armAutosave();
       }
+      // WHY: the editor says "modified" and at once "not modified" while it lays a document out
+      // (measured 2026-09-28 on a workbook: true then false in the same millisecond), and
+      // "not modified" again when an undo returns to the saved state. Nothing is unsaved then,
+      // so the pending save is dropped rather than rewriting a file that was only opened.
+      // A save already running, or one that failed, keeps its own state.
+      if (m.cmd === 'set_document_modified' && args.modified === false) {
+        const s = save.current;
+        if (s.dirty && !s.saving && !s.failed) {
+          s.dirty = false;
+          if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
+          markUnchanged(file.path);
+        }
+      }
+      const saving = isSaveCmd(m.cmd);
+      if (saving) {
+        const s = save.current;
+        s.saving = true;
+        // A save is running now; a pending timer would only start a second one behind it.
+        if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
+        markSaving(file.path);
+      }
+      b.invoke(opened.token, m.cmd, m.args ?? {}).then((result) => {
+        post({ yc: 'rpc-result', id: m.id, result });
+        if (saving) {
+          // A change during the save keeps the strip at "Saving…" for the follow-up save.
+          if (save.current.dirty) markChanged(file.path); else markSaved(file.path);
+          saveSettled();
+        }
+      }, (e: unknown) => {
+        const message = plainMessage(e, saving ? "Office couldn't save this file." : "Office couldn't finish that.");
+        post({ yc: 'rpc-result', id: m.id, error: message });
+        if (saving) {
+          // Main's message is already written for a person (office-commands.ts), so the strip
+          // shows it as is, with Retry (docs/error-message-standards.md: specific + Retry).
+          // WHY no automatic retry: a read-only file or a full disk would fail every 3 s and
+          // flicker the strip; the changes stay unsaved (a closing tab still tries once more).
+          markFailed(file.path, message);
+          save.current.dirty = true;
+          save.current.failed = true;
+          saveSettled();
+        }
+      });
+    };
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== opened.origin || e.source !== ref.current?.contentWindow) return;
+      const d = e.data as { yc?: string; type?: string; state?: OfficeCommandState } | null;
+      if (d?.yc === 'ready') {
+        post({ type: OFFICE_THEME_MESSAGE, theme: editorTheme() });
+        post({ type: OFFICE_MODE_MESSAGE, slim });
+        post({ yc: 'event', name: 'open-file', payload: file.path });
+      }
+      if (d?.yc === 'rpc' && typeof (d as RpcMessage).cmd === 'string') relay(d as RpcMessage);
       // The bridge says when the document is really drawn — "opened" only means accepted.
       if (d?.type === 'yc:office-loaded') setPhase('open');
       if (d?.type === 'yc:office-state' && d.state) stateCb.current?.(d.state);
       if (d?.type === 'yc:office-esc') dismissRef.current();
-      if (d?.type === 'document:error') { setFailure(d.payload?.message ?? 'The file could not be opened.'); setPhase('failed'); }
     };
     window.addEventListener('message', onMessage);
-    const stopTheme = watchOfficeTheme((theme) => post({ type: OFFICE_THEME_MESSAGE, theme }));
+    const stopTheme = watchOfficeTheme(() => post({ type: OFFICE_THEME_MESSAGE, theme: editorTheme() }));
     return () => { window.removeEventListener('message', onMessage); stopTheme(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- post reads the ref; slim is fixed per frame
-  }, [file.path, file.name, origin]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- post/save read refs; slim is fixed per frame
+  }, [file.path, opened]);
 
   return (
     <div className="absolute inset-0 overflow-hidden" hidden={hidden}>
       {phase === 'open' && !hidden && screen && <ScreenMark name={screen} />}
       <iframe
         ref={ref}
-        src={src}
+        src={origin === null ? undefined : `${origin}/index.html`}
         title={file.name}
         // The editor needs scripts, workers and its own storage — on ITS origin,
         // never the app's (no top navigation, no access to window.claude).
@@ -162,7 +285,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       {phase === 'starting' && <div className="absolute inset-0"><LoadingState what={stripExt(file.name)} verb="Opening" /></div>}
       {phase === 'failed' && (
         <div className="p-6 max-w-xl mx-auto">
-          <ErrorState message={failure} onRetry={() => { setPhase('starting'); setOrigin(null); setAttempt((n) => n + 1); }} />
+          <ErrorState message={failure} onRetry={() => { setPhase('starting'); setOpened(null); setAttempt((n) => n + 1); }} />
         </div>
       )}
       {phase === 'unavailable' && <div className="p-6 max-w-xl mx-auto"><EmptyState message={failure} /></div>}

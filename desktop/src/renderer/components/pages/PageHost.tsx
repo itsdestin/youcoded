@@ -82,6 +82,8 @@ interface PageHostProps {
   settingsDangerBadge?: boolean;
   /** Starts the creator in a new conversation. Owned by App. */
   onCreatePage: () => void;
+  /** The focused conversation's folder, for Office's "In <project>" list and new files. */
+  projectRoot?: string | null;
 }
 
 type Load =
@@ -90,7 +92,7 @@ type Load =
   | { state: 'ready'; page: PageDocument; doc: string }
   | { state: 'failed'; failure: PageLoadFailure };
 
-export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage }: PageHostProps) {
+export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null }: PageHostProps) {
   // Narrow selectors (perf, 2026-09-23): only the page flags this host shows.
   const dispatch = useArtifactDispatch();
   const open = useArtifactSelector((s) => s.pageViewOpen);
@@ -385,7 +387,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
           {/* Photo-only marks: the view once its list has loaded, or the page once it is ready. */}
           {load.state === 'idle' && loaded && !failed && !isOffice && <ScreenMark name="pages" />}
-          {isOffice && <OfficeView />}
+          {isOffice && <OfficeView projectRoot={projectRoot} />}
           {load.state === 'ready' && pageId && <ScreenMark name={`pages/${pageFocus ? 'focus' : 'page'}/${pageId}`} />}
           {/* WHY: first-run belongs where the Pages button lands, not a second click into Manage pages. */}
           {load.state === 'idle' && !loaded && <LoadingState what="pages" />}

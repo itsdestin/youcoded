@@ -4331,7 +4331,7 @@ function AppInner() {
         settingsOpen={settingsOpen}
         onToggleSettings={() => setSettingsOpen(prev => !prev)}
         settingsBadge={settingsBadge}
-        settingsDangerBadge={settingsDangerBadge}
+        settingsDangerBadge={settingsDangerBadge} projectRoot={currentSession?.cwd ?? null}
         onCreatePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
       />
       <PageCreateDialog

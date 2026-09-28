@@ -476,10 +476,9 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
-import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeSampleUrl } from './fixtures/office';
-import { OFFICE_PAGE_ID } from '../../../shared/pages-types';
+import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
+import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
-import type { OfficeWorkbenchPreview } from '../../components/office/EditorFrame';
 import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
@@ -3538,19 +3537,17 @@ function createPagesMock(empty: boolean): PagesBridge {
   }
 }
 
-/** The built-in Office page as the pages list carries it (design stage). The
- *  real host will list it from main; until then only this fake does. */
-const OFFICE_PAGE: PageDocument = {
-  id: OFFICE_PAGE_ID, name: 'Office', description: 'Documents, spreadsheets and presentations.',
-  icon: 'office', home: { kind: 'builtin' }, pinned: false, updatedAt: '2026-09-28T00:00:00Z', htmlStamp: 0,
-  html: '', data: null,
-};
+/** The built-in Office page as the pages list carries it — the same row main lists. */
+const OFFICE_PAGE: PageDocument = { ...OFFICE_PAGE_SUMMARY, html: '', data: null };
 
-/** `window.claude.office` for the workbench (v2 shape, build plan Task 5). Files are the
- *  three neutral fixtures, served by the editor add-on's origin; see fixtures/office.ts for
- *  how to run it. open/invoke are stand-ins until Task 6 builds the editor relay; meanwhile
- *  `workbenchPreview` keeps the old URL shortcut so the Office screens still show a document. */
-function createOfficeMock(empty: boolean): OfficeBridge & { workbenchPreview: OfficeWorkbenchPreview } {
+/** `window.claude.office` for the workbench — a fake HOST around the real editor (Task 6).
+ *  The editor add-on itself is served by scripts/office-workbench-server.mjs on
+ *  127.0.0.1:4717 (fixtures/office.ts); `open` hands out that origin, and `invoke` answers the
+ *  editor's requests the way main would: `open_file` returns the fixture translated by the
+ *  real x2t (the server runs main's own convert()), a save answers 'ok' and writes nothing.
+ *  WHY a fake host that still runs x2t: the Office screens then show the real editor with real
+ *  content, as Destin reviewed them. */
+function createOfficeMock(empty: boolean): OfficeBridge {
   const HOUR = 3_600_000;
   const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
   const recent = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
@@ -3574,21 +3571,30 @@ function createOfficeMock(empty: boolean): OfficeBridge & { workbenchPreview: Of
       return { ok: true, file: { ...base, path: `/home/you/Documents/${name}`, name, folder: 'Documents', at: new Date().toISOString() } };
     },
     pick: async () => OFFICE_FILES[0],
-    // Stand-ins until Task 6: the workbench has no main process to open a document in or to
-    // answer the editor's requests. EditorFrame uses workbenchPreview below instead.
-    open: async () => ({ ok: false, message: "The workbench can't open documents in Office yet." }),
-    invoke: async () => { throw new Error('refused'); },
-    close: async () => {},
-    // WORKBENCH ONLY, removed in Task 6 (see OfficeWorkbenchPreview in EditorFrame.tsx).
-    // A new file opens the fixture of its kind (the add-on has no blank templates yet).
-    workbenchPreview: {
-      origin: OFFICE_EDITOR_ORIGIN,
-      sampleUrl: (path) => {
-        const ext = path.slice(path.lastIndexOf('.'));
-        const f = OFFICE_FILES.find((x) => x.path === path) ?? OFFICE_FILES.find((x) => x.name.endsWith(ext)) ?? OFFICE_FILES[0];
-        return officeSampleUrl(OFFICE_EDITOR_ORIGIN, f.name);
-      },
+    // One token per file (not one 'wb' for all): two documents can be open at once, and the
+    // token is how invoke knows which fixture the editor is asking for. The origin is the one
+    // local server, so the frames are told apart by their window, as EditorFrame already does.
+    open: async (path) => ({ ok: true, token: `wb:${path}`, origin: OFFICE_EDITOR_ORIGIN }),
+    invoke: async (token, cmd) => {
+      const path = token.slice('wb:'.length);
+      const base = path.slice(path.lastIndexOf('/') + 1);
+      switch (cmd) {
+        case 'open_file': {
+          const r = await fetch(`${OFFICE_EDITOR_ORIGIN}/fixtures/${encodeURIComponent(officeFixtureName(path))}`);
+          if (!r.ok) throw new Error("Office couldn't open this file.");
+          return r.text();
+        }
+        case 'write_editor_bin': case 'save_file': case 'save_changes': return 'ok';
+        // The rest answer as main's own defaults do (main/office/office-commands.ts).
+        case 'get_current_path': return base;
+        case 'recent_files_state': return { enabled: false, files: [] };
+        case 'get_system_fonts': return '';
+        case 'list_user_dictionaries': return { folders: [], refused: [] };
+        case 'recovery_candidates': return [];
+        default: return null;
+      }
     },
+    close: async () => {},
     versions: async () => {
       if (empty) return [];
       const v = (id: string, h: number, reason: OfficeVersion['reason']): OfficeVersion => ({ id, at: ago(h * HOUR), reason, bytes: 37_000 });

@@ -27,6 +27,13 @@ export type PageIcon =
 /** The built-in Office page's id. Stable, so a pin syncs like any page's. */
 export const OFFICE_PAGE_ID = 'builtin:office';
 
+/** The built-in Office page as the pages list carries it (main lists it where the add-on is
+ *  installed; the workbench fake always does). Unpinned until the person pins it. */
+export const OFFICE_PAGE_SUMMARY: PageSummary = {
+  id: OFFICE_PAGE_ID, name: 'Office', description: 'Documents, spreadsheets and presentations.',
+  icon: 'office', home: { kind: 'builtin' }, pinned: false, updatedAt: '2026-09-28T00:00:00Z', htmlStamp: 0,
+};
+
 // ── Phase 2: connections (decided on two questions decks, 2026-09-19) ──────
 // Everything a page reaches outside its frame is listed here and approved
 // once; anything unlisted is blocked. The shapes are the UI's contract — the

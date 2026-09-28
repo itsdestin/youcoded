@@ -5363,7 +5363,7 @@ export function registerIpcHandlers(
     noteOwnWrite,
     // Phase 2: approvals and key POINTERS beside the model-provider keys in
     // userData, never in a sync space — a key is machine-bound ciphertext.
-    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore),
+    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore), officeListed: async () => (await import('./office/office-root')).officeAvailable(),
     // A FRESH reader per call, not a held instance: the fs-backed store caches
     // after its first load, so a long-lived one here would keep answering with
     // the token from before the person signed in or out.

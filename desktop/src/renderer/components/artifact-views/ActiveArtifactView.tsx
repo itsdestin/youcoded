@@ -26,6 +26,8 @@ import { openEditorSearch, revealLineIn } from './cm/editor-registry';
 import { draftKey, stashDraft, takeDraft, clearDraft } from './draft-store';
 import { ScreenMark } from '../../shoot-mode';
 import { isOfficeEditable } from '../office/office-files';
+import { useOfficeAvailable } from '../office/office-availability';
+import { flushOffice } from '../office/office-store';
 // Office files edit in the Euro-Office editor (design stage, 2026-09-28) — lazy,
 // so the editor code loads only when someone presses Edit on one.
 const OfficeInlineEditor = lazy(() => import('../office/OfficeInlineEditor').then((m) => ({ default: m.OfficeInlineEditor })));
@@ -179,9 +181,11 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // draft, and the save call cannot disagree — see edit-permission.ts.
   // Office files are not text: they edit in the Office editor, which saves them
   // itself (office-questions#Q-open-mode, #Q-save), so none of the text-draft
-  // machinery below applies. Only where the app can run the editors — the
-  // bridge is absent on Android and over remote until phones get Office (#Q-phones).
-  const office = isOfficeEditable(artifact.path) && !!(window.claude as { office?: unknown } | undefined)?.office;
+  // machinery below applies. Only where the app can run the editors: a desktop whose
+  // Office add-on is installed (Task 6 — the namespace itself exists on remote and the phone
+  // too, where Office stays off until phones get it, #Q-phones).
+  const officeAvailable = useOfficeAvailable();
+  const office = isOfficeEditable(artifact.path) && officeAvailable;
   const isEditable = office ? tier !== 'denied' : canEditArtifact(contentInfo, content, tier);
 
   // ── Task 6.4: controlled edit state (lifted from MarkdownView) ──
@@ -353,8 +357,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // overwrite. Shaped as an options object so accidental event-object args
   // (onClick={handleSave}) can never read as force=true.
   const handleSave = useCallback(async (opts?: { force?: boolean }): Promise<boolean> => {
-    // The Office editor has already saved every change; leaving is all "Done" does.
-    if (office) { setEditing(false); return true; }
+    // The Office editor saves as you type (3 s after the last change); Done waits for that
+    // last save, at most 5 s, so leaving never drops the final few seconds of typing.
+    if (office) { await flushOffice(absolutePath); setEditing(false); return true; }
     // The §2.2 empty-file guarantee: while content is null (the fetch
     // transient, an orphan, a binary file) there is NOTHING valid to save — a
     // write here would truncate the file to the placeholder draft. This is the
@@ -432,7 +437,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     }
     setSaveError(saveErrorMessage(res));
     return false;
-  }, [office, projectRoot, projectId, projectName, artifact.id, draft, sessionId, onContentChange, onDiskRead, tier, content, contentInfo]);
+  }, [office, absolutePath, projectRoot, projectId, projectName, artifact.id, draft, sessionId, onContentChange, onDiskRead, tier, content, contentInfo]);
 
   const handleCancel = useCallback(() => {
     clearDraft(draftKey(projectRoot, artifact.id));

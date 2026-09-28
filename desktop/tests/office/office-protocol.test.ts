@@ -198,7 +198,7 @@ describe('main.ts office scheme privileges', () => {
       'utf8',
     );
     expect(mainSource).toContain(
-      "{ scheme: 'office', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },",
+      "{ scheme: 'office', privileges: { standard: true, secure: true, supportFetchAPI: true } },",
     );
   });
 });

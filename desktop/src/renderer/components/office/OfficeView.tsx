@@ -14,41 +14,53 @@
 // back to (Q-save); the editor wears the theme — colours, font, glass and
 // roundness (Q-theme). The editors are Euro-Office (office-base#Q-base-final),
 // on their own sealed origin; only files and small messages cross.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState } from '../ui';
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
 import { HistoryGlyph, HomeGlyph, KIND_LABEL, OfficeKindGlyph } from './office-icons';
-import { HOME_TAB, closeDoc, openDoc, selectTab, showVersions, useOfficeTabs } from './office-store';
+import { HOME_TAB, closeDoc, finishClose, openDoc, selectTab, showVersions, useOfficeTabs, useSaveState } from './office-store';
 import { EditorFrame, stripExt } from './EditorFrame';
+import type { EditorFrameHandle } from './EditorFrame';
 import { ScreenMark } from '../../shoot-mode';
 
 function officeBridge(): OfficeBridge | undefined {
   return window.claude?.office;
 }
 
-type StatusLoad = { state: 'loading' } | { state: 'ready'; status: OfficeStatus } | { state: 'failed' };
+// 'unavailable': this build or this host cannot run Office at all — a fact, not a failure.
+type StatusLoad = { state: 'loading' } | { state: 'ready'; status: OfficeStatus } | { state: 'failed' } | { state: 'unavailable' };
 
-export function OfficeView() {
+/** projectRoot: the focused conversation's folder (PageHost passes it), for "In <project>". */
+export function OfficeView({ projectRoot = null }: { projectRoot?: string | null }) {
   const { docs, active, versionsFor } = useOfficeTabs();
   const [load, setLoad] = useState<StatusLoad>({ state: 'loading' });
   const reloadStatus = () => {
     const b = officeBridge();
-    if (!b) { setLoad({ state: 'failed' }); return; }
-    // null project until Task 8 threads the focused conversation's folder through.
-    b.status(null).then((status) => setLoad({ state: 'ready', status }), () => setLoad({ state: 'failed' }));
+    if (!b) { setLoad({ state: 'unavailable' }); return; }
+    b.status(projectRoot).then(
+      (status) => setLoad(status.available ? { state: 'ready', status } : { state: 'unavailable' }),
+      // WHY (Task 5 carry-over): the remote client and the phone refuse office:* outright, and
+      // their shim stays quiet for it, so this screen must say so itself — as the same fact,
+      // with nothing to retry. Any other rejection is a real failure and keeps Retry.
+      (e: unknown) => setLoad(/^remote-unsupported:/.test(String((e as Error)?.message ?? '')) ? { state: 'unavailable' } : { state: 'failed' }),
+    );
   };
-  useEffect(reloadStatus, []);
+  useEffect(reloadStatus, [projectRoot]);
+  // Each mounted editor's handle, so the strip's Retry can ask it to save again.
+  const frames = useRef(new Map<string, EditorFrameHandle>());
 
 
-  const front = docs.find((d) => d.file.path === active) ?? null;
+  const front = docs.find((d) => d.file.path === active && !d.closing) ?? null;
+  const saveState = useSaveState(front?.file.path ?? null);
   const tabs: DocumentTab[] = [
     { id: HOME_TAB, label: 'Home', icon: <HomeGlyph />, closable: false },
-    ...docs.map((d) => ({ id: d.file.path, label: stripExt(d.file.name), icon: <OfficeKindGlyph kind={d.file.kind} />, asleep: d.asleep })),
+    // A closing tab is gone from the strip at once; its editor finishes saving out of sight.
+    ...docs.filter((d) => !d.closing).map((d) => ({ id: d.file.path, label: stripExt(d.file.name), icon: <OfficeKindGlyph kind={d.file.kind} />, asleep: d.asleep })),
   ];
 
   const create = async (kind: OfficeKind) => {
-    const r = await officeBridge()?.create(kind, null);
+    const r = await officeBridge()?.create(kind, projectRoot);
     if (r?.ok) openDoc(r.file);
   };
   const pick = async () => {
@@ -58,12 +70,17 @@ export function OfficeView() {
 
   return (
     <div className="absolute inset-0 flex flex-col">
-      <div className="h-11 shrink-0 flex items-center gap-2 px-2 border-b border-edge-dim">
+      {/* min-h, not h: a failed save's message and Retry (below) are taller than the strip's
+          44px; every other state keeps exactly that height. */}
+      <div className="min-h-11 shrink-0 flex items-center gap-2 px-2 border-b border-edge-dim">
         <DocumentTabs label="Open documents" tabs={tabs} activeId={active} onSelect={selectTab} onClose={closeDoc} className="flex-1" />
         {front && (
           <div className="shrink-0 flex items-center gap-2 pl-2">
-            {/* Saving is automatic (Q-save), so this only confirms it happened. */}
-            <span className="text-2xs text-fg-muted">Saved</span>
+            {/* Saving is automatic (Q-save), so this only confirms it happened — or, when a save
+                failed, says main's own reason with Retry (design §4; error-message-standards). */}
+            {saveState.phase === 'failed'
+              ? <ErrorState variant="inline" className="max-w-sm" message={saveState.message ?? "Office couldn't save this file."} onRetry={() => frames.current.get(front.file.path)?.save()} />
+              : <span className="text-2xs text-fg-muted">{saveState.phase === 'saved' ? 'Saved' : 'Saving…'}</span>}
             <Button variant="ghost" size="sm" onClick={() => showVersions(front.file)}>
               <HistoryGlyph />
               Versions
@@ -80,7 +97,15 @@ export function OfficeView() {
             others are hidden (performance rule 2 — a hidden editor sits idle).
             An asleep one is not mounted at all: that is what saves the memory. */}
         {load.state === 'ready' && docs.filter((d) => !d.asleep).map((d) => (
-          <EditorFrame key={d.file.path} file={d.file} hidden={d.file.path !== active} screen={`office/${d.file.kind}`} />
+          <EditorFrame
+            key={d.file.path}
+            ref={(h) => { if (h) frames.current.set(d.file.path, h); else frames.current.delete(d.file.path); }}
+            file={d.file}
+            hidden={d.closing || d.file.path !== active}
+            screen={`office/${d.file.kind}`}
+            closing={d.closing}
+            onClosed={() => finishClose(d.file.path)}
+          />
         ))}
       </div>
 
@@ -94,6 +119,8 @@ function OfficeHome({ load, onRetry, onCreate, onPick, onOpen }: {
 }) {
   if (load.state === 'loading') return <LoadingState what="Office" />;
   if (load.state === 'failed') return <div className="p-6 max-w-xl mx-auto"><ErrorState message="Office could not be started." onRetry={onRetry} /></div>;
+  // Specific and certain, and no Retry: nothing the person can do here changes it.
+  if (load.state === 'unavailable') return <div className="p-6 max-w-xl mx-auto"><EmptyState message="Office isn't included in this build." /></div>;
   const { recent, project } = load.status;
   const projectFiles = (project?.files ?? []).filter((f) => !recent.some((r) => r.path === f.path));
   return (
