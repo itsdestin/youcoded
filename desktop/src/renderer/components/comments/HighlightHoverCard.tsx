@@ -21,7 +21,7 @@ import { ErrorState } from '../ui/states';
 import { placeBubble } from '../ui/anchor-position';
 import { Avatar, authorName } from './Avatar';
 import { ReplyField } from './ReplyField';
-import { EditDeleteButtons, InlineEditField, DeleteConfirmRow, deleteCommentLabel } from './CommentActions';
+import { CommentRowActions, InlineEditField, DeleteConfirmRow, deleteCommentLabel } from './CommentActions';
 import type { DocComment } from '../../state/doc-comments-store';
 
 const GAP = 8;
@@ -124,6 +124,7 @@ export function HighlightHoverCard({
         editing={isEditingComment}
         onSaveEdit={(text) => { onEditText?.(text); setIsEditingComment(false); }}
         onCancelEdit={() => setIsEditingComment(false)}
+        onRequestDelete={() => { setIsEditingComment(false); setConfirmingDeleteComment(true); }}
         below={confirmingDeleteComment && (
           <DeleteConfirmRow
             label={deleteCommentLabel(comment.replies.length)}
@@ -131,26 +132,43 @@ export function HighlightHoverCard({
             onCancel={() => setConfirmingDeleteComment(false)}
           />
         )}
+        // Restyle (ask 2+3): CommentRowActions swaps Edit/Delete + the
+        // Resolve toggle (passed as `trailing`) for the single "Editing"
+        // pill while `isEditingComment` — E-1's row stays shared between
+        // this preview and CommentCard's topRightActions rather than each
+        // hand-rolling its own editing/not-editing branch.
         trailing={
-          // cursor-pointer: same fix as CommentCard's topRightActions
-          // (CommentActions.tsx WHY) — this preview reuses the identical row.
-          <div className="flex items-center gap-0.5 shrink-0 cursor-pointer">
-            {onEditText && onDeleteComment && (
-              <EditDeleteButtons
-                onEdit={() => { setIsEditingComment(true); setConfirmingDeleteComment(false); }}
-                onDelete={() => { setConfirmingDeleteComment(true); setIsEditingComment(false); }}
-                editLabel="Edit comment"
-                deleteLabel="Delete comment"
-              />
-            )}
-            <CompleteToggle
-              done={comment.resolved}
-              name="this comment"
-              onToggle={(next) => (next ? onResolve() : onReopen())}
-              titles={{ set: 'Resolved. Click to reopen.', unset: 'Resolve this comment?' }}
-              className="shrink-0"
+          onEditText && onDeleteComment ? (
+            <CommentRowActions
+              editing={isEditingComment}
+              onEdit={() => { setIsEditingComment(true); setConfirmingDeleteComment(false); }}
+              onDelete={() => { setConfirmingDeleteComment(true); setIsEditingComment(false); }}
+              onCancelEdit={() => setIsEditingComment(false)}
+              editLabel="Edit comment"
+              deleteLabel="Delete comment"
+              trailing={
+                <CompleteToggle
+                  done={comment.resolved}
+                  name="this comment"
+                  onToggle={(next) => (next ? onResolve() : onReopen())}
+                  titles={{ set: 'Resolved. Click to reopen.', unset: 'Resolve this comment?' }}
+                  className="shrink-0"
+                />
+              }
             />
-          </div>
+          ) : (
+            // cursor-pointer: same fix as CommentCard's topRightActions
+            // (CommentActions.tsx WHY) — no Edit/Delete icons wired.
+            <div className="flex items-center gap-0.5 shrink-0 cursor-pointer">
+              <CompleteToggle
+                done={comment.resolved}
+                name="this comment"
+                onToggle={(next) => (next ? onResolve() : onReopen())}
+                titles={{ set: 'Resolved. Click to reopen.', unset: 'Resolve this comment?' }}
+                className="shrink-0"
+              />
+            </div>
+          )
         }
       />
       {/* Replies scroll inside the card past a few, so a long thread never
@@ -166,6 +184,7 @@ export function HighlightHoverCard({
                 editing={editingReplyId === r.id}
                 onSaveEdit={(text) => { onEditReply?.(r.id, text); setEditingReplyId(null); }}
                 onCancelEdit={() => setEditingReplyId(null)}
+                onRequestDelete={() => { setEditingReplyId(null); setConfirmingDeleteReplyId(r.id); }}
                 below={confirmingDeleteReplyId === r.id && (
                   <DeleteConfirmRow
                     label="Delete this reply?"
@@ -173,10 +192,15 @@ export function HighlightHoverCard({
                     onCancel={() => setConfirmingDeleteReplyId(null)}
                   />
                 )}
-                trailing={onEditReply && onDeleteReply && editingReplyId !== r.id && confirmingDeleteReplyId !== r.id && (
-                  <EditDeleteButtons
+                // ask 2: editing this reply shows the Editing pill in place
+                // of its own Edit/Delete (CommentRowActions) — only its own
+                // delete confirm hides the row entirely, same as before.
+                trailing={onEditReply && onDeleteReply && confirmingDeleteReplyId !== r.id && (
+                  <CommentRowActions
+                    editing={editingReplyId === r.id}
                     onEdit={() => { setEditingReplyId(r.id); setConfirmingDeleteReplyId(null); }}
                     onDelete={() => { setConfirmingDeleteReplyId(r.id); setEditingReplyId(null); }}
+                    onCancelEdit={() => setEditingReplyId(null)}
                     editLabel="Edit reply"
                     deleteLabel="Delete reply"
                   />
@@ -192,7 +216,11 @@ export function HighlightHoverCard({
       {comment.error && (
         <ErrorState className="mt-2" message={comment.error.message} onRetry={comment.error.onRetry} />
       )}
-      {!confirmingDeleteComment && <ReplyField onSend={onReply} onFocusChange={setFocused} onDraftChange={setHasText} />}
+      {/* Ask 2: hidden while editing THIS comment or any one of its replies —
+          same reasoning as CommentCard's own ReplyField condition. */}
+      {!confirmingDeleteComment && !isEditingComment && !editingReplyId && (
+        <ReplyField onSend={onReply} onFocusChange={setFocused} onDraftChange={setHasText} />
+      )}
     </OverlayPanel>
     </div>
   );
@@ -203,9 +231,9 @@ export function HighlightHoverCard({
  *  `InlineEditField`, and `below` renders CommentCard's own delete confirm
  *  underneath — kept as props on the ALREADY-shared row rather than a second
  *  near-duplicate component (Avatar.tsx's own "two copies drifted" WHY). */
-function Entry({ author, createdAt, text, clamp, trailing, editing, onSaveEdit, onCancelEdit, below }: {
+function Entry({ author, createdAt, text, clamp, trailing, editing, onSaveEdit, onCancelEdit, onRequestDelete, below }: {
   author: DocComment['author']; createdAt: number; text: string; clamp?: boolean; trailing?: ReactNode;
-  editing?: boolean; onSaveEdit?: (text: string) => void; onCancelEdit?: () => void; below?: ReactNode;
+  editing?: boolean; onSaveEdit?: (text: string) => void; onCancelEdit?: () => void; onRequestDelete?: () => void; below?: ReactNode;
 }) {
   return (
     <div className="flex items-start gap-2 group">
@@ -216,7 +244,11 @@ function Entry({ author, createdAt, text, clamp, trailing, editing, onSaveEdit, 
           <span className="text-2xs text-fg-muted">{formatRelativeTime(createdAt)}</span>
         </div>
         {editing && onSaveEdit && onCancelEdit ? (
-          <InlineEditField text={text} onSave={onSaveEdit} onCancel={onCancelEdit} />
+          // Ask 4: onRequestDelete falls back to onCancelEdit only so a
+          // caller that somehow omits it (there are none today — both call
+          // sites always pass it) doesn't produce a dead button; the real
+          // paths always route empty-box Delete into the actual confirm.
+          <InlineEditField text={text} onSave={onSaveEdit} onCancel={onCancelEdit} onRequestDelete={onRequestDelete ?? onCancelEdit} />
         ) : (
           <p className={`mt-0.5 text-fg-2 whitespace-pre-wrap${clamp ? ' line-clamp-4' : ''}`}>{text}</p>
         )}

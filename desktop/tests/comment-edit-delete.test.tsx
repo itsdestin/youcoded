@@ -450,3 +450,230 @@ describe('Resolve/Edit/Delete row — one cursor, no dead gaps (hover flicker fi
     expect(screen.getByTitle(/resolve this comment/i)).toBe(resolveBefore);
   });
 });
+
+// Restyle round (Destin, 2026-09-28, reviewing the dev instance screenshot):
+// edit mode now matches CommentComposer's styling (Save filled like the send
+// arrow), hides the row's other controls behind a single "Editing" pill, and
+// swaps Save for Delete once the box is emptied. CommentCard and
+// HighlightHoverCard share every bit of this through CommentActions.tsx's
+// InlineEditField + CommentRowActions/EditingPill, so both are pinned here.
+describe('CommentCard — while editing: hide reply box + delete/resolve, show the "Editing" pill (asks 2-3)', () => {
+  it('editing a comment hides its own Delete AND Resolve, replacing both (and Edit) with the "Editing" pill', () => {
+    render(
+      <CommentCard
+        comment={baseComment({ text: 'Original note.' })}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={noop} onDeleteComment={noop}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText(/edit comment/i));
+    expect(screen.queryByLabelText(/^edit comment$/i)).toBeNull();
+    expect(screen.queryByLabelText(/delete comment/i)).toBeNull();
+    expect(screen.queryByTitle(/resolve this comment/i)).toBeNull();
+    expect(screen.getByLabelText(/cancel editing/i)).toBeTruthy();
+    expect(screen.getByText('Editing')).toBeTruthy();
+  });
+
+  it('editing a comment also hides the reply box', () => {
+    render(
+      <CommentCard
+        comment={baseComment()}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={noop} onDeleteComment={noop}
+      />,
+    );
+    expect(screen.getByPlaceholderText(/reply/i)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(/edit comment/i));
+    expect(screen.queryByPlaceholderText(/reply/i)).toBeNull();
+  });
+
+  it('clicking the "Editing" pill cancels the edit (its aria-label/tooltip say so) and restores Edit/Delete/Resolve', () => {
+    const onEditText = vi.fn();
+    render(
+      <CommentCard
+        comment={baseComment({ text: 'Original note.' })}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={onEditText} onDeleteComment={noop}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText(/edit comment/i));
+    const pill = screen.getByLabelText(/cancel editing/i);
+    expect(pill.getAttribute('title')).toMatch(/cancel editing/i);
+    fireEvent.click(pill);
+    expect(onEditText).not.toHaveBeenCalled();
+    expect(screen.getByText('Original note.')).toBeTruthy();
+    expect(screen.getByLabelText(/edit comment/i)).toBeTruthy();
+    expect(screen.getByLabelText(/delete comment/i)).toBeTruthy();
+    expect(screen.getByTitle(/resolve this comment/i)).toBeTruthy();
+  });
+
+  it("editing a reply hides only THAT reply's own Delete and the thread's reply box — the comment's own actions and the other reply stay put", () => {
+    render(
+      <CommentCard
+        comment={baseComment({
+          replies: [
+            { id: 'r-1', author: 'user', createdAt: Date.now(), text: 'first reply' },
+            { id: 'r-2', author: 'assistant', createdAt: Date.now(), text: 'second reply' },
+          ],
+        })}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={noop} onDeleteComment={noop} onEditReply={noop} onDeleteReply={noop}
+      />,
+    );
+    fireEvent.click(screen.getAllByLabelText(/edit reply/i)[0]);
+    // Only the OTHER reply still has its own Edit/Delete icons.
+    expect(screen.getAllByLabelText(/edit reply/i)).toHaveLength(1);
+    expect(screen.getAllByLabelText(/delete reply/i)).toHaveLength(1);
+    expect(screen.getByLabelText(/cancel editing/i)).toBeTruthy();
+    // The thread's reply box is gone.
+    expect(screen.queryByPlaceholderText(/^reply…$/i)).toBeNull();
+    // The comment's own Edit/Delete/Resolve are untouched.
+    expect(screen.getByLabelText(/edit comment/i)).toBeTruthy();
+    expect(screen.getByLabelText(/delete comment/i)).toBeTruthy();
+    expect(screen.getByTitle(/resolve this comment/i)).toBeTruthy();
+  });
+});
+
+describe('InlineEditField (CommentCard) — Save becomes Delete when the box is emptied, and back (ask 4)', () => {
+  it('clearing all text swaps Save for a danger Delete button; typing text back swaps it back to Save', () => {
+    render(
+      <CommentCard
+        comment={baseComment({ text: 'Original note.' })}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={noop} onDeleteComment={noop}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText(/edit comment/i));
+    const box = screen.getByPlaceholderText(/edit…/i);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+
+    fireEvent.change(box, { target: { value: '   ' } }); // whitespace-only counts as empty
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
+
+    fireEvent.change(box, { target: { value: 'back again' } });
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
+
+  it('clicking Delete while the box is empty opens the SAME delete confirm the standalone Delete icon opens (E-4, no second path)', () => {
+    const onDeleteComment = vi.fn();
+    render(
+      <CommentCard
+        comment={baseComment({
+          text: 'Original note.',
+          replies: [{ id: 'r-1', author: 'user', createdAt: Date.now(), text: 'a reply' }],
+        })}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={noop} onDeleteComment={onDeleteComment}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText(/edit comment/i));
+    fireEvent.change(screen.getByPlaceholderText(/edit…/i), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(screen.queryByPlaceholderText(/edit…/i)).toBeNull();
+    expect(screen.getByText('Delete this comment and its 1 reply?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(onDeleteComment).toHaveBeenCalledTimes(1);
+  });
+
+  it('Enter while the box is empty opens the delete confirm too, instead of a no-op save', () => {
+    const onEditText = vi.fn();
+    render(
+      <CommentCard
+        comment={baseComment({ text: 'Original note.' })}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={onEditText} onDeleteComment={noop}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText(/edit comment/i));
+    const box = screen.getByPlaceholderText(/edit…/i);
+    fireEvent.change(box, { target: { value: '' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(onEditText).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete this comment?')).toBeTruthy();
+  });
+
+  it('a reply\'s own edit field gets the same Save<->Delete swap and Enter-while-empty behavior', () => {
+    const onDeleteReply = vi.fn();
+    render(
+      <CommentCard
+        comment={baseComment({ replies: [{ id: 'r-1', author: 'user', createdAt: Date.now(), text: 'first reply' }] })}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditReply={noop} onDeleteReply={onDeleteReply}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText(/edit reply/i));
+    const box = screen.getByPlaceholderText(/edit…/i);
+    fireEvent.change(box, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(screen.getByText('Delete this reply?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(onDeleteReply).toHaveBeenCalledWith('r-1');
+  });
+});
+
+describe('HighlightHoverCard — while editing: hide reply box + delete/resolve, the "Editing" pill, Save<->Delete (asks 2-4)', () => {
+  const bounds = document.createElement('div');
+  function renderCard(comment: DocComment, extra: Partial<React.ComponentProps<typeof HighlightHoverCard>> = {}) {
+    return render(
+      <HighlightHoverCard
+        comment={comment}
+        anchorRect={new DOMRect(0, 0, 10, 10)}
+        boundsEl={bounds}
+        onPointerEnter={noop}
+        onPointerLeave={noop}
+        onEngagedChange={noop}
+        onReply={noop}
+        onResolve={noop}
+        onReopen={noop}
+        {...extra}
+      />,
+    );
+  }
+
+  it('editing the comment hides Delete, Resolve and the reply box, showing the "Editing" pill instead', () => {
+    renderCard(baseComment({ text: 'Original.' }), { onEditText: noop, onDeleteComment: noop });
+    expect(screen.getByPlaceholderText(/reply/i)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(/edit comment/i));
+    expect(screen.queryByLabelText(/^delete comment$/i)).toBeNull();
+    expect(screen.queryByTitle(/resolve this comment/i)).toBeNull();
+    expect(screen.queryByPlaceholderText(/reply/i)).toBeNull();
+    expect(screen.getByLabelText(/cancel editing/i)).toBeTruthy();
+  });
+
+  it('clicking the "Editing" pill cancels without saving', () => {
+    const onEditText = vi.fn();
+    renderCard(baseComment({ text: 'Original.' }), { onEditText, onDeleteComment: noop });
+    fireEvent.click(screen.getByLabelText(/edit comment/i));
+    fireEvent.click(screen.getByLabelText(/cancel editing/i));
+    expect(onEditText).not.toHaveBeenCalled();
+    expect(screen.getByText('Original.')).toBeTruthy();
+    expect(screen.getByTitle(/resolve this comment/i)).toBeTruthy();
+  });
+
+  it('clearing the text swaps Save for Delete, and Enter-while-empty opens the confirm', () => {
+    renderCard(baseComment({ text: 'Original.' }), { onEditText: noop, onDeleteComment: noop });
+    fireEvent.click(screen.getByLabelText(/edit comment/i));
+    const box = screen.getByPlaceholderText(/edit…/i);
+    fireEvent.change(box, { target: { value: '' } });
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(screen.getByText('Delete this comment?')).toBeTruthy();
+  });
+
+  it("editing a reply hides its own Delete and the thread's reply box, leaving the comment's own row untouched", () => {
+    const comment = baseComment({
+      replies: [{ id: 'r-1', author: 'user', createdAt: Date.now(), text: 'a reply' }],
+    });
+    renderCard(comment, { onEditText: noop, onDeleteComment: noop, onEditReply: noop, onDeleteReply: noop });
+    fireEvent.click(screen.getByLabelText(/edit reply/i));
+    expect(screen.queryByLabelText(/delete reply/i)).toBeNull();
+    expect(screen.queryByPlaceholderText(/^reply…$/i)).toBeNull();
+    expect(screen.getByLabelText(/edit comment/i)).toBeTruthy();
+    expect(screen.getByLabelText(/delete comment/i)).toBeTruthy();
+    expect(screen.getByTitle(/resolve this comment/i)).toBeTruthy();
+  });
+});

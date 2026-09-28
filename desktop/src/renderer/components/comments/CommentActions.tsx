@@ -26,7 +26,7 @@
 //      — never a hand-rolled dialog, but not a floating popover either.
 // E-5: no "edited" marker — editing a comment/reply just replaces its text.
 import React, { useEffect, useRef, useState } from 'react';
-import { Button } from '../ui/Button';
+import { Button, FOCUS_RING } from '../ui/Button';
 import { FIELD_SIZE, FIELD_TEXT } from '../ui/field';
 
 /** 24×24 viewBox, stroke currentColor, the app's shared inline-icon
@@ -39,9 +39,12 @@ function IconSvg({ children, className = 'w-3.5 h-3.5' }: { children: React.Reac
   );
 }
 
-function EditGlyph() {
+// className is threaded through (default undefined, so IconSvg's own
+// 'w-3.5 h-3.5' still applies) so EditingPill below can shrink the glyph to
+// fit its pill without a second near-identical icon component.
+function EditGlyph({ className }: { className?: string } = {}) {
   return (
-    <IconSvg>
+    <IconSvg className={className}>
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
     </IconSvg>
@@ -86,7 +89,10 @@ const ICON_BUTTON =
   'rounded-sm p-0.5 text-fg-faint hover:text-fg-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent coarse-hit cursor-pointer ' +
   'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 touch-reveal transition-opacity';
 
-export function EditDeleteButtons({ onEdit, onDelete, editLabel, deleteLabel, className = '' }: {
+// WHY not exported (knip): only CommentRowActions below calls this now — the
+// restyle moved every external call site (CommentCard, HighlightHoverCard)
+// onto CommentRowActions, which owns the editing/not-editing swap.
+function EditDeleteButtons({ onEdit, onDelete, editLabel, deleteLabel, className = '' }: {
   onEdit: () => void;
   onDelete: () => void;
   editLabel: string;
@@ -109,6 +115,69 @@ export function EditDeleteButtons({ onEdit, onDelete, editLabel, deleteLabel, cl
   );
 }
 
+/** Same fill as `<Button variant="primary" size="sm">` (`bg-accent
+ *  text-on-accent`, `text-2xs px-2.5 py-1`, the one shared `FOCUS_RING`) —
+ *  the exact classes BUTTON_VARIANT.primary/BUTTON_SIZE.sm emit, copied
+ *  rather than reached through `<Button className="rounded-full gap-1">`:
+ *  `lint:design`'s `shadcn/no-restyle` refuses a caller overriding
+ *  `<Button>`'s own shape/spacing groups even under this file's allowed
+ *  "layout" contract (Button.tsx's own `rounded-full` className precedent
+ *  is size-driven, not a caller override) — the SAME reason `ICON_BUTTON`
+ *  above is a raw `<button>` rather than `<Button>` for its hover-reveal.
+ *  A pill is a shape Button's `sm` size doesn't have. */
+const EDITING_PILL =
+  'inline-flex items-center gap-1 shrink-0 rounded-full px-2.5 py-1 text-2xs font-medium ' +
+  'bg-accent text-on-accent hover:bg-accent/90 active:bg-accent/80 cursor-pointer coarse-hit transition-colors ' +
+  FOCUS_RING;
+
+/** Ask 3 (Destin, 2026-09-28, restyle round): while a row is being edited,
+ *  its Edit pencil (and, for CommentRowActions below, Delete/Resolve too)
+ *  sit exactly where they'd otherwise be, replaced by this one dark pill —
+ *  same filled look as InlineEditField's own Save. Clicking it cancels the
+ *  edit — same effect as InlineEditField's Cancel button, just reachable
+ *  from the exact spot the eye is already on.
+ *
+ *  Not exported (knip): only CommentRowActions below renders it. */
+function EditingPill({ onCancel }: { onCancel: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onCancel(); }}
+      aria-label="Cancel editing"
+      title="Cancel editing"
+      className={EDITING_PILL}
+    >
+      Editing
+      <EditGlyph className="w-2.5 h-2.5" />
+    </button>
+  );
+}
+
+/** Ask 2+3, shared by CommentCard and HighlightHoverCard so the swap between
+ *  "Edit/Delete icons (+ an optional trailing node, e.g. Resolve)" and "the
+ *  Editing pill alone" is written once. While `editing` is true this row's
+ *  own Delete AND `trailing` (a top-level comment's Resolve toggle) are both
+ *  gone, not just Edit — ask 2's "hide that comment's delete + resolve
+ *  buttons" / "hide that reply's own delete button" falls out of returning
+ *  ONLY the pill, with nothing else in this row to hide separately. */
+export function CommentRowActions({ editing, onEdit, onDelete, onCancelEdit, editLabel, deleteLabel, trailing }: {
+  editing: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+  onCancelEdit: () => void;
+  editLabel: string;
+  deleteLabel: string;
+  trailing?: React.ReactNode;
+}) {
+  if (editing) return <EditingPill onCancel={onCancelEdit} />;
+  return (
+    <div className="flex items-center gap-0.5 shrink-0 cursor-pointer">
+      <EditDeleteButtons onEdit={onEdit} onDelete={onDelete} editLabel={editLabel} deleteLabel={deleteLabel} />
+      {trailing}
+    </div>
+  );
+}
+
 /** WHY (Destin, 2026-09-28: the edit box cut text off after two lines): the
  *  comment boxes grow with what's typed, up to a cap, then scroll. CSS
  *  `field-sizing: content` does it with no script measuring the box on every
@@ -123,17 +192,36 @@ const GROWING_FIELD_STYLE = { fieldSizing: 'content', minHeight: '3.2em', maxHei
  *  mid-keystroke the way the recent draft-focus bug did (doc-comments-
  *  store.ts's `commitDraft`/CommentCard's `editingDraft`, both keyed off a
  *  flag a keystroke could flip). A local `value` buffer, not the live store
- *  text: nothing is saved until Save/Enter. */
-export function InlineEditField({ text, onSave, onCancel, className = 'mt-1' }: {
+ *  text: nothing is saved until Save/Enter.
+ *
+ *  Restyle (Destin, 2026-09-28, re-reviewing the dev instance):
+ *  - The surface/padding/text-size/focus-border here already match
+ *    CommentComposer's (both go through FIELD_TEXT + FIELD_SIZE.sm on an
+ *    FIELD_SURFACE-equivalent wrapper) — what didn't match was Save reading
+ *    as a light secondary button next to the composer's dark filled send
+ *    arrow. Save is now `variant="primary"`, the SAME filled look as that
+ *    arrow, through the Button primitive rather than a hand-rolled class.
+ *    Cancel stays `ghost` — quiet, as asked.
+ *  - Clearing the box to nothing swaps Save for a `danger` Delete button
+ *    (E-4's existing inline confirm is what it opens — `onRequestDelete`,
+ *    not a second delete path) — Enter while empty does the same. Typing
+ *    text back swaps it right back to Save; both branches read off the same
+ *    `isEmpty`, so there's no separate state to fall out of sync. */
+export function InlineEditField({ text, onSave, onCancel, onRequestDelete, className = 'mt-1' }: {
   text: string;
   onSave: (text: string) => void;
   onCancel: () => void;
+  /** Empty-box Delete (via the button or Enter) — same delete confirm the
+   *  standalone Delete icon opens, never a second/silent deletion path. */
+  onRequestDelete: () => void;
   className?: string;
 }) {
   const [value, setValue] = useState(text);
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
-  const save = () => { if (value.trim()) onSave(value.trim()); else onCancel(); };
+  const isEmpty = value.trim().length === 0;
+  const save = () => { if (!isEmpty) onSave(value.trim()); };
+  const submit = () => { if (isEmpty) onRequestDelete(); else save(); };
   return (
     // Destin, 2026-09-28: Cancel/Save move INSIDE the field's own border,
     // bottom-right — one bordered box (textarea on top, buttons at the
@@ -152,7 +240,7 @@ export function InlineEditField({ text, onSave, onCancel, className = 'mt-1' }: 
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); }
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
           else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
         }}
         placeholder="Edit…"
@@ -164,7 +252,11 @@ export function InlineEditField({ text, onSave, onCancel, className = 'mt-1' }: 
       />
       <div className="flex items-center justify-end gap-1.5 px-1.5 pb-1.5 pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
-        <Button variant="secondary" size="sm" disabled={!value.trim()} onClick={save}>Save</Button>
+        {isEmpty ? (
+          <Button variant="danger" size="sm" onClick={onRequestDelete}>Delete</Button>
+        ) : (
+          <Button variant="primary" size="sm" onClick={save}>Save</Button>
+        )}
       </div>
     </div>
   );

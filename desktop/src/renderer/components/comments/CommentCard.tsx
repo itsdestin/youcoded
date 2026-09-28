@@ -8,7 +8,7 @@ import { formatRelativeTime } from '../../utils/format-time';
 import type { DocComment } from '../../state/doc-comments-store';
 import { Avatar, authorName, authorNameInline } from './Avatar';
 import { ReplyField } from './ReplyField';
-import { EditDeleteButtons, InlineEditField, DeleteConfirmRow, deleteCommentLabel } from './CommentActions';
+import { CommentRowActions, InlineEditField, DeleteConfirmRow, deleteCommentLabel } from './CommentActions';
 import { CommentComposer } from './CommentComposer';
 
 interface Props {
@@ -172,22 +172,28 @@ export function CommentCard({
   // unchanged). `onEditText`/`onDeleteComment` are optional (see Props' own
   // WHY), so a caller that hasn't wired them yet (or a bare test) just gets
   // the resolve toggle alone, same as before this build.
+  //
+  // Restyle (ask 2+3): while THIS comment is being edited, CommentRowActions
+  // swaps the whole cluster (Edit/Delete icons AND the Resolve toggle passed
+  // in as `trailing`) for the single "Editing" pill — so editing a comment
+  // hides its own delete + resolve for free, without a second condition here.
   const topRightActions = !isDraft && (
-    // cursor-pointer: the same fix as ICON_BUTTON/CompleteToggle
-    // (CommentActions.tsx WHY) — this row's own gap-0.5 sliver between the
-    // Edit/Delete group and the resolve toggle is otherwise a THIRD cursor
-    // value in the sweep.
-    <div className="flex items-center gap-0.5 shrink-0 cursor-pointer">
-      {onEditText && onDeleteComment && (
-        <EditDeleteButtons
-          onEdit={() => { setIsEditingComment(true); setConfirmingDeleteComment(false); }}
-          onDelete={() => { setConfirmingDeleteComment(true); setIsEditingComment(false); }}
-          editLabel="Edit comment"
-          deleteLabel="Delete comment"
-        />
-      )}
-      {resolveToggle}
-    </div>
+    onEditText && onDeleteComment ? (
+      <CommentRowActions
+        editing={isEditingComment}
+        onEdit={() => { setIsEditingComment(true); setConfirmingDeleteComment(false); }}
+        onDelete={() => { setConfirmingDeleteComment(true); setIsEditingComment(false); }}
+        onCancelEdit={() => setIsEditingComment(false)}
+        editLabel="Edit comment"
+        deleteLabel="Delete comment"
+        trailing={resolveToggle}
+      />
+    ) : (
+      // cursor-pointer: the same fix as ICON_BUTTON/CompleteToggle
+      // (CommentActions.tsx WHY) — no Edit/Delete icons wired, so this is
+      // just the resolve toggle in its own cursor-consistent wrapper.
+      <div className="flex items-center gap-0.5 shrink-0 cursor-pointer">{resolveToggle}</div>
+    )
   );
   // Round 11 (Destin: "remove the quote section at the top of each
   // comment"): in Comments mode each card already sits beside its highlight
@@ -230,10 +236,16 @@ export function CommentCard({
       <div key={r.id} className="flex items-start gap-2 mt-2 pl-1 group">
         <Avatar author={r.author} />
         <div className="flex-1 min-w-0">
-          {header(r, undefined, onEditReply && onDeleteReply && !isEditingThis && !isConfirmingThis && (
-            <EditDeleteButtons
+          {/* ask 2: while THIS reply is being edited, CommentRowActions shows
+              the Editing pill instead of its Edit/Delete pair — that's the
+              "hide that reply's own delete button" ask, for free (only
+              `isConfirmingThis` hides the row entirely, same as before). */}
+          {header(r, undefined, onEditReply && onDeleteReply && !isConfirmingThis && (
+            <CommentRowActions
+              editing={isEditingThis}
               onEdit={() => { setEditingReplyId(r.id); setConfirmingDeleteReplyId(null); }}
               onDelete={() => { setConfirmingDeleteReplyId(r.id); setEditingReplyId(null); }}
+              onCancelEdit={() => setEditingReplyId(null)}
               editLabel="Edit reply"
               deleteLabel="Delete reply"
             />
@@ -243,6 +255,7 @@ export function CommentCard({
               text={r.text}
               onSave={(text) => { onEditReply?.(r.id, text); setEditingReplyId(null); }}
               onCancel={() => setEditingReplyId(null)}
+              onRequestDelete={() => { setEditingReplyId(null); setConfirmingDeleteReplyId(r.id); }}
             />
           ) : (
             <p className={`mt-0.5 whitespace-pre-wrap ${muted ? 'text-fg-muted' : 'text-fg-2'}`}>{r.text}</p>
@@ -284,6 +297,7 @@ export function CommentCard({
                 text={comment.text}
                 onSave={(text) => { onEditText?.(text); setIsEditingComment(false); }}
                 onCancel={() => setIsEditingComment(false)}
+                onRequestDelete={() => { setIsEditingComment(false); setConfirmingDeleteComment(true); }}
               />
             ) : (
               <p className="mt-0.5 text-fg-muted whitespace-pre-wrap">{comment.text}</p>
@@ -329,6 +343,7 @@ export function CommentCard({
               text={comment.text}
               onSave={(text) => { onEditText?.(text); setIsEditingComment(false); }}
               onCancel={() => setIsEditingComment(false)}
+              onRequestDelete={() => { setIsEditingComment(false); setConfirmingDeleteComment(true); }}
             />
           ) : isDraft ? (
             // Same send control as ReplyField (the round arrow inside the
@@ -383,8 +398,12 @@ export function CommentCard({
         <ErrorState className="mt-2" message={comment.error.message} onRetry={comment.error.onRetry} />
       )}
 
-      {/* The reply box is shared with the Reading-mode hover card (ReplyField.tsx). */}
-      {!isDraft && !confirmingDeleteComment && <ReplyField onSend={onReply} />}
+      {/* The reply box is shared with the Reading-mode hover card
+          (ReplyField.tsx). Ask 2: hidden while editing THIS comment or any
+          one of its replies — a reply-in-progress being pushed off screen or
+          a stray Enter landing in the wrong box both read as a trap while
+          text elsewhere in the card is mid-edit. */}
+      {!isDraft && !confirmingDeleteComment && !isEditingComment && !editingReplyId && <ReplyField onSend={onReply} />}
     </div>
   );
 }
