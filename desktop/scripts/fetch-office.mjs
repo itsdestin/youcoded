@@ -2,7 +2,7 @@
 // WHY at build and dev time, not first use: contract R2 — Office ships INSIDE the installer.
 // WHY a separate program in a separate folder: the MIT app and the AGPL editors stay apart (R2).
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -25,24 +25,97 @@ export function planFetch(pin, manifest, key) {
   return { action: 'download', url: entry.url, sha256: entry.sha256 };
 }
 
-async function main() {
+// WHY a pure function deciding exit codes, not inline process.exit() calls: 'ok' is always 0.
+// 'unsupported' and 'network-failed' are the two failure modes an OFFLINE DEVELOPER hits
+// (no bundle for this platform yet, or fetch/HTTP failure) — gated by --required, because
+// `dev:main` (no flag) must still start the app with Office reporting itself unavailable,
+// while `build --required` (contract R2: Office ships INSIDE the installer) must fail loudly
+// rather than silently ship without it. A checksum mismatch or extraction failure is neither:
+// it means the download or the tarball itself is corrupt/tampered, which is a bug regardless
+// of network state, so main() throws for those and the top-level catch always exits 1 —
+// exitCodeFor is never consulted for them.
+export function exitCodeFor(status, required) {
+  if (status === 'ok') return 0;
+  return required ? 1 : 0;
+}
+
+// WHY staging + rm/rename, not extracting straight into DEST: a `tar` that dies partway
+// (disk full, a killed build) used to leave office-addon/ holding SOME files with no correct
+// manifest — the next run's officeAvailable() check then either wrongly reports available (a
+// stale old manifest survives untouched) or leaves a half-installed folder with no way to
+// know it's broken. Extracting into a sibling staging directory first, verifying its
+// manifest.json matches the pinned version, THEN swapping (rm old DEST, rename staging over
+// it) means any failure before the rename leaves DEST exactly as it was — either the previous
+// complete install, or nothing.
+export async function stageAndReplace({ dest, pin, extract }) {
+  const staging = `${dest}.staging-${process.pid}`;
+  await rm(staging, { recursive: true, force: true });
+  await mkdir(staging, { recursive: true });
+  try {
+    await extract(staging);
+    const manifest = await readFile(path.join(staging, 'manifest.json'), 'utf8').then(JSON.parse, () => null);
+    if (!manifest || manifest.version !== pin.version) {
+      throw new Error(`office add-on staged bundle missing manifest.json or wrong version (expected ${pin.version})`);
+    }
+    await rm(dest, { recursive: true, force: true });
+    await rename(staging, dest);
+  } catch (e) {
+    await rm(staging, { recursive: true, force: true });
+    throw e;
+  }
+}
+
+async function main(required) {
   const pin = JSON.parse(await readFile(path.join(DESKTOP, 'office-pin.json'), 'utf8'));
   const manifest = await readFile(path.join(DEST, 'manifest.json'), 'utf8').then(JSON.parse, () => null);
   const plan = planFetch(pin, manifest, platformKey());
-  if (plan.action === 'skip') return console.log(`office add-on ${pin.version} present`);
-  if (plan.action === 'unsupported') return console.log(`office add-on: no bundle for ${platformKey()} yet — Office will say it is not available`);
-  const res = await fetch(plan.url);
-  if (!res.ok) throw new Error(`office add-on download failed: HTTP ${res.status} ${plan.url}`);
-  const buf = Buffer.from(await res.arrayBuffer());
+
+  if (plan.action === 'skip') {
+    console.log(`office add-on ${pin.version} present`);
+    return 'ok';
+  }
+  if (plan.action === 'unsupported') {
+    console.log(`office add-on: no bundle for ${platformKey()} yet — Office will say it is not available`);
+    return 'unsupported';
+  }
+
+  // WHY caught here instead of left to the top-level catch: this is the ONE failure mode an
+  // offline developer is expected to hit, and exitCodeFor needs it as a returned status (not a
+  // throw) to apply the --required gate. Checksum and staging/extraction failures below are
+  // NOT caught here — they always propagate and always exit 1, required or not.
+  let buf;
+  try {
+    const res = await fetch(plan.url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    buf = Buffer.from(await res.arrayBuffer());
+  } catch (e) {
+    console.log(`office add-on: download failed (${e.message}) — Office will say it is not available`);
+    return 'network-failed';
+  }
+
   const got = createHash('sha256').update(buf).digest('hex');
   if (got !== plan.sha256) throw new Error(`office add-on checksum mismatch: expected ${plan.sha256}, got ${got}`);
+
   const tgz = path.join(os.tmpdir(), `youcoded-office-${pin.version}.tar.gz`);
   await writeFile(tgz, buf);
-  await rm(DEST, { recursive: true, force: true });
-  await mkdir(DEST, { recursive: true });
-  await promisify(execFile)('tar', ['-xzf', tgz, '-C', DEST]);
-  await rm(tgz, { force: true });
+  try {
+    await stageAndReplace({
+      dest: DEST,
+      pin,
+      extract: (stagingDir) => promisify(execFile)('tar', ['-xzf', tgz, '-C', stagingDir]),
+    });
+  } finally {
+    await rm(tgz, { force: true });
+  }
   console.log(`office add-on ${pin.version} installed in office-addon/`);
+  return 'ok';
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch((e) => { console.error(e.message); process.exit(1); });
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  // WHY --required only on `build`: contract R2 says a release must never silently ship
+  // without Office; `dev:main` omits it so starting the app offline still works.
+  const required = process.argv.includes('--required');
+  main(required)
+    .then((status) => process.exit(exitCodeFor(status, required)))
+    .catch((e) => { console.error(e.message); process.exit(1); });
+}
