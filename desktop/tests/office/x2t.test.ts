@@ -71,3 +71,16 @@ describe.skipIf(!HAS_ADDON)('convert with the bundled x2t', () => {
     expect((await stat(bin)).size).toBeGreaterThan(0);
   });
 });
+
+describe('convert when its temp base is gone', () => {
+  it('rejects without recreating a removed temp base', async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'x2t-gone-'));
+    try {
+      const gone = path.join(parent, 'base');
+      await expect(convert('/unused', '/unused/in.docx', path.join(parent, 'Editor.bin'), FORMAT.bin, gone)).rejects.toThrow();
+      expect(existsSync(gone)).toBe(false);
+    } finally {
+      await rm(parent, { recursive: true, force: true, maxRetries: 3 });
+    }
+  });
+});

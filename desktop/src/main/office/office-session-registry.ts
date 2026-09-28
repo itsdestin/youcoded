@@ -5,7 +5,7 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { log } from '../logger';
-import { awaitIdle } from './office-commands';
+import { awaitIdle, stopOfficeCommands } from './office-commands';
 import { createSessions } from './office-sessions';
 
 // WHY per-instance temp base, not a fixed shared path (fix round 1, review of Task 3): a
@@ -87,5 +87,8 @@ export async function quitOfficeSessions(capMs = 5_000): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([awaitIdle(), new Promise<void>((r) => (timer = setTimeout(r, capMs)))]).catch(() => {});
   clearTimeout(timer);
+  // WHY before the removal (fix round 1): from here on every new command is refused, and a
+  // save still translating (the cap was hit) abandons its copy instead of replacing the file.
+  stopOfficeCommands();
   void cleanupOfficeSessions();
 }

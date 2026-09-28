@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, open, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, open, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,7 @@ vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn
 import { noteOwnWrite } from '../../src/main/artifacts/project-watcher';
 import { awaitIdle, createOfficeCommands, OFFICE_COMMANDS } from '../../src/main/office/office-commands';
 import { createSessions, type OfficeSession } from '../../src/main/office/office-sessions';
-import { convert, FORMAT } from '../../src/main/office/x2t';
+import { convert, FORMAT, X2tError } from '../../src/main/office/x2t';
 import { OFFICE_MAX_BYTES } from '../../src/shared/office-types';
 
 const ROOT = fileURLToPath(new URL('../../office-addon/', import.meta.url));
@@ -38,6 +38,8 @@ async function sessionFor(src: string, rel = 'docs/file.docx'): Promise<OfficeSe
 
 async function textOf(file: string): Promise<string> {
   const out = path.join(dir, `read-${Math.random().toString(36).slice(2)}.txt`);
+  // convert() never creates its temp base (quit removes it), so the reader makes its own.
+  await mkdir(path.join(dir, 'jobs'), { recursive: true });
   await convert(ROOT, file, out, TXT, path.join(dir, 'jobs'));
   return (await readFile(out)).toString('utf8');
 }
@@ -112,7 +114,8 @@ describe('office commands without the translator', () => {
     await expect(run(s.token, 'write_editor_bin', { data: 'A'.repeat(16) })).rejects.toThrow(
       'This document has grown too large for Office to save.',
     );
-    expect(from).not.toHaveBeenCalled();
+    // Nothing else may decode the payload (logging a refusal may use Buffer.from on its own text).
+    expect(from.mock.calls.filter((c) => (c as unknown[])[1] === 'base64')).toEqual([]);
   });
 
   it("leaves the user's file untouched and no tmp behind when the translation fails", async () => {
@@ -264,5 +267,183 @@ describe.skipIf(!HAS_ADDON)('office commands with the bundled x2t', () => {
     expect(await textOf(s.path)).toContain('Garden Club Notice');
     expect(await tmpsBeside(s.path)).toEqual([]);
     expect(runs).toBeLessThanOrEqual(2);
+  });
+});
+
+// A fake translator that writes a small, valid-looking document (zip signature first).
+const fakeDoc = async (_r: string, _f: string, to: string) => {
+  await writeFile(to, Buffer.concat([Buffer.from('PK\x03\x04'), Buffer.alloc(64)]));
+};
+const writeBin = (run: ReturnType<typeof createOfficeCommands>, token: string) =>
+  run(token, 'write_editor_bin', { data: Buffer.from('bin').toString('base64') });
+
+describe('office command errors the editor is shown', () => {
+  // WHY: the editor frame is the least-trusted party here — it must never learn where a file
+  // lives on disk, only a message a person can act on.
+  const noPath = (msg: string) => {
+    expect(msg).not.toContain(dir);
+    expect(msg).not.toMatch(/[\\/]/);
+  };
+  async function saveError(fail: unknown): Promise<string> {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({
+      root: ROOT,
+      sessions,
+      convert: async () => {
+        throw fail;
+      },
+    });
+    await writeBin(run, s.token);
+    const err = await run(s.token, 'save_file', {}).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    noPath(err!.message);
+    return err!.message;
+  }
+
+  it('says permission was refused when saving hits EACCES or EPERM', async () => {
+    const e = Object.assign(new Error(`EACCES: permission denied, open '${dir}/x'`), { code: 'EACCES' });
+    expect(await saveError(e)).toBe("Office doesn't have permission to save this file.");
+    const p = Object.assign(new Error(`EPERM: operation not permitted '${dir}/x'`), { code: 'EPERM' });
+    expect(await saveError(p)).toBe("Office doesn't have permission to save this file.");
+  });
+
+  it('says the disk is full when saving hits ENOSPC', async () => {
+    const e = Object.assign(new Error(`ENOSPC: no space left on device, write '${dir}/x'`), { code: 'ENOSPC' });
+    expect(await saveError(e)).toBe("The disk is full, so Office couldn't save this file.");
+  });
+
+  it('says the file took too long when the translator times out', async () => {
+    expect(await saveError(new X2tError('x2t failed (timeout)', 'timeout', `stuck on ${dir}/x`))).toBe(
+      'This file took too long to convert, so Office stopped.',
+    );
+  });
+
+  it('gives a general message, with no cause guessed, for anything else', async () => {
+    expect(await saveError(new X2tError('x2t failed (1)', 1, `bad input ${dir}/x`))).toBe("Office couldn't save this file.");
+    expect(await saveError(new Error(`something odd at ${dir}/y`))).toBe("Office couldn't save this file.");
+  });
+
+  it('says the file cannot be found when opening a missing file', async () => {
+    const s = await sessionFor(MEMO);
+    await rm(s.path);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    const err = await run(s.token, 'open_file', {}).catch((e: Error) => e);
+    expect((err as Error).message).toBe("Office can't find this file.");
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'says permission was refused when opening an unreadable file (POSIX, non-root: root reads anything)',
+    async () => {
+      const s = await sessionFor(MEMO);
+      await chmod(s.path, 0o000);
+      const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+      const err = await run(s.token, 'open_file', {}).catch((e: Error) => e);
+      expect((err as Error).message).toBe("Office doesn't have permission to open this file.");
+      noPath((err as Error).message);
+    },
+  );
+
+  it('words the unsupported-type refusal for opening and for saving separately', async () => {
+    const s = await sessionFor(MEMO, 'docs/notes.odt');
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    await expect(run(s.token, 'open_file', {})).rejects.toThrow("Office can't open this kind of file.");
+    await writeBin(run, s.token);
+    await expect(run(s.token, 'save_file', {})).rejects.toThrow("Office can't save this kind of file.");
+  });
+
+  it('tells the editor only the file name, never its folder', async () => {
+    const s = await sessionFor(MEMO, 'docs/Quarterly memo.docx');
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    expect(await run(s.token, 'get_current_path', {})).toBe('Quarterly memo.docx');
+  });
+});
+
+describe('office saves keep the file safe', () => {
+  it.skipIf(process.platform === 'win32')('keeps a private file private after a save (POSIX file modes)', async () => {
+    const s = await sessionFor(MEMO);
+    await chmod(s.path, 0o600);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    await writeBin(run, s.token);
+    expect(await run(s.token, 'save_file', {})).toBe('ok');
+    expect((await stat(s.path)).mode & 0o777).toBe(0o600);
+  });
+
+  it('runs a save again when it is asked for while another save is already translating', async () => {
+    const s = await sessionFor(MEMO);
+    let runs = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const translating = new Promise<void>((r) => (entered = r));
+    const gated = async (r: string, f: string, to: string) => {
+      runs++;
+      if (runs === 1) {
+        entered();
+        await gate;
+      }
+      await fakeDoc(r, f, to);
+    };
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: gated });
+    await writeBin(run, s.token);
+    const first = run(s.token, 'save_file', {});
+    await translating;
+    const second = run(s.token, 'save_file', {});
+    release();
+    expect(await Promise.all([first, second])).toEqual(['ok', 'ok']);
+    expect(runs).toBe(2);
+  });
+
+  it('removes a leftover partial editor file when writing it fails', async () => {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    // A directory where the final Editor.bin should go makes the rename fail after the write.
+    await mkdir(path.join(s.temp, 'Editor.bin', 'blocker'), { recursive: true });
+    await expect(writeBin(run, s.token)).rejects.toThrow();
+    expect((await readdir(s.temp)).filter((n) => n.endsWith('.part'))).toEqual([]);
+  });
+});
+
+describe('office commands at quit', () => {
+  // WHY a fresh module: the closing switch is module state, and it must not leak into the
+  // other tests in this file.
+  async function freshModule() {
+    vi.resetModules();
+    return import('../../src/main/office/office-commands');
+  }
+
+  it("abandons a save that is still translating when quit gives up waiting, leaving the user's file untouched", async () => {
+    const m = await freshModule();
+    const s = await sessionFor(MEMO);
+    const original = await readFile(s.path);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const translating = new Promise<void>((r) => (entered = r));
+    const slow = async (r: string, f: string, to: string) => {
+      entered();
+      await gate;
+      await fakeDoc(r, f, to);
+    };
+    const run = m.createOfficeCommands({ root: ROOT, sessions, convert: slow });
+    await writeBin(run, s.token);
+    const saved = run(s.token, 'save_file', {});
+    await translating;
+    m.stopOfficeCommands();
+    release();
+    await expect(saved).rejects.toThrow('Office is closing.');
+    expect(await readFile(s.path)).toEqual(original);
+    expect(await tmpsBeside(s.path)).toEqual([]);
+  });
+
+  it('refuses every command that arrives once quit has started', async () => {
+    const m = await freshModule();
+    const s = await sessionFor(MEMO);
+    const run = m.createOfficeCommands({ root: ROOT, sessions, convert: fakeDoc });
+    m.stopOfficeCommands();
+    await expect(run(s.token, 'get_system_fonts', {})).rejects.toThrow('Office is closing.');
+    await expect(writeBin(run, s.token)).rejects.toThrow('Office is closing.');
   });
 });

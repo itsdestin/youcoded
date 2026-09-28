@@ -131,6 +131,7 @@ describe('office session registry lifecycle', () => {
     await quit;
     expect(editorBinPresentAtTranslate).toBe(true);
     expect(removedBase()).toBe(true);
+    await expect(run(s.token, 'get_system_fonts', {})).rejects.toThrow('Office is closing.');
     expect(mod.getOfficeSessions()).toBeNull();
   });
 

@@ -45,7 +45,10 @@ export async function convert(root: string, from: string, to: string, formatTo: 
   // Every x2t job gets a FRESH temp dir. Measured 2026-09-28: saving with the temp dir the open
   // step had used (it leaves xlsx_unpacked/ behind) made x2t merge the old drawing parts in, and
   // a workbook's 5 charts came back on two sheets. A clean dir gives the right file.
-  await fsp.mkdir(tempBase, { recursive: true });
+  //
+  // WHY no mkdir of tempBase (fix round 1): at quit, cleanup removes the instance temp base;
+  // recreating it here would leave a folder behind after quit. A missing base makes mkdtemp
+  // reject, which is the right answer for a translation asked for that late.
   const job = await fsp.mkdtemp(path.join(tempBase, 'job-'));
   try {
     const params = path.join(job, 'params.xml');
@@ -61,13 +64,20 @@ export async function convert(root: string, from: string, to: string, formatTo: 
     await fsp.writeFile(params, xml, 'utf8');
     // WHY the library path: x2t loads its shared libraries from its own folder. On macOS the
     // DYLD_ variable is the equivalent — unverified there, noted for design task 9.
-    const env: NodeJS.ProcessEnv = { ...process.env, LD_LIBRARY_PATH: bin };
+    // Each variable is set only on the platform that reads it (fix round 1).
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (process.platform === 'linux') env.LD_LIBRARY_PATH = bin;
     if (process.platform === 'darwin') env.DYLD_LIBRARY_PATH = bin;
     await new Promise<void>((resolve, reject) => {
-      execFile(path.join(bin, 'x2t'), [params], { cwd: bin, env, timeout: 60_000 }, (err, _stdout, stderr) => {
+      // WHY SIGKILL on timeout: a wedged converter may ignore SIGTERM and linger holding the
+      // file. WHY a large maxBuffer: x2t can be chatty on stdout for a big document, and hitting
+      // the default 1 MB limit would kill a translation that was working.
+      const opts = { cwd: bin, env, timeout: 60_000, killSignal: 'SIGKILL' as const, maxBuffer: 64 * 1024 * 1024 };
+      execFile(path.join(bin, 'x2t'), [params], opts, (err, _stdout, stderr) => {
         if (!err) return resolve();
-        const e = err as NodeJS.ErrnoException & { signal?: string | null };
-        const code = e.code ?? e.signal ?? 'unknown';
+        const e = err as NodeJS.ErrnoException & { signal?: string | null; killed?: boolean };
+        // WHY 'timeout' by name: callers tell the user "took too long" for exactly this case.
+        const code = e.killed && e.signal === 'SIGKILL' ? 'timeout' : (e.code ?? e.signal ?? 'unknown');
         reject(new X2tError(`x2t failed (${code})`, code, String(stderr ?? '')));
       });
     });
