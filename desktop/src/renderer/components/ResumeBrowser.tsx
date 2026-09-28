@@ -1959,10 +1959,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               one press will do. */}
           {wb && (
             <div className="shrink-0 relative px-4 py-3 flex flex-col gap-2">
+              {/* WHY 16px insets + 8% taper: the same divider as this list's approved
+                  header line (ResumeBrowser.css, Resume R-1 2026-09-23). */}
               <div
                 aria-hidden
-                className="absolute inset-x-0 top-0 h-px"
-                style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
+                className="absolute inset-x-4 top-0 h-px"
+                style={{ background: 'linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent)' }}
               />
               {/* Stacked, full width, primary over secondary — the app's dialog
                   footer (review round 2, C-1: "stacked"). */}

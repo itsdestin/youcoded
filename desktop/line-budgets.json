@@ -12,19 +12,19 @@
     "renderer/App.tsx": 4966,
     "main/remote-server.ts": 4217,
     "main/harness/harness-session.ts": 4229,
-    "renderer/components/SettingsPanel.tsx": 3256,
+    "renderer/components/SettingsPanel.tsx": 3264,
     "renderer/remote-shim.ts": 3176,
     "renderer/state/chat-reducer.ts": 3397,
-    "renderer/styles/globals.css": 2960,
-    "renderer/components/SessionStrip.tsx": 2784,
+    "renderer/styles/globals.css": 2966,
+    "renderer/components/SessionStrip.tsx": 2791,
     "main/main.ts": 2604,
     "shared/types.ts": 2391,
-    "renderer/components/SyncPanel.tsx": 2104,
+    "renderer/components/SyncPanel.tsx": 2130,
     "main/engine/engine-manager.ts": 2035,
     "renderer/components/ResumeBrowser.tsx": 2069,
     "main/preload.ts": 1961,
     "renderer/components/StatusBar.tsx": 1809,
     "renderer/components/ToolCard.tsx": 1636,
-    "renderer/components/SessionDrawer.tsx": 1514
+    "renderer/components/SessionDrawer.tsx": 1530
   }
 }

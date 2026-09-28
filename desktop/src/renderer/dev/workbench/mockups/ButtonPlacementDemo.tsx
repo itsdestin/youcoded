@@ -63,7 +63,7 @@ export function PairDialogDemo({ layout, size = 'panel' }: { layout: PairLayout;
   return (
     <Frame>
       <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>Open popup</Button>
-      <Dialog open={open} onClose={() => setOpen(false)} title="Create a page" size={size}>
+      <Dialog noScreen="a workbench design-review mockup, not an app screen" open={open} onClose={() => setOpen(false)} title="Create a page" size={size}>
         <div className="space-y-3">
           <p className="text-xs text-fg-muted">Describe what the page should do and the assistant builds it.</p>
           <TextInput className="w-full" placeholder="Page name" defaultValue="Week planner" aria-label="Page name" />
@@ -83,7 +83,7 @@ export function SingleDialogDemo({ layout }: { layout: SingleLayout }) {
   return (
     <Frame>
       <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>Open popup</Button>
-      <Dialog open={open} onClose={() => setOpen(false)} title="Submit a ticket" size="panel">
+      <Dialog noScreen="a workbench design-review mockup, not an app screen" open={open} onClose={() => setOpen(false)} title="Submit a ticket" size="panel">
         <div className="space-y-3">
           <p className="text-xs text-fg-muted">Tickets are public on GitHub. Review details before sharing.</p>
           <TextInput className="w-full" placeholder="A short summary" aria-label="Title" />
@@ -102,7 +102,7 @@ export function DangerDialogDemo({ layout }: { layout: DangerLayout }) {
   return (
     <Frame height={380}>
       <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>Open popup</Button>
-      <Dialog open={open} onClose={() => setOpen(false)} title="Remove this project?" size="prompt" destructive>
+      <Dialog noScreen="a workbench design-review mockup, not an app screen" open={open} onClose={() => setOpen(false)} title="Remove this project?" size="prompt" destructive>
         <div className="space-y-3">
           <p className="text-xs text-fg-2">youcoded leaves your Projects list. Its files and conversations stay on this computer.</p>
           <div className="flex justify-end gap-2 pt-2">{layout === 'danger-right' ? [cancel, remove] : [remove, cancel]}</div>
