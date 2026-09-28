@@ -155,6 +155,19 @@ describe('office IPC channels', () => {
     await vi.waitFor(() => expect(sessions.byPath(file)).toBeUndefined());
   });
 
+  it("a stray extra close only affects that window's own document", async () => {
+    const a = (await call('office:open', win1, await aDocx('a.docx'))) as { token: string };
+    const b = (await call('office:open', win1, await aDocx('b.docx'))) as { token: string };
+    const other = (await call('office:open', win2, await aDocx('c.docx'))) as { token: string };
+    await call('office:close', win1, a.token);
+    await call('office:close', win1, a.token); // stray: already closed
+    const again = (await call('office:open', win1, path.join(dir, 'a.docx'))) as { token: string };
+    await call('office:close', win1, a.token); // stray, with the file open again under a new token
+    expect(sessions.get(again.token)).toBeDefined();
+    expect(sessions.get(b.token)).toBeDefined();
+    expect(sessions.get(other.token)).toBeDefined();
+  });
+
   it('does not let another window close a document it did not open', async () => {
     const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
     await call('office:close', win2, token);

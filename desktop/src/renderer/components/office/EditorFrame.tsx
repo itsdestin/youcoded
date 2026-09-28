@@ -7,7 +7,7 @@
 // theme, the mode, "open this file", a toolbar command, and the editor's
 // replies (ready, drawn, failed, which commands are on).
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { ErrorState, LoadingState } from '../ui';
+import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
 import { ScreenMark } from '../../shoot-mode';
@@ -63,7 +63,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   { file, hidden = false, slim = false, onCommandState, screen }, handleRef,
 ) {
   const ref = useRef<HTMLIFrameElement>(null);
-  const [phase, setPhase] = useState<'starting' | 'open' | 'failed'>('starting');
+  // 'unavailable': this host refuses Office outright (remote, phone) — a fact, not a failure.
+  const [phase, setPhase] = useState<'starting' | 'open' | 'failed' | 'unavailable'>('starting');
   const [failure, setFailure] = useState('');
   // WHY the frame asks for its own origin (Task 5): every open document has its own sealed
   // office://<token> origin now, handed out by office.open, so there is no shared editor
@@ -100,12 +101,15 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (gone) { void b.close(r.token).catch(() => {}); return; }
       token = r.token;
       setOrigin(r.origin);
-    }, (e: unknown) => failWith(
-      // WHY (fix round 1): on the remote client and the phone the host refuses Office outright,
-      // and that is known for certain, so say it (plainMessage names the feature and where)
-      // rather than the general "couldn't open", which would suggest the file is at fault.
-      /^remote-unsupported:/.test(String((e as Error)?.message ?? '')) ? plainMessage(e) : "Office couldn't open this file.",
-    ));
+    }, (e: unknown) => {
+      // WHY (fix rounds 1-2): on the remote client and the phone the host refuses Office
+      // outright. That is known for certain, so say it (plainMessage names the feature and
+      // where) rather than the general "couldn't open", which would blame the file — and as a
+      // plain notice with no Retry, since retrying can never help. The shim's one-time toast
+      // stays quiet for office channels (remote-unsupported.ts), so this is said once.
+      if (!/^remote-unsupported:/.test(String((e as Error)?.message ?? ''))) { failWith("Office couldn't open this file."); return; }
+      if (!gone) { setFailure(plainMessage(e)); setPhase('unavailable'); }
+    });
     return () => {
       gone = true;
       if (token) void b.close(token).catch(() => {});
@@ -161,6 +165,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
           <ErrorState message={failure} onRetry={() => { setPhase('starting'); setOrigin(null); setAttempt((n) => n + 1); }} />
         </div>
       )}
+      {phase === 'unavailable' && <div className="p-6 max-w-xl mx-auto"><EmptyState message={failure} /></div>}
     </div>
   );
 });

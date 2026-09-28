@@ -60,6 +60,14 @@ export function stopOfficeCommands(): void {
 // document's queue first (capped, like quit), and a save still running past the cap gives up
 // before its rename instead of landing late.
 const closedSessions = new WeakSet<OfficeSession>();
+// One abort switch per document for its running translator (fix round 2): a close that stops
+// waiting kills that document's x2t, the way quit kills them all.
+const aborts = new WeakMap<OfficeSession, AbortController>();
+function abortOf(s: OfficeSession): AbortController {
+  let a = aborts.get(s);
+  if (!a) aborts.set(s, (a = new AbortController()));
+  return a;
+}
 const isClosing = (s: OfficeSession) => closing || closedSessions.has(s);
 
 /**
@@ -76,6 +84,9 @@ export async function drainSession(s: OfficeSession, capMs = 5_000): Promise<voi
     clearTimeout(timer);
   }
   closedSessions.add(s);
+  // Past the cap a translation may still be running: stop it, so it neither keeps writing
+  // into the folder about to be removed nor lingers. Harmless when nothing is running.
+  abortOf(s).abort();
 }
 
 // ── One command at a time per document (review P1-2; design §3 "one save in flight") ──
@@ -206,7 +217,7 @@ export function createOfficeCommands(deps: {
     // asc/docmedia/media/. A re-open must not keep a previous translation's pictures there.
     await fsp.rm(path.join(s.temp, 'media'), { recursive: true, force: true });
     await fsp.rm(editorBin(s), { force: true });
-    await convert(deps.root, s.path, editorBin(s), FORMAT.bin, jobsBase(s));
+    await convert(deps.root, s.path, editorBin(s), FORMAT.bin, jobsBase(s), abortOf(s).signal);
     const b64 = (await fsp.readFile(editorBin(s))).toString('base64');
     if (deps.onOpened) {
       // WHY caught: the file opened fine; a failure to keep its "opened" version (Task 7) must
@@ -267,7 +278,7 @@ export function createOfficeCommands(deps: {
     const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
     const tmp = path.join(priv, base);
     try {
-      await convert(deps.root, editorBin(s), tmp, fmt, jobsBase(s));
+      await convert(deps.root, editorBin(s), tmp, fmt, jobsBase(s), abortOf(s).signal);
       await finishCopy(tmp, orig);
       // WHY again, right before the rename (fix round 1): the translation can take many seconds,
       // and the folder may have become protected, or a link swapped in, meanwhile.

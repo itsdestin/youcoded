@@ -23,8 +23,18 @@ export interface OfficeSession {
 // callers that never run commands (the protocol and session tests) leave it out.
 export function createSessions(tempBase: string, opts: { drain?: (s: OfficeSession) => Promise<void> } = {}) {
   const sessions = new Map<string, OfficeSession>();
+  // WHY (fix round 2): a document being closed may still be finishing its last save. A re-open
+  // of the same file in that time — from any window — must wait for it, or the new session
+  // would load the file as it was before that save and, on its own next save, write the
+  // older content back over the edits the closed tab just saved. Keyed by (real) path.
+  const closing = new Map<string, Promise<void>>();
 
   async function open(filePath: string, senderId: number): Promise<OfficeSession> {
+    // A close that starts while this one waited is waited for too; the same promise twice is not.
+    for (let c = closing.get(filePath), seen: Promise<void> | undefined; c && c !== seen; c = closing.get(filePath)) {
+      seen = c;
+      await c;
+    }
     // WHY mkdir first: tempBase (a fresh, per-instance mkdtemp'd
     // os.tmpdir()/youcoded-office-<random> directory in production — see
     // office-session-registry.ts) may not exist yet the first time open() runs, and after
@@ -52,8 +62,17 @@ export function createSessions(tempBase: string, opts: { drain?: (s: OfficeSessi
     if (!session) return;
     // Out of get() first, so no new command can join the queue while it drains.
     sessions.delete(token);
-    if (opts.drain) await opts.drain(session).catch(() => {});
-    await rm(session.temp, { recursive: true, force: true });
+    const done = (async () => {
+      if (opts.drain) await opts.drain(session).catch(() => {});
+      await rm(session.temp, { recursive: true, force: true });
+    })();
+    // WHY chained on any close already running for this path: two documents of one file
+    // (another window's, now gone) can close at once, and a re-open waits for both.
+    const prior = closing.get(session.path);
+    const all = (prior ? Promise.all([prior, done]).then(() => {}) : done).catch(() => {});
+    closing.set(session.path, all);
+    void all.then(() => { if (closing.get(session.path) === all) closing.delete(session.path); });
+    await done;
   }
 
   async function closeAllFor(senderId: number): Promise<void> {

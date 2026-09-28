@@ -603,3 +603,92 @@ describe('closing a document while its save is translating', () => {
     expect(await readdir(path.dirname(file))).toEqual(['close.docx']);
   });
 });
+
+// Fix round 2 (Task 5 re-review).
+describe('re-opening a file while its last tab is closing', () => {
+  const PK = Buffer.from('PK\x03\x04');
+  // Opening copies the file into Editor.bin as-is; saving writes PK + Editor.bin, held by
+  // `gate` so a test decides when the save's translation finishes.
+  function translator(gate: Promise<void>) {
+    return async (_r: string, from: string, to: string) => {
+      if (to.endsWith('Editor.bin')) { await copyFile(from, to); return; }
+      await gate;
+      await writeFile(to, Buffer.concat([PK, await readFile(from)]));
+    };
+  }
+
+  for (const reopener of [1, 2]) {
+    it(`waits for the closing save, then opens what it saved (${reopener === 1 ? 'same window' : 'another window'})`, async () => {
+      const closable = createSessions(path.join(dir, 'closable'), { drain: (x) => drainSession(x) });
+      const file = path.join(dir, 'docs/reopen.docx');
+      await mkdir(path.dirname(file), { recursive: true });
+      await copyFile(MEMO, file);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const run = createOfficeCommands({ root: ROOT, sessions: closable, convert: translator(gate) });
+      const first = await closable.open(file, 1);
+      await run(first.token, 'write_editor_bin', { data: Buffer.from('edited').toString('base64') });
+      const saving = run(first.token, 'save_file', {});
+      const closing = closable.close(first.token);
+      let reopened: OfficeSession | null = null;
+      const reopening = closable.open(file, reopener).then((s) => (reopened = s));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(reopened).toBeNull(); // still waiting on the close
+      release();
+      await expect(saving).resolves.toBe('ok');
+      await closing;
+      const second = await reopening;
+      expect(second.token).not.toBe(first.token);
+      expect(second.senderId).toBe(reopener);
+      const opened = (await run(second.token, 'open_file', {})) as string;
+      expect(Buffer.from(opened, 'base64')).toEqual(Buffer.concat([PK, Buffer.from('edited')]));
+    });
+  }
+});
+
+describe('closing a document, round two', () => {
+  it("stops that document's translator when the close gives up waiting", async () => {
+    const closable = createSessions(path.join(dir, 'closable'), { drain: (x) => drainSession(x, 50) });
+    const file = path.join(dir, 'docs/stop.docx');
+    await mkdir(path.dirname(file), { recursive: true });
+    await copyFile(MEMO, file);
+    const s = await closable.open(file, 1);
+    let seen: AbortSignal | undefined;
+    let entered!: () => void;
+    const translating = new Promise<void>((r) => (entered = r));
+    // Stands in for x2t: runs until its abort signal fires, as execFile's kill would end it.
+    const stoppable = (_r: string, _f: string, _t: string, _fmt: number, _b: string, signal?: AbortSignal) =>
+      new Promise<void>((_resolve, reject) => {
+        seen = signal;
+        entered();
+        signal?.addEventListener('abort', () => reject(new X2tError('x2t failed (stopped)', 'stopped', '')));
+      });
+    const run = createOfficeCommands({ root: ROOT, sessions: closable, convert: stoppable });
+    await writeBin(run, s.token);
+    // Caught at once: the abort rejects it while the close is still being awaited.
+    const saving = run(s.token, 'save_file', {}).catch((e: Error) => e);
+    await translating;
+    expect(seen?.aborted).toBe(false);
+    await closable.close(s.token);
+    expect(seen?.aborted).toBe(true);
+    expect(((await saving) as Error).message).toBe('Office is closing.');
+  });
+
+  it('runs a write and a save queued unawaited just before the close, and the save lands', async () => {
+    const closable = createSessions(path.join(dir, 'closable'), { drain: (x) => drainSession(x) });
+    const file = path.join(dir, 'docs/late.docx');
+    await mkdir(path.dirname(file), { recursive: true });
+    await copyFile(MEMO, file);
+    const s = await closable.open(file, 1);
+    const copyOut = async (_r: string, from: string, to: string) => {
+      await writeFile(to, Buffer.concat([Buffer.from('PK\x03\x04'), await readFile(from)]));
+    };
+    const run = createOfficeCommands({ root: ROOT, sessions: closable, convert: copyOut });
+    const writing = run(s.token, 'write_editor_bin', { data: Buffer.from('last words').toString('base64') });
+    const saving = run(s.token, 'save_file', {});
+    await closable.close(s.token);
+    await expect(writing).resolves.toBe('ok');
+    await expect(saving).resolves.toBe('ok');
+    expect(await readFile(file)).toEqual(Buffer.from('PK\x03\x04last words'));
+  });
+});

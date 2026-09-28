@@ -109,6 +109,19 @@ describe.skipIf(process.platform === 'win32')('convert failure shapes with a sta
     expect((err as X2tError).code).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
   });
 
+  it("stops one document's converter when its abort signal fires, and reports it as stopped", async () => {
+    const started = path.join(root, 'started');
+    await fakeX2t(`touch '${started}'; exec sleep 30`);
+    const stop = new AbortController();
+    const pending = convert(root, '/in.docx', path.join(root, 'out.bin'), FORMAT.bin, root, stop.signal).catch((e) => e);
+    // Wait until it is really running (positive signal) before stopping it.
+    await vi.waitFor(() => expect(existsSync(started)).toBe(true));
+    stop.abort();
+    const err = await pending;
+    expect(err).toBeInstanceOf(X2tError);
+    expect((err as X2tError).code).toBe('stopped');
+  });
+
   it('stops a running converter at quit and reports it as stopped', async () => {
     await fakeX2t('echo started; exec sleep 30');
     const pending = convert(root, '/in.docx', path.join(root, 'out.bin'), FORMAT.bin, root).catch((e) => e);

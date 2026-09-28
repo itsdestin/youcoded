@@ -9,7 +9,7 @@ import type { RemoteBridge } from '../shared/bridge-types';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
-import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
+import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage, saidInPlace } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT } from './remote-events';
 // The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
 import { localBridgeUrl, invokeLocalBridge } from './android-local-bridge';
@@ -771,6 +771,8 @@ function noteUnsupported(channel: string): void {
     console.warn(`[remote-shim] not available over remote access (unnamed): ${channel}`);
     return;
   }
+  // WHY: Office says this very sentence in its own pane (Task 5 fix round 2), so no toast.
+  if (saidInPlace(channel)) { console.warn(`[remote-shim] not available here (said in place): ${channel}`); return; }
   const feature = remoteFeatureName(channel);
   if (announced.has(feature)) return;
   announced.add(feature);

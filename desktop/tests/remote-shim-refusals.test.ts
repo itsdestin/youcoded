@@ -215,6 +215,24 @@ describe('remote-shim — rejecting failures', () => {
       }
     });
 
+    it('refuses Office without a toast, because its own pane says the same sentence', () => {
+      const seen: any[] = [];
+      const onNotice = (e: any) => seen.push(e.detail);
+      window.addEventListener(REMOTE_UNSUPPORTED_EVENT, onNotice);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      markConnectedForNotices();
+      vi.setSystemTime(Date.now() + 10_000);
+      try {
+        const resolve = vi.fn(); const reject = vi.fn();
+        applyResponse({ resolve, reject }, 'office:open', { ok: false, unsupported: true });
+        expect(reject.mock.calls[0][0].message).toBe('remote-unsupported: office:open');
+        expect(seen).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+        window.removeEventListener(REMOTE_UNSUPPORTED_EVENT, onNotice);
+      }
+    });
+
     // …and the dispatcher must not settle a caller behind applyResponse's back.
     // A `entry.resolve(payload); return;` placed before the call would leave every
     // assertion above green while the bug ran in production.

@@ -56,7 +56,12 @@ function xmlEscape(s: string): string {
  * editor's form, and reads them back from `<dirname(from)>/media/` when translating OUT of it
  * (verified 2026-09-28 by running x2t on a docx with a picture — see the task-4 report).
  */
-export async function convert(root: string, from: string, to: string, formatTo: number, tempBase: string): Promise<void> {
+export async function convert(
+  root: string, from: string, to: string, formatTo: number, tempBase: string,
+  /** Aborting it kills this translation (a closed document whose close stopped waiting). */
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) throw new X2tError('x2t failed (stopped)', 'stopped', '');
   const bin = path.join(root, 'converter');
   // Every x2t job gets a FRESH temp dir. Measured 2026-09-28: saving with the temp dir the open
   // step had used (it leaves xlsx_unpacked/ behind) made x2t merge the old drawing parts in, and
@@ -88,7 +93,9 @@ export async function convert(root: string, from: string, to: string, formatTo: 
       // WHY SIGKILL on timeout: a wedged converter may ignore SIGTERM and linger holding the
       // file. WHY a large maxBuffer: x2t can be chatty on stdout for a big document, and hitting
       // the default 1 MB limit would kill a translation that was working.
-      const opts = { cwd: bin, env, timeout: 60_000, killSignal: 'SIGKILL' as const, maxBuffer: 64 * 1024 * 1024 };
+      // WHY `signal` (Task 5 fix round 2): execFile kills the child with killSignal when it
+      // aborts, so one document's translation can be stopped without touching the others'.
+      const opts = { cwd: bin, env, timeout: 60_000, killSignal: 'SIGKILL' as const, maxBuffer: 64 * 1024 * 1024, signal };
       const child = execFile(path.join(bin, 'x2t'), [params], opts, (err, _stdout, stderr) => {
         running.delete(child);
         if (!err) return resolve();
@@ -97,7 +104,7 @@ export async function convert(root: string, from: string, to: string, formatTo: 
         // a real timeout. Node reports an output overflow with its own code, and our own kill
         // at quit also arrives as killed+SIGKILL, so each is told apart before the timeout test.
         let code: string | number;
-        if (stoppedAtQuit.has(child)) code = 'stopped';
+        if (stoppedAtQuit.has(child) || signal?.aborted) code = 'stopped';
         else if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') code = e.code;
         else if (e.killed && e.signal === 'SIGKILL') code = 'timeout';
         else code = e.code ?? e.signal ?? 'unknown';
