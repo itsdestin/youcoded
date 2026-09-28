@@ -1,0 +1,225 @@
+{
+ "ccVersion": "2.1.281",
+ "scenario": "mcp-one",
+ "key": "mcp-one-40x30",
+ "folder": "plain",
+ "trusted": false,
+ "args": [],
+ "files": [
+  ".mcp.json"
+ ],
+ "auth": false,
+ "cols": 40,
+ "rows": 30,
+ "capturedAt": "2026-09-24T04:49:07.297Z",
+ "chunks": [
+  {
+   "t": 200,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 214,
+   "b64": "G1s/MjVs"
+  },
+  {
+   "t": 214,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 221,
+   "b64": "DQ0KG1szODsyOzI1NTsxOTM7N23ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAbWzM5bQ0NChtbMkcbWzM4OzI7MjU1OzE5Mzs3bRtbMW1BY2Nlc3NpbmcbWzEyR3dvcmtzcGFjZTobWzIybRtbMzltDQ0KDQ0KG1syRxtbMW0vdG1wL3N0YXJ0dXAtbWNwLW9uZS1jcUNnd1UvcHJvamVjdBtbMjJtDQ0KDQ0KG1syR1F1aWNrG1s4R3NhZmV0eRtbMTVHY2hlY2s6G1syMkdJcxtbMjVHdGhpcxtbMzBHYRtbMzJHcHJvamVjdA0NChtbMkd5b3UbWzZHY3JlYXRlZBtbMTRHb3IbWzE3R29uZRtbMjFHeW91G1syNUd0cnVzdD8bWzMyRyhMaWtlDQ0KG1syR3lvdXIbWzdHb3duG1sxMUdjb2RlLBtbMTdHYRtbMTlHd2VsbC1rbm93bhtbMzBHb3Blbg0NChtbMkdzb3VyY2UbWzlHcHJvamVjdCwbWzE4R29yG1syMUd3b3JrG1syNkdmcm9tG1szMUd5b3VyDQ0KG1syR3RlYW0pLhtbOUdJZhtbMTJHbm90LBtbMTdHdGFrZRtbMjJHYRtbMjRHbW9tZW50G1szMUd0bxtbMzRHcmV2aWV3DQ0KG1syR3doYXQncxtbOUdpbhtbMTJHdGhpcxtbMTdHZm9sZGVyG1syNEdmaXJzdC4NDQoNDQobWzJHQ2xhdWRlG1s5R0NvZGUnbGwbWzE3R2JlG1syMEdhYmxlG1syNUd0bxtbMjhHcmVhZCwbWzM0R2VkaXQsDQ0KG1syR2FuZBtbNkdleGVjdXRlG1sxNEdmaWxlcxtbMjBHaGVyZS4NDQoNDQobWzJHG1szODsyOzE1MzsxNTM7MTUzbVNlY3VyaXR5G1sxMUdndWlkZRtbMzltDQ0KDQ0KG1syRxtbMzg7MjsxNzc7MTg1OzI0OW3ina8bWzRHTm8sG1s4R2V4aXQbWzM5bQ0NChtbNEdZZXMsG1s5R0kbWzExR3RydXN0G1sxN0d0aGlzG1syMkdmb2xkZXINDQoNDQobWzJHG1szODsyOzE1MzsxNTM7MTUzbUVudGVyG1s4R3RvG1sxMUdjb25maXJtG1sxOUfCtxtbMjFHRXNjG1syNUd0bxtbMjhHY2FuY2VsG1szOW0NDQobWzFDG1s0QQ=="
+  },
+  {
+   "t": 224,
+   "b64": "G1s+MHEbWz91"
+  },
+  {
+   "t": 224,
+   "b64": "G1tj"
+  },
+  {
+   "t": 977,
+   "b64": "G1sxRBtbNEING1sxQxtbNEEgG1s0R05vLCBleGl0DRtbMUMbWzFCG1szODsyOzE3NzsxODU7MjQ5beKdrxtbNEdZZXMsIEkgdHJ1c3QgdGhpcyBmb2xkZXIbWzM5bQ0NCg0KDQobWzFDG1szQQ=="
+  },
+  {
+   "t": 1065,
+   "b64": "G1s+NG0bWzx1G1s/MTAwNGwbWz8yMDMxbBtbPzIwMDRs"
+  },
+  {
+   "t": 1066,
+   "b64": "G1sxRBtbM0IbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1tHG1sxQRtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzIxQQ=="
+  },
+  {
+   "t": 1081,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 1084,
+   "b64": "DQ0KG1szODsyOzI1NTsxOTM7N23ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAbWzM5bQ0NChtbM0cbWzM4OzI7MjU1OzE5Mzs3bRtbMW1OZXcbWzdHTUNQG1sxMUdzZXJ2ZXIbWzE4R2ZvdW5kG1syNEdpbhtbMjdHdGhpcxtbMjJtG1szOW0NDQobWzNHG1szODsyOzI1NTsxOTM7N20bWzFtcHJvamVjdDobWzEyR2RlbW8bWzIybRtbMzltDQ0KDQ0KG1szR01DUBtbN0dzZXJ2ZXJzG1sxNUdtYXkbWzE5R2V4ZWN1dGUbWzI3R2NvZGUbWzMyR29yDQ0KG1szR2FjY2VzcxtbMTBHc3lzdGVtG1sxN0dyZXNvdXJjZXMuG1syOEdBbGwbWzMyR3Rvb2wNDQobWzNHY2FsbHMbWzlHcmVxdWlyZRtbMTdHYXBwcm92YWwuG1syN0dMZWFybhtbMzNHbW9yZQ0NChtbM0dpbhtbNkd0aGUbWzEwR01DUBtbMTRHZG9jdW1lbnRhdGlvbi4NDQoNDQobWzVHVXNlG1s5R3RoaXMbWzE0R01DUBtbMThHc2VydmVyDQ0KG1s1R1VzZRtbOUd0aGlzG1sxNEdhbmQbWzE4R2FsbBtbMjJHZnV0dXJlG1syOUdNQ1AbWzMzR3NlcnZlcnMNDQobWzVHaW4bWzhHdGhpcxtbMTNHcHJvamVjdA0NChtbM0cbWzM4OzI7MTc3OzE4NTsyNDlt4p2vG1s1R0NvbnRpbnVlG1sxNEd3aXRob3V0G1syMkd1c2luZxtbMjhHdGhpcxtbMzNHTUNQG1szOW0NDQobWzVHG1szODsyOzE3NzsxODU7MjQ5bXNlcnZlchtbMzltDQ0KDQ0KG1szRxtbMzg7MjsxNTM7MTUzOzE1M20bWzNtRW50ZXIbWzlHdG8bWzEyR2NvbmZpcm0bWzIwR8K3G1syMkdFc2MbWzI2R3RvG1syOUdjYW5jZWwbWzIzbRtbMzltDQ0KG1syQxtbNEE="
+  },
+  {
+   "t": 1084,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 1873,
+   "b64": "G1s+NG0bWzx1G1s/MTAwNGwbWz8yMDMxbBtbPzIwMDRs"
+  },
+  {
+   "t": 1894,
+   "b64": "G1syRBtbNEIbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbWzFBG1sySxtbMUEbWzJLG1sxQRtbMksbW0cbWzFBG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxQhtbSw0bWzFCG1tLDRtbMUIbW0sNG1sxNkE="
+  },
+  {
+   "t": 1976,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 1987,
+   "b64": "G10wO+KcsyBDbGF1ZGUgQ29kZQc="
+  },
+  {
+   "t": 2018,
+   "b64": "G1sxMkcbWzFtQ2xhdWRlG1sxOUdDb2RlG1syNEcbWzIybRtbMzg7MjsxNTM7MTUzOzE1M212Mi4xLjI4MRtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdtIOKWkBtbNDg7MjswOzA7MG3ilpvilojilojilojilpvilogbWzEyRxtbNDltG1szODsyOzE1MzsxNTM7MTUzbU9wdXMbWzE3RzUuNRtbMjFHKDFNG1syNUdjb250ZXh0KRtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdt4pad4pacG1s0ODsyOzA7MDswbeKWiOKWiOKWiOKWiOKWiBtbNDlt4paI4paAG1sxMkcbWzM4OzI7MTUzOzE1MzsxNTNtQVBJG1sxNkdVc2FnZRtbMjJHQmlsbGluZxtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdtIBtbM0filp3ilp0bWzZH4pad4padG1sxMkcbWzM4OzI7MTUzOzE1MzsxNTNtL+KApi9wcm9qZWN0G1szOW0NDQoNDQoNDQobWzM4OzI7MTM2OzEzNjsxMzZt4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSAG1szOW0NDQrina/CoBtbN20gG1syN20NDQobWzM4OzI7MTM2OzEzNjsxMzZt4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSAG1szOW0NDQobWzNHG1szODsyOzE1MzsxNTM7MTUzbeKPuBtbNUdtYW51YWwbWzEyR21vZGUbWzE3R29uG1syMEfCtxtbMjJHPxtbMjRHZm9yG1syOEdzaG9ydGN1dHMbWzM4R+KAphtbMzltDQ0KG1sxM0cbWzM4OzI7MjU1OzEwNzsxMjhtTm90G1sxN0dsb2dnZWQbWzI0R2luG1syN0fCtxtbMjlHUnVuG1szM0cvbG9naW4bWzM5bQ0NChtbMjFHG1szODsyOzE1MzsxNTM7MTUzbeKXkBtbMjNHbWVkaXVtG1szMEfCtxtbMzJHL2VmZm9ydBtbMzltDQ0KG1syQxtbNUE="
+  },
+  {
+   "t": 2099,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 2604,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 2856,
+   "b64": "G1syRBtbNUI="
+  },
+  {
+   "t": 2856,
+   "b64": "G1s/MTAwNGwbWz40bRtbPHUbWz8yMDMxbBtbPzIwMDRsGyhCDxtbPzEwMTZsG1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGwbWz8yNWgbNxtbchs4G10wOwc="
+  }
+ ],
+ "marks": [
+  {
+   "t": 969,
+   "label": "dialog-1-visible",
+   "chunkIndex": 6
+  },
+  {
+   "t": 969,
+   "label": "send",
+   "chunkIndex": 6,
+   "data": "\u001b[B"
+  },
+  {
+   "t": 1050,
+   "label": "send",
+   "chunkIndex": 7,
+   "data": "\r"
+  },
+  {
+   "t": 1130,
+   "label": "dialog-1-gone",
+   "chunkIndex": 12
+  },
+  {
+   "t": 1857,
+   "label": "dialog-2-visible",
+   "chunkIndex": 12
+  },
+  {
+   "t": 1858,
+   "label": "send",
+   "chunkIndex": 12,
+   "data": "\r"
+  },
+  {
+   "t": 1939,
+   "label": "dialog-2-gone",
+   "chunkIndex": 14
+  },
+  {
+   "t": 2100,
+   "label": "main-prompt-visible",
+   "chunkIndex": 18
+  }
+ ],
+ "dialogs": [
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "Accessing workspace:",
+   "options": [
+    "No, exit",
+    "Yes, I trust this folder"
+   ],
+   "numbers": [
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "<tmp-path>",
+    "Quick safety check: Is this a project",
+    "you created or one you trust? (Like",
+    "your own code, a well-known open",
+    "source project, or work from your",
+    "team). If not, take a moment to review",
+    "what's in this folder first.",
+    "Claude Code'll be able to read, edit,",
+    "and execute files here.",
+    "Security guide"
+   ]
+  },
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "New MCP server found in this",
+   "options": [
+    "Use this MCP server",
+    "Use this and all future MCP servers in this project",
+    "Continue without using this MCP server"
+   ],
+   "numbers": [
+    null,
+    null,
+    null
+   ],
+   "defaultCursor": 2,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "project: demo",
+    "MCP servers may execute code or",
+    "access system resources. All tool",
+    "calls require approval. Learn more",
+    "in the MCP documentation."
+   ]
+  }
+ ],
+ "outcome": {
+  "steps": [
+   {
+    "dialog": 1,
+    "answered": "Yes, I trust this folder",
+    "gone": true
+   },
+   {
+    "dialog": 2,
+    "answered": "Continue without using this MCP server",
+    "gone": true
+   }
+  ],
+  "reachedMainPrompt": true,
+  "exitCode": null,
+  "folderTrusted": true,
+  "bypassAccepted": false,
+  "userSettingsKeys": [
+   "hooks"
+  ],
+  "sessionStartHookAt": [
+   2103
+  ]
+ }
+}

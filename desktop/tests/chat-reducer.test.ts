@@ -732,6 +732,33 @@ describe('TRANSCRIPT_USER_MESSAGE suppresses the redundant /compact bubble', () 
   });
 });
 
+// A resumed conversation's first page can land before the session's chat
+// state exists: App creates that state from the session:created announcement,
+// which is applied at the next render, while the resume fetches the page at
+// once. Dropping the page there opened resumed sessions EMPTY, depending on
+// which won (Destin, 2026-09-24: "whether the messages/history loads or not is
+// inconsistent"; a dev instance logged page-before-init for 2 of 3 sessions).
+describe('HISTORY_PAGE_LOADED for a session with no chat state yet', () => {
+  const ev = (type: string, uuid: string, text: string, ts: number) =>
+    ({ type, sessionId: SESSION, uuid, timestamp: ts, data: { text } }) as any;
+  const page: ChatAction = {
+    type: 'HISTORY_PAGE_LOADED', sessionId: SESSION, cursor: null, hasMore: false,
+    events: [ev('user-message', 'p1', 'hi', 1), ev('assistant-text', 'p2', 'Hi! What can I help with?', 2)],
+  };
+
+  it('keeps the page instead of dropping it', () => {
+    const state = dispatch(new Map(), page);
+    const users = state.get(SESSION)?.timeline.filter((e) => e.kind === 'user') as any[] | undefined;
+    expect(users?.map((e) => e.message.content)).toEqual(['hi']);
+  });
+
+  it('a SESSION_INIT that arrives afterwards leaves the loaded history in place', () => {
+    let state = dispatch(new Map(), page);
+    state = dispatch(state, { type: 'SESSION_INIT', sessionId: SESSION });
+    expect(state.get(SESSION)!.timeline.filter((e) => e.kind === 'user')).toHaveLength(1);
+  });
+});
+
 describe('PERMISSION_RESPONDED budget gates', () => {
   let state: ChatState;
 

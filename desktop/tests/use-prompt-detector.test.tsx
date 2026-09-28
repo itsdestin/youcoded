@@ -277,3 +277,309 @@ describe('usePromptDetector settles kept cards when the menu is gone', () => {
     expect(mocks.dispatch.mock.calls.some((c) => c[0].type === 'SHOW_PROMPT')).toBe(true);
   });
 });
+
+// ---- the startup safety net -------------------------------------------------
+import { getUnreadableStartupDialog } from '../src/renderer/state/startup-dialog-store';
+
+const RULE = '─'.repeat(80);
+const NEW_DIALOG = [
+  RULE,
+  '  Something Claude Code has never asked before',
+  '',
+  '  Some body text explaining it.',
+  '',
+  '  ❯ Keep going',
+  '    Stop here',
+  '',
+  '  Enter to confirm · Esc to cancel',
+].join('\n');
+const TRUST_2_1_281 = [
+  RULE,
+  ' Accessing workspace:',
+  '',
+  ' /home/someone/project',
+  '',
+  " Claude Code'll be able to read, edit, and execute files here.",
+  '',
+  ' Security guide',
+  '',
+  ' ❯ No, exit',
+  '   Yes, I trust this folder',
+  '',
+  ' Enter to confirm · Esc to cancel',
+].join('\n');
+const MULTI_SELECT = [
+  RULE,
+  '  2 new MCP servers found in this project',
+  '  Select any you wish to enable.',
+  '',
+  '  ❯ [✔] demo',
+  '    [✔] other',
+  '       Enable selected',
+  ' Space to select · Esc to reject all',
+].join('\n');
+
+describe('usePromptDetector startup safety net', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.dispatch.mockClear();
+    mocks.callbacks.length = 0;
+    mocks.screen.text = '';
+    mocks.sessions.clear();
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const shows = () => mocks.dispatch.mock.calls.filter((c) => c[0].type === 'SHOW_PROMPT').map((c) => c[0]);
+
+  it('shows the 2.1.281 trust dialog with verified-navigation buttons, starting on "No, exit"', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    const [show] = shows();
+    expect(show.title).toBe('Trust This Folder?');
+    expect(show.buttons.map((b: any) => b.label)).toEqual(['No, exit', 'Yes, I trust this folder']);
+    expect(show.buttons.every((b: any) => b.pick && b.input === '')).toBe(true);
+    expect(show.defaultIndex).toBe(0);
+  });
+
+  it('while starting, shows a dialog nobody taught it about — titled with its own heading', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = NEW_DIALOG;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    const [show] = shows();
+    expect(show.title).toBe('Something Claude Code has never asked before');
+    expect(show.buttons.map((b: any) => b.label)).toEqual(['Keep going', 'Stop here']);
+    expect(show.defaultIndex).toBe(0);
+  });
+
+  it('once started, the same unknown menu is left alone (permission menus belong to the hook cards)', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => false }));
+    mocks.screen.text = NEW_DIALOG;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(shows()).toEqual([]);
+    expect(getUnreadableStartupDialog('s1')).toBeNull();
+  });
+
+  it('never turns a numbered list in a reply into a card, even while starting', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = UNRECOGNIZED_MENU;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(shows()).toEqual([]);
+  });
+
+  it('reports a dialog it cannot turn into buttons at once, and clears it when it goes', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = MULTI_SELECT;
+    fireBuffer('s1');
+    expect(getUnreadableStartupDialog('s1')).toEqual({ heading: '2 new MCP servers found in this project' });
+    expect(shows()).toEqual([]);
+    mocks.screen.text = '❯ \n? for shortcuts';
+    fireBuffer('s1');
+    expect(getUnreadableStartupDialog('s1')).toBeNull();
+  });
+});
+
+describe('usePromptDetector — every readable dialog ends up with a card', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.dispatch.mockClear();
+    mocks.callbacks.length = 0;
+    mocks.screen.text = '';
+    mocks.sessions.clear();
+  });
+  afterEach(() => { vi.useRealTimers(); });
+  const shows = () => mocks.dispatch.mock.calls.filter((c) => c[0].type === 'SHOW_PROMPT').map((c) => c[0]);
+
+  it('an unreadable frame inside the debounce does not lose the card (trust → garbled → trust)', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(100); });
+    // One frame mid-redraw: the footer not painted yet → not a readable menu.
+    mocks.screen.text = TRUST_2_1_281.replace(' Enter to confirm · Esc to cancel', '');
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(100); });
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(shows().map((s) => s.title)).toEqual(['Trust This Folder?']);
+  });
+
+  it('gives an identical dialog that follows an ANSWERED card a fresh card', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    const [first] = shows();
+    // The user answered it; Claude Code asks the identical question again.
+    mocks.sessions.set('s1', {
+      toolCalls: new Map(), activeTurnToolIds: [],
+      timeline: [{ kind: 'prompt', prompt: { ...first, completed: 'Yes, I trust this folder' } }],
+    });
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(1000 + 400); });
+    const all = shows();
+    expect(all).toHaveLength(2);
+    expect(all[1].promptId).toBe(`${first.promptId}~1`);
+    expect(all[1].title).toBe('Trust This Folder?');
+  });
+
+  it('does not re-issue a card whose dialog left promptly after the answer', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    const [first] = shows();
+    mocks.sessions.set('s1', {
+      toolCalls: new Map(), activeTurnToolIds: [],
+      timeline: [{ kind: 'prompt', prompt: { ...first, completed: 'Yes, I trust this folder' } }],
+    });
+    fireBuffer('s1');
+    mocks.screen.text = '❯ \n? for shortcuts';
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(shows()).toHaveLength(1);
+  });
+});
+
+// Android (review F1): the REAL multi-server MCP dialog, as Android's terminal
+// hands it over (exported by startup-dialogs.test.ts). Until the session has
+// started — which on Android now means "Claude Code ran a hook", never "the
+// screen showed something" — it must reach the safety net, and a menu card must
+// not count as "started".
+import fs from 'fs';
+import path from 'path';
+import { promptShowMeansStarted } from '../src/renderer/state/startup-dialog-store';
+
+describe('Android startup: the multi-server MCP dialog', () => {
+  const fx = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'test', 'resources',
+    'startup-dialogs', 'mcp-two-100x35-dialog-2-visible.json'), 'utf8'));
+  beforeEach(() => { mocks.dispatch.mockClear(); mocks.callbacks.length = 0; mocks.sessions.clear(); });
+
+  it('reaches the safety net while the session is starting', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = fx.screen;
+    fireBuffer('android-1');
+    expect(getUnreadableStartupDialog('android-1')).toEqual({ heading: '2 new MCP servers found in this project' });
+  });
+
+  it('only Android\'s explicit ready signal starts a session — a dialog card never does', () => {
+    expect(promptShowMeansStarted('_session_ready')).toBe(true);
+    expect(promptShowMeansStarted('menu_no_exit_yes_i_trus')).toBe(false);
+    expect(promptShowMeansStarted('bypass_warning')).toBe(false);
+  });
+});
+
+describe('usePromptDetector — re-issuing a card for an identical follow-up, guarded', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.dispatch.mockClear();
+    mocks.callbacks.length = 0;
+    mocks.screen.text = '';
+    mocks.sessions.clear();
+  });
+  afterEach(() => { vi.useRealTimers(); });
+  const shows = () => mocks.dispatch.mock.calls.filter((c) => c[0].type === 'SHOW_PROMPT').map((c) => c[0]);
+  const dismissed = () => mocks.dispatch.mock.calls.filter((c) => c[0].type === 'DISMISS_PROMPT').map((c) => c[0].promptId);
+  const answer = (card: any, completed: string | false = 'Yes, I trust this folder') => {
+    const prev = mocks.sessions.get('s1')?.timeline ?? [];
+    mocks.sessions.set('s1', {
+      toolCalls: new Map(), activeTurnToolIds: [],
+      timeline: [...prev.filter((e: any) => e.prompt.promptId !== card.promptId), { kind: 'prompt', prompt: { ...card, completed } }],
+    });
+  };
+  const showTrust = () => {
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    return shows().at(-1);
+  };
+
+  it('never re-issues a card that is still UNANSWERED', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first, false);
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(3000); });
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(shows()).toHaveLength(1);
+  });
+
+  it('never re-issues a card answered by a DIGIT (nothing confirmed Claude Code redrew)', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = RESUME_MENU;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    answer(shows()[0], 'from summary');
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(shows()).toHaveLength(1);
+  });
+
+  it('re-issues at most once per dialog, under the same id on every device', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first);
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(1400); });
+    const second = shows().at(-1);
+    expect(second.promptId).toBe(`${first.promptId}~1`);
+    answer(second);
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(shows()).toHaveLength(2);
+  });
+
+  it('re-checks when the timer fires: a card re-shown unanswered meanwhile is not re-issued', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first);
+    fireBuffer('s1'); // arms the re-issue
+    answer(first, false); // …then the card is live again (re-shown)
+    act(() => { vi.advanceTimersByTime(1400); });
+    expect(shows()).toHaveLength(1);
+  });
+
+  it('a different menu arriving cancels the pending re-issue (answered A, then B, then A again → no duplicate A)', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first);
+    fireBuffer('s1'); // arms the re-issue for A
+    act(() => { vi.advanceTimersByTime(200); });
+    mocks.screen.text = NEW_DIALOG; // B
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(500); });
+    mocks.screen.text = TRUST_2_1_281; // A again — a NEW appearance, its own card
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(1500); });
+    expect(shows().map((s) => s.promptId).filter((id) => id.endsWith('~1'))).toEqual([]);
+  });
+
+  it('dismisses a re-issued "~1" card when its dialog leaves the screen', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first);
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(1400); });
+    mocks.screen.text = '❯ \n? for shortcuts';
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(700); });
+    expect(dismissed()).toContain(`${first.promptId}~1`);
+  });
+
+  it('dismisses a re-issued "~1" card when a different menu replaces it', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    const first = showTrust();
+    answer(first);
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(1400); });
+    mocks.screen.text = NEW_DIALOG;
+    fireBuffer('s1');
+    expect(dismissed()).toContain(`${first.promptId}~1`);
+  });
+});

@@ -96,3 +96,36 @@ describe('a failing file close never costs the read', () => {
     }
   });
 });
+
+// firstCwd reads the head in 16 KB pieces and stops at the first match. These pin
+// that it still scans exactly the lines the old "decode 512 KB, split, take 200"
+// read did — no line lost at a piece boundary, no line past either bound.
+describe('firstCwd reads in pieces but scans the same lines as a whole-head read', () => {
+  const PROJ = '/home/u/prøject — ünïcode';
+  const write = (name: string, text: string) => { const f = path.join(tmp, name); fs.writeFileSync(f, text); return f; };
+  const pad = (bytes: number) => line({ type: 'mode', pad: 'x'.repeat(Math.max(0, bytes - 30)) });
+
+  it('finds a cwd line that straddles a 16 KB piece boundary, multi-byte characters included', async () => {
+    const head = pad(16 * 1024 - 20);                       // the cwd line starts ~20 bytes before the boundary
+    const f = write('straddle.jsonl', head + line({ type: 'user', cwd: PROJ }));
+    expect(Buffer.byteLength(head)).toBeLessThan(16 * 1024);
+    expect(await firstCwd(f, 'linux')).toBe(PROJ);
+  });
+
+  it('reads the last line when the file has no trailing newline', async () => {
+    const f = write('no-newline.jsonl', line({ type: 'mode' }) + JSON.stringify({ type: 'user', cwd: PROJ }));
+    expect(await firstCwd(f, 'linux')).toBe(PROJ);
+  });
+
+  it('still stops at the 200-line cap: a cwd first seen on line 201 is not the session origin', async () => {
+    const rows = Array.from({ length: 200 }, () => line({ type: 'mode' })).join('');
+    expect(await firstCwd(write('line-201.jsonl', rows + line({ type: 'user', cwd: PROJ })), 'linux')).toBeNull();
+    const rows199 = Array.from({ length: 199 }, () => line({ type: 'mode' })).join('');
+    expect(await firstCwd(write('line-200.jsonl', rows199 + line({ type: 'user', cwd: PROJ })), 'linux')).toBe(PROJ);
+  });
+
+  it('still stops at 512 KB: a cwd that begins past it is not read', async () => {
+    const f = write('past-512k.jsonl', pad(600 * 1024) + line({ type: 'user', cwd: PROJ }));
+    expect(await firstCwd(f, 'linux')).toBeNull();
+  });
+});

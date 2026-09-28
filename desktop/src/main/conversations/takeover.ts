@@ -70,6 +70,13 @@ export interface HolderTakeoverDeps {
   // this device's. After the release another device holds the conversation,
   // so a session that failed to destroy stays refusing (review N12).
   endQuiesceNative?: (desktopId: string) => void;
+  // Welcome back (design 2026-09-24 §2): a takeover means the conversation now
+  // lives on another device, so this desktop id is no longer "open here" —
+  // called at every site below that destroys the local session directly
+  // (bypassing SESSION_DESTROY, whose own untrack call this flow never runs
+  // through). Optional so this module's existing fake-collaborator tests
+  // that don't care about Welcome back keep passing unchanged.
+  untrackWelcomeBack?: (desktopId: string) => void;
 }
 
 // Returns the async handler wired to the lease client's onTakeoverRequest.
@@ -138,8 +145,26 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
               if (evidence!.provider === 'native') {
                 await deps.destroyNative(id);
                 dropQuiesced(id);
-                if (!deps.sessionManager.destroySession(id) || !evidence!.persisted()) proven = false;
-              } else if ((await deps.sessionManager.stopSessionForHandoff?.(id))?.status !== 'stopped') proven = false;
+                const destroyed = deps.sessionManager.destroySession(id);
+                // WHY here regardless of `destroyed`/`persisted()`: those only
+                // affect whether THIS handoff counts as proven; this device no
+                // longer holds the conversation the moment its local session is
+                // torn down (design §2), independent of that proof.
+                deps.untrackWelcomeBack?.(id);
+                if (!destroyed || !evidence!.persisted()) proven = false;
+              } else {
+                const stopped = (await deps.sessionManager.stopSessionForHandoff?.(id))?.status === 'stopped';
+                // WHY (F1, code review 2026-09-24): only the native branch above
+                // untracked — a Claude Code handoff through this verified-receipt
+                // path never called untrackWelcomeBack at all, so it stayed
+                // "open" here forever and got wrongly re-offered by Welcome back.
+                // Untrack unconditionally, matching the native branch: calling
+                // stopSessionForHandoff is this device giving up the writer,
+                // independent of whether the stop is later provable (that only
+                // gates `proven`/publish below).
+                deps.untrackWelcomeBack?.(id);
+                if (!stopped) proven = false;
+              }
             } catch { proven = false; }
           }
           if (!proven) { deps.protectUnsafe?.(claudeId); return; }
@@ -229,7 +254,12 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
         try {
           await deps.destroyNative(desktopId);
           dropQuiesced(desktopId);
-          if (!deps.sessionManager.destroySession(desktopId)) return;
+          const destroyed = deps.sessionManager.destroySession(desktopId);
+          // Welcome back (design §2): same as the captureWriter branch above —
+          // the conversation moved, so this device stops offering it back,
+          // whether or not this particular destroy call returned true.
+          deps.untrackWelcomeBack?.(desktopId);
+          if (!destroyed) return;
         } catch (e) { console.warn('[takeover] teardown failed; retaining lease', e); return; }
       }
       // WHY: even an interrupted PTY may append again until its worker stops.

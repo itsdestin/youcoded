@@ -14,6 +14,8 @@
 // production build, so Vite folds every branch below to dead code — nothing in
 // here can fire in Electron or the Android WebView.
 
+declare const __SHOOT__: boolean;
+
 /** True in ANY document the workbench boots — including the PRODUCTION site build.
  *
  *  WHY this exists next to `isWorkbenchMode()`, which looks almost identical:
@@ -41,8 +43,13 @@ export function isWorkbenchDocument(): boolean {
 
 /** True only inside the UI Workbench (`bash scripts/run-workbench.sh`). */
 export function isWorkbenchMode(): boolean {
+  // WHY the photo-only build too: `shoot` photographs a packaged copy, and the
+  // screens behind this predicate (the terminal's canned screen, voice input,
+  // page connections) came out blank there. `__SHOOT__` is a build-time literal
+  // (vite.config.ts) that is false in the app AND the landing page's demo, so
+  // this still folds to `false` in both.
   // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
-  if (!import.meta.env.DEV) return false;
+  if (!(import.meta.env.DEV || (typeof __SHOOT__ !== 'undefined' && __SHOOT__))) return false;
   if (typeof location === 'undefined') return false;
   return new URLSearchParams(location.search).get('mode') === 'workbench';
 }
@@ -132,4 +139,29 @@ export function workbenchScreenFrame(): ScreenFrame {
   if (!isWorkbenchMode()) return 'cards';
   const raw = new URLSearchParams(location.search).get('screenFrame') ?? 'cards';
   return (SCREEN_FRAMES as readonly string[]).includes(raw) ? (raw as ScreenFrame) : 'cards';
+}
+
+/** Chrome-style override for reviewing a chrome layout on ANY theme, without
+ *  editing that theme's manifest — `?chrome=float`.
+ *
+ *  WHY this exists next to the real `layout['chrome-style']`: the style is a
+ *  theme property, and a community pack is a file the user installed rather than
+ *  something a review can rewrite. The floating-chrome round (2026-09-17) needed
+ *  the same thing for screen frames and solved it the same way. `null` means "no
+ *  override — the theme's own value", which is also what every non-workbench
+ *  document and every production build gets.
+ *
+ *  The values are `ChromeStyle`'s own, kept as string literals because
+ *  workbench-mode.ts must not import the theme layer (it is loaded by components
+ *  that a unit test may mount without a theme). */
+export type ChromeStyleOverride = 'default' | 'floating' | 'float';
+
+const CHROME_STYLE_OVERRIDES: ReadonlyArray<ChromeStyleOverride> = ['default', 'floating', 'float'];
+
+export function workbenchChromeStyle(): ChromeStyleOverride | null {
+  if (!isWorkbenchMode()) return null;
+  const raw = new URLSearchParams(location.search).get('chrome');
+  return (CHROME_STYLE_OVERRIDES as readonly string[]).includes(raw ?? '')
+    ? (raw as ChromeStyleOverride)
+    : null;
 }

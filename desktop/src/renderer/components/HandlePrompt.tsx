@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useAccount } from '../state/account-context';
 import { Button, Dialog, FieldError, InputGroup } from './ui';
+import { useScreenOpen } from '../shoot-mode';
 
 // Persisted "don't nag me again" flag. Set on skip (and on ESC, which is the
 // same as skip), never set when the user actually claims a handle.
@@ -20,6 +21,9 @@ const dismissKey = (userId: string) => `youcoded-handle-prompt-dismissed:${userI
 export default function HandlePrompt() {
   const { signedIn, user, setHandle } = useAccount();
   const [open, setOpen] = useState(false);
+  // photo-only build: nothing to click — `?signedIn=1&handleMissing=1` (mock-shim)
+  // is what makes the effect below open this on its own, same shape as `welcome`.
+  useScreenOpen('handle-prompt', () => {});
 
   // Once the user answers (skip or save) or ESC-dismisses this session, don't
   // let the effect re-open the prompt — even though refresh() re-fires the
@@ -94,7 +98,7 @@ function HandlePromptPopup({
   return createPortal(
     <>
       {/* Skip on scrim click so the prompt is genuinely skippable. */}
-      <Dialog open onClose={skip} size="prompt" aria-label="Choose a handle" scrollBody={false}>
+      <Dialog open onClose={skip} size="prompt" aria-label="Choose a handle" scrollBody={false} screen="handle-prompt">
         <div className="p-5 space-y-4">
           <div className="space-y-1.5">
             <h3 id="handle-prompt-title" className="text-sm font-semibold text-fg">Pick a handle</h3>

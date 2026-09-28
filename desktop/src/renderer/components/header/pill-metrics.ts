@@ -12,9 +12,10 @@
 // (session-runtime-label.ts). A pill is its dot and its name, nothing else.
 import { LABEL_TAIL_PX } from './pill-label-style';
 
-/** Pill chrome around the label: 6px left pad + dot (10) + 4px gap + 6px right
- *  pad + 2px border. */
-export const PILL_CHROME_PX = 28;
+/** Pill chrome around the label: 6px left pad + dot (10) + 6px gap + 2px
+ *  border. No right pad: the label's own tail (LABEL_TAIL_PX) is the right
+ *  edge, so the name sits evenly between the pill's ends (2026-09-27). */
+export const PILL_CHROME_PX = 24;
 
 /** Fallback font for the measurement, used only until the strip has read the
  *  REAL computed font off its own label (SessionStrip). WHY that matters: the

@@ -2,11 +2,25 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { scanGgufCache, scanLocalDownloads, isComplete, ggufIdFromFileName } from '../src/main/engine/cache-scan';
+import {
+  scanGgufCache, scanLocalDownloads, isComplete, ggufIdFromFileName,
+  scanLocalDownloadsAsync, scanGgufCacheAsync,
+} from '../src/main/engine/cache-scan';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gguf-cache-')); });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(async () => {
+  // WHY every test checks this (perf, 2026-09-24): the engine's model poll now
+  // uses the ASYNC scan while other callers still use the sync one. Every layout
+  // below must read identically both ways, or the model list and the Settings
+  // list could disagree — the 2026-08-26 class of bug.
+  try {
+    expect(await scanLocalDownloadsAsync(dir)).toEqual(scanLocalDownloads(dir));
+    expect(await scanGgufCacheAsync(dir)).toEqual(scanGgufCache(dir));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function touch(name: string, bytes = 8) {
   fs.writeFileSync(path.join(dir, name), Buffer.alloc(bytes));
@@ -257,5 +271,28 @@ describe('scanLocalDownloads — one level of folders', () => {
       { id: 'Flat-Q4_K_M', sizeBytes: 5, loaded: false, state: 'unloaded' },
       { id: 'V-Q4_K_M', sizeBytes: 10, loaded: false, state: 'unloaded' },
     ]);
+  });
+});
+
+describe('the async scan (the engine model poll) matches the sync scan', () => {
+  it('a mixed cache — flat, split, partial, manifest, folder, projector, junk — reads the same both ways', async () => {
+    touch('Flat-Q4_K_M.gguf', 5);
+    touch('Big-UD-Q4_K_XL-00001-of-00002.gguf', 10);
+    touch('Big-UD-Q4_K_XL-00002-of-00002.gguf.partial', 3);
+    touch('Big-UD-Q4_K_XL-00001-of-00002.gguf.download.json', 50);
+    touch('notes.txt');
+    touchIn('V-Q4_K_M', 'V-Q4_K_M.gguf', 10);
+    touchIn('V-Q4_K_M', 'mmproj-F16.gguf', 4);
+    touchIn('Orphan-Q4_K_M', 'mmproj-F16.gguf', 900);
+    touchIn(path.join('deep', 'inner'), 'B-Q8_0.gguf', 10);
+    const asyncRows = await scanLocalDownloadsAsync(dir);
+    expect(asyncRows.map((d) => d.modelId)).toEqual(['Big-UD-Q4_K_XL-00001-of-00002', 'Flat-Q4_K_M', 'Orphan-Q4_K_M', 'V-Q4_K_M']);
+    expect(asyncRows).toEqual(scanLocalDownloads(dir));
+    expect((await scanGgufCacheAsync(dir)).map((m) => m.id)).toEqual(['Flat-Q4_K_M', 'V-Q4_K_M']);
+  });
+
+  it('a missing cache dir is an empty list, not an error', async () => {
+    expect(await scanLocalDownloadsAsync(path.join(dir, 'nope'))).toEqual([]);
+    expect(await scanGgufCacheAsync(path.join(dir, 'nope'))).toEqual([]);
   });
 });

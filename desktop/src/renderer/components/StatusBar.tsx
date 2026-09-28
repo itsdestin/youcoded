@@ -24,6 +24,7 @@ import { selectCacheReuse, selectReuseDisplay } from '../state/cache-reuse';
 import { CLAUDE_ALIASES, CLAUDE_ALIAS_LABELS, type ClaudeAlias } from '../../shared/model-ids';
 import { formatTime12, formatDayLong, formatMonthDay } from '../../shared/time-format';
 import { usableOtherWindows, windowLengthLabel } from './plan-windows';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // --- Session stats shape (written by statusline.sh to .session-stats-{id}.json) ---
 
@@ -764,6 +765,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
   // expandedInfo because the cycle editor is Theme-specific and collapses the
   // info panel when opened (and vice-versa) — they're mutually exclusive rows.
   const [cycleEditorOpen, setCycleEditorOpen] = useState(false);
+  useScreenOpen('chat/status-bar/themes', () => setCycleEditorOpen(true)); // photo-only build
   // Theme list + cycle membership come from the theme context, consumed here
   // so the Theme pill's cycle can be edited without leaving the widget popup.
   const { allThemes, cycleList, setCycleList } = useTheme();
@@ -789,7 +791,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
           "No flex-1" workaround is gone too: that was needed because its body
           was a bare overflow-y-auto div with no min-height:0, which .scroll-fade
           supplies. */}
-      <Dialog open onClose={onClose} title="Status Bar Widgets" size="panel">
+      <Dialog screen="chat/status-bar" open onClose={onClose} title="Status Bar Widgets" size="panel">
             {WIDGET_CATEGORIES.map((cat) => (
               <section key={cat.name}>
                 <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
@@ -914,6 +916,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                             every theme checked here. Must keep ≥1 in the cycle. */}
                         {showCycleEditor && (
                           <div className="ml-7 mr-2 mb-1.5 px-2.5 py-2 rounded-md bg-inset border border-edge-dim text-3xs space-y-1.5">
+                            <ScreenMark name="chat/status-bar/themes" />
                             <p className="text-fg-dim leading-relaxed">
                               Pick which themes the pill rotates through when you tap it.
                             </p>
@@ -998,12 +1001,19 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   const { activeTheme, cycleTheme, contextDisplay } = useTheme();
   const { visible, toggle } = useWidgetVisibility();
   const [popupOpen, setPopupOpen] = useState(false);
+  useScreenOpen('chat/status-bar', () => setPopupOpen(true)); // photo-only build: `shoot` opens it by name
   // Version pill now opens the in-app UpdatePanel (changelog + update action) instead of firing external URLs.
   const [updatePanelOpen, setUpdatePanelOpen] = useState(false);
+  useScreenOpen('chat/update', () => setUpdatePanelOpen(true)); // photo-only build
   const [contextPopupOpen, setContextPopupOpen] = useState(false);
+  useScreenOpen('chat/context', () => setContextPopupOpen(true)); // photo-only build
   // Full-text view of the announcement chip — the chip itself truncates at 280px,
   // so longer messages are read here.
   const [announcementOpen, setAnnouncementOpen] = useState(false);
+  // photo-only build: `?announcement=1` (mock-shim) is what actually makes the
+  // Dialog below exist to open — without it hasAnnouncement is false and this
+  // would open nothing.
+  useScreenOpen('chat/announcement', () => setAnnouncementOpen(true));
   const hasAnnouncement = !!statusData.announcement?.message && !isExpired(statusData.announcement.expires);
   // WHY: without this, an announcement that expires while its popup is open would
   // leave the flag set, and the NEXT announcement would pop open unprompted.
@@ -1762,7 +1772,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {/* Announcement popup — the whole message, since the chip truncates it.
           pre-wrap keeps the line breaks the author wrote. */}
       {hasAnnouncement && statusData.announcement && (
-        <Dialog open={announcementOpen} onClose={() => setAnnouncementOpen(false)} title="Announcement" size="panel">
+        <Dialog open={announcementOpen} onClose={() => setAnnouncementOpen(false)} title="Announcement" size="panel" screen="chat/announcement">
           <p className="text-sm text-fg whitespace-pre-wrap break-words leading-relaxed">
             {statusData.announcement.message}
           </p>

@@ -1,3 +1,4 @@
+import type { NativePermissionMode } from '../../../shared/permission-types';
 import { MARKETPLACE_API_HOST } from '../../state/marketplace-api-client';
 import type { ChatGptAccountStatus } from '../../../shared/chatgpt-types';
 import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
@@ -135,9 +136,17 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // Web search keys — real channels (search:* in main); listed so the
   // contract test checks them like every other hand-written fake.
   'search.list', 'search.test', 'search.setKey', 'search.removeKey',
+  // Settings → Performance (`?gpus=2` shows it) — real channels, a fixture machine here.
+  'performance.get', 'performance.set',
   // G-1 — real backend as of 2026-08-28; hand-written so the gallery's Bash
   // cards keep their fixture state instead of talking to a real process.
   'native.killShell', 'on.shellEvent',
+  // admin-password (2026-09-26) — real backend on all five surfaces
+  // (permission-broker.ts's password kind, admin-password-service.ts,
+  // ipc-handlers/preload/remote-shim/remote-server/SessionService.kt);
+  // hand-written so the gallery's password card can be reviewed with no
+  // real sudo, socket or askpass helper.
+  'native.submitAdminPassword',
   // "What the assistant was given" — real backend as of 2026-09-10; hand-written
   // here so the panel has file text to show without a filesystem.
   'native.sessionContextText', 'native.onSessionContext',
@@ -509,6 +518,26 @@ function applyFailSwitch(impls: Record<string, Record<string, unknown>>): void {
   }
 }
 
+/** `?stall=session.browse` — the stall twin of `?fail=`: each named channel never
+ *  answers, so a spinner's long-wait state (Resume's "still loading", 2026-09-26)
+ *  can be photographed. Same nested-path rules as applyFailSwitch. */
+function applyStallSwitch(impls: Record<string, Record<string, unknown>>): void {
+  const raw = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('stall') : null;
+  if (!raw) return;
+  for (const path of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const parts = path.split('.');
+    if (parts.length < 2) continue;
+    let parent: Record<string, unknown> = impls;
+    for (const key of parts.slice(0, -1)) {
+      const current = parent[key];
+      const copy = current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
+      parent[key] = copy;
+      parent = copy;
+    }
+    parent[parts[parts.length - 1]] = () => new Promise(() => {});
+  }
+}
+
 /** `?update=available` — the status pill's update, which no scenario otherwise sends. */
 function updateStatusSwitch(): { current: string; latest: string; update_available: true; download_url: string } | null {
   if (typeof location === 'undefined' || new URLSearchParams(location.search).get('update') !== 'available') return null;
@@ -518,6 +547,14 @@ function updateStatusSwitch(): { current: string; latest: string; update_availab
     update_available: true,
     download_url: 'https://github.com/itsdestin/youcoded/releases/tag/v1.3.0',
   };
+}
+
+/** `?announcement=1` — a real, unexpired announcement, so `chat/announcement` can
+ *  open StatusBar's own Announcement <Dialog> (statusData otherwise always sends
+ *  `announcement: null`, matching the fetch-not-run default). */
+function announcementSwitch(): { message: string; fetched_at: string; expires?: string } | null {
+  if (typeof location === 'undefined' || new URLSearchParams(location.search).get('announcement') !== '1') return null;
+  return { message: 'YouCoded 1.3.0 is out — new themes, faster sync, and the games arcade.', fetched_at: new Date().toISOString() };
 }
 
 export function createMockShim(store: MockStore): Window['claude'] {
@@ -566,6 +603,7 @@ export function createMockShim(store: MockStore): Window['claude'] {
   // "Cannot read properties of undefined (reading 'find')". Driving the impl
   // keys means a new namespace works the moment it is written.
   applyFailSwitch(impls);
+  applyStallSwitch(impls);
   for (const ns of new Set([...NAMESPACES, ...Object.keys(impls)])) {
     bridge[ns] = withCatchAll(ns, impls[ns] ?? {});
   }
@@ -679,6 +717,9 @@ interface UntypedSessionWrites {
   setTag: (sessionId: string, tagId: string, value: boolean) => Promise<{ ok: boolean }>;
   setNote: (sessionId: string, note: string) => Promise<{ ok: boolean }>;
   getMeta: (sessionId: string) => Promise<{ tags: string[]; note: string; supported: boolean; flags: Record<string, boolean> }>;
+  // Welcome back (MOCK_ONLY — see mock-only.ts).
+  reopenList: () => Promise<string[]>;
+  forgetReopen: (ids: string[]) => Promise<{ ok: boolean }>;
 }
 
 /** Upsert one session's meta slice, seeding from a `past` row of the same id so
@@ -866,7 +907,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // is switched, Grok answers, the user reacts) — replaying one fixed answer
   // to every message could not film it. One-turn fixtures behave as before.
   const replyCursor = new Map<string, number>();
-  const startReply = (sessionId: string, text: string) => {
+  // `echoUser`: Claude Code sessions only (session.sendInput) — Claude Code records the typed
+  // message in its transcript; a native session's app draws the user's bubble itself.
+  const startReply = (sessionId: string, text: string, echoUser = false) => {
     const raw = REPLY_SCRIPTS[`./fixtures/replies/${replyScriptName()}.jsonl`];
     if (!raw) { console.warn(`[workbench] no reply script "${replyScriptName()}"`); return; }
     const turns = splitTurns(parseReplyScript(raw));
@@ -887,6 +930,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       transcript: (e) => subs.transcript.forEach((f) => f(e)),
       hook: (e) => subs.hook.forEach((f) => f(e)),
       speed,
+      echoUser,
     });
   };
 
@@ -951,6 +995,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     handoff: handoff as any,
     list: async () => store.getState().sessions,
     browse: async () => store.getState().past,
+    // Welcome back — MOCK_ONLY until the per-install list lands in main.
+    reopenList: async () => delay(store.getState().reopen),
+    forgetReopen: async (ids: string[]) => {
+      store.setState((s) => ({ ...s, reopen: s.reopen.filter((id) => !ids.includes(id)) }));
+      return delay({ ok: true });
+    },
 
     create: async (opts) => {
       // Admission belongs to creation, just like the desktop backend. A race
@@ -1011,7 +1061,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // hookHandler). SessionStart maps to no chat action, so the only effect
       // is lifting the Initializing overlay. Deferred so App has run its
       // sessionCreated handler (SESSION_INIT) before the hook arrives.
-      if (resumedRow && created.provider === 'claude') {
+      // Every Claude Code session, not only a resumed one (2026-09-26): a brand-new one
+      // otherwise sat on "Initializing session…" forever, so no journey could send its
+      // first message — the real app lifts it within seconds.
+      if (created.provider === 'claude') {
         setTimeout(() => subs.hook.forEach((f) => f({ type: 'SessionStart', sessionId: id, payload: {} })), 50);
       }
       return created;
@@ -1031,7 +1084,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // Control bytes are ignored inside playReply so the PTY-shaped calls App
     // makes for Claude Code sessions ('\r', '\x1b') never start a script.
     canSend: () => true,
-    sendInput: (sessionId: string, text: string) => startReply(sessionId, text),
+    sendInput: (sessionId: string, text: string) => startReply(sessionId, text, true),
     // Real signature is Promise<boolean> (useIpc.ts/preload.ts), not {ok} —
     // resolvePermission already returns a boolean (false = stale/unknown id).
     respondToPermission: async (requestId: string, _decision: object) => resolvePermission(requestId),
@@ -1214,6 +1267,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     test: async (_id: string, key: string) => ({ ok: key.trim().length > 8, message: key.trim().length > 8 ? 'Connected.' : 'That key is too short to be valid.' }),
     setKey: async (id: string) => { if (store.refuseWrites) throw new Error('refused'); searchKeys.add(id); return true; },
     removeKey: async (id: string) => { if (store.refuseWrites) throw new Error('refused'); searchKeys.delete(id); return true; },
+  };
+
+  // Settings → Performance only appears on a computer with two graphics chips.
+  // `?gpus=2` pretends to be one, so the row and its popup can be opened and
+  // photographed (`shoot settings/performance`); without it the row stays
+  // hidden, exactly as on a one-chip machine.
+  const twoGpus = typeof location !== 'undefined' && new URLSearchParams(location.search).get('gpus') === '2';
+  let preferPowerSaving = false;
+  // Named perfMock: a local `performance` would shadow the browser's own for
+  // everything else in this function.
+  const perfMock = {
+    get: async () => ({
+      preferPowerSaving,
+      appliedAtLaunch: false,
+      multiGpuDetected: twoGpus,
+      gpuList: twoGpus ? ['AMD Radeon 8060S (built in)', 'NVIDIA GeForce RTX 4070 Laptop GPU'] : ['AMD Radeon 8060S (built in)'],
+    }),
+    set: async (value: boolean) => { if (store.refuseWrites) throw new Error('refused'); preferPowerSaving = value; return { ok: true as const }; },
   };
 
   // A key saved through the fake Connect dialog, so the card re-reads as
@@ -1729,6 +1800,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
 
   let contextPreferences: import('../../../shared/context-preferences').ContextPreferences = { openrouter: 'standard', chatgpt: 'standard' };
   let stepGuard: number | null = null;
+  const nativeModes = new Map<string, NativePermissionMode>();
+  const nativePermission = {
+    getPermissionMode: async (sessionId: string) => nativeModes.get(sessionId) ?? 'ask',
+    setPermissionMode: async (sessionId: string, mode: NativePermissionMode) => {
+      if (store.refuseWrites) return nativeModes.get(sessionId) ?? 'ask';
+      nativeModes.set(sessionId, mode);
+      return mode;
+    },
+  };
   const native: Ns<'native'> = {
     supported: true,
     getContextPreferences: async () => ({ ...contextPreferences }),
@@ -1737,6 +1817,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       contextPreferences = { ...contextPreferences, ...patch };
       return { ...contextPreferences };
     },
+    // Permission mode per native session. WHY (2026-09-24): with no entry here the
+    // catch-all proxy answered `[]`, which App.tsx reads as 'unknown' — so every
+    // native session in the workbench wore a red "PERMISSION UNKNOWN" chip no real
+    // session shows (seen in the themes' preview screenshots). A new session starts
+    // on 'ask', the preset default (main/harness/preset-registry.ts).
+    // getPermissionMode is in preload but not in the renderer's Window type (App.tsx
+    // reaches it through `as any`), so it is spread in rather than written here.
+    ...nativePermission,
     getStepGuard: async () => stepGuard,
     setStepGuard: async (value: number | null) => {
       if (store.refuseWrites) throw new Error('The workbench is refusing writes.');
@@ -1786,6 +1874,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // G-1: the card's Stop just resolves — the gallery fixture stays in its
     // captured state rather than spawning anything real.
     killShell: async (_sessionId: string, _shellId: string) => ({ ok: true }),
+    // admin-password (2026-09-26): the fixture stays in its captured state —
+    // there is no real sudo/askpass here to actually deliver a password to.
+    // `?adminPasswordFail=1` lets a reviewer pin the "ask expired" card state
+    // (submit returns false) without needing a real socket to close.
+    submitAdminPassword: async (_requestId: string, _password: string) =>
+      new URLSearchParams(location.search).get('adminPasswordFail') !== '1',
     // "What the assistant was given": one file's text, read on demand. The real
     // one reads the file and runs the session's own fitter; there is no
     // filesystem here, so the fixtures below stand in — including a genuinely
@@ -1997,6 +2091,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     renameDevice: async () => ({ ok: true }),
     removeDevice: async () => ({ ok: true }),
   };
+  // `?sync=<state>` — the Backup & Sync states the review plans used to patch in by hand:
+  // `ok` (every space synced), `auth-error` (GitHub sign-in expired), `oversize` (files
+  // too big to sync). The default stays the failing-sync state the panel already shows.
+  const syncSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('sync') : null;
+  if (syncSwitch) {
+    const base = syncSpaces.status;
+    (syncSpaces as { status: () => Promise<unknown> }).status = async () => {
+      const st = await base();
+      const events = st.recentEvents.filter((e: { type: string }) => e.type !== 'error');
+      if (syncSwitch === 'auth-error') return { ...st, recentEvents: [...events, { type: 'error', spaceId: 'personal', at: SYNC_NOW - 30_000, errorCode: 'github-auth', message: 'GitHub sign-in expired — reconnect your GitHub account in the Sync settings' }] };
+      if (syncSwitch === 'oversize') return { ...st, recentEvents: events, oversize: [{ spaceId: 'personal', files: ['Conversations/claude/transcripts/youcoded-dev/84ee31a9.jsonl', 'Conversations/claude/transcripts/youcoded-dev/b4c2255f.jsonl'] }], oversizeLimitMb: 50 };
+      return { ...st, recentEvents: events };
+    };
+  }
 
   // The LEGACY rclone half of Backup & Sync (Drive/iCloud/GitHub backends), which
   // SyncPanel reads alongside syncSpaces above.
@@ -2370,8 +2478,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // stay reviewable.
   const signedInSwitch = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('signedIn') === '1';
+  // `?handleMissing=1` (with `?signedIn=1`) fakes a just-signed-in account with no
+  // handle yet, so `chat/handle-prompt`'s screen entry can open the real
+  // HandlePrompt dialog instead of needing `noScreen`.
+  const handleMissingSwitch = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('handleMissing') === '1';
   const FIXTURE_USER: MarketplaceUser = {
-    id: 'workbench:you', login: 'you', avatar_url: '', display_name: 'You', handle: 'you',
+    id: 'workbench:you', login: 'you', avatar_url: '', display_name: 'You',
+    handle: handleMissingSwitch ? null : 'you',
   };
   const account: Ns<'account'> = {
     signedIn: async () => signedInSwitch,
@@ -2858,6 +2972,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // object.
   const windowNs = {
     getId: async () => WORKBENCH_WINDOW_ID,
+    // Welcome back's in-app quit warning — MOCK_ONLY. `?quit=ask` plays the
+    // close button being pressed, so the prompt is reviewable without a window
+    // manager; the answer is only logged. requestId is a fixed string: the
+    // workbench is a single tab with no whole-app quit to race this prompt
+    // against, so nothing here needs it to be unique.
+    onCloseRequest: (cb: (req: { requestId: string; sessions: number }) => void) => {
+      if (typeof location === 'undefined' || new URLSearchParams(location.search).get('quit') !== 'ask') return () => {};
+      const t = setTimeout(() => cb({ requestId: 'workbench-close', sessions: store.getState().sessions.length }), 400);
+      return () => clearTimeout(t);
+    },
+    answerClose: (answer: { requestId: string; close: boolean; reopen?: boolean }) => {
+      console.info('[workbench] close answer', answer);
+    },
+    // Real main.ts pushes this only when a whole-app quit settles a request
+    // the renderer was still waiting on (design §4 step 5) — never reachable
+    // here, but the subscription must exist so App's effect has something to
+    // call.
+    onCloseRequestCancelled: (_cb: (payload: { requestId: string }) => void) => () => {},
   };
   const detach: Ns<'detach'> & { openDetached: (payload: { sessionId: string }) => void } = {
     // Present so `detachAvailable` is true and the "Launch in New Window"
@@ -2967,7 +3099,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         cb({
           usage: fixture.usage,
           chatgptUsage: chatgptUsageFixture(),
-          announcement: null,
+          announcement: announcementSwitch(),
           updateStatus: updateStatusSwitch(),
           syncWarnings: [],
           contextMap: {},
@@ -2985,9 +3117,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // effort: 'auto'`, which is exactly what App.tsx read before this namespace
   // existed (the untyped `(window.claude as any).modes` access resolved to the
   // catch-all's `[]`, so `m?.fast` was always undefined -> false).
+  // Remembers a set() for the page's life, as the real handler keeps a file: a tester
+  // who picked Low saw Auto again on reopening and reported it as an app bug (2026-09-26).
+  let modesState = { fast: activeScenario === 'statusbar-cc', effort: 'auto' };
   const modes = {
-    get: async () => ({ fast: activeScenario === 'statusbar-cc', effort: 'auto' }),
-    set: async () => ({ ok: true }),
+    get: async () => ({ ...modesState }),
+    set: async (m: { fast?: boolean; effort?: string }) => { modesState = { ...modesState, ...m }; return { ...modesState }; },
   };
   // Scripted replies: the transcript/hook events a played reply fixture emits
   // (playReply in sendInput above). Same attachment pattern as specialistEvent
@@ -3033,6 +3168,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // throwing synchronously inside marketplace-context's Promise.all.
     marketplace: {
       list: async () => (marketplaceEmpty ? [] : MARKETPLACE_THEMES.map((t) => ({ ...t }))),
+      // Real implementations for ThemeShareSheet's two mount-time calls: left to
+      // the catch-all, both resolve `[]` (truthy), and `previewPath.replace(...)`
+      // on an array crashes the dialog on open (found opening `marketplace/theme-share`).
+      generatePreview: async () => null,
+      resolvePublishState: async () => ({ kind: 'draft' }),
     },
   };
 
@@ -3123,6 +3263,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return [...skillFavourites];
     },
     getFeatured: async () => (marketplaceEmpty ? { hero: [], rails: [] } : JSON.parse(JSON.stringify(FEATURED))),
+    // ShareSheet's mount-time call: left to the catch-all, it resolves `[]`
+    // (truthy), and the QR code renders garbage instead of a real-looking link.
+    getShareLink: async (id: string) => `https://youcoded.app/skill/${id}`,
   };
   // fs:read-head — the first bytes of an attached file, for the composer's
   // attachment cards. Canned per file kind so the screenshot rig sees a REAL
@@ -3309,7 +3452,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search,
+    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),

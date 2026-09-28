@@ -80,7 +80,23 @@ export interface PortableModelRef {
  *    'secret-maybe': it could (a glob, a find with no usable filter).
  *  The card's wording comes from this, so it never claims more than the check
  *  knows (review N11). */
-export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe';
+export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe' | 'admin';
+
+/** A running Bash call whose `sudo` is waiting for the computer password
+ *  (admin-password design, 2026-09-25). The card asks for it; the password
+ *  itself never enters this state, a transcript or the model's view. */
+export interface PasswordAsk {
+  requestId: string;
+  /** The exact admin step sudo will run, read from the sudo process itself —
+   *  never the prompt text the command supplied (a command can choose its own
+   *  prompt, e.g. "Enter your Google password"). */
+  command: string;
+  /** Set when the admin step is inside another command (an install script):
+   *  that command's name, so the card can say who is asking. */
+  via?: string;
+  /** Set after a wrong password: how many tries sudo has left. */
+  triesLeft?: number;
+}
 
 export type NativeSendResult =
   | { status: 'sent' }
@@ -145,6 +161,12 @@ export interface SessionInfo {
    *  Consumed once by InputBar on first render after session switch; cleared via
    *  a consumed-set ref so it never re-fires on re-renders. */
   initialInput?: string;
+  /** Claude Code session that has NOT yet run its first hook — it is still on
+   *  its startup dialogs (trust, bypass, MCP approval). The HOST knows this; a
+   *  window or phone that connects mid-startup must not assume "already
+   *  running" and open the chat box onto a live dialog (dev-instance finding,
+   *  2026-09-24). Absent = started (older hosts). */
+  awaitingStart?: boolean;
 }
 
 // A refused resume creates no session. Keep it distinct from both startup
@@ -228,7 +250,26 @@ export type TranscriptEventType =
   // reducer and attribute the child's model to the parent. Bookkeeping only — it
   // never enters the timeline and never enters model history (history-rebuild.ts's
   // default branch drops it).
-  | 'subagent-usage';
+  | 'subagent-usage'
+  // Claude Code only: a background helper/command ended — parsed from its
+  // <task-notification>. The launching card's tool result is only "launched",
+  // so this is the ONLY signal the work is over (2026-09-24). Carries
+  // `data.backgroundTask`, and `data.toolUseId` when Claude Code names the call.
+  | 'background-task';
+
+/** A Claude Code background task's end state, as its <task-notification> says.
+ *  Claude Code writes 'completed' | 'failed' | 'killed' | 'stopped'; 'killed'
+ *  (the user or the model stopped it) is folded into 'stopped' here. */
+type CcBackgroundStatus = 'running' | 'completed' | 'failed' | 'stopped';
+
+/** See ToolCallState.ccBackground. `result` is a helper's final report;
+ *  `summary` is Claude Code's one-line account of how it ended. */
+export interface CcBackgroundRun {
+  taskId: string;
+  status: CcBackgroundStatus;
+  summary?: string;
+  result?: string;
+}
 
 /**
  * Opaque-to-the-renderer handle for "the page before this one". `offset` is the
@@ -250,6 +291,9 @@ export interface TranscriptPageRequest {
    */
   claudeSessionId?: string;
   projectSlug?: string;
+  /** First page only: read to EOF, not the tailer's start — a renderer rebuilt while the
+   *  session ran missed the live stream, so recent messages vanished (2026-09-27). */
+  toEnd?: boolean;
 }
 
 export interface PageCursor {
@@ -301,6 +345,19 @@ export interface TranscriptEvent {
     stopReason?: string;
     /** Edit/MultiEdit tool-result payloads carry structuredPatch hunks. */
     structuredPatch?: StructuredPatchHunk[];
+    /** Claude Code tool-result only: this call started work that keeps going
+     *  in the background (an Agent's `agentId`, or a Bash command's
+     *  `backgroundTaskId`), so the result is a launch receipt, not the outcome.
+     *  The outcome arrives later as a 'background-task' event. */
+    backgroundTaskId?: string;
+    /** Claude Code SendMessage tool-result only: the finished helper it resumed
+     *  (`toolUseResult.resumedAgentId`) — that helper's card works again. */
+    resumedTaskId?: string;
+    /** 'background-task' only: which task(s) ended and how. `taskIds` is a list
+     *  because Claude Code reports several orphaned commands in one notice on
+     *  resume. `result` is a helper's final report; `summary` is Claude Code's
+     *  one-line description ("Agent \"X\" finished", "... (exit code 0)"). */
+    backgroundTask?: { taskIds: string[]; status: Exclude<CcBackgroundStatus, 'running'>; summary?: string; result?: string };
     /** Native user-message events: absolute composer attachment paths, persisted so
      *  resume can re-read the pixels (events carry no binary). #290 follow-up fix 2. */
     attachments?: string[];
@@ -645,6 +702,11 @@ export type SubagentSegment =
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
       resolvedRequestId?: string;
+      /** admin-password design §2.5/§2.6: this nested Bash call's sudo is
+       *  waiting for the computer password — mirrors ToolCallState.passwordAsk
+       *  so a specialist's own sudo nests under its Task card exactly like a
+       *  permission ask does, instead of showing at the top level. */
+      passwordAsk?: PasswordAsk;
     }
   | {
       /** A steer — "send a note" — from the user (card action) or the parent
@@ -825,6 +887,17 @@ export interface ToolCallState {
    *  → the "Always allow" button is HIDDEN (for the same reason as `external`)
    *  and Full auto's stop band names which floor. See FloorStop. */
   floorStop?: FloorStop;
+  /** Native runtime only: this command's sudo is waiting for the computer
+   *  password. Status flip (Destin, 2026-09-26 dogfood: while the password
+   *  card waits, the card looked like it was still running, with nothing
+   *  marking the session as needing input): the card's own `status` flips to
+   *  'awaiting-approval' for as long as this is set (chat-reducer.ts
+   *  PASSWORD_REQUEST/PASSWORD_RESOLVED) — exactly like a permission ask,
+   *  so it can't be mistaken for a running command. A password ask has no
+   *  `requestId` of its own on this field (only nested inside `passwordAsk`
+   *  itself), so a consumer that used to gate on `!!requestId` alone must
+   *  use `needsUserAnswer()` (specialist-cards.ts) instead. */
+  passwordAsk?: PasswordAsk;
   /** Native broker only: the session's permission mode when the ask fired.
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */
@@ -873,6 +946,16 @@ export interface ToolCallState {
   subagentSegments?: SubagentSegment[];
   agentType?: string;
   agentId?: string;
+  /**
+   * Claude Code only: this call started work that outlives it — an Agent
+   * (every CC Agent call runs in the background as of 2026-09) or a Bash
+   * `run_in_background` command. Its tool result is only the launch receipt,
+   * so `status: 'complete'` alone read "done" the instant the helper started.
+   * This record is the work's real state: 'running' from the receipt until the
+   * 'background-task' notice says how it ended. The CC counterpart of
+   * `specialistRun` / `shellRun` below, and drives the card the same way.
+   */
+  ccBackground?: CcBackgroundRun;
   /**
    * Native specialists (1c): the live run record for the hire THIS Task call
    * started, keyed to the card by parentToolCallId. Drives the card's real
@@ -1015,6 +1098,10 @@ export interface ShellRunView {
   /** True when the command was moved to the background at its time limit
    *  rather than started there — the card says so. */
   detached?: boolean;
+  /** Something this command started is still running with admin rights (it
+   *  passed the admin password card). The card keeps a "Running as admin"
+   *  strip with Stop in view until it ends (admin-password design, Q-still-running). */
+  admin?: boolean;
   startedAt: number;
   endedAt?: number;
   /** The last lines of output so far (the full log lives at logPath). */
@@ -1799,6 +1886,7 @@ export const IPC = {
   SESSION_HISTORY: 'session:history',
   // Mark/unmark a session flag (complete, priority, helpful, …)
   SESSION_SET_FLAG: 'session:set-flag',
+  SESSION_MENU_LOCK: 'session:menu-lock',
   // Broadcast when session metadata changes (carries a flag + value)
   SESSION_META_CHANGED: 'session:meta-changed',
   // Custom session tags (registry CRUD + application) and per-session notes.
@@ -1816,6 +1904,10 @@ export const IPC = {
   SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
   SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
   SESSION_GET_META: 'session:get-meta', // (sessionId) → { tags, note, supported }
+  // Welcome back (design 2026-09-24 §3): the per-install "open at last
+  // shutdown" list. Desktop-only — Android always answers []/{ok:true}.
+  SESSION_REOPEN_LIST: 'session:reopen-list',     // () → string[] (conversation ids)
+  SESSION_FORGET_REOPEN: 'session:forget-reopen', // (ids: string[]) → { ok: true }
   TAGS_LIST: 'tags:list',
   TAGS_CREATE: 'tags:create',           // (label, color)
   TAGS_UPDATE: 'tags:update',           // (id, { label?, color?, archived? })
@@ -1841,6 +1933,13 @@ export const IPC = {
   // Repositions macOS traffic lights so they sit inside the floating chrome's
   // rounded header; null restores OS default. Called from theme-engine.
   WINDOW_SET_TRAFFIC_LIGHT_POS: 'window:set-traffic-light-pos',
+  // Welcome back's in-app quit warning (design §4, plan T3). Electron-only
+  // (window.claude.window) — no remote-shim/Android twin, same as the other
+  // WINDOW_* entries above: a phone or browser tab never owns a desktop
+  // session for this to ask about.
+  WINDOW_CLOSE_REQUEST: 'window:close-request',                       // Main -> Renderer (push): {requestId, sessions}
+  WINDOW_ANSWER_CLOSE: 'window:answer-close',                         // Renderer -> Main: {requestId, close, reopen?}
+  WINDOW_CLOSE_REQUEST_CANCELLED: 'window:close-request-cancelled',   // Main -> Renderer (push): {requestId}
   // Zoom controls
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',
@@ -2085,6 +2184,9 @@ export const IPC = {
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',   // G-1: the Bash card's Stop button
+  // admin-password design §2.5: the card's Confirm button. Request-response —
+  // the card needs the boolean to know whether to show the ask as ended.
+  NATIVE_SUBMIT_ADMIN_PASSWORD: 'native:submit-admin-password',
   // "What the assistant was given" (2026-09-10): the session-start push carrying
   // the inventory, and the on-demand read of ONE file's text. Two channels
   // because file bodies do not belong in a push — see SessionContext above.

@@ -87,6 +87,8 @@ import { SessionStripMotionDemo } from '../mockups/SessionStripMotion';
 // actual settle → breathe → wake. A sleep pose cannot be judged from a still —
 // two thirds of it is motion.
 import { BuddySleepDemo } from '../mockups/BuddySleep';
+// mascot-frame-rate: the REAL welcome mascot, old full-refresh loop vs the 30/s one.
+import { MascotFrameRateDemo } from '../mockups/MascotFrameRate';
 import { FriendlyMascots } from '../mockups/FriendlyMascots';
 import { RemoteSetupDemo } from '../mockups/RemoteSetup';
 // The REAL derivation the shipping card will use — a candidate that hardcoded
@@ -161,7 +163,7 @@ const SFX_CTX: CompleteSessionContext = {
     // What the model received — the outline. Headings kept, bodies cut.
     text: '# CLAUDE.md\n\n## Theme authoring\n- Tokens are named --bg-*, --fg-*, --border-*\n- Every theme ships a dark variant\n\n## Marketplace\n- Publish via /theme-builder\n\n## Building\n- npm run build\n\n…',
     // The full file on disk — the diff compares this to `text`.
-    fullText: '# CLAUDE.md\n\n# Theme authoring\n\nWeCoded themes are defined by a semantic token system. Every color the\ninterface uses is a CSS custom property, not a raw hex value, so a theme\npack can restyle the whole app without touching a component.\n\nTokens are named --bg-*, --fg-*, --border-*. All --bg-* and --fg-* tokens\nmust form an accessible pair: contrast ratio 4.5:1 at normal text size,\n3:1 at large. Every theme ships a dark variant that re-derives the same\nset from a darker base.\n\nCustom CSS is supported but must never re-define a token — it layers\nON TOP of the semantic system, and only after the tokens have applied.\n\n# Marketplace\n\nPublish a theme via the /theme-builder skill. The registry validates the\nmanifest, checks token coverage, and renders the preview image.\n\n# Building\n\nThemes are plain CSS. Run `npm run build` to emit the distributable\npack and validate the manifest against the registry schema.\n\n# Testing\n\nEvery token must be present in at least one state of the app. The\ncontrast audit script in scripts/audit-theme-contrast.mjs walks every\nsurface and fails on a token pair below 3:1.\n\n# Releases\n\nVersion bumps happen through the marketplace-publisher skill. A release\nrequires a clean audit, a changelog entry, and a tagged commit.\n',
+    fullText: '# CLAUDE.md\n\n# Theme authoring\n\nYouCoded themes are defined by a semantic token system. Every color the\ninterface uses is a CSS custom property, not a raw hex value, so a theme\npack can restyle the whole app without touching a component.\n\nTokens are named --bg-*, --fg-*, --border-*. All --bg-* and --fg-* tokens\nmust form an accessible pair: contrast ratio 4.5:1 at normal text size,\n3:1 at large. Every theme ships a dark variant that re-derives the same\nset from a darker base.\n\nCustom CSS is supported but must never re-define a token — it layers\nON TOP of the semantic system, and only after the tokens have applied.\n\n# Marketplace\n\nPublish a theme via the /theme-builder skill. The registry validates the\nmanifest, checks token coverage, and renders the preview image.\n\n# Building\n\nThemes are plain CSS. Run `npm run build` to emit the distributable\npack and validate the manifest against the registry schema.\n\n# Testing\n\nEvery token must be present in at least one state of the app. The\ncontrast audit script in scripts/audit-theme-contrast.mjs walks every\nsurface and fails on a token pair below 3:1.\n\n# Releases\n\nVersion bumps happen through the marketplace-publisher skill. A release\nrequires a clean audit, a changelog entry, and a tagged commit.\n',
     truncated: true,
     note: '3 of 12 sections kept (headings only)',
   },
@@ -172,7 +174,7 @@ const SFX_CTX: CompleteSessionContext = {
       path: '/home/destin/youcoded-dev/wecoded-themes/skills/theme-builder/SKILL.md',
       truncated: true,
       note: 'body cut to fit the window',
-      fullText: '# Theme Builder\n\nUse this skill to build, preview, and publish a WeCoded theme.\n\n## When to use it\n- The user wants a new theme or to restyle an existing one\n- The user asks to publish or update a theme on the registry\n\n## Steps\n1. Load the current token set from the active theme.\n2. Present the color palette as a before/after preview.\n3. On approval, write the theme pack and run the audit.\n4. Publish via /marketplace-publisher.\n\n## Rules\n- Never hand-write a hex value; always derive from a token.\n- Keep the dark variant in lockstep with the light one.\n',
+      fullText: '# Theme Builder\n\nUse this skill to build, preview, and publish a YouCoded theme.\n\n## When to use it\n- The user wants a new theme or to restyle an existing one\n- The user asks to publish or update a theme on the registry\n\n## Steps\n1. Load the current token set from the active theme.\n2. Present the color palette as a before/after preview.\n3. On approval, write the theme pack and run the audit.\n4. Publish via /marketplace-publisher.\n\n## Rules\n- Never hand-write a hex value; always derive from a token.\n- Keep the dark variant in lockstep with the light one.\n',
     },
     { id: 'marketplace-publisher', label: 'marketplace-publisher', path: '/home/destin/youcoded-dev/wecoded-marketplace/skills/marketplace-publisher/SKILL.md' },
     { id: 'chatsearch', label: 'chatsearch', path: '/home/destin/youcoded-dev/youcoded/desktop/skills/chatsearch/SKILL.md' },
@@ -4552,6 +4554,24 @@ function PresentRefTable() {
 }
 
 const ALL_SURFACES: CompareSurface[] = [
+  {
+    id: 'mascot-frame-rate',
+    label: 'Mascot — frame rate',
+    question: 'Does the mascot moving 30 times a second look as good as the old full-refresh motion?',
+    frame: 'canvas',
+    // Welcome-screen size plus the style buttons; judged at his real size.
+    paneWidth: 260,
+    rounds: [
+      {
+        n: 1,
+        basis: "Destin, 2026-09-26: \"lets test at a lower framerate?\" — after measuring on his real screen that the idle welcome mascot kept the graphics chip ~36% busy (8% with it hidden). Until now: CSS keyframes, drawn at the panel's full refresh rate. 30 per second: the same keyframes, computed in MascotRig's own 30/s update (measured on his screen: ~12-17% busy, app CPU ~2/3 -> ~1/4 of a core). Same rig, same motion values; only the rate differs.",
+        candidates: [
+          { id: 'full-refresh', label: 'Until now', note: 'Smooth CSS loop — the screen redraws at its full rate (180/s on yours).', render: () => <MascotFrameRateDemo driver="css" /> },
+          { id: 'thirty', label: '30 per second', note: 'The same motion, drawn 30 times a second with the limbs.', render: () => <MascotFrameRateDemo driver="tick" /> },
+        ],
+      },
+    ],
+  },
   {
     id: 'buddy-sleep',
     label: 'Buddy — falling asleep',

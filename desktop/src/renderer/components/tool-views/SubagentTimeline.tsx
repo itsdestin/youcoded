@@ -7,7 +7,7 @@ import { SpecialistAskBlock } from '../specialists/SpecialistAskBlock';
 import { CheckIcon, FailIcon, ChevronIcon, QuestionIcon, NoteIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
 import { useExpandAllToggle, getInitialExpanded } from '../../hooks/useExpandAllToggle';
-import { segmentToToolState } from '../../utils/specialist-cards';
+import { segmentToToolState, needsUserAnswer } from '../../utils/specialist-cards';
 
 /**
  * Renders a subagent's inline timeline inside the parent AgentView card.
@@ -219,7 +219,10 @@ const SubagentToolRow = memo(function SubagentToolRow({
   // ToolCards, so subagent rows read like "Reading config.ts" rather than
   // "READ /path/to/config.ts".
   const { label, detail } = friendlyToolDisplay(tool);
-  const awaiting = segment.status === 'awaiting-approval' && !!segment.requestId;
+  // needsUserAnswer, not a bare requestId check — a nested password ask
+  // (segment.passwordAsk) is 'awaiting-approval' too but carries no
+  // requestId of its own on this row (coordinator, 2026-09-26).
+  const awaiting = needsUserAnswer(segment);
 
   return (
     <div

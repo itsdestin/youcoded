@@ -46,6 +46,10 @@ const IPC = {
   SESSION_LIST: 'session:list',
   SESSION_CREATED: 'session:created',
   SESSION_DESTROYED: 'session:destroyed',
+  // Welcome back (design 2026-09-24 §3): the per-install "open at last
+  // shutdown" list.
+  SESSION_REOPEN_LIST: 'session:reopen-list',
+  SESSION_FORGET_REOPEN: 'session:forget-reopen',
   PTY_OUTPUT: 'pty:output',
   PTY_RAW_BYTES: 'pty:raw-bytes',
   HOOK_EVENT: 'hook:event',
@@ -129,6 +133,7 @@ const IPC = {
   SESSION_HISTORY: 'session:history',
   // Mark/unmark a session flag (complete, priority, helpful, …)
   SESSION_SET_FLAG: 'session:set-flag',
+  SESSION_MENU_LOCK: 'session:menu-lock',
   // Pushed when session metadata (a flag value) changes so open browsers refresh
   SESSION_META_CHANGED: 'session:meta-changed',
   // Session tags + note (custom user tags, freeform note)
@@ -171,6 +176,12 @@ const IPC = {
   // fixed window coords, so the floating-chrome header (margin + radius) leaves
   // them stranded in empty space. Caller passes a {x,y} offset or null to reset.
   WINDOW_SET_TRAFFIC_LIGHT_POS: 'window:set-traffic-light-pos',
+  // Welcome back's in-app quit warning (design §4, plan T3) — must stay
+  // byte-identical to shared/types.ts (ipc-channels.test.ts's hand-written
+  // parity block for this trio; preload can't import that file directly).
+  WINDOW_CLOSE_REQUEST: 'window:close-request',
+  WINDOW_ANSWER_CLOSE: 'window:answer-close',
+  WINDOW_CLOSE_REQUEST_CANCELLED: 'window:close-request-cancelled',
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',
   ZOOM_RESET: 'zoom:reset',
@@ -398,6 +409,8 @@ const IPC = {
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',
+  // admin-password design §2.5 — mirrors shared/types.ts.
+  NATIVE_SUBMIT_ADMIN_PASSWORD: 'native:submit-admin-password',
   // "What the assistant was given" (2026-09-10): the session-start push carrying
   // the inventory, and the on-demand read of ONE file's text. Two channels
   // because file bodies do not belong in a push — see shared/types.ts's
@@ -552,6 +565,10 @@ contextBridge.exposeInMainWorld('claude', {
     // The desktop talks over IPC, so there is no connection to be down. Present on both
     // bridges so the composer can ask without knowing which one it has.
     canSend: () => true,
+    // One device at a time answers a menu by verified navigation — the lock
+    // lives in main (menu-answer-lock.ts), shared with the remote host.
+    menuLock: (sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.SESSION_MENU_LOCK, sessionId, holder, action),
     sendInput: (sessionId: string, text: string) =>
       ipcRenderer.send(IPC.SESSION_INPUT, sessionId, text),
     resize: (sessionId: string, cols: number, rows: number) =>
@@ -583,6 +600,11 @@ contextBridge.exposeInMainWorld('claude', {
     // Read a session's applied tag ids + note (used by the in-session Tag chip).
     getMeta: (sessionId: string): Promise<SessionMetaResult> =>
       ipcRenderer.invoke(IPC.SESSION_GET_META, sessionId),
+    // Welcome back (design §3): conversation ids open at the last shutdown.
+    reopenList: (): Promise<string[]> =>
+      ipcRenderer.invoke(IPC.SESSION_REOPEN_LIST),
+    forgetReopen: (ids: string[]): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke(IPC.SESSION_FORGET_REOPEN, ids),
   },
   // Tag registry CRUD (custom user-defined tags shared across sessions).
   tags: {
@@ -990,11 +1012,11 @@ contextBridge.exposeInMainWorld('claude', {
     readLastModel: (transcriptPath: string): Promise<string | null> => ipcRenderer.invoke(IPC.MODEL_READ_LAST, transcriptPath),
   },
   appearance: {
-    get: (): Promise<{ theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; glassOverrides?: Record<string, Record<string, number>> } | null> =>
+    get: (): Promise<{ theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; lookOverrides?: Record<string, unknown> } | null> =>
       ipcRenderer.invoke(IPC.APPEARANCE_GET),
-    // Accepts arbitrary appearance prefs — glassOverrides stores per-theme
-    // glass slider overrides for community/builtin themes
-    set: (prefs: { theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; glassOverrides?: Record<string, Record<string, number>> }): Promise<boolean> =>
+    // Accepts arbitrary appearance prefs — lookOverrides holds the user's global
+    // look choices laid over every theme (renderer themes/look-overrides.ts)
+    set: (prefs: { theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; lookOverrides?: Record<string, unknown> }): Promise<boolean> =>
       ipcRenderer.invoke(IPC.APPEARANCE_SET, prefs),
     // Multi-window appearance sync: any window calling broadcast forwards its
     // change to every OTHER peer window so ThemeProvider can apply it without
@@ -1191,6 +1213,26 @@ contextBridge.exposeInMainWorld('claude', {
     // Returns this renderer's BrowserWindow webContents id — used by the detach
     // subsystem so a window can identify itself when resolving cross-window drops.
     getId: (): Promise<number> => ipcRenderer.invoke(IPC.WINDOW_GET_ID),
+    // Welcome back's in-app quit warning (design §4, plan T3). Main pushes
+    // this instead of showing an OS dialog when the closing window still owns
+    // active sessions; the renderer answers with `{requestId, close, reopen}`.
+    // Electron-only — no shim/Android twin (design §3).
+    onCloseRequest: (cb: (req: { requestId: string; sessions: number }) => void) => {
+      const wrapped = (_e: IpcRendererEvent, req: { requestId: string; sessions: number }) => cb(req);
+      ipcRenderer.on(IPC.WINDOW_CLOSE_REQUEST, wrapped);
+      return () => ipcRenderer.removeListener(IPC.WINDOW_CLOSE_REQUEST, wrapped);
+    },
+    answerClose: (answer: { requestId: string; close: boolean; reopen?: boolean }) =>
+      ipcRenderer.invoke(IPC.WINDOW_ANSWER_CLOSE, answer),
+    // Whole-app quit wins over a pending prompt (design §4 step 5): pushed
+    // when shutdownApp() settles a request the renderer was still waiting on,
+    // so the dialog does not sit open describing a window that is already
+    // closing.
+    onCloseRequestCancelled: (cb: (payload: { requestId: string }) => void) => {
+      const wrapped = (_e: IpcRendererEvent, payload: { requestId: string }) => cb(payload);
+      ipcRenderer.on(IPC.WINDOW_CLOSE_REQUEST_CANCELLED, wrapped);
+      return () => ipcRenderer.removeListener(IPC.WINDOW_CLOSE_REQUEST_CANCELLED, wrapped);
+    },
   },
   // Multi-window detach: drag a session pill to a new OS window, re-dock, etc.
   // Main owns a WindowRegistry (sessionId → windowId); per-session events route
@@ -1508,6 +1550,11 @@ contextBridge.exposeInMainWorld('claude', {
     // G-1: the Bash card's Stop button. Request-response — the card needs
     // {ok, reason} to stop showing "Stopping…" when nothing was stopped.
     killShell: (sessionId: string, shellId: string) => ipcRenderer.invoke(IPC.NATIVE_KILL_SHELL, { sessionId, shellId }),
+    // admin-password design §2.5: the card's Confirm button. Request-response —
+    // the card needs the boolean to show itself as ended on a false (expired ask).
+    // Never logged/echoed on this side either; main converts to a Buffer at once.
+    submitAdminPassword: (requestId: string, password: string) =>
+      ipcRenderer.invoke(IPC.NATIVE_SUBMIT_ADMIN_PASSWORD, { requestId, password }),
     // One file's text for the "What the assistant was given" panel, read when the
     // user opens that row. Runs the session's OWN fitter and budget in main, so
     // what the panel shows is what the model would receive.

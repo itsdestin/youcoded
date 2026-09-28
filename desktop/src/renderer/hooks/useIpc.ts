@@ -42,6 +42,10 @@ declare global {
         respondToPermission: (requestId: string, decision: object) => Promise<boolean>;
         browse: () => Promise<any[]>;
         loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) => Promise<any>;
+        // Welcome back (design 2026-09-24 §3): conversation ids open at the
+        // last shutdown.
+        reopenList: () => Promise<string[]>;
+        forgetReopen: (ids: string[]) => Promise<{ ok: boolean }>;
       };
       skills: {
         list: () => Promise<import('../../shared/types').SkillEntry[]>;
@@ -373,6 +377,10 @@ declare global {
         setStepGuard: (value: number | null) => Promise<number | null>;
         sessionsList: () => Promise<any[]>;
         killShell: (sessionId: string, shellId: string) => Promise<{ ok: true } | { ok: false; reason: string }>;   // G-1
+        // admin-password design §2.5: the card's Confirm button. false means the
+        // ask expired (no live askpass connection left to deliver into) — the
+        // card shows itself as ended, never a retry of the same field.
+        submitAdminPassword: (requestId: string, password: string) => Promise<boolean>;
         // Per-session bound-model residency push (2026-07-14): { sessionId,
         // modelId, state: 'unloaded'|'loading'|'loaded'|'sleeping', sizeBytes }.
         onModelState: (cb: (s: any) => void) => () => void;

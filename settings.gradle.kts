@@ -12,6 +12,6 @@ dependencyResolutionManagement {
         maven("https://jitpack.io")
     }
 }
-rootProject.name = "destin-code"
+rootProject.name = "youcoded"
 include(":app")
 include(":terminal-emulator-vendored")

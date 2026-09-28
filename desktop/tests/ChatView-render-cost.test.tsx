@@ -18,21 +18,83 @@ import { render } from '@testing-library/react';
 // SAME props, which the memoised default export skips by design (see ChatView.tsx).
 import { UnmemoizedChatView as ChatView } from '../src/renderer/components/ChatView';
 import { findArchiveBoundary } from '../src/renderer/state/archive-boundary';
+import { chatReducer } from '../src/renderer/state/chat-reducer';
+import type { ChatAction, ChatState } from '../src/renderer/state/chat-types';
+import { entryRenders, resetEntryRenders } from './helpers/entry-render-probes';
 
 const mocks = vi.hoisted(() => ({ state: {} as any }));
 
-vi.mock('../src/renderer/state/chat-context', () => ({
-  useChatState: () => mocks.state,
-  useChatDispatch: () => vi.fn(),
-}));
+vi.mock('../src/renderer/state/chat-context', async (importOriginal) => {
+  // ToolCard's specialist lookup reads the store directly; an empty real store
+  // answers "no specialist run" exactly as the app does for a plain Bash call.
+  const real = await importOriginal<any>();
+  const store = real.createChatStore();
+  return {
+    useChatState: () => mocks.state,
+    useChatDispatch: () => vi.fn(),
+    useChatStore: () => store,
+  };
+});
 
-vi.mock('../src/renderer/state/ArtifactContext', () => {
+vi.mock('../src/renderer/state/ArtifactContext', async (importOriginal) => {
   // ChatView reads the artifact store through narrow selectors (perf, 2026-09-23).
+  // The rest is real: ToolCard's optional selector degrades to "no provider".
+  const real = await importOriginal<any>();
   const state = { drawerOpenBySession: {}, drawerExpanded: false };
   return {
+    ...real,
     useArtifactSelector: (select: (s: any) => unknown) => select(state),
     useArtifactDispatch: () => vi.fn(),
   };
+});
+
+// Per-entry render counters (tests/helpers/entry-render-probes.tsx): each wraps
+// the real component, keeping its memo, and counts renders under its entry id.
+// Only the streamed-word budget below reads them; they change nothing else.
+vi.mock('../src/renderer/components/UserMessage', async (orig) => {
+  const real = await orig<any>();
+  const { probeEntry } = await import('./helpers/entry-render-probes');
+  return { ...real, default: probeEntry(real.default, 'UserMessage', (p: any) => p.message.id) };
+});
+vi.mock('../src/renderer/components/AssistantTurnBubble', async (orig) => {
+  const real = await orig<any>();
+  const { probeEntry } = await import('./helpers/entry-render-probes');
+  return { ...real, default: probeEntry(real.default, 'AssistantTurnBubble', (p: any) => p.turn.id) };
+});
+vi.mock('../src/renderer/components/ToolCard', async (orig) => {
+  const real = await orig<any>();
+  const { probeEntry } = await import('./helpers/entry-render-probes');
+  return { ...real, default: probeEntry(real.default, 'ToolCard', (p: any) => p.tool.toolUseId) };
+});
+vi.mock('../src/renderer/components/PromptCard', async (orig) => {
+  const real = await orig<any>();
+  const { probeEntry } = await import('./helpers/entry-render-probes');
+  return { ...real, default: probeEntry(real.default, 'PromptCard', (p: any) => p.prompt.promptId) };
+});
+vi.mock('../src/renderer/components/UsageCard', async (orig) => {
+  const real = await orig<any>();
+  const { probeEntry } = await import('./helpers/entry-render-probes');
+  return { ...real, default: probeEntry(real.default, 'UsageCard', (p: any) => p.snapshot.entryId) };
+});
+vi.mock('../src/renderer/components/SystemMarker', async (orig) => {
+  const real = await orig<any>();
+  const { probeEntry } = await import('./helpers/entry-render-probes');
+  return { ...real, default: probeEntry(real.default, 'SystemMarker', (p: any) => p.marker.id) };
+});
+vi.mock('../src/renderer/components/SkillInvocationCard', async (orig) => {
+  const real = await orig<any>();
+  const { probeEntry } = await import('./helpers/entry-render-probes');
+  return { ...real, default: probeEntry(real.default, 'SkillInvocationCard', (p: any) => p.skillId) };
+});
+vi.mock('../src/renderer/components/CopyPicker', async (orig) => {
+  const real = await orig<any>();
+  const { probeEntry } = await import('./helpers/entry-render-probes');
+  return { ...real, default: probeEntry(real.default, 'CopyPicker', (p: any) => p.id) };
+});
+vi.mock('../src/renderer/components/TimelineEntryHint', async (orig) => {
+  const real = await orig<any>();
+  const { probeEntry } = await import('./helpers/entry-render-probes');
+  return { ...real, TimelineEntryHint: probeEntry(real.TimelineEntryHint, 'TimelineEntryHint', (p: any) => p.entryKey) };
 });
 
 // The real markdown pipeline is irrelevant here and slow to mount.
@@ -233,5 +295,85 @@ describe('ChatView — auto-scroll pins on content, never on the activity timest
     mocks.state = { ...mocks.state, isThinking: true, lastActivityAt: mocks.state.lastActivityAt + 7 };
     r.rerender(view());
     expect(reads()).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// Perf (2026-09-24): a word streamed into the chat on screen re-renders only
+// the reply being written.
+//
+// ChatView re-renders once per streamed word — it has to, the live reply is
+// growing. It used to build every timeline row inline, so each word also
+// re-rendered every card that is not memoised on its own: with the 24-entry
+// conversation below and 40 words, 40 renders EACH of the /clear and model
+// markers, the skill, prompt, usage and copy cards, and all seven archived-entry
+// hints. Now each row is ChatTimelineRow (memoised, stable props), so a word
+// reaches only the live turn. User bubbles, finished turns and their tool cards
+// were already 0 (memoised themselves) and must stay 0.
+//
+// State is built by the REAL reducer, so the entry/turn/Map identities the
+// memo depends on are exactly the ones the app produces.
+describe('ChatView — a streamed word re-renders only the entry being written', () => {
+  /** Renders of every OTHER entry for a whole 40-word reply. */
+  const BUDGET_OTHER_ENTRIES_PER_REPLY = 0;
+  const WORDS = 40;
+  const SID = 's1';
+
+  function build() {
+    let chat: ChatState = new Map();
+    let n = 0;
+    const d = (a: Record<string, unknown>) => {
+      chat = chatReducer(chat, { sessionId: SID, timestamp: 1_000 + n, uuid: `x-${++n}`, ...a } as ChatAction);
+    };
+    const exchange = (i: number) => {
+      d({ type: 'TRANSCRIPT_USER_MESSAGE', text: `question ${i}` });
+      d({ type: 'TRANSCRIPT_ASSISTANT_TEXT', text: `Answer ${i}.` });
+      d({ type: 'TRANSCRIPT_TOOL_USE', toolUseId: `tool-${i}`, toolName: 'Bash', toolInput: { command: `ls ${i}` } });
+      d({ type: 'TRANSCRIPT_TOOL_RESULT', toolUseId: `tool-${i}`, result: 'a\nb', isError: false });
+      d({ type: 'TRANSCRIPT_ASSISTANT_TEXT', text: `Done ${i}.` });
+      d({ type: 'TRANSCRIPT_TURN_COMPLETE', stopReason: 'end_turn', model: null, anthropicRequestId: null, usage: null });
+    };
+    d({ type: 'SESSION_INIT' });
+    for (let i = 0; i < 3; i++) exchange(i);
+    d({ type: 'TRANSCRIPT_SKILL_INVOKED', skillId: 'sk-1', displayName: 'Skill One' });
+    // /clear: everything above is archived (faded, with a hint beside it).
+    d({ type: 'CLEAR_TIMELINE', markerId: 'clear-1' });
+    for (let i = 3; i < 5; i++) exchange(i);
+    d({ type: 'SHOW_PROMPT', promptId: 'prompt-1', title: 'Pick', buttons: [{ label: 'Yes', input: 'y' }, { label: 'No', input: 'n' }] });
+    d({ type: 'SHOW_USAGE_CARD', snapshot: { entryId: 'usage-1', timestamp: 1, costUsd: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: null, cacheCreationTokens: null, contextTokens: null, contextPercent: null, duration: null, apiDuration: null, linesAdded: null, linesRemoved: null } });
+    d({ type: 'SHOW_COPY_PICKER', id: 'copy-1', options: [{ id: 'o1', label: 'Full', preview: 'p', content: 'c' }] });
+    d({ type: 'MODEL_SWITCH_MARKER', markerId: 'model-1', label: 'Model switched to Opus' });
+    for (let i = 5; i < 8; i++) exchange(i);
+    d({ type: 'TRANSCRIPT_USER_MESSAGE', text: 'last question' });
+    d({ type: 'TRANSCRIPT_ASSISTANT_TEXT', text: 'Streaming ', partId: 'live' });
+    return { state: () => chat.get(SID)!, word: () => d({ type: 'TRANSCRIPT_ASSISTANT_TEXT', text: 'word ', partId: 'live' }) };
+  }
+
+  it('a streamed word re-renders the live reply and no other entry', () => {
+    const convo = build();
+    mocks.state = convo.state();
+    const kinds = mocks.state.timeline.map((e: any) => e.kind);
+    // The fixture really has every kind this budget is about (else a 0 proves nothing).
+    for (const k of ['user', 'assistant-turn', 'skill-invocation', 'system-marker', 'prompt', 'usage-card', 'copy-picker']) {
+      expect(kinds).toContain(k);
+    }
+    expect(kinds.length).toBeGreaterThanOrEqual(20);
+    const liveTurnId = mocks.state.currentTurnId;
+    const r = render(view());
+    resetEntryRenders();
+
+    for (let w = 0; w < WORDS; w++) {
+      convo.word();
+      mocks.state = convo.state();
+      r.rerender(view());
+    }
+
+    const live = `AssistantTurnBubble:${liveTurnId}`;
+    // Control: the probes see renders at all — the live reply redraws per word.
+    expect(entryRenders.get(live)).toBe(WORDS);
+    const others = Object.fromEntries([...entryRenders].filter(([k]) => k !== live));
+    const allowed = Object.fromEntries(Object.keys(others).map((k) => [k, BUDGET_OTHER_ENTRIES_PER_REPLY]));
+    expect(others).toEqual(allowed);
+    expect(r.container.textContent).toContain('word word');
+    resetEntryRenders();
   });
 });

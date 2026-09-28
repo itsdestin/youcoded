@@ -65,6 +65,8 @@ class SessionService : Service() {
     // pattern. On Android there's typically one client, so we also allow input
     // if there's only one authenticated connection (covers reconnect cases).
     private val sessionOwnership = ConcurrentHashMap<String, String>()
+    /** Per-session answer lock for verified menu navigation (review F4). */
+    private val menuAnswerLock = MenuAnswerLock()
 
     // Tracks the per-session coroutine job that collects rawByteFlow and
     // broadcasts pty:raw-bytes push events. Cancelled when the session is destroyed
@@ -1021,6 +1023,15 @@ class SessionService : Service() {
                     })
                 })
             }
+            // Welcome back (design 2026-09-24 §3, S-phone): the "open at last
+            // shutdown" screen is desktop-only, so Android never has a real
+            // list — always answer as if nothing is offered.
+            "session:reopen-list" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
+            }
+            "session:forget-reopen" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
+            }
             "session:list" -> {
                 val sessions = sessionRegistry.sessions.value.map { (id, session) ->
                     MessageRouter.buildSessionInfo(
@@ -1029,7 +1040,8 @@ class SessionService : Service() {
                         status = if (session.status.value == SessionStatus.Dead) "destroyed" else "active",
                         permissionMode = session.permissionMode,
                         skipPermissions = session.dangerousMode,
-                        createdAt = session.createdAt
+                        createdAt = session.createdAt,
+                        awaitingStart = session.awaitingStart,
                     )
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray(sessions)) }
@@ -1700,6 +1712,15 @@ class SessionService : Service() {
                     .put("unsupported", true)
                     .put("error", "not-implemented-on-mobile")
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
+            }
+            "session:menu-lock" -> {
+                // One device at a time answers a menu by verified navigation
+                // (desktop: menu-answer-lock.ts, review F4). On the phone's own
+                // runtime there is one WebView, but the rule is the same.
+                val sid = msg.payload.optString("sessionId", "")
+                val holder = msg.payload.optString("holder", "")
+                val granted = menuAnswerLock.handle(sid, holder, msg.payload.optString("action", ""))
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, granted) }
             }
             "session:set-flag" -> {
                 // Set a named flag on a past session. Writes the same
@@ -4312,6 +4333,12 @@ class SessionService : Service() {
             // native harness, so this is the honest refusal; the phone stops a
             // DESKTOP command through the remote WebSocket path instead.
             "native:kill-shell",
+            // admin-password design §2.5/R19: sudo asks the DESKTOP's own
+            // AskpassServer for a password, so this is desktop-only like the
+            // rest of this block — a phone answers a DESKTOP session's card
+            // over the remote WebSocket path (native:submit-admin-password on
+            // remote-server.ts), never through Android's own native runtime.
+            "native:submit-admin-password",
             // "What the assistant was given" (2026-09-10). The context record
             // itself is PUSHED, and reaches a phone inside chat:hydrate over the
             // remote WebSocket — there is nothing to answer here. This is the

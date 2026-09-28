@@ -75,6 +75,21 @@ export class SecretsStore {
     return this.parseStore(raw);
   }
 
+  /** read()'s async twin, with the SAME error narrowing (only ENOENT reads as
+   *  empty). WHY (2026-09-24 blocking-calls B8): get() runs on every cloud
+   *  model turn to fetch the API key, and a sync read there froze every window
+   *  for the read. read() stays for has(), whose callers are synchronous. */
+  private async readAsync(): Promise<Record<string, string>> {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(this.file, 'utf8');
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return {};
+      throw e;
+    }
+    return this.parseStore(raw);
+  }
+
   /**
    * Read-modify-write the store file inside cas-write's mkdir lock, with the
    * NativeHome-style retry-then-THROW: a contended write that silently
@@ -126,7 +141,7 @@ export class SecretsStore {
 
   /** Only a missing ref is null; failed reads leave ciphertext intact for retry. */
   async get(ref: string): Promise<string | null> {
-    const entries = this.read();
+    const entries = await this.readAsync();
     if (!Object.prototype.hasOwnProperty.call(entries, ref)) return null;
     await this.assertAvailable();
     try {

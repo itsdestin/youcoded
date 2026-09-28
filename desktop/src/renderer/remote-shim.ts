@@ -1947,6 +1947,9 @@ export function installShim(): void {
       // Set a named flag on a past session (complete, priority; helpful retired).
       setFlag: (sessionId: string, flag: string, value: boolean) =>
         invoke('session:set-flag', { sessionId, flag, value }),
+      // The host's per-session answer lock (menu-answer-lock.ts, review F4).
+      menuLock: (sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean> =>
+        invoke('session:menu-lock', { sessionId, holder, action }),
       // Toggle a custom user tag on a past session.
       setTag: (sessionId: string, tagId: string, value: boolean) =>
         invoke('session:set-tag', { sessionId, tagId, value }),
@@ -1955,6 +1958,11 @@ export function installShim(): void {
         invoke('session:set-note', { sessionId, note }),
       // Read a session's applied tag ids + note (used by the in-session Tag chip).
       getMeta: (sessionId: string) => invoke('session:get-meta', { sessionId }),
+      // Welcome back (design §3): implemented for SharedBridge parity, but the
+      // renderer's own gating (App.tsx, T4) never calls this off-desktop —
+      // remote browsers and Android don't show the Welcome back screen (S-phone).
+      reopenList: () => invoke('session:reopen-list'),
+      forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
@@ -3008,6 +3016,12 @@ export function installShim(): void {
       // G-1: NOT gated on `supported` — a phone must be able to Stop a command
       // running on the DESKTOP, whose runtime is the one that owns it.
       killShell: (sessionId: string, shellId: string) => invoke('native:kill-shell', { sessionId, shellId }),
+      // admin-password design §2.5, contract R6: a paired phone or browser may
+      // answer the password card too — NOT gated on `supported`, same as
+      // killShell above. `password` is never logged or echoed on this hop
+      // either; it rides straight inside the WS frame to remote-server.ts.
+      submitAdminPassword: (requestId: string, password: string) =>
+        invoke('native:submit-admin-password', { requestId, password }),
       // One file's text for the session-context panel. NOT gated on `supported`,
       // for the same reason killShell is not: the desktop owns the session and
       // its files, and a phone looking at that chat must be able to read them.

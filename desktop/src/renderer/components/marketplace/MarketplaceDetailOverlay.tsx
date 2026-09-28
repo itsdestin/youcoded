@@ -29,6 +29,7 @@ import { Button, CloseButton, Callout } from "../ui";
 // Task 3: `longDescription` is markdown and used to be printed verbatim, so a
 // listing that wrote "**Heading**" showed the asterisks.
 import MarkdownContent from "../MarkdownContent";
+import { ScreenMark } from '../../shoot-mode';
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -143,6 +144,8 @@ export default function MarketplaceDetailOverlay({
         layer={2}
         className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
       >
+        {/* Photo-only build: marked only when the item was found, never on "not found". */}
+        {React.isValidElement(content) && content.type !== NotFound && <ScreenMark name={target.kind === 'skill' ? 'marketplace/detail' : 'marketplace/theme-detail'} />}
         <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
           <h2 className="text-lg font-semibold text-fg">Details</h2>
           {/* Wide: Esc-text hint. Narrow: bordered close-X matching the marketplace top bar. */}

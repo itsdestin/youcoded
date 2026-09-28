@@ -1,7 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// Only execFileSync is replaced (the default `vm_stat` reader); everything else
+// in child_process is the real module.
+const { mockExecFileSync } = vi.hoisted(() => ({ mockExecFileSync: vi.fn() }));
+vi.mock('child_process', async (orig) => ({
+  ...(await orig() as any),
+  execFileSync: (...args: any[]) => mockExecFileSync(...args),
+}));
+
 import {
   estimateFit, checkDiskSpace, checkMemoryForLoad, kvCacheBytes, contextLengthFor,
-  poolFromDevices, availableMemoryBytes, isResident, WORKING_HEADROOM_BYTES,
+  poolFromDevices, availableMemoryBytes, isResident, WORKING_HEADROOM_BYTES, VM_STAT_TIMEOUT_MS,
   type MemoryCheckInputs,
 } from '../src/main/models/fit-estimator';
 import type { GgufHeader } from '../src/main/models/gguf-header';
@@ -649,5 +658,25 @@ describe('estimateFit — unified memory (Strix Halo, Apple Silicon)', () => {
       totalMemBytes: T, availableBytes: 20 * GB,
     }));
     expect(r.fit).toBe('fits');
+  });
+});
+
+describe('the default vm_stat reader cannot freeze the app', () => {
+  // WHY (perf, 2026-09-24): vm_stat runs on the main thread on every memory
+  // check and used to have NO timeout. A hung one must give up and fall back to
+  // free memory — the smaller, more cautious number — never wait forever.
+  it('runs vm_stat with a timeout', () => {
+    mockExecFileSync.mockReset();
+    mockExecFileSync.mockReturnValue('Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages free: 10.\n');
+    expect(availableMemoryBytes({ platform: 'darwin', freemem: () => 1 })).toBe(10 * 4096);
+    expect(mockExecFileSync).toHaveBeenCalledWith('vm_stat', [], expect.objectContaining({ timeout: VM_STAT_TIMEOUT_MS }));
+    expect(VM_STAT_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(VM_STAT_TIMEOUT_MS).toBeLessThanOrEqual(5_000);
+  });
+
+  it('a vm_stat that times out falls back to free memory (errs towards warning)', () => {
+    mockExecFileSync.mockReset();
+    mockExecFileSync.mockImplementation(() => { throw Object.assign(new Error('spawnSync vm_stat ETIMEDOUT'), { code: 'ETIMEDOUT' }); });
+    expect(availableMemoryBytes({ platform: 'darwin', freemem: () => 2 * GB })).toBe(2 * GB);
   });
 });

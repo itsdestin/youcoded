@@ -17,6 +17,8 @@ import FolderSwitcher from './components/FolderSwitcher';
 import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { useChatViewHandlers } from './hooks/use-chatview-handlers';
+import { useAppScreens } from './shoot-app-screens';
+import { ScreenMark } from './shoot-mode';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
@@ -70,13 +72,17 @@ import { useNativeSessionTotals } from './hooks/useNativeSessionTotals';
 import { useZoomControls } from './hooks/useZoomControls';
 import { useChromeMeasurements } from './hooks/useChromeMeasurements';
 import { broadcastExpandAll, broadcastCollapseAll, isInExpandAllMode } from './hooks/useExpandAllToggle';
-import { AppIcon, WelcomeAppIcon, ThemeMascot } from './components/Icons';
+import { WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
-import TrustGate, { useTrustGateActive } from './components/TrustGate';
+import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
+import { InitializingCover } from './components/InitializingCover';
+import { promptShowMeansStarted, composerDisabled, startedIds } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
+import QuitSessionsPrompt from './components/QuitSessionsPrompt';
+import { fetchReopenList, forgetReopenList, resolveNativeBinding, claudeModelFor } from './state/welcome-back';
 import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
 import PreferencesPopup from './components/PreferencesPopup';
 import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, defaultRuntime, type Runtime, type Binding } from './components/RuntimeBinding';
@@ -98,14 +104,14 @@ import { PageHost } from './components/pages/PageHost';
 import { PageCreateDialog, type PageCreateRequest } from './components/pages/PageCreateDialog';
 import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
-import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
+import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider, PastSession } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { detectPermissionMode, syncKeyedSubscriptions, clearKeyedSubscriptions } from './state/permission-mode-scan';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
-import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './state/first-page-retry';
+import { createFirstPageLoader, type FirstPageLoader, type PageHint } from './state/first-page-loader';
 
 import FirstRunView from './components/FirstRunView';
-import { getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
+import { getPlatform, isAndroid, isRemoteMode, onConnectionModeChange } from './platform';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
 
 /** Remote access batch 2: where a phone's copy of the conversation stands. */
@@ -656,7 +662,11 @@ function AppInner() {
   // (see useSessionDefaults for why).
   const sessionDefaults = useSessionDefaults(settingsOpen);
 
-  usePromptDetector();
+  // The detector's startup safety net asks "still starting?" — the init gate's answer, via a ref.
+  const initializedRef = useRef(initializedSessions);
+  initializedRef.current = initializedSessions;
+  const isStarting = useCallback((sid: string) => !initializedRef.current.has(sid), []);
+  usePromptDetector({ isStarting });
   // Recovers chat→PTY submits that get lost on Windows ConPTY when Claude is
   // busy — see useSubmitConfirmation for the full mechanism. Pass active
   // session + its view mode so the hook can suppress the `\r` retry while the
@@ -680,6 +690,22 @@ function AppInner() {
 
   const dispatch = useChatDispatch();
   const chatStore = useChatStore();
+  // One first-page load per session (asking twice would prepend the newest page
+  // twice) — but a load that FAILED is forgotten and re-asked by the session's
+  // next live event, and a resume's locator reaches a load already running. The
+  // old one-shot guard left a live conversation blank ("Start a conversation")
+  // whenever its only load lost the resume race or hit a Windows file lock.
+  // See first-page-loader.ts.
+  const firstPagesRef = useRef<FirstPageLoader | null>(null);
+  if (!firstPagesRef.current) firstPagesRef.current = createFirstPageLoader({
+    request: async (req) => (window as any).claude?.detach?.requestTranscriptPage?.(req),
+    dispatch,
+    // Batch 2 (§4): the computer's copy is the only source on a remote client — wait for
+    // it, and never load a page on top of a session it delivered. Not recorded as asked,
+    // so the sessions effect retries when the hydrate lands (hydrateTick).
+    mayLoad: (sid) => shouldLoadFirstPage({ remote: isRemoteMode(), placeDecided: placeDecidedRef.current, hydrated: !!chatStore.getState().get(sid)?.history.hydrated }),
+  });
+  const firstPages = firstPagesRef.current;
   // Artifact tracker — global reducer for session/project artifact state.
   // WHY a store created once (perf, 2026-09-23): a `{ state, dispatch }` context
   // value changed on every artifact dispatch and redrew every reader (each open
@@ -1228,10 +1254,17 @@ function AppInner() {
       // Exact conversation match only: another conversation opened meanwhile must appear at once.
       if (waiting?.phase === 'waiting' && (info.resumeSessionId ?? info.id) === waiting.conversationId)
         deferredCreatedRef.current.set(info.id, info);
-      else setSessions((prev) => {
+      else {
+        // WHY here, not inside the updater below: updaters run at the next
+        // render and must be pure, so a dispatch in there landed AFTER a
+        // resume's first page (which then had no chat state to land in) and
+        // tripped React's "Cannot update a component while rendering" error.
+        // SESSION_INIT is has()-guarded, so a replayed announcement for a
+        // session that already exists changes nothing.
+        dispatch({ type: 'SESSION_INIT', sessionId: info.id });
+        setSessions((prev) => {
         // Deduplicate — replay buffers resend session:created for existing sessions
         if (prev.some((s) => s.id === info.id)) return prev;
-        dispatch({ type: 'SESSION_INIT', sessionId: info.id });
         // Only auto-focus genuinely new sessions (not replayed ones) — and on a remote
         // client not before its place is decided: the restore sends every session as
         // session:created ahead of the hydrate.
@@ -1239,6 +1272,7 @@ function AppInner() {
         if (mayAutoSelect() && !pendingRef.current?.active) setSessionId(info.id);
         return [...prev, info];
       });
+      }
       // Native harness sessions (roadmap Phase 1+) are chat-first — they have
       // no PTY, so 'terminal' would be an empty pane. Claude sessions also
       // default to chat. (Gemini, the old terminal-only provider, is gone.)
@@ -1399,6 +1433,8 @@ function AppInner() {
 
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
       if (!event?.type || !event?.sessionId) return;
+      // Live event = main can read this transcript: re-ask a failed first page (first-page-loader.ts).
+      firstPages.noteLiveActivity(event.sessionId);
 
       switch (event.type) {
         case 'user-message':
@@ -1482,9 +1518,29 @@ function AppInner() {
             result: event.data.toolResult || '',
             isError: event.data.isError || false,
             structuredPatch: event.data.structuredPatch,
+            backgroundTaskId: event.data.backgroundTaskId,
+            resumedTaskId: event.data.resumedTaskId,
             parentAgentToolUseId: event.data.parentAgentToolUseId,
             agentId: event.data.agentId,
           });
+          break;
+        case 'background-task':
+          // Claude Code: background work a card launched has ended — the only
+          // signal that it did (its tool result was just the launch receipt).
+          // Three mirrors: App.tsx, BubbleFeed.tsx, transcript-page-actions.ts.
+          if (event.data.backgroundTask) {
+            batchTranscriptDispatch({
+              type: 'TRANSCRIPT_BACKGROUND_TASK',
+              sessionId: event.sessionId,
+              uuid: event.uuid,
+              toolUseId: event.data.toolUseId,
+              taskIds: event.data.backgroundTask.taskIds,
+              status: event.data.backgroundTask.status,
+              summary: event.data.backgroundTask.summary,
+              result: event.data.backgroundTask.result,
+              parentAgentToolUseId: event.data.parentAgentToolUseId,
+            });
+          }
           break;
         case 'replay-complete':
           // End of a transcript replay — reap cards the history left 'running'.
@@ -1847,20 +1903,16 @@ function AppInner() {
 
     // Prompt events — Android bridge broadcasts Ink menu prompts detected from PTY screen
     const promptShowHandler = (window.claude.on as any).promptShow?.((payload: any) => {
-      // A prompt arriving proves the session is alive — dismiss "Initializing" overlay
-      setInitializedSessions((prev) => {
-        if (prev.has(payload.sessionId)) return prev;
-        const next = new Set(prev);
-        next.add(payload.sessionId);
-        return next;
-      });
+      // Only Android's explicit ready signal (first hook) starts the session — a
+      // startup-dialog card must not (review F1; startup-dialog-store.ts).
+      if (promptShowMeansStarted(payload.promptId)) setInitializedSessions((prev) => (prev.has(payload.sessionId) ? prev : new Set(prev).add(payload.sessionId)));
       dispatch({
         type: 'SHOW_PROMPT',
         sessionId: payload.sessionId,
         promptId: payload.promptId,
         title: payload.title,
         description: payload.description,
-        buttons: payload.buttons || [],
+        buttons: payload.buttons || [], defaultIndex: payload.defaultIndex,
       });
     });
     const promptDismissHandler = (window.claude.on as any).promptDismiss?.((payload: any) => {
@@ -2089,70 +2141,24 @@ function AppInner() {
   // claudeSessionId/projectSlug are the fallback locator for a session the
   // transcript watcher does not know yet (a just-resumed CC session) — see
   // TranscriptPageRequest.
-  // Sessions whose first page has already been asked for — asking twice would
-  // prepend the newest page a second time. An id is removed only when its
-  // session leaves the list (the effect below), never on the strength of the
-  // ANSWER: for the life of a session, the first request to arrive is the only
-  // one that ever runs.
-  const firstPageAsked = useRef<Set<string>>(new Set());
-
-  const loadFirstPage = useCallback(async (sid: string, locator?: { claudeSessionId: string; projectSlug: string }) => {
-    if (firstPageAsked.current.has(sid)) return;
-    // Batch 2 (§4): the computer's copy is the only source on a remote client — wait for
-    // it, and never load a page on top of a session it delivered. Not recorded as asked,
-    // so the sessions effect retries when the hydrate lands (hydrateTick).
-    if (!shouldLoadFirstPage({ remote: isRemoteMode(), placeDecided: placeDecidedRef.current, hydrated: !!chatStore.getState().get(sid)?.history.hydrated })) return;
-    firstPageAsked.current.add(sid);
-    dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId: sid });
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const page = await (window as any).claude?.detach?.requestTranscriptPage?.({
-          sessionId: sid,
-          beforeCursor: null,
-          claudeSessionId: locator?.claudeSessionId,
-          projectSlug: locator?.projectSlug,
-        });
-        if (!page) { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid }); return; }
-        // An empty page used to be ambiguous: either the session genuinely has
-        // no history, or main could not resolve its transcript YET (a
-        // just-started session is not watched until Claude Code's hook reports
-        // its path). Main now says which — `unresolved` — so the two get
-        // different budgets, and an unresolved one is never RECORDED: writing
-        // hasMore:false + a null cursor is what permanently removes the
-        // scroll-up sentinel (Destin, 2026-09-07). See first-page-retry.ts.
-        const decision = decideFirstPage(page, attempt);
-        if (decision === 'accept') {
-          dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: sid, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
-          return;
-        }
-        if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid }); return; }
-      } catch {
-        // The scroll sentinel can retry; a failed first page leaves an empty
-        // view rather than a wrong one.
-        dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid });
-        return;
-      }
-      await new Promise((r) => setTimeout(r, FIRST_PAGE_RETRY_MS));
-    }
-  }, [dispatch, chatStore]);
+  const loadFirstPage = useCallback((sid: string, hint?: PageHint) => firstPages.load(sid, hint), [firstPages]);
 
   // Every session this window knows about gets its most recent page — not just
   // the paths that happen to create one. History used to arrive as a side effect
   // of the live tailer replaying from byte 0, which covered every entry point by
   // accident; now that the tailer starts at EOF, a session that appears by any
   // OTHER route (adopted from the directory, created through the session API
-  // directly) would render EMPTY. Guarded by firstPageAsked, so the explicit
-  // resume calls below — which carry a locator — win the race and this skips them.
+  // directly) would render EMPTY. A resume's locator-carrying call that arrives
+  // while this one is running is picked up by it (first-page-loader.ts).
   useEffect(() => {
     // Forget closed sessions first. A native session is keyed by the id it
     // resumes, so the same id can legitimately come back — and a stale entry
     // here would silently deny it any history at all.
-    const live = new Set(sessions.map((s) => s.id));
-    for (const id of firstPageAsked.current) if (!live.has(id)) firstPageAsked.current.delete(id);
+    firstPages.retainOnly(new Set(sessions.map((s) => s.id)));
     // WHY: session:created may precede the attempt's admitted reply. Its
     // unlocated first page must not consume the receiver's one locator read.
     if (!pendingRef.current?.active) for (const s of sessions) if (!String(s.id).startsWith('pending-handoff:')) void loadFirstPage(s.id);
-  }, [sessions, loadFirstPage, hydrateTick]);
+  }, [sessions, loadFirstPage, firstPages, hydrateTick]);
 
   useEffect(() => {
     window.claude.session.list().then((list: any[]) => {
@@ -2174,6 +2180,8 @@ function AppInner() {
       // and never clobbers what session:created already seeded.
       for (const s of list) {
         dispatch({ type: 'SESSION_INIT', sessionId: s.id });
+        // WHY toEnd: it streamed while no chat listened (reload/remount) — read to EOF or recent messages vanish.
+        void loadFirstPage(s.id, { toEnd: true });
         setViewModes((vm) => vm.has(s.id) ? vm : new Map(vm).set(s.id, 'chat'));
         setPermissionModes((pm) => pm.has(s.id) ? pm : new Map(pm).set(s.id, matchPermissionMode(s.permissionMode)));
         // These sessions were already running before this window's event
@@ -2193,11 +2201,11 @@ function AppInner() {
         return [...prev, ...newSessions];
       });
       setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
-      // Mark all existing sessions as initialized — they're already running,
-      // so skip the "Initializing" overlay (which waits for first hook event)
+      // Existing sessions that have STARTED skip the "Initializing" cover; one
+      // still on its startup dialogs does not (SessionInfo.awaitingStart).
       setInitializedSessions((prev) => {
         const next = new Set(prev);
-        for (const s of list) next.add(s.id);
+        for (const id of startedIds(list)) next.add(id);
         return next;
       });
 
@@ -2212,11 +2220,10 @@ function AppInner() {
       // Ordering: the transcript:event listener is registered by an effect
       // declared ABOVE this one, so it is already attached when these replayed
       // events stream back; uuid dedup absorbs any overlap with live events.
-      // History is requested by the session-list effect above, which covers every
-      // entry point rather than only this one. Remote/Android hydrate via
-      // chat:hydrate on connect instead.
+      // History: requested in the loop above; the session-list effect covers every
+      // other entry point. Remote/Android hydrate via chat:hydrate on connect instead.
     }).catch(() => {});
-  }, [dispatch]);
+  }, [dispatch, loadFirstPage]);
 
   // Multi-window ownership wiring (Phase 2 of detach feature).
   // Subscribes to directory/leader/ownership pushes from main and mutates
@@ -2286,10 +2293,7 @@ function AppInner() {
       setSessionModels((prev) => prev.has(sid) ? prev : new Map(prev).set(sid, matchModelAlias(sessionInfo.model)));
       // Transferred sessions were already initialized on the source — skip the
       // "Initializing" overlay, it would flash briefly before replay completes.
-      setInitializedSessions((prev) => {
-        if (prev.has(sid)) return prev;
-        const next = new Set(prev); next.add(sid); return next;
-      });
+      if (!sessionInfo.awaitingStart) setInitializedSessions((prev) => (prev.has(sid) ? prev : new Set(prev).add(sid)));
       if (freshWindow) setSessionId(sid);
       // Hydrate from ONE page, not a whole-transcript replay. Main knows this
       // window INHERITED the session and serves its first page read to EOF
@@ -2297,7 +2301,7 @@ function AppInner() {
       // through the newest message, which the stop-at-startOffset page was not.
       //
       // Called here rather than left to the sessions effect below so the order
-      // is deterministic: this claims `firstPageAsked` first, and replayLiveState
+      // is deterministic: this claims the first-page load first, and replayLiveState
       // is chained AFTER the page resolves. That ordering is load-bearing —
       // replayLiveState ends with the replay-complete marker, which reaps tool
       // cards the history left 'running', and it must not run before the page
@@ -2391,8 +2395,8 @@ function AppInner() {
         // Never over a place already on screen: this reply can land after the hydrate chose
         // one (T4 review, 7).
         setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
-        // Mark existing sessions as initialized (already running)
-        setInitializedSessions(new Set(list.map((s) => s.id)));
+        // Existing sessions that have started (not those still on startup dialogs)
+        setInitializedSessions(new Set(startedIds(list)));
       }).catch(() => {});
     });
     return unsub;
@@ -2519,6 +2523,14 @@ function AppInner() {
     setDrawerFilter(undefined);
   }, []);
 
+  // A Claude Code session's model, in BOTH places it is read: the status bar chip
+  // (sessionModels) and the session itself, which the All Sessions menu labels its row
+  // from. Writing only the first left the menu on the old model (UX tester, 2026-09-26).
+  const rememberSessionModel = useCallback((sid: string, m: ModelAlias) => {
+    setSessionModels((prev) => new Map(prev).set(sid, m));
+    setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, model: m } : s)));
+  }, []);
+
   // Shared core for any "switch THIS session to model X" flow — Shift+Space
   // cycling and the typed `/model <alias>` chat command both route through
   // this so the guarded PTY send, the optimistic pill update, and the
@@ -2532,7 +2544,7 @@ function AppInner() {
     // on CC's live Ink menu and answer it. Refusing BEFORE the optimistic
     // state writes also keeps the model pill truthful when nothing was sent.
     if (!guardedPtySend(sid, `/model ${target}\r`)) return 'blocked';
-    setSessionModels((prev) => new Map(prev).set(sid, target));
+    rememberSessionModel(sid, target);
     setPendingModel(target);
     // Fix: don't verify against in-flight events from the current turn —
     // wait until a new user turn starts so we know Claude is using the new model.
@@ -2621,7 +2633,7 @@ function AppInner() {
         const actual = MODELS.find(m => actualModel.includes(baseKey(m)));
         // Revert this session's model and persisted preference to what Claude is actually using
         if (actual) {
-          if (sessionId) setSessionModels((prev) => new Map(prev).set(sessionId, actual));
+          if (sessionId) rememberSessionModel(sessionId, actual);
           (window.claude as any).model?.setPreference(actual);
         }
         const failures = consecutiveFailures.current + 1;
@@ -3430,20 +3442,10 @@ function AppInner() {
 
   const trustGateActive = useTrustGateActive(sessionId);
 
-  // Once trust gate activates, permanently mark the session as initialized
-  // so the "Initializing" overlay doesn't reappear after trust is completed
-  // (there's a gap between trust completion and the first hook event).
-  useEffect(() => {
-    if (trustGateActive && sessionId) {
-      setInitializedSessions((prev) => {
-        if (prev.has(sessionId)) return prev;
-        const next = new Set(prev);
-        next.add(sessionId);
-        (window as any).claude?.remote?.broadcastAction({ type: '_SESSION_INITIALIZED', sessionId });
-        return next;
-      });
-    }
-  }, [trustGateActive, sessionId]);
+  // No "trust gate = initialized" shortcut (removed 2026-09-24): it switched the
+  // startup safety net off for every dialog after trust. The cover steps aside
+  // for any waiting prompt card; the first real hook event marks the start.
+  const pendingPromptActive = usePendingPromptActive(sessionId);
 
   const sessionInitialized = sessionId ? initializedSessions.has(sessionId) : true;
   // Plan 2b Moved Gate: when the active session was taken over by another device,
@@ -3451,20 +3453,9 @@ function AppInner() {
   // (now-dead) chat/terminal view.
   const movedGate = sessionId ? movedSessions.get(sessionId) : undefined;
 
-  // Show a "something may be wrong" hint after 6s of waiting on initialization.
-  // WHY 6s (was 15s, shortened 2026-09-14): 15s was a long wait before the way
-  // out (the terminal view) was offered when a start really is stuck.
-  // Resets whenever the active session changes or the session becomes initialized.
-  const [initSlowWarning, setInitSlowWarning] = useState(false);
   // The init warning's button is a one-way door: switching to terminal view also
   // hides the overlay that named the toggle. This coach mark is the way back.
   const [backToChatHint, setBackToChatHint] = useState(false);
-  useEffect(() => {
-    if (sessionInitialized) { setInitSlowWarning(false); return; }
-    setInitSlowWarning(false);
-    const t = setTimeout(() => setInitSlowWarning(true), 6000);
-    return () => clearTimeout(t);
-  }, [sessionId, sessionInitialized]);
 
   // ── First-run guide ──────────────────────────────────────────────────────
   // The welcome screen's first-time version (deck 2026-09-10, Q-8): with no
@@ -3504,6 +3495,87 @@ function AppInner() {
     // edge — no manual touched reset needed here.
     setWelcomeFormOpen(true);
   }, [sessionDefaults]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ── Welcome back (design 2026-09-24) ─────────────────────────────────────
+  // Asked ONCE per launch, strip empty, not while a phone catches up, and only
+  // in the LEADER window (remote/Android never — S-phone; a non-leader WAITS).
+  const [welcomeBackIds, setWelcomeBackIds] = useState<string[] | null>(null);
+  const welcomeBackAsked = useRef(false);
+  useEffect(() => {
+    if (welcomeBackAsked.current || isFirstRun !== false || !sessionListLoaded || remoteCatchingUp) return;
+    if (!(myWindowId != null && leaderWindowId !== -1) && !isRemoteMode() && !isAndroid()) return; // leader not yet known
+    if (isRemoteMode() || isAndroid() || !isLeader) { welcomeBackAsked.current = true; return; }
+    welcomeBackAsked.current = true;
+    if (sessions.length > 0) return;
+    let alive = true;
+    void fetchReopenList().then((ids) => { if (alive && ids.length > 0) setWelcomeBackIds(ids); });
+    return () => { alive = false; };
+  }, [isFirstRun, sessionListLoaded, remoteCatchingUp, sessions.length, myWindowId, leaderWindowId, isLeader]);
+  const welcomeBackDone = useCallback(() => {
+    setWelcomeBackIds((ids) => { if (ids) void forgetReopenList(ids); return null; });
+  }, []);
+  // Resume every ticked row through the same path as a Resume-browser click, one
+  // at a time so each goes through its own lease check. A native row reuses the
+  // model it last ran on (Q-model); one whose model is not set up here is left
+  // on the list for a manual Resume, which asks.
+  const welcomeBackResumeMany = useCallback(async (rows: PastSession[]): Promise<{ launched: string[]; needModel: string[] }> => {
+    const [providers, catalog] = await Promise.all([
+      window.claude.providers.list(),
+      window.claude.providers.catalog(),
+    ]).catch(() => [[], []] as [any[], any[]]);
+    const done: string[] = [];
+    const needModel: string[] = [];
+    for (const r of rows) {
+      let binding: ModelBinding | undefined;
+      if (r.provider === 'native') {
+        binding = resolveNativeBinding(r.lastUsedModel, providers as any[], catalog as any[]) ?? undefined;
+        // Reported, so the screen can say WHY this row stayed (UX review 2, U2).
+        if (!binding) { needModel.push(r.sessionId); continue; }
+      }
+      const ok = await handleResumeSession(
+        r.sessionId, r.projectSlug, r.projectPath,
+        claudeModelFor(r.provider === 'native' ? undefined : r.lastUsedModel, sessionDefaults.model),
+        // WHY always false: this screen shows no Skip Permissions switch, so a
+        // default of "skip" would have reopened every session with approvals off,
+        // unseen. Resuming one row through its own card still shows the switch.
+        false, false, r.provider, binding, r.name,
+      );
+      if (ok) done.push(r.sessionId);
+    }
+    return { launched: done, needModel };
+  }, [handleResumeSession, sessionDefaults]);
+  const welcomeBackMode = useMemo(() => (welcomeBackIds && welcomeBackIds.length > 0
+    ? { ids: welcomeBackIds, onResumeMany: welcomeBackResumeMany, onDone: welcomeBackDone }
+    : undefined), [welcomeBackIds, welcomeBackResumeMany, welcomeBackDone]);
+
+  // The in-app quit warning (Welcome back S-dialog, design §4). Main asks
+  // when a window that still owns sessions is closed; the answer says whether
+  // to close and whether those sessions come back next launch. `requestId`
+  // round-trips on the answer so main can match it to the right pending
+  // request (a second window closing at the same time gets its own).
+  const [quitPrompt, setQuitPrompt] = useState<{ requestId: string; sessions: number } | null>(null);
+  useEffect(() => {
+    const api = (window.claude as any).window;
+    return api?.onCloseRequest?.((req: { requestId: string; sessions: number }) => setQuitPrompt(req)) ?? undefined;
+  }, []);
+  useEffect(() => {
+    // Whole-app quit wins over a pending prompt (design §4 step 5): main
+    // pushes this when shutdownApp() settles a request this window was still
+    // waiting on, so the dialog does not sit open describing a window that is
+    // already closing. Matched by requestId — an unrelated push (there is
+    // only ever one prompt per window, but belt-and-suspenders costs nothing)
+    // must not clear a DIFFERENT, still-live prompt.
+    const api = (window.claude as any).window;
+    return api?.onCloseRequestCancelled?.((payload: { requestId: string }) => {
+      setQuitPrompt((cur) => (cur && cur.requestId === payload.requestId ? null : cur));
+    }) ?? undefined;
+  }, []);
+  const answerClose = useCallback((answer: { close: boolean; reopen?: boolean }) => {
+    setQuitPrompt((cur) => {
+      if (cur) (window.claude as any).window?.answerClose?.({ requestId: cur.requestId, ...answer });
+      return null;
+    });
+  }, []);
+
   const autoOpenedWelcome = useRef(false);
   useEffect(() => {
     // Not while a phone is still catching up: the screen it would open over is about to fill
@@ -3653,6 +3725,8 @@ function AppInner() {
   }, []);
   const toggleGamePanel = useCallback(() => gameDispatch({ type: 'TOGGLE_PANEL' }), [gameDispatch]);
   const toggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
+  // Photo-only build: `shoot` opens these screens by name (shoot-app-screens.ts).
+  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => setTakeoverPrompt({ device: 'Devins laptop', phase }), openWelcomeForm, showNativeResumeModel: () => { setPendingNativeBinding(null); setPendingNativeResume({ claudeSessionId: 'shoot-native-resume', projectSlug: 'youcoded', projectPath: '/home/destin/youcoded-dev/youcoded' }); }, setQuitPrompt, gateSkip, gateSmallModel, gateFullAuto, setEditorSkillId, setPublishThemeSlug, setShareSkillId });
   const openResumeBrowser = useCallback(() => setResumeRequested(true), []);
 
   // Still loading first-run check
@@ -3861,27 +3935,13 @@ function AppInner() {
                   expanded={artifactState.drawerExpanded}
                 />
               )}
-              {/* Initializing overlay — shown before Claude is ready, but only in chat view.
-                 Terminal view must stay accessible during init so the user can interact there.
-                 z-10: must stay below glassmorphism chrome (z-20) so header/bottom bars remain accessible */}
-              {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && (
-                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
-                  <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
-                  {/* select-none: a status line, not content. Ctrl+A must not
-                      paint it (Destin, 2026-09-10). */}
+              {/* Initializing cover — chat view only (terminal view stays usable during
+                 init), and never over a waiting prompt card. */}
+              {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && !pendingPromptActive && (
+                <InitializingCover sessionId={sessionId} onOpenTerminal={() => { setBackToChatHint(true); handleToggleView('terminal'); }}>
+                  {/* select-none: a status line, not content (ast-grep chrome-root-select-none-app). */}
                   <p className="text-sm text-fg-dim font-medium select-none">Initializing session...</p>
-                  {initSlowWarning && (
-                    <div className="mt-4 text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2">
-                      <p>Something may be wrong. The terminal may show what it is waiting on.</p>
-                      {/* Fix: the old copy told the user to go find the chat/terminal toggle
-                         themselves. This does it in one tap — and because the overlay is
-                         hidden in terminal view, switching also clears it. */}
-                      <Button variant="secondary" size="sm" onClick={() => { setBackToChatHint(true); handleToggleView('terminal'); }}>
-                        Check terminal view
-                      </Button>
-                    </div>
-                  )}
-                </div>
+                </InitializingCover>
               )}
               {backToChatHint && currentViewMode === 'terminal' && (
                 <ViewToggleHint onDismiss={() => setBackToChatHint(false)} />
@@ -3937,7 +3997,7 @@ function AppInner() {
             {/* Always mounted so draft text survives chat↔terminal switches.
                inert disables focus/keyboard/paste when hidden so keystrokes
                reach xterm instead of the buried textarea. */}
-              <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
+              <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : isTerminalTouch ? ' bottom-docked' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
                 {/* A shell session draws NONE of the bottom chrome: no composer
                     (there is nothing to send a message to), and so no Stop
                     button, no model chip and no way into the model picker — all
@@ -3947,7 +4007,7 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
+                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
                   // Name the blocker so reaching for "Send anyway" is an informed
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).
@@ -4005,7 +4065,9 @@ function AppInner() {
               />
             </div>
           <div
-            className="flex-1 flex flex-col items-center justify-center gap-3"
+            // invisible under Welcome back: that screen takes this one's place
+            // until you choose (Q-where), rather than sitting on top of it.
+            className={`flex-1 flex flex-col items-center justify-center gap-3${welcomeBackMode ? ' invisible' : ''}`}
             // The header is position:absolute over the top of this area, so
             // center the welcome content in the space BELOW it (and above the
             // bare frame's bottom strip) rather than behind it. --top-chrome-
@@ -4016,6 +4078,7 @@ function AppInner() {
             // still centres in the open middle instead of drifting downward.
             style={{ paddingTop: 'var(--top-chrome-bottom, 2.5rem)', paddingBottom: 'var(--top-chrome-height, 2.5rem)' }}
           >
+            <ScreenMark name="welcome" />
             {/* First-time version (deck 2026-09-10, Q-8): "No Active Session"
                 reads like an error to someone who has never had one. Once a
                 session exists to resume, this is the everyday screen again.
@@ -4060,6 +4123,7 @@ function AppInner() {
                 /* Expanded new-session form with toggles.
                    data-guide-anchor: the tour's "sessions" stop rings the form. */
                 <div className="layer-surface w-full p-3 flex flex-col gap-2" data-guide-anchor="new-session-form">
+                  <ScreenMark name="welcome/new-session" />
                   <div>
                     <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Project Folder</label>
                     {/* Match SessionStrip: the picker's "Manage projects…"
@@ -4365,6 +4429,25 @@ function AppInner() {
       {skipWarning}
       {smallModelWarning}
       {fullAutoWarning}
+      {quitPrompt && (
+        <QuitSessionsPrompt
+          count={quitPrompt.sessions}
+          onCancel={() => answerClose({ close: false })}
+          onConfirm={(reopen) => answerClose({ close: true, reopen })}
+        />
+      )}
+      {/* Welcome back: its own instance, so the everyday Resume browser keeps
+          its search/filter state and open/close behaviour untouched. */}
+      {welcomeBackMode && (
+        <ResumeBrowser
+          open
+          onClose={welcomeBackDone}
+          onResume={handleResumeSession}
+          defaultModel={sessionDefaults.model}
+          defaultSkipPermissions={sessionDefaults.skipPermissions}
+          welcomeBack={welcomeBackMode}
+        />
+      )}
       <ResumeBrowser
         open={resumeRequested}
         onClose={() => setResumeRequested(false)}
@@ -4444,7 +4527,7 @@ function AppInner() {
           // optimistic state writes keeps the model pill truthful when the
           // command never reached CC. Mirrors cycleModel.
           if (!guardedPtySend(sessionId, `/model ${m}\r`)) return;
-          setSessionModels((prev) => new Map(prev).set(sessionId, m));
+          rememberSessionModel(sessionId, m);
           setPendingModel(m);
           postSwitchTurnReady.current = false;
           (window.claude as any).model?.setPreference(m);
@@ -4565,6 +4648,7 @@ function AppInner() {
         return (
           <>
             <Dialog
+              screen={`chat/takeover/${takeoverPrompt.phase}`}
               open
               onClose={() => resolveTakeover(false)}
               size="panel"
@@ -4619,7 +4703,7 @@ function AppInner() {
       {pendingNativeResume && (
         <>
           <Dialog
-            open
+            screen="chat/resume/pick-model" open
             // Dismissal stays suppressed while the resume is in flight.
             onClose={() => { if (pendingNativeResuming) return; setPendingNativeResume(null); setPendingNativeBinding(null); }}
             size="panel"

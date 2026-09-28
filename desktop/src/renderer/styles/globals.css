@@ -2,6 +2,7 @@
 @import "./buddy.css";
 @import "./mascot.css";
 @import "./motion.css";
+@import "./float-chrome.css";
 
 @source "../../";
 
@@ -724,6 +725,10 @@ body[data-mode="buddy-chat"] #theme-bg {
 /* Bottom chrome (input + status bars) — mirrors header pattern.
    Absolutely positioned so chat messages scroll behind the chrome.
    React toggles .bottom-float based on view mode. */
+/* Touch terminal view: bottom chrome in the layout but above .chrome-glass, or
+   its key row is invisible in framed themes (2026-09-24; terminal-touch-bottom-chrome test). */
+.bottom-docked { position: relative; z-index: 20; }
+
 .bottom-float {
   position: absolute;
   bottom: 0;
@@ -979,19 +984,19 @@ body[data-mode="buddy-chat"] #theme-bg {
    the name inside is laid out ONCE at its full width so it never re-wraps or
    re-ellipsises mid-animation. Whatever does not fit fades out over the last
    LABEL_TAIL_PX, the way Chrome fades a tab title — a squeezed active pill and
-   a pill mid-reveal are the same treatment at two moments. The 12px here is
-   LABEL_TAIL_PX in pill-label-style.ts; the test pins them together. */
+   a pill mid-reveal are the same treatment at two moments. The 7px is LABEL_TAIL_PX
+   (test-pinned) and the pill's right padding: it matches the left (12 did not). */
 .session-pill__label {
   display: block;
   min-width: 0;
   overflow: hidden;
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 7px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 7px), transparent);
 }
 .session-pill__name {
   display: block;
   width: max-content;
-  padding-right: 12px;
+  padding-right: 7px;
   white-space: nowrap;
 }
 
@@ -2168,6 +2173,25 @@ pre.yc-code code {
 [data-chrome-style='floating'] .chrome-glass,
 [data-input-style='floating'] .chrome-glass {
   display: none;
+}
+
+/* 'float' chrome deliberately does NOT take the `display: none` above.
+   `display: none` does not stop the element PAINTING here: the browser promotes
+   an element carrying a clip-path to its own stacking context, and in the
+   workbench it leaked a visible hairline down the right edge of the window
+   (measured 2026-09-20). It also has to stay in the tree, because chrome-glass
+   owns the `--top-chrome-bottom` / `--bottom-chrome-height` custom properties
+   that the header veil and every chat float read.
+   Instead the donut simply stops painting: the same clip-path with all four
+   strips collapsed onto the top edge. Nothing is drawn, nothing is promoted,
+   and no variable the rest of the layout depends on moves.
+   The rest of this mode is in styles/float-chrome.css. */
+[data-chrome-style='float'] .chrome-glass,
+[data-chrome-style='float'] .app-mockup .chrome-glass {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  clip-path: polygon(0 0, 100% 0, 100% 0, 0 0);
 }
 
 /* When a right pane (artifact drawer OR game pane) is open, the chat

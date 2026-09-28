@@ -301,7 +301,9 @@ async function openDialog() {
  *  driven. WHY a gate the test opens, not "every fetch after the first": the
  *  poll runs every 50 ms here, so on a loaded machine the second fetch could
  *  land before the test had even checked the BEFORE state, failing a correct
- *  component (seen 2026-09-26 under a full verify run). */
+ *  component (seen 2026-09-26 under a full verify run — the same race master
+ *  independently fixed with a holdLater/reveal() opt-in; this gate is
+ *  unconditional so every `later`-bearing call site is safe by default). */
 async function openSettings(settings: StoredModelSettings, later?: StoredModelSettings): Promise<() => void> {
   (globalThis as any).window = (globalThis as any).window ?? {};
   let landed = false;

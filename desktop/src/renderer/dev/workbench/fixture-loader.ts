@@ -109,6 +109,7 @@ export function loadFixture(
   try {
     let state = makeInitialState(sessionId);
     const blocks: FixtureBlock[] = [];
+    const passwordAsks = new Map<string, import('../../../shared/types').PasswordAsk>();
     const actions: ChatAction[] = [];
 
     for (const line of lines) {
@@ -130,6 +131,20 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+        // …then the transcript's confirmation, as a live session receives it. WHY
+        // (2026-09-24): USER_PROMPT alone leaves the bubble PENDING, and the reducer
+        // keeps pending bubbles at the timeline's tail (appendAbovePending) — so every
+        // seeded conversation drew its user message BELOW the replies to it. Found
+        // when the workbench started taking the themes' preview screenshots.
+        const confirm: ChatAction = {
+          type: 'TRANSCRIPT_USER_MESSAGE',
+          sessionId,
+          uuid: `fixture-user-${actions.length}`,
+          text: parsed.text,
+          timestamp: FIXTURE_T0 + actions.length * 1000,
+        };
+        state = chatReducer(state, confirm);
+        actions.push(confirm);
       } else if (parsed.type === 'turn_complete') {
         // Without this a seeded conversation is frozen MID-TURN: the thinking
         // chip ("Contemplating…") and the stop button stay up forever, which
@@ -289,6 +304,13 @@ export function loadFixture(
           // denyListed:true → the destructive-deny-list rule won; ToolCard
           // gates the "Always allow" strip behind a consequence warning.
           denyListed: parsed.denyListed === true,
+          // WHY: workbench reviews must exercise the same Full Auto stop as a
+          // live PermissionRequest, not silently downgrade it to generic Yes/No.
+          external: parsed.external === true,
+          permissionMode: parsed.permissionMode,
+          // Carried so a floor's card (no Always Allow, its own note) — the
+          // admin stop included — can be shown from a fixture.
+          ...(parsed.floorStop ? { floorStop: parsed.floorStop } : {}),
         };
         state = chatReducer(state, action);
         actions.push(action);
@@ -340,6 +362,15 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'password_ask') {
+        // The admin password card (design 2026-09-25): a RUNNING Bash call whose
+        // sudo waits for the computer password. A real reducer action
+        // (PASSWORD_REQUEST) exists now, but this fixture format predates it
+        // and keeps laying the ask directly onto the tool's final block below
+        // — simpler for a fixture line that only ever needs to PIN a state,
+        // never to exercise the request/resolve lifecycle itself (that is
+        // reducer-tests.test.ts's job, not the workbench's).
+        passwordAsks.set(parsed.tool_use_id, parsed.ask);
       } else if (parsed.type === 'permission_expired') {
         // WHY: the KEPT card (PERMISSION_EXPIRED 'hook-closed') — the hook socket
         // died but Claude Code's own menu may still be live, so the card stays
@@ -405,7 +436,7 @@ export function loadFixture(
           run: {
             toolUseId: parsed.tool_use_id, shellId: parsed.shellId ?? 'sh-1',
             status: parsed.status ?? 'running', exitCode: parsed.exitCode,
-            stopReason: parsed.stopReason, detached: parsed.detached === true,
+            stopReason: parsed.stopReason, detached: parsed.detached === true, admin: parsed.admin === true || undefined,
             startedAt, endedAt: parsed.ranForMs != null ? startedAt + parsed.ranForMs : undefined,
             tail: parsed.tail ?? '', logPath: parsed.logPath ?? '/tmp/youcoded-harness-bash-output/s1/bash-1.txt',
           },
@@ -460,7 +491,15 @@ export function loadFixture(
       }
     }
 
-    return { blocks: [...refreshed, ...stillRunning], actions };
+    const withAsks = [...refreshed, ...stillRunning].map((b) =>
+      b.kind === 'tool' && passwordAsks.has(b.tool.toolUseId)
+        // Status flip 2026-09-26 (coordinator): a password ask now reads
+        // 'awaiting-approval', same as a permission ask — a fixture that
+        // still hardcoded 'running' would render the OLD, buggy look.
+        ? { kind: 'tool' as const, tool: { ...b.tool, passwordAsk: passwordAsks.get(b.tool.toolUseId), status: 'awaiting-approval' as const } }
+        : b,
+    );
+    return { blocks: withAsks, actions };
   } catch (err) {
     return {
       blocks: [],

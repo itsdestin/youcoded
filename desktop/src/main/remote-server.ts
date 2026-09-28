@@ -107,6 +107,7 @@ import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import { getField, setField } from './claude-settings';
 import { resolveStaticFile } from './remote-static-path';
+import { menuAnswerLock } from './menu-answer-lock';
 
 // 4M UTF-16 units per session — enough for full conversation replay. Named for what it
 // counts (batch 2): JavaScript string length, not bytes.
@@ -407,6 +408,14 @@ export class RemoteServer {
        *  home folder instead of the private place the desktop gives it. main.ts wires it;
        *  tests that pass nothing get the payload untouched. */
       prepareCreate?: <T extends { cwd?: string }>(payload: T) => T;
+      /** Welcome back (design 2026-09-24 §2): a phone/remote browser's own X on a
+       *  session must untrack it too — the desktop's SESSION_DESTROY IPC handler
+       *  does this for the Electron path, but this WS host answers session:destroy
+       *  for remote clients independently and never reaches that handler. Wired
+       *  from main.ts to the (later-constructed) welcome-back-store, the same lazy
+       *  closure-over-a-module-var pattern as `prepareCreate` above. Absent in
+       *  tests that don't care — every call site is optional-chained. */
+      untrackWelcomeBack?: (desktopId: string) => void;
     },
   ) {
     this.devices = new RemoteDeviceStore();
@@ -419,11 +428,13 @@ export class RemoteServer {
     this.prepareCreate = opts?.prepareCreate ?? ((p) => p);
     this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
     this.serveBuiltPage = opts?.serveBuiltPage ?? true;
+    this.untrackWelcomeBack = opts?.untrackWelcomeBack;
   }
   private serveBuiltPage: boolean;
   private listCommands: (() => Promise<unknown[]>) | null;
   private prepareCreate: <T extends { cwd?: string }>(payload: T) => T;
   private listThemes: () => string[];
+  private untrackWelcomeBack?: (desktopId: string) => void;
   private sessionCreate?: (opts: Parameters<SessionManager['createSession']>[0]) => Promise<import('../shared/types').SessionCreateResult>;
   private handoffRoute?: ReturnType<typeof createHandoffTransport>;
   /** WHY: remote requests share the exact Electron backend; no connection may supply another owner's identity. */
@@ -1088,7 +1099,7 @@ export class RemoteServer {
     // switch defaults to null on this unknown type, so even if a live client
     // saw it broadcast, it is a harmless no-op — nothing here required a
     // renderer change.
-    if (event.type === 'PermissionResolved') {
+    if (event.type === 'PermissionResolved' || event.type === 'PasswordResolved') {
       const requestId = (event.payload as Record<string, unknown> | undefined)?._requestId;
       const buf = this.hookBuffers.get(sessionId);
       if (buf && typeof requestId === 'string') {
@@ -1097,6 +1108,14 @@ export class RemoteServer {
       }
       return;
     }
+    // admin-password design §2.5: a PasswordRequest is never buffered at all
+    // — not even transiently. Unlike a PermissionRequest (which the buffer
+    // exists to replay to a reconnecting phone), a password ask's own
+    // re-announce heartbeat (permission-broker.ts, every 3s) plus this same
+    // live broadcast already cover a reconnect within a few seconds, and this
+    // rolling log must not hold a password ask's command line/tries any
+    // longer than the ask is actually live.
+    if (event.type === 'PasswordRequest') return;
     const buf = this.hookBuffers.get(sessionId) || [];
     buf.push(event);
     // Perf: drop the overflow IN PLACE. This was `buf = buf.slice(...)`, which
@@ -1836,9 +1855,28 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         if (result) {
           this.broadcast({ type: 'session:destroyed', payload: { sessionId: payload.sessionId || payload, focus: { sessionId: this.getFocusSessionId() } } });
+          // Welcome back (design §2): this IS a phone/remote browser's own X —
+          // the same "explicit destroy" case Electron's SESSION_DESTROY handler
+          // untracks for. Without this, a session closed from a phone was wrongly
+          // offered back on the desktop's next launch.
+          this.untrackWelcomeBack?.(payload.sessionId || payload);
         }
         break;
       }
+      // Welcome back (design 2026-09-24 §3, S-phone): the per-install "open at
+      // last shutdown" screen is desktop-only — a phone or remote browser
+      // never shows it — so this host always answers as if nothing is
+      // offered, with no dependency on the desktop-only welcome-back-store.
+      case 'session:reopen-list': {
+        this.respond(client.ws, type, id, []);
+        break;
+      }
+      case 'session:forget-reopen': {
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      // The SAME lock the desktop window uses (menu-answer-lock.ts, review F4).
+      case 'session:menu-lock': this.respond(client.ws, type, id, menuAnswerLock.handle(payload.sessionId, payload.holder, payload.action)); break;
       case 'session:list': {
         const sessions = this.sessionManager.listSessions();
         this.respond(client.ws, type, id, sessions);
@@ -1991,6 +2029,31 @@ export class RemoteServer {
         const result = this.nativeRuntime
           ? await this.nativeRuntime.nativeHost.killShell(payload.sessionId, payload.shellId)
           : { ok: false, reason: 'not-live' };
+        this.respond(client.ws, type, id, result);
+        break;
+      }
+      case 'native:submit-admin-password': {
+        // admin-password design §2.5, contract R6: a paired phone or browser
+        // may answer the password card too — same "not gated on
+        // native.supported" posture as native:kill-shell above.
+        //
+        // WHY no logging anywhere near this case, and why `payload.password`
+        // is never assigned to a local outside this one expression:
+        // `password` is the one secret this whole feature exists to keep out
+        // of every log, transcript and store (design R13) — this case reads
+        // it once, passes it straight to submitAdminPassword(), and nothing
+        // here retains a reference to it afterward.
+        // T4-2 (review): an authenticated-but-buggy or malicious remote peer
+        // controls this payload — a non-string `password` would otherwise
+        // throw synchronously inside submit()'s `Buffer.from`, an
+        // unnecessary throw path reachable over the WS hop specifically
+        // (nothing awaits this handler's promise, so it would only surface
+        // via the process-wide unhandledRejection log). Refused here
+        // instead, matching submit()'s own "unknown/expired requestId
+        // returns false" contract.
+        const result = this.nativeRuntime && typeof payload.password === 'string' && payload.password.length > 0
+          ? this.nativeRuntime.nativeHost.submitAdminPassword(payload.requestId, payload.password)
+          : false;
         this.respond(client.ws, type, id, result);
         break;
       }
@@ -3092,7 +3155,10 @@ export class RemoteServer {
         // native id", so CC's transcript file is the source.
         // Async form (2026-09-16 C2 review): the desktop's page handler was
         // converted; the phone's scroll-up read the whole transcript sync too.
-        const nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null;
+        let nativePage: Awaited<ReturnType<NativeSessionHost['getHistoryPageAsync']>> = null;
+        // An existing-but-unreadable native transcript throws: `unresolved` (retry), as ipc-handlers' page.
+        try { nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null; }
+        catch { this.respond(client.ws, type, id, { ...emptyPage, unresolved: true }); break; }
         if (nativePage) {
           this.respond(client.ws, type, id, {
             events: nativePage.events,

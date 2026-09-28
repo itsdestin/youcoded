@@ -68,6 +68,11 @@ type Ev =
   | ['result', string, string?, boolean?]
   | ['ask', string, string, Record<string, unknown>]
   | ['answered', string]
+  // admin-password: requestId, toolUseId, command — PASSWORD_REQUEST binds
+  // by toolUseId directly (design §2.5/§2.6), never name/input matching like
+  // PERMISSION_REQUEST above.
+  | ['password-ask', string, string, string]
+  | ['password-resolved', string]
   | ['interrupt']
   | ['done', string?];
 
@@ -83,6 +88,8 @@ function toAction(ev: Ev): ChatAction {
     case 'result': return { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: S, uuid: `u${t}`, toolUseId: ev[1], result: ev[2] ?? 'ok', isError: ev[3] ?? false };
     case 'ask': return { type: 'PERMISSION_REQUEST', sessionId: S, toolName: ev[2], input: ev[3], requestId: ev[1] };
     case 'answered': return { type: 'PERMISSION_RESPONDED', sessionId: S, requestId: ev[1] };
+    case 'password-ask': return { type: 'PASSWORD_REQUEST', sessionId: S, requestId: ev[1], toolUseId: ev[2], command: ev[3] };
+    case 'password-resolved': return { type: 'PASSWORD_RESOLVED', sessionId: S, requestId: ev[1] };
     case 'interrupt': return { type: 'TRANSCRIPT_INTERRUPT', sessionId: S, uuid: `u${t}`, timestamp: t, kind: 'plain' };
     case 'done': return { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: S, uuid: `u${t}`, timestamp: t, stopReason: ev[1] ?? 'end_turn', model: null, anthropicRequestId: null, usage: null };
   }
@@ -317,6 +324,24 @@ describe('bubble grouping — hidden tools must not leave hollow bubbles', () =>
     expect(signature(pending)).toEqual(['(nothing)']);
     // Answered → the card comes home to its bubble.
     expect(signature([...pending, ['answered', 'req-1'], ['result', 'a'], ['done']])).toEqual(['{Bash}']);
+  });
+
+  it('a command whose sudo is waiting for the password: no shell in the timeline, exactly like a permission ask', () => {
+    // Bug (Destin, real-machine dogfood): while the password card waited,
+    // the command still looked like it was running, folded inside a group
+    // ("Running a command (+1 completed)"). PASSWORD_REQUEST now flips the
+    // tool's status to 'awaiting-approval' (chat-reducer.ts) — the SAME
+    // status ToolGroupInline already pulls out of every group and pins to
+    // the bottom of the timeline for a permission ask, so a password ask
+    // gets the identical treatment with no group-specific code at all.
+    const pending: Ev[] = [
+      ['user', 'go'],
+      ['prep', 'a', 'Bash'], ['tool', 'a', 'Bash', { command: 'sudo apt update' }],
+      ['password-ask', 'req-1', 'a', 'sudo apt update'],
+    ];
+    expect(signature(pending)).toEqual(['(nothing)']);
+    // Resolved → the card comes home to its bubble, same as an answered permission ask.
+    expect(signature([...pending, ['password-resolved', 'req-1'], ['result', 'a'], ['done']])).toEqual(['{Bash}']);
   });
 
   it('a skill invoked first (CC "/skill") does not leave a hollow bubble above the reply', () => {

@@ -367,8 +367,16 @@ export function availableMemoryBytes(probe: MemoryProbe = {}): number {
   return freemem();
 }
 
+/** How long `vm_stat` may take before we stop waiting and fall back to
+ *  os.freemem(). WHY (perf, 2026-09-24): this runs on the main thread on every
+ *  quant list and memory check, and had NO timeout — a wedged `vm_stat` would
+ *  have frozen every window with it. It normally answers in a few ms. The
+ *  fallback is the smaller number, so a timeout can only make a verdict MORE
+ *  cautious, never let a model through that would not fit. */
+export const VM_STAT_TIMEOUT_MS = 2_000;
+
 function defaultRunCommand(command: string, args: string[]): string {
-  return execFileSync(command, args, { encoding: 'utf8' });
+  return execFileSync(command, args, { encoding: 'utf8', timeout: VM_STAT_TIMEOUT_MS });
 }
 
 /**

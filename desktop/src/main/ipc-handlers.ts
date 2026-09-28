@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
+import { loadDefaultAppIcon, fitForMacDock } from './app-icon';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
@@ -39,6 +40,10 @@ import { OpenRouterSignIn } from './providers/openrouter-oauth';
 // (it needs the post-dev-profile userData) and passed IN; this file only wires it.
 import type { ChatGptAuth } from './providers/chatgpt-auth';
 import { ClaudeAccount } from './providers/claude-account';
+// Welcome back (design 2026-09-24 §1-3): the per-install "open at last
+// shutdown" store, constructed in main.ts and passed in (T1 built the store
+// itself; this file only calls its API).
+import type { WelcomeBackStore, WelcomeBackProvider } from './welcome-back-store';
 // Task 7: native auto-title generation over the AI SDK — the SAME `ai`
 // package harness-session.ts already depends on (never through
 // HarnessSession.send(), which hard-throws on re-entrancy).
@@ -62,6 +67,8 @@ import { detectEndpoints } from './models/endpoint-detectors';
 import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
+import { adminCapabilityReady } from './harness/admin-capability';
+import { startAdminPassword } from './harness/admin-password-startup';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
@@ -86,7 +93,9 @@ import { ddgBackend } from './harness/search/backends/ddg';
 import { tavilyBackend } from './harness/search/backends/tavily';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
-import { listPastSessions, loadHistory } from './session-browser';
+import { listPastSessions, loadHistory, readSessionTranscriptMeta } from './session-browser';
+import { perfMark } from './perf-marks';
+import { shareInFlight } from './share-in-flight';
 import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
 import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
@@ -116,12 +125,14 @@ import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } 
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
+import { attachStartupDialogLog } from './startup-dialog-log';
+import { menuAnswerLock } from './menu-answer-lock';
 import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus, clearWorkspaceSetupStatus } from './dev-tools';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost } from './update-installer';
 import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
 import { verifyDownloadedUpdate } from './update-manifest-verify';
 import { readReleaseStatus, selectRelease, type UpdateStatus } from './update-release-status';
-import { linuxInstallKind } from './linux-install-kind';
+import { linuxInstallKind, primeLinuxInstallKind } from './linux-install-kind';
 import { UpdateSettings } from './update-settings';
 import { UPDATE_SIGNING_PUBLIC_KEY_PEM } from './update-signing-key';
 import { getChangelog } from './changelog-service';
@@ -364,6 +375,44 @@ export function buddyShowRefusal(status: HelperStatus | null): string | null {
   return status.reason ?? 'The buddy needs its KDE helper on this desktop, and the helper is not running.';
 }
 
+/** admin-password design §2.1/§11 tasks 5+review: the ONE resolver for both
+ *  askpass paths, so `SUDO_ASKPASS` (the wrapper) and `helperScriptRealpath`
+ *  (the verifier's argv[1] check, `askpass.cjs`) can never drift apart —
+ *  T5-1 shipped with SUDO_ASKPASS pointed at `askpass.cjs` directly (no
+ *  execute bit, no shebang: sudo's execve() of it fails outright, and even
+ *  fixing that by making askpass.cjs itself executable would silently
+ *  delete the wrapper's `env -i` scrub, the actual control against a
+ *  command-supplied `NODE_OPTIONS` reaching the verified helper — design
+ *  review 1, D1). `wrapperRealpath` is resolved as a SIBLING of
+ *  `helperScriptRealpath`'s own real directory (never re-derived from `base`
+ *  independently), so the two can never name files in different directories.
+ *  dev is the worktree files under `desktop/scripts/askpass/`
+ *  (`app.getAppPath()` is `desktop/` itself in dev, where `package.json`
+ *  lives); packaged is `process.resourcesPath/app.asar.unpacked/scripts/
+ *  askpass/` (electron-builder.yml's `asarUnpack: scripts/**\/*`). Returns
+ *  null (never throws) when either file genuinely isn't there — the caller
+ *  logs plainly and skips the whole feature, exactly like a failed
+ *  self-test (design §2.2: "no fallback to a self-reported pid").
+ *
+ *  T5-3: async (`fs.promises.realpath`) — a startup-only `fs.*Sync` call
+ *  needs no `main-blocking-calls.allowlist.json` entry (that list may only
+ *  shrink, `.claude/rules/performance.md` rule 1) when the async form is
+ *  just as easy at this one call site. */
+export async function resolveAskpassPaths(): Promise<{ helperScriptRealpath: string; wrapperRealpath: string } | null> {
+  const rel = path.join('scripts', 'askpass', 'askpass.cjs');
+  try {
+    // Test doubles for `app` (many suites construct a minimal fake) may
+    // lack `getAppPath`/`isPackaged` entirely — never let that throw before
+    // this feature has a chance to be genuinely unavailable, exactly like a
+    // missing file below.
+    const base = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', rel) : path.join(app.getAppPath(), rel);
+    const helperScriptRealpath = await fs.promises.realpath(base);
+    const wrapperRealpath = await fs.promises.realpath(path.join(path.dirname(helperScriptRealpath), 'youcoded-askpass'));
+    return { helperScriptRealpath, wrapperRealpath };
+  } catch {
+    return null;
+  }
+}
 
 export function registerIpcHandlers(
   ipcMain: IpcMain,
@@ -406,6 +455,10 @@ export function registerIpcHandlers(
   // (no virtual row, no models, answers signed-out/false) while the object
   // itself stays alive as the file reader main.ts's launch check needs.
   chatgptAuth?: ChatGptAuth | null,
+  // Welcome back (design §1-3): absent only in tests that don't care about it —
+  // every call site below is optional-chained, so the feature is silently
+  // inert (no offer, no tracking) rather than throwing when it's omitted.
+  welcomeBackStore?: WelcomeBackStore,
 ) {
   // Broadcast a non-session-scoped event to every renderer. Status data, UI
   // actions, and similar globals must reach every window — not just window 1.
@@ -565,17 +618,16 @@ export function registerIpcHandlers(
   //   1. theme-asset://<slug>/<relative-path>  — a file in a community/user theme's
   //      asset dir (server resolves the path and confines reads to that dir, so
   //      renderer cannot read arbitrary files).
-  //   2. data:image/png;base64,<...>            — an in-memory PNG synthesized by
-  //      the renderer (theme-default-icon.ts), used for every theme that doesn't
-  //      declare its own appIcon. Capped at MAX_DATA_ICON_BYTES to prevent a
-  //      compromised renderer from flooding main with huge buffers.
-  // Anything else (or null, or failure) resets to the bundled default icon.
-  const DEFAULT_ICON_PATH = path.join(__dirname, '../../assets/icon.png');
+  //   2. data:image/png;base64,<...> — an icon the renderer draws (unused since the
+  //      tint was retired 2026-09-10; kept for theme-matched icons). Size-capped.
+  // null or failure resets to the platform's bundled default (app-icon.ts — it was
+  // icon.png, whose edge-to-edge tile looked oversized in the Mac Dock).
+  const ASSETS_DIR = path.join(__dirname, '../../assets');
   const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'wecoded-themes');
   const MAX_DATA_ICON_BYTES = 1024 * 1024; // 1 MB — a 256px PNG is typically <100KB
   ipcMain.handle(IPC.WINDOW_SET_ICON, (_e, url: string | null) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    let iconImg = nativeImage.createFromPath(DEFAULT_ICON_PATH);
+    let iconImg = loadDefaultAppIcon(ASSETS_DIR);
     if (url && typeof url === 'string') {
       try {
         if (url.startsWith('theme-asset://')) {
@@ -597,7 +649,8 @@ export function registerIpcHandlers(
       } catch { /* fall through to default */ }
     }
     mainWindow.setIcon(iconImg);
-    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(iconImg);
+    // WHY fitForMacDock: edge-to-edge theme art is shrunk onto Apple's grid, as shipped.
+    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(fitForMacDock(iconImg));
   });
 
   // Zoom controls — each returns the new zoom percentage for the overlay UI
@@ -783,6 +836,7 @@ export function registerIpcHandlers(
   sessionManager.on('session-created', (info) => {
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
+  attachStartupDialogLog(sessionManager, hookRelay, log, (id) => sessionManager.markStarted(id)); // desktop.log + SessionInfo.awaitingStart
 
   // The docx/xlsx pending-mutation queue's lifecycle (T9b/T20/finding #3) —
   // extracted to its own file (session-lifecycle.ts) to keep this file under
@@ -847,6 +901,14 @@ export function registerIpcHandlers(
     // The window can close while admission or native startup is awaiting I/O.
     const checkWindow = () => { attemptCheck?.(); if (event?.sender.isDestroyed?.()) throw new Error('The window closed before this conversation opened.'); };
     checkWindow();
+    // Task 1 (Destin, 2026-09-26): no session may exist before this
+    // machine's admin capability is settled — a session created in the
+    // first moments of app start would otherwise read the Bash
+    // description's placeholder default and keep it, byte-identical, for
+    // its own whole life (prompt cache). Resolves instantly once settled;
+    // pending only in the brief window right after app launch.
+    await adminCapabilityReady();
+    checkWindow();
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
@@ -860,6 +922,29 @@ export function registerIpcHandlers(
       sessionIdMap.set(info.id, opts.resumeSessionId);
       if (leaseWiring && leasesEnabled()) admittedResumes.add(info.id);
       if (info.provider === 'claude') awaitingFirstResumeHook.add(info.id);
+      // Welcome back (design §2): a resumed conversation already has messages
+      // (S-sent), so it's remembered as "open" from the moment it's created —
+      // unlike a brand-new session, which only earns that once its first user
+      // message actually lands (the hook on the transcript-event listeners
+      // below). 'shell' has no conversation id to remember (welcome-back-store.ts).
+      if (info.provider !== 'shell') trackWelcomeBack(info.id, opts.resumeSessionId, info.provider);
+      // WHY: a resumed Claude Code session's pill sat on the 'Resuming...'
+      // placeholder for its whole life — only native resumes re-applied the
+      // stored title below (Destin, 2026-09-24). Same re-apply, same rename
+      // pair, keyed by the CONVERSATION id (a Claude session's desktop id
+      // differs). No stored title → the opening words, read by the same
+      // reader the Resume browser row uses, so the pill matches the row the
+      // user clicked; provisional, so the namer can still give it a real one.
+      // Fire-and-forget: never lets a title read delay or fail the resume.
+      if (info.provider === 'claude') {
+        const conversationId = opts.resumeSessionId;
+        const jsonlPath = resumeBoundary?.jsonlPath;
+        void reapplyStoredTitle({
+          getStoredTitle: async () => (await getConversationStore()?.get('claude', conversationId))?.title,
+          onTitle: resumeTitleDeps.onTitle,
+          getOpeningTitle: async () => (jsonlPath ? (await readSessionTranscriptMeta(jsonlPath, true)).fallbackTitle ?? undefined : undefined),
+        }, info.id);
+      }
     }
     // WHY: assign ownership BEFORE the first native await. session-created is
     // forwarded on nextTick; otherwise it reaches the wrong window (pinned by
@@ -936,6 +1021,8 @@ export function registerIpcHandlers(
             // a fresh session under the same id so the renderer isn't left with a
             // SessionInfo backed by no live HarnessSession.
             const fallbackBinding = opts.binding;
+            // WHY: an EXISTING file with no readable header was never "not persisted" — create() appended a 2nd header.
+            if (!resumed && nativeTranscriptExists(info.cwd, opts.resumeSessionId)) throw new Error('This conversation could not be resumed — its saved data could not be read.');
             if (!resumed && fallbackBinding) {
               await nativeHost.create({ sessionId: info.id, cwd: info.cwd, binding: fallbackBinding, presetId: opts.preset });
             } else if (!resumed && !opts.binding) {
@@ -1007,6 +1094,17 @@ export function registerIpcHandlers(
           await resumeAdmission.waitForStop(opts.resumeSessionId ?? info.id);
           resumeAdmission.clearProtection(opts.resumeSessionId ?? info.id);
           sessionManager.destroySession(info.id);
+          // WHY (F2, code review 2026-09-24): a resumed session is tracked as
+          // "open" at creation, above, before this native resume attempt ever
+          // runs (S-sent — it already has messages). Every failure here
+          // (refused sync, missing project folder, missing saved data,
+          // another device holding the lease, the window closing mid-start)
+          // reaches this successful-teardown branch, and a resume that failed
+          // for a real reason is not "open" — it must not be re-offered by
+          // the next Welcome back screen. Only reached once teardown itself
+          // succeeded (the cleanupError branch below keeps the session's
+          // renewable hold, so it stays tracked, matching the WHY above it).
+          if (opts.resumeSessionId) untrackWelcomeBack(info.id);
         } catch (cleanupError) {
           resumeAdmission.protect(opts.resumeSessionId ?? info.id);
           log('ERROR', 'IPC', 'native teardown after startup failure failed', { sessionId: info.id, error: String(cleanupError) });
@@ -1126,6 +1224,13 @@ export function registerIpcHandlers(
       // reducer no-ops clean exits unless a turn was in flight.
       sendForSession(sessionId, IPC.SESSION_DESTROYED, sessionId, 0);
       windowRegistry?.releaseSession(sessionId);
+      // Welcome back (design §2): this is the session's own X — untrack it so
+      // it is NOT offered back next launch. Deliberately NOT in
+      // sessionManager.destroySession/session-exit (below): those also run on
+      // an ordinary process exit or a whole-app quit, which must keep it
+      // tracked (S-other-quit) — only THIS explicit IPC path means "the user
+      // closed it".
+      untrackWelcomeBack(sessionId);
     }
     return result;
   });
@@ -1826,6 +1931,9 @@ export function registerIpcHandlers(
   }
 
   // --- Session browser (resume) ---
+  // One scan answers every browse made while it runs with the same live sessions
+  // excluded (share-in-flight.ts has the why: two full scans per first open).
+  const browseOnce = shareInFlight<Awaited<ReturnType<typeof listPastSessions>>>();
   ipcMain.handle(IPC.SESSION_BROWSE, async () => {
     // Collect active Claude Code session IDs so we can exclude them.
     // Bug 1 (2026-07-13 dogfood): a stale sessionIdMap entry (missed exit event,
@@ -1843,7 +1951,14 @@ export function registerIpcHandlers(
     // registry; passing it in (rather than session-browser.ts reading disk
     // itself) keeps NativeSessionHost the one source of truth for what native
     // sessions exist.
-    return listPastSessions(activeIds, await nativeHost.listAsync());
+    // WHY the marks: measured 2026-09-26, this native list is most of a first
+    // Resume open on a big history (it runs before listPastSessions starts).
+    return browseOnce([...activeIds].sort().join(','), async () => {
+      perfMark('bg:browse:native-list:start');
+      const nativeEntries = await nativeHost.listAsync();
+      perfMark('bg:browse:native-list:done', { native: nativeEntries.length });
+      return listPastSessions(activeIds, nativeEntries);
+    });
   });
 
   ipcMain.handle(IPC.SESSION_HISTORY, async (
@@ -1983,13 +2098,15 @@ export function registerIpcHandlers(
           https.get(res.headers.location!, { headers: { 'User-Agent': 'YouCoded', 'Accept': 'application/vnd.github.v3+json' }, timeout: 10000 }, (rRes) => {
             let body = '';
             rRes.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-            rRes.on('end', () => { parseReleaseResponse(body, listing); resolve(); });
+            rRes.on('end', () => { void primeLinuxInstallKind().finally(() => { parseReleaseResponse(body, listing); resolve(); }); });
           }).on('error', () => { resolve(); });
           return;
         }
         let body = '';
         res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-        res.on('end', () => { parseReleaseResponse(body, listing); resolve(); });
+        // WHY prime first: parseReleaseResponse reads linuxInstallKind(); priming
+        // answers it off the main thread instead of blocking spawnSync calls.
+        res.on('end', () => { void primeLinuxInstallKind().finally(() => { parseReleaseResponse(body, listing); resolve(); }); });
       });
       req.on('error', () => { resolve(); });
       req.on('timeout', () => { req.destroy(); resolve(); });
@@ -2465,6 +2582,21 @@ export function registerIpcHandlers(
   const nativeExited = new Set<string>();
   const admittedResumes = new Set<string>();
   const awaitingFirstResumeHook = new Set<string>();
+  // Welcome back (design §2): desktop ids the store has already been told to
+  // `track()`, so the first-user-message hook (below) fires the store write
+  // exactly ONCE per session instead of on every subsequent message — the
+  // store's own track() is a plain overwrite-and-persist with no such guard
+  // (design §1: "changes are a handful per session", not one per turn).
+  const welcomeBackTracked = new Set<string>();
+  const trackWelcomeBack = (desktopId: string, conversationId: string, provider: WelcomeBackProvider) => {
+    if (!welcomeBackStore || welcomeBackTracked.has(desktopId)) return;
+    welcomeBackTracked.add(desktopId);
+    welcomeBackStore.track(desktopId, conversationId, provider);
+  };
+  const untrackWelcomeBack = (desktopId: string) => {
+    welcomeBackTracked.delete(desktopId);
+    welcomeBackStore?.untrack(desktopId);
+  };
   const resumeAdmission = createResumeAdmission<SessionInfo>({
     acquire: (id) => leaseWiring!.client.acquire(id),
     release: (id) => leaseWiring!.client.release(id),
@@ -2621,6 +2753,11 @@ export function registerIpcHandlers(
       // unconditionally without needing to know the provider.
       destroyNative: (id) => nativeHost.destroy(id),
       endQuiesceNative: (id) => nativeHost.endQuiesce(id),
+      // Welcome back (design §2): a holder takeover means the conversation now
+      // lives on another device, so it is no longer "open here" — untrack
+      // wherever this flow calls sessionManager.destroySession directly
+      // (bypassing SESSION_DESTROY, which has its own untrack call).
+      untrackWelcomeBack: (id) => untrackWelcomeBack(id),
     });
     // Fire-and-forget from a hub event — the handler never throws (each step is
     // try/caught inside createHolderTakeover), so void is safe.
@@ -2658,6 +2795,11 @@ export function registerIpcHandlers(
     // This listener is on the CC TranscriptWatcher only — native transcript
     // events are routed separately (Task 4 wires the native listener's feed).
     if (claudeId) noteTranscriptEvent(claudeId, event, 'claude');
+    // Welcome back (design §2): a session with no messages yet isn't
+    // remembered (S-sent) — this is where a brand-new (non-resume) session
+    // earns its spot, the moment its first user message actually lands.
+    // trackWelcomeBack no-ops after the first call, so later messages are free.
+    if (claudeId && event.type === 'user-message') trackWelcomeBack(event.sessionId, claudeId, 'claude');
     // Claude Code sessions are named by the SAME policy as native ones: this
     // tailer emits 'turn-complete' only when stop_reason !== 'tool_use', so a
     // turn that ran twenty tools counts as the one reply it is.
@@ -2975,6 +3117,11 @@ export function registerIpcHandlers(
     { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
   );
 
+  // admin-password: the password card's app-start wiring and its quit teardown
+  // (harness/admin-password-startup.ts). Always settles this machine's capability,
+  // which session creation below awaits.
+  const stopAdminPassword = startAdminPassword(nativeHost, resolveAskpassPaths);
+
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref
   // noteModelUsed persists — thin async wrapper around bindingToPortableModel
   // (portable-model.ts) closed over the live nativeHost/providerRegistry.
@@ -3169,6 +3316,11 @@ export function registerIpcHandlers(
     // below, which resolves through sessionIdMap — event.sessionId IS already
     // the store's record id; no lookup needed.
     noteTranscriptEvent(event.sessionId, event, 'native');
+    // Welcome back (design §2): same first-message rule as the Claude feed
+    // above. Native ids are identity-mapped (see the comment above this
+    // listener), so event.sessionId IS already the conversation id — no
+    // sessionIdMap lookup needed here.
+    if (event.type === 'user-message') trackWelcomeBack(event.sessionId, event.sessionId, 'native');
     // Feed the SAME event stream into the namer. Pure/injected logic — see
     // session-namer.ts — never throws synchronously.
     sessionNamer.noteEvent(event);
@@ -3290,12 +3442,18 @@ export function registerIpcHandlers(
     // later, unrelated page read. See WindowRegistry.markInheritedByTransfer.
     const inherited = !beforeCursor
       && !!windowRegistry?.consumeInheritedByTransfer(sessionId, evt.sender.id);
+    // A rebuilt renderer missed the live stream too (TranscriptPageRequest.toEnd). Not a
+    // one-shot mark like `inherited`, and native reconcile stays keyed to real transfers.
+    const readToEnd = inherited || (!beforeCursor && req.toEnd === true);
 
     // Native sessions page over the merged event array; getHistoryPage returns
     // null for non-native ids, so CC's watcher stays the source for claude
     // sessions — the same discrimination the replay handler uses.
     const idleBeforeRead = nativeHost.isLive(sessionId) && nativeHost.isIdle(sessionId);
-    const nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null);
+    let nativePage: Awaited<ReturnType<typeof nativeHost.getHistoryPageAsync>>;
+    // An existing-but-unreadable native transcript throws: answer `unresolved` (retry), never an empty beginning.
+    try { nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null); }
+    catch { if (inherited) windowRegistry?.markInheritedByTransfer(sessionId, evt.sender.id); return { ...empty, unresolved: true }; }
     if (nativePage !== null) {
       return {
         events: nativePage.events,
@@ -3328,11 +3486,11 @@ export function registerIpcHandlers(
         return { ...empty, unresolved: true };
       }
     }
-    // The first page stops at the watcher cutoff; zero or an inherited window reads to EOF.
+    // The first page stops at the watcher cutoff; zero, an inherited window or a rebuilt renderer reads to EOF.
     // HISTORY_PAGE_LOADED dedups any overlap against the live seenUuids.
     const saved = resumePageBoundaries.get(sessionId);
     const resumeOffset = saved?.jsonlPath === source.jsonlPath ? saved.offset : null;
-    const endOffset = beforeCursor ? beforeCursor.offset : (inherited ? null : (source.startOffset || null));
+    const endOffset = beforeCursor ? beforeCursor.offset : (readToEnd ? null : (source.startOffset || null));
     const page = await readTranscriptPage({
       jsonlPath: source.jsonlPath, sessionId, endOffset, subagentsDir: source.subagentsDir,
     });
@@ -3362,7 +3520,7 @@ export function registerIpcHandlers(
     let nativeEvents: TranscriptEvent[] | null;
     try {
       nativeEvents = await nativeHost.getHistoryAsync(sessionId);
-      events = nativeEvents ?? transcriptWatcher.getHistory(sessionId);
+      events = nativeEvents ?? []; // WHY no CC replay (B1): nothing sends this channel; history pages via TRANSCRIPT_PAGE
     } catch (err) {
       log('WARN', 'IPC', 'transcript replay failed to read the history', { sessionId, error: String((err as any)?.message ?? err) });
       return;
@@ -4095,6 +4253,11 @@ export function registerIpcHandlers(
 
       writerGenerations.set(desktopId, (writerGenerations.get(desktopId) ?? 0) + 1);
       sessionIdMap.set(desktopId, claudeId);
+      // Welcome back (design §2): keep a tracked session's remembered
+      // conversation id in sync with a rotation (/clear, in-session /resume).
+      // A no-op if `desktopId` isn't tracked yet — this fires for every
+      // mapping change, tracked or not.
+      welcomeBackStore?.remap(desktopId, claudeId);
       startWatching(desktopId, claudeId);
 
       // Start watching the transcript file for this session
@@ -4279,6 +4442,7 @@ export function registerIpcHandlers(
     catch { return 'claude'; }
   };
 
+  ipcMain.handle(IPC.SESSION_MENU_LOCK, (_e, sid: string, holder: string, action: string) => menuAnswerLock.handle(sid, holder, action));
   ipcMain.handle(IPC.SESSION_SET_FLAG, async (_event, sessionId: string, flag: string, value: boolean) => {
     if (!SESSION_FLAG_NAMES.includes(flag as SessionFlagName)) {
       return { ok: false, error: `unknown flag: ${flag}` };
@@ -4566,6 +4730,22 @@ export function registerIpcHandlers(
     } catch (e) { return { tags: [], note: '', supported: true, unreadable: e instanceof Error && e.message ? e.message : "the conversation's record could not be read" }; }
   });
 
+  // Welcome back (design §1, §3): both handlers await `ready` rather than
+  // relying on any boot-order assumption — the store's own contract (review 1
+  // D5). Absent store (tests that omit it) reads as "nothing to offer".
+  ipcMain.handle(IPC.SESSION_REOPEN_LIST, async (): Promise<string[]> => {
+    if (!welcomeBackStore) return [];
+    await welcomeBackStore.ready;
+    return welcomeBackStore.offerIds();
+  });
+
+  ipcMain.handle(IPC.SESSION_FORGET_REOPEN, async (_e, ids: string[]): Promise<{ ok: boolean }> => {
+    if (!welcomeBackStore) return { ok: true };
+    await welcomeBackStore.ready;
+    welcomeBackStore.forget(Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : []);
+    return { ok: true };
+  });
+
   // --- Sync management ---
   // Control plane for YouCoded toolkit sync — reads state files written
   // by sync.sh / session-start.sh and triggers sync via the existing scripts.
@@ -4734,6 +4914,22 @@ export function registerIpcHandlers(
     if (nativeHost.respondPermission(requestId, decision as Record<string, unknown>)) return true;
     return hookRelay ? hookRelay.respond(requestId, decision) : false;
   });
+
+  // admin-password design §2.5: the card's Confirm button. `password` is never
+  // logged, echoed, or stored on this hop — it goes straight into
+  // nativeHost.submitAdminPassword() (AdminPasswordService.submit() under
+  // it), which converts it to a Buffer and hands it to the verified askpass
+  // socket without holding it beyond that call.
+  // T4-2 (review): a malformed/malicious payload's `password` is only typed
+  // as `string` at compile time — nothing upstream of this line actually
+  // checks it. A non-string reaching `Buffer.from(password, 'utf8')` inside
+  // submit() throws synchronously; Electron rejects the ipcMain.handle
+  // promise for that (no crash), but it's an unnecessary throw path a
+  // buggy/malicious renderer can trigger. Refused here instead, matching
+  // submit()'s own "unknown/expired requestId returns false" contract —
+  // never logs `password` (a non-string value included).
+  ipcMain.handle(IPC.NATIVE_SUBMIT_ADMIN_PASSWORD, (_event, { requestId, password }: { requestId: string; password: string }) =>
+    typeof password === 'string' && password.length > 0 ? nativeHost.submitAdminPassword(requestId, password) : false);
 
   // --- Settings → Development feature handlers (see dev-tools.ts) ---
 
@@ -5525,6 +5721,7 @@ export function registerIpcHandlers(
     // is synchronous and callers don't await it, so this mirrors the async
     // stopSyncSpaces() teardown pattern in main.ts window-all-closed.
     void nativeHost.destroyAll().catch(() => {});
+    stopAdminPassword(); // refuse open password asks; final forget sweep
     // Awaited by the caller: never leave an orphaned llama-server on quit.
     const engineStopped = engineManager.stopAll().catch(() => {});
     for (const watcher of topicWatchers.values()) {

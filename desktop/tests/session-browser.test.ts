@@ -870,3 +870,40 @@ describe('readSessionTranscriptMetaCached', () => {
     expect(b.lastTimestampMs).not.toBeNull();
   });
 });
+
+// A project folder whose name the quick first-line match can't resolve (a real
+// one: "PAF 574 - Diversity, Ethics, & Public Change") sent every Resume open
+// into reading every transcript in that folder in full. The answer is now kept
+// until the folder gains or loses a transcript.
+describe('listPastSessions — slug folder resolution is remembered', () => {
+  it('reads an unmatchable folder in full once, not on every open, and again once it changes', async () => {
+    const slug = '-odd-folder';
+    const dir = path.join(tmpHome, '.claude', 'projects', slug);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, '11111111-1111-4111-8111-111111111111.jsonl');
+    // Its cwd re-slugs to something else, so R1's quick tier misses and the full tier runs.
+    const body = [
+      { type: 'user', uuid: 'u1', promptId: 'p1', cwd: '/somewhere/else', timestamp: '2026-06-01T10:00:01Z', message: { content: 'hello there, a real opening prompt' } },
+      { type: 'assistant', uuid: 'a1', timestamp: '2026-06-01T10:00:02Z', message: { content: [{ type: 'text', text: 'hi' }], stop_reason: 'end_turn' } },
+    ].map((o) => JSON.stringify(o)).join('\n') + '\n' + 'x'.repeat(600) + '\n';
+    fs.writeFileSync(file, body);
+
+    vi.resetModules();
+    const mod = await import('../src/main/session-browser');
+    const readFile = vi.spyOn(fs.promises, 'readFile');
+    const fullReads = () => readFile.mock.calls.filter(([p]) => String(p) === file).length;
+
+    await mod.listPastSessions();
+    expect(fullReads()).toBeGreaterThan(0);          // non-vacuous: the full tier really ran
+    const afterFirst = fullReads();
+    await mod.listPastSessions();
+    expect(fullReads()).toBe(afterFirst);            // remembered
+
+    // A new transcript lands in the folder: the folder changed, so it is worked out again.
+    await new Promise((r) => setTimeout(r, 20));
+    fs.writeFileSync(path.join(dir, '22222222-2222-4222-8222-222222222222.jsonl'), body);
+    await mod.listPastSessions();
+    expect(fullReads()).toBeGreaterThan(afterFirst);
+    readFile.mockRestore();
+  });
+});

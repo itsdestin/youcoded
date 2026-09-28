@@ -1,6 +1,7 @@
-// Preview images for the four built-in themes — the SAME picture the Marketplace and
-// Library cards show for community themes (generated once with
-// wecoded-themes/scripts/generate-previews.js from the built-in manifests, 800×500).
+// Preview images for the four built-in themes — the SAME kind of picture the Marketplace
+// and Library cards show for community themes: since 2026-09-24 a screenshot of the real
+// app in that theme (youcoded-dev scripts/ui-review/theme-previews.py, 800×500; before
+// that, a mock page from wecoded-themes/scripts/generate-previews.js).
 // Community and user themes carry their own preview.png in their theme folder and are
 // served through theme-asset://; built-ins have no folder on disk, so theirs ship in
 // the bundle. Phase C, P-3 #1 (Destin, 2026-08-27): the Themes dialog cards show this

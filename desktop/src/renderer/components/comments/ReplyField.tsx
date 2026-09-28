@@ -28,7 +28,7 @@ export function ReplyField({ onSend, onDraftChange, onFocusChange, className = '
     // right side of the reply box"): InputGroup — the primitive for a field
     // with its submit inside it (TagPicker's Create is the same shape).
     // Enter sends.
-    <InputGroup size="sm" className={`${className} w-full pr-1.5`}>
+    <InputGroup size="sm" className={`${className} w-full`}>
       <InputGroup.Field
         aria-label="Reply"
         value={text}
@@ -39,10 +39,11 @@ export function ReplyField({ onSend, onDraftChange, onFocusChange, className = '
         placeholder="Reply…"
       />
       {/* Round 12/14 (Destin: "send button looks too big… too close to
-          edges"): icon-xs (16px) with the group's right inset raised to 6px,
-          so ~6px of air on every side; the glyph is the composer's send
-          arrow, so it reads as "send" at a glance. */}
-      <Button size="icon-xs" aria-label="Send reply" disabled={!text.trim()} onClick={send}>
+          edges"): icon-xs (16px), with the extra 2px of air over InputGroup's
+          own 4px inset put on the BUTTON as margin (design lint's no-restyle:
+          InputGroup owns its own padding, so the +2px goes here instead of
+          overriding InputGroup's pr-1) — same ~6px gutter Destin approved. */}
+      <Button size="icon-xs" aria-label="Send reply" disabled={!text.trim()} onClick={send} className="mr-0.5">
         <svg className="w-2.5 h-2.5 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
           <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
         </svg>

@@ -14,6 +14,8 @@ import { randomBytes } from 'crypto';
 import type { ShellRunView, ShellStopReason } from '../../shared/types';
 import { spillDirFor, sweepOldSpillFilesOnce } from './tools/spill-paths';
 import { ENV_SENTINEL, normalizeNewlines, stripAnsi, stripSentinelLines } from './tools/shell-text';
+import { RunningCalls } from './askpass/running-calls';
+import { forgetOnCallExit } from './askpass/admin-forget';
 
 /** Explicit background starts allowed at once (spec §3.6). Hand-offs never count (D5). */
 export const MAX_EXPLICIT_RUNNING = 5;
@@ -79,6 +81,15 @@ export interface ShellRun {
   stopReason?: ShellStopReason;
   /** Handed off at its time limit rather than started in the background. */
   detached: boolean;
+  /** admin-password design §7: true once a delivered password for this
+   *  call's admin sudo was ACCEPTED (no re-ask within ~1s) — cleared when
+   *  the run exits. Review fix T5-4: seeded ONLY from
+   *  `acceptedToolCallIds` (the "accepted" signal), NEVER from
+   *  RunningCalls.markGranted's bare delivery — a delivery that turns out
+   *  wrong must never show "Running as admin" for the window before sudo
+   *  re-asks. `acceptedToolCallIds` still covers the up-front-then-handed-
+   *  off race (acceptance can arrive before this run object even exists). */
+  admin: boolean;
   /** Counts toward the cap (D5). */
   explicit: boolean;
   /** The host queued the finished notice (set by the host, never here). */
@@ -230,13 +241,40 @@ export function formatLongRunningNotice(run: Pick<ShellRun, 'shellId' | 'command
 
 export class ShellRegistry extends EventEmitter {
   private runs = new Map<string, ShellRun>();
+  /** Per-run tail of in-flight read()s — see read(). WeakMap so a run's chain
+   *  never outlives the run. */
+  private readonly readChains = new WeakMap<ShellRun, Promise<unknown>>();
   private readonly longRunNoticeMs: readonly number[];
 
+  private readonly runningCalls: RunningCalls;
+  /** admin-password design §6/§11 task 5: only `wipeUpfront` — see
+   *  ToolContext.adminPasswordService's own doc for why the tool layer and
+   *  this registry both only ever need that one method. */
+  private readonly wipeUpfront?: (toolCallId: string) => void;
+  /** admin-password design §7, review fix T5-4: toolCallIds whose password
+   *  was ACCEPTED (markAdmin's own signal), independent of whether a
+   *  ShellRun for that call exists yet — the "accepted" event and this
+   *  run's own registration can arrive in EITHER order (an up-front ask
+   *  accepted moments before a hand-off/background-start, or the reverse),
+   *  and `admin` must come from THIS Set either way, never from
+   *  RunningCalls' mere-delivery bookkeeping (which says nothing about
+   *  whether sudo actually accepted it). Cleared per-toolCallId on exit. */
+  private readonly acceptedToolCallIds = new Set<string>();
+
   /** `longRunNoticeMs` is a test seam — production callers pass nothing and
-   *  get LONG_RUN_NOTICE_MS. */
-  constructor(private readonly sessionId: string, opts: { longRunNoticeMs?: readonly number[] } = {}) {
+   *  get LONG_RUN_NOTICE_MS. `runningCalls`/`wipeUpfront` are optional so
+   *  every existing direct construction (shell-registry.test.ts and
+   *  friends) keeps working unchanged; real wiring (native-session-host.ts)
+   *  always supplies both, sharing the ONE RunningCalls instance
+   *  tools/bash.ts's own foreground spawn path registers into. */
+  constructor(
+    private readonly sessionId: string,
+    opts: { longRunNoticeMs?: readonly number[]; runningCalls?: RunningCalls; wipeUpfront?: (toolCallId: string) => void } = {},
+  ) {
     super();
     this.longRunNoticeMs = opts.longRunNoticeMs ?? LONG_RUN_NOTICE_MS;
+    this.runningCalls = opts.runningCalls ?? new RunningCalls();
+    this.wipeUpfront = opts.wipeUpfront;
   }
 
   get(shellId: string): ShellRun | undefined { return this.runs.get(shellId); }
@@ -307,9 +345,22 @@ export class ShellRegistry extends EventEmitter {
       shellId, toolUseId: spec.toolUseId, command: spec.command, cwd: spec.cwd, child: spec.child,
       logPath, logStream, tail: [], partial: '', lastReadBytes: 0, captureEnv: spec.captureEnv,
       startedAt: spec.startedAt, status: 'running', detached: flags.detached, explicit: flags.explicit,
+      // design §7, review fix T5-4: seeded true when this call's password
+      // was already ACCEPTED before this run object existed (an up-front
+      // ask, accepted, then a hand-off or an explicit background start of
+      // the SAME approved call) — from `acceptedToolCallIds`, never from a
+      // bare delivery (RunningCalls.hasGranted), which says nothing about
+      // whether sudo actually took it.
+      admin: this.acceptedToolCallIds.has(spec.toolUseId),
       reported: false, exited, resolveExited, logPending: 0, logWaiters: [], logDone: null, changeTimer: null,
       longRunTimers: [],
     };
+    // admin-password design §2.3: registered here for BOTH start() (a fresh
+    // spawn) and adopt() (bash.ts already registered this same pid — this
+    // simply overwrites with an equivalent entry, RunningCalls.register's
+    // own documented idempotence) rather than branching on `flags.detached`,
+    // so a future third caller of register() can never forget to.
+    if (spec.child.pid) void this.runningCalls.registerPid(spec.child.pid, { sessionId: this.sessionId, toolCallId: spec.toolUseId });
     // Still-running marks (LONG_RUN_NOTICE_MS): measured from the run's own
     // startedAt, so an adopted hand-off that already ran two minutes in the
     // foreground reaches its first mark three minutes from now, not five.
@@ -397,6 +448,16 @@ export class ShellRegistry extends EventEmitter {
   private onExit(run: ShellRun, code: number | null, signal: NodeJS.Signals | null): void {
     if (run.status !== 'running') return;
     run.endedAt = Date.now();
+    // admin-password design §2.3/§5/§6/§7: this run's own root pid no longer
+    // owns a live call — unregister it, run the forget step if this was the
+    // LAST granted call, wipe any up-front password this call's toolCallId
+    // was still holding but never consumed, and clear the admin flag (the
+    // strip disappears with the run — R12's "still running" framing).
+    if (run.child.pid) this.runningCalls.unregister(run.child.pid);
+    forgetOnCallExit(this.runningCalls, run.toolUseId);
+    this.wipeUpfront?.(run.toolUseId);
+    run.admin = false;
+    this.acceptedToolCallIds.delete(run.toolUseId);
     for (const t of run.longRunTimers.splice(0)) clearTimeout(t);
     if (run.stopReason) {
       run.status = 'stopped';
@@ -406,11 +467,14 @@ export class ShellRegistry extends EventEmitter {
       else if (signal) run.signal = signal;
     }
     if (run.partial) { run.tail.push(run.partial); run.partial = ''; if (run.tail.length > RING_LINES) run.tail.shift(); }
-    run.logDone = new Promise<void>((res) => {
+    const logClosed = new Promise<void>((res) => {
       if (run.logStream.destroyed) return res();
       run.logStream.end(() => res());
     });
-    if (run.captureEnv) this.unlinkEnvFile(run);
+    // WHY folded into logDone (2026-09-24 blocking-calls B8): the env-file
+    // delete is async now, and read() awaits logDone — so no BashOutput after
+    // exit can observe the file still there, same as the old sync unlink.
+    run.logDone = run.captureEnv ? Promise.all([logClosed, this.unlinkEnvFile(run)]).then(() => undefined) : logClosed;
     this.emitChangeNow(run);
     run.resolveExited();
     this.emit('exit', run);
@@ -419,12 +483,15 @@ export class ShellRegistry extends EventEmitter {
   /** D6: the persistent_env temp file the probe wrote when the handed-off
    *  command finally exited — bash.ts's finish() never ran for this call, so
    *  nobody else will delete it. */
-  private unlinkEnvFile(run: ShellRun): void {
+  private async unlinkEnvFile(run: ShellRun): Promise<void> {
     for (let i = run.tail.length - 1; i >= 0; i--) {
       const line = run.tail[i];
       if (!line.startsWith(ENV_SENTINEL)) continue;
       const file = line.slice(ENV_SENTINEL.length).trim();
-      if (file) { try { fs.unlinkSync(file); } catch { /* already gone */ } }
+      // WHY async (2026-09-24 blocking-calls B8): runs on the child's exit
+      // event, which must not hold the main thread. Never rejects: a missing
+      // file is fine, and logDone must still settle.
+      if (file) await fs.promises.unlink(file).catch(() => { /* already gone */ });
       return;
     }
   }
@@ -449,9 +516,43 @@ export class ShellRegistry extends EventEmitter {
     return {
       toolUseId: run.toolUseId, shellId: run.shellId, status: run.status,
       exitCode: run.exitCode, stopReason: run.stopReason, detached: run.detached,
+      admin: run.admin,
       startedAt: run.startedAt, endedAt: run.endedAt,
       tail: this.tailText(run, WIRE_TAIL_LINES), logPath: run.logPath,
     };
+  }
+
+  /** admin-password design §7: called from AdminPasswordService's
+   *  "accepted" signal (native-session-host.ts's `attachAdminPassword`
+   *  wiring). Review fix T5-4: records the acceptance into
+   *  `acceptedToolCallIds` UNCONDITIONALLY first — this is what lets a run
+   *  registered AFTER acceptance (the up-front-then-hand-off race) still
+   *  come up `admin: true` (see `register()`'s own seed) — then, if a run
+   *  already exists for `toolUseId`, flips it live. A no-op past the Set
+   *  write if no run exists yet (the common case: the command finished in
+   *  the foreground before ever reaching this registry) or it already
+   *  exited. */
+  markAdmin(toolUseId: string): void {
+    this.acceptedToolCallIds.add(toolUseId);
+    for (const run of this.runs.values()) {
+      if (run.toolUseId !== toolUseId || run.status !== 'running' || run.admin) continue;
+      run.admin = true;
+      this.emitChangeNow(run);
+    }
+  }
+
+  /** Code review F2: `onExit()` clears `acceptedToolCallIds` for a run that
+   *  actually registered here (background/hand-off) — but the COMMON case
+   *  (an ordinary approved sudo that runs and exits in the foreground) never
+   *  registers a `ShellRun` at all, per `markAdmin`'s own comment, so its
+   *  entry was never removed: one leaked `Set` entry per approved admin
+   *  command for the life of the session's `ShellRegistry`. tools/bash.ts
+   *  calls this directly on its OWN foreground exit paths (the same
+   *  `onCallExit` closure that already unregisters `RunningCalls` and wipes
+   *  an unconsumed up-front hold), so the accepted mark for a call that
+   *  never reached this registry is still cleared when that call ends. */
+  clearAccepted(toolUseId: string): void {
+    this.acceptedToolCallIds.delete(toolUseId);
   }
 
   /** New output since the last read (first read: everything so far). The log's
@@ -466,21 +567,36 @@ export class ShellRegistry extends EventEmitter {
   async read(shellId: string): Promise<{ run: ShellRun; text: string; truncated: boolean } | undefined> {
     const run = this.runs.get(shellId);
     if (!run) return undefined;
+    // WHY serialized per run (2026-09-24 blocking-calls B8): the log read below
+    // is now async, so two BashOutput calls for the same shell in one parallel
+    // tool batch could both read from the same cursor and hand the model the
+    // same output twice. Each read waits for the previous one on this run, so
+    // the cursor advances exactly as it did when the read was synchronous.
+    const prev = this.readChains.get(run) ?? Promise.resolve();
+    const next = prev.then(() => this.readOnce(run));
+    this.readChains.set(run, next.catch(() => undefined));
+    return next;
+  }
+
+  private async readOnce(run: ShellRun): Promise<{ run: ShellRun; text: string; truncated: boolean }> {
     await this.flushLog(run);
-    let fd: number | undefined;
+    let fh: fs.promises.FileHandle | undefined;
     let text = '';
     let truncated = false;
     let size = run.lastReadBytes;
     try {
-      fd = fs.openSync(run.logPath, 'r');
-      size = fs.fstatSync(fd).size;
+      // WHY fs.promises (2026-09-24 blocking-calls B8): BashOutput runs up to
+      // eight times a turn (a stuck command was once polled ~150 times); each
+      // sync open/stat/read/close held every window while it ran.
+      fh = await fs.promises.open(run.logPath, 'r');
+      size = (await fh.stat()).size;
       const pending = Math.max(0, size - run.lastReadBytes);
       const want = Math.min(pending, READ_MAX_BYTES);
       truncated = pending > want;
       if (want > 0) {
         const buf = Buffer.alloc(want);
-        fs.readSync(fd, buf, 0, want, size - want);
-        text = buf.toString('utf8');
+        const { bytesRead } = await fh.read(buf, 0, want, size - want);
+        text = buf.toString('utf8', 0, bytesRead);
         // A bounded read can start mid-line; drop the first partial line rather
         // than hand the model half a word it cannot place.
         if (truncated) text = text.slice(text.indexOf('\n') + 1);
@@ -490,7 +606,7 @@ export class ShellRegistry extends EventEmitter {
       // in-memory ring so a read still answers with the truth we do hold.
       text = run.lastReadBytes === 0 ? this.tailText(run, RING_LINES) : '';
     } finally {
-      if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already closed */ } }
+      if (fh !== undefined) { try { await fh.close(); } catch { /* already closed */ } }
     }
     run.lastReadBytes = size;
     return { run, text: stripSentinelLines(text), truncated };

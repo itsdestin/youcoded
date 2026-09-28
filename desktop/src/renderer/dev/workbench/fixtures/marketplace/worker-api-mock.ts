@@ -1,4 +1,4 @@
-// The workbench's stand-in for the WeCoded Worker (the Cloudflare backend
+// The workbench's stand-in for the YouCoded Worker (the Cloudflare backend
 // behind install counts, ratings, thumbs and comments).
 //
 // WHY: the stats/ratings code talks to the Worker with plain `fetch`, not

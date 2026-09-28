@@ -1,0 +1,52 @@
+{
+  "start": {
+    "scenario": "default",
+    "screen": null,
+    "width": 1440,
+    "height": 900,
+    "theme": "meadow-mist",
+    "latency": 0,
+    "params": ""
+  },
+  "steps": [
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Sonnet | Auto Effort",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "Haiku · Claude Code",
+        "nth": 1
+      }
+    },
+    {
+      "do": "expect",
+      "control": {
+        "role": "button",
+        "label": "Haiku | Auto Effort"
+      }
+    },
+    {
+      "do": "click",
+      "target": {
+        "role": "button",
+        "label": "All Sessions",
+        "nth": 1
+      }
+    },
+    {
+      "do": "expect",
+      "text": "Claude Code · Haiku"
+    },
+    {
+      "do": "key",
+      "key": "Escape"
+    }
+  ]
+}

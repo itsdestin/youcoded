@@ -30,6 +30,7 @@ import { useTagRegistry } from '../../hooks/useTagRegistry';
 import { namingApi } from '../assistant-settings/naming-api';
 import { useRenamedSessions } from '../assistant-settings/use-renamed-sessions';
 import { COPY } from '../../../shared/chatsearch-refs';
+import { ScreenMark } from '../../shoot-mode';
 
 interface ConversationPreviewProps {
   session: PastSession;
@@ -156,6 +157,7 @@ export function ConversationPreview({ session, onClose, onResume, defaultModel, 
   return (
     <>
       <ProjectDetailOverlay title={title} onClose={onClose} tools={tools}>
+        <ScreenMark name="projects/conversations/preview" />
         <div className="flex h-full min-h-0 flex-col preview-backdrop">
           <div className="min-h-0 flex-1">
             <SessionPreviewPane

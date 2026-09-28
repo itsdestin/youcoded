@@ -11,6 +11,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { HarnessSession } from '../src/main/harness/harness-session';
+import { BashTool } from '../src/main/harness/tools/bash';
+import { settleAdminCapability, resetAdminCapabilityForTests } from '../src/main/harness/admin-capability';
 import { isContextOverflow } from '../src/main/providers/context-overflow';
 import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES } from '../src/main/harness/image-support';
 import type { HarnessManifest } from '../src/shared/harness-manifest';
@@ -495,6 +497,45 @@ describe('HarnessSession — multi-step turn driver', () => {
       expect(res.data.toolResult).toMatch(/user declined/i);
       expect((write as any).calls).toHaveLength(0);
     }
+  });
+
+  it('allows external file edits across folders only after a root session grant, and resets on resume', async () => {
+    const edit = fakeTool('Edit', { permissionSubject: (args: any) => args.file_path });
+    const outsideA = path.join(os.tmpdir(), 'yc-outside-a', 'one.ts');
+    const outsideB = path.join(os.tmpdir(), 'yc-outside-b', 'two.ts');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Edit', { file_path: outsideA }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'Edit', { file_path: outsideB }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow', allowExternalEditsForSession: true }));
+    const session = new HarnessSession(makeOpts({ tools: [edit], decide: async () => ALLOW, askUser }), async () => model as any);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(askUser.mock.calls[0][0]).toMatchObject({ toolName: 'Edit', external: true });
+    expect((edit as any).calls).toHaveLength(2);
+    session.seedHistory([]);
+    const next = scriptedModel([
+      stream(toolCallChunk('c3', 'Edit', { file_path: outsideB }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    (session as any).modelFactory = async () => next as any;
+    await session.send('again');
+    expect(askUser).toHaveBeenCalledTimes(2);
+  });
+
+  it('never applies an external-file grant to a specialist child', async () => {
+    const edit = fakeTool('Edit', { permissionSubject: (args: any) => args.file_path });
+    const outside = path.join(os.tmpdir(), 'yc-outside', 'one.ts');
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Edit', { file_path: outside }), finishChunk('tool-calls')),
+      stream(toolCallChunk('c2', 'Edit', { file_path: outside }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow', allowExternalEditsForSession: true }));
+    const session = new HarnessSession(makeOpts({ tools: [edit], decide: async () => ALLOW, askUser, isSpecialistChild: true }), async () => model as any);
+    await session.send('go');
+    expect(askUser).toHaveBeenCalledTimes(2);
   });
 
   it('askUser canceled → user-interrupt, turn ends, NO turn-complete', async () => {
@@ -1166,6 +1207,210 @@ describe('HarnessSession — multi-step turn driver', () => {
       const { askUser, ran } = await run('npm run env:check', async () => ALLOW);
       expect(askUser).not.toHaveBeenCalled();
       expect(ran).toBe(1);
+    });
+  });
+
+  // Admin-password design (docs/active/specs/2026-09-26-admin-password-technical-design.md
+  // §4): a Bash command that visibly runs `sudo` always asks — even under a
+  // saved "Always allow" or Full auto — because saying yes opens a password
+  // prompt inside the app. `doas`/`su`/`pkexec`/`run0` are refused outright:
+  // no card at all, because pkexec/run0 would raise the DESKTOP's own polkit
+  // dialog outside the app.
+  describe('the admin floor', () => {
+    const bashTool = () => fakeTool('Bash', {
+      schema: z.object({ command: z.string() }),
+      permissionSubject: (a: any) => a.command,
+    });
+    const oneBash = (command: string) => scriptedModel([
+      stream(toolCallChunk('c1', 'Bash', { command }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'ok'), finishChunk('stop')),
+    ]);
+    const run = async (command: string, decide: () => Promise<PermissionDecision>, answer: AskDecision = { behavior: 'allow', always: true }) => {
+      const bash = bashTool();
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => answer);
+      const session = new HarnessSession(makeOpts({ tools: [bash], decide, askUser }), async () => oneBash(command) as any);
+      const remembered: unknown[] = [];
+      session.on('remember-rule', (r) => remembered.push(r));
+      const events = collect(session);
+      await session.send('go');
+      return { askUser, remembered, ran: (bash as any).calls.length, events };
+    };
+
+    it('an admin ask hides Always allow (floorStop \'admin\')', async () => {
+      const { askUser, ran } = await run('sudo apt update', async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'admin', external: false });
+      expect(ran).toBe(1); // the person said yes, so it runs
+    });
+
+    it('a remembered Always-allow rule for `sudo x` does NOT skip the card', async () => {
+      // decide() returning 'allow' with no ask is exactly what a stored
+      // "Always allow" rule produces — the floor must still force a card and
+      // must still refuse to remember anything new (forcedAsk).
+      const { askUser, remembered, ran } = await run('sudo systemctl restart nginx', async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ floorStop: 'admin' });
+      expect(remembered).toEqual([]);
+      expect(ran).toBe(1);
+    });
+
+    it('Full auto still asks', async () => {
+      // Full auto's own decide() answers 'allow' with denyListed:true for a
+      // command on its list — the floor still turns it into an ask.
+      const { askUser, ran } = await run('sudo apt update', async () => ({ action: 'allow', denyListed: true }));
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'admin' });
+      expect(ran).toBe(1);
+    });
+
+    it('a no from the person stops the admin command', async () => {
+      const { ran } = await run('sudo apt update', async () => ALLOW, { behavior: 'deny' });
+      expect(ran).toBe(0);
+    });
+
+    it('never turns a deny rule into an ask', async () => {
+      const { askUser, ran } = await run('sudo apt update', async () => ({ action: 'deny', denyListed: false }));
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(0);
+    });
+
+    it('pkexec is denied without an ask', async () => {
+      const { askUser, ran, events } = await run('pkexec apt update', async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(0);
+      const res = events.find((e) => e.type === 'tool-result')!;
+      expect(res.data.isError).toBe(true);
+      expect(res.data.toolResult).toMatch(/pkexec can't be used here/);
+      expect(res.data.toolResult).toMatch(/use sudo instead/i);
+    });
+
+    // Review T1-4: pkexec/run0 and doas/su fail for DIFFERENT reasons — the
+    // message must state the true cause for each, never one invented sentence
+    // shared by all four (docs/error-message-standards.md).
+    it.each(['pkexec', 'run0'])('%s: the message names the real cause — a password window outside YouCoded', async (word) => {
+      const { events } = await run(`${word} apt update`, async () => ALLOW);
+      const res = events.find((e) => e.type === 'tool-result')!;
+      expect(res.data.toolResult).toMatch(/password window outside YouCoded/);
+      expect(res.data.toolResult).not.toMatch(/terminal/);
+    });
+
+    it.each(['doas', 'su'])('%s: the message names the real cause — a terminal YouCoded can\'t show', async (word) => {
+      const { askUser, ran, events } = await run(`${word} apt update`, async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(0);
+      const res = events.find((e) => e.type === 'tool-result')!;
+      expect(res.data.isError).toBe(true);
+      expect(res.data.toolResult).toMatch(/asks for your password in a terminal/);
+      expect(res.data.toolResult).toMatch(/use sudo instead/i);
+      expect(res.data.toolResult).not.toMatch(/password window outside YouCoded/);
+    });
+
+    it('the admin floor beats the removal-target floor: `sudo rm -rf ~` shows the admin band', async () => {
+      const { askUser } = await run('sudo rm -rf ~', async () => ALLOW);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ floorStop: 'admin' });
+    });
+  });
+
+  // admin-password design §2.4/R20/§11 task 5: after the approval card above
+  // returns allow for a visibly-sudo command, the session asks a SECOND
+  // question — the password — BEFORE the fake tool's own execute() ever runs.
+  describe('the up-front password ask (R20)', () => {
+    const bashTool = () => fakeTool('Bash', {
+      schema: z.object({ command: z.string() }),
+      permissionSubject: (a: any) => a.command,
+    });
+    const oneBash = (command: string) => scriptedModel([
+      stream(toolCallChunk('c1', 'Bash', { command }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'ok'), finishChunk('stop')),
+    ]);
+
+    function fakeAdminPasswordService(result: 'submitted' | 'canceled' = 'submitted') {
+      const calls: Array<{ sessionId: string; toolCallId: string; expectedArgvLines: string[][] }> = [];
+      const askUpFront = vi.fn(async (req: any) => {
+        calls.push(req);
+        return result;
+      });
+      return { askUpFront, wipeUpfront: vi.fn(), calls };
+    }
+
+    const run = async (command: string, adminPasswordService: ReturnType<typeof fakeAdminPasswordService>) => {
+      const bash = bashTool();
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true }));
+      const session = new HarnessSession(
+        makeOpts({ tools: [bash], decide: async () => ALLOW, askUser, adminPasswordService: adminPasswordService as any }),
+        async () => oneBash(command) as any,
+      );
+      const events = collect(session);
+      await session.send('go');
+      return { askUser, ran: (bash as any).calls.length, events };
+    };
+
+    it('asks for the password AFTER the approval card, naming the sudo line, and BEFORE the command spawns', async () => {
+      const svc = fakeAdminPasswordService('submitted');
+      const { askUser, ran } = await run('sudo apt update', svc);
+      expect(askUser).toHaveBeenCalledTimes(1);       // the approval card ran first
+      expect(svc.askUpFront).toHaveBeenCalledTimes(1); // then the password ask
+      expect(svc.calls[0]).toMatchObject({ toolCallId: 'c1', expectedArgvLines: [['apt', 'update']] });
+      expect(ran).toBe(1); // submitted -> the command still spawns
+    });
+
+    it('Skip/cancel of the password ask means the command never runs at all', async () => {
+      const svc = fakeAdminPasswordService('canceled');
+      const { ran, events } = await run('sudo apt update', svc);
+      expect(ran).toBe(0);
+      const res = events.find((e) => e.type === 'tool-result')!;
+      expect(res.data.isError).toBe(true);
+      expect(res.data.toolResult).toMatch(/interrupted/i);
+    });
+
+    it('a command that names no visible sudo line never calls askUpFront', async () => {
+      const svc = fakeAdminPasswordService('submitted');
+      const { ran } = await run('apt update', svc);
+      expect(svc.askUpFront).not.toHaveBeenCalled();
+      expect(ran).toBe(1);
+    });
+
+    // Code review F1: where the password card is genuinely unavailable
+    // (macOS, Windows, or a Linux self-test failure) `adminPasswordService`
+    // is never wired at all — `undefined`, not a service that always
+    // refuses. Passwordless (NOPASSWD) sudo must keep working after
+    // approval exactly as it did before this feature existed: the approval
+    // band still fires (floorStop:'admin' is unconditional), the up-front
+    // password step is simply skipped, and the command still spawns.
+    it('passwordless sudo still runs after approval when adminPasswordService is unset entirely (F1)', async () => {
+      const bash = bashTool();
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true }));
+      const session = new HarnessSession(
+        makeOpts({ tools: [bash], decide: async () => ALLOW, askUser }), // no adminPasswordService key at all
+        async () => oneBash('sudo -n true') as any,
+      );
+      collect(session);
+      await session.send('go');
+      expect(askUser).toHaveBeenCalledTimes(1); // the approval band still shows
+      expect((bash as any).calls.length).toBe(1); // and the command still runs
+      // WHY here too (contract R21, graded fail): the row promises both halves —
+      // it still runs AND the assistant is told why a password-needing sudo
+      // won't work. With no service wired the availability flag stays at its
+      // default (off), so the real Bash tool's description must say so.
+      resetAdminCapabilityForTests();
+      settleAdminCapability('no-password-only');
+      expect(BashTool.description).toContain('`sudo` only works here when the command needs no password (NOPASSWD)');
+      expect(BashTool.description).not.toContain('the user types their admin password in a card');
+      resetAdminCapabilityForTests(); // never leak into a later test in this file
+    });
+
+    it('a no from the person on the APPROVAL card means the password is never asked either', async () => {
+      const svc = fakeAdminPasswordService('submitted');
+      const bash = bashTool();
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
+      const session = new HarnessSession(
+        makeOpts({ tools: [bash], decide: async () => ALLOW, askUser, adminPasswordService: svc as any }),
+        async () => oneBash('sudo apt update') as any,
+      );
+      collect(session);
+      await session.send('go');
+      expect(svc.askUpFront).not.toHaveBeenCalled();
+      expect((bash as any).calls.length).toBe(0);
     });
   });
 
