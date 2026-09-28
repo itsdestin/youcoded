@@ -68,11 +68,9 @@ function motionWindowMs(el: Element | null): number {
   return Number.isFinite(reveal) && reveal > 0 ? Math.round(reveal + EXPAND_WINDOW_SLACK_MS) : EXPAND_WINDOW_FALLBACK_MS;
 }
 
-/** A collapsed pill (dot only): px-1.5 (12) + dot (10) + border (2) + the
- *  gap-1 (4) that sits between the dot and its zero-width label. Measured
- *  2026-09-01 at 28px; the packer had budgeted 24 since it was written, so a
- *  row of N dots was under-reserved by 4N px and the active name got squeezed. */
-const COLLAPSED_PILL_PX = 28;
+/** A collapsed pill: pl-1.5 (6) + dot (10) + gap-1.5 (6) + border (2). It was 28 with the
+ *  dot 4px off-centre until 2026-09-27; the gap is now its right padding (pillClass). */
+const COLLAPSED_PILL_PX = 24;
 
 /** The "+N" overflow chip's room: min-w-[18px] + px-1 fits two digits at
  *  ~24px, plus its ml-1 (4). Reserved by the packer only when something
@@ -1977,8 +1975,10 @@ export default function SessionStrip({
           const hoverPeek = !isActive && !displayPack.expanded.has(s.id);
           const isDot = !displayPack.expanded.has(s.id);
 
+          // WHY pr-0 (2026-09-27): a dot ends in the 6px gap, a name in its 7px tail —
+          // each matching the left side. px-1.5 left the right visibly wider.
           const pillClass = `
-                  relative flex items-center gap-1 rounded-full px-1.5 py-px
+                  relative flex items-center gap-1.5 rounded-full pl-1.5 pr-0 py-px
                   border select-none touch-none overflow-hidden
                   ${pillSurfaceClass(showName && (isActive || !displayPack.expanded.has(s.id)), dragging)}`;
           const pillBody = (
@@ -2140,7 +2140,7 @@ export default function SessionStrip({
                   }}
                 >
                   <SessionDot color={color} isActive={isActive} />
-                  <span className="session-pill__label text-xs font-medium text-fg-2 px-0.5">{s.name}</span>
+                  <span className="session-pill__label text-xs font-medium text-fg-2"><span className="session-pill__name">{s.name}</span></span>
                 </div>,
                 document.body,
               )}
