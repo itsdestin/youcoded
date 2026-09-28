@@ -276,6 +276,8 @@ export default function ModelPicker({
   pinSelectedToTop = false,
   emptyLabel = 'Choose a model…',
   triggerClassName,
+  onClear,
+  clearLabel = 'No selection',
 }: {
   value: ModelChoice | null;
   /** What the CLOSED button reads when nothing is picked. Defaults to the
@@ -339,6 +341,15 @@ export default function ModelPicker({
    *  isn't needed. Omitted everywhere else so the ~20 other call sites,
    *  including the ones the deepening was written for, don't move. */
   triggerClassName?: string;
+  /** Round 4 (2026-09-28) — Destin: Specialists' tier pickers need their own
+   *  clear, in the list rather than a separate button beside it ("each can be
+   *  cleared individually"). Opt-in and additive: omitted, the picker behaves
+   *  exactly as before at every other call site. When set, a row reading
+   *  `clearLabel` is pinned first in the open list; picking it calls `onClear`
+   *  instead of `onSelect` and closes the panel the same way a real pick does. */
+  onClear?: () => void;
+  /** Only used with `onClear`. Defaults to "No selection". */
+  clearLabel?: string;
 }) {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
@@ -971,6 +982,24 @@ export default function ModelPicker({
                       >
                         Add provider
                       </Button>
+                    </div>
+                  )}
+                  {/* "No selection" — round 4, opt-in via `onClear`: a plain row,
+                      same shape as a real pick, pinned above the list so a tier
+                      can be cleared without a separate button. */}
+                  {onClear && (
+                    <div className="group/model flex items-center px-2">
+                      <div className={`flex-1 min-w-0 flex items-center gap-1 rounded ${!value ? 'bg-accent' : ''}`}>
+                        <button
+                          type="button"
+                          onClick={() => { onClear(); setOpen(false); setFilterOpen(false); }}
+                          aria-pressed={!value}
+                          className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex items-center gap-2 ${!value ? 'text-on-accent font-medium' : 'text-fg-2 hover:bg-inset'}`}
+                        >
+                          <span className="w-[13px] shrink-0" />
+                          <span className="truncate block min-w-0">{clearLabel}</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                   {visibleRows.map(row)}

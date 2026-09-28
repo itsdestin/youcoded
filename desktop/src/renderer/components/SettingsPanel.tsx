@@ -1957,10 +1957,9 @@ function RemoteButton(props: RemoteButtonProps) {
                           )}
                         </FieldRow>
 
-                        {/* Keep awake — level-1 card (round 2): was a bare div
-                            sitting loose between Password's card and the popup
-                            background — Destin: "sits loose". variant="nested"
-                            (level-2) matches every other nested track. */}
+                        {/* Keep awake — level-1 card: was a bare div sitting loose
+                            between Password's card and the background ("sits loose").
+                            variant="nested" matches every other nested track. */}
                         <div className={`${CARD_LEVEL_1} px-3 py-2`}>
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs text-fg-2">Keep awake</span>
@@ -2134,7 +2133,9 @@ function RemoteButton(props: RemoteButtonProps) {
                           />
                         </div>
                       ) : (
-                        <div className="py-2">
+                        // Level-1 card (round 4): was a bare div, the one row
+                        // under this heading with no card, unlike Status/Address.
+                        <div className={`${CARD_LEVEL_1} p-3`}>
                           <p className="text-xs text-fg-muted mb-2">
                             Tailscale is not installed. It creates a secure private network so you can access YouCoded from anywhere.
                           </p>

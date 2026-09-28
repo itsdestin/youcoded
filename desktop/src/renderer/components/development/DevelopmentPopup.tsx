@@ -37,42 +37,44 @@ export function DevelopmentPopup({ open, onClose, onOpenBug, onOpenContribute }:
   // Dialog already portals itself, so the createPortal wrapper is gone too.
   return (
     <Dialog open onClose={onClose} size="panel" title="Development" scrollBody>
-      <div className="p-4">
-        {/* K2: these are nav rows — each one opens something — so they take the
-            nav density (text-sm/text-2xs) rather than the smaller in-menu size
-            they used to hand-roll. A row that navigates now looks the same here
-            as it does in the settings drawer, which is the whole point. */}
-        <p className="text-sm text-fg-2 mb-4">Help make YouCoded better. Share a problem, suggest an idea, or work on a change with your assistant.</p>
-        <div className="space-y-2">
-          <SettingRow
-            icon={<BugIcon />}
-            title="Report a Bug or Request a Feature"
-            description="Send it to the YouCoded team"
-            onClick={() => { onOpenBug(); }}
-          />
-          <SettingRow
-            icon={<CodeBracketsIcon />}
-            title="Contribute to YouCoded"
-            description="Start with a conversation, not code"
-            onClick={() => { onOpenContribute(); }}
-          />
-          <SettingRow
-            icon={<ClipboardListIcon />}
-            title="Known issues"
-            description="Browse open issues on GitHub"
-            onClick={() => { window.open(KNOWN_ISSUES_URL, '_blank'); onClose(); }}
-          />
-          {/* WHY: navigating public pages is not submission; these normal links stay usable. */}
-          <SettingRow icon={<ClipboardListIcon />} title="Roadmap" description="See what’s planned on GitHub" onClick={() => window.open('https://github.com/itsdestin/youcoded-dev/blob/master/ROADMAP.md', '_blank', 'noopener,noreferrer')} />
-          {/* Beta builds. WHY here and not in About (Destin, 2026-09-13 deck):
-              every row above is someone choosing to help with the app rather
-              than just use it, which is the same person who wants pre-release
-              builds. It is the fifth card in the same list rather than its own
-              headed section ("remove the header/copy, leave just the card
-              thing") — it carries an icon because the four above it do, and a
-              card with an empty icon column reads as a broken one. */}
-          <BetaChannelRow variant="nav" icon={<FlaskIcon />} />
-        </div>
+      {/* WHY no extra wrapper div (round 4, 2026-09-28 — Destin: "its margins
+          ... still differ from other Settings popups"): `scrollBody` already
+          gives every Dialog body `px-4 py-4` (the standard 16px edge) — the
+          removed `<div className="p-4">` was doubling it to 32px, the one
+          thing that made this popup's margins read as different. Intro text
+          drops to the standard `text-xs` hint size used elsewhere (About,
+          Remote Access); the nav rows below already match the drawer's own
+          density and card level — those were never the problem. */}
+      <p className="text-xs text-fg-2">Help make YouCoded better. Share a problem, suggest an idea, or work on a change with your assistant.</p>
+      <div className="space-y-2">
+        <SettingRow
+          icon={<BugIcon />}
+          title="Report a Bug or Request a Feature"
+          description="Send it to the YouCoded team"
+          onClick={() => { onOpenBug(); }}
+        />
+        <SettingRow
+          icon={<CodeBracketsIcon />}
+          title="Contribute to YouCoded"
+          description="Start with a conversation, not code"
+          onClick={() => { onOpenContribute(); }}
+        />
+        <SettingRow
+          icon={<ClipboardListIcon />}
+          title="Known issues"
+          description="Browse open issues on GitHub"
+          onClick={() => { window.open(KNOWN_ISSUES_URL, '_blank'); onClose(); }}
+        />
+        {/* WHY: navigating public pages is not submission; these normal links stay usable. */}
+        <SettingRow icon={<ClipboardListIcon />} title="Roadmap" description="See what’s planned on GitHub" onClick={() => window.open('https://github.com/itsdestin/youcoded-dev/blob/master/ROADMAP.md', '_blank', 'noopener,noreferrer')} />
+        {/* Beta builds. WHY here and not in About (Destin, 2026-09-13 deck):
+            every row above is someone choosing to help with the app rather
+            than just use it, which is the same person who wants pre-release
+            builds. It is the fifth card in the same list rather than its own
+            headed section ("remove the header/copy, leave just the card
+            thing") — it carries an icon because the four above it do, and a
+            card with an empty icon column reads as a broken one. */}
+        <BetaChannelRow variant="nav" icon={<FlaskIcon />} />
       </div>
     </Dialog>
   );

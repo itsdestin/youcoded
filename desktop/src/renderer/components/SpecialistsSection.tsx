@@ -367,24 +367,15 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
           // Card-levels sweep: nested inside this section's level-1 card, so
           // the trigger matches every other nested control (level-2 default).
           triggerClassName=""
+          // WHY onClear here, not a separate "Set to …" line + Clear button
+          // (round 4 — Destin: the lines repeated the picker's own value, the
+          // button was odd, and each tier should clear on its own): "No
+          // selection" is now the picker's own first row; choosing it clears
+          // this tier exactly as the old Clear button did.
+          onClear={onClear}
         />
-        {/* WHY moved here, right under the dropdown it describes (round 2 —
-            Destin: "Set to ... " read as loose text under Clear, not attached
-            to anything): this is the tier's own hint, not a free caption. */}
-        {(!loaded || value) && (
-          <div className="text-2xs">
-            {!loaded
-              ? <LoadingState what={`the ${tier} model`} variant="inline" />
-              : <span className="text-fg-dim">Set to <span className="text-fg-2">{value!.label}</span></span>}
-          </div>
-        )}
-        {value && (
-          // WHY not full-width (round 2 — Destin: read as "a full-width faint
-          // bar", not a button): a normal small outlined button, right-aligned
-          // as a follow-up action, same size/shape as every other row's Clear.
-          <div className="flex justify-end">
-            <Button size="sm" variant="secondary" onClick={onClear} title={`Unset the ${tier} model`}>Clear</Button>
-          </div>
+        {!loaded && (
+          <div className="text-2xs"><LoadingState what={`the ${tier} model`} variant="inline" /></div>
         )}
       </div>
     </div>

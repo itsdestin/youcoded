@@ -20,7 +20,11 @@ import { FIELD_SURFACE } from './field';
  * LEVEL 1 — a first-level card on a page: the translucent `bg-inset/50` box
  * already used by `FieldRow`, `SettingRow` and the General page's own field
  * cards ("the glass card... the ones with the glass effect look fine" — Destin,
- * 2026-09-27). No border: the translucency alone is what reads as "glass".
+ * 2026-09-27), PLUS the 1px `border-edge-dim` the "before" version of this card
+ * (card-measurements.md "Card B") always had (round 4, 2026-09-28 — Destin:
+ * first-level cards "no longer separate from the background, esp. Meadow
+ * Mist" once the border was dropped). Restoring it here fixes every level-1
+ * card on every screen from one place.
  *
  * LEVEL 2 — anything nested INSIDE a level-1 card: reuses the app's existing
  * `FIELD_SURFACE` (opaque `bg-inset` + a visible `border-edge-dim`, already the
@@ -29,5 +33,5 @@ import { FIELD_SURFACE } from './field';
  * makes "everything nested looks the same" true without inventing a ninth card
  * style — it already existed, just wasn't reused for non-field nested boxes.
  */
-export const CARD_LEVEL_1 = 'bg-inset/50 rounded-lg';
+export const CARD_LEVEL_1 = 'bg-inset/50 border border-edge-dim rounded-lg';
 export const CARD_LEVEL_2 = FIELD_SURFACE;

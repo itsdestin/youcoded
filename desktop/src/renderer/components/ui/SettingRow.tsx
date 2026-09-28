@@ -89,7 +89,10 @@ const DENSITY: Record<SettingRowVariant, { title: string; desc: string }> = {
 // No longer exported (knip, 2026-09-27): PermissionsSection's FOLDER_HEADER
 // was the one external reader, and the card-levels sweep gave it its own
 // definition instead (a level-2 nested card no longer wants level-1's tint).
-const SETTING_ROW_BASE = 'w-full flex items-center gap-3 px-3 py-2 bg-inset/50 rounded-lg text-left transition-colors stepped-hover';
+// WHY border-edge-dim (round 4, 2026-09-28): kept equal to CARD_LEVEL_1 by
+// hand (a plain string literal, not an import — see the ast-grep guard below)
+// after Destin restored the level-1 border app-wide.
+const SETTING_ROW_BASE = 'w-full flex items-center gap-3 px-3 py-2 bg-inset/50 border border-edge-dim rounded-lg text-left transition-colors stepped-hover';
 
 /**
  * `items-center`, always — deviating from the spec's `items-start`.

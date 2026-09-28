@@ -187,11 +187,19 @@ describe('model tiers: load and write failures are shown, never swallowed into "
 
     render(<SpecialistsSection cwd="cwd-tier-write-failed" />);
 
-    await screen.findByText('My Budget Model');
-    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    // WHY assert on the picker's own trigger text, not a separate "Set to …"
+    // line (round 4 — that line is gone, it only repeated this value): the
+    // test's provider/catalog mocks are empty, so the trigger falls back to
+    // the raw modelId ("x/y") rather than the label — see ModelPicker's
+    // `currentLabel`. Open-then-click "No selection" replaces the removed
+    // Clear button, matching how a real pick is made.
+    const budgetRow = await screen.findByTestId('tier-row-budget');
+    await within(budgetRow).findByText('x/y');
+    fireEvent.click(within(budgetRow).getByRole('button', { name: 'Model' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'No selection' }));
 
     // Reverts: the previous value is still shown, not cleared.
-    await waitFor(() => expect(screen.getByText('My Budget Model')).toBeInTheDocument());
+    await waitFor(() => expect(within(budgetRow).getByText('x/y')).toBeInTheDocument());
     // The real refusal text is shown verbatim, not swallowed.
     expect(screen.getByText(/Model no longer available\./)).toBeInTheDocument();
   });
@@ -214,8 +222,10 @@ describe('model tiers: load and write failures are shown, never swallowed into "
 
     render(<SpecialistsSection cwd="cwd-tier-write-alert" />);
 
-    await screen.findByText('My Budget Model');
-    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    const budgetRow = await screen.findByTestId('tier-row-budget');
+    await within(budgetRow).findByText('x/y');
+    fireEvent.click(within(budgetRow).getByRole('button', { name: 'Model' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'No selection' }));
 
     // role="alert" does not compute its accessible NAME from content (ARIA:
     // "alert" is name-from-author, not name-from-content) — find the alert,

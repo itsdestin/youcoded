@@ -243,22 +243,22 @@ function SignedOutBody({
   // void startSignIn() swallowed them and the user saw nothing happen.
   const [signInError, setSignInError] = useState<string | null>(null);
   return (
-    <div className="flex flex-col items-center gap-4 py-2 text-center">
-      <p className="text-2xs text-fg-dim leading-relaxed">
-        One YouCoded account for the marketplace, games, and syncing with friends.
+    // WHY normal Button size + standard text sizing, left-aligned, one line
+    // (round 4, 2026-09-28 — Destin: "the button is oddly sized, its text
+    // doesn't follow the settings text/spacing rules... tighten the copy"):
+    // was a centered hero CTA (size="lg", text-center) with two paragraphs
+    // of small print — the one Settings row that broke the popup's normal
+    // body-text conventions. Meaning kept, just said once.
+    <div className="space-y-2 py-2">
+      <p className="text-xs text-fg-2">
+        One account, using your GitHub profile — for the marketplace, games, and syncing with friends.
       </p>
-      {/* Page-level CTA -> lg. Also drops hover:brightness-110, which was
-          invisible on Light/Creme (their accent is already near-black), and
-          gains the focus ring it never had. */}
       {/* "Sign in to YouCoded", NOT "Sign in with GitHub" (Destin, 2026-07-22):
           the account is a YOUCODED account — GitHub is only the login
-          mechanism, and naming the button after the mechanism made it read as
-          a duplicate of the Connected-accounts GitHub repo connection. The
-          mechanism lives in the small print below; the octocat stays off the
-          CTA for the same reason. Same rename applied to every sign-in
-          surface (SignInPromptModal, GameLobby, RatingSubmitModal, chip). */}
+          mechanism, which is why the copy above names it instead of the
+          button. Same rename applied to every sign-in surface
+          (SignInPromptModal, GameLobby, RatingSubmitModal, chip). */}
       <Button
-        size="lg"
         onClick={() => {
           setSignInError(null);
           startSignIn().catch((e) =>
@@ -269,9 +269,6 @@ function SignedOutBody({
       >
         {signInPending ? 'Signing in…' : 'Sign in to YouCoded'}
       </Button>
-      <p className="text-3xs text-fg-muted leading-relaxed">
-        Uses your GitHub profile to sign in — GitHub only shares your public info.
-      </p>
       {signInError && <FieldError as="p">{signInError}</FieldError>}
     </div>
   );

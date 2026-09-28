@@ -1338,11 +1338,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           {countTab === 'proj' && (() => {
                             const projects = ((spacesStatus?.spaces ?? []) as any[]).filter(s => s.kind === 'project');
                             if (projects.length === 0) return <p className="text-2xs text-fg-muted">Turn on sync for a project folder to add it here.</p>;
-                            // LEVEL-2 row (card-levels trial): nested inside the level-1 status card.
+                            // One shared level-2 list, bare rows — matches Devices above.
                             return (
-                              <ul className="space-y-1">
+                              <ul className={`${CARD_LEVEL_2} p-1.5 space-y-0.5`}>
                                 {projects.map((s: any) => (
-                                  <li key={s.id} className={`${CARD_LEVEL_2} flex items-center justify-between gap-2 px-2.5 py-1.5`}>
+                                  <li key={s.id} className="flex items-center justify-between gap-2 px-1 py-1">
                                     <span className="text-xs text-fg-2 truncate">{s.displayName || s.id.replace('project:', '')}</span>
                                     <span className="text-3xs text-fg-muted shrink-0">{s.remote ? 'connected' : 'local only'}</span>
                                   </li>
@@ -1357,9 +1357,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                             const shown = sorted.slice(0, 4);
                             return (
                               <>
-                                <ul className="space-y-1">
+                                <ul className={`${CARD_LEVEL_2} p-1.5 space-y-0.5`}>
                                   {shown.map(c => (
-                                    <li key={c.sessionId} className={`${CARD_LEVEL_2} flex items-center justify-between gap-2 px-2.5 py-1.5`}>
+                                    <li key={c.sessionId} className="flex items-center justify-between gap-2 px-1 py-1">
                                       <span className="text-xs text-fg-2 truncate">{c.name}</span>
                                       <span className="text-3xs text-fg-muted shrink-0">{relativeMs(c.lastModified)}</span>
                                     </li>
@@ -1388,13 +1388,16 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         )}
                         {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
                         {/* The app's warning card, collapsed to one informative line
-                            (review, 2026-09-16); it opens to the reason and the names —
-                            each a LEVEL-2 row now, same recipe as the tabs above. */}
+                            (review, 2026-09-16); it opens to the reason and the names.
+                            WHY bare names, not each its own box (round 4 — Destin:
+                            "bare names like they were before, inside ONE shared
+                            container, not 3 separate boxes"): the Callout itself is
+                            that one shared container — a name is a plain line in it. */}
                         {oversizeLine && (
                           <Callout tone="warning" collapsible title={oversizeLine.header}>
                             {oversizeLine.body}
-                            <div className="mt-1.5 space-y-1">
-                              {oversizeNames.map((n, i) => <div key={i} className={`${CARD_LEVEL_2} px-2.5 py-1 text-xs truncate`}>{n}</div>)}
+                            <div className="mt-1.5 space-y-0.5">
+                              {oversizeNames.map((n, i) => <div key={i} className="text-xs truncate">{n}</div>)}
                             </div>
                           </Callout>
                         )}
@@ -1878,8 +1881,10 @@ function DevicesTab({ devices, onRename, onRemove, syncInProgress, lastSyncByDev
     return <p className="text-2xs text-fg-muted">No devices yet — they appear here once sync has run.</p>;
   }
 
+  // WHY one shared container, not one box per row ("bare names ... inside ONE
+  // shared container, not 3 separate boxes"): plain rows, matching below.
   return (
-    <ul className="space-y-1">
+    <ul className={`${CARD_LEVEL_2} p-1.5 space-y-0.5`}>
       {(devices ?? []).map(d => {
         const plat = platformLabel(d.platform);
         // Real sync recency instead of the frozen launch-time "last seen":
@@ -1904,7 +1909,7 @@ function DevicesTab({ devices, onRename, onRemove, syncInProgress, lastSyncByDev
         const right = plat ? `${plat} · ${activity}` : activity;
         return (
           <li key={d.id}>
-            <div className={`${CARD_LEVEL_2} flex items-center justify-between gap-2 px-2.5 py-1.5`}> {/* LEVEL-2 row (card-levels trial) */}
+            <div className="flex items-center justify-between gap-2 px-1 py-1">{/* bare row inside the shared level-2 list */}
               <div className="min-w-0 flex items-center gap-1.5">
                 {editingId === d.id ? (
                   /* Shared FIELD surface (spec change 20) — `sm` because this is an
@@ -1960,7 +1965,7 @@ function DevicesTab({ devices, onRename, onRemove, syncInProgress, lastSyncByDev
                 moment this renders (and never shows on touch or to a screen reader). */}
             {confirmingId === d.id && (
               <div
-                className="mt-1.5 space-y-2 rounded-lg bg-inset border border-edge-dim p-2.5"
+                className={`mt-1.5 space-y-2 ${CARD_LEVEL_2} p-2.5`}
                 onKeyDown={(e) => { if (e.key === 'Escape') setConfirmingId(null); }} // matches the rename input's Escape
               >
                 <p className="text-2xs text-fg-dim leading-relaxed">
