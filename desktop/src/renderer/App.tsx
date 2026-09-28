@@ -108,7 +108,7 @@ import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionP
 import type { NativePermissionMode } from '../shared/permission-types';
 import { detectPermissionMode, syncKeyedSubscriptions, clearKeyedSubscriptions } from './state/permission-mode-scan';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
-import { createFirstPageLoader, type FirstPageLoader, type PageLocator } from './state/first-page-loader';
+import { createFirstPageLoader, type FirstPageLoader, type PageHint } from './state/first-page-loader';
 
 import FirstRunView from './components/FirstRunView';
 import { getPlatform, isAndroid, isRemoteMode, onConnectionModeChange } from './platform';
@@ -1416,8 +1416,7 @@ function AppInner() {
 
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
       if (!event?.type || !event?.sessionId) return;
-      // A live event proves main can now read this session's transcript: if its
-      // first page failed, ask again (a Set lookup otherwise). first-page-loader.ts.
+      // Live event = main can read this transcript: re-ask a failed first page (first-page-loader.ts).
       firstPages.noteLiveActivity(event.sessionId);
 
       switch (event.type) {
@@ -2125,7 +2124,7 @@ function AppInner() {
   // claudeSessionId/projectSlug are the fallback locator for a session the
   // transcript watcher does not know yet (a just-resumed CC session) — see
   // TranscriptPageRequest.
-  const loadFirstPage = useCallback((sid: string, locator?: PageLocator) => firstPages.load(sid, locator), [firstPages]);
+  const loadFirstPage = useCallback((sid: string, hint?: PageHint) => firstPages.load(sid, hint), [firstPages]);
 
   // Every session this window knows about gets its most recent page — not just
   // the paths that happen to create one. History used to arrive as a side effect
@@ -2164,6 +2163,8 @@ function AppInner() {
       // and never clobbers what session:created already seeded.
       for (const s of list) {
         dispatch({ type: 'SESSION_INIT', sessionId: s.id });
+        // WHY toEnd: it streamed while no chat listened (reload/remount) — read to EOF or recent messages vanish.
+        void loadFirstPage(s.id, { toEnd: true });
         setViewModes((vm) => vm.has(s.id) ? vm : new Map(vm).set(s.id, 'chat'));
         setPermissionModes((pm) => pm.has(s.id) ? pm : new Map(pm).set(s.id, matchPermissionMode(s.permissionMode)));
         // These sessions were already running before this window's event
@@ -2202,11 +2203,10 @@ function AppInner() {
       // Ordering: the transcript:event listener is registered by an effect
       // declared ABOVE this one, so it is already attached when these replayed
       // events stream back; uuid dedup absorbs any overlap with live events.
-      // History is requested by the session-list effect above, which covers every
-      // entry point rather than only this one. Remote/Android hydrate via
-      // chat:hydrate on connect instead.
+      // History: requested in the loop above; the session-list effect covers every
+      // other entry point. Remote/Android hydrate via chat:hydrate on connect instead.
     }).catch(() => {});
-  }, [dispatch]);
+  }, [dispatch, loadFirstPage]);
 
   // Multi-window ownership wiring (Phase 2 of detach feature).
   // Subscribes to directory/leader/ownership pushes from main and mutates

@@ -3379,6 +3379,9 @@ export function registerIpcHandlers(
     // later, unrelated page read. See WindowRegistry.markInheritedByTransfer.
     const inherited = !beforeCursor
       && !!windowRegistry?.consumeInheritedByTransfer(sessionId, evt.sender.id);
+    // A rebuilt renderer missed the live stream too (TranscriptPageRequest.toEnd). Not a
+    // one-shot mark like `inherited`, and native reconcile stays keyed to real transfers.
+    const readToEnd = inherited || (!beforeCursor && req.toEnd === true);
 
     // Native sessions page over the merged event array; getHistoryPage returns
     // null for non-native ids, so CC's watcher stays the source for claude
@@ -3417,11 +3420,11 @@ export function registerIpcHandlers(
         return { ...empty, unresolved: true };
       }
     }
-    // The first page stops at the watcher cutoff; zero or an inherited window reads to EOF.
+    // The first page stops at the watcher cutoff; zero, an inherited window or a rebuilt renderer reads to EOF.
     // HISTORY_PAGE_LOADED dedups any overlap against the live seenUuids.
     const saved = resumePageBoundaries.get(sessionId);
     const resumeOffset = saved?.jsonlPath === source.jsonlPath ? saved.offset : null;
-    const endOffset = beforeCursor ? beforeCursor.offset : (inherited ? null : (source.startOffset || null));
+    const endOffset = beforeCursor ? beforeCursor.offset : (readToEnd ? null : (source.startOffset || null));
     const page = await readTranscriptPage({
       jsonlPath: source.jsonlPath, sessionId, endOffset, subagentsDir: source.subagentsDir,
     });

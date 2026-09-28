@@ -48,6 +48,23 @@ describe('first-page loader', () => {
     expect(r.types()).toContain('HISTORY_PAGE_LOADED');
   });
 
+  it('a rebuilt renderer asks for the page to the end, and a later locator keeps that', async () => {
+    let resolveFirst!: (p: TranscriptPageResult) => void;
+    const r = rig((_req, n) => (n === 1 ? new Promise((res) => { resolveFirst = res; }) as any : real));
+    const run = r.loader.load('s', { toEnd: true });
+    await r.loader.load('s', LOC);
+    resolveFirst(unresolved);
+    await run;
+    expect(r.requests[0].toEnd).toBe(true);
+    expect(r.requests[1]).toMatchObject({ toEnd: true, claudeSessionId: 'cc-1' });
+  });
+
+  it('an ordinary load never sends toEnd', async () => {
+    const r = rig(() => real);
+    await r.loader.load('s');
+    expect(r.requests[0]).not.toHaveProperty('toEnd');
+  });
+
   it('a load that gave up is re-asked by the next live event, and then shows history', async () => {
     let hookLanded = false;
     const r = rig(() => (hookLanded ? real : unresolved));

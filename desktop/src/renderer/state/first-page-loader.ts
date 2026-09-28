@@ -21,6 +21,11 @@ import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './first-page-retry';
  *     servers, the trust prompt) was enough.
  *  2. A transient read failure (a Windows file lock) answered as a failure.
  *
+ * And one way it "succeeded" with the wrong page: a renderer REBUILT while its
+ * sessions kept running (reload, crash recovery, an error-boundary remount)
+ * got a first page that stopped where the live tailer started, so every
+ * message since vanished mid-conversation. Such a renderer passes `toEnd`.
+ *
  * Fixes: a locator supplied later is picked up by the attempt already running;
  * a load that did not succeed is forgotten, and the first live transcript event
  * for that session asks again (proof main can now find the file). Re-asks are
@@ -30,7 +35,11 @@ import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './first-page-retry';
  * test (see first-page-retry.ts).
  */
 
-export interface PageLocator { claudeSessionId: string; projectSlug: string }
+interface PageLocator { claudeSessionId: string; projectSlug: string }
+/** What a caller knows about where this session's first page comes from: the
+ *  resume locator, and/or `toEnd` — this renderer was rebuilt while the session
+ *  kept running, so the page must read to EOF (TranscriptPageRequest.toEnd). */
+export type PageHint = Partial<PageLocator> & { toEnd?: boolean };
 
 /** Whole load runs (each up to decideFirstPage's attempt budget) per session,
  *  counting the first. Bounded so a session that never gets a transcript (a
@@ -48,8 +57,8 @@ export interface FirstPageLoaderDeps {
 
 export interface FirstPageLoader {
   /** Load `sessionId`'s newest page unless it is loading or loaded already. A
-   *  `locator` reaches an attempt already in flight. */
-  load: (sessionId: string, locator?: PageLocator) => Promise<void>;
+   *  `hint` reaches an attempt already in flight. */
+  load: (sessionId: string, hint?: PageHint) => Promise<void>;
   /** A live transcript event arrived: re-ask if this session's load failed. */
   noteLiveActivity: (sessionId: string) => void;
   /** Forget every session not in `liveIds` (closed sessions; a native id can
@@ -66,7 +75,7 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
   /** Loads that did not succeed, awaiting a live event to try again. */
   const failed = new Set<string>();
   const runs = new Map<string, number>();
-  const locators = new Map<string, PageLocator>();
+  const hints = new Map<string, PageHint>();
 
   const fail = (sid: string) => {
     deps.dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid });
@@ -74,9 +83,9 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
     failed.add(sid);
   };
 
-  const load = async (sid: string, locator?: PageLocator) => {
+  const load = async (sid: string, hint?: PageHint) => {
     // Recorded BEFORE the guard: the attempt loop reads it each time round.
-    if (locator) locators.set(sid, locator);
+    if (hint) hints.set(sid, { ...hints.get(sid), ...hint });
     if (busyOrDone.has(sid)) return;
     if ((runs.get(sid) ?? 0) >= FIRST_PAGE_MAX_RUNS) return;
     if (!deps.mayLoad(sid)) return;
@@ -88,9 +97,10 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
     for (let attempt = 0; ; attempt++) {
       let page: TranscriptPageResult | null | undefined;
       try {
-        const loc = locators.get(sid);
+        const h = hints.get(sid);
         page = await deps.request({ sessionId: sid, beforeCursor: null,
-          claudeSessionId: loc?.claudeSessionId, projectSlug: loc?.projectSlug });
+          claudeSessionId: h?.claudeSessionId, projectSlug: h?.projectSlug,
+          ...(h?.toEnd ? { toEnd: true } : {}) });
       } catch {
         if (busyOrDone.get(sid) === token) fail(sid);
         return;
@@ -100,7 +110,7 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
       if (!page) { fail(sid); return; }
       const decision = decideFirstPage(page, attempt);
       if (decision === 'accept') {
-        locators.delete(sid);
+        hints.delete(sid);
         try {
           deps.dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: sid, events: page.events, cursor: page.cursor,
             hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true,
@@ -124,7 +134,7 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
     noteLiveActivity: (sid) => { if (failed.has(sid)) void load(sid); },
     retainOnly: (liveIds) => {
       for (const id of failed) if (!liveIds.has(id)) failed.delete(id);
-      for (const map of [busyOrDone, runs, locators]) for (const id of map.keys()) if (!liveIds.has(id)) map.delete(id);
+      for (const map of [busyOrDone, runs, hints]) for (const id of map.keys()) if (!liveIds.has(id)) map.delete(id);
     },
   };
 }
