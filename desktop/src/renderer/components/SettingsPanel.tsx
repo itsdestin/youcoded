@@ -2699,7 +2699,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
 
   return (
     <>
-      <div className="flex-1 px-4 py-4 space-y-2">
+      <div className="flex-1 px-4 pt-2 pb-4 space-y-2">{/* WHY pt-2: header-line gap = the 8px between rows (Destin, surface-levels#SL-13) */}
 
         {/* Account leads the stack — your identity is the first thing settings should show (Destin, 2026-07-08) */}
         <AccountSection />
@@ -3088,7 +3088,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
 
   return (
     <>
-      <div className="flex-1 px-4 py-4 space-y-2">
+      <div className="flex-1 px-4 pt-2 pb-4 space-y-2">{/* WHY pt-2: header-line gap = the 8px between rows (Destin, surface-levels#SL-13) */}
 
         {/* Account leads the stack — your identity is the first thing settings should show (Destin, 2026-07-08).
             GitHub (and future providers) live INSIDE it on the Connected
