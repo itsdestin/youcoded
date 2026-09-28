@@ -27,6 +27,8 @@ const MSG = {
   notADocument: "Office couldn't save this file.",
   binTooLarge: 'This document has grown too large for Office to save.',
   closing: 'Office is closing.',
+  copyRefused: "Office can't save a copy there. Choose another folder.",
+  copyNothing: 'There are no changes to save a copy of yet.',
   refused: 'refused',
 } as const;
 
@@ -153,7 +155,7 @@ function toEditorError(e: unknown, cmd: string, filePath: string): Error {
     code: err?.code ?? null,
     stderr: e instanceof X2tError ? e.stderr.slice(0, 4000) : undefined,
   });
-  const verb = cmd === 'open_file' ? 'open' : cmd === 'save_file' || cmd === 'save_changes' ? 'save' : null;
+  const verb = cmd === 'open_file' ? 'open' : cmd === 'save_file' || cmd === 'save_copy' ? 'save' : null;
   if (e instanceof X2tError) {
     if (e.code === 'timeout') return new Error('This file took too long to convert, so Office stopped.');
   } else if (verb) {
@@ -171,6 +173,25 @@ function toEditorError(e: unknown, cmd: string, filePath: string): Error {
   return new Error(verb ? `Office couldn't ${verb} this file.` : "Office couldn't finish that.");
 }
 
+/** What "Save a copy…" can do for a document whose save failed (Task 6 fix round 1). */
+export interface OfficeCopyRunner {
+  /** Whether a copy can succeed: an edited Editor.bin exists and the last save did not fail
+   *  in the translation itself (a copy would go through that same translation). */
+  canCopy(token: string): boolean;
+  /** Translate the document's current Editor.bin into `target`. Never touches the original. */
+  saveCopy(token: string, target: string): Promise<void>;
+}
+type OfficeRunner = ((token: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>) & OfficeCopyRunner;
+
+// Per document: whether the editor has handed over an edited Editor.bin, and whether the last
+// save failed while translating. WHY a WeakMap: the same private-bookkeeping reason as queues.
+const copyState = new WeakMap<OfficeSession, { edited: boolean; translateFailed: boolean }>();
+const copyStateOf = (s: OfficeSession) => {
+  let c = copyState.get(s);
+  if (!c) copyState.set(s, (c = { edited: false, translateFailed: false }));
+  return c;
+};
+
 export function createOfficeCommands(deps: {
   root: string;
   sessions: ReturnType<typeof createSessions>;
@@ -180,7 +201,7 @@ export function createOfficeCommands(deps: {
   convert?: typeof realConvert;
   /** Test seam: a small limit, so the size refusal is testable without a 1 GB string. */
   editorBinMaxBytes?: number;
-}): (token: string, cmd: string, args: Record<string, unknown>) => Promise<unknown> {
+}): OfficeRunner {
   const convert = deps.convert ?? realConvert;
   const binMax = deps.editorBinMaxBytes ?? EDITOR_BIN_MAX_BYTES;
   const editorBin = (s: OfficeSession) => path.join(s.temp, 'Editor.bin');
@@ -234,7 +255,11 @@ export function createOfficeCommands(deps: {
     try {
       await fsp.writeFile(tmp, Buffer.from(data, 'base64'));
       await fsp.rename(tmp, editorBin(s));
+      copyStateOf(s).edited = true;
     } catch (e) {
+      // The Editor.bin left behind is older than the editor's content now, so a copy of it
+      // would silently miss the latest edits — "Save a copy…" is not offered until one lands.
+      copyStateOf(s).edited = false;
       // WHY (fix round 1): a leftover .part is up to 1 GB of the temp disk, for nothing.
       await fsp.rm(tmp, { force: true }).catch(() => {});
       throw e;
@@ -278,7 +303,15 @@ export function createOfficeCommands(deps: {
     const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
     const tmp = path.join(priv, base);
     try {
-      await convert(deps.root, editorBin(s), tmp, fmt, jobsBase(s), abortOf(s).signal);
+      try {
+        await convert(deps.root, editorBin(s), tmp, fmt, jobsBase(s), abortOf(s).signal);
+        copyStateOf(s).translateFailed = false;
+      } catch (e) {
+        // Remembered for "Save a copy…": a copy goes through this same translation, so after
+        // a translation failure it cannot succeed and is not offered.
+        copyStateOf(s).translateFailed = true;
+        throw e;
+      }
       await finishCopy(tmp, orig);
       // WHY again, right before the rename (fix round 1): the translation can take many seconds,
       // and the folder may have become protected, or a link swapped in, meanwhile.
@@ -383,7 +416,34 @@ export function createOfficeCommands(deps: {
     });
   }
 
-  return async (token, cmd, args) => {
+  // "Save a copy…" (fix round 1, the owner's decision on a save that keeps failing): the same
+  // safe path as a save — a private folder beside the target, a check that the output is a real
+  // document, one rename — but into a new file the person chose. The original is never touched.
+  async function saveCopyFile(s: OfficeSession, target: string): Promise<void> {
+    const fmt = formatFor(target);
+    if (fmt === null || fmt !== formatFor(s.path)) throw userError(MSG.unsupportedSave);
+    const auth = await authorizeArtifactWrite({ projectRoot: path.dirname(target), fullPath: target, mustStayInRoot: false });
+    if (!auth.ok) throw userError(MSG.copyRefused);
+    // WHY refuse the original itself: this path exists precisely because saving there failed,
+    // and a copy must never be a back door around that file's read-only state.
+    const real = await fsp.realpath(s.path).catch(() => s.path);
+    if (auth.realPath === real) throw userError(MSG.copyRefused);
+    const dir = path.dirname(target);
+    const base = path.basename(target);
+    const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
+    const tmp = path.join(priv, base);
+    try {
+      await convert(deps.root, editorBin(s), tmp, fmt, jobsBase(s), abortOf(s).signal);
+      await finishCopy(tmp, null);
+      if (isClosing(s)) throw userError(MSG.closing, true);
+      noteOwnWrite(target);
+      await renameReplacing(tmp, target, process.platform, () => isClosing(s));
+    } finally {
+      await fsp.rm(priv, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  const run = async (token: string, cmd: string, args: Record<string, unknown>) => {
     if (!OFFICE_COMMANDS.has(cmd)) throw new Error(MSG.refused);
     // WHY the session comes only from the token: the frame is sealed to its own document, and
     // an editor naming some other path (args.path) must never reach any file but its own.
@@ -396,6 +456,26 @@ export function createOfficeCommands(deps: {
       throw toEditorError(e, cmd, s.path);
     }
   };
+  return Object.assign(run, {
+    canCopy(token: string): boolean {
+      const s = deps.sessions.get(token);
+      if (!s) return false;
+      const c = copyStateOf(s);
+      return c.edited && !c.translateFailed;
+    },
+    async saveCopy(token: string, target: string): Promise<void> {
+      const s = deps.sessions.get(token);
+      if (!s) throw new Error(MSG.refused);
+      if (closing) throw new Error(MSG.closing);
+      if (!copyStateOf(s).edited) throw new Error(MSG.copyNothing);
+      try {
+        // In the document's queue, so the copy reads an Editor.bin no write is replacing.
+        await enqueueOther(s, () => saveCopyFile(s, target));
+      } catch (e) {
+        throw toEditorError(e, 'save_copy', target);
+      }
+    },
+  });
 }
 
 // Private save folders are named `.<file><SAVE_DIR_MARK><random>` beside the file.

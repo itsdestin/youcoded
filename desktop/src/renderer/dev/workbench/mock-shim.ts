@@ -219,7 +219,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
   // workbench has files to list and versions to show without the add-on or a disk.
   'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
-  'office.versions', 'office.restore',
+  'office.versions', 'office.restore', 'office.saveCopy',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -3595,6 +3595,8 @@ function createOfficeMock(empty: boolean): OfficeBridge {
       }
     },
     close: async () => {},
+    // "Save a copy…" answers as main would for a failed save whose translation worked.
+    saveCopy: async (_token, mode) => (mode === 'check' ? { ok: true, possible: true } : { ok: true, folder: 'Documents' }),
     versions: async () => {
       if (empty) return [];
       const v = (id: string, h: number, reason: OfficeVersion['reason']): OfficeVersion => ({ id, at: ago(h * HOUR), reason, bytes: 37_000 });

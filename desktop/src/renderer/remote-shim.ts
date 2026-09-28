@@ -2588,11 +2588,9 @@ export function installShim(): void {
         return () => removeListener('git:changed', handler);
       },
     },
-    // Office is desktop only (R28): a phone keeps the quick preview. WHY every member routes
-    // through invoke() instead of the namespace being left out: the host has no handler, so
-    // it answers unsupported, the call rejects, and the user reads "Office isn't available
-    // via remote access yet." — a refusal, not a "not a function" crash (same as
-    // dev.setupWorkspace below). Positional arguments go in a named object, as elsewhere here.
+    // Office is desktop only (R28). WHY every member routes through invoke(): the host has no handler, so the
+    // call is refused ("Office isn't available via remote access yet.") — not a "not a function" crash.
+    // No onFlushRequest/flushDone: close/quit saving is the desktop window's own (office-flush.ts).
     office: {
       status: (projectRoot: string | null) => invoke('office:status', { projectRoot }),
       create: (kind: string, projectRoot: string | null) => invoke('office:create', { kind, projectRoot }),
@@ -2602,6 +2600,7 @@ export function installShim(): void {
       close: (token: string) => invoke('office:close', { token }),
       versions: (filePath: string) => invoke('office:versions', { path: filePath }),
       restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
+      saveCopy: (token: string, mode: string) => invoke('office:save-copy', { token, mode }),
     },
     // Project View IPC — sibling to artifacts. Object-payload invoke style
     // mirrors the artifacts namespace above; the literal 'project:*' channel

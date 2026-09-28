@@ -4171,7 +4171,7 @@ class SessionService : Service() {
             }
 
             "office:status", "office:create", "office:pick", "office:open",
-            "office:invoke", "office:close", "office:versions", "office:restore" -> {
+            "office:invoke", "office:close", "office:versions", "office:restore", "office:save-copy" -> {
                 // Office editing is desktop only for now (R28, build plan Task 5): the phone
                 // keeps the quick preview. unsupported=true makes the shared renderer reject
                 // the call and name the feature ("Office isn't available on the phone yet.")

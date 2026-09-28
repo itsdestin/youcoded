@@ -99,6 +99,11 @@ type ErrorStateCommon = {
   onRetry?: () => void;
   onReportBug?: () => void;
   onDiagnose?: () => void;
+  /** Recovery choices the failure itself offers, beyond Retry (Office's failed save: "Save a
+   *  copy…", "Close without saving"). Secondary, before the fixed actions, so Retry stays last
+   *  at the right-hand end. They do not count toward "at least one action": the type still
+   *  demands one of the three. */
+  moreActions?: ReadonlyArray<{ label: string; onClick: () => void }>;
 };
 
 /**
@@ -160,6 +165,9 @@ export function ErrorState(props: ErrorStateProps) {
   const primary = props.onRetry ? 'retry' : props.onDiagnose ? 'diagnose' : 'report';
   const actions = (
     <>
+      {props.moreActions?.map((a) => (
+        <Button key={a.label} variant="secondary" size="sm" onClick={a.onClick}>{a.label}</Button>
+      ))}
       {props.onReportBug && (
         <Button variant={primary === 'report' ? 'primary' : 'secondary'} size="sm" onClick={props.onReportBug}>
           Report bug

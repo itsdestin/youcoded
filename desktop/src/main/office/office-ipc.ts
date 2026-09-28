@@ -12,7 +12,7 @@
 // these handlers with a fake that records them. main.ts passes the real one.
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
-import { OFFICE_MAX_BYTES, type OfficeFile, type OfficeOpen, type OfficeStatus, type OfficeVersion } from '../../shared/office-types';
+import { OFFICE_MAX_BYTES, type OfficeFile, type OfficeOpen, type OfficeSaveCopyResult, type OfficeStatus, type OfficeVersion } from '../../shared/office-types';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
 import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
@@ -32,6 +32,7 @@ const CHANNELS = [
   'office:close',
   'office:versions',
   'office:restore',
+  'office:save-copy',
 ] as const;
 
 // WHY a local literal, not imported: office-protocol.ts keeps its scheme constant private on
@@ -49,6 +50,7 @@ const MSG = {
   noPermission: "Office doesn't have permission to open this file.",
   openElsewhere: 'This file is already open in another window.',
   couldNotOpen: "Office couldn't open this file.",
+  couldNotCopy: "Office couldn't save a copy of this file.",
   refused: 'refused',
   notYet: 'Not available yet.',
 } as const;
@@ -75,7 +77,13 @@ export interface OfficeIpcDeps {
   available(): Promise<boolean>;
   /** The add-on folder, for the translator (officeRoot()). */
   root: string;
+  /** Where "Save a copy…" goes (the system save dialog); null when cancelled. Tests pass a fake.
+   *  WHY optional: main.ts does not pass it — the real one lives in office-dialogs.ts, loaded
+   *  only when a copy is asked for, so this file itself never imports electron. */
+  pickCopyTarget?(sender: unknown, filePath: string): Promise<string | null>;
 }
+
+
 
 const fail = (message: string): OfficeOpen => ({ ok: false, message });
 
@@ -212,7 +220,28 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     await reg.close(token);
   }
 
+  // "Save a copy…" for a document whose save keeps failing (the owner's decision, fix round 1).
+  // Same checks as invoke: the token must be one this window opened.
+  async function saveCopy(sender: OfficeSender, token: unknown, mode: unknown): Promise<OfficeSaveCopyResult> {
+    const reg = deps.getSessions();
+    const s = typeof token === 'string' ? reg?.get(token) : undefined;
+    if (!reg || !s || s.senderId !== sender.id) return { ok: false, message: MSG.refused };
+    const run = commandsFor(reg);
+    if (mode === 'check') return { ok: true, possible: run.canCopy(s.token) };
+    const pick = deps.pickCopyTarget ?? (await import('./office-dialogs')).pickCopyTarget;
+    const target = await pick(sender, s.path);
+    if (!target) return { ok: false, cancelled: true };
+    try {
+      await run.saveCopy(s.token, target);
+      // The folder's name only — never a full path on screen (the owner's rule for this message).
+      return { ok: true, folder: path.basename(path.dirname(target)) };
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : MSG.couldNotCopy };
+    }
+  }
+
   ipcMain.handle('office:open', (e, filePath) => open(e.sender, filePath));
+  ipcMain.handle('office:save-copy', (e, token, mode) => saveCopy(e.sender, token, mode));
   ipcMain.handle('office:invoke', (e, token, cmd, args) => invoke(e.sender, token, cmd, args));
   ipcMain.handle('office:close', (e, token) => close(e.sender, token));
 

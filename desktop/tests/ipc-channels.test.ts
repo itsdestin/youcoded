@@ -1489,7 +1489,7 @@ describe('office:* channel parity', () => {
 
   const channels = [
     'office:status', 'office:create', 'office:pick', 'office:open',
-    'office:invoke', 'office:close', 'office:versions', 'office:restore',
+    'office:invoke', 'office:close', 'office:versions', 'office:restore', 'office:save-copy',
   ];
 
   for (const ch of channels) {
@@ -1505,6 +1505,18 @@ describe('office:* channel parity', () => {
 
   it('a refused office call is named Office, not by its channel id', () => {
     expect(unsupported).toContain(`'office:'`);
+  });
+
+  // Window close / app quit saving: a main→renderer push and its reply, desktop only. The
+  // remote client and the phone have no Office documents to save, so they carry neither.
+  it('the close/quit save handshake is carried by preload and main, and by no other host', () => {
+    const flush = readSourceFile(path.join(__dirname, '../src/main/office/office-flush.ts'));
+    for (const ch of ['office:flush-request', 'office:flush-done']) {
+      expect(preload).toContain(`'${ch}'`);
+      expect(flush).toContain(`'${ch}'`);
+      expect(shim).not.toContain(`'${ch}'`);
+      if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
+    }
   });
 });
 

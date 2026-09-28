@@ -56,20 +56,38 @@ export function holdInline(path: string, release: () => void): () => void {
   return () => { if (inlineHolders.get(path) === release) inlineHolders.delete(path); };
 }
 
-// Each mounted editor's "save what is unsaved, then resolve" (EditorFrame's flush).
-// WHY: autosave waits 3 s after the last change, so leaving an in-place edit (Done, or the
-// briefcase moving the file to an Office tab) inside that window would drop the last few
-// seconds of typing. Those paths wait for this first — at most 5 s.
-const flushers = new Map<string, () => Promise<void>>();
+/** How a "save what is unsaved" ended. `ok: false` carries main's own reason; the caller keeps
+ *  the editor open with it (Retry, Save a copy…, Close without saving — the save-failed actions). */
+export type FlushResult = { ok: true } | { ok: false; message: string };
 
-export function registerFlush(path: string, flush: () => Promise<void>): () => void {
+// Each mounted editor's "save what is unsaved, then resolve" (EditorFrame's flush).
+// WHY: autosave waits 3 s after the last change, so anything that ends an editor — Done, the
+// briefcase, closing the panel, leaving a tab, the hand-off to an Office tab, window close and
+// quit — would drop the last few seconds of typing. Those paths wait for this first (≤5 s).
+const flushers = new Map<string, () => Promise<FlushResult>>();
+
+export function registerFlush(path: string, flush: () => Promise<FlushResult>): () => void {
   flushers.set(path, flush);
+  answerFlushRequests();
   return () => { if (flushers.get(path) === flush) flushers.delete(path); };
 }
 
-/** Save the file's unsaved changes, if an editor has it open; resolves when that is done. */
-export function flushOffice(path: string): Promise<void> {
-  return flushers.get(path)?.() ?? Promise.resolve();
+/** Save the file's unsaved changes, if an editor has it open. */
+export function flushOffice(path: string): Promise<FlushResult> {
+  return flushers.get(path)?.() ?? Promise.resolve({ ok: true });
+}
+
+// Window close and app quit (design §4, main/office/office-flush.ts): main asks this window to
+// save every open document and waits for the answer (or 5 s). Subscribed once, on the first
+// editor; the host without Office (remote, phone) has no such push and nothing subscribes.
+let answering = false;
+function answerFlushRequests(): void {
+  const office = typeof window === 'undefined' ? undefined : window.claude?.office;
+  if (answering || !office?.onFlushRequest || !office.flushDone) return;
+  answering = true;
+  office.onFlushRequest((id) => {
+    void Promise.all([...flushers.values()].map((f) => f().catch(() => null))).then(() => office.flushDone?.(id));
+  });
 }
 
 /** The file's Office tab, if it has one (a closing tab still counts: its editor is mounted). */
@@ -78,9 +96,24 @@ export function officeDocFor(path: string): OpenDoc | null {
 }
 
 /** Open a file, or bring it forward if it is already open (also taking back a tab that was
- *  closing, so its still-mounted editor is reused rather than a second one started). */
+ *  closing, so its still-mounted editor is reused rather than a second one started).
+ *  A file being edited in place is saved first and only then handed over (C2, fix round 1):
+ *  ending the in-place editor at once dropped whatever it had not saved yet. If that save
+ *  fails, the file stays in place, where its error and Retry show. */
 export function openDoc(file: OfficeFile): void {
-  inlineHolders.get(file.path)?.();
+  const holder = inlineHolders.get(file.path);
+  if (holder) {
+    void flushOffice(file.path).then((r) => {
+      if (!r.ok) return;
+      if (inlineHolders.get(file.path) === holder) holder();
+      showDoc(file);
+    });
+    return;
+  }
+  showDoc(file);
+}
+
+function showDoc(file: OfficeFile): void {
   const existing = state.docs.find((d) => d.file.path === file.path);
   const docs = existing
     ? state.docs.map((d) => (d.file.path === file.path ? { ...d, asleep: false, closing: false } : d))
@@ -111,6 +144,12 @@ export function closeDoc(path: string): void {
   if (doc.asleep) forgetSaveState(path);
 }
 
+/** The closing tab's save failed: it comes back, in front, where its error and actions show. */
+export function cancelClose(path: string): void {
+  if (!state.docs.some((d) => d.file.path === path && d.closing)) return;
+  set({ ...state, docs: state.docs.map((d) => (d.file.path === path ? { ...d, closing: false } : d)), active: path });
+}
+
 /** The closing tab's editor has saved (or given up after 5 s): remove it for good. */
 export function finishClose(path: string): void {
   if (!state.docs.some((d) => d.file.path === path && d.closing)) return;
@@ -131,6 +170,8 @@ export interface OfficeSaveState {
   savedAt?: string;
   /** Main's own reason, for `failed` (already worded for a person — office-commands.ts). */
   message?: string;
+  /** After "Save a copy…": the folder the copy went to (its name only, never a full path). */
+  copiedTo?: string;
 }
 
 const SAVED: OfficeSaveState = { phase: 'saved' };
@@ -157,6 +198,10 @@ export function useSaveState(path: string | null): OfficeSaveState {
 }
 export function markChanged(path: string): void {
   setSave(path, { phase: 'unsaved', savedAt: saves[path]?.savedAt });
+}
+/** "Save a copy…" landed: the changes are in the copy, and the file itself is left as it was. */
+export function markCopied(path: string, folder: string): void {
+  setSave(path, { phase: 'saved', savedAt: saves[path]?.savedAt, copiedTo: folder });
 }
 /** The editor says nothing is unsaved after all (see EditorFrame): back to the last save. */
 export function markUnchanged(path: string): void {
@@ -192,6 +237,7 @@ export function resetOfficeStoreForTests(): void {
   saves = {};
   inlineHolders.clear();
   flushers.clear();
+  answering = false;
   listeners.forEach((l) => l());
   saveListeners.forEach((l) => l());
 }

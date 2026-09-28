@@ -3,7 +3,7 @@
 // the in-place editor that gives a file up when the file opens in an Office tab.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  HOME_TAB, closeDoc, finishClose, flushOffice, holdInline, markChanged, markFailed, markSaved, markSaving,
+  HOME_TAB, cancelClose, closeDoc, finishClose, flushOffice, holdInline, markChanged, markFailed, markSaved, markSaving,
   officeDocFor, officeTabsNow, openDoc, registerFlush, resetOfficeStoreForTests, saveStateFor, selectTab,
 } from '../../src/renderer/components/office/office-store';
 import type { OfficeFile } from '../../src/shared/office-types';
@@ -81,11 +81,29 @@ describe('closing a tab', () => {
 });
 
 describe('one editor per file', () => {
-  it('ends the in-place editor of a file when that file opens in an Office tab', () => {
+  it('saves an in-place editor first, then ends it, when that file opens in an Office tab', async () => {
+    let saved!: (r: { ok: true }) => void;
+    registerFlush(A.path, () => new Promise((r) => (saved = r)));
     const release = vi.fn();
     holdInline(A.path, release);
     openDoc(A);
-    expect(release).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    // Not yet: its last changes are still being saved.
+    expect(release).not.toHaveBeenCalled();
+    expect(officeDocFor(A.path)).toBeNull();
+    saved({ ok: true });
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    expect(officeDocFor(A.path)).not.toBeNull();
+  });
+
+  it('keeps a file in place, with its error showing, when its save fails during the hand-off', async () => {
+    registerFlush(A.path, async () => ({ ok: false, message: "Office doesn't have permission to save this file." }));
+    const release = vi.fn();
+    holdInline(A.path, release);
+    openDoc(A);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(release).not.toHaveBeenCalled();
+    expect(officeDocFor(A.path)).toBeNull();
   });
 
   it('leaves the in-place editor of another file alone', () => {
@@ -111,16 +129,29 @@ describe('one editor per file', () => {
   });
 
   it("waits for the file's editor to save before a caller moves on, and resolves at once without one", async () => {
-    let saved!: () => void;
-    const flush = vi.fn(() => new Promise<void>((r) => (saved = r)));
+    let saved!: (r: { ok: true }) => void;
+    const flush = vi.fn(() => new Promise<{ ok: true }>((r) => (saved = r)));
     registerFlush(A.path, flush);
     let done = false;
     const p = flushOffice(A.path).then(() => { done = true; });
     await Promise.resolve();
     expect(done).toBe(false);
-    saved();
+    saved({ ok: true });
     await p;
     expect(done).toBe(true);
-    await expect(flushOffice(B.path)).resolves.toBeUndefined();
+    await expect(flushOffice(B.path)).resolves.toEqual({ ok: true });
+  });
+
+  it("reports a failed save's own reason to the caller", async () => {
+    registerFlush(A.path, async () => ({ ok: false, message: 'The disk is full, so Office couldn\'t save this file.' }));
+    await expect(flushOffice(A.path)).resolves.toEqual({ ok: false, message: "The disk is full, so Office couldn't save this file." });
+  });
+
+  it('brings a tab whose closing save failed back to the front instead of dropping it', () => {
+    openDoc(A); openDoc(B);
+    closeDoc(B.path);
+    cancelClose(B.path);
+    expect(officeDocFor(B.path)).toMatchObject({ closing: false });
+    expect(officeTabsNow().active).toBe(B.path);
   });
 });

@@ -48,7 +48,7 @@ import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
-import { previewOfficeTabs } from '../office/office-store';
+import { previewOfficeTabs, useOfficeTabs } from '../office/office-store';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
@@ -124,6 +124,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // Office is built in (office-questions#Q-entry): it lists, pins and opens like
   // a page, but its body is OfficeView, never a framed page document.
   const isOffice = pageId === OFFICE_PAGE_ID;
+  const officeKept = useOfficeTabs().docs.length > 0;
   const ownPages = pages.filter((p) => p.home.kind !== 'builtin');
   const pinnedCount = pages.filter((p) => p.pinned).length;
   // The frame reloads when page.html was rewritten (the stamp moves) and not
@@ -297,7 +298,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   const askPageToRefresh = () => {
     frameRef.current?.contentWindow?.postMessage({ type: PAGE_REFRESH_MESSAGE }, '*');
   };
-  if (!open) return null;
+  // WHY stay mounted, hidden, while Office has documents open (C2, Task 6 fix round 1): closing
+  // the page view (or showing another page) used to unmount every Office editor, and an editor
+  // unmounted inside autosave's 3 s window lost its last changes. Kept mounted, the editors
+  // also come back instantly. Everything else in the view still goes when it closes.
+  if (!open && !officeKept) return null;
 
   const builtin = pages.filter((p) => p.home.kind === 'builtin');
   const personal = pages.filter((p) => p.home.kind === 'personal');
@@ -318,8 +323,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     // .screen-view / .screen-pane: floating-chrome themes restyle them (see
     // globals.css → "Screens in floating chrome"); data-screen-frame is the
     // workbench's variant switch for that design round, 'cards' in the app.
-    <div className="screen-view fixed inset-0 bg-panel z-40 flex flex-col" data-screen-frame={workbenchScreenFrame()}>
-      <ScreenBand
+    <div className="screen-view fixed inset-0 bg-panel z-40 flex flex-col" data-screen-frame={workbenchScreenFrame()} hidden={!open}>
+      {open && <ScreenBand
         settingsOpen={settingsOpen}
         onToggleSettings={onToggleSettings}
         settingsBadge={settingsBadge}
@@ -335,7 +340,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           {summary && !awaitingApproval && <PageFreshness page={summary} onRefresh={askPageToRefresh} />}
           {summary && !awaitingApproval && <PageCodeChanged page={summary} />}
         </>}
-      />
+      />}
 
       {/* Below the band: the panel in its own rounded container and the page
           pane, both inset by the frame edge, like the chat pane and the
@@ -343,7 +348,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       <div className="screen-body flex-1 min-h-0 flex">
         {/* With Office built in the panel always has something to list, so it
             stays beside the first-run card instead of hiding. */}
-        {!pageFocus && (!emptyPages || builtin.length > 0) && (
+        {open && !pageFocus && (!emptyPages || builtin.length > 0) && (
         <aside className="screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
           <div className="flex-1 overflow-y-auto p-2">
             {builtin.length > 0 && (
@@ -385,9 +390,15 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         </aside>
         )}
         <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
+          {/* First, so its place in the tree never changes whatever else shows (see officeKept). */}
+          {(isOffice || officeKept) && (
+            <div className="absolute inset-0" hidden={!(open && isOffice)}>
+              <OfficeView projectRoot={projectRoot} visible={open && isOffice} />
+            </div>
+          )}
+          {open && <>
           {/* Photo-only marks: the view once its list has loaded, or the page once it is ready. */}
           {load.state === 'idle' && loaded && !failed && !isOffice && <ScreenMark name="pages" />}
-          {isOffice && <OfficeView projectRoot={projectRoot} />}
           {load.state === 'ready' && pageId && <ScreenMark name={`pages/${pageFocus ? 'focus' : 'page'}/${pageId}`} />}
           {/* WHY: first-run belongs where the Pages button lands, not a second click into Manage pages. */}
           {load.state === 'idle' && !loaded && <LoadingState what="pages" />}
@@ -425,6 +436,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               title={title}
             />
           )}
+          </>}
         </div>
       </div>
     </div>

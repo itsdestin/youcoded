@@ -19,7 +19,9 @@ import { Button, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState } fr
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
 import { HistoryGlyph, HomeGlyph, KIND_LABEL, OfficeKindGlyph } from './office-icons';
-import { HOME_TAB, closeDoc, finishClose, openDoc, selectTab, showVersions, useOfficeTabs, useSaveState } from './office-store';
+import { HOME_TAB, cancelClose, closeDoc, finishClose, openDoc, selectTab, showVersions, useOfficeTabs, useSaveState } from './office-store';
+import type { OfficeSaveState } from './office-store';
+import { OfficeSaveFailed } from './OfficeSaveFailed';
 import { EditorFrame, stripExt } from './EditorFrame';
 import type { EditorFrameHandle } from './EditorFrame';
 import { ScreenMark } from '../../shoot-mode';
@@ -32,7 +34,9 @@ function officeBridge(): OfficeBridge | undefined {
 type StatusLoad = { state: 'loading' } | { state: 'ready'; status: OfficeStatus } | { state: 'failed' } | { state: 'unavailable' };
 
 /** projectRoot: the focused conversation's folder (PageHost passes it), for "In <project>". */
-export function OfficeView({ projectRoot = null }: { projectRoot?: string | null }) {
+/** visible: false while the page view is closed or shows another page — the view stays mounted
+ *  then (PageHost) so no open editor is torn down with unsaved changes (C2, fix round 1). */
+export function OfficeView({ projectRoot = null, visible = true }: { projectRoot?: string | null; visible?: boolean }) {
   const { docs, active, versionsFor } = useOfficeTabs();
   const [load, setLoad] = useState<StatusLoad>({ state: 'loading' });
   const reloadStatus = () => {
@@ -47,9 +51,8 @@ export function OfficeView({ projectRoot = null }: { projectRoot?: string | null
     );
   };
   useEffect(reloadStatus, [projectRoot]);
-  // Each mounted editor's handle, so the strip's Retry can ask it to save again.
+  // Each mounted editor's handle, so the strip's save-failed actions reach it.
   const frames = useRef(new Map<string, EditorFrameHandle>());
-
 
   const front = docs.find((d) => d.file.path === active && !d.closing) ?? null;
   const saveState = useSaveState(front?.file.path ?? null);
@@ -79,8 +82,13 @@ export function OfficeView({ projectRoot = null }: { projectRoot?: string | null
             {/* Saving is automatic (Q-save), so this only confirms it happened — or, when a save
                 failed, says main's own reason with Retry (design §4; error-message-standards). */}
             {saveState.phase === 'failed'
-              ? <ErrorState variant="inline" className="max-w-sm" message={saveState.message ?? "Office couldn't save this file."} onRetry={() => frames.current.get(front.file.path)?.save()} />
-              : <span className="text-2xs text-fg-muted">{saveState.phase === 'saved' ? 'Saved' : 'Saving…'}</span>}
+              ? <OfficeSaveFailed
+                  className="max-w-xl"
+                  message={saveState.message ?? "Office couldn't save this file."}
+                  frame={{ get current() { return frames.current.get(front.file.path); } }}
+                  onCloseWithoutSaving={() => closeDoc(front.file.path)}
+                />
+              : <span className="text-2xs text-fg-muted">{saveLabel(saveState)}</span>}
             <Button variant="ghost" size="sm" onClick={() => showVersions(front.file)}>
               <HistoryGlyph />
               Versions
@@ -95,16 +103,19 @@ export function OfficeView({ projectRoot = null }: { projectRoot?: string | null
         )}
         {/* Awake documents stay mounted so switching tabs is instant; the
             others are hidden (performance rule 2 — a hidden editor sits idle).
-            An asleep one is not mounted at all: that is what saves the memory. */}
-        {load.state === 'ready' && docs.filter((d) => !d.asleep).map((d) => (
+            An asleep one is not mounted at all: that is what saves the memory.
+            WHY not gated on the status load (C2, fix round 1): only Home needs the lists; a
+            status re-fetch that fails or reloads must never unmount an editor with unsaved work. */}
+        {docs.filter((d) => !d.asleep).map((d) => (
           <EditorFrame
             key={d.file.path}
             ref={(h) => { if (h) frames.current.set(d.file.path, h); else frames.current.delete(d.file.path); }}
             file={d.file}
-            hidden={d.closing || d.file.path !== active}
+            hidden={!visible || d.closing || d.file.path !== active}
             screen={`office/${d.file.kind}`}
             closing={d.closing}
             onClosed={() => finishClose(d.file.path)}
+            onCloseFailed={() => cancelClose(d.file.path)}
           />
         ))}
       </div>
@@ -112,6 +123,12 @@ export function OfficeView({ projectRoot = null }: { projectRoot?: string | null
       <VersionsDialog file={versionsFor} onClose={() => showVersions(null)} />
     </div>
   );
+}
+
+function saveLabel(s: OfficeSaveState): string {
+  if (s.phase !== 'saved') return 'Saving…';
+  // After "Save a copy…", say where it went — the folder's name only, never a full path.
+  return s.copiedTo ? `Saved a copy to ${s.copiedTo}` : 'Saved';
 }
 
 function OfficeHome({ load, onRetry, onCreate, onPick, onOpen }: {

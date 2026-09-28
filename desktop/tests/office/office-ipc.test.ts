@@ -73,8 +73,8 @@ async function aDocx(name = 'memo.docx'): Promise<string> {
 }
 
 describe('office IPC channels', () => {
-  it('registers all eight channels, clearing each one first so a reload can register again', () => {
-    const all = ['office:status', 'office:create', 'office:pick', 'office:open', 'office:invoke', 'office:close', 'office:versions', 'office:restore'];
+  it('registers all nine channels, clearing each one first so a reload can register again', () => {
+    const all = ['office:status', 'office:create', 'office:pick', 'office:open', 'office:invoke', 'office:close', 'office:versions', 'office:restore', 'office:save-copy'];
     expect([...ipc.handlers.keys()].sort()).toEqual([...all].sort());
     expect([...ipc.removed].sort()).toEqual([...all].sort());
     expect(() => registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: dir })).not.toThrow();

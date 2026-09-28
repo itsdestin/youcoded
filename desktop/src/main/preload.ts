@@ -1935,9 +1935,7 @@ contextBridge.exposeInMainWorld('claude', {
       return () => ipcRenderer.removeListener('git:changed', handler);
     },
   },
-  // Office (design §3a): the editor frame's requests reach main only through invoke, and
-  // main re-checks the command and that this window opened the document.
-  // Shape: shared/office-types.ts (OfficeBridge); handlers: main/office/office-ipc.ts.
+  // Office (§3a): editor requests reach main only via invoke (main re-checks); flush = save before close/quit (§4). Shape: shared/office-types.ts; handlers: main/office/office-ipc.ts, office-flush.ts.
   office: {
     status: (projectRoot: string | null) => ipcRenderer.invoke('office:status', projectRoot),
     create: (kind: string, projectRoot: string | null) => ipcRenderer.invoke('office:create', kind, projectRoot),
@@ -1947,6 +1945,8 @@ contextBridge.exposeInMainWorld('claude', {
     close: (token: string) => ipcRenderer.invoke('office:close', token),
     versions: (p: string) => ipcRenderer.invoke('office:versions', p),
     restore: (p: string, id: string) => ipcRenderer.invoke('office:restore', p, id),
+    saveCopy: (token: string, mode: string) => ipcRenderer.invoke('office:save-copy', token, mode), flushDone: (id: string) => ipcRenderer.send('office:flush-done', id),
+    onFlushRequest: (cb: (id: string) => void) => { const h = (_e: IpcRendererEvent, id: string) => cb(id); ipcRenderer.on('office:flush-request', h); return () => { ipcRenderer.off('office:flush-request', h); }; },
   },
   // Project View IPC — sibling to artifacts. Backs the project overlay's
   // conversations / repo / context tabs.

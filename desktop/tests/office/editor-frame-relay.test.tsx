@@ -202,17 +202,97 @@ describe('EditorFrame autosave', () => {
     expect(bridge.close).not.toHaveBeenCalled(); // the tab's unmount does that, after this
   });
 
-  it('a closed tab whose save never answers lets go after 5 s', async () => {
-    fakeBridge();
+  it('a closed tab whose save_file is already with main lets go after 5 s (main drains it)', async () => {
+    fakeBridge({ invoke: vi.fn((_t: string, cmd: string) => (cmd === 'save_file' ? new Promise(() => {}) : Promise.resolve(null))) });
     const onClosed = vi.fn();
-    const { fromEditor, rerender } = await mountFrame({ onClosed });
+    const onCloseFailed = vi.fn();
+    const { fromEditor, rerender } = await mountFrame({ onClosed, onCloseFailed });
     vi.useFakeTimers();
     fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
-    rerender(<EditorFrame file={FILE} closing onClosed={onClosed} />);
+    rerender(<EditorFrame file={FILE} closing onClosed={onClosed} onCloseFailed={onCloseFailed} />);
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
     await act(async () => { vi.advanceTimersByTime(4_999); });
     expect(onClosed).not.toHaveBeenCalled();
     await act(async () => { vi.advanceTimersByTime(1); });
     expect(onClosed).toHaveBeenCalledTimes(1);
+    expect(onCloseFailed).not.toHaveBeenCalled();
+  });
+
+  it('a closed tab whose editor never starts the save keeps the tab and says so after 5 s', async () => {
+    fakeBridge();
+    const onClosed = vi.fn();
+    const onCloseFailed = vi.fn();
+    const { fromEditor, rerender } = await mountFrame({ onClosed, onCloseFailed });
+    vi.useFakeTimers();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    rerender(<EditorFrame file={FILE} closing onClosed={onClosed} onCloseFailed={onCloseFailed} />);
+    await act(async () => { vi.advanceTimersByTime(5_000); });
+    expect(onClosed).not.toHaveBeenCalled();
+    expect(onCloseFailed).toHaveBeenCalledWith("Office didn't finish saving this file.");
+  });
+
+  it('a change made during a save is saved before a close lets go', async () => {
+    const answers: Array<(v: unknown) => void> = [];
+    fakeBridge({ invoke: vi.fn((_t: string, cmd: string) => (cmd === 'save_file' ? new Promise((r) => answers.push(r)) : Promise.resolve(null))) });
+    const onClosed = vi.fn();
+    const { fromEditor, saves, rerender } = await mountFrame({ onClosed });
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } }); // the autosave, running
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'set_document_modified', args: { modified: true } }); // typed during it
+    rerender(<EditorFrame file={FILE} closing onClosed={onClosed} />);
+    answers[0]('ok');
+    await settle();
+    // The first save landed, but the change made during it has not: no letting go yet, and its
+    // follow-up save is asked for at once rather than 3 s later.
+    expect(onClosed).not.toHaveBeenCalled();
+    expect(saves()).toBe(1);
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    expect(onClosed).not.toHaveBeenCalled();
+    answers[1]('ok');
+    await vi.waitFor(() => expect(onClosed).toHaveBeenCalledTimes(1));
+  });
+
+  it("waits through the editor's own save — change log, name, bytes, then save_file — before a close lets go", async () => {
+    let answerSave!: (v: unknown) => void;
+    const calls: string[] = [];
+    fakeBridge({ invoke: vi.fn((_t: string, cmd: string) => { calls.push(cmd); return cmd === 'save_file' ? new Promise((r) => (answerSave = r)) : Promise.resolve(cmd === 'get_current_path' ? 'plan.docx' : 'ok'); }) });
+    const onClosed = vi.fn();
+    const { fromEditor, saves, rerender } = await mountFrame({ onClosed });
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    rerender(<EditorFrame file={FILE} closing onClosed={onClosed} />);
+    expect(saves()).toBe(1);
+    // What asc_Save sends, in order (measured in the dev window).
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'save_changes', args: { changes: [], deleteIndex: 11, count: 0 } });
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'set_document_modified', args: { modified: false } });
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'get_current_path', args: {} });
+    fromEditor({ yc: 'rpc', id: 5, cmd: 'write_editor_bin', args: { data: 'RE9D' } });
+    await settle();
+    expect(saveStateFor(FILE.path).phase).not.toBe('saved'); // save_changes is not the save
+    expect(onClosed).not.toHaveBeenCalled();
+    fromEditor({ yc: 'rpc', id: 6, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    expect(onClosed).not.toHaveBeenCalled();
+    answerSave('ok');
+    await vi.waitFor(() => expect(onClosed).toHaveBeenCalledTimes(1));
+    expect(calls).toEqual(['set_document_modified', 'save_changes', 'set_document_modified', 'get_current_path', 'write_editor_bin', 'save_file']);
+  });
+
+  it("a failed save keeps a closing tab, with main's reason, after trying once more", async () => {
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("Office doesn't have permission to save this file."); return null; }) });
+    const onClosed = vi.fn();
+    const onCloseFailed = vi.fn();
+    const { fromEditor, saves, rerender } = await mountFrame({ onClosed, onCloseFailed });
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    expect(saveStateFor(FILE.path).phase).toBe('failed');
+    rerender(<EditorFrame file={FILE} closing onClosed={onClosed} onCloseFailed={onCloseFailed} />);
+    expect(saves()).toBe(1); // the close tries once more
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    expect(onClosed).not.toHaveBeenCalled();
+    expect(onCloseFailed).toHaveBeenCalledWith("Office doesn't have permission to save this file.");
   });
 
   it('a closed tab with nothing unsaved lets go at once', async () => {

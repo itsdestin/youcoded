@@ -16,7 +16,8 @@ import { officeFileFor } from './office-files';
 import { EditorFrame } from './EditorFrame';
 import type { EditorFrameHandle, OfficeCommand, OfficeCommandState } from './EditorFrame';
 import { CommandGlyph } from './office-icons';
-import { holdInline, officeDocFor, openDoc } from './office-store';
+import { holdInline, officeDocFor, openDoc, useSaveState } from './office-store';
+import { OfficeSaveFailed } from './OfficeSaveFailed';
 import { useArtifactDispatch } from '../../state/ArtifactContext';
 import { OFFICE_PAGE_ID } from '../../../shared/pages-types';
 
@@ -48,6 +49,7 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
     return holdInline(file.path, () => cancelRef.current?.());
     // eslint-disable-next-line react-hooks/exhaustive-deps -- file is derived from absolutePath
   }, [absolutePath, inOffice]);
+  const saveState = useSaveState(file.path);
   if (inOffice) return null;
 
   // Lists only exist in documents and slides; slides align through a menu, so
@@ -85,6 +87,14 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
           </React.Fragment>
         ))}
       </div>
+      {/* A failed save shows its reason and the save-failed actions right above the document
+          (I1, Task 6 fix round 1): Done and closing the panel wait on it rather than dropping
+          the changes. "Close without saving" leaves the in-place edit. */}
+      {saveState.phase === 'failed' && (
+        <div className="shrink-0 p-2 border-b border-edge-dim">
+          <OfficeSaveFailed message={saveState.message ?? "Office couldn't save this file."} frame={frame} onCloseWithoutSaving={() => cancelRef.current?.()} />
+        </div>
+      )}
       <div className="relative flex-1 min-h-0">
         {/* WHY no wait for an origin here any more (Task 5): each document gets its own,
             which the frame asks main for itself, showing its own loading state meanwhile. */}

@@ -13,9 +13,10 @@
 // The host only relays: main re-checks every command and that this window opened the document.
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { EmptyState, ErrorState, LoadingState } from '../ui';
-import type { OfficeBridge, OfficeFile } from '../../../shared/office-types';
+import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markSaved, markSaving, markUnchanged, registerFlush } from './office-store';
+import { markChanged, markCopied, markFailed, markSaved, markSaving, markUnchanged, registerFlush } from './office-store';
+import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
 import { plainMessage } from '../../utils/ipc-error';
@@ -26,6 +27,13 @@ export interface EditorFrameHandle {
   command(cmd: OfficeCommand): void;
   /** Save now (the strip's Retry after a failed save). */
   save(): void;
+  /** Whether "Save a copy…" can succeed for this document (main knows: an edited copy exists
+   *  and the failed save did not fail in the translation itself). */
+  canSaveCopy(): Promise<boolean>;
+  /** Save once more (so main has the newest edits), then write them to a copy the person picks. */
+  saveCopy(): Promise<OfficeSaveCopyResult>;
+  /** "Close without saving" was confirmed: forget the unsaved changes so a close lets go. */
+  discard(): void;
 }
 
 /** WHY 3 s (design §4): long enough that a burst of typing is one save, short enough that
@@ -70,13 +78,18 @@ interface EditorFrameProps {
   /** The tab was closed: save what is unsaved, then call onClosed (at most 5 s later). */
   closing?: boolean;
   onClosed?: () => void;
+  /** The close's save failed: the tab stays, its strip showing the reason with Retry. */
+  onCloseFailed?: (message: string) => void;
 }
 
 interface RpcMessage { yc: 'rpc'; id: unknown; cmd: string; args?: unknown }
-const isSaveCmd = (cmd: string) => cmd === 'save_file' || cmd === 'save_changes';
+// WHY only save_file (fix round 1): save_changes is sdkjs's crash-recovery change log, sent at
+// the START of the editor's own save; counting it as the save let a close settle before the
+// real save_file had even been sent.
+const isSaveCmd = (cmd: string) => cmd === 'save_file';
 
 export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(function EditorFrame(
-  { file, hidden = false, slim = false, onCommandState, screen, closing = false, onClosed }, handleRef,
+  { file, hidden = false, slim = false, onCommandState, screen, closing = false, onClosed, onCloseFailed }, handleRef,
 ) {
   const ref = useRef<HTMLIFrameElement>(null);
   // 'unavailable': this host refuses Office outright (remote, phone) — a fact, not a failure.
@@ -86,6 +99,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   // null until main has answered.
   const [opened, setOpened] = useState<{ token: string; origin: string } | null>(null);
   const origin = opened?.origin ?? null;
+  const openedRef = useRef(opened);
+  openedRef.current = opened;
   // Bumped by Retry, to open the document again from the start.
   const [attempt, setAttempt] = useState(0);
   // Escape the editor itself had no use for closes the app's top layer, as a page's does.
@@ -96,22 +111,36 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   stateCb.current = onCommandState;
   const closedCb = useRef(onClosed);
   closedCb.current = onClosed;
+  const closeFailedCb = useRef(onCloseFailed);
+  closeFailedCb.current = onCloseFailed;
   const originRef = useRef<string | null>(null);
   originRef.current = origin;
   const post = (msg: unknown) => { const o = originRef.current; if (o) ref.current?.contentWindow?.postMessage(msg, o); };
 
   // ── Autosave (design §4), per document ──
   // WHY refs, not state: they change on every keystroke's "modified" and must never re-render.
-  // `dirty`: changes the editor has not been asked to save yet. `saving`: a save_file is out.
+  //   dirty      changes the editor has not been asked to save yet
+  //   requested  the editor was asked (yc:office-save) and its save_file has not arrived yet —
+  //              the editor's own save sends save_changes, write_editor_bin and only then save_file
+  //   saving     a save_file is with main
+  //   failed     the last save failed (its message kept); only Retry, a new change or a flush
+  //              tries again — never every 3 s against a read-only file
   // A change while a save is out waits for its result and then triggers exactly ONE follow-up
   // save (coalescing, design §3 "one save in flight").
-  // `failed`: the last save failed; only Retry, a new change or a close tries again.
-  const save = useRef({ dirty: false, saving: false, failed: false, timer: 0 as ReturnType<typeof setTimeout> | 0, waiters: [] as Array<() => void> });
+  const save = useRef({
+    dirty: false, requested: false, saving: false, failed: false, failMessage: '',
+    // The editor's last word on "modified": false while a requested save runs means it
+    // considers the document saved even if save_file never comes (see flush's cap).
+    editorClean: true,
+    timer: 0 as ReturnType<typeof setTimeout> | 0,
+    waiters: [] as Array<() => void>,
+  });
   const requestSave = () => {
     const s = save.current;
     if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
     s.dirty = false;
     s.failed = false;
+    s.requested = true;
     post({ type: 'yc:office-save' });
   };
   const armAutosave = () => {
@@ -119,27 +148,55 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     if (s.timer) clearTimeout(s.timer);
     s.timer = setTimeout(() => { s.timer = 0; requestSave(); }, AUTOSAVE_DELAY_MS);
   };
+  // Every waiter re-checks after any change of save state.
+  const wake = () => save.current.waiters.slice().forEach((w) => w());
   const saveSettled = () => {
     const s = save.current;
     s.saving = false;
-    const waiters = s.waiters.splice(0);
-    waiters.forEach((w) => w());
-    if (s.dirty && !s.failed) armAutosave();
+    if (s.dirty && !s.failed) {
+      // WHY at once when someone waits (C1, fix round 1): a close or Done must not settle
+      // while a change made during the save is still unsaved — it gets its follow-up now.
+      if (s.waiters.length > 0) requestSave(); else armAutosave();
+    }
+    wake();
   };
-  /** Saves whatever is unsaved; resolves when that save's result is in, or after 5 s. */
-  const flush = (): Promise<void> => {
+  /**
+   * Save whatever is unsaved. Resolves ok only once nothing is dirty, requested or saving —
+   * including any follow-up save — and with main's message when a save failed (the caller then
+   * keeps the editor open with that error and Retry). After 5 s it resolves ok if a save_file
+   * is already with main (main drains it before the document closes) or the editor reports the
+   * document unmodified; otherwise it reports that the save did not finish.
+   */
+  const flush = (): Promise<FlushResult> => {
     const s = save.current;
-    if (!originRef.current || (!s.dirty && !s.saving && !s.timer)) return Promise.resolve();
-    return new Promise<void>((resolve) => {
-      let done = false;
-      const finish = () => { if (!done) { done = true; clearTimeout(cap); resolve(); } };
-      const cap = setTimeout(finish, CLOSE_SAVE_WAIT_MS);
-      s.waiters.push(finish);
-      if (!s.saving) requestSave();
+    const settled = () => !s.dirty && !s.requested && !s.saving && !s.timer;
+    if (!originRef.current || (settled() && !s.failed)) return Promise.resolve({ ok: true });
+    return new Promise<FlushResult>((resolve) => {
+      const finish = (r: FlushResult) => {
+        clearTimeout(cap);
+        s.waiters = s.waiters.filter((w) => w !== check);
+        resolve(r);
+      };
+      const check = () => {
+        if (s.failed && !s.requested && !s.saving) finish({ ok: false, message: s.failMessage });
+        else if (settled()) finish({ ok: true });
+      };
+      const cap = setTimeout(() => {
+        if (s.saving || (s.requested && s.editorClean && !s.dirty)) finish({ ok: true });
+        else finish({ ok: false, message: "Office didn't finish saving this file." });
+      }, CLOSE_SAVE_WAIT_MS);
+      s.waiters.push(check);
+      if ((s.dirty || s.failed) && !s.saving && !s.requested) requestSave();
     });
   };
   const flushRef = useRef(flush);
   flushRef.current = flush;
+  const discardPending = () => {
+    const s = save.current;
+    if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
+    s.dirty = false; s.failed = false; s.requested = false;
+    wake();
+  };
 
   // Open the document in main, and close it again when this frame goes away, so its
   // temporary files do not outlive the tab. A late answer (this frame already gone) is closed
@@ -180,7 +237,12 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   useEffect(() => {
     if (!closing) return;
     let cancelled = false;
-    void flushRef.current().then(() => { if (!cancelled) closedCb.current?.(); });
+    // I1 (fix round 1): a save that failed keeps the tab, showing main's reason and Retry —
+    // closing must never throw the changes away without saying so.
+    void flushRef.current().then((r) => {
+      if (cancelled) return;
+      if (r.ok) closedCb.current?.(); else closeFailedCb.current?.(r.message);
+    });
     return () => { cancelled = true; };
   }, [closing]);
 
@@ -190,8 +252,33 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
 
   useImperativeHandle(handleRef, () => ({
     command: (cmd) => post({ type: 'yc:office-cmd', cmd }),
-    save: () => { if (!save.current.saving) requestSave(); },
-  }), []);
+    save: () => { const s = save.current; if (!s.saving && !s.requested) requestSave(); },
+    canSaveCopy: async () => {
+      const b = officeBridge();
+      const t = openedRef.current?.token;
+      if (!b?.saveCopy || !t) return false;
+      const r = await b.saveCopy(t, 'check').catch(() => null);
+      return !!r && r.ok && 'possible' in r && r.possible;
+    },
+    saveCopy: async () => {
+      const b = officeBridge();
+      const t = openedRef.current?.token;
+      if (!b?.saveCopy || !t) return { ok: false, message: "Office couldn't save a copy of this file." };
+      // WHY save first (the owner's choice between "trigger the save flow" and "reuse the last
+      // Editor.bin"): the save sends the editor's newest bytes to main (write_editor_bin) even
+      // when the save itself fails again, so the copy holds every change — not only those up
+      // to the last save attempt.
+      await flushRef.current();
+      const r = await b.saveCopy(t, 'save').catch((e: unknown) => ({ ok: false as const, message: plainMessage(e, "Office couldn't save a copy of this file.") }));
+      if (r.ok && 'folder' in r) {
+        // The changes now live in the copy; the file's own unsaved state is resolved by it.
+        discardPending();
+        markCopied(file.path, r.folder);
+      }
+      return r;
+    },
+    discard: () => { discardPending(); markUnchanged(file.path); },
+  }), [file.path]);
 
   useEffect(() => {
     if (!opened) return;
@@ -201,10 +288,12 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       const args = m.args && typeof m.args === 'object' ? m.args as Record<string, unknown> : {};
       // The editor says when the document changes; the host decides when to save (3 s later).
       if (m.cmd === 'set_document_modified' && args.modified === true) {
-        save.current.dirty = true;
-        save.current.failed = false;
+        const s = save.current;
+        s.dirty = true;
+        s.failed = false;
+        s.editorClean = false;
         markChanged(file.path);
-        if (!save.current.saving) armAutosave();
+        if (!s.saving && !s.requested) armAutosave();
       }
       // WHY: the editor says "modified" and at once "not modified" while it lays a document out
       // (measured 2026-09-28 on a workbook: true then false in the same millisecond), and
@@ -213,7 +302,10 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       // A save already running, or one that failed, keeps its own state.
       if (m.cmd === 'set_document_modified' && args.modified === false) {
         const s = save.current;
-        if (s.dirty && !s.saving && !s.failed) {
+        s.editorClean = true;
+        // Not while a requested save is on its way: the editor's own save reports "not
+        // modified" BEFORE its save_file (measured), and that save must still be waited for.
+        if (s.dirty && !s.saving && !s.failed && !s.requested) {
           s.dirty = false;
           if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
           markUnchanged(file.path);
@@ -224,6 +316,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         const s = save.current;
         s.saving = true;
         // A save is running now; a pending timer would only start a second one behind it.
+        s.requested = false;
         if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
         markSaving(file.path);
       }
@@ -245,6 +338,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
           markFailed(file.path, message);
           save.current.dirty = true;
           save.current.failed = true;
+          save.current.failMessage = message;
           saveSettled();
         }
       });

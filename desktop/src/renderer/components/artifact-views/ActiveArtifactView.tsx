@@ -358,8 +358,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // (onClick={handleSave}) can never read as force=true.
   const handleSave = useCallback(async (opts?: { force?: boolean }): Promise<boolean> => {
     // The Office editor saves as you type (3 s after the last change); Done waits for that
-    // last save, at most 5 s, so leaving never drops the final few seconds of typing.
-    if (office) { await flushOffice(absolutePath); setEditing(false); return true; }
+    // last save, at most 5 s, so leaving never drops the final few seconds of typing. A save
+    // that failed keeps the editor open, where its reason and the save-failed actions show (I1).
+    if (office) { const r = await flushOffice(absolutePath); if (!r.ok) return false; setEditing(false); return true; }
     // The §2.2 empty-file guarantee: while content is null (the fetch
     // transient, an orphan, a binary file) there is NOTHING valid to save — a
     // write here would truncate the file to the placeholder draft. This is the

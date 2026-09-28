@@ -63,7 +63,20 @@ export interface OfficeBridge {
   versions(path: string): Promise<OfficeVersion[]>;
   /** Replace the file with a kept copy; the current file is kept first. */
   restore(path: string, versionId: string): Promise<{ ok: true } | { ok: false; message: string }>;
+  /** "Save a copy…" for a document whose save failed: `check` says whether a copy can succeed
+   *  (hide the button when not); `save` asks where and writes it, never touching the original. */
+  saveCopy(token: string, mode: 'check' | 'save'): Promise<OfficeSaveCopyResult>;
+  /** Window close / app quit (design §4): main asks this window to save every open document,
+   *  and waits for flushDone with the same id (or 5 s). Desktop only — absent elsewhere. */
+  onFlushRequest?(cb: (id: string) => void): () => void;
+  flushDone?(id: string): void;
 }
+
+export type OfficeSaveCopyResult =
+  | { ok: true; possible: boolean }
+  | { ok: true; folder: string }
+  | { ok: false; cancelled: true }
+  | { ok: false; message: string };
 
 /** The largest file Office will open (200 MB). WHY a cap: x2t translates the whole file in
  *  one go and the editor holds all of it in memory; past this the app would stall or run out
