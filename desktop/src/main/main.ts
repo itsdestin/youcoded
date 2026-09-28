@@ -41,6 +41,9 @@ import { log, rotateLog } from './logger';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
+import { registerOfficeProtocol } from './office/office-protocol';
+import { officeRoot } from './office/office-root';
+import { getOfficeSessions } from './office/office-session-registry';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
 import { pickSuggestedModel } from './first-run-local';
@@ -436,6 +439,10 @@ protocol.registerSchemesAsPrivileged([
   // WHY: supportFetchAPI alone does not allow cross-origin fetch from the
   // renderer. Inline mascot rigs need the scheme in Chromium's CORS allowlist.
   { scheme: 'theme-asset', privileges: { bypassCSP: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+  // Office editors (design §3): a standard secure origin per document so workers, fetch and
+  // storage work; no bypassCSP, no service workers. corsEnabled + stream were in the spike's
+  // set; drop each and keep it only if the editor then fails to load (record which in the test).
+  { scheme: 'office', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
 
 // In-memory cache of user's permission overrides, loaded from defaults file
@@ -1919,6 +1926,12 @@ void app.whenReady().then(async () => {
 
   registerThemeProtocol();
   perfMark('main:chore:theme-protocol:done');
+
+  // Office editors (design §3a): each open document gets its own sealed office://<token>
+  // origin. The session registry is a module-level singleton (office-session-registry.ts)
+  // so Task 5's IPC handlers can reach the same open-session set this protocol serves.
+  registerOfficeProtocol({ root: officeRoot(), sessions: getOfficeSessions() });
+  perfMark('main:chore:office-protocol:done');
 
   // Marketplace auth store — instantiated once at startup, passed to IPC handlers.
   // The auth store holds the bearer token in the main process only; the token
