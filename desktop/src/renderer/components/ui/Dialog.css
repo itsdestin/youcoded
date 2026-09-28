@@ -22,11 +22,8 @@
   mask-composite: add;
   transition: --dialog-fade-top 150ms ease-out, --dialog-fade-bottom 150ms ease-out;
 }
-/* WHY 24px (trial, nothing-bare-2#N2-1 "odd glow"): on themes whose cards are darker than
-   the popup (Meadow Mist), the fade lets the lighter popup show through as a pale band; a
-   shorter fade makes that band thinner. Was 42px. */
-.dialog-scroll[data-fade-top="true"], [data-session-files-scroll][data-fade-top="true"] { --dialog-fade-top: 24px; }
-.dialog-scroll[data-fade-bottom="true"], [data-session-files-scroll][data-fade-bottom="true"] { --dialog-fade-bottom: 24px; }
+.dialog-scroll[data-fade-top="true"], [data-session-files-scroll][data-fade-top="true"] { --dialog-fade-top: 42px; }
+.dialog-scroll[data-fade-bottom="true"], [data-session-files-scroll][data-fade-bottom="true"] { --dialog-fade-bottom: 42px; }
 .dialog-scroll::before, .dialog-scroll::after,
 [data-session-files-scroll]::before, [data-session-files-scroll]::after { display: none; }
 
