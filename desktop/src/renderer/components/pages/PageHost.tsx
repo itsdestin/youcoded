@@ -46,7 +46,9 @@ import { workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
-import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../../shared/pages-types';
+import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../../../shared/pages-types';
+import { OfficeView } from '../office/OfficeView';
+import { previewOfficeTabs } from '../office/office-store';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
@@ -110,7 +112,16 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   const pageIds = pages.map((p) => p.id);
   useScreenOpen('pages/page', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id }); }, pageIds);
   useScreenOpen('pages/focus', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id, focus: true }); }, pageIds);
+  // Office (built in): home beside the panel; documents as a pinned button opens them.
+  useScreenOpen('office', () => dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID }));
+  useScreenOpen('office/document', () => { void previewOfficeTabs(0); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
+  useScreenOpen('office/spreadsheet', () => { void previewOfficeTabs(1); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
+  useScreenOpen('office/versions', () => { void previewOfficeTabs(0, true); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   const summary = pages.find((p) => p.id === pageId) ?? null;
+  // Office is built in (office-questions#Q-entry): it lists, pins and opens like
+  // a page, but its body is OfficeView, never a framed page document.
+  const isOffice = pageId === OFFICE_PAGE_ID;
+  const ownPages = pages.filter((p) => p.home.kind !== 'builtin');
   const pinnedCount = pages.filter((p) => p.pinned).length;
   // The frame reloads when page.html was rewritten (the stamp moves) and not
   // when the page saved its own data (it does not) — review F7.
@@ -138,7 +149,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
 
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   // Only the confirmed first-run state replaces the rail, not loading, errors, or an open page.
-  const emptyPages = pageId === null && load.state === 'idle' && loaded && !failed && pages.length === 0;
+  // The first-run card is about the person's OWN pages — Office alone does not count.
+  const emptyPages = pageId === null && load.state === 'idle' && loaded && !failed && ownPages.length === 0;
   const frameRef = useRef<HTMLIFrameElement>(null);
   // The data the page in the frame is known to hold, so an outside change can
   // be told apart from the echo of the page's own save (see the onData effect).
@@ -152,7 +164,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   useEffect(() => {
     if (!open) return;
     void refreshPages();
-    if (pageId === null) { setLoad({ state: 'idle' }); return; }
+    if (pageId === null || pageId === OFFICE_PAGE_ID) { setLoad({ state: 'idle' }); return; }
     let cancelled = false;
     setLoad({ state: 'loading' });
     const bridge = pagesBridge();
@@ -284,6 +296,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   };
   if (!open) return null;
 
+  const builtin = pages.filter((p) => p.home.kind === 'builtin');
   const personal = pages.filter((p) => p.home.kind === 'personal');
   const byProject = new Map<string, PageSummary[]>();
   for (const p of pages) {
@@ -325,9 +338,19 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
       <div className="screen-body flex-1 min-h-0 flex">
-        {!pageFocus && !emptyPages && (
+        {/* With Office built in the panel always has something to list, so it
+            stays beside the first-run card instead of hiding. */}
+        {!pageFocus && (!emptyPages || builtin.length > 0) && (
         <aside className="screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
           <div className="flex-1 overflow-y-auto p-2">
+            {builtin.length > 0 && (
+              <RailGroup label="Built in">
+                {builtin.map((p) => (
+                  <RailRow key={p.id} page={p} current={p.id === pageId} pinFull={pinnedCount >= MAX_PINNED_PAGES}
+                    onOpen={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
+                ))}
+              </RailGroup>
+            )}
             {personal.length > 0 && (
               <RailGroup label="Personal">
                 {personal.map((p) => (
@@ -347,7 +370,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           </div>
           <div className="p-3 flex flex-col gap-2">
             {/* The welcome card owns the primary action when the library is empty (G-4). */}
-            {pages.length > 0 && <Button variant="primary" onClick={onCreatePage} className="w-full justify-center rounded-full">
+            {ownPages.length > 0 && <Button variant="primary" onClick={onCreatePage} className="w-full justify-center rounded-full">
               <PlusGlyph />
               Create a page
             </Button>}
@@ -360,7 +383,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         )}
         <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
           {/* Photo-only marks: the view once its list has loaded, or the page once it is ready. */}
-          {load.state === 'idle' && loaded && !failed && <ScreenMark name="pages" />}
+          {load.state === 'idle' && loaded && !failed && !isOffice && <ScreenMark name="pages" />}
+          {isOffice && <OfficeView />}
           {load.state === 'ready' && pageId && <ScreenMark name={`pages/${pageFocus ? 'focus' : 'page'}/${pageId}`} />}
           {/* WHY: first-run belongs where the Pages button lands, not a second click into Manage pages. */}
           {load.state === 'idle' && !loaded && <LoadingState what="pages" />}
@@ -370,7 +394,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               <PagesEmptyCard onMake={onCreatePage} />
             </div>
           )}
-          {load.state === 'idle' && loaded && !failed && pages.length > 0 && (
+          {load.state === 'idle' && loaded && !failed && !isOffice && ownPages.length > 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 select-none">
               <div className="text-sm font-medium text-fg-2">No page selected</div>
               <div className="text-xs text-fg-muted">Pick one from the list, or create a page.</div>

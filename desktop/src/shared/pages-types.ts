@@ -10,13 +10,22 @@
  *  inferred from the current session (scope §1: "explicit source bindings"). */
 export type PageHome =
   | { kind: 'personal' }
-  | { kind: 'project'; path: string; name: string };
+  | { kind: 'project'; path: string; name: string }
+  // WHY: Office ships with the app (questions deck office-questions#Q-entry: "a
+  // pinnable page") — it lists, pins and opens like a page, but its body is the
+  // app's own Office view, never a framed page document.
+  | { kind: 'builtin' };
 
 /** The small named icon set a page may pick for its card and pinned button.
  *  A named glyph, not an image: the pinned button is 16px in the header bar
  *  and follows `currentColor` like the Projects folder beside it. */
 export type PageIcon =
-  | 'page' | 'timer' | 'notes' | 'paint' | 'chart' | 'calendar' | 'list' | 'game';
+  | 'page' | 'timer' | 'notes' | 'paint' | 'chart' | 'calendar' | 'list' | 'game'
+  // Built-in pages only.
+  | 'office';
+
+/** The built-in Office page's id. Stable, so a pin syncs like any page's. */
+export const OFFICE_PAGE_ID = 'builtin:office';
 
 // ── Phase 2: connections (decided on two questions decks, 2026-09-19) ──────
 // Everything a page reaches outside its frame is listed here and approved

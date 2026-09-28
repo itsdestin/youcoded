@@ -375,6 +375,13 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // Photo-only build: `shoot` opens a file in the viewer by id (fixture files a-sent-chart,
   // a-sent-diagram, a-sent-pdf).
   useScreenOpen('chat/files/open', (id) => { if (id) dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: id }); }, allArtifacts.map((a) => a.id));
+  // Office (design stage): a file opened straight into Edit mode.
+  useScreenOpen('chat/files/edit', (id) => {
+    if (!id) return;
+    dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: id });
+    const tryEdit = (n: number) => { if (editRef.current?.isEditable) editRef.current.startEdit(); else if (n > 0) setTimeout(() => tryEdit(n - 1), 100); };
+    tryEdit(40);
+  }, allArtifacts.map((a) => a.id));
   // Read lifecycle (fetch + null-gate on switch + loading/missing/error
   // phases) lives in the shared useArtifactContent hook — this drawer and
   // FilesTab used to carry duplicate effects that conflated "loading" with
@@ -399,7 +406,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // Edit control is owned by ActiveArtifactView; the header drives it through
   // this ref + mirrors its state so the toolbar can swap pencil ↔ save/cancel.
   const editRef = useRef<ActiveArtifactHandle>(null);
-  const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean }>({ isEditable: false, editing: false });
+  const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean; autosaves?: boolean }>({ isEditable: false, editing: false });
   // D3: every navigation away from a dirty editor goes through this guard
   // (Save / Discard / Cancel dialog) instead of silently discarding the draft.
   const { guard: guardUnsaved, dialog: unsavedDialog } = useUnsavedGuard(
@@ -1255,7 +1262,18 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       : 'opacity-0 scale-90 pointer-events-none'
                   }`}
                 >
-                  {editState.editing ? (
+                  {editState.editing && editState.autosaves ? (
+                    // Office files save as you edit (office-questions#Q-save):
+                    // nothing to confirm or throw away, so one Done leaves edit mode.
+                    <button
+                      type="button"
+                      onClick={() => editRef.current?.saveEdit()}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
+                    >
+                      <Ic name="check" size={15} />
+                      Done
+                    </button>
+                  ) : editState.editing ? (
                     <>
                       <button
                         type="button"

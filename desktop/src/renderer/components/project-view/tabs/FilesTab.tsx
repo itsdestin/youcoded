@@ -1192,7 +1192,7 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   // ActiveArtifactView still owns the edit/save/conflict logic; we only call into
   // it and mirror its edit state so the header can swap Edit ↔ Save/Cancel.
   const viewRef = useRef<ActiveArtifactHandle>(null);
-  const [editState, setEditState] = useState({ isEditable: false, editing: false });
+  const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean; autosaves?: boolean }>({ isEditable: false, editing: false });
   const [copied, setCopied] = useState(false);
 
   const filename = artifact.path.split('/').pop() ?? artifact.path;
@@ -1235,7 +1235,13 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   // Header tools: Edit ↔ Save/Cancel (only for editable formats) + Reveal + Copy.
   const tools = (
     <>
-      {editState.isEditable && (editState.editing ? (
+      {editState.isEditable && (editState.editing && editState.autosaves ? (
+        // Office files save as you edit (office-questions#Q-save): one Done.
+        <button type="button" className={TOOL_BTN_ACCENT} onClick={() => viewRef.current?.saveEdit()}>
+          <CheckIcon size={13} />
+          Done
+        </button>
+      ) : editState.editing ? (
         <>
           <button type="button" className={TOOL_BTN_ACCENT} onClick={() => viewRef.current?.saveEdit()}>
             <CheckIcon size={13} />

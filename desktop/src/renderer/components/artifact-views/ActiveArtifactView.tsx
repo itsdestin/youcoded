@@ -1,7 +1,7 @@
 // ActiveArtifactView — shared component for viewing and editing a single artifact.
 // Extracted from SessionDrawer.tsx (Task 7.2) so both SessionDrawer and ProjectView
 // can use it identically without duplicating the edit state + conflict-detection logic.
-import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
+import { lazy, useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
 import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer } from './RendererRegistry';
 import { PartialFileBanner } from './PartialFileBanner';
 import { canEditArtifact } from './edit-permission';
@@ -25,6 +25,10 @@ function absoluteArtifactPath(projectRoot: string, a: ArtifactRecord): string {
 import { openEditorSearch, revealLineIn } from './cm/editor-registry';
 import { draftKey, stashDraft, takeDraft, clearDraft } from './draft-store';
 import { ScreenMark } from '../../shoot-mode';
+import { isOfficeEditable } from '../office/office-files';
+// Office files edit in the Euro-Office editor (design stage, 2026-09-28) — lazy,
+// so the editor code loads only when someone presses Edit on one.
+const OfficeInlineEditor = lazy(() => import('../office/OfficeInlineEditor').then((m) => ({ default: m.OfficeInlineEditor })));
 
 // Confirm-tier wording (D5): name the actual consequence, per path family.
 // Never a vague "are you sure" — the user should know what the file DOES.
@@ -63,6 +67,9 @@ export interface ActiveArtifactHandle {
   /** True when edit mode holds changes not yet on disk — hosts must gate
    * selection/close behind the unsaved-changes prompt when set (D3). */
   dirty: boolean;
+  /** Office files save themselves as you edit: hosts show one "Done" instead of
+   *  Save + Cancel, and saveEdit/cancelEdit both just leave edit mode. */
+  autosaves: boolean;
   startEdit(): void;
   /** Resolves true when the save landed — false means the pane is showing a
    * conflict or error and the caller should NOT proceed with navigation. */
@@ -139,7 +146,7 @@ export interface ActiveArtifactViewProps {
   // (SessionDrawer) renders them in its header instead. ProjectView omits this.
   controlsInHeader?: boolean;
   // Fires whenever editability / edit-mode changes so the host header can update.
-  onEditStateChange?: (s: { isEditable: boolean; editing: boolean }) => void;
+  onEditStateChange?: (s: { isEditable: boolean; editing: boolean; autosaves?: boolean }) => void;
   /** Host's Ctrl+F bar is open — forwarded so a viewer can move its own floating
    *  controls out from under it. */
   findBarOpen?: boolean;
@@ -170,7 +177,12 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // The four conditions (resolved content, policy, binary sniff, SIZE) live in
   // one predicate so the affordance, entering edit mode, restoring a stashed
   // draft, and the save call cannot disagree — see edit-permission.ts.
-  const isEditable = canEditArtifact(contentInfo, content, tier);
+  // Office files are not text: they edit in the Office editor, which saves them
+  // itself (office-questions#Q-open-mode, #Q-save), so none of the text-draft
+  // machinery below applies. Only where the app can run the editors — the
+  // bridge is absent on Android and over remote until phones get Office (#Q-phones).
+  const office = isOfficeEditable(artifact.path) && !!(window.claude as { office?: unknown } | undefined)?.office;
+  const isEditable = office ? tier !== 'denied' : canEditArtifact(contentInfo, content, tier);
 
   // ── Task 6.4: controlled edit state (lifted from MarkdownView) ──
   // Owning edit state here lets the conflict banner read/reset it without
@@ -309,6 +321,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
 
   // ── Edit lifecycle callbacks (passed down to MarkdownView as controlled props) ──
   const handleStartEdit = useCallback(() => {
+    if (office) { setEditing(true); return; }
     // Confirm-tier paths get one deliberate click BEFORE editing starts, not a
     // surprise refusal at save time (D5 — mistake-prevention, not security; the
     // hard boundary is main's).
@@ -334,12 +347,14 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     setEditing(true);
     setConflict(null);
     setSaveError(null);
-  }, [tier, absolutePath, projectRoot, artifact.id, content, contentInfo, onContentChange, onDiskRead]);
+  }, [office, tier, absolutePath, projectRoot, artifact.id, content, contentInfo, onContentChange, onDiskRead]);
 
   // opts.force: skip the concurrency token — the deliberate "Keep mine"
   // overwrite. Shaped as an options object so accidental event-object args
   // (onClick={handleSave}) can never read as force=true.
   const handleSave = useCallback(async (opts?: { force?: boolean }): Promise<boolean> => {
+    // The Office editor has already saved every change; leaving is all "Done" does.
+    if (office) { setEditing(false); return true; }
     // The §2.2 empty-file guarantee: while content is null (the fetch
     // transient, an orphan, a binary file) there is NOTHING valid to save — a
     // write here would truncate the file to the placeholder draft. This is the
@@ -417,7 +432,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     }
     setSaveError(saveErrorMessage(res));
     return false;
-  }, [projectRoot, projectId, projectName, artifact.id, draft, sessionId, onContentChange, onDiskRead, tier, content, contentInfo]);
+  }, [office, projectRoot, projectId, projectName, artifact.id, draft, sessionId, onContentChange, onDiskRead, tier, content, contentInfo]);
 
   const handleCancel = useCallback(() => {
     clearDraft(draftKey(projectRoot, artifact.id));
@@ -472,6 +487,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     isEditable,
     editing,
     dirty,
+    autosaves: office,
     startEdit: handleStartEdit,
     saveEdit: () => handleSave(),
     cancelEdit: handleCancel,
@@ -487,7 +503,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       };
       tryReveal();
     },
-  }), [isEditable, editing, dirty, handleStartEdit, handleSave, handleCancel]);
+  }), [isEditable, editing, dirty, office, handleStartEdit, handleSave, handleCancel]);
 
   // Desktop app-quit / window-close guard while dirty (D3). Android never
   // fires beforeunload usefully — its back navigation goes through the
@@ -502,8 +518,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // Notify the host whenever editability / edit-mode changes so its header
   // can swap the pencil ↔ save/cancel icons.
   useEffect(() => {
-    onEditStateChange?.({ isEditable, editing });
-  }, [isEditable, editing, onEditStateChange]);
+    onEditStateChange?.({ isEditable, editing, autosaves: office });
+  }, [isEditable, editing, office, onEditStateChange]);
 
   // The Registry returns a real component for every type (heavy viewers —
   // pdf/docx/xlsx — are React.lazy, so they're code-split but still rendered
@@ -512,7 +528,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // editor component — most read viewers (HtmlView iframe, CsvView grid) have
   // no edit UI, so "Edit" on those files used to render nothing.
   const ViewerComponent = editing
-    ? getEditViewer(artifact.path)
+    ? (office ? OfficeInlineEditor : getEditViewer(artifact.path))
     : getViewer(artifact.path, {
         // Only assert text when a get response actually sniffed the bytes —
         // absent info keeps the registry's conservative extension routing.
@@ -646,6 +662,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           <ScreenMark name={`chat/files/open/${artifact.id}`} />
           <ViewerComponent
             path={artifact.path}
+            artifactId={artifact.id}
             content={content}
             contentInfo={contentInfo}
             sniffedBinaryTextFile={sniffedBinaryTextFile}

@@ -216,6 +216,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
   // Pages Phase 2 (connections) — designed ahead of the backend; rows in mock-only.ts.
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
+  // Office (design stage) — rows in mock-only.ts.
+  'office.status', 'office.create', 'office.pick', 'office.source', 'office.versions', 'office.restore',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -472,6 +474,9 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
+import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeSampleUrl } from './fixtures/office';
+import { OFFICE_PAGE_ID } from '../../../shared/pages-types';
+import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
 import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
@@ -2832,6 +2837,17 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         return { ok: true, base64: after ? SHEET_AFTER : SHEET_BEFORE,
                  mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
       }
+      // Office (design stage): the fixture documents live on the editor add-on's
+      // origin, so the quick preview reads the same bytes the editor opens.
+      if (ext === 'docx' || ext === 'pptx') {
+        try {
+          const name = absolutePath.split('/').pop() ?? '';
+          const buf = new Uint8Array(await (await fetch(officeSampleUrl(OFFICE_EDITOR_ORIGIN, name))).arrayBuffer());
+          let bin = '';
+          for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+          return { ok: true, base64: btoa(bin), mime: 'application/octet-stream' };
+        } catch { return { ok: false, reason: 'not-an-image' }; }
+      }
       if (ext === 'pdf') {
         const pdf = makeSamplePdfBase64();
         if (pdf) return { ok: true, base64: pdf, mime: 'application/pdf' };
@@ -3425,6 +3441,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
+    office: createOfficeMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;
 }
 
@@ -3433,7 +3450,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
  *  gets the three fixture pages. Pin toggles publish through onChanged the way
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {
-  let pages: PageDocument[] = empty ? [] : seedPages();
+  // Office is built in, so it is listed in every scenario — even the empty one.
+  let pages: PageDocument[] = [{ ...OFFICE_PAGE, pinned: !empty }, ...(empty ? [] : seedPages())];
   // One key is saved from the start (Trip board uses it), so the Weather page
   // can show "Uses your saved OpenWeather key".
   const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);
@@ -3512,6 +3530,50 @@ function createPagesMock(empty: boolean): PagesBridge {
       usedBy: pages.filter((p) => p.connections?.some((c) => c.kind === 'key' && c.service === service && c.approved)).map((p) => ({ id: p.id, name: p.name })),
     }));
   }
+}
+
+/** The built-in Office page as the pages list carries it (design stage). The
+ *  real host will list it from main; until then only this fake does. */
+const OFFICE_PAGE: PageDocument = {
+  id: OFFICE_PAGE_ID, name: 'Office', description: 'Documents, spreadsheets and presentations.',
+  icon: 'office', home: { kind: 'builtin' }, pinned: false, updatedAt: '2026-09-28T00:00:00Z', htmlStamp: 0,
+  html: '', data: null,
+};
+
+/** `window.claude.office` for the workbench (design stage — every channel is a
+ *  mock-only.ts row). Files are the three neutral fixtures, served by the editor
+ *  add-on's origin; see fixtures/office.ts for how to run it. */
+function createOfficeMock(empty: boolean): OfficeBridge {
+  const HOUR = 3_600_000;
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const recent = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
+  let created = 0;
+  return {
+    status: async () => ({
+      editorOrigin: OFFICE_EDITOR_ORIGIN,
+      recent,
+      project: empty ? null : { name: 'community-garden', files: OFFICE_FILES.map((f, i) => ({ ...f, at: ago([26, 49, 75][i] * HOUR) })) },
+    }),
+    create: async (kind) => {
+      created += 1;
+      const base = OFFICE_FILES.find((f) => f.kind === kind)!;
+      const name = `${{ document: 'Untitled document', spreadsheet: 'Untitled spreadsheet', presentation: 'Untitled presentation' }[kind]}${created > 1 ? ` ${created}` : ''}${base.name.slice(base.name.lastIndexOf('.'))}`;
+      return { ok: true, file: { ...base, path: `/home/you/Documents/${name}`, name, folder: 'Documents', at: new Date().toISOString() } };
+    },
+    pick: async () => OFFICE_FILES[0],
+    // A new file opens the fixture of its kind (the add-on has no blank templates yet).
+    source: async (path) => {
+      const ext = path.slice(path.lastIndexOf('.'));
+      const f = OFFICE_FILES.find((x) => x.path === path) ?? OFFICE_FILES.find((x) => x.name.endsWith(ext)) ?? OFFICE_FILES[0];
+      return { ok: true, url: officeSampleUrl(OFFICE_EDITOR_ORIGIN, f.name) };
+    },
+    versions: async () => {
+      if (empty) return [];
+      const v = (id: string, h: number, reason: OfficeVersion['reason']): OfficeVersion => ({ id, at: ago(h * HOUR), reason, bytes: 37_000 });
+      return [v('v4', 0.1, 'autosave'), v('v3', 0.4, 'opened'), v('v2', 3, 'autosave'), v('v1', 26, 'opened')];
+    },
+    restore: async () => ({ ok: true }),
+  };
 }
 
 const VOICE_SCRIPT = "Can you look at the budget spreadsheet I sent yesterday? Row 14 is wrong: it says $2,300 but Sarah's invoice was $2,030. Fix it and draft a short reply to her.".split(' ');

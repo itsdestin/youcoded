@@ -48,6 +48,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
 
   const close = () => dispatch({ type: 'PAGES_VIEW_CLOSED' });
   const openPage = (id: string) => dispatch({ type: 'PAGE_OPENED', pageId: id });
+  const builtin = pages.filter((p) => p.home.kind === 'builtin');
   const personal = pages.filter((p) => p.home.kind === 'personal');
   const byProject = new Map<string, PageSummary[]>();
   for (const p of pages) {
@@ -97,6 +98,13 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
               message="The list of pages could not be read."
               onRetry={() => window.location.reload()}
             />
+          )}
+          {loaded && !failed && builtin.length > 0 && (
+            <Section label="Built in">
+              {builtin.map((p) => (
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onConnections={() => setConnectionsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+              ))}
+            </Section>
           )}
           {loaded && !failed && personal.length > 0 && (
             <Section label="Personal">
@@ -150,7 +158,8 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
           <div className="text-sm font-medium text-fg truncate" title={page.name}>{page.name}</div>
           <div className="text-xs text-fg-muted line-clamp-2">{page.description}</div>
         </div>
-        <Tooltip text="Edit in chat" placement="bottom">
+        {/* A built-in page is part of the app: nothing to edit in chat. */}
+        {page.home.kind !== 'builtin' && <Tooltip text="Edit in chat" placement="bottom">
           <Button
             size="icon-sm"
             variant="ghost"
@@ -160,7 +169,7 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
             {/* Colour on the glyph, not the Button: the primitive owns its own text colour. */}
             <span className="text-fg-muted"><EditGlyph /></span>
           </Button>
-        </Tooltip>
+        </Tooltip>}
         <Tooltip text={cannotPin ? `Up to ${MAX_PINNED_PAGES} pinned pages` : page.pinned ? 'Unpin from the top bar' : 'Pin to the top bar'} placement="bottom">
           <Button
             size="icon-sm"
@@ -175,9 +184,11 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
         </Tooltip>
       </div>
       <div className="flex items-center gap-2 text-2xs text-fg-muted">
-        <span>{page.home.kind === 'personal' ? 'Personal' : page.home.name}</span>
-        <span aria-hidden="true" className="text-fg-faint">·</span>
-        <span>Updated {relative(page.updatedAt)}</span>
+        <span>{page.home.kind === 'personal' ? 'Personal' : page.home.kind === 'builtin' ? 'Built in' : page.home.name}</span>
+        {page.home.kind !== 'builtin' && <>
+          <span aria-hidden="true" className="text-fg-faint">·</span>
+          <span>Updated {relative(page.updatedAt)}</span>
+        </>}
         {/* A quiet line, only on pages that reach outside (deck Q-manage: the
             library stays calm; no badge on every card — deck Q-levels). */}
         {connectionCount > 0 && (
