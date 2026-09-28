@@ -32,7 +32,7 @@ import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
 import type { ChatAction } from './state/chat-types';
-import { installTranscriptBatcher, applyChatHydrate } from './state/transcript-batch';
+import { installTranscriptBatcher, applyChatHydrate, flushTranscriptActions } from './state/transcript-batch';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
@@ -1390,6 +1390,10 @@ function AppInner() {
       // whenever a phone's answer broadcast was lost. Clear the card quietly instead.
       if (action?.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode()) action.silent = true;
       if (action) {
+        // WHY: this dispatch is immediate but transcript deltas are rAF-batched (can stall
+        // a frame under load) — flush first, or a later hook action jumps ahead and splits a
+        // streaming bubble (2026-09-28, permission-approve.json step 8 flake).
+        flushTranscriptActions();
         dispatch(action);
       }
       // First hook event for a session = Claude is initialized
