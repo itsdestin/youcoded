@@ -39,7 +39,7 @@ import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/hando
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
-import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
+import { askCloseHungWindow, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
 import { registerOfficeProtocol } from './office/office-protocol';
 import { registerOfficeIpc } from './office/office-ipc';
@@ -47,7 +47,7 @@ import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
 import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate } from './office/office-flush';
 import { createCloseGate } from './window-close-gate';
-import { gatedQuit } from './app-restart';
+import { gatedQuit, onWillQuit } from './app-restart';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
 import { pickSuggestedModel } from './first-run-local';
@@ -823,7 +823,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // Record beachballs. A hung window is otherwise invisible: it keeps servicing
   // background work, so nothing in the app, the OS, or this log says anything is
   // wrong — which is exactly why the 2026-09-03 force quit was unexplainable.
-  wireWindowHangDiagnostics(win, opts?.buddy ? `buddy:${opts.buddy}` : 'main');
+  const hang = wireWindowHangDiagnostics(win, opts?.buddy ? `buddy:${opts.buddy}` : 'main');
 
   // Lift alwaysOnTop to 'screen-saver' level for buddy windows after construction.
   // 'screen-saver' is the highest reliable always-on-top level; floats over
@@ -1006,7 +1006,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     // about to tear down every session anyway — a close event reaching here
     // once shuttingDown is set must ask nothing and let the window close.
     shuttingDown: () => !!shuttingDown,
-    holdForOffice: (ev) => holdCloseForOfficeSave(win, ev), // Office docs save first (≤5 s, design §4)
+    holdForOffice: (ev, onFailed) => holdCloseForOfficeSave(win, ev, undefined, onFailed), // Office docs save first (≤5 s, design §4)
     sessionCount: () => windowRegistry.sessionsForWindow(wid).length,
     ask: (count) => closeRequests.request(wid, count, (push) => {
       if (!win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST, push);
@@ -1023,8 +1023,12 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
       destroySession: (sid) => sessionManager.destroySession(sid),
       releaseSession: (sid) => windowRegistry.releaseSession(sid),
     }),
+    closes: (answer) => answer.close,
     isDestroyed: () => win.isDestroyed(),
     close: () => win.close(),
+    unresponsive: () => hang.unresponsive,
+    confirmCloseHung: () => askCloseHungWindow(win),
+    destroy: () => win.destroy(),
   });
   // A page's beforeunload veto cancelled the close. Observed only: preventDefault would override it.
   win.webContents.on('will-prevent-unload', () => closeGate.onUnloadPrevented());
@@ -2615,8 +2619,10 @@ app.on('before-quit', (e) => {
     relaunch: () => app.relaunch(),
     shutdown: () => shutdownApp(),
     quit: () => app.quit(),
+    windowsLeft: () => BrowserWindow.getAllWindows().some((w) => !w.isDestroyed()), exit: () => app.exit(0),
   }).catch(() => {});
 });
+app.on('will-quit', () => onWillQuit(() => app.relaunch())); // a restart relaunches only now (app-restart.ts)
 
 // Route 3: OS shutdown, logout, `kill`, or Ctrl+C in a dev terminal. These
 // never reach Electron's quit events at all, so they need their own hook.

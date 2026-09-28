@@ -388,7 +388,10 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         const s = save.current;
         s.dirty = true;
         // Any change withdraws a close's pending approval of the unload — also while failed,
-        // where markChanged below is skipped (fix round 6, M1).
+        // where markChanged below is skipped (fix round 6, M1). Accepted (fix round 7): the
+        // editor's own late "modified" echo after a failed save can arrive just after Close
+        // anyway and withdraw it too. Nothing is lost that way — the window stays open with the
+        // edits, and the next X asks again.
         withdrawUnloadApproval();
         // WHY not a new change after a failed save (measured in the dev window, fix round 1):
         // the editor answers its own failed save by marking the document modified again. Taking

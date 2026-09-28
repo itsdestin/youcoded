@@ -117,7 +117,7 @@ function listenForProceed(ipc: FlushIpc): void {
  * the window open and asks the person (OFFICE_UNSAVED_PROMPT); "Close anyway" closes it.
  * Returns false when there is nothing to save, or on the close it re-issued.
  */
-export function holdCloseForOfficeSave(win: ClosingWindow, ev: { preventDefault(): void }, deps: GateDeps = realDeps()): boolean {
+export function holdCloseForOfficeSave(win: ClosingWindow, ev: { preventDefault(): void }, deps: GateDeps = realDeps(), onFailed?: () => void): boolean {
   if (flushedForClose.has(win)) { flushedForClose.delete(win); return false; }
   if (win.isDestroyed() || !deps.hasDocuments(win.webContents.id)) return false;
   ev.preventDefault();
@@ -125,6 +125,7 @@ export function holdCloseForOfficeSave(win: ClosingWindow, ev: { preventDefault(
   listenForProceed(ipc);
   void askToFlush(win.webContents, ipc, deps.capMs, 'close').then((o) => {
     if (o.how === 'failed') {
+      onFailed?.(); // the close gate forgets a sessions answer if the person then chooses Review
       held.set(win.webContents.id, { kind: 'close', win });
       if (!win.webContents.isDestroyed()) win.webContents.send(OFFICE_UNSAVED_PROMPT, { count: o.count, firstPath: o.firstPath });
       return;
