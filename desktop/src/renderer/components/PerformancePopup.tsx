@@ -106,16 +106,15 @@ export default function PerformancePopup({
             <section>
             <SectionLabel className="mb-2">Graphics</SectionLabel>
             <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
-              {/* The card's own header row (no box of its own); the whole row stays
-                  clickable — a bigger touch target, and SettingRow keeps the toggle's
-                  own click from firing twice. */}
+              {/* WHY title + switch alone on the row, the explanation full width under
+                  it (nothing-bare-2#N2-3, Destin: "prefer power saving should be aligned
+                  with the toggle, and all copy should be full width under the one line
+                  title/toggle"). The whole row stays clickable, as before. */}
+              <div>
               <SettingRow
                 header
                 variant="item"
                 title="Prefer power saving"
-                // WHY the chips in the description (nothing-bare#NB-3 "clean the prefer
-                // power saving card up"): one block of grey text, not a second loose line.
-                description={<>Use the integrated GPU instead of the discrete one. Saves battery, but UI animations may stutter.{gpuList.length > 0 && <><br />Detected: {gpuList.join(', ')}</>}</>}
                 onClick={handleToggle}
                 control={
                   <Toggle
@@ -125,6 +124,11 @@ export default function PerformancePopup({
                   />
                 }
               />
+              <p className="text-3xs text-fg-muted leading-relaxed">
+                Use the integrated GPU instead of the discrete one. Saves battery, but UI animations may stutter.
+                {gpuList.length > 0 && <><br />Detected: {gpuList.join(', ')}</>}
+              </p>
+              </div>
 
               {needsRestart && (
                 <Callout

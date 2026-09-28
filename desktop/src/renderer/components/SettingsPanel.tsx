@@ -1270,11 +1270,11 @@ export function BuddyButton() {
               {canRemoveHelper && (
                 <>
                   {removeError && <Callout tone="warning">{removeError}</Callout>}
-                  <div className="flex justify-end">
-                    <Button variant="ghost" size="sm" onClick={removeHelper} disabled={removing}>
-                      {removing ? 'Removing\u2026' : 'Remove helper'}
-                    </Button>
-                  </div>
+                  {/* WHY a full-width outlined button (nothing-bare-2#N2-7; guide: a follow-up
+                      action under a group is never bare text, and a lone button is full width). */}
+                  <Button variant="secondary" onClick={removeHelper} disabled={removing} className="w-full">
+                    {removing ? 'Removing\u2026' : 'Remove helper'}
+                  </Button>
                 </>
               )}
             </div>

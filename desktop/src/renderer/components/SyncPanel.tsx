@@ -1460,14 +1460,18 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               // Card-levels trial: fix batch 1 went flat here to kill a box-
               // inside-box bug, leaving no first-level card at all, unlike every
               // sibling here. Now ONE level-1 card; destinations are level-2.
-              return (
+              // WHY its own label (nothing-bare-2#N2-5, Destin: "additional backups now
+              // appear to be under main backups"): once the first card has a label,
+              // every card on the page needs one, or the next reads as filed under it.
+              return (<div>
+                <SectionLabel className="mb-2">Additional backups</SectionLabel>
                 <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
                   {/* WHY `header` (Destin, 2026-09-28): this row IS the card's header —
                       a boxed row here read as a card inside the card. */}
                   <SettingRow
                     variant="item"
                     header
-                    title={<span className="flex items-center gap-2">Additional backups<Badge>Optional</Badge></span>}
+                    title={<span className="flex items-center gap-2">Keep a second copy<Badge>Optional</Badge></span>}
                     description={sub}
                     control={
                       // Shared Toggle (spec changes 15/16) — same 36x20 geometry, but the
@@ -1632,7 +1636,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       )}
                     </div>
                   )}
-                </div>
+                </div></div>
               );
             })()}
 
@@ -1701,6 +1705,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 setting, arrow on the right. It was a bare "› Sync log" text toggle
                 with the arrow on the left (Destin, B1-6: "sync log dropdown …
                 all wrong"). The lines are fetched when it opens, as before. */}
+            {/* WHY a label (nothing-bare-2#N2-5): every card on this page has one. */}
+            <div>
+            <SectionLabel className="mb-2">History</SectionLabel>
             <FoldRow
               title="Sync log"
               open={showLog}
@@ -1748,6 +1755,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   </Button>
                 </div>
             </FoldRow>
+            </div>
 
             {/* Empty state before the first sync status arrives. Copy fix: this
                 used to say "Install the YouCoded toolkit" — the toolkit is

@@ -19,7 +19,7 @@
     "renderer/components/SessionStrip.tsx": 2791,
     "main/main.ts": 2604,
     "shared/types.ts": 2391,
-    "renderer/components/SyncPanel.tsx": 2131,
+    "renderer/components/SyncPanel.tsx": 2139,
     "main/engine/engine-manager.ts": 2035,
     "renderer/components/ResumeBrowser.tsx": 2069,
     "main/preload.ts": 1961,
