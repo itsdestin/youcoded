@@ -31,6 +31,14 @@ export const CONTENT_Z: Record<OverlayLayer, number> = { 1: 50, 2: 61, 3: 71, 4:
 // always clears its host without re-magic-numbering at each call site.
 export const POPOVER_Z = 9001;
 
+// Hint tier: Tooltip and AnchorTip bubbles. WHY above everything, including
+// the 9000–9999 exception band: a hint is anchored to the control under the
+// pointer, so that control is already on top — yet at L4 (z-100) a hint opened
+// inside the session menu, model picker or ⋯ menu drew BEHIND its own menu
+// (Destin, 2026-09-27: "tooltips get stuck behind other surfaces"). Safe at the
+// very top because hover hints are pointer-events-none and close on leave.
+export const TOOLTIP_Z = 10000;
+
 type ScrimProps = {
   layer: OverlayLayer;
   onClick?: (e: React.MouseEvent) => void;
