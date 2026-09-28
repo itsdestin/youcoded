@@ -12,6 +12,7 @@ import type { OfficeBridge, OfficeFile } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
+import { plainMessage } from '../../utils/ipc-error';
 
 export type OfficeCommand = 'undo' | 'redo' | 'bold' | 'italic' | 'underline' | 'markers' | 'numbering' | 'align-left' | 'align-center' | 'align-right';
 export type OfficeCommandState = Partial<Record<OfficeCommand, { on: boolean; enabled: boolean }>>;
@@ -83,10 +84,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   const post = (msg: unknown) => { if (origin) ref.current?.contentWindow?.postMessage(msg, origin); };
 
   // Open the document in main, and close it again when this frame goes away, so its
-  // temporary files do not outlive the tab. WHY a late answer is NOT closed: a frame for the
-  // same file mounted meanwhile gets the same token (one session per file), and closing it
-  // would pull the document out from under that frame. Main reuses the session for the next
-  // open of this file, and removes it when the window closes.
+  // temporary files do not outlive the tab. A late answer (this frame already gone) is closed
+  // too: main counts each open of a token, so that close only ends this frame's share and
+  // never the document another frame of the same file is showing.
   useEffect(() => {
     const b = officeBridge();
     const wb = workbenchPreview(b);
@@ -97,10 +97,15 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     if (!b) { failWith("Office couldn't open this file."); return; }
     b.open(file.path).then((r) => {
       if (!r.ok) { failWith(r.message); return; }
-      if (gone) return;
+      if (gone) { void b.close(r.token).catch(() => {}); return; }
       token = r.token;
       setOrigin(r.origin);
-    }, () => failWith("Office couldn't open this file."));
+    }, (e: unknown) => failWith(
+      // WHY (fix round 1): on the remote client and the phone the host refuses Office outright,
+      // and that is known for certain, so say it (plainMessage names the feature and where)
+      // rather than the general "couldn't open", which would suggest the file is at fault.
+      /^remote-unsupported:/.test(String((e as Error)?.message ?? '')) ? plainMessage(e) : "Office couldn't open this file.",
+    ));
     return () => {
       gone = true;
       if (token) void b.close(token).catch(() => {});

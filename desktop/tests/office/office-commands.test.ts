@@ -10,7 +10,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn() }));
 
 import { noteOwnWrite } from '../../src/main/artifacts/project-watcher';
-import { awaitIdle, createOfficeCommands, OFFICE_COMMANDS } from '../../src/main/office/office-commands';
+import { awaitIdle, createOfficeCommands, drainSession, OFFICE_COMMANDS } from '../../src/main/office/office-commands';
 import { createSessions, type OfficeSession } from '../../src/main/office/office-sessions';
 import { convert, FORMAT, X2tError } from '../../src/main/office/x2t';
 import { OFFICE_MAX_BYTES } from '../../src/shared/office-types';
@@ -545,4 +545,61 @@ describe('office save errors, round two', () => {
       expect(await readFile(s.path)).toEqual(original);
     },
   );
+});
+
+// Fix round 1 (Task 5 review): closing a document removes its temp folder, so a close must
+// wait for a save still queued for it — and, past the cap, that save must give up rather
+// than land late.
+describe('closing a document while its save is translating', () => {
+  it('waits for the save, which still lands, before removing the temp folder', async () => {
+    const closable = createSessions(path.join(dir, 'closable'), { drain: (x) => drainSession(x) });
+    const file = path.join(dir, 'docs/close.docx');
+    await mkdir(path.dirname(file), { recursive: true });
+    await copyFile(MEMO, file);
+    const s = await closable.open(file, 1);
+    // WHY it reads its input after the pause: the real translator reads Editor.bin from the
+    // document's temp folder, which is exactly what an early close would remove.
+    const slow = async (_r: string, from: string, to: string) => {
+      await new Promise((r) => setTimeout(r, 150));
+      await writeFile(to, Buffer.concat([Buffer.from('PK\x03\x04'), await readFile(from)]));
+    };
+    const run = createOfficeCommands({ root: ROOT, sessions: closable, convert: slow });
+    await writeBin(run, s.token);
+    // Back to back: the save is queued, then the tab closes.
+    const saving = run(s.token, 'save_file', {});
+    const closing = closable.close(s.token);
+    expect(closable.get(s.token)).toBeUndefined(); // no new command can reach it now
+    await expect(saving).resolves.toBe('ok');
+    await closing;
+    expect(await readFile(file)).toEqual(Buffer.from('PK\x03\x04bin'));
+    expect(existsSync(s.temp)).toBe(false);
+    expect(await tmpsBeside(file)).toEqual([]);
+  });
+
+  it("abandons a save still translating past the cap, leaving the user's file untouched", async () => {
+    const closable = createSessions(path.join(dir, 'closable'), { drain: (x) => drainSession(x, 50) });
+    const file = path.join(dir, 'docs/close.docx');
+    await mkdir(path.dirname(file), { recursive: true });
+    await copyFile(MEMO, file);
+    const original = await readFile(file);
+    const s = await closable.open(file, 1);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const translating = new Promise<void>((r) => (entered = r));
+    const slow = async (r: string, f: string, to: string) => {
+      entered();
+      await gate;
+      await fakeDoc(r, f, to);
+    };
+    const run = createOfficeCommands({ root: ROOT, sessions: closable, convert: slow });
+    await writeBin(run, s.token);
+    const saving = run(s.token, 'save_file', {});
+    await translating;
+    await closable.close(s.token); // returns once the 50 ms cap has passed
+    release();
+    await expect(saving).rejects.toThrow('Office is closing.');
+    expect(await readFile(file)).toEqual(original);
+    expect(await readdir(path.dirname(file))).toEqual(['close.docx']);
+  });
 });

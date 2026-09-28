@@ -5,7 +5,7 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { log } from '../logger';
-import { awaitIdle, stopOfficeCommands } from './office-commands';
+import { awaitIdle, drainSession, stopOfficeCommands } from './office-commands';
 import { createSessions } from './office-sessions';
 import { killRunningConverters } from './x2t';
 
@@ -23,7 +23,8 @@ let tempBase: string | undefined;
  *  use initOfficeSessionsSafely() from startup code that must not abort on that. */
 export async function initOfficeSessions(): Promise<ReturnType<typeof createSessions>> {
   tempBase = await fsp.mkdtemp(path.join(os.tmpdir(), 'youcoded-office-'));
-  sessions = createSessions(tempBase);
+  // drainSession: closing a document waits for its queued save first (see office-sessions.ts).
+  sessions = createSessions(tempBase, { drain: (s) => drainSession(s) });
   return sessions;
 }
 

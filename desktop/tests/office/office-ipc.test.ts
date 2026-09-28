@@ -124,6 +124,37 @@ describe('office IPC channels', () => {
     await expect(call('office:invoke', win1, token, 'get_current_path', {})).rejects.toThrow('refused');
   });
 
+  it('keeps a document open until every place in the window that opened it has closed it', async () => {
+    const file = await aDocx();
+    const tab = (await call('office:open', win1, file)) as { token: string };
+    const panel = (await call('office:open', win1, file)) as { token: string };
+    expect(panel.token).toBe(tab.token);
+    await call('office:close', win1, tab.token);
+    expect(sessions.get(tab.token)).toBeDefined();
+    await expect(call('office:invoke', win1, tab.token, 'get_current_path', {})).resolves.toBe('memo.docx');
+    await call('office:close', win1, panel.token);
+    expect(sessions.get(tab.token)).toBeUndefined();
+  });
+
+  it('closes a document opened twice when its window goes away, whatever the count', async () => {
+    const file = await aDocx();
+    const { token } = (await call('office:open', win1, file)) as { token: string };
+    await call('office:open', win1, file);
+    win1.emit('destroyed');
+    await vi.waitFor(() => expect(sessions.get(token)).toBeUndefined());
+    // A fresh open after that starts from a count of one again.
+    const again = (await call('office:open', win1, file)) as { token: string };
+    await call('office:close', win1, again.token);
+    expect(sessions.get(again.token)).toBeUndefined();
+  });
+
+  it('does not leave a session behind for a window that closed while it was being opened', async () => {
+    const file = await aDocx();
+    const gone = Object.assign(fakeSender(3), { isDestroyed: () => true });
+    await expect(call('office:open', gone, file)).resolves.toMatchObject({ ok: false });
+    await vi.waitFor(() => expect(sessions.byPath(file)).toBeUndefined());
+  });
+
   it('does not let another window close a document it did not open', async () => {
     const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
     await call('office:close', win2, token);

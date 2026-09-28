@@ -63,6 +63,7 @@ export interface OfficeIpcMain {
 interface OfficeSender {
   id: number;
   once(event: 'destroyed', listener: () => void): unknown;
+  isDestroyed?(): boolean;
 }
 
 export interface OfficeIpcDeps {
@@ -101,12 +102,17 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // WHY track windows: a window that closes (or crashes) never sends office:close, and its
   // documents' temp folders would otherwise stay until quit. One listener per window.
   const watched = new Set<number>();
+  // WHY count opens (fix round 1): a window can hold the same file in more than one place (a
+  // tab, and an Edit in a file panel), and each place is handed the same token. Only the
+  // last one's close may tear the session down. Keyed by window, then token.
+  const opens = new Map<number, Map<string, number>>();
   function watch(sender: OfficeSender): void {
     const id = sender.id;
     if (watched.has(id)) return;
     watched.add(id);
     sender.once('destroyed', () => {
       watched.delete(id);
+      opens.delete(id);
       void deps.getSessions()?.closeAllFor(id).catch((e) => log('WARN', 'Office', 'closing a gone window\'s documents failed', { error: String(e) }));
     });
   }
@@ -167,7 +173,17 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     // WHY refuse rather than hand over the token: the token is bound to the window that
     // opened the file, so another window could not use it anyway (invoke re-checks the owner).
     if (session.senderId !== sender.id) return fail(MSG.openElsewhere);
+    // WHY (fix round 1): the window can close while main was opening. Its destroyed event has
+    // then already run (or never will be listened for), so nothing would ever close this
+    // session, and it would keep the file claimed until quit.
+    if (sender.isDestroyed?.()) {
+      void reg.close(session.token).catch(() => {});
+      return fail(MSG.couldNotOpen);
+    }
     watch(sender);
+    const mine = opens.get(sender.id) ?? new Map<string, number>();
+    opens.set(sender.id, mine);
+    mine.set(session.token, (mine.get(session.token) ?? 0) + 1);
     return { ok: true, token: session.token, origin: `${SCHEME}://${session.token}` };
   }
 
@@ -187,7 +203,13 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     const reg = deps.getSessions();
     // WHY silent for someone else's token: closing is only ever a request about the asking
     // window's own documents; anything else changes nothing.
-    if (reg?.get(token)?.senderId === sender.id) await reg.close(token);
+    if (!reg || reg.get(token)?.senderId !== sender.id) return;
+    const mine = opens.get(sender.id);
+    const left = (mine?.get(token) ?? 1) - 1;
+    if (left > 0) { mine!.set(token, left); return; }
+    mine?.delete(token);
+    // reg.close waits (capped) for a save still queued for this document before its temp goes.
+    await reg.close(token);
   }
 
   ipcMain.handle('office:open', (e, filePath) => open(e.sender, filePath));

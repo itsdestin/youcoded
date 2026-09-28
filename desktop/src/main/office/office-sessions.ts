@@ -15,7 +15,13 @@ export interface OfficeSession {
 // token and a distinct temp dir per open document keep two documents' storage
 // and media apart — office-protocol.ts confines /asc/docmedia/... reads to the
 // session's own temp dir, so one document can never name another's folder.
-export function createSessions(tempBase: string) {
+//
+// WHY `drain` (fix round 1, Task 5 review): closing a document must not pull its temp folder
+// out from under a save still queued for it. The registry passes office-commands'
+// drainSession, which waits (capped) for the document's commands before the folder goes.
+// Injected rather than imported so this module stays free of the command runner's imports;
+// callers that never run commands (the protocol and session tests) leave it out.
+export function createSessions(tempBase: string, opts: { drain?: (s: OfficeSession) => Promise<void> } = {}) {
   const sessions = new Map<string, OfficeSession>();
 
   async function open(filePath: string, senderId: number): Promise<OfficeSession> {
@@ -44,7 +50,9 @@ export function createSessions(tempBase: string) {
   async function close(token: string): Promise<void> {
     const session = sessions.get(token);
     if (!session) return;
+    // Out of get() first, so no new command can join the queue while it drains.
     sessions.delete(token);
+    if (opts.drain) await opts.drain(session).catch(() => {});
     await rm(session.temp, { recursive: true, force: true });
   }
 

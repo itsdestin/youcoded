@@ -54,6 +54,30 @@ export function stopOfficeCommands(): void {
   closing = true;
 }
 
+// ── Closing one document (fix round 1, Task 5 review) ──
+// WHY the same rule as quit, per document: closing a tab removes that document's temp folder,
+// and with it the Editor.bin a queued save still has to translate. So a close waits for the
+// document's queue first (capped, like quit), and a save still running past the cap gives up
+// before its rename instead of landing late.
+const closedSessions = new WeakSet<OfficeSession>();
+const isClosing = (s: OfficeSession) => closing || closedSessions.has(s);
+
+/**
+ * Wait (at most `capMs`) until every command already queued for this document has finished,
+ * then mark it closed: anything of it still queued or running is refused or abandoned from
+ * here on. office-sessions.ts calls this after taking the session out of get(), so nothing
+ * new can join the queue meanwhile, and before it removes the temp folder.
+ */
+export async function drainSession(s: OfficeSession, capMs = 5_000): Promise<void> {
+  const q = queues.get(s);
+  if (q) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([q.tail, new Promise<void>((r) => (timer = setTimeout(r, capMs)))]);
+    clearTimeout(timer);
+  }
+  closedSessions.add(s);
+}
+
 // ── One command at a time per document (review P1-2; design §3 "one save in flight") ──
 // WHY a queue: without it, write_editor_bin from a second save could replace Editor.bin while
 // x2t is still reading it for the first — the saved file would be a mix of two versions, or
@@ -84,7 +108,7 @@ function enqueue<T>(s: OfficeSession, run: () => Promise<T>): Promise<T> {
   const q = queueOf(s);
   // WHY re-check closing when the command's turn comes: it may have been queued before quit
   // started and would otherwise run against a temp folder that is being removed.
-  const guarded = () => (closing ? Promise.reject(userError(MSG.closing, true)) : run());
+  const guarded = () => (isClosing(s) ? Promise.reject(userError(MSG.closing, true)) : run());
   // WHY run on both fulfil and reject: one failed command must not wedge the document's queue.
   const p = q.tail.then(guarded, guarded);
   q.tail = p.catch(() => undefined);
@@ -250,13 +274,14 @@ export function createOfficeCommands(deps: {
       await authorize(s);
       // WHY here (fix round 1): quit stopped waiting while this save translated — its temp
       // folder is going away, so the only safe move is to keep the user's file as it was.
-      if (closing) throw userError(MSG.closing, true);
+      // ...and the same when this one document was closed and its close stopped waiting.
+      if (isClosing(s)) throw userError(MSG.closing, true);
       noteOwnWrite(s.path);
       // WHY the abort check (fix round 2): on Windows a busy rename is retried for a moment;
       // if quit gives up on this save meanwhile, it must stop rather than land late.
-      await renameReplacing(tmp, s.path, process.platform, () => closing);
+      await renameReplacing(tmp, s.path, process.platform, () => isClosing(s));
     } catch (e) {
-      if (closing) throw userError(MSG.closing, true);
+      if (isClosing(s)) throw userError(MSG.closing, true);
       throw e;
     } finally {
       // Every path — success (the folder is then empty), failure, or abandoned at quit.
