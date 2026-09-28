@@ -1,477 +1,226 @@
-// Excel (.xlsx) comment READING — T12 of the doc-comments build
-// (docs/active/specs/2026-09-26-doc-comments-build-design.md §4.1-§4.3, §8
-// T12). Reads exceljs legacy cell Notes (`cell.note`) into PersistedComment-
-// shaped cell records, run in the Electron MAIN process for the same reason
-// docx-comments.ts (T10) is: T8's native harness tools and T9's MCP
-// pending-mutation queue must be able to read an Excel comment with no
-// renderer window open on that file at all.
+// Excel (.xlsx) comment reading + writing — T12 (read) and T13 (write) of the
+// doc-comments build (docs/active/specs/2026-09-26-doc-comments-build-
+// design.md §4.1-§4.3, §8). REWRITTEN 2026-09-27 (session `comments-mock-a`)
+// for Destin's threaded-comments-only decision (chat, 2026-09-27: "Excel
+// comments use ONLY modern threaded comments... never old-style notes as the
+// product format") — this supersedes the ENTIRE prior legacy-Notes design
+// (the exceljs-based reader/writer, the "Priya Shah: ..." formatted-
+// transcript note body, the `​✓ Resolved`/`​[[yc:resolved]]` marker hack, the
+// `APP_AUTHOR_PREFIX_RE`/`NON_NAME_HEADINGS` author-guessing heuristic) — not
+// layered under it. See the design doc's own 2026-09-27 changelog entries for
+// the full research citation.
 //
-// exceljs is already a direct dependency (`XlsxView.tsx` already uses it
-// read-only for cell VALUES) — no new dependency for the READ path, unlike
-// T10's jszip promotion. The WRITE path below (rewritten this session — see
-// its own header) additionally uses `linkedom`'s `DOMParser` for surgical
-// OOXML edits, mirroring docx-comments.ts's own T10/T11 choice (already a
-// direct dependency — `src/main/harness/tools/web-fetch.ts` and
-// docx-comments.ts both already import it).
+// exceljs is REMOVED from this module entirely (§4.1): its `cell.note` getter
+// cannot tell a genuine Note apart from a threaded comment's own legacy-
+// compatibility placeholder — it reads the placeholder's text as if it were
+// an ordinary Note, an independently-confirmed defect in the code this
+// rewrite replaces. exceljs remains a direct dependency of the app as a
+// whole (`XlsxView.tsx`'s own read-only cell-VALUE display still uses it),
+// just never imported by THIS module again. Reading/writing here moves
+// entirely to the same hand-rolled JSZip + `linkedom` DOM approach
+// docx-comments.ts already uses — surgical edits touching only the parts a
+// mutation needs, never a whole-workbook rebuild (the same "never re-
+// serialize an untouched part" discipline that already protects a real
+// LibreOffice-authored workbook's docProps/custom.xml, external links, and
+// everything else this module never opens).
+//
+// Old-style Notes already in a file are never read, created, or edited by
+// this module (§4.1) — a genuine Note round-trips byte-for-byte, untouched,
+// no matter how many threaded-comment writes happen around it, and is never
+// surfaced in the comments pane (the product has no write path for one any
+// more, and showing it risks the exact garbled-placeholder confusion this
+// rewrite retires).
+//
+// Exact OOXML shapes below are researched from Microsoft's [MS-XLSX] open
+// spec plus two real, redistributable sample files captured under
+// `shared-fixtures/doc-comments/xlsx-threaded-reference/` (`manifest.json`/
+// `README.md` there hold the same facts machine-checkably) — see design §4.2
+// for the full citation and the gaps that research could not close (Strict
+// OOXML; same-cell Note+thread coexistence).
+import { randomUUID } from 'crypto';
 import JSZip from 'jszip';
-import ExcelJS from 'exceljs';
 import { DOMParser } from 'linkedom';
 import type { CellSelector, CommentAuthor, CommentReply, CommentSelector, PersistedComment } from '../../shared/doc-comments-types';
-import { checkTotalWithinCeiling, decompressBounded } from './zip-size-guard';
+import { checkNamedEntriesWithinCeiling, decompressBounded } from './zip-size-guard';
 import { writeFileMutation } from './write-pipeline';
 
-// Not exported (same convention as docx-comments.ts's DocxReadError, and
-// doc-comments-store.ts's DocCommentsError): nothing outside this module
-// needs the error union by name — knip flags an exported type nothing ever
-// imports as dead code. Callers only need `XlsxReadResult`, which IS exported.
+// Not exported (same convention as docx-comments.ts's DocxReadError): nothing
+// outside this module needs the error union by name — knip flags an exported
+// type nothing ever imports as dead code. Callers only need `XlsxReadResult`.
 //
-// 'archive-too-large' (implementation-review F2 — major): refused after a
-// JSZip pre-scan of the raw archive, BEFORE handing the same bytes to
-// exceljs's own loader — exceljs has no hook to check declared entry sizes
-// itself before it starts unzipping (see zip-size-guard.ts).
-type XlsxReadError = 'invalid-xlsx' | 'archive-too-large';
+// 'archive-too-large': a NAMED part (never the whole archive — §4.3's own
+//   "the guard narrows to match" finding, since exceljs's black-box
+//   decompression is gone from this module entirely) declares (or, per
+//   zip-size-guard.ts's own decompression-time backstop, actually contains)
+//   an implausible uncompressed size.
+// 'too-many-comments' (design review 1, F3): a record-count ceiling,
+//   independent of the byte ceiling above — a crafted (or just very large)
+//   threadedComment{N}.xml of many thousands of minimal elements could stay
+//   comfortably under the byte ceiling while still handing the renderer many
+//   thousands of PersistedComment records in one `list()` response.
+type XlsxReadError = 'invalid-xlsx' | 'archive-too-large' | 'too-many-comments';
 export type XlsxReadResult = { ok: true; comments: PersistedComment[] } | { ok: false; error: XlsxReadError };
 
-// §4.1's fixed, non-natural-language resolve marker, appended as the note
-// body's own trailing LINE (never just a trailing substring — see
-// `stripResolvedMarker` below). Inert in ordinary prose so a legitimate reply
-// that happens to end with resolve-like words is never misread as this app's
-// own resolve marker.
-//
-// Implementation-review F4: the original `​[[yc:resolved]]` token (a leading
-// zero-width space plus a bracketed machine token) works as a signal but
-// reads as literal garbage code to anyone opening the file in real Excel or
-// Google Sheets — exactly the surface this app promises stays human-legible
-// (R8/R9). The new marker is a leading zero-width space (still what makes it
-// inert/never something a human types) followed by plain, readable text
-// ("✓ Resolved") instead of a bracketed token. `RESOLVED_MARKER` is the only
-// marker this app WRITES going forward (a writer-facing constant — T13, the
-// xlsx write path, imports this same export rather than re-deriving it).
-// `LEGACY_RESOLVED_MARKER` is never written again but is still READ, so a
-// file an earlier build already marked resolved doesn't silently flip back
-// to unresolved just because the token format changed.
-//
-// Not exported YET: T13 (the xlsx write path) doesn't exist in this codebase
-// yet, so there is no real consumer to import this — `knip`'s unused-export
-// ratchet (knip-baseline.json: "never raise it, delete the unused export
-// instead") correctly flags an `export` nothing calls as dead code. T13
-// should import this constant from here rather than re-deriving the string;
-// exporting it is a one-line change for whoever builds T13, once there's an
-// actual caller.
-const RESOLVED_MARKER = '​✓ Resolved';
-const LEGACY_RESOLVED_MARKER = '​[[yc:resolved]]';
+// Task-time starting point, not a benchmarked constant (matching zip-size-
+// guard.ts's own MAX_DECLARED_UNCOMPRESSED_BYTES precedent) — real workbooks
+// this feature will see (the `elden` reference fixture's own ~150 threads is
+// the largest real sample this research found) sit orders of magnitude below
+// this; lower it if a real-world report calls for it.
+const MAX_COMMENT_RECORDS = 20000;
 
-/** Turn an exceljs `cell.note` (a plain string OR a rich-text object with
- *  `texts`) into plain text — the same normalization §4.1 assumes when it
- *  describes the note body as a formatted transcript. */
-function noteToPlainText(note: ExcelJS.Comment | string): string {
-  if (typeof note === 'string') return note;
-  const texts = note.texts;
-  if (!Array.isArray(texts)) return '';
-  return texts.map((t) => t.text ?? '').join('');
+const SML_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+const REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
+const XR_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2014/revision';
+const THREADED_COMMENTS_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments';
+
+const COMMENTS_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml';
+// §4.2: NO `+xml` suffix, unlike every other XML part's content type in the
+// same file — an easy mismatch to introduce by analogy with the Overrides
+// around it, so this is a named constant, never re-typed at each call site.
+const VML_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.vmlDrawing';
+const THREADED_COMMENT_CONTENT_TYPE = 'application/vnd.ms-excel.threadedcomments+xml';
+const PERSON_CONTENT_TYPE = 'application/vnd.ms-excel.person+xml';
+
+const COMMENTS_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments';
+const VML_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing';
+const THREADED_COMMENT_REL_TYPE = 'http://schemas.microsoft.com/office/2017/10/relationships/threadedComment';
+const PERSON_REL_TYPE = 'http://schemas.microsoft.com/office/2017/10/relationships/person';
+
+// The legacy compatibility placeholder's own text — §4.2, confirmed byte-for-
+// byte (header sentence + URL) across three independent sources: both real
+// reference fixtures, and a third real-Excel-365 sample quoted in a public
+// bug report (github.com/PHPOffice/PhpSpreadsheet issue #2184). This app's
+// writer matches the real-EXCEL layout verbatim (blank line after the
+// header, blank line before "Comment:", 4-space indents, one "Reply:" block
+// per reply) — the more common of the two observed shapes (Google Sheets'
+// own export uses a different, tab-indented layout) and the one
+// independently corroborated a third time.
+const PLACEHOLDER_HEADER =
+  '[Threaded comment]\n\n' +
+  'Your version of Excel allows you to read this threaded comment; however, any edits to it will get removed if the file is opened in a newer version of Excel. Learn more: https://go.microsoft.com/fwlink/?linkid=870924\n\n' +
+  'Comment:\n    ';
+
+/** §4.2: builds the WHOLE placeholder body fresh from the thread's current
+ *  full transcript (root text + every reply, in `dT`/creation order) rather
+ *  than incrementally appending — simpler and just as correct, since a
+ *  reply/move needs to know the full history to rebuild this anyway, and the
+ *  placeholder is write-only output this app never re-parses (§4.1: a
+ *  `tc={GUID}`-linked legacy `<comment>` is always skipped by the reader in
+ *  favor of the real thread). A multi-line reply's OWN embedded newlines are
+ *  never re-indented — only the block's own leading `Reply:\n    ` marks
+ *  where the block starts, matching every real sample inspected. */
+function buildPlaceholderBody(commentText: string, replyTexts: readonly string[]): string {
+  let body = PLACEHOLDER_HEADER + commentText;
+  for (const reply of replyTexts) body += `\nReply:\n    ${reply}`;
+  return body;
 }
 
-// Implementation-review F5: this app's OWN write convention (§4.1 — "the
-// author's name goes as the first line of the note body") only ever writes a
-// REAL DISPLAY NAME there — "Priya Shah", "Marcus Lee", "You" — never a
-// sentence. The precise shape of a name this app writes: 1 to 4
-// space-separated words, EVERY word starting with a capital letter (letters,
-// apostrophe, or hyphen after that). A foreign note's prose almost never
-// matches this exactly, because natural sentences have lowercase words after
-// the first ("Check this number: 42", "Please review before Friday: thanks")
-// — those fail the all-words-capitalized test and so are never mistaken for
-// this app's own "Name:" prefix. This is a precise, checkable rule, not a
-// fuzzy heuristic: it either matches the write convention exactly or it
-// doesn't.
-const APP_AUTHOR_PREFIX_RE = /^([A-Z][A-Za-z'’-]*(?: [A-Z][A-Za-z'’-]*){0,3}):\s([\s\S]*)$/;
+/** §4.2's own "the ONLY link between a legacy placeholder and its real
+ *  thread" rule: the legacy `<comment>`'s own `authorId` resolves (through
+ *  this file's own `<authors>` list) to a `tc={GUID}` string, `{GUID}`
+ *  byte-identical (this function compares case-insensitively — §4.2's own
+ *  GUID-case finding) to the corresponding `threadedComment` ROOT's `id`.
+ *  Anything else is a genuine Note (§4.1: never shown, never touched). */
+const TC_AUTHOR_RE = /^tc=\{[0-9A-Fa-f-]{36}\}$/;
 
-// Review F10 (implementation review, this session): the shape check above
-// (1-4 Capitalized words before a colon) also matches a colleague's own
-// ORDINARY heading that happens to be Title Case — "Action Items: buy milk",
-// "Next Steps: ...", "Follow Up: ..." — misattributing that heading as if it
-// were a person's NAME. A "known author list" cross-reference (the task's own
-// suggested fix) was tried and rejected: xlsx's own OOXML `<authors>` list is
-// no help (§4.1/the T18 spike: this app always writes the literal placeholder
-// "Author" there, and real Excel/LibreOffice write their OWN placeholder —
-// "Unknown Author" for LibreOffice, confirmed against the kitchen-sink
-// fixture — never a real name, so it carries no corroborating signal for
-// ANY file any tool wrote), and cross-referencing names against OTHER turns
-// in the SAME workbook breaks a real, single-occurrence colleague name this
-// reader already gets right today (q3-sales-by-rep.xlsx: "Marcus Lee"
-// appears exactly ONCE, as By rep!B5's only reply, and the existing pinning
-// test correctly expects it attributed to him, not "Unknown" — requiring
-// recurrence would misattribute every genuine one-off commenter). A denylist
-// of common Title-Case task-note headings is the narrower, honest fix that
-// closes the specific gap named without weakening recognition of a real name
-// that only ever appears once. This is a documented, INCOMPLETE heuristic
-// (a heading not on this list can still slip through), not a general name
-// detector — once real accounts exist (§1.2) a roster to check names against
-// would be a stronger fix; filed as a documented limitation, not a blocker.
-const NON_NAME_HEADINGS = new Set([
-  'Action Item',
-  'Action Items',
-  'Next Steps',
-  'Next Step',
-  'To Do',
-  'Follow Up',
-  'Follow-Up',
-  'Key Takeaways',
-  'Open Questions',
-  'Summary',
-  'Notes',
-]);
+function isTcAuthorText(text: string): boolean {
+  return TC_AUTHOR_RE.test(text);
+}
 
-/**
- * Splits a note body into "turns" — §4.1's transcript format is one turn per
- * blank-line-separated paragraph, each shaped `"Author: text"` (the ONLY
- * place §4.1 says the author's name goes is "as the first line of the note
- * body" — for a single, no-reply comment that first line IS the whole body,
- * `"Name: text"`).
- *
- * Implementation-review F5 (major): the previous version treated ANY
- * `"<=60 chars>: rest"` shape as an author split, which misreads a foreign
- * note like "Check this number: 42" as authored by "Check this number" —
- * and, worse, a colon-free foreign note fell through to `{author: p, text:
- * ''}`, silently DROPPING the entire comment body (§1.1: "nothing silently
- * lost" — a real bug, not just a misattribution). Fixed: a leading `"Name:
- * "` is only read as an author when it matches `APP_AUTHOR_PREFIX_RE` above
- * (this app's own precise write convention) AND is not a known non-name
- * heading (F10, above); anything else — no colon at all, a colon whose
- * prefix isn't shaped like a name this app would have written, or a prefix
- * that IS shaped like a name but is a known non-name heading — keeps the
- * WHOLE paragraph as the comment's TEXT, with a neutral, nameless author
- * (`toCommentAuthor('')` → `person:Unknown`; exceljs exposes no per-note
- * author field to fall back to instead — §4.1, review 1 F15, confirmed
- * against the installed version's `Comment` interface).
- */
-function splitTurns(body: string): Array<{ author: string; text: string }> {
-  const paragraphs = body.split(/\n{2,}/);
-  return paragraphs
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0)
-    .map((p) => {
-      const match = APP_AUTHOR_PREFIX_RE.exec(p);
-      if (match && !NON_NAME_HEADINGS.has(match[1])) return { author: match[1], text: match[2] };
-      // Neutral author, WHOLE paragraph kept as text — never dropped.
-      return { author: '', text: p };
-    });
+/** §4.2: strips braces and lowercases, so a Windows/Mac-Excel-written
+ *  UPPERCASE GUID and a Google-Sheets-written lowercase one compare equal —
+ *  "reads case-insensitively (matches either vendor)". This app's OWN writer
+ *  always MINTS uppercase (matches the spec and the majority real-world
+ *  writer, §4.2), but every COMPARISON in this module goes through this
+ *  function so a foreign file's own case convention never matters. */
+function normalizeGuid(raw: string): string {
+  return raw.replace(/[{}]/g, '').toLowerCase();
+}
+
+/** A brand-new root/reply/person GUID, in this app's own written shape:
+ *  braces included, uppercase hex (§4.2). */
+function mintGuid(): string {
+  return `{${randomUUID().toUpperCase()}}`;
+}
+
+/** §4.2's own confirmed real-world format: `YYYY-MM-DDTHH:MM:SS.ff` — exactly
+ *  two fractional-second digits, no timezone offset, never a trailing `Z`.
+ *  Written in LOCAL time (matching "locally-naive" — no real writer sampled
+ *  emits a UTC-suffixed value even though the XSD's plain `xsd:dateTime`
+ *  would permit one). */
+function formatThreadedDate(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const y = d.getFullYear();
+  const mo = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const h = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  const s = pad(d.getSeconds());
+  const cs = pad(Math.floor(d.getMilliseconds() / 10));
+  return `${y}-${mo}-${day}T${h}:${mi}:${s}.${cs}`;
+}
+
+/** `Date.parse` already treats an offset-less ISO-shaped string as LOCAL time
+ *  per the ES2016+ Date Time String Format grammar (confirmed empirically
+ *  against real `dT` values from both reference fixtures before writing
+ *  this) — no bespoke parsing needed, same `Date.parse`-with-`NaN`-fallback
+ *  shape docx-comments.ts's own `parseDate` already uses. */
+function parseThreadedDate(dT: string): number {
+  const t = Date.parse(dT);
+  return Number.isNaN(t) ? Date.now() : t;
+}
+
+/** linkedom's `Element.getAttribute()` does NOT decode XML entities for
+ *  `text/xml` parsing — confirmed empirically before writing this fix
+ *  (`.textContent` decodes correctly; `.getAttribute()` returns `&amp;`
+ *  literally). A real workbook can legitimately have an `&` in a sheet name
+ *  (the `elden` reference fixture's own "Sorceries & Incantations List" is
+ *  exactly this case) or a person's `displayName` — every attribute value
+ *  this module treats as free-text DATA (never an id/ref/GUID, which never
+ *  contains XML-special characters in practice) is decoded through this
+ *  function before use, both for comparison (matching a caller's own
+ *  `CellSelector.sheet`) and for the value this module hands back to a
+ *  caller. `setAttribute` + serialization already encodes correctly on the
+ *  way OUT (confirmed empirically), so this fix is read-side only. */
+function decodeXmlEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);/g, (whole, ent: string) => {
+    switch (ent) {
+      case 'amp':
+        return '&';
+      case 'lt':
+        return '<';
+      case 'gt':
+        return '>';
+      case 'quot':
+        return '"';
+      case 'apos':
+        return "'";
+      default: {
+        const code = ent[1] === 'x' || ent[1] === 'X' ? Number.parseInt(ent.slice(2), 16) : Number.parseInt(ent.slice(1), 10);
+        return Number.isNaN(code) ? whole : String.fromCodePoint(code);
+      }
+    }
+  });
 }
 
 function toCommentAuthor(name: string): CommentAuthor {
   return `person:${name || 'Unknown'}`;
 }
 
-/**
- * F4: the marker is recognized only when it is the note body's exact LAST
- * LINE (never a bare trailing-substring match) — a real reply that happens
- * to literally end with "✓ Resolved" but has NO leading zero-width space
- * (nothing this app wrote, since it never types a ZWSP) is not the marker,
- * even though a plain `.endsWith()` on the visible text would wrongly match
- * it. Both the current and legacy marker are recognized (never written
- * again, but a file an earlier build already resolved must not silently
- * flip back to unresolved just because the token format changed).
- */
-function stripResolvedMarker(rawBody: string): { resolved: boolean; body: string } {
-  const lines = rawBody.split('\n');
-  const last = lines[lines.length - 1];
-  if (last === RESOLVED_MARKER || last === LEGACY_RESOLVED_MARKER) {
-    return { resolved: true, body: lines.slice(0, -1).join('\n') };
-  }
-  return { resolved: false, body: rawBody };
+/** §3.4/§4.1's own rule, mirrored from docx-comments.ts's
+ *  `commentAuthorToDisplayName` (duplicated here rather than imported — the
+ *  two write modules are deliberately independent, same reasoning as
+ *  write-pipeline.ts's own header): a reply/add made from this app must
+ *  round-trip into a real `personId`->`displayName` mapping naming "the
+ *  account's display name or 'You'", never overwriting a colleague's own
+ *  `<person>` entry. No accounts exist yet (§1.2), so 'user' is literally
+ *  "You"; 'assistant' is a plain, honest label. */
+function commentAuthorToDisplayName(author: CommentAuthor): string {
+  if (author === 'user') return 'You';
+  if (author === 'assistant') return 'Assistant';
+  if (author.startsWith('person:')) return author.slice('person:'.length) || 'Unknown';
+  return 'Unknown';
 }
-
-/**
- * Reads every legacy cell Note in a workbook's raw bytes into
- * PersistedComment-shaped records. `path` is stamped onto each record the
- * same way docx-comments.ts's `readDocxComments` does (§1.1: these are never
- * stored in a JSON sidecar, but the field still identifies the source file).
- *
- * Every worksheet cell is walked with `includeEmpty: true` (implementation-
- * review F1 — major): a Note is a property of the cell object itself,
- * independent of whether that cell also carries a value, so a bordered-but-
- * value-less cell (a styled placeholder a user annotated before filling it
- * in) still has a real `.note` — but exceljs's own `eachRow`/`eachCell`
- * SKIP any cell whose type is `Null` (no value) when `includeEmpty` is left
- * at its default `false` (confirmed by reading `exceljs/lib/doc/row.js`'s
- * `eachCell`/`hasValues` before writing this fix), silently dropping exactly
- * that comment. `includeEmpty: true` visits every touched row/cell instead;
- * the existing `if (!note) return;` immediately below already handles the
- * (much more common) case of a plain empty cell with no note at all, so
- * this costs nothing extra for ordinary workbooks.
- */
-export async function readXlsxComments(bytes: Uint8Array | Buffer, path: string): Promise<XlsxReadResult> {
-  // F2 (major): pre-scan the raw archive with JSZip BEFORE handing the same
-  // bytes to exceljs's own loader — exceljs has no hook of its own to check
-  // a decompression-bomb-shaped entry's declared size ahead of unzipping it
-  // (zip-size-guard.ts explains why this check is possible cheaply, and
-  // docx-comments.ts's own §3.2 guard does the equivalent check for Word).
-  let zip: JSZip;
-  try {
-    zip = await JSZip.loadAsync(bytes);
-  } catch {
-    return { ok: false, error: 'invalid-xlsx' };
-  }
-  const sizeCheck = checkTotalWithinCeiling(zip);
-  if (!sizeCheck.ok) return { ok: false, error: sizeCheck.error };
-
-  // F3 (implementation review): the declared-size pre-scan above only ever
-  // reads central-directory METADATA (zip-size-guard.ts's own header) — a
-  // crafted entry can simply lie about it. Unlike docx-comments.ts's own read
-  // path, this module never reads a NAMED part itself — the actual per-entry
-  // decompression happens entirely inside exceljs's own `.xlsx.load()`, a
-  // black box with no hook of its own to bound it. So every entry is inflated
-  // HERE, through JSZip's own streaming API (`decompressBounded`), with a
-  // byte-counting cap — the decompressed text itself is discarded immediately
-  // (only whether it stayed under the ceiling matters for this check) —
-  // BEFORE the same bytes are ever handed to exceljs's loader.
-  const entries: JSZip.JSZipObject[] = [];
-  zip.forEach((_relativePath, file) => {
-    if (!file.dir) entries.push(file);
-  });
-  for (const entry of entries) {
-    const bounded = await decompressBounded(entry);
-    if (!bounded.ok) return { ok: false, error: bounded.error };
-  }
-
-  const workbook = new ExcelJS.Workbook();
-  try {
-    // exceljs's own .d.ts types `.load()` as taking a plain (non-generic)
-    // `Buffer`, which this repo's newer @types/node's generic `Buffer<T>`
-    // doesn't structurally match even for a real Buffer instance — the SAME
-    // mismatch XlsxView.tsx already works around with `as any` for its own
-    // `.load()` call (`bytes.buffer as any`). `Buffer.from(bytes)` always
-    // copies into a real Buffer first (never `bytes.buffer`, which would
-    // alias a Uint8Array's backing ArrayBuffer and could hand exceljs a
-    // slice-relative view for a sub-array).
-    await workbook.xlsx.load(Buffer.from(bytes) as any);
-  } catch {
-    return { ok: false, error: 'invalid-xlsx' };
-  }
-
-  // §4.2: `sheet` is required on the selector only when the workbook has
-  // more than one tab — matches the mock's own `sourceLabel` convention
-  // (doc-comments-store.ts:249,281,298: "By rep · B4" vs plain "C4").
-  const singleSheet = workbook.worksheets.length <= 1;
-
-  const comments: PersistedComment[] = [];
-  for (const worksheet of workbook.worksheets) {
-    worksheet.eachRow({ includeEmpty: true }, (row) => {
-      row.eachCell({ includeEmpty: true }, (cell) => {
-        const note = cell.note;
-        if (!note) return;
-        const rawBody = noteToPlainText(note);
-        const { resolved, body } = stripResolvedMarker(rawBody);
-        const turns = splitTurns(body);
-        if (turns.length === 0) return;
-        const [first, ...rest] = turns;
-
-        const cellSelector: CellSelector = {
-          type: 'CellSelector',
-          cell: cell.address,
-          ...(singleSheet ? {} : { sheet: worksheet.name }),
-        };
-        const selector: CommentSelector = { kind: 'cell', selector: cellSelector };
-
-        const replies: CommentReply[] = rest.map((turn, i) => ({
-          id: `x-${worksheet.id}-${cell.address}-r${i + 1}`,
-          author: toCommentAuthor(turn.author),
-          text: turn.text,
-          createdAt: Date.now(),
-        }));
-
-        comments.push({
-          id: `x-${worksheet.id}-${cell.address}`,
-          path,
-          selector,
-          text: first.text,
-          author: toCommentAuthor(first.author),
-          // exceljs's legacy Note carries no timestamp of its own — never
-          // invent one; the read time is the only honest value available.
-          createdAt: Date.now(),
-          replies,
-          resolved,
-          // Same reasoning as docx-comments.ts: no separate resolve/reopen
-          // audit trail exists in the note itself, only the current marker
-          // bit — `history` starts empty on a freshly-read native comment.
-          history: [],
-        });
-      });
-    });
-  }
-
-  return { ok: true, comments };
-}
-
-// =============================================================================
-// Excel (.xlsx) comment WRITING — T13 of the doc-comments build, REWRITTEN
-// this session (docs/active/specs/2026-09-26-doc-comments-build-design.md
-// §4.3, §4.1, §8 T13; original commit a4275bf23; review that prompted this
-// rewrite: a real-LibreOffice-authored workbook round-tripped through the
-// exceljs write path came back with docProps/custom.xml GONE,
-// xl/externalLinks/* GONE (breaking formula references), defined names'
-// `$`-absoluteness ALTERED, ignoredErrors/customSheetViews GONE, and a
-// resized comment box reset to the default size).
-//
-// WHY exceljs's own `workbook.xlsx.writeBuffer()` can never fix this: it
-// REBUILDS every OOXML part from its own in-memory model — it never copies
-// through a part it didn't parse into that model, and its model has no slot
-// for custom properties, external links, or several other whole part types
-// at all. A feature-denylist approach (the OLD code's `UNSUPPORTED_FEATURES`
-// scan, refusing on charts/pivots/slicers/etc.) can never be COMPLETE — it
-// can only refuse on parts someone thought to name, while docProps/custom.xml
-// and xl/externalLinks/* were both lost SILENTLY, with no refusal at all,
-// because nobody had named them. The only fix that is complete BY
-// CONSTRUCTION is to stop rebuilding the workbook at all.
-//
-// THE FIX: exactly the shape docx-comments.ts's own write path (§3.3) already
-// uses — surgical JSZip edits. A legacy Note touches, at most, five parts:
-// the target worksheet's own comments part (xl/commentsN.xml), its VML
-// drawing (xl/drawings/vmlDrawingN.vml), that worksheet's own rels file, the
-// worksheet's `<legacyDrawing r:id>` element, and `[Content_Types].xml` —
-// every OTHER part in the archive (styles, shared strings, other worksheets,
-// docProps/custom.xml, xl/externalLinks/*, defined names, images, everything)
-// is NEVER PARSED, NEVER TOUCHED, and comes back through JSZip's own
-// unmodified-entry passthrough exactly as it went in. Where a target
-// worksheet already has comments/VML from a REAL Excel/LibreOffice author,
-// this edits them IN PLACE — adding or replacing only the target cell's
-// `<comment>` and `<v:shape>`, never re-serializing (and so never resizing or
-// repositioning) any OTHER shape already in that file.
-//
-// Exact byte shapes for a BRAND-NEW comments/VML pair (when a worksheet has
-// no notes yet) follow ../docs/active/investigations/2026-09-27-xlsx-note-
-// format-spike.md and shared-fixtures/doc-comments/xlsx-note-reference/
-// verbatim — the same reference T19 (Android's own from-scratch Kotlin
-// writer, not built by this task) targets, so this rewrite does not move that
-// target: Android's future writer and desktop's writer now both need to
-// produce (and, for existing files, edit) the identical shape.
-//
-// Every mutation still goes through `write-pipeline.ts`'s `writeFileMutation`:
-// backup-before-write, atomic tmp-then-rename replace, and verify-after-write
-// with AUTOMATIC ROLLBACK on failure — unchanged from the original T13.
-// =============================================================================
-
-// -----------------------------------------------------------------------
-// Feature refusal (write path only). The OLD denylist named nine feature
-// classes exceljs's REBUILD would silently drop (charts, pivots, slicers,
-// timelines, VBA, threaded comments, rich data types, embedded objects, form
-// controls). A surgical writer never rebuilds anything it doesn't touch, so
-// eight of those nine are no longer at risk here — a workbook carrying a
-// chart, a pivot table, a macro, or an embedded OLE object round-trips that
-// content byte-for-byte the same way it round-trips styles.xml, because this
-// writer never opens xl/charts/1.xml (etc.) at all, let alone rebuilds it.
-// Removing those eight refusals is not "loosening a safety check" — it is
-// recognizing that the SPECIFIC failure mode they existed to prevent (silent
-// rebuild-loss) cannot occur here.
-//
-// ONE refusal remains, for a genuinely different reason: modern THREADED
-// comments (Excel 2019+, `xl/threadedComments/` + `xl/persons.xml`) live in
-// parts separate from the legacy Notes this module reads/writes, but a
-// threaded comment ALSO leaves a legacy-shaped compatibility placeholder
-// behind in the very same `xl/commentsN.xml` this writer edits ("[Threaded
-// comment]... your version of Excel allows you to read this threaded
-// comment; however, any edits to it will get removed if the file is opened
-// in a newer version of Excel."). Editing that placeholder in place — which
-// this module would otherwise do exactly like any other legacy note — would
-// desynchronize it from the real threaded thread it fronts for, producing a
-// file where Excel's own UI shows one thing and this app's reply/resolve
-// history reflects another. That is exactly the "comments/VML parts are
-// ambiguous" case the task brief calls out to keep refusing. Scope: the
-// refusal is WORKBOOK-WIDE (matching the old code's own granularity) rather
-// than per-cell, since a per-cell placeholder detector would be one more
-// heuristic that could itself be wrong in either direction.
-// -----------------------------------------------------------------------
-
-type FeatureCheckResult = { ok: true } | { ok: false; error: 'unsupported-workbook-features'; features: string[] };
-
-function checkNoUnsupportedFeatures(zip: JSZip): FeatureCheckResult {
-  let hasThreadedComments = false;
-  zip.forEach((relativePath) => {
-    const name = relativePath.startsWith('/') ? relativePath.slice(1) : relativePath;
-    if (name.startsWith('xl/threadedComments/') || name === 'xl/persons.xml') hasThreadedComments = true;
-  });
-  if (!hasThreadedComments) return { ok: true };
-  return { ok: false, error: 'unsupported-workbook-features', features: ['modern threaded comments'] };
-}
-
-// Not exported: same knip convention as `XlsxReadError` above — callers only
-// need the exported `XlsxWriteResult` shape.
-//
-// 'comment-not-found': a reply/resolve/reopen/move `id` that isn't (or is no
-//   longer) a real cell note in this workbook.
-// 'invalid-selector': add's `selector` (or move's `newSelector`) isn't a
-//   `kind: 'cell'` selector, names a malformed cell reference, or omits
-//   `sheet` on a workbook with more than one tab (§4.2: required only then) —
-//   a caller bug (dispatch should never construct one of these), refused
-//   honestly rather than silently guessed at.
-// 'sheet-not-found': a named `sheet` doesn't exist in the workbook (or names
-//   a chartsheet, which never carries cell notes).
-// 'cell-already-has-comment': `add` targeted a cell that already carries a
-//   note — this app's own comment thread lives in ONE note body per cell, so
-//   a second `add` at the same address would have to either silently merge
-//   into or clobber the existing thread; refused instead (R6).
-// 'destination-cell-occupied': `move`'s `newSelector` names a DIFFERENT cell
-//   that already has its OWN note — writing over it would silently destroy
-//   that other comment (R6), so this refuses rather than clobbering.
-// 'ambiguous-comment-wiring' (NEW this rewrite): the target worksheet's own
-//   `<legacyDrawing>` element / comments relationship / vmlDrawing
-//   relationship exist in some PARTIAL or inconsistent combination (e.g. a
-//   vmlDrawing relationship with no matching comments relationship, or a
-//   `<legacyDrawing r:id>` that doesn't match the vmlDrawing relationship's
-//   own id) — a shape no real Excel/LibreOffice writer produces for an
-//   ordinary legacy note, so editing it surgically would risk guessing at
-//   wiring this module cannot safely reconstruct. Refused honestly (R6)
-//   rather than risked; a workbook a user actually opens should essentially
-//   never hit this.
-//
-// 'cell-has-no-value' — KEPT this rewrite, but for a DIFFERENT, verified
-// reason than the old exceljs-based writer's (which refused because
-// `workbook.xlsx.writeBuffer()` omitted the `<c r="...">` element entirely
-// for a value-less cell it never loaded). A legacy Note's OOXML wiring
-// itself has no such dependency — this surgical writer CAN insert a bare
-// `<c r="...">` into sheetData at the right sorted position with no problem.
-// The blocker is downstream, in exceljs's OWN reader (kept unchanged, per
-// this rewrite's scope, for both READING and this writer's own verify-by-
-// reread step): confirmed by reading the installed exceljs@4.4.0's
-// `cell-xform.js` `parseClose('c')` — a `<c>` with NO value AND NO `s`
-// (style) attribute is classified `Enums.ValueType.Merge` (exceljs's own
-// heuristic for "this is a merged-range placeholder cell", not anything the
-// OOXML spec itself distinguishes), and `row.js`'s `set model()` explicitly
-// SKIPS any cell of type `Merge` — it never even enters the row's own
-// `_cells` array, so `eachCell({includeEmpty:true})` never visits it and its
-// comment (correctly present in `commentsN.xml`) never gets reattached.
-// Confirmed empirically while building this rewrite: an add on a bare,
-// never-touched cell produces valid OOXML a real Excel/LibreOffice show
-// correctly, but this app's OWN reader reports it as if the comment weren't
-// there at all — an honest 'verify-failed'-and-rollback, not data loss, but
-// not a real fix either. Giving the new `<c>` a non-zero `s` (style) index
-// avoids the Merge misclassification, but the only style index guaranteed
-// safe to reuse without silently changing the cell's visible formatting
-// (font/border/fill) would be a freshly-cloned duplicate of the workbook's
-// own default style, appended to `xl/styles.xml` — a real, separate part
-// this rewrite's own "touch only the parts a note needs" scope doesn't take
-// on. Refused honestly (R6) rather than either an invisible comment or
-// borrowed formatting; a cell that already has ANY `<c>` element (a real
-// value, OR just a style like the kitchen-sink/q3 fixtures' own B18/E1
-// precedent) is unaffected — this refusal never revisits an already-
-// commentable cell, only a genuinely untouched one.
-type XlsxWriteError =
-  | XlsxReadError
-  | 'comment-not-found'
-  | 'invalid-selector'
-  | 'sheet-not-found'
-  | 'cell-already-has-comment'
-  | 'destination-cell-occupied'
-  | 'cell-has-no-value'
-  | 'ambiguous-comment-wiring'
-  | 'read-failed'
-  | 'backup-failed'
-  | 'write-failed'
-  | 'verify-failed';
-
-export type XlsxWriteResult<Extra extends Record<string, unknown> = {}> =
-  | ({ ok: true } & Extra)
-  | { ok: false; error: XlsxWriteError }
-  | { ok: false; error: 'unsupported-workbook-features'; features: string[] };
 
 // A1-style reference, 1-3 letters then 1-7 digits — generous enough for any
 // real worksheet (Excel's own max column is XFD, max row 1,048,576) while
@@ -497,47 +246,31 @@ function parseCellRef(addr: string): { col: number; row: number } {
   return { col: colLettersToNumber(m[1]), row: Number.parseInt(m[2], 10) };
 }
 
-/** True when `cellAddr` has NO `<c>` element at all in the worksheet's own
- *  `<sheetData>` — the exact shape `'cell-has-no-value'` (above) refuses on.
- *  A cell that already has a `<c>` element — a real value, OR just a style
- *  with none, matching the fixtures' own B18/E1 precedent — is fine to
- *  comment on; only a cell with ZERO sheetData presence trips this, since
- *  that's the shape exceljs's own reader (see the error union's own doc
- *  comment above) cannot reliably reconcile a comment onto. */
-function cellExistsInSheetData(worksheetDoc: Document, cellAddr: string): boolean {
-  const sheetData = elementsByTag(worksheetDoc, 'sheetData')[0];
-  if (!sheetData) return false;
-  for (const row of elementsByTag(sheetData, 'row')) {
-    if (elementsByTag(row, 'c').some((c) => c.getAttribute('r') === cellAddr)) return true;
-  }
-  return false;
+// -----------------------------------------------------------------------
+// The app-level thread id — §4.2's corrected, GUID-embedding scheme (design
+// review 1, F1; parse regex pre-written by design review round 2, F2).
+// -----------------------------------------------------------------------
+
+/** Pre-written regex (design review round 2, F2) — parse from the LEFT,
+ *  splitting on exactly the first TWO hyphens; the remainder (group 3),
+ *  regardless of how many hyphens it itself contains, is the GUID verbatim,
+ *  NEVER itself split further. A naive `id.split('-')` would destructure only
+ *  the GUID's own first hyphen-delimited segment, silently truncating it.
+ *  `shared-fixtures/doc-comments/id-parse-test-vectors.json` is the shared
+ *  contract both this module and a future Kotlin port (T18/T19) read
+ *  directly in their own pinning tests. */
+const XLSX_THREAD_ID_RE = /^xt-(\d+)-([^-]+)-(.+)$/;
+
+function parseXlsxThreadId(id: string): { sheetId: number; cell: string; guid: string } | null {
+  const m = XLSX_THREAD_ID_RE.exec(id);
+  if (!m) return null;
+  const sheetId = Number.parseInt(m[1], 10);
+  if (Number.isNaN(sheetId) || !isValidCellAddress(m[2])) return null;
+  return { sheetId, cell: m[2], guid: m[3] };
 }
 
-// The `{ok:false, ...}` half of `XlsxWriteResult`/`XlsxMutateResult`'s union,
-// pulled out on its own so it can be passed as `writeFileMutation`'s explicit
-// `ErrorResult` type argument at each call site below — TypeScript cannot
-// reliably INFER a generic split between "the ok:true branch plus Extra" and
-// "everything else" out of a pre-existing union return type, so every call
-// below names both type arguments explicitly rather than leaning on
-// inference across the two richer-than-`{error: string}` error shapes here.
-type XlsxErrorResult =
-  | { ok: false; error: XlsxWriteError }
-  | { ok: false; error: 'unsupported-workbook-features'; features: string[] };
-
-type XlsxMutateResult<Extra extends Record<string, unknown>> = ({ ok: true } & Extra) | XlsxErrorResult;
-
-/** §3.4/§4.1's own rule, mirrored from docx-comments.ts's
- *  `commentAuthorToDisplayName` (duplicated here rather than imported — the
- *  two write modules are deliberately independent, same reasoning as
- *  write-pipeline.ts's own header): a reply/add made from this app must
- *  round-trip into the note body naming "the account's display name or
- *  'You'", never overwriting a colleague's own turn. No accounts exist yet
- *  (§1.2), so 'user' is literally "You"; 'assistant' is a plain, honest label. */
-function commentAuthorToDisplayName(author: CommentAuthor): string {
-  if (author === 'user') return 'You';
-  if (author === 'assistant') return 'Assistant';
-  if (author.startsWith('person:')) return author.slice('person:'.length) || 'Unknown';
-  return 'Unknown';
+function buildXlsxThreadId(sheetId: number, cell: string, guidBraced: string): string {
+  return `xt-${sheetId}-${cell}-${guidBraced.replace(/[{}]/g, '')}`;
 }
 
 // -----------------------------------------------------------------------
@@ -573,8 +306,7 @@ function resolveRelTarget(baseDir: string, target: string): string {
 
 /** The inverse of `resolveRelTarget`: expresses `toPath` as a path relative
  *  to `fromDir`, the shape a NEW `Relationship`'s own `Target` attribute
- *  needs (e.g. worksheet dir `xl/worksheets` + new part `xl/comments2.xml`
- *  -> `"../comments2.xml"`, matching the T18 spike's own captured shape). */
+ *  needs. */
 function relativizeTarget(fromDir: string, toPath: string): string {
   const fromParts = fromDir.split('/').filter(Boolean);
   const toParts = toPath.split('/').filter(Boolean);
@@ -593,7 +325,7 @@ function worksheetRelsPathFor(partPath: string): string {
 // Minimal XML plumbing — mirrors docx-comments.ts's own linkedom-based
 // parse/serialize helpers (duplicated rather than imported: the two write
 // modules are deliberately independent, same reasoning as write-pipeline.ts's
-// own header and `commentAuthorToDisplayName` above).
+// own header).
 // -----------------------------------------------------------------------
 
 function parseXml(xml: string): Document {
@@ -604,17 +336,38 @@ function elementsByTag(node: Document | Element, tag: string): Element[] {
   return Array.from((node as unknown as { getElementsByTagName(t: string): ArrayLike<Element> }).getElementsByTagName(tag));
 }
 
+/** §4.2's own load-bearing gotcha, confirmed by the second real sample:
+ *  namespace prefixes vary by writer (real Excel declares the threaded-
+ *  comments namespace as the DEFAULT, unprefixed namespace; real Google
+ *  Sheets prefixes every element `x18tc:`). `linkedom`'s own `.localName`
+ *  getter is NOT namespace-aware for `text/xml` parsing (confirmed
+ *  empirically before writing this module: it returns the full PREFIXED tag
+ *  string, identical to `.tagName`) — so this module computes a real local
+ *  name itself (the substring after the last `:`) rather than trusting
+ *  either. `elementsByTagName(tag)` matching a literal (possibly-prefixed)
+ *  string would silently read ZERO threaded comments from a Google-Sheets-
+ *  authored file; this is the fix, used everywhere this module needs to find
+ *  a `threadedComment`/`text`/`person` element regardless of which vendor's
+ *  prefix convention wrote it. `querySelectorAll('*')` is used for the
+ *  wildcard scan rather than `getElementsByTagName('*')` — confirmed
+ *  empirically that linkedom's own wildcard `getElementsByTagName` returns
+ *  an always-empty collection, while `querySelectorAll('*')` works. */
+function localNameOf(el: Element): string {
+  const tag = el.tagName;
+  const i = tag.lastIndexOf(':');
+  return i === -1 ? tag : tag.slice(i + 1);
+}
+
+function elementsByLocalName(root: Document | Element, name: string): Element[] {
+  const all = Array.from((root as unknown as { querySelectorAll(sel: string): ArrayLike<Element> }).querySelectorAll('*'));
+  return all.filter((el) => localNameOf(el) === name);
+}
+
 /** Sets every `[name, value]` pair in `attrs` so the element SERIALIZES in
- *  exactly that order — confirmed empirically (not documented anywhere in
- *  linkedom's own README/types) that its `Element.toString()` emits
- *  attributes in the REVERSE of their `setAttribute()` call order, not
- *  insertion order as every other DOM implementation does. This matters here
- *  specifically because the T18 spike's own checked-in reference (and this
- *  module's own drift-pinning test against it) asserts EXACT attribute order
- *  for a brand-new comment/VML shape/relationship/content-type entry — a
- *  from-scratch Kotlin writer (T19) targets that same literal byte shape.
- *  Calling `setAttribute` in reverse of `attrs`' own order is what makes the
- *  OUTPUT come out in `attrs`' order. */
+ *  exactly that order — confirmed empirically that linkedom's own
+ *  `Element.toString()` emits attributes in the REVERSE of their
+ *  `setAttribute()` call order. Calling `setAttribute` in reverse of `attrs`'
+ *  own order is what makes the OUTPUT come out in `attrs`' order. */
 function setOrderedAttributes(el: Element, attrs: ReadonlyArray<readonly [string, string]>): void {
   for (let i = attrs.length - 1; i >= 0; i--) el.setAttribute(attrs[i][0], attrs[i][1]);
 }
@@ -631,61 +384,77 @@ const SELF_CLOSING_SPACE_RE = /(<[\w:.-]+(?:\s+[^<>]*)?) \/>/g;
  *  declaration verbatim (linkedom's own `toString()` lowercases `encoding`
  *  and drops `standalone="yes"`) and undoes the space linkedom adds before a
  *  self-closing tag's `/>`. `originalXml` is the part's real prior bytes for
- *  an EXISTING part, or this module's own `EMPTY_*_XML` template for a
- *  brand-new one (so a freshly-minted part's declaration still matches the
- *  T18 spike's exact captured format, never linkedom's own mangled one). */
-function serializeXlsxPart(doc: Document, originalXml: string): string {
+ *  an EXISTING part, or `null` for a brand-new one this operation minted
+ *  (only the self-closing-tag normalization applies then). */
+function serializeXlsxPart(doc: Document, originalXml: string | null): string {
   let out = doc.toString();
-  const originalDecl = originalXml.match(XML_DECL_RE);
-  out = originalDecl ? out.replace(XML_DECL_RE, originalDecl[0]) : out.replace(XML_DECL_RE, '');
+  if (originalXml !== null) {
+    const originalDecl = originalXml.match(XML_DECL_RE);
+    out = originalDecl ? out.replace(XML_DECL_RE, originalDecl[0]) : out.replace(XML_DECL_RE, '');
+  }
   return out.replace(SELF_CLOSING_SPACE_RE, '$1/>');
 }
 
-function writeXlsxPart(zip: JSZip, name: string, doc: Document, originalXml: string): void {
+function writeXlsxPart(zip: JSZip, name: string, changed: boolean, doc: Document, originalXml: string | null): void {
+  if (!changed && originalXml !== null) {
+    zip.file(name, originalXml);
+    return;
+  }
   zip.file(name, serializeXlsxPart(doc, originalXml));
 }
 
 // -----------------------------------------------------------------------
-// Exact OOXML shapes for a BRAND-NEW comments/VML pair — verbatim from
-// ../docs/active/investigations/2026-09-27-xlsx-note-format-spike.md and
-// shared-fixtures/doc-comments/xlsx-note-reference/, so a from-scratch
-// Kotlin writer (T19, not this task) has the SAME byte-level target this
-// writer produces, not a second, silently-different one.
+// Exact OOXML shapes for brand-new parts — §4.2/§4.3.
 // -----------------------------------------------------------------------
 
-const SML_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
-const REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
-const COMMENTS_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml';
-// The T18 spike's own finding (c): NO `+xml` suffix, unlike every other XML
-// part's content type in the same file — an easy mismatch to introduce by
-// analogy with the Overrides around it, so this is a named constant, never
-// re-typed at each call site.
-const VML_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.vmlDrawing';
-const COMMENTS_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments';
-const VML_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing';
-
-// A LEADING NEWLINE after the XML declaration in every one of these three
-// templates is deliberate, not incidental formatting: linkedom PRESERVES
-// whatever followed the declaration in the STRING it originally parsed
-// (confirmed empirically — re-parsing a source with `?>\n<root>` round-trips
-// that same `\n` on `.toString()`, but a source with no newline never gains
-// one). The T18 spike's own checked-in reference — captured from exceljs's
-// REAL output — has this exact newline in `comments1.xml`/`vmlDrawing1.vml`/
-// `sheet1.xml.rels`, so it has to be here too for a from-scratch part to
-// byte-match that reference (`xlsx-note-reference-drift.test.ts`).
-const EMPTY_COMMENTS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<comments xmlns="${SML_NS}"><authors><author>Author</author></authors><commentList></commentList></comments>`;
+// A LEADING NEWLINE after the XML declaration is deliberate, not incidental
+// formatting: linkedom PRESERVES whatever followed the declaration in the
+// STRING it originally parsed, and every real reference sample captured here
+// has this exact newline.
 const EMPTY_VML_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype></xml>`;
 const EMPTY_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${REL_NS}"></Relationships>`;
+// §4.3 step 1 (design review 1, F6): a comments{N}.xml part THIS APP mints
+// itself gets `xmlns:xr`/`mc:Ignorable="xr"` — the Mac-Excel convention, the
+// more spec-literal of the two observed real conventions (Google Sheets
+// omits it and Excel still opens the file either way). `<authors>` starts
+// EMPTY — unlike the retired legacy-Notes writer's own "Author" placeholder
+// convention, every author entry this module ever writes is a unique
+// `tc={GUID}` string, one per thread, never reused across threads.
+const EMPTY_COMMENTS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<comments xmlns="${SML_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="xr" xmlns:xr="${XR_NS}"><authors></authors><commentList></commentList></comments>`;
+// §4.2: real Excel declares the threaded-comments namespace as the DEFAULT
+// (unprefixed) namespace — this app's writer follows that convention for
+// every part it mints itself (an existing Google-Sheets-authored, `x18tc:`-
+// prefixed part is edited in its OWN convention instead — see
+// `detectThreadedPrefix` below).
+const EMPTY_THREADED_COMMENTS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ThreadedComments xmlns="${THREADED_COMMENTS_NS}" xmlns:x="${SML_NS}"></ThreadedComments>`;
+const EMPTY_PERSON_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<personList xmlns="${THREADED_COMMENTS_NS}" xmlns:x="${SML_NS}"></personList>`;
 
-/** Builds one `<v:shape>` element for a brand-new note at 1-based `(col,
- *  row)`, attribute order and every literal value matching the spike's own
- *  captured reference exactly (the default box position/size is a FIXED
- *  constant regardless of cell — confirmed against exceljs's own
- *  `vml-shape-xform.js`: only `<x:Anchor>`/`<x:Row>`/`<x:Column>` vary per
- *  cell). `idNumber` is `_x0000_s<idNumber>` — see `nextVmlShapeId` below for
- *  how the caller picks a number that can never collide with an existing
- *  shape already in this same VML part. */
-function buildVmlShapeElement(doc: Document, idNumber: number, col: number, row: number): Element {
+/** Detects whether an EXISTING `ThreadedComments`/`personList` document uses
+ *  the default-namespace (Excel) convention or a prefixed (`x18tc:`, Google
+ *  Sheets) one, by reading the root element's own tag name — so a NEW
+ *  element appended into an existing part matches whatever convention that
+ *  part already uses, rather than mixing two styles under one root. `''`
+ *  (no prefix) for a brand-new part this app mints itself. */
+function detectPrefix(doc: Document): string {
+  const rootTag = doc.documentElement.tagName;
+  const i = rootTag.indexOf(':');
+  return i === -1 ? '' : rootTag.slice(0, i);
+}
+
+function tcTag(prefix: string, local: string): string {
+  return prefix ? `${prefix}:${local}` : local;
+}
+
+/** Builds one `<v:shape>` element for a brand-new threaded-comment
+ *  placeholder at 1-based `(col, row)`. §4.2's own confirmed difference from
+ *  a genuine legacy Note's VML: every one of three independently-sourced
+ *  real threaded-placeholder samples (Mac Excel, Google Sheets, plus one
+ *  cross-checked-but-not-redistributed Windows Excel sample) OMITS
+ *  `<x:Locked>`/`<x:LockText>` — present on a genuine Note's own VML, never
+ *  on a threaded placeholder's. Anchor/position math is otherwise identical
+ *  to the (now-retired) legacy-Notes VML builder's own formula (a format
+ *  detail unrelated to note-vs-threaded, carried forward unchanged). */
+function buildThreadedVmlShape(doc: Document, idNumber: number, col: number, row: number): Element {
   const shape = doc.createElement('v:shape');
   setOrderedAttributes(shape, [
     ['id', `_x0000_s${idNumber}`],
@@ -725,9 +494,9 @@ function buildVmlShapeElement(doc: Document, idNumber: number, col: number, row:
   clientData.appendChild(doc.createElement('x:SizeWithCells'));
   // Default anchor rect (exceljs's own `vml-anchor-xform.js` `getDefaultRect`,
   // `ref.col`/`ref.row` 1-based): l=col, t=max(row-2,0), r=col+2, b=t+4, with
-  // fixed sub-cell fractions 6/14/2/16 — reproduced verbatim rather than
-  // re-derived, since the T18 spike confirms this exact formula against a
-  // real captured A1 note (`1, 6, 0, 14, 3, 2, 4, 16`).
+  // fixed sub-cell fractions 6/14/2/16 — carried forward unchanged from the
+  // retired legacy-Notes builder (a positioning formula unrelated to the
+  // note-vs-threaded distinction).
   const l = col;
   const t = Math.max(row - 2, 0);
   const r = col + 2;
@@ -735,15 +504,9 @@ function buildVmlShapeElement(doc: Document, idNumber: number, col: number, row:
   const anchor = doc.createElement('x:Anchor');
   anchor.textContent = [l, 6, t, 14, r, 2, b, 16].join(', ');
   clientData.appendChild(anchor);
-  const locked = doc.createElement('x:Locked');
-  locked.textContent = 'True';
-  clientData.appendChild(locked);
   const autoFill = doc.createElement('x:AutoFill');
   autoFill.textContent = 'False';
   clientData.appendChild(autoFill);
-  const lockText = doc.createElement('x:LockText');
-  lockText.textContent = 'True';
-  clientData.appendChild(lockText);
   const rowEl = doc.createElement('x:Row');
   rowEl.textContent = String(row - 1);
   clientData.appendChild(rowEl);
@@ -756,12 +519,9 @@ function buildVmlShapeElement(doc: Document, idNumber: number, col: number, row:
 }
 
 /** Scans the CURRENT `<v:shape id="_x0000_sNNNN">` ids already in `vmlDoc`
- *  (a foreign shape named some other way, e.g. LibreOffice's own
- *  `id="shape_0"`, simply never matches and is ignored — this app's own ids
- *  only ever need to be unique among THEMSELVES, not sequential across every
- *  tool that ever touched the file) and returns the next number to use —
- *  1025 if none exist yet, matching the spike's own "first note on a
- *  worksheet starts at _x0000_s1025" finding. */
+ *  and returns the next number to use — 1025 if none exist yet. Reused
+ *  verbatim from the retired legacy-Notes writer (format-agnostic: it never
+ *  cared whether a shape was a Note's or a threaded placeholder's). */
 function nextVmlShapeId(vmlDoc: Document): number {
   let max = 1024;
   for (const el of elementsByTag(vmlDoc, 'v:shape')) {
@@ -771,54 +531,69 @@ function nextVmlShapeId(vmlDoc: Document): number {
   return max + 1;
 }
 
-/** F10-adjacent correctness fix (found while building this rewrite, not in
- *  any prior review): this app's OWN comments always tag `authorId="0"`
- *  (§4.1: exceljs itself hardcodes this, and this reader/writer's real
- *  author lives in the note BODY's first line, never OOXML's own author
- *  slot). The OLD exceljs-based writer never had to worry about what
- *  `authorId="0"` actually POINTS at, because it always rebuilt `<authors>`
- *  from scratch with exactly one entry, "Author", at index 0. This writer
- *  EDITS an existing `<authors>` list in place (never rebuilds it), so a
- *  file with REAL authors already listed (or, per the kitchen-sink fixture,
- *  LibreOffice's own "Unknown Author" placeholder) at index 0 would
- *  otherwise make a brand-new app-authored comment display, in Excel's UI,
- *  as written by whoever else is already at index 0 — a real misattribution
- *  this rewrite must not introduce. Fix: reuse an existing `<author>Author
- *  </author>` entry's index if this app already added one to this part
- *  before; otherwise APPEND a new one (never overwrite an existing entry)
- *  and use its new index. */
-function resolveAuthorIndex(commentsDoc: Document): number {
-  const authorsEl = elementsByTag(commentsDoc, 'authors')[0];
-  const authorEls = authorsEl ? elementsByTag(authorsEl, 'author') : [];
-  const existingIdx = authorEls.findIndex((el) => el.textContent === 'Author');
-  if (existingIdx !== -1) return existingIdx;
-  const authors =
-    authorsEl ??
-    (() => {
-      const el = commentsDoc.createElement('authors');
-      commentsDoc.documentElement.insertBefore(el, commentsDoc.documentElement.firstChild);
-      return el;
-    })();
+/** Ensures `doc`'s root declares the `xr` namespace prefix — needed before
+ *  setting an `xr:uid` attribute on an EXISTING comments part that never had
+ *  one before (a brand-new part already bakes this into its own template,
+ *  §4.3 step 1/F6; this only matters when this module is APPENDING its
+ *  first-ever `tc=`-linked placeholder into a foreign, pre-existing
+ *  comments part). A no-op if already declared. */
+function ensureXrNamespaceDeclared(doc: Document): void {
+  if (!doc.documentElement.getAttribute('xmlns:xr')) {
+    doc.documentElement.setAttribute('xmlns:xr', XR_NS);
+  }
+}
+
+function appendTcAuthor(commentsDoc: Document, guidBraced: string): number {
+  let authorsEl = elementsByTag(commentsDoc, 'authors')[0];
+  if (!authorsEl) {
+    authorsEl = commentsDoc.createElement('authors');
+    commentsDoc.documentElement.insertBefore(authorsEl, commentsDoc.documentElement.firstChild);
+  }
+  const authorEls = elementsByTag(authorsEl, 'author');
   const newAuthor = commentsDoc.createElement('author');
-  newAuthor.textContent = 'Author';
-  authors.appendChild(newAuthor);
+  newAuthor.textContent = `tc=${guidBraced}`;
+  authorsEl.appendChild(newAuthor);
   return authorEls.length;
 }
 
-function findXlsxComment(commentsDoc: Document, cellAddr: string): Element | null {
-  return elementsByTag(commentsDoc, 'comment').find((el) => el.getAttribute('ref') === cellAddr) ?? null;
+/** §4.1's own rule: does the target cell already carry a GENUINE (non-`tc=`)
+ *  Note in `commentsDoc`? Used to refuse `'cell-has-note'`. */
+function findGenuineNoteAtCell(commentsDoc: Document, cell: string): boolean {
+  const authorsEl = elementsByTag(commentsDoc, 'authors')[0];
+  const authorEls = authorsEl ? elementsByTag(authorsEl, 'author') : [];
+  for (const commentEl of elementsByTag(commentsDoc, 'comment')) {
+    if (commentEl.getAttribute('ref') !== cell) continue;
+    const idx = Number.parseInt(commentEl.getAttribute('authorId') ?? '', 10);
+    const authorText = authorEls[idx]?.textContent ?? '';
+    if (!isTcAuthorText(authorText)) return true;
+  }
+  return false;
+}
+
+/** Finds the ONE legacy `<comment>` fronting for the thread whose root GUID
+ *  is `guidBraced`, by resolving each `<comment>`'s own `authorId` through
+ *  `<authors>` and matching the `tc={GUID}` string case-insensitively
+ *  (§4.2's own GUID-case finding). */
+function findTcComment(commentsDoc: Document, guidBraced: string): Element | null {
+  const authorsEl = elementsByTag(commentsDoc, 'authors')[0];
+  const authorEls = authorsEl ? elementsByTag(authorsEl, 'author') : [];
+  const target = `tc=${normalizeGuid(guidBraced)}`;
+  for (const commentEl of elementsByTag(commentsDoc, 'comment')) {
+    const idx = Number.parseInt(commentEl.getAttribute('authorId') ?? '', 10);
+    const authorText = authorEls[idx]?.textContent ?? '';
+    if (isTcAuthorText(authorText) && `tc=${normalizeGuid(authorText.slice(3))}` === target) return commentEl;
+  }
+  return null;
 }
 
 /** Replaces (or, for a brand-new `<comment>`, sets for the first time)
  *  `commentEl`'s own `<text>` child with a SINGLE `<r><t>` run holding the
- *  full body — this app's own convention (§4.1) is one note body per cell as
- *  a plain transcript, never per-turn rich runs, so a reply/resolve/reopen
- *  necessarily flattens any rich formatting a FOREIGN multi-run note might
- *  have carried on that one cell (an accepted, pre-existing simplification —
- *  the OLD exceljs-based writer did the same via a plain-string `cell.note =`
- *  assignment). `xml:space="preserve"` is added under the same condition
- *  exceljs's own `text-xform.js` uses (leading/trailing whitespace or an
- *  embedded newline), matching the spike's own documented convention. */
+ *  full placeholder body — this module's own convention is one placeholder
+ *  body per thread, rebuilt WHOLE on every write (never per-turn rich runs).
+ *  `xml:space="preserve"` is added under the same condition exceljs's own
+ *  `text-xform.js` uses (leading/trailing whitespace or an embedded newline)
+ *  — a placeholder body always has both, so this is effectively always set,
+ *  but the check is kept general rather than hardcoded. */
 function setXlsxCommentBody(doc: Document, commentEl: Element, bodyText: string): void {
   for (const existing of elementsByTag(commentEl, 'text')) {
     existing.parentNode?.removeChild(existing as unknown as Node);
@@ -833,31 +608,22 @@ function setXlsxCommentBody(doc: Document, commentEl: Element, bodyText: string)
   commentEl.appendChild(textEl);
 }
 
-function appendXlsxComment(commentsDoc: Document, cellAddr: string, authorIdx: number, bodyText: string): void {
+function appendPlaceholderComment(commentsDoc: Document, cellAddr: string, authorIdx: number, guidBraced: string, bodyText: string): void {
+  ensureXrNamespaceDeclared(commentsDoc);
   const commentList = elementsByTag(commentsDoc, 'commentList')[0];
   const commentEl = commentsDoc.createElement('comment');
   setOrderedAttributes(commentEl, [
     ['ref', cellAddr],
     ['authorId', String(authorIdx)],
+    ['xr:uid', guidBraced],
   ]);
   setXlsxCommentBody(commentsDoc, commentEl, bodyText);
   commentList.appendChild(commentEl);
 }
 
-/** Concatenates every `<r><t>` under `commentEl`'s own `<text>`, in document
- *  order — the same "never assume a single run" reconstruction rule T12's
- *  reader already documents (a FOREIGN note, e.g. one with bold mid-sentence
- *  text, is genuinely multi-run), used here so Reply/Resolve/Reopen/Move
- *  read the CURRENT body verbatim before rewriting or relocating it. */
-function rawBodyOfXlsxComment(commentEl: Element): string {
-  return elementsByTag(commentEl, 't')
-    .map((t) => t.textContent ?? '')
-    .join('');
-}
-
 // -----------------------------------------------------------------------
-// Per-worksheet wiring: resolving where a cell's comment/VML data lives (or
-// would need to be created), and whether that wiring is safe to edit at all.
+// Per-worksheet / per-workbook wiring — resolving where a thread's parts
+// live (or would need to be created).
 // -----------------------------------------------------------------------
 
 interface SheetMeta {
@@ -868,43 +634,10 @@ interface SheetMeta {
   isChartsheet: boolean;
 }
 
-interface WorksheetContext {
-  partPath: string;
-  sheetId: number;
-  sheetName: string;
-  worksheetDoc: Document;
-  worksheetXmlOriginal: string;
-  worksheetChanged: boolean;
-  relsPartPath: string;
-  relsDoc: Document;
-  relsXmlOriginal: string;
-  relsChanged: boolean;
-  wiring: 'none' | 'existing' | 'ambiguous';
-  commentsPartPath: string | null;
-  commentsDoc: Document | null;
-  commentsXmlOriginal: string;
-  commentsChanged: boolean;
-  vmlPartPath: string | null;
-  vmlDoc: Document | null;
-  vmlXmlOriginal: string;
-  vmlChanged: boolean;
-}
-
-interface XlsxArchive {
-  zip: JSZip;
-  sheets: SheetMeta[];
-  contentTypesDoc: Document;
-  contentTypesXmlOriginal: string;
-  contentTypesChanged: boolean;
-  worksheetContexts: Map<string, WorksheetContext>;
-}
-
 /** Parses `xl/workbook.xml`'s `<sheets>` against `xl/_rels/workbook.xml.rels`
  *  to resolve each `<sheet>`'s real worksheet PART path and whether it's a
- *  chartsheet (a `.../relationships/chartsheet` relationship rather than
- *  `.../relationships/worksheet`) — chartsheets are excluded from every
- *  cell-comment operation below (T12's reader already excludes them from
- *  "single sheet" counting the same way; a chartsheet has no cells at all). */
+ *  chartsheet — chartsheets are excluded from every cell-comment operation
+ *  (a chartsheet has no cells at all) and from "single sheet" counting. */
 function parseSheetsFromWorkbook(workbookXml: string, workbookRelsXml: string): SheetMeta[] {
   const workbookDoc = parseXml(workbookXml);
   const relsDoc = parseXml(workbookRelsXml);
@@ -915,7 +648,7 @@ function parseSheetsFromWorkbook(workbookXml: string, workbookRelsXml: string): 
   }
   const sheets: SheetMeta[] = [];
   for (const el of elementsByTag(workbookDoc, 'sheet')) {
-    const name = el.getAttribute('name') ?? '';
+    const name = decodeXmlEntities(el.getAttribute('name') ?? '');
     const sheetId = Number.parseInt(el.getAttribute('sheetId') ?? '', 10);
     const rId = el.getAttribute('r:id') ?? '';
     const rel = relMap.get(rId);
@@ -931,28 +664,90 @@ function parseSheetsFromWorkbook(workbookXml: string, workbookRelsXml: string): 
   return sheets;
 }
 
-async function loadXlsxArchiveForWrite(bytes: Buffer): Promise<{ ok: true; archive: XlsxArchive } | XlsxErrorResult> {
+interface WorksheetContext {
+  partPath: string;
+  sheetId: number;
+  sheetName: string;
+  worksheetDoc: Document;
+  worksheetXmlOriginal: string;
+  worksheetChanged: boolean;
+  relsPartPath: string;
+  relsDoc: Document;
+  relsXmlOriginal: string;
+  relsChanged: boolean;
+
+  ambiguous: boolean;
+
+  commentsPartPath: string | null;
+  commentsDoc: Document | null;
+  commentsXmlOriginal: string | null;
+  commentsChanged: boolean;
+  vmlPartPath: string | null;
+  vmlDoc: Document | null;
+  vmlXmlOriginal: string | null;
+  vmlChanged: boolean;
+
+  threadedPartPath: string | null;
+  threadedDoc: Document | null;
+  threadedXmlOriginal: string | null;
+  threadedChanged: boolean;
+}
+
+interface XlsxArchive {
+  zip: JSZip;
+  sheets: SheetMeta[];
+  contentTypesDoc: Document;
+  contentTypesXmlOriginal: string;
+  contentTypesChanged: boolean;
+  workbookRelsDoc: Document;
+  workbookRelsXmlOriginal: string;
+  workbookRelsChanged: boolean;
+  personsPartPath: string;
+  personsDoc: Document | null;
+  personsXmlOriginal: string | null;
+  personsChanged: boolean;
+  worksheetContexts: Map<string, WorksheetContext>;
+}
+
+type PartReadResult = { ok: true; text: string | null } | { ok: false; error: 'archive-too-large' };
+
+/** Reads a NAMED zip entry (or `{ok:true, text:null}` if it doesn't exist),
+ *  checked against the size guard BEFORE decompression and decompressed via
+ *  the streaming, self-aborting `decompressBounded` — never `.async('string')`
+ *  — matching docx-comments.ts's own "named parts only" discipline (§4.3's
+ *  own "the guard narrows to match" finding: this module never hands a
+ *  black-box decompressor a whole archive the way the retired exceljs-based
+ *  reader did). */
+async function readOptionalPart(zip: JSZip, name: string): Promise<PartReadResult> {
+  const file = zip.file(name);
+  if (!file) return { ok: true, text: null };
+  const sizeCheck = checkNamedEntriesWithinCeiling(zip, [name]);
+  if (!sizeCheck.ok) return { ok: false, error: sizeCheck.error };
+  const bounded = await decompressBounded(file);
+  if (!bounded.ok) return { ok: false, error: bounded.error };
+  return { ok: true, text: bounded.text };
+}
+
+async function loadXlsxArchiveForWrite(bytes: Buffer): Promise<{ ok: true; archive: XlsxArchive } | { ok: false; error: XlsxWriteError }> {
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(bytes);
   } catch {
     return { ok: false, error: 'invalid-xlsx' };
   }
-  const sizeCheck = checkTotalWithinCeiling(zip);
-  if (!sizeCheck.ok) return { ok: false, error: sizeCheck.error };
-
-  const featureCheck = checkNoUnsupportedFeatures(zip);
-  if (!featureCheck.ok) return featureCheck;
 
   const workbookFile = zip.file('xl/workbook.xml');
   const contentTypesFile = zip.file('[Content_Types].xml');
   if (!workbookFile || !contentTypesFile) return { ok: false, error: 'invalid-xlsx' };
-  const workbookRelsFile = zip.file('xl/_rels/workbook.xml.rels');
+
+  const sizeCheck = checkNamedEntriesWithinCeiling(zip, ['xl/workbook.xml', '[Content_Types].xml', 'xl/_rels/workbook.xml.rels']);
+  if (!sizeCheck.ok) return { ok: false, error: sizeCheck.error };
 
   let workbookXml: string;
   let contentTypesXml: string;
   let workbookRelsXml: string;
   try {
+    const workbookRelsFile = zip.file('xl/_rels/workbook.xml.rels');
     [workbookXml, contentTypesXml, workbookRelsXml] = await Promise.all([
       workbookFile.async('string'),
       contentTypesFile.async('string'),
@@ -963,6 +758,25 @@ async function loadXlsxArchiveForWrite(bytes: Buffer): Promise<{ ok: true; archi
   }
 
   const sheets = parseSheetsFromWorkbook(workbookXml, workbookRelsXml);
+  const workbookRelsDoc = parseXml(workbookRelsXml);
+
+  // §4.2: the persons relationship is WORKBOOK-level, not per-worksheet, and
+  // exactly one part per workbook — resolved once here, shared by every
+  // worksheet context below.
+  let personsPartPath = 'xl/persons/person.xml';
+  let personsDoc: Document | null = null;
+  let personsXmlOriginal: string | null = null;
+  const personRel = elementsByTag(workbookRelsDoc, 'Relationship').find((el) => el.getAttribute('Type') === PERSON_REL_TYPE);
+  if (personRel) {
+    personsPartPath = resolveRelTarget('xl', personRel.getAttribute('Target') ?? '');
+    const personRead = await readOptionalPart(zip, personsPartPath);
+    if (!personRead.ok) return personRead;
+    if (personRead.text !== null) {
+      personsXmlOriginal = personRead.text;
+      personsDoc = parseXml(personRead.text);
+    }
+  }
+
   return {
     ok: true,
     archive: {
@@ -971,6 +785,13 @@ async function loadXlsxArchiveForWrite(bytes: Buffer): Promise<{ ok: true; archi
       contentTypesDoc: parseXml(contentTypesXml),
       contentTypesXmlOriginal: contentTypesXml,
       contentTypesChanged: false,
+      workbookRelsDoc,
+      workbookRelsXmlOriginal: workbookRelsXml,
+      workbookRelsChanged: false,
+      personsPartPath,
+      personsDoc,
+      personsXmlOriginal,
+      personsChanged: false,
       worksheetContexts: new Map(),
     },
   };
@@ -978,84 +799,93 @@ async function loadXlsxArchiveForWrite(bytes: Buffer): Promise<{ ok: true; archi
 
 /** Loads (or returns the already-loaded, cached-by-partPath) context for one
  *  worksheet: its own XML, its own rels, and — if wiring is unambiguous —
- *  the comments/VML parts it already points at. Determines `wiring`:
- *  - `'none'`: no `<legacyDrawing>`, no comments relationship, no vmlDrawing
- *    relationship — a worksheet with zero legacy notes so far.
- *  - `'existing'`: all three present AND internally consistent (the
- *    `<legacyDrawing r:id>` names exactly the vmlDrawing relationship's own
- *    `Id`), and both parts it points at are actually present in the archive.
- *  - `'ambiguous'`: anything else — a partial combination, a dangling
- *    reference, or a `<legacyDrawing>` pointing at something other than the
- *    vmlDrawing relationship. Refused by every caller (see
- *    `'ambiguous-comment-wiring'`'s own doc comment above) rather than
- *    guessed at. */
+ *  the comments/VML/threadedComment parts it already points at.
+ *  `ctx.ambiguous` is set when the legacy comments/vml/legacyDrawing trio is
+ *  a partial or inconsistent combination, OR a threadedComment relationship
+ *  exists with no matching part, OR a threadedComment part exists without
+ *  its accompanying legacy pair (a shape no real Excel/Google-Sheets writer
+ *  produces) — refused by every write op with `'ambiguous-comment-wiring'`
+ *  rather than guessed at. */
 async function getWorksheetContext(
   archive: XlsxArchive,
   sheetMeta: SheetMeta
-): Promise<{ ok: true; ctx: WorksheetContext } | { ok: false; error: 'invalid-selector' }> {
+): Promise<{ ok: true; ctx: WorksheetContext } | { ok: false; error: 'invalid-selector' | 'archive-too-large' }> {
   const cached = archive.worksheetContexts.get(sheetMeta.partPath);
   if (cached) return { ok: true, ctx: cached };
 
-  const worksheetFile = archive.zip.file(sheetMeta.partPath);
-  if (!worksheetFile) return { ok: false, error: 'invalid-selector' };
-  let worksheetXmlOriginal: string;
-  try {
-    worksheetXmlOriginal = await worksheetFile.async('string');
-  } catch {
-    return { ok: false, error: 'invalid-selector' };
-  }
+  const worksheetRead = await readOptionalPart(archive.zip, sheetMeta.partPath);
+  if (!worksheetRead.ok) return worksheetRead;
+  if (worksheetRead.text === null) return { ok: false, error: 'invalid-selector' };
+  const worksheetXmlOriginal = worksheetRead.text;
   const worksheetDoc = parseXml(worksheetXmlOriginal);
 
   const relsPartPath = worksheetRelsPathFor(sheetMeta.partPath);
-  const relsFile = archive.zip.file(relsPartPath);
-  const relsXmlOriginal = relsFile ? await relsFile.async('string') : EMPTY_RELS_XML;
+  const relsRead = await readOptionalPart(archive.zip, relsPartPath);
+  if (!relsRead.ok) return relsRead;
+  const relsXmlOriginal = relsRead.text ?? EMPTY_RELS_XML;
   const relsDoc = parseXml(relsXmlOriginal);
 
   const legacyDrawingEl = elementsByTag(worksheetDoc, 'legacyDrawing')[0] ?? null;
   const relationshipEls = elementsByTag(relsDoc, 'Relationship');
   const commentsRel = relationshipEls.find((el) => el.getAttribute('Type') === COMMENTS_REL_TYPE) ?? null;
   const vmlRel = relationshipEls.find((el) => el.getAttribute('Type') === VML_REL_TYPE) ?? null;
+  const threadedRel = relationshipEls.find((el) => el.getAttribute('Type') === THREADED_COMMENT_REL_TYPE) ?? null;
 
-  let wiring: WorksheetContext['wiring'];
+  let ambiguous = false;
   let commentsPartPath: string | null = null;
   let vmlPartPath: string | null = null;
-  let commentsXmlOriginal = EMPTY_COMMENTS_XML;
-  let vmlXmlOriginal = EMPTY_VML_XML;
   let commentsDoc: Document | null = null;
   let vmlDoc: Document | null = null;
+  let commentsXmlOriginal: string | null = null;
+  let vmlXmlOriginal: string | null = null;
+  let legacyExisting = false;
 
-  if (!legacyDrawingEl && !commentsRel && !vmlRel) {
-    wiring = 'none';
-  } else if (legacyDrawingEl && commentsRel && vmlRel && legacyDrawingEl.getAttribute('r:id') === vmlRel.getAttribute('Id')) {
-    const worksheetDir = dirnameOfPart(sheetMeta.partPath);
-    commentsPartPath = resolveRelTarget(worksheetDir, commentsRel.getAttribute('Target') ?? '');
-    vmlPartPath = resolveRelTarget(worksheetDir, vmlRel.getAttribute('Target') ?? '');
-    const commentsFile = archive.zip.file(commentsPartPath);
-    const vmlFile = archive.zip.file(vmlPartPath);
-    if (!commentsFile || !vmlFile) {
-      wiring = 'ambiguous';
-      commentsPartPath = null;
-      vmlPartPath = null;
-    } else {
-      let loadedOk = true;
-      try {
-        [commentsXmlOriginal, vmlXmlOriginal] = await Promise.all([commentsFile.async('string'), vmlFile.async('string')]);
-      } catch {
-        loadedOk = false;
-      }
-      if (loadedOk) {
-        commentsDoc = parseXml(commentsXmlOriginal);
-        vmlDoc = parseXml(vmlXmlOriginal);
-        wiring = 'existing';
-      } else {
-        wiring = 'ambiguous';
+  if (legacyDrawingEl || commentsRel || vmlRel) {
+    if (legacyDrawingEl && commentsRel && vmlRel && legacyDrawingEl.getAttribute('r:id') === vmlRel.getAttribute('Id')) {
+      const worksheetDir = dirnameOfPart(sheetMeta.partPath);
+      commentsPartPath = resolveRelTarget(worksheetDir, commentsRel.getAttribute('Target') ?? '');
+      vmlPartPath = resolveRelTarget(worksheetDir, vmlRel.getAttribute('Target') ?? '');
+      const commentsRead = await readOptionalPart(archive.zip, commentsPartPath);
+      if (!commentsRead.ok) return commentsRead;
+      const vmlRead = await readOptionalPart(archive.zip, vmlPartPath);
+      if (!vmlRead.ok) return vmlRead;
+      if (commentsRead.text === null || vmlRead.text === null) {
+        ambiguous = true;
         commentsPartPath = null;
         vmlPartPath = null;
+      } else {
+        commentsXmlOriginal = commentsRead.text;
+        vmlXmlOriginal = vmlRead.text;
+        commentsDoc = parseXml(commentsXmlOriginal);
+        vmlDoc = parseXml(vmlXmlOriginal);
+        legacyExisting = true;
       }
+    } else {
+      ambiguous = true;
     }
-  } else {
-    wiring = 'ambiguous';
   }
+
+  let threadedPartPath: string | null = null;
+  let threadedDoc: Document | null = null;
+  let threadedXmlOriginal: string | null = null;
+  let threadedExisting = false;
+  if (threadedRel) {
+    threadedPartPath = resolveRelTarget(dirnameOfPart(sheetMeta.partPath), threadedRel.getAttribute('Target') ?? '');
+    const threadedRead = await readOptionalPart(archive.zip, threadedPartPath);
+    if (!threadedRead.ok) return threadedRead;
+    if (threadedRead.text === null) {
+      ambiguous = true;
+      threadedPartPath = null;
+    } else {
+      threadedXmlOriginal = threadedRead.text;
+      threadedDoc = parseXml(threadedXmlOriginal);
+      threadedExisting = true;
+    }
+  }
+  // §4.2: a threaded part is never observed without its accompanying legacy
+  // pair in any real sample — treat that combination as ambiguous rather
+  // than silently reconstructing a legacy pair that never existed.
+  if (threadedExisting && !legacyExisting) ambiguous = true;
 
   const ctx: WorksheetContext = {
     partPath: sheetMeta.partPath,
@@ -1068,7 +898,7 @@ async function getWorksheetContext(
     relsDoc,
     relsXmlOriginal,
     relsChanged: false,
-    wiring,
+    ambiguous,
     commentsPartPath,
     commentsDoc,
     commentsXmlOriginal,
@@ -1077,6 +907,10 @@ async function getWorksheetContext(
     vmlDoc,
     vmlXmlOriginal,
     vmlChanged: false,
+    threadedPartPath,
+    threadedDoc,
+    threadedXmlOriginal,
+    threadedChanged: false,
   };
   archive.worksheetContexts.set(sheetMeta.partPath, ctx);
   return { ok: true, ctx };
@@ -1101,13 +935,23 @@ function addXlsxRelationship(relsDoc: Document, id: string, type: string, target
   relsDoc.documentElement.appendChild(el);
 }
 
+function addContentTypeOverride(contentTypesDoc: Document, partName: string, contentType: string): void {
+  const exists = elementsByTag(contentTypesDoc, 'Override').some((el) => el.getAttribute('PartName') === partName);
+  if (exists) return;
+  const el = contentTypesDoc.createElement('Override');
+  setOrderedAttributes(el, [
+    ['PartName', partName],
+    ['ContentType', contentType],
+  ]);
+  contentTypesDoc.documentElement.appendChild(el);
+}
+
 /** Picks the smallest positive integer not already used by an
- *  `xl/comments<N>.xml` OR `xl/drawings/vmlDrawing<N>.vml` part ANYWHERE in
- *  the archive — a fresh, collision-free number for a worksheet's FIRST
- *  note, used for BOTH new parts together (conventional pairing; nothing in
- *  OOXML actually requires the two numbers to match, but every real
- *  Excel/exceljs-written file pairs them this way, and there is no reason to
- *  needlessly deviate from that convention for a from-scratch pair). */
+ *  `xl/comments<N>.xml`, `xl/drawings/vmlDrawing<N>.vml`, OR
+ *  `xl/threadedComments/threadedComment<N>.xml` part ANYWHERE in the archive
+ *  — extended (§4.2) from the retired legacy-Notes writer's own
+ *  `mintPartNumber`, which already produces the correct "skip the gap, don't
+ *  reserve it" numbering once the new part type is included in the scan. */
 function mintPartNumber(archive: XlsxArchive): number {
   let max = 0;
   archive.zip.forEach((relPath) => {
@@ -1115,29 +959,32 @@ function mintPartNumber(archive: XlsxArchive): number {
     if (m) max = Math.max(max, Number.parseInt(m[1], 10));
     m = /^xl\/drawings\/vmlDrawing(\d+)\.vml$/.exec(relPath);
     if (m) max = Math.max(max, Number.parseInt(m[1], 10));
+    m = /^xl\/threadedComments\/threadedComment(\d+)\.xml$/.exec(relPath);
+    if (m) max = Math.max(max, Number.parseInt(m[1], 10));
   });
   return max + 1;
 }
 
-/** Transitions a `wiring: 'none'` worksheet to `'existing'` by creating its
- *  comments/VML parts (from this module's own `EMPTY_*_XML` templates,
- *  matching the T18 spike's captured shape verbatim), wiring the worksheet's
- *  own rels (comments relationship THEN vmlDrawing relationship — the
- *  spike's own confirmed order) and `[Content_Types].xml` (a single
- *  archive-wide `Default Extension="vml"`, added once, plus a fresh
- *  `Override` for the new comments part), and inserting
- *  `<legacyDrawing r:id="...">` as the worksheet's OWN LAST child element —
- *  the spike's own "legacyDrawing is the last element in `<worksheet>`, even
- *  after `<extLst>` if one exists" finding, which `appendChild` satisfies
- *  unconditionally regardless of whether an `<extLst>` is already the
- *  current last child. Called ONLY immediately before the first comment is
- *  actually added to a worksheet — never speculatively. */
-function ensureWiringForAdd(archive: XlsxArchive, ctx: WorksheetContext): void {
-  const n = mintPartNumber(archive);
+function extractPartNumber(partPath: string): number {
+  const m = /(\d+)\.[a-z]+$/i.exec(partPath);
+  return m ? Number.parseInt(m[1], 10) : 1;
+}
+
+/** Creates a brand-new comments{N}.xml/vmlDrawing{N}.vml pair, wires the
+ *  worksheet's own rels (comments relationship THEN vmlDrawing relationship)
+ *  and `[Content_Types].xml`, and inserts `<legacyDrawing r:id="...">` as the
+ *  worksheet's OWN LAST child element — restated explicitly (design review
+ *  round 2, F4 — High): this exact rule was found and fixed once already for
+ *  the retired legacy-Notes design and neither real reference fixture has a
+ *  worksheet-level `<extLst>` to force a regression here to surface during
+ *  ordinary testing (`synthetic-worksheet-with-extlst.xlsx` is the required
+ *  fixture that does). `appendChild` satisfies this unconditionally
+ *  regardless of whether an `<extLst>` is already the current last child. */
+function createLegacyPair(archive: XlsxArchive, ctx: WorksheetContext, n: number): void {
   ctx.commentsPartPath = `xl/comments${n}.xml`;
   ctx.vmlPartPath = `xl/drawings/vmlDrawing${n}.vml`;
-  ctx.commentsXmlOriginal = EMPTY_COMMENTS_XML;
-  ctx.vmlXmlOriginal = EMPTY_VML_XML;
+  ctx.commentsXmlOriginal = null;
+  ctx.vmlXmlOriginal = null;
   ctx.commentsDoc = parseXml(EMPTY_COMMENTS_XML);
   ctx.vmlDoc = parseXml(EMPTY_VML_XML);
 
@@ -1157,12 +1004,6 @@ function ensureWiringForAdd(archive: XlsxArchive, ctx: WorksheetContext): void {
     ['PartName', `/${ctx.commentsPartPath}`],
     ['ContentType', COMMENTS_CONTENT_TYPE],
   ]);
-  // Inserted right after the vml Default — matching the T18 spike's own
-  // captured element order exactly (exceljs's own content-types-xform.js
-  // emits sheet/style/etc. Overrides, THEN the vml Default, THEN each
-  // comments Override, THEN docProps' Overrides last) — rather than
-  // `appendChild`, which would land after any docProps Overrides already
-  // present and silently drift from the reference T19 targets.
   vmlDefaultEl.parentNode?.insertBefore(override as unknown as Node, vmlDefaultEl.nextSibling);
   archive.contentTypesChanged = true;
 
@@ -1177,17 +1018,191 @@ function ensureWiringForAdd(archive: XlsxArchive, ctx: WorksheetContext): void {
   legacyDrawing.setAttribute('r:id', vmlRelId);
   ctx.worksheetDoc.documentElement.appendChild(legacyDrawing);
   ctx.worksheetChanged = true;
-
-  ctx.wiring = 'existing';
 }
 
-/** §4.2's own rule, applied on the WRITE side: `sheet` is required only when
- *  the workbook has more than one (non-chartsheet) tab. Reused identically by
- *  add's `selector` and move's `newSelector`. */
+/** §4.2: the threadedComment/person relationships are BOTH "implicit" — no
+ *  `r:id` anywhere in worksheet/workbook CONTENT ever points at either, so
+ *  creating the threaded part needs only a rels entry + content-types
+ *  Override, never any worksheet-content wiring beyond that (unlike
+ *  vmlDrawing's explicit `<legacyDrawing r:id>`). */
+function createThreadedPart(archive: XlsxArchive, ctx: WorksheetContext, n: number): void {
+  ctx.threadedPartPath = `xl/threadedComments/threadedComment${n}.xml`;
+  ctx.threadedXmlOriginal = null;
+  ctx.threadedDoc = parseXml(EMPTY_THREADED_COMMENTS_XML);
+
+  const worksheetDir = dirnameOfPart(ctx.partPath);
+  const relId = nextRelId(ctx.relsDoc);
+  addXlsxRelationship(ctx.relsDoc, relId, THREADED_COMMENT_REL_TYPE, relativizeTarget(worksheetDir, ctx.threadedPartPath));
+  ctx.relsChanged = true;
+
+  addContentTypeOverride(archive.contentTypesDoc, `/${ctx.threadedPartPath}`, THREADED_COMMENT_CONTENT_TYPE);
+  archive.contentTypesChanged = true;
+}
+
+/** Ensures BOTH the legacy pair and the threaded part exist for `ctx`,
+ *  minting a fresh shared `N` when neither exists yet, or reusing the
+ *  EXISTING legacy pair's own `N` when only the threaded part is missing
+ *  (§4.2: "`N`... is shared between `comments{N}.xml` and
+ *  `threadedComment{N}.xml` for a given worksheet"). Called only
+ *  immediately before the first thread is actually added to a worksheet —
+ *  never speculatively. */
+function ensureThreadedWiring(archive: XlsxArchive, ctx: WorksheetContext): void {
+  if (!ctx.commentsDoc) {
+    const n = mintPartNumber(archive);
+    createLegacyPair(archive, ctx, n);
+    createThreadedPart(archive, ctx, n);
+  } else if (!ctx.threadedDoc) {
+    const n = extractPartNumber(ctx.commentsPartPath!);
+    createThreadedPart(archive, ctx, n);
+  }
+}
+
+function ensurePersonsPart(archive: XlsxArchive): void {
+  if (archive.personsDoc) return;
+  archive.personsDoc = parseXml(EMPTY_PERSON_XML);
+  archive.personsXmlOriginal = null;
+  archive.personsChanged = true;
+
+  const alreadyWired = elementsByTag(archive.workbookRelsDoc, 'Relationship').some((el) => el.getAttribute('Type') === PERSON_REL_TYPE);
+  if (!alreadyWired) {
+    const relId = nextRelId(archive.workbookRelsDoc);
+    addXlsxRelationship(archive.workbookRelsDoc, relId, PERSON_REL_TYPE, relativizeTarget('xl', archive.personsPartPath));
+    archive.workbookRelsChanged = true;
+  }
+  addContentTypeOverride(archive.contentTypesDoc, `/${archive.personsPartPath}`, PERSON_CONTENT_TYPE);
+  archive.contentTypesChanged = true;
+}
+
+/** §4.2's own reuse-not-duplicate rule: before minting a new `<person>`, look
+ *  for an existing entry with `providerId="YouCoded"` AND a matching
+ *  `displayName` — only a genuine miss appends a new one with a freshly-
+ *  minted GUID. `userId` is omitted (matching Google Sheets' own precedent —
+ *  this app has no real account-linked identity to put there yet, §1.2). */
+function resolveOrCreatePerson(archive: XlsxArchive, author: CommentAuthor): string {
+  ensurePersonsPart(archive);
+  const displayName = commentAuthorToDisplayName(author);
+  const existing = elementsByLocalName(archive.personsDoc!, 'person').find(
+    (el) => el.getAttribute('providerId') === 'YouCoded' && decodeXmlEntities(el.getAttribute('displayName') ?? '') === displayName
+  );
+  if (existing) {
+    const id = existing.getAttribute('id');
+    if (id) return id;
+  }
+  const id = mintGuid();
+  const personEl = archive.personsDoc!.createElement('person');
+  setOrderedAttributes(personEl, [
+    ['displayName', displayName],
+    ['id', id],
+    ['providerId', 'YouCoded'],
+  ]);
+  archive.personsDoc!.documentElement.appendChild(personEl);
+  archive.personsChanged = true;
+  return id;
+}
+
+// -----------------------------------------------------------------------
+// Thread lookup — root/reply element helpers, shared by read and write.
+// -----------------------------------------------------------------------
+
+function isRootThreadedComment(el: Element): boolean {
+  return !el.getAttribute('parentId');
+}
+
+function repliesOfRoot(threadedDoc: Document, rootIdBraced: string): Element[] {
+  const target = normalizeGuid(rootIdBraced);
+  return elementsByLocalName(threadedDoc, 'threadedComment').filter(
+    (el) => normalizeGuid(el.getAttribute('parentId') ?? '') === target
+  );
+}
+
+function textOfThreadedComment(el: Element): string {
+  const textEl = elementsByLocalName(el, 'text')[0];
+  return textEl?.textContent ?? '';
+}
+
+function findRootByRefAndGuid(threadedDoc: Document, ref: string, guidNorm: string): Element | null {
+  return (
+    elementsByLocalName(threadedDoc, 'threadedComment').find(
+      (el) => isRootThreadedComment(el) && el.getAttribute('ref') === ref && normalizeGuid(el.getAttribute('id') ?? '') === guidNorm
+    ) ?? null
+  );
+}
+
+function findAnyRootAtRef(threadedDoc: Document, ref: string): Element | null {
+  return elementsByLocalName(threadedDoc, 'threadedComment').find((el) => isRootThreadedComment(el) && el.getAttribute('ref') === ref) ?? null;
+}
+
+function findRootsByGuid(threadedDoc: Document, guidNorm: string): Element[] {
+  return elementsByLocalName(threadedDoc, 'threadedComment').filter(
+    (el) => isRootThreadedComment(el) && normalizeGuid(el.getAttribute('id') ?? '') === guidNorm
+  );
+}
+
+interface ThreadTarget {
+  ctx: WorksheetContext;
+  cell: string;
+  rootEl: Element;
+}
+
+/** §4.2's corrected id-resolution algorithm (design review 1, F1; ambiguity
+ *  refusal design review round 2, F3): (1) open the HINTED worksheet and
+ *  match the embedded GUID against a root at the hinted `ref`; (2) on a
+ *  miss, fall back to a full-workbook scan for a root whose `id` matches;
+ *  (3) refuse `'comment-not-found'` only if NEITHER finds it, or
+ *  `'ambiguous-comment-id'` if the FALLBACK scan finds more than one —
+ *  never "the nth thread currently at this ref". */
+async function resolveXlsxThreadTarget(
+  archive: XlsxArchive,
+  id: string
+): Promise<{ ok: true; target: ThreadTarget } | { ok: false; error: 'comment-not-found' | 'ambiguous-comment-id' | 'ambiguous-comment-wiring' | 'archive-too-large' }> {
+  const parsed = parseXlsxThreadId(id);
+  if (!parsed) return { ok: false, error: 'comment-not-found' };
+  const guidNorm = normalizeGuid(parsed.guid);
+
+  const hintedSheet = archive.sheets.find((s) => s.sheetId === parsed.sheetId && !s.isChartsheet);
+  if (hintedSheet) {
+    const ctxResult = await getWorksheetContext(archive, hintedSheet);
+    if (!ctxResult.ok) {
+      if (ctxResult.error === 'archive-too-large') return { ok: false, error: 'archive-too-large' };
+      // 'invalid-selector' here means the worksheet part itself is missing —
+      // fall through to the workbook-wide scan below rather than failing
+      // outright, since the hint is only ever a locate-first shortcut.
+    } else {
+      const ctx = ctxResult.ctx;
+      if (ctx.ambiguous) return { ok: false, error: 'ambiguous-comment-wiring' };
+      if (ctx.threadedDoc) {
+        const hit = findRootByRefAndGuid(ctx.threadedDoc, parsed.cell, guidNorm);
+        if (hit) return { ok: true, target: { ctx, cell: parsed.cell, rootEl: hit } };
+      }
+    }
+  }
+
+  const matches: ThreadTarget[] = [];
+  for (const sheetMeta of archive.sheets) {
+    if (sheetMeta.isChartsheet) continue;
+    const ctxResult = await getWorksheetContext(archive, sheetMeta);
+    if (!ctxResult.ok) {
+      if (ctxResult.error === 'archive-too-large') return { ok: false, error: 'archive-too-large' };
+      continue;
+    }
+    const ctx = ctxResult.ctx;
+    if (ctx.ambiguous || !ctx.threadedDoc) continue;
+    for (const rootEl of findRootsByGuid(ctx.threadedDoc, guidNorm)) {
+      matches.push({ ctx, cell: rootEl.getAttribute('ref') ?? '', rootEl });
+    }
+  }
+  if (matches.length === 0) return { ok: false, error: 'comment-not-found' };
+  if (matches.length > 1) return { ok: false, error: 'ambiguous-comment-id' };
+  return { ok: true, target: matches[0] };
+}
+
+/** §4.2's own rule: `sheet` is required only when the workbook has more than
+ *  one (non-chartsheet) tab. Reused identically by add's `selector` and
+ *  move's `newSelector`. */
 async function resolveWorksheetForSelector(
   archive: XlsxArchive,
   sel: CellSelector
-): Promise<{ ok: true; ctx: WorksheetContext } | { ok: false; error: 'sheet-not-found' | 'invalid-selector' | 'ambiguous-comment-wiring' }> {
+): Promise<{ ok: true; ctx: WorksheetContext } | { ok: false; error: 'sheet-not-found' | 'invalid-selector' | 'ambiguous-comment-wiring' | 'archive-too-large' }> {
   if (!isValidCellAddress(sel.cell)) return { ok: false, error: 'invalid-selector' };
   const realSheets = archive.sheets.filter((s) => !s.isChartsheet);
   let sheetMeta: SheetMeta;
@@ -1200,104 +1215,381 @@ async function resolveWorksheetForSelector(
     sheetMeta = realSheets[0];
   }
   const ctxResult = await getWorksheetContext(archive, sheetMeta);
-  if (!ctxResult.ok) return { ok: false, error: 'invalid-selector' };
-  if (ctxResult.ctx.wiring === 'ambiguous') return { ok: false, error: 'ambiguous-comment-wiring' };
+  if (!ctxResult.ok) {
+    if (ctxResult.error === 'archive-too-large') return ctxResult;
+    return { ok: false, error: 'invalid-selector' };
+  }
+  if (ctxResult.ctx.ambiguous) return { ok: false, error: 'ambiguous-comment-wiring' };
   return { ok: true, ctx: ctxResult.ctx };
 }
 
-/** `"x-3-B5"` -> `{worksheetId: 3, cell: "B5"}`; `null` for anything not
- *  shaped like a root comment id T12's reader mints (§4's own `id:
- *  \`x-${worksheet.id}-${cell.address}\``, where `worksheet.id` is the
- *  `sheetId` XML attribute — see the T18 spike's own "worksheet id... comes
- *  from `<sheet sheetId="N">`... never from position" finding, which this
- *  writer matches by indexing `archive.sheets` on `sheetId` too, never list
- *  position). A REPLY id (`x-3-B5-r1`) is never a valid target for
- *  reply/resolve/reopen/move — those four always act on a whole THREAD. */
-function parseXlsxCommentId(id: string): { sheetId: number; cell: string } | null {
-  const m = /^x-(-?\d+)-(.+)$/.exec(id);
-  if (!m) return null;
-  const sheetId = Number.parseInt(m[1], 10);
-  if (Number.isNaN(sheetId) || !isValidCellAddress(m[2])) return null;
-  return { sheetId, cell: m[2] };
-}
+/** Removes a thread's root+replies from `ctx.threadedDoc`, its ONE legacy
+ *  `<comment>` from `ctx.commentsDoc`, and its `<v:shape>` from `ctx.vmlDoc`
+ *  (matched by `<x:Row>`/`<x:Column>`, the same 0-based pair every legacy-
+ *  note-writing tool writes into `<x:ClientData>`) — used only by Move, to
+ *  vacate the OLD `[sheet, cell]` pair. */
+function removeThreadFromWorksheet(ctx: WorksheetContext, cell: string, rootEl: Element): void {
+  const rootId = rootEl.getAttribute('id') ?? '';
+  for (const reply of repliesOfRoot(ctx.threadedDoc!, rootId)) {
+    reply.parentNode?.removeChild(reply as unknown as Node);
+  }
+  rootEl.parentNode?.removeChild(rootEl as unknown as Node);
+  ctx.threadedChanged = true;
 
-async function findCommentTargetXlsx(
-  archive: XlsxArchive,
-  id: string
-): Promise<
-  | { ok: true; ctx: WorksheetContext; commentEl: Element; cellAddr: string }
-  | { ok: false; error: 'comment-not-found' | 'ambiguous-comment-wiring' }
-> {
-  const parsed = parseXlsxCommentId(id);
-  if (!parsed) return { ok: false, error: 'comment-not-found' };
-  const sheetMeta = archive.sheets.find((s) => s.sheetId === parsed.sheetId);
-  if (!sheetMeta) return { ok: false, error: 'comment-not-found' };
-  const ctxResult = await getWorksheetContext(archive, sheetMeta);
-  if (!ctxResult.ok) return { ok: false, error: 'comment-not-found' };
-  const ctx = ctxResult.ctx;
-  if (ctx.wiring === 'none') return { ok: false, error: 'comment-not-found' };
-  if (ctx.wiring === 'ambiguous') return { ok: false, error: 'ambiguous-comment-wiring' };
-  const commentEl = findXlsxComment(ctx.commentsDoc!, parsed.cell);
-  if (!commentEl) return { ok: false, error: 'comment-not-found' };
-  return { ok: true, ctx, commentEl, cellAddr: parsed.cell };
-}
-
-/** Removes `cellAddr`'s `<comment>` from `ctx.commentsDoc` and its matching
- *  `<v:shape>` from `ctx.vmlDoc` (matched by `<x:Row>`/`<x:Column>` — the
- *  same 0-based pair every legacy-note-writing tool, including this one,
- *  writes into `<x:ClientData>`, confirmed present in real LibreOffice
- *  output too). Used only by Move, to vacate the OLD `[sheet, cell]` pair
- *  without leaving an orphaned entry behind. */
-function removeXlsxCommentAndShape(ctx: WorksheetContext, cellAddr: string): void {
-  const commentEl = findXlsxComment(ctx.commentsDoc!, cellAddr);
+  const commentEl = ctx.commentsDoc ? findTcComment(ctx.commentsDoc, rootId) : null;
   if (commentEl) {
     commentEl.parentNode?.removeChild(commentEl as unknown as Node);
     ctx.commentsChanged = true;
   }
-  const { col, row } = parseCellRef(cellAddr);
+  const { col, row } = parseCellRef(cell);
   const zeroRow = String(row - 1);
   const zeroCol = String(col - 1);
-  for (const shape of elementsByTag(ctx.vmlDoc!, 'v:shape')) {
-    const clientData = elementsByTag(shape, 'x:ClientData')[0];
-    if (!clientData) continue;
-    const rowEl = elementsByTag(clientData, 'x:Row')[0];
-    const colEl = elementsByTag(clientData, 'x:Column')[0];
-    if (rowEl?.textContent === zeroRow && colEl?.textContent === zeroCol) {
-      shape.parentNode?.removeChild(shape as unknown as Node);
-      ctx.vmlChanged = true;
-      break;
+  if (ctx.vmlDoc) {
+    for (const shape of elementsByTag(ctx.vmlDoc, 'v:shape')) {
+      const clientData = elementsByTag(shape, 'x:ClientData')[0];
+      if (!clientData) continue;
+      const rowEl = elementsByTag(clientData, 'x:Row')[0];
+      const colEl = elementsByTag(clientData, 'x:Column')[0];
+      if (rowEl?.textContent === zeroRow && colEl?.textContent === zeroCol) {
+        shape.parentNode?.removeChild(shape as unknown as Node);
+        ctx.vmlChanged = true;
+        break;
+      }
     }
   }
+}
+
+interface ThreadSnapshotReply {
+  id: string;
+  personId: string;
+  dT: string;
+  text: string;
+}
+
+interface ThreadSnapshot {
+  id: string;
+  personId: string;
+  dT: string;
+  done: boolean;
+  text: string;
+  replies: ThreadSnapshotReply[];
+}
+
+function snapshotThread(ctx: WorksheetContext, rootEl: Element): ThreadSnapshot {
+  const rootId = rootEl.getAttribute('id') ?? '';
+  const replies = repliesOfRoot(ctx.threadedDoc!, rootId)
+    .slice()
+    .sort((a, b) => parseThreadedDate(a.getAttribute('dT') ?? '') - parseThreadedDate(b.getAttribute('dT') ?? ''))
+    .map((r) => ({
+      id: r.getAttribute('id') ?? '',
+      personId: r.getAttribute('personId') ?? '',
+      dT: r.getAttribute('dT') ?? '',
+      text: textOfThreadedComment(r),
+    }));
+  return {
+    id: rootId,
+    personId: rootEl.getAttribute('personId') ?? '',
+    dT: rootEl.getAttribute('dT') ?? '',
+    done: rootEl.getAttribute('done') === '1',
+    text: textOfThreadedComment(rootEl),
+    replies,
+  };
+}
+
+/** Appends a `<threadedComment>` element (root or reply) matching the target
+ *  document's own namespace-prefix convention (§4.2's own load-bearing
+ *  finding — a brand-new part always uses the default-namespace convention,
+ *  since `ensureThreadedWiring` always mints one from `EMPTY_THREADED_COMMENTS_XML`). */
+function appendThreadedElement(
+  threadedDoc: Document,
+  attrs: { ref: string; dT: string; personId: string; id: string; parentId?: string; done?: boolean },
+  text: string
+): void {
+  const prefix = detectPrefix(threadedDoc);
+  const el = threadedDoc.createElement(tcTag(prefix, 'threadedComment'));
+  const orderedAttrs: Array<[string, string]> = [
+    ['ref', attrs.ref],
+    ['dT', attrs.dT],
+    ['personId', attrs.personId],
+    ['id', attrs.id],
+  ];
+  if (attrs.parentId) orderedAttrs.push(['parentId', attrs.parentId]);
+  if (attrs.done) orderedAttrs.push(['done', '1']);
+  setOrderedAttributes(el, orderedAttrs);
+  const textEl = threadedDoc.createElement(tcTag(prefix, 'text'));
+  textEl.textContent = text;
+  el.appendChild(textEl);
+  threadedDoc.documentElement.appendChild(el);
+}
+
+/** Re-runs `ensureThreadedWiring`, appends `snapshot`'s root+replies verbatim
+ *  (SAME ids/personIds/timestamps/text/done state — §3.3/§4.3a's own "never
+ *  minting fresh GUIDs on a move" rule), the matching legacy placeholder
+ *  (a FRESH `authorId` in the destination file's own `<authors>` list, since
+ *  author indices are per-file, but the SAME `tc={root id}` string), and a
+ *  fresh `<v:shape>` at the new cell. Used by both Add (a `snapshot` with no
+ *  replies) and Move. */
+function insertThreadIntoWorksheet(archive: XlsxArchive, ctx: WorksheetContext, cell: string, snapshot: ThreadSnapshot): void {
+  ensureThreadedWiring(archive, ctx);
+
+  appendThreadedElement(
+    ctx.threadedDoc!,
+    { ref: cell, dT: snapshot.dT, personId: snapshot.personId, id: snapshot.id, done: snapshot.done },
+    snapshot.text
+  );
+  ctx.threadedChanged = true;
+  for (const reply of snapshot.replies) {
+    appendThreadedElement(ctx.threadedDoc!, { ref: cell, dT: reply.dT, personId: reply.personId, id: reply.id, parentId: snapshot.id }, reply.text);
+  }
+
+  const authorIdx = appendTcAuthor(ctx.commentsDoc!, snapshot.id);
+  const body = buildPlaceholderBody(
+    snapshot.text,
+    snapshot.replies.map((r) => r.text)
+  );
+  appendPlaceholderComment(ctx.commentsDoc!, cell, authorIdx, snapshot.id, body);
+  ctx.commentsChanged = true;
+
+  const { col, row } = parseCellRef(cell);
+  const shape = buildThreadedVmlShape(ctx.vmlDoc!, nextVmlShapeId(ctx.vmlDoc!), col, row);
+  ctx.vmlDoc!.documentElement.appendChild(shape);
+  ctx.vmlChanged = true;
 }
 
 function serializeXlsxArchive(archive: XlsxArchive): Promise<Buffer> {
   if (archive.contentTypesChanged) {
-    writeXlsxPart(archive.zip, '[Content_Types].xml', archive.contentTypesDoc, archive.contentTypesXmlOriginal);
+    writeXlsxPart(archive.zip, '[Content_Types].xml', true, archive.contentTypesDoc, archive.contentTypesXmlOriginal);
+  }
+  if (archive.workbookRelsChanged) {
+    writeXlsxPart(archive.zip, 'xl/_rels/workbook.xml.rels', true, archive.workbookRelsDoc, archive.workbookRelsXmlOriginal);
+  }
+  if (archive.personsChanged && archive.personsDoc) {
+    writeXlsxPart(archive.zip, archive.personsPartPath, true, archive.personsDoc, archive.personsXmlOriginal);
   }
   for (const ctx of archive.worksheetContexts.values()) {
-    if (ctx.worksheetChanged) writeXlsxPart(archive.zip, ctx.partPath, ctx.worksheetDoc, ctx.worksheetXmlOriginal);
-    if (ctx.relsChanged) writeXlsxPart(archive.zip, ctx.relsPartPath, ctx.relsDoc, ctx.relsXmlOriginal);
+    if (ctx.worksheetChanged) writeXlsxPart(archive.zip, ctx.partPath, true, ctx.worksheetDoc, ctx.worksheetXmlOriginal);
+    if (ctx.relsChanged) writeXlsxPart(archive.zip, ctx.relsPartPath, true, ctx.relsDoc, ctx.relsXmlOriginal);
     if (ctx.commentsChanged && ctx.commentsDoc && ctx.commentsPartPath) {
-      writeXlsxPart(archive.zip, ctx.commentsPartPath, ctx.commentsDoc, ctx.commentsXmlOriginal);
+      writeXlsxPart(archive.zip, ctx.commentsPartPath, true, ctx.commentsDoc, ctx.commentsXmlOriginal);
     }
     if (ctx.vmlChanged && ctx.vmlDoc && ctx.vmlPartPath) {
-      writeXlsxPart(archive.zip, ctx.vmlPartPath, ctx.vmlDoc, ctx.vmlXmlOriginal);
+      writeXlsxPart(archive.zip, ctx.vmlPartPath, true, ctx.vmlDoc, ctx.vmlXmlOriginal);
+    }
+    if (ctx.threadedChanged && ctx.threadedDoc && ctx.threadedPartPath) {
+      writeXlsxPart(archive.zip, ctx.threadedPartPath, true, ctx.threadedDoc, ctx.threadedXmlOriginal);
     }
   }
   // Every OTHER part in the archive — styles, shared strings, other
-  // worksheets, docProps/*, xl/externalLinks/*, images, everything — was
-  // never read into a Document at all and is never `zip.file()`d again here,
-  // so JSZip's own generateAsync passthrough emits its ORIGINAL bytes
-  // unchanged. This IS the fix: nothing this operation didn't touch is ever
-  // re-encoded.
+  // worksheets, docProps/*, xl/externalLinks/*, images, a genuine Note
+  // elsewhere in the same file, everything — was never read into a Document
+  // at all and is never `zip.file()`d again here, so JSZip's own
+  // generateAsync passthrough emits its ORIGINAL bytes unchanged.
   return archive.zip.generateAsync({ type: 'nodebuffer' });
 }
 
 // -----------------------------------------------------------------------
-// Pure, in-memory mutations — bytes in, bytes out. No disk I/O here at all;
-// `writeFileMutation` (write-pipeline.ts) owns backup/atomic-write/verify/
-// rollback so EVERY operation gets that behaviour identically, in one place.
+// Read (T12) — hand-rolled JSZip + linkedom parse of
+// xl/threadedComments/threadedComment{N}.xml + xl/persons/person.xml.
 // -----------------------------------------------------------------------
+
+/**
+ * Reads every Excel THREADED comment out of a `.xlsx`'s raw bytes into
+ * `PersistedComment`-shaped thread records — never exceljs, never a legacy
+ * Note (§4.1). `path` is the file's own (project-relative) path, stamped
+ * onto each returned record the same way docx-comments.ts's own
+ * `readDocxComments` does.
+ *
+ * A workbook with ONLY genuine Notes (no threaded comments at all) returns
+ * an EMPTY list, not the garbled pseudo-comment the retired exceljs-based
+ * reader produced for this exact shape (§4.1) — this module never opens a
+ * legacy `commentsN.xml` at all during a read, since nothing in it
+ * contributes information not already in the real threadedComment part; a
+ * worksheet with no `threadedComment` relationship simply contributes no
+ * records.
+ */
+export async function readXlsxComments(bytes: Uint8Array | Buffer, path: string): Promise<XlsxReadResult> {
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(bytes);
+  } catch {
+    return { ok: false, error: 'invalid-xlsx' };
+  }
+
+  const workbookFile = zip.file('xl/workbook.xml');
+  if (!workbookFile) return { ok: false, error: 'invalid-xlsx' };
+  const sizeCheck0 = checkNamedEntriesWithinCeiling(zip, ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels']);
+  if (!sizeCheck0.ok) return { ok: false, error: sizeCheck0.error };
+
+  let workbookXml: string;
+  let workbookRelsXml: string;
+  try {
+    const workbookRelsFile = zip.file('xl/_rels/workbook.xml.rels');
+    [workbookXml, workbookRelsXml] = await Promise.all([
+      workbookFile.async('string'),
+      workbookRelsFile ? workbookRelsFile.async('string') : Promise.resolve(EMPTY_RELS_XML),
+    ]);
+  } catch {
+    return { ok: false, error: 'invalid-xlsx' };
+  }
+
+  const sheets = parseSheetsFromWorkbook(workbookXml, workbookRelsXml);
+  const realSheets = sheets.filter((s) => !s.isChartsheet);
+  const singleSheet = realSheets.length <= 1;
+  const workbookRelsDoc = parseXml(workbookRelsXml);
+
+  // Person map, resolved once at workbook level (§4.2).
+  const personMap = new Map<string, string>();
+  const personRel = elementsByTag(workbookRelsDoc, 'Relationship').find((el) => el.getAttribute('Type') === PERSON_REL_TYPE);
+  if (personRel) {
+    const personPath = resolveRelTarget('xl', personRel.getAttribute('Target') ?? '');
+    const personRead = await readOptionalPart(zip, personPath);
+    if (!personRead.ok) return personRead;
+    if (personRead.text !== null) {
+      const personDoc = parseXml(personRead.text);
+      for (const el of elementsByLocalName(personDoc, 'person')) {
+        const id = el.getAttribute('id');
+        if (id) personMap.set(normalizeGuid(id), decodeXmlEntities(el.getAttribute('displayName') ?? ''));
+      }
+    }
+  }
+
+  let totalRecords = 0;
+  const comments: PersistedComment[] = [];
+
+  for (const sheetMeta of realSheets) {
+    const relsPath = worksheetRelsPathFor(sheetMeta.partPath);
+    const relsRead = await readOptionalPart(zip, relsPath);
+    if (!relsRead.ok) return relsRead;
+    if (relsRead.text === null) continue;
+    const relsDoc = parseXml(relsRead.text);
+    const threadedRel = elementsByTag(relsDoc, 'Relationship').find((el) => el.getAttribute('Type') === THREADED_COMMENT_REL_TYPE);
+    if (!threadedRel) continue;
+    const threadedPath = resolveRelTarget(dirnameOfPart(sheetMeta.partPath), threadedRel.getAttribute('Target') ?? '');
+    const threadedRead = await readOptionalPart(zip, threadedPath);
+    if (!threadedRead.ok) return threadedRead;
+    if (threadedRead.text === null) continue; // dangling relationship — skip this sheet rather than fail the whole read
+
+    const threadedDoc = parseXml(threadedRead.text);
+    const all = elementsByLocalName(threadedDoc, 'threadedComment');
+    totalRecords += all.length;
+    if (totalRecords > MAX_COMMENT_RECORDS) return { ok: false, error: 'too-many-comments' };
+
+    const repliesByRoot = new Map<string, Element[]>();
+    const roots: Element[] = [];
+    for (const el of all) {
+      const parentId = el.getAttribute('parentId');
+      if (parentId) {
+        const key = normalizeGuid(parentId);
+        const list = repliesByRoot.get(key) ?? [];
+        list.push(el);
+        repliesByRoot.set(key, list);
+      } else {
+        roots.push(el);
+      }
+    }
+
+    for (const rootEl of roots) {
+      const rootId = rootEl.getAttribute('id') ?? '';
+      const ref = rootEl.getAttribute('ref') ?? '';
+      const personId = rootEl.getAttribute('personId') ?? '';
+      const dT = rootEl.getAttribute('dT') ?? '';
+      const resolved = rootEl.getAttribute('done') === '1';
+      const text = textOfThreadedComment(rootEl);
+      const replyEls = (repliesByRoot.get(normalizeGuid(rootId)) ?? [])
+        .slice()
+        .sort((a, b) => parseThreadedDate(a.getAttribute('dT') ?? '') - parseThreadedDate(b.getAttribute('dT') ?? ''));
+
+      const appId = buildXlsxThreadId(sheetMeta.sheetId, ref, rootId);
+      const replies: CommentReply[] = replyEls.map((r, i) => ({
+        id: `${appId}-r${i + 1}`,
+        author: toCommentAuthor(personMap.get(normalizeGuid(r.getAttribute('personId') ?? '')) ?? 'Unknown'),
+        text: textOfThreadedComment(r),
+        createdAt: parseThreadedDate(r.getAttribute('dT') ?? ''),
+      }));
+
+      const cellSelector: CellSelector = {
+        type: 'CellSelector',
+        cell: ref,
+        ...(singleSheet ? {} : { sheet: sheetMeta.name }),
+      };
+
+      comments.push({
+        id: appId,
+        path,
+        selector: { kind: 'cell', selector: cellSelector },
+        text,
+        author: toCommentAuthor(personMap.get(normalizeGuid(personId)) ?? 'Unknown'),
+        createdAt: parseThreadedDate(dT),
+        replies,
+        resolved,
+        // A threaded comment's OOXML has no separate resolve/reopen AUDIT
+        // TRAIL — only the current `done` bit. Same reasoning as
+        // docx-comments.ts's own read path: `history` starts empty on a
+        // freshly-read native comment.
+        history: [],
+      });
+    }
+  }
+
+  return { ok: true, comments };
+}
+
+// =============================================================================
+// Write (T13) — surgical add/reply/resolve/reopen/move, mirroring docx's §3.3.
+// =============================================================================
+
+// Not exported: same knip convention as `XlsxReadError` above.
+//
+// 'comment-not-found': a reply/resolve/reopen/move `id` that can't be
+//   resolved to a real thread root (hinted lookup AND full-workbook fallback
+//   both miss).
+// 'ambiguous-comment-id' (design review round 2, F3): the fallback scan found
+//   MORE than one root sharing the embedded GUID — never silently acted on
+//   scan order.
+// 'invalid-selector': add's `selector` (or move's `newSelector`) isn't a
+//   `kind: 'cell'` selector, names a malformed cell reference, or omits
+//   `sheet` on a workbook with more than one tab.
+// 'sheet-not-found': a named `sheet` doesn't exist in the workbook (or names
+//   a chartsheet, which never carries cell comments).
+// 'cell-has-note' (§4.1): the target cell already carries a GENUINE
+//   (non-`tc=`) Note — this app's own policy, refused rather than layered on
+//   top of it (Excel's own engine behavior here is unverified either way).
+// 'cell-already-has-comment' (§4.2's own one-thread-per-cell WRITE policy):
+//   `add` targeted a cell that already carries ANY thread (resolved or not)
+//   — a real file's cell can carry several independent threads, but THIS
+//   app's own "Add comment" always offers reply-to-the-existing-thread
+//   instead, mirroring Excel's everyday UI.
+// 'destination-cell-occupied': `move`'s `newSelector` names a DIFFERENT cell
+//   that already carries its OWN thread.
+// 'ambiguous-comment-wiring': the target worksheet's own legacy comments/vml/
+//   legacyDrawing/threadedComment wiring is a partial or inconsistent
+//   combination no real Excel/Google-Sheets writer produces.
+// 'file-open-elsewhere' (design review round 3, F4 — §3.3 step 0, shared by
+//   write-pipeline.ts): a real Word/Excel/LibreOffice owner/lock file sits
+//   beside the target — inherited for free via the shared pipeline entry
+//   point, no separate implementation needed here.
+type XlsxWriteError =
+  | XlsxReadError
+  | 'comment-not-found'
+  | 'ambiguous-comment-id'
+  | 'invalid-selector'
+  | 'sheet-not-found'
+  | 'cell-has-note'
+  | 'cell-already-has-comment'
+  | 'destination-cell-occupied'
+  | 'ambiguous-comment-wiring'
+  | 'read-failed'
+  | 'backup-failed'
+  | 'write-failed'
+  | 'verify-failed'
+  | 'file-open-elsewhere';
+
+export type XlsxWriteResult<Extra extends Record<string, unknown> = {}> = ({ ok: true } & Extra) | { ok: false; error: XlsxWriteError };
+
+type XlsxErrorResult = { ok: false; error: XlsxWriteError };
+type XlsxMutateResult<Extra extends Record<string, unknown>> = ({ ok: true } & Extra) | XlsxErrorResult;
+
+const XLSX_BACKUP_SUFFIX = '.xlsx.bak';
 
 async function mutateAddXlsxComment(
   currentBytes: Buffer,
@@ -1313,24 +1605,26 @@ async function mutateAddXlsxComment(
   const ctx = wsResult.ctx;
   const cellAddr = args.selector.selector.cell;
 
-  if (ctx.wiring === 'existing' && findXlsxComment(ctx.commentsDoc!, cellAddr)) {
+  if (ctx.threadedDoc && findAnyRootAtRef(ctx.threadedDoc, cellAddr)) {
     return { ok: false, error: 'cell-already-has-comment' };
   }
-  if (!cellExistsInSheetData(ctx.worksheetDoc, cellAddr)) return { ok: false, error: 'cell-has-no-value' };
-  if (ctx.wiring === 'none') ensureWiringForAdd(archive, ctx);
+  if (ctx.commentsDoc && findGenuineNoteAtCell(ctx.commentsDoc, cellAddr)) {
+    return { ok: false, error: 'cell-has-note' };
+  }
 
-  const authorIdx = resolveAuthorIndex(ctx.commentsDoc!);
-  const body = `${commentAuthorToDisplayName(args.author)}: ${args.text}`;
-  appendXlsxComment(ctx.commentsDoc!, cellAddr, authorIdx, body);
-  ctx.commentsChanged = true;
-
-  const { col, row } = parseCellRef(cellAddr);
-  const shape = buildVmlShapeElement(ctx.vmlDoc!, nextVmlShapeId(ctx.vmlDoc!), col, row);
-  ctx.vmlDoc!.documentElement.appendChild(shape);
-  ctx.vmlChanged = true;
+  const personId = resolveOrCreatePerson(archive, args.author);
+  const snapshot: ThreadSnapshot = {
+    id: mintGuid(),
+    personId,
+    dT: formatThreadedDate(new Date()),
+    done: false,
+    text: args.text,
+    replies: [],
+  };
+  insertThreadIntoWorksheet(archive, ctx, cellAddr, snapshot);
 
   const bytes = await serializeXlsxArchive(archive);
-  return { ok: true, bytes, id: `x-${ctx.sheetId}-${cellAddr}` };
+  return { ok: true, bytes, id: buildXlsxThreadId(ctx.sheetId, cellAddr, snapshot.id) };
 }
 
 async function mutateReplyToXlsxComment(
@@ -1340,15 +1634,34 @@ async function mutateReplyToXlsxComment(
   const loaded = await loadXlsxArchiveForWrite(currentBytes);
   if (!loaded.ok) return loaded;
   const { archive } = loaded;
-  const found = await findCommentTargetXlsx(archive, args.id);
+  const found = await resolveXlsxThreadTarget(archive, args.id);
   if (!found.ok) return found;
-  const { ctx, commentEl } = found;
+  const { ctx, cell, rootEl } = found.target;
 
-  const rawBody = rawBodyOfXlsxComment(commentEl);
-  const { resolved, body } = stripResolvedMarker(rawBody);
-  const withReply = `${body}\n\n${commentAuthorToDisplayName(args.author)}: ${args.text}`;
-  setXlsxCommentBody(ctx.commentsDoc!, commentEl, resolved ? `${withReply}\n${RESOLVED_MARKER}` : withReply);
-  ctx.commentsChanged = true;
+  const rootId = rootEl.getAttribute('id') ?? '';
+  const ref = rootEl.getAttribute('ref') ?? cell;
+  const personId = resolveOrCreatePerson(archive, args.author);
+  const replyId = mintGuid();
+  appendThreadedElement(
+    ctx.threadedDoc!,
+    { ref, dT: formatThreadedDate(new Date()), personId, id: replyId, parentId: rootId },
+    args.text
+  );
+  ctx.threadedChanged = true;
+
+  // §4.2: the placeholder is rebuilt WHOLE from the thread's current full
+  // transcript — read the (now-updated) reply list straight back off
+  // `threadedDoc` rather than tracking it separately, so this can never
+  // disagree with what was just appended above.
+  const replies = repliesOfRoot(ctx.threadedDoc!, rootId)
+    .slice()
+    .sort((a, b) => parseThreadedDate(a.getAttribute('dT') ?? '') - parseThreadedDate(b.getAttribute('dT') ?? ''))
+    .map((r) => textOfThreadedComment(r));
+  const commentEl = ctx.commentsDoc ? findTcComment(ctx.commentsDoc, rootId) : null;
+  if (commentEl && ctx.commentsDoc) {
+    setXlsxCommentBody(ctx.commentsDoc, commentEl, buildPlaceholderBody(textOfThreadedComment(rootEl), replies));
+    ctx.commentsChanged = true;
+  }
 
   const bytes = await serializeXlsxArchive(archive);
   return { ok: true, bytes };
@@ -1362,94 +1675,66 @@ async function mutateSetResolvedXlsx(
   const loaded = await loadXlsxArchiveForWrite(currentBytes);
   if (!loaded.ok) return loaded;
   const { archive } = loaded;
-  const found = await findCommentTargetXlsx(archive, args.id);
+  const found = await resolveXlsxThreadTarget(archive, args.id);
   if (!found.ok) return found;
-  const { ctx, commentEl } = found;
+  const { ctx, rootEl } = found.target;
 
-  const rawBody = rawBodyOfXlsxComment(commentEl);
-  const { body } = stripResolvedMarker(rawBody);
-  // Resolving an already-(legacy-marker-)resolved note writes the CURRENT
-  // marker — the old token is never written again by any writer (§4.1) —
-  // and reopening strips whichever marker matched, leaving everything else
-  // in the body untouched.
-  setXlsxCommentBody(ctx.commentsDoc!, commentEl, done ? `${body}\n${RESOLVED_MARKER}` : body);
-  ctx.commentsChanged = true;
+  // §4.2: `done` lives ONLY on the root element, and this app OMITS the
+  // attribute entirely on reopen (never writes `done="0"`) — never touching
+  // the legacy placeholder, which never reflects resolve state at all.
+  if (done) rootEl.setAttribute('done', '1');
+  else rootEl.removeAttribute('done');
+  ctx.threadedChanged = true;
 
   const bytes = await serializeXlsxArchive(archive);
   return { ok: true, bytes };
 }
 
-/** §4.3's Move algorithm, now cross-sheet-capable: read the OLD cell's
- *  CURRENT note body VERBATIM (including any already-applied resolve marker
- *  — a move changes nothing about what was said or its resolve state, only
- *  where it points), remove the old cell's `<comment>`/`<v:shape>`, and
- *  append the identical body as a NEW `<comment>`/`<v:shape>` at the NEW
- *  `[sheet, cell]` pair the caller's `newSelector` names — minting fresh
- *  comments/VML parts for the destination worksheet if it has no notes yet
- *  (`ensureWiringForAdd`, the exact same helper Add uses). Refuses rather
- *  than clobbering if the destination already carries a DIFFERENT comment. */
 async function mutateMoveXlsxComment(
   currentBytes: Buffer,
   args: { id: string; newSelector: CommentSelector }
-): Promise<XlsxMutateResult<{ bytes: Buffer; movedBody: string }>> {
+): Promise<XlsxMutateResult<{ bytes: Buffer }>> {
   if (args.newSelector.kind !== 'cell') return { ok: false, error: 'invalid-selector' };
   const loaded = await loadXlsxArchiveForWrite(currentBytes);
   if (!loaded.ok) return loaded;
   const { archive } = loaded;
 
-  const found = await findCommentTargetXlsx(archive, args.id);
+  const found = await resolveXlsxThreadTarget(archive, args.id);
   if (!found.ok) return found;
-  const { ctx: oldCtx, commentEl: oldCommentEl, cellAddr: oldCellAddr } = found;
-  // Read verbatim BEFORE touching anything — this exact string is what gets
-  // written to the new location and compared byte-for-byte during verify.
-  const originalBody = rawBodyOfXlsxComment(oldCommentEl);
+  const { ctx: oldCtx, cell: oldCell, rootEl } = found.target;
+  // §4.3a: read the OLD cell's thread data VERBATIM before touching
+  // anything — reused, never re-minted, at the new location.
+  const snapshot = snapshotThread(oldCtx, rootEl);
 
   const wsResult = await resolveWorksheetForSelector(archive, args.newSelector.selector);
   if (!wsResult.ok) return wsResult;
   const newCtx = wsResult.ctx;
-  const newCellAddr = args.newSelector.selector.cell;
+  const newCell = args.newSelector.selector.cell;
 
-  const isSameCell = newCtx.partPath === oldCtx.partPath && newCellAddr === oldCellAddr;
-  if (!isSameCell && newCtx.wiring === 'existing' && findXlsxComment(newCtx.commentsDoc!, newCellAddr)) {
-    return { ok: false, error: 'destination-cell-occupied' };
+  const isSameCell = newCtx.partPath === oldCtx.partPath && newCell === oldCell;
+  if (!isSameCell && newCtx.threadedDoc) {
+    const existingAtDest = findAnyRootAtRef(newCtx.threadedDoc, newCell);
+    if (existingAtDest) return { ok: false, error: 'destination-cell-occupied' };
   }
-  // Same constraint `mutateAddXlsxComment` refuses on (see 'cell-has-no-value'
-  // above) — a DIFFERENT destination with zero sheetData presence would write
-  // valid OOXML this app's own reader still can't see. Not checked for
-  // `isSameCell` — that cell demonstrably already round-trips its note today
-  // (it's the READ path's own source for `oldCtx`/`oldCellAddr` above).
-  if (!isSameCell && !cellExistsInSheetData(newCtx.worksheetDoc, newCellAddr)) {
-    return { ok: false, error: 'cell-has-no-value' };
+  if (!isSameCell && newCtx.commentsDoc && findGenuineNoteAtCell(newCtx.commentsDoc, newCell)) {
+    return { ok: false, error: 'cell-has-note' };
   }
 
-  removeXlsxCommentAndShape(oldCtx, oldCellAddr);
-  if (newCtx.wiring === 'none') ensureWiringForAdd(archive, newCtx);
-
-  const authorIdx = resolveAuthorIndex(newCtx.commentsDoc!);
-  appendXlsxComment(newCtx.commentsDoc!, newCellAddr, authorIdx, originalBody);
-  newCtx.commentsChanged = true;
-
-  const { col, row } = parseCellRef(newCellAddr);
-  const shape = buildVmlShapeElement(newCtx.vmlDoc!, nextVmlShapeId(newCtx.vmlDoc!), col, row);
-  newCtx.vmlDoc!.documentElement.appendChild(shape);
-  newCtx.vmlChanged = true;
+  removeThreadFromWorksheet(oldCtx, oldCell, rootEl);
+  insertThreadIntoWorksheet(archive, newCtx, newCell, snapshot);
 
   const bytes = await serializeXlsxArchive(archive);
-  return { ok: true, bytes, movedBody: originalBody };
+  return { ok: true, bytes };
 }
 
 // -----------------------------------------------------------------------
 // Public orchestration — one per operation, each wiring its own mutate +
 // verify into `writeFileMutation`. `absolutePath` is the already-
-// containment-verified real file path (doc-comments-dispatch.ts resolves it,
-// the same way it already does for `listNativeComments`/docx's write path);
-// `path` is the caller's project-relative (or fallback-absolute) path,
-// stamped onto `PersistedComment.path` — needed here only to re-run T12's own
-// reader during verification. UNCHANGED from the original T13 (the public
-// signatures/verify strategy were never the problem this rewrite fixes).
+// containment-verified real file path (doc-comments-dispatch.ts resolves
+// it); `path` is the caller's project-relative (or fallback-absolute) path,
+// stamped onto `PersistedComment.path` — needed here only to re-run this
+// module's own reader during verification.
 // -----------------------------------------------------------------------
-
-const XLSX_BACKUP_SUFFIX = '.xlsx.bak';
 
 export async function addXlsxComment(args: {
   absolutePath: string;
@@ -1485,7 +1770,7 @@ export async function replyToXlsxComment(args: {
     async (newBytes) => {
       const result = await readXlsxComments(newBytes, args.path);
       if (!result.ok) return false;
-      const target = result.comments.find((c) => c.id === args.id);
+      const target = findByThreadIdPrefix(result.comments, args.id);
       return !!target && target.replies.some((r) => r.text === args.text);
     }
   );
@@ -1494,13 +1779,9 @@ export async function replyToXlsxComment(args: {
 /** `by` (§1.6's generic `{path, id, by}` payload) is accepted for call-site
  *  symmetry with the sidecar store's own `resolveComment`/`reopenComment` and
  *  docx-comments.ts's own `resolveDocxComment`, but deliberately UNUSED here:
- *  a native Excel Note has no separate resolve/reopen audit trail to record
- *  it into — only the CURRENT marker bit exists in the note body itself. */
-export async function resolveXlsxComment(args: {
-  absolutePath: string;
-  path: string;
-  id: string;
-}): Promise<XlsxWriteResult> {
+ *  a threaded comment's resolve/reopen has no separate audit trail — only the
+ *  current `done` bit exists in the file itself. */
+export async function resolveXlsxComment(args: { absolutePath: string; path: string; id: string }): Promise<XlsxWriteResult> {
   return writeFileMutation<{}, XlsxErrorResult>(
     args.absolutePath,
     XLSX_BACKUP_SUFFIX,
@@ -1508,17 +1789,13 @@ export async function resolveXlsxComment(args: {
     async (newBytes) => {
       const result = await readXlsxComments(newBytes, args.path);
       if (!result.ok) return false;
-      const target = result.comments.find((c) => c.id === args.id);
+      const target = findByThreadIdPrefix(result.comments, args.id);
       return !!target && target.resolved === true;
     }
   );
 }
 
-export async function reopenXlsxComment(args: {
-  absolutePath: string;
-  path: string;
-  id: string;
-}): Promise<XlsxWriteResult> {
+export async function reopenXlsxComment(args: { absolutePath: string; path: string; id: string }): Promise<XlsxWriteResult> {
   return writeFileMutation<{}, XlsxErrorResult>(
     args.absolutePath,
     XLSX_BACKUP_SUFFIX,
@@ -1526,7 +1803,7 @@ export async function reopenXlsxComment(args: {
     async (newBytes) => {
       const result = await readXlsxComments(newBytes, args.path);
       if (!result.ok) return false;
-      const target = result.comments.find((c) => c.id === args.id);
+      const target = findByThreadIdPrefix(result.comments, args.id);
       return !!target && target.resolved === false;
     }
   );
@@ -1538,47 +1815,36 @@ export async function moveXlsxComment(args: {
   id: string;
   newSelector: CommentSelector;
 }): Promise<XlsxWriteResult> {
-  // `movedBody` is `writeFileMutation`'s own internal `Extra` — needed by
-  // `verify` below to compare the new location's body against the ORIGINAL,
-  // but not part of this function's PUBLIC result shape. Stripped before
-  // returning to the caller, never leaked as an incidental extra field.
-  const result = await writeFileMutation<{ movedBody: string }, XlsxErrorResult>(
+  return writeFileMutation<{}, XlsxErrorResult>(
     args.absolutePath,
     XLSX_BACKUP_SUFFIX,
     (bytes) => mutateMoveXlsxComment(bytes, args),
-    async (newBytes, extra) => {
+    async (newBytes) => {
       if (args.newSelector.kind !== 'cell') return false;
-      const read = await readXlsxComments(newBytes, args.path);
-      if (!read.ok) return false;
-      // OLD id must be gone — a comment record is purely positional for
-      // xlsx (its id is derived from the cell address), so "the old range is
-      // gone" means no comment reads back at the OLD id any more.
-      if (read.comments.some((c) => c.id === args.id)) return false;
-      // NEW location's raw note body must match the ORIGINAL, verbatim.
-      const rawAtNew = await readRawXlsxNoteText(newBytes, args.newSelector.selector.sheet, args.newSelector.selector.cell);
-      return rawAtNew === extra.movedBody;
+      const result = await readXlsxComments(newBytes, args.path);
+      if (!result.ok) return false;
+      const target = findByThreadIdPrefix(result.comments, args.id);
+      if (!target || target.selector.kind !== 'cell') return false;
+      const wantSheet = args.newSelector.selector.sheet;
+      const gotSheet = target.selector.selector.sheet;
+      return target.selector.selector.cell === args.newSelector.selector.cell && (wantSheet ?? '') === (gotSheet ?? '');
     }
   );
-  return result.ok ? { ok: true } : result;
 }
 
-/** Verify-only helper: reads the raw note text at `[sheet, cell]` off
- *  ALREADY-WRITTEN bytes, straight through exceljs (the reader T12 already
- *  uses — no reason for a verify-only path to duplicate its own OOXML
- *  parsing) — used by Move's own verify step to confirm the NEW location's
- *  body matches the ORIGINAL byte-for-byte, which the parsed
- *  `PersistedComment` shape (turns split, marker stripped) can't itself
- *  assert directly. */
-async function readRawXlsxNoteText(bytes: Buffer, sheet: string | undefined, cell: string): Promise<string | null> {
-  const workbook = new ExcelJS.Workbook();
-  try {
-    await workbook.xlsx.load(Buffer.from(bytes) as any);
-  } catch {
-    return null;
-  }
-  const worksheet = sheet ? workbook.getWorksheet(sheet) : workbook.worksheets[0];
-  if (!worksheet) return null;
-  const targetCell = worksheet.getCell(cell);
-  if (!targetCell.note) return null;
-  return noteToPlainText(targetCell.note);
+/** A move changes the id's own embedded CELL (the hint), so the id a caller
+ *  passed to `moveXlsxComment` no longer matches any record after a
+ *  successful move — verification instead matches by the id's own embedded
+ *  GUID suffix, which a move never changes (§4.2: "never minting fresh
+ *  GUIDs on a move"). Also used by reply/resolve/reopen's own verify step
+ *  (there the id genuinely is unchanged, so this is equivalent to an exact
+ *  match, just expressed once). */
+function findByThreadIdPrefix(comments: readonly PersistedComment[], id: string): PersistedComment | undefined {
+  const parsed = parseXlsxThreadId(id);
+  if (!parsed) return undefined;
+  const guidNorm = normalizeGuid(parsed.guid);
+  return comments.find((c) => {
+    const p = parseXlsxThreadId(c.id);
+    return !!p && normalizeGuid(p.guid) === guidNorm;
+  });
 }

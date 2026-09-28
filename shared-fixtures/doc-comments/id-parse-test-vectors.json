@@ -1,0 +1,40 @@
+{
+  "_readFirst": "T12 (TS, desktop/src/main/doc-comments/xlsx-comments.ts) and T18 (Kotlin, XlsxComments.kt, not built in this session) both parse an xlsx app-level thread id with the SAME pre-written regex (docs/active/specs/2026-09-26-doc-comments-build-design.md §4.2, design review round 2 F2): /^xt-(\\d+)-([^-]+)-(.+)$/ — group 1 is sheetId (parsed as an integer), group 2 is the cell reference (never itself contains a hyphen), group 3 is the GUID VERBATIM (braces already stripped by whoever minted the id; never re-split on its own internal hyphens even though it contains four of them). Both runtimes read this file directly in their own pinning tests so a fix to one parser that the other doesn't share fails immediately, instead of silently diverging.",
+  "vectors": [
+    {
+      "case": "worked example from the design doc itself (uppercase GUID, Mac-Excel convention)",
+      "input": "xt-3-B19-36100E21-63DC-459D-8552-6830736C717E",
+      "sheetId": 3,
+      "cell": "B19",
+      "guid": "36100E21-63DC-459D-8552-6830736C717E"
+    },
+    {
+      "case": "lowercase GUID — real Google Sheets export convention (§4.2 guidFormat)",
+      "input": "xt-4-C56-f3048e4d-bc95-49f6-afd5-19cd805fd966",
+      "sheetId": 4,
+      "cell": "C56",
+      "guid": "f3048e4d-bc95-49f6-afd5-19cd805fd966"
+    },
+    {
+      "case": "single-digit sheetId",
+      "input": "xt-1-F7-04C1C54B-2744-A647-93D1-A99C27C7EFDC",
+      "sheetId": 1,
+      "cell": "F7",
+      "guid": "04C1C54B-2744-A647-93D1-A99C27C7EFDC"
+    },
+    {
+      "case": "single-letter, single-digit cell (A1)",
+      "input": "xt-2-A1-9079903E-5C85-DC40-828F-9D93A620480C",
+      "sheetId": 2,
+      "cell": "A1",
+      "guid": "9079903E-5C85-DC40-828F-9D93A620480C"
+    },
+    {
+      "case": "three-letter, seven-digit cell — Excel's own maximum address (XFD1048576)",
+      "input": "xt-5-XFD1048576-3A26E9AE-8B38-864D-BAF4-BA5D9C6E1DA4",
+      "sheetId": 5,
+      "cell": "XFD1048576",
+      "guid": "3A26E9AE-8B38-864D-BAF4-BA5D9C6E1DA4"
+    }
+  ]
+}

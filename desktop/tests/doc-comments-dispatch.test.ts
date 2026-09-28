@@ -96,15 +96,39 @@ describe('listNativeComments — reading a real .docx inside a project', () => {
 });
 
 describe('listNativeComments — reading a real .xlsx inside a project', () => {
-  it('reads the fixture’s own cell notes through the containment-checked source path', async () => {
+  // §4.1's threaded-comments-only redesign (2026-09-27): `q3-sales-by-rep.xlsx`
+  // carries only GENUINE legacy Notes, no threaded comments at all — this
+  // dispatch point reads through xlsx-comments.ts's own reader, which now
+  // never surfaces a genuine Note (the product has no write path for one any
+  // more). Confirms the dispatch layer passes that empty result through
+  // rather than a leftover legacy-Notes read succeeding underneath it.
+  it('reads zero comments from a workbook with only genuine Notes, through the containment-checked source path', async () => {
     await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3-sales-by-rep.xlsx'));
     const result = await listNativeComments('xlsx', { path: 'reports/q3-sales-by-rep.xlsx', projectRoot: root });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const q3Note = result.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B2');
-    expect(q3Note).toBeDefined();
-    expect(q3Note?.text).toContain('West is Priya');
+    expect(result.comments).toEqual([]);
+  });
+
+  it('reads a real threaded comment through the containment-checked source path', async () => {
+    await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
+    const target = path.join(root, 'reports', 'q3-sales-by-rep.xlsx');
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), target);
+    const added = await addNativeXlsxComment({
+      path: 'reports/q3-sales-by-rep.xlsx',
+      projectRoot: root,
+      selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'C3', sheet: 'Q3' } },
+      text: 'A brand new thread.',
+      author: 'user',
+    });
+    expect(added.ok).toBe(true);
+    const result = await listNativeComments('xlsx', { path: 'reports/q3-sales-by-rep.xlsx', projectRoot: root });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const thread = result.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'C3');
+    expect(thread).toBeDefined();
+    expect(thread?.text).toBe('A brand new thread.');
   });
 });
 
@@ -236,12 +260,19 @@ describe('addNativeXlsxComment / replyToNativeXlsxComment / etc. — gated the s
     const target = path.join(root, 'reports', 'q3-sales-by-rep.xlsx');
     await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), target);
 
-    const listed = await listNativeComments('xlsx', { path: 'reports/q3-sales-by-rep.xlsx', projectRoot: root });
-    expect(listed.ok).toBe(true);
-    if (!listed.ok) return;
-    const q3Note = listed.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B2');
-    expect(q3Note).toBeDefined();
-    const id = q3Note!.id;
+    // §4.1's threaded-comments-only redesign: this fixture carries only
+    // genuine legacy Notes, so a real THREAD to mutate has to be added
+    // first — mirrors how a real session would reach this state.
+    const added = await addNativeXlsxComment({
+      path: 'reports/q3-sales-by-rep.xlsx',
+      projectRoot: root,
+      selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'C3', sheet: 'Q3' } },
+      text: 'A brand new thread.',
+      author: 'user',
+    });
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    const id = added.id;
 
     const replied = await replyToNativeXlsxComment({ path: 'reports/q3-sales-by-rep.xlsx', projectRoot: root, id, text: 'Thanks!', author: 'user' });
     expect(replied).toEqual({ ok: true });

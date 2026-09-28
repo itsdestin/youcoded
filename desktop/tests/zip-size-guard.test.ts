@@ -1,11 +1,13 @@
 // Pins F3 (implementation review, both docx/xlsx read paths):
 // `decompressBounded`'s own byte-counting decompression-time backstop,
-// underneath the declared-size-only `checkNamedEntriesWithinCeiling`/
-// `checkTotalWithinCeiling` checks pinned by docx-comments.test.ts/
-// xlsx-comments.test.ts's own "decompression-bomb-shaped archive" describe
-// blocks. See zip-size-guard.ts's own header for why the declared-size checks
-// alone are not a sufficient guard: they only ever read central-directory
-// METADATA, which a crafted entry can simply lie about.
+// underneath the declared-size-only `checkNamedEntriesWithinCeiling` checks
+// pinned by docx-comments.test.ts's/xlsx-comments.test.ts's own
+// "decompression-bomb-shaped archive" describe blocks (both readers now open
+// only NAMED parts — §4.3's 2026-09-27 threaded-comments rewrite retired the
+// old whole-archive `checkTotalWithinCeiling` scan along with exceljs). See
+// zip-size-guard.ts's own header for why the declared-size checks alone are
+// not a sufficient guard: they only ever read central-directory METADATA,
+// which a crafted entry can simply lie about.
 import { describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
 import { Readable } from 'stream';

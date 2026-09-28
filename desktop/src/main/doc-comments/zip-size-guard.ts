@@ -2,9 +2,10 @@
 // readers (docs/active/specs/2026-09-26-doc-comments-build-design.md §3.2,
 // §4.3; implementation-review finding F2 — major).
 //
-// WHY: both readers hand a caller-supplied byte buffer straight to a zip
-// library (JSZip for docx, exceljs's own bundled JSZip for xlsx) with no
-// check on what that archive CLAIMS its contents will decompress to. A
+// WHY: both readers hand a caller-supplied byte buffer straight to JSZip
+// (xlsx moved off exceljs's own bundled JSZip entirely in the 2026-09-27
+// threaded-comments rewrite — §4.1/§4.3) with no check on what that archive
+// CLAIMS its contents will decompress to. A
 // crafted archive can declare an enormous uncompressed size for an entry
 // while its actual compressed bytes are tiny — the classic "zip bomb" shape
 // — and decompressing it would try to allocate however many bytes the
@@ -71,41 +72,28 @@ export function checkNamedEntriesWithinCeiling(zip: JSZip, names: string[]): Zip
   return { ok: true };
 }
 
-/**
- * Refuses if the SUM of every entry's declared uncompressed size (or any
- * single entry alone) is over the ceiling. Used by xlsx-comments.ts, which
- * pre-scans the whole archive with JSZip before handing the same bytes to
- * exceljs's own loader (§4.3's own instruction: "pre-scan the archive... sum/
- * individual uncompressed sizes... before exceljs load") — exceljs has no
- * hook to check this itself before it starts unzipping.
- */
-export function checkTotalWithinCeiling(zip: JSZip): ZipSizeGuardResult {
-  let total = 0;
-  let oversizedEntry = false;
-  zip.forEach((_relativePath, file) => {
-    if (file.dir) return;
-    const size = declaredUncompressedSize(file);
-    if (size > MAX_DECLARED_UNCOMPRESSED_BYTES) oversizedEntry = true;
-    total += size;
-  });
-  if (oversizedEntry || total > MAX_DECLARED_UNCOMPRESSED_BYTES) {
-    return { ok: false, error: 'archive-too-large' };
-  }
-  return { ok: true };
-}
+// `checkTotalWithinCeiling` (a whole-archive pre-scan) used to live here for
+// the old exceljs-based xlsx reader, which handed a black-box loader the
+// WHOLE archive with no hook to bound it itself. Removed 2026-09-27 (the
+// threaded-comments-only rewrite, §4.3's own "the guard narrows to match"
+// finding): exceljs is gone from xlsx-comments.ts entirely, and the new
+// hand-rolled reader/writer only ever opens NAMED parts by path — the exact
+// shape `checkNamedEntriesWithinCeiling` above already covers, matching
+// docx-comments.ts's own model. Kept only in git history, not as a second,
+// now-unused code path (knip's own "delete the unused export" rule).
 
 // =============================================================================
 // F3 (implementation review, both docx/xlsx READ paths): a decompression-time
-// backstop UNDERNEATH the two declared-size checks above.
+// backstop UNDERNEATH the declared-size check above.
 //
-// WHY the checks above are not enough on their own: both only ever read
+// WHY the check above is not enough on its own: it only ever reads
 // `declaredUncompressedSize`, a value this module's own header already
 // documents as coming from JSZip's internal-but-stable `_data.uncompressedSize`
 // field — itself sourced from the archive's own CENTRAL DIRECTORY metadata,
 // never verified against what an entry ACTUALLY decompresses to (and falling
 // back to `0` when absent — see `declaredUncompressedSize` above). A crafted
 // entry can declare a small (or absent) uncompressed size while its real
-// DEFLATE stream expands far past it; both declared-size checks would wave it
+// DEFLATE stream expands far past it; the declared-size check would wave it
 // straight through, and `.async('string')` would then decompress the FULL
 // real size into memory regardless. `decompressBounded` below is the check
 // that doesn't trust anything the archive DECLARES: it consumes the entry's
@@ -124,12 +112,11 @@ export type DecompressionGuardResult = { ok: true; text: string } | { ok: false;
  * MOMENT the running total exceeds `ceilingBytes` — never `.async('string')`,
  * which buffers the FULL decompressed output before this function would ever
  * get a chance to look at it. See this section's own header for why this
- * exists as a backstop UNDERNEATH `checkNamedEntriesWithinCeiling`/
- * `checkTotalWithinCeiling`, which only ever look at the archive's own
- * declared metadata.
+ * exists as a backstop UNDERNEATH `checkNamedEntriesWithinCeiling`, which
+ * only ever looks at the archive's own declared metadata.
  *
  * `ceilingBytes` defaults to the same `MAX_DECLARED_UNCOMPRESSED_BYTES`
- * ceiling the declared-size checks use above. A caller only ever overrides it
+ * ceiling the declared-size check uses above. A caller only ever overrides it
  * in a test — proving the abort fires correctly, well under the real 200MB
  * production ceiling, without a test having to actually inflate anywhere near
  * that much data itself.

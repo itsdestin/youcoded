@@ -116,10 +116,13 @@ describe('docComments over remote access', () => {
     expect(sent[0].payload).toEqual({ ok: true, id: callerId });
   });
 
-  // T13: a .xlsx target's mutations are real over the remote WS surface too
-  // (T3 built BOTH desktop IPC and this WS surface off the same dispatch
-  // module — they must never disagree about which formats are real). q3.xlsx
-  // has two sheets, so the write-side selector names `sheet` (§4.2).
+  // T13 (redesigned 2026-09-27, threaded-comments-only, §4): a .xlsx target's
+  // mutations are real over the remote WS surface too (T3 built BOTH desktop
+  // IPC and this WS surface off the same dispatch module — they must never
+  // disagree about which formats are real). q3.xlsx has two sheets, so the
+  // write-side selector names `sheet` (§4.2). The fixture's own genuine
+  // legacy Notes are never surfaced any more (§4.1) — `list` reads zero until
+  // a real thread is added.
   it('list on a .xlsx target reads the file over the WS surface; add writes for real', async () => {
     const fixturesDir = path.join(__dirname, 'fixtures', 'doc-comments');
     await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
@@ -133,7 +136,7 @@ describe('docComments over remote access', () => {
       type: 'docComments:list', id: 'req-1', payload: { path: 'reports/q3.xlsx', projectRoot: root },
     }));
     expect(sent[0].payload.ok).toBe(true);
-    expect(sent[0].payload.comments.length).toBeGreaterThan(0);
+    expect(sent[0].payload.comments).toEqual([]);
     await server.handleMessage(client, JSON.stringify({
       type: 'docComments:add', id: 'req-2',
       payload: {
@@ -142,7 +145,12 @@ describe('docComments over remote access', () => {
         text: 'x', author: 'user',
       },
     }));
-    expect(sent[1].payload).toEqual({ ok: true, id: expect.stringMatching(/^x-/) });
+    expect(sent[1].payload).toEqual({ ok: true, id: expect.stringMatching(/^xt-/) });
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:list', id: 'req-3', payload: { path: 'reports/q3.xlsx', projectRoot: root },
+    }));
+    expect(sent[2].payload.ok).toBe(true);
+    expect(sent[2].payload.comments.length).toBeGreaterThan(0);
   });
 
   // T11: a .docx target's mutations are real over the remote WS surface too

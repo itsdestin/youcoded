@@ -121,7 +121,10 @@ describe('dispatch by extension — Word/Excel targets route through the native 
     const cellSelector: CommentSelector = { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1', sheet: 'Q3' } as CellSelector };
     const added = await AddCommentTool.execute({ path: 'reports/q3.xlsx', selector: cellSelector, text: 'assistant note' }, ctx);
     expect(added.isError).toBeFalsy();
-    expect(added.text).toMatch(/id: x-/);
+    // §4.2's GUID-embedding id scheme (design review 1, F1): `xt-{sheetId}-
+    // {cell}-{GUID}`, not the retired legacy-Notes positional `x-{sheetId}-
+    // {cell}` shape.
+    expect(added.text).toMatch(/id: xt-/);
 
     const listed = await ReadFileCommentsTool.execute({ path: 'reports/q3.xlsx' }, ctx);
     expect(listed.isError).toBeFalsy();

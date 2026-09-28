@@ -92,26 +92,30 @@ describe('registerDocCommentsHandlers', () => {
     expect(listed.comments[0].id).toBe(callerId);
   });
 
-  // T13: a .xlsx target's mutations are REAL now — same wiring T11 already
-  // proved for .docx, exercised here through the IPC surface. q3.xlsx has two
-  // sheets (Q3, By rep), so a write-side selector must name `sheet` (§4.2).
+  // T13 (redesigned 2026-09-27, threaded-comments-only, §4): a .xlsx target's
+  // mutations are REAL now — same wiring T11 already proved for .docx,
+  // exercised here through the IPC surface. q3.xlsx has two sheets (Q3, By
+  // rep), so a write-side selector must name `sheet` (§4.2). The fixture's
+  // own genuine legacy Notes are never surfaced any more (§4.1) — a real
+  // THREAD is added first so there is something real to reply/resolve/move.
   it('list on a .xlsx target reads the file’s own comments; add/reply/resolve/reopen/move all write for real', async () => {
     await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
     await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3.xlsx'));
     const ipcMain = fakeIpcMain();
     registerDocCommentsHandlers(ipcMain as any, deps);
-    const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
-    expect(listed.ok).toBe(true);
-    expect(listed.comments.length).toBeGreaterThan(0);
+    const listedBefore = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
+    expect(listedBefore.ok).toBe(true);
+    expect(listedBefore.comments).toEqual([]);
 
     const cellSelector: CommentSelector = { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1', sheet: 'Q3' } as CellSelector };
     const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
       path: 'reports/q3.xlsx', projectRoot: root, selector: cellSelector, text: 'x', author: 'user',
     });
-    expect(added).toEqual({ ok: true, id: expect.stringMatching(/^x-/) });
+    expect(added).toEqual({ ok: true, id: expect.stringMatching(/^xt-/) });
 
-    const q3Note = listed.comments.find((c: any) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B2');
-    const id = q3Note.id;
+    const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
+    expect(listed.comments.length).toBeGreaterThan(0);
+    const id = added.id;
 
     const replied = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
       path: 'reports/q3.xlsx', projectRoot: root, id, text: 'thanks', author: 'user',
@@ -162,7 +166,12 @@ describe('registerDocCommentsHandlers', () => {
     const replied = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
       path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', text: 'thanks', author: 'user',
     });
-    expect(replied).toEqual({ ok: true });
+    // T5 review (design §1.6, F2): `reply`'s response is enriched to carry the
+    // real persisted `CommentReply` — a docx reply's id depends on the file's
+    // own current state at write time (§1.6's own reasoning), so it can't be
+    // asserted as a literal here; just prove the shape and the ordinal.
+    expect(replied).toEqual({ ok: true, reply: expect.objectContaining({ text: 'thanks', author: 'user' }) });
+    expect((replied as any).reply.id).toMatch(/^w-1-r\d+$/);
 
     const resolved = await ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, {
       path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', by: 'user',
@@ -249,7 +258,11 @@ describe('registerDocCommentsHandlers', () => {
     const ipcMain = fakeIpcMain();
     registerDocCommentsHandlers(ipcMain as any, deps);
     const args = { path: 'docs/cold.md', projectRoot: root, id: added.id };
-    await expect(ipcMain.call(DOC_COMMENTS_IPC.REPLY, { ...args, text: 'hi', author: 'assistant' })).resolves.toEqual({ ok: true });
+    // T5 review (design §1.6, F2): the plain-sidecar `reply` path is enriched
+    // too, uniformly with docx/xlsx (§1.6's table entry is general).
+    await expect(ipcMain.call(DOC_COMMENTS_IPC.REPLY, { ...args, text: 'hi', author: 'assistant' })).resolves.toEqual({
+      ok: true, reply: expect.objectContaining({ text: 'hi', author: 'assistant' }),
+    });
     await expect(ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, { ...args, by: 'assistant' })).resolves.toEqual({ ok: true });
     await expect(ipcMain.call(DOC_COMMENTS_IPC.REOPEN, { ...args, by: 'user' })).resolves.toEqual({ ok: true });
     await expect(ipcMain.call(DOC_COMMENTS_IPC.MOVE, { ...args, newSelector: CELL_SELECTOR })).resolves.toEqual({ ok: true });
