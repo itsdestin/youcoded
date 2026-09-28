@@ -31,7 +31,8 @@ export function EditPencilButton({ label, onClick, className = '', plain = false
         onClick={onClick}
         className={`${className} shrink-0 ${android ? 'w-8 h-8' : 'w-6 h-6'} ${surface} transition-colors flex items-center justify-center`}
       >
-        <PencilIcon size={android ? 12 : 10} />
+        {/* Plain: the trash icon's size beside it (14px), per Destin's "bigger". */}
+        <PencilIcon size={plain ? (android ? 16 : 14) : (android ? 12 : 10)} />
       </button>
     </Tooltip>
   );
