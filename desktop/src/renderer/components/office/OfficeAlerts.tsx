@@ -29,9 +29,10 @@ export function OfficeAlerts({ onReview }: { onReview: (path: string) => void })
         layer={3}
         screen="office/unsaved-on-close"
       >
-        <p className="text-sm text-fg-2 pb-4">Review shows each one with its choices, such as Retry. Closing anyway loses their changes since the last save.</p>
+        {/* A reload's prompt says what it will do (fix round 6, M3): it reloads, not closes. */}
+        <p className="text-sm text-fg-2 pb-4">Review shows each one with its choices, such as Retry. {unsaved?.reload ? 'Reloading' : 'Closing'} anyway loses their changes since the last save.</p>
         <div className="flex gap-2 justify-end">
-          <Button variant="danger" onClick={closeAnyway}>Close anyway</Button>
+          <Button variant="danger" onClick={closeAnyway}>{unsaved?.reload ? 'Reload anyway' : 'Close anyway'}</Button>
           <Button variant="primary" onClick={review}>Review</Button>
         </div>
       </Dialog>

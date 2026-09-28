@@ -15,7 +15,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, registerFlush } from './office-store';
+import { markChanged, markFailed, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, registerFlush, withdrawUnloadApproval } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -355,7 +355,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
             ? await b.saveCopy(t, 'again').catch(failCopy)
             : { ok: false, message: COPY_FAILED };
           // 'again' rewrote the copy if the bytes differed, so on success the copy is current.
-          if (!again.ok) return refuse('message' in again ? again.message : COPY_FAILED);
+          // WHY say so rather than delete it (fix round 6, M5): the copy from 'save' is complete
+          // (written whole, then renamed into place) — only the last moments' typing may be
+          // missing. Deleting it could also delete a file the person chose to replace. So it
+          // stays, the strip says it is older, and this tab keeps the newest edits.
+          if (!again.ok) return refuse(`An older copy was saved to ${r.folder}. Your newest changes are still only here.`);
         }
         if (r.ok && 'folder' in r) {
           // "Save As" (the owner's decision, fix round 2): the changes now live in the copy, and
@@ -383,6 +387,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (m.cmd === 'set_document_modified' && args.modified === true) {
         const s = save.current;
         s.dirty = true;
+        // Any change withdraws a close's pending approval of the unload — also while failed,
+        // where markChanged below is skipped (fix round 6, M1).
+        withdrawUnloadApproval();
         // WHY not a new change after a failed save (measured in the dev window, fix round 1):
         // the editor answers its own failed save by marking the document modified again. Taking
         // that as typing retried a read-only file every 3 s and flipped the strip between the

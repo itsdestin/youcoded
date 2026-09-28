@@ -75,7 +75,9 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
   const tabs: DocumentTab[] = [
     { id: HOME_TAB, label: 'Home', icon: <HomeGlyph />, closable: false },
     // A closing tab is gone from the strip at once; its editor finishes saving out of sight.
-    ...docs.filter((d) => !d.closing).map((d) => ({ id: d.file.path, label: stripExt(d.file.name), icon: <OfficeKindGlyph kind={d.file.kind} />, asleep: d.asleep })),
+    ...docs.filter((d) => !d.closing).map((d) => ({ id: d.file.path, label: stripExt(d.file.name), icon: <OfficeKindGlyph kind={d.file.kind} />, asleep: d.asleep,
+      // Its copy is being written (fix round 6, M6): the ✕ says why it does nothing yet.
+      closeNote: copying && d.file.path === front?.file.path ? 'Saving a copy…' : undefined })),
   ];
 
   const create = async (kind: OfficeKind) => {

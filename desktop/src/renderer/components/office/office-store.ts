@@ -100,6 +100,12 @@ let unloadApproval: 'none' | 'once' | 'quit' = 'none';
 function approveUnload(kind: 'once' | 'quit'): void {
   if (unloadApproval !== 'quit') unloadApproval = kind;
 }
+/** The editor reported a change (EditorFrame, fix round 6 M1): a pending one-unload approval no
+ *  longer covers everything — even for a document whose save failed (markChanged is skipped
+ *  there, so withdrawing cannot hang on it). */
+export function withdrawUnloadApproval(): void {
+  if (unloadApproval === 'once') unloadApproval = 'none';
+}
 function onBeforeUnload(e: BeforeUnloadEvent): void {
   if (unloadApproval === 'quit') return;
   if (unloadApproval === 'once') { unloadApproval = 'none'; return; }
@@ -123,10 +129,11 @@ function guardUnload(): void {
 export function reloadAfterOfficeSave(reload: () => void = () => window.location.reload()): void {
   const entries = [...flushers.entries()].filter(([path]) => !aliasPaths.has(path));
   void Promise.all(entries.map(([, f]) => f(CLOSE_FLUSH_CAP_MS).catch(() => null))).then((results) => {
-    const failed = entries.filter((_, i) => results[i]?.ok === false).map(([path]) => path);
+    // A flusher that threw (null) counts as failed (fix round 6, M6): nothing says it saved.
+    const failed = entries.filter((_, i) => results[i]?.ok !== true).map(([path]) => path);
     if (failed.length === 0) { approveUnload('once'); reload(); return; }
     heldReload = reload;
-    setAlerts({ ...alerts, unsaved: { count: failed.length, firstPath: failed[0] } });
+    setAlerts({ ...alerts, unsaved: { count: failed.length, firstPath: failed[0], reload: true } });
   });
 }
 // The reload a failed save held, for Close anyway (null when the prompt is main's close or quit).
@@ -175,13 +182,14 @@ function answerFlushRequests(): void {
       // WHY report failures (fix round 2): a document whose save failed must not be closed with
       // its window without the person choosing that. Main holds the close (or quit) and sends
       // the prompt (counting every window's documents, office:unsaved-prompt).
-      const failed = entries.filter((_, i) => results[i]?.ok === false).map(([path]) => path);
+      // A flusher that threw (null) counts as failed (fix round 6, M6): nothing says it saved.
+      const failed = entries.filter((_, i) => results[i]?.ok !== true).map(([path]) => path);
       // The unload that main's close or quit goes on to may pass the window guard (see above).
       if (reason === 'final') approveUnload('quit'); else if (failed.length === 0) approveUnload('once');
       // WHY 'final' reports none (accepted, fix round 4 — M2): it is quit's last pass, after the
       // person already chose Close anyway. A document that newly fails in this pass is not asked
       // about again; asking would re-open a prompt during shutdown for a choice already made.
-      // The editors stay as they are: the add-on keeps them from vetoing the unload (v0.1.2).
+      // The editors stay as they are: the add-on keeps them from vetoing the unload (v0.1.2+).
       office.flushDone?.(id, { failed: reason === 'final' ? 0 : failed.length, firstPath: failed[0] });
     });
   });
@@ -190,7 +198,7 @@ function answerFlushRequests(): void {
 
 /** "Close anyway": main goes ahead with the close or quit it held. WHY nothing is taken down
  *  (fix round 4): the editors keep their edits and failed-save state, so if the window survives
- *  (another veto, e.g. an unsaved text file) nothing was lost. The add-on (v0.1.2) keeps an
+ *  (another veto, e.g. an unsaved text file) nothing was lost. The add-on (v0.1.3) keeps an
  *  editor page from vetoing the unload itself. */
 export function closeAnyway(): void {
   setAlerts({ ...alerts, unsaved: null });
@@ -206,7 +214,8 @@ export function closeAnyway(): void {
 //   unsaved       a window close or quit found documents whose save failed
 //   closeFailed   a tab closed while the page was hidden could not save, so it came back
 interface OfficeAlertsState {
-  unsaved: { count: number; firstPath: string } | null;
+  /** reload: the prompt is a reload's (fix round 6, M3), so it says "Reload anyway". */
+  unsaved: { count: number; firstPath: string; reload?: boolean } | null;
   closeFailed: string | null;
 }
 let alerts: OfficeAlertsState = { unsaved: null, closeFailed: null };
@@ -345,7 +354,7 @@ export function useSaveState(path: string | null): OfficeSaveState {
 }
 export function markChanged(path: string): void {
   // A new change withdraws a close's approval: that close has not saved it (see the guard).
-  if (unloadApproval === 'once') unloadApproval = 'none';
+  withdrawUnloadApproval();
   setSave(path, { phase: 'unsaved', savedAt: saves[path]?.savedAt });
 }
 /** "Save a copy…" landed: the changes are in the copy, and the file itself is left as it was. */

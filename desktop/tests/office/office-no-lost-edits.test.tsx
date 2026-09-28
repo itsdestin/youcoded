@@ -372,9 +372,15 @@ describe('the kept, hidden Office view', () => {
     // editor-frame-relay.test.tsx), and under load that happens after this point.
     const win = () => { const w = (frameOf(container) as HTMLIFrameElement).contentWindow!; if (!vi.isMockFunction(w.postMessage)) vi.spyOn(w, 'postMessage').mockImplementation(() => {}); return w; };
     const send = (data: unknown) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: win() })); });
-    send({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    // WHY resend until it registers: the frame's message listener is attached in an effect after
+    // the render that set the src, and under a loaded suite it can land later — a change sent
+    // before it was simply lost, so the close had nothing to save and no toast came.
+    const { closeDoc, saveStateFor } = await import('../../src/renderer/components/office/office-store');
+    await waitFor(() => {
+      send({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+      expect(saveStateFor(FILE.path).phase).toBe('unsaved');
+    });
     rerender(host(false));
-    const { closeDoc } = await import('../../src/renderer/components/office/office-store');
     act(() => closeDoc(FILE.path));
     send({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
     expect(await screen.findByText("An Office document couldn't be saved.")).toBeInTheDocument();
@@ -457,7 +463,8 @@ describe('Save a copy while the editor could still change', () => {
   it('does not switch when the final check gets no hand-over', async () => {
     const { saveCopy } = await failedWith({ handsOver: (n) => n === 1 });
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
-    expect(await screen.findByText("Office couldn't save a copy of this file.")).toBeInTheDocument();
+    // The copy from 'save' is kept and called older, never deleted (M5).
+    expect(await screen.findByText('An older copy was saved to Documents. Your newest changes are still only here.')).toBeInTheDocument();
     expect(saveCopy.mock.calls.map((c) => c[1]).filter((m) => m !== 'check')).toEqual(['save']);
     expect(officeDocFor(COPY)).toBeNull();
     expect(officeDocFor(FILE.path)).not.toBeNull();
@@ -614,10 +621,43 @@ describe('the window unload guard', () => {
     const { result } = renderHook(() => store.useOfficeAlerts());
     await act(async () => { store.reloadAfterOfficeSave(reload); await Promise.resolve(); await Promise.resolve(); });
     expect(reload).not.toHaveBeenCalled();
-    expect(result.current.unsaved).toEqual({ count: 1, firstPath: FILE.path });
+    expect(result.current.unsaved).toEqual({ count: 1, firstPath: FILE.path, reload: true });
     act(() => store.closeAnyway());
     expect(reload).toHaveBeenCalledTimes(1);
     expect(office.proceedClose).not.toHaveBeenCalled(); // this prompt was the reload's, not main's
+  });
+
+  it('a change to a document whose save failed withdraws Close anyway\'s approval', async () => {
+    withOffice({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("Office doesn't have permission to save this file."); return null; }) });
+    const store = await import('../../src/renderer/components/office/office-store');
+    act(() => openDoc(FILE));
+    const r = render(<OfficeView />);
+    await waitFor(() => expect(frameOf(r.container)?.getAttribute('src')).toBe('office://t1/index.html'));
+    const from = (data: unknown) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: (frameOf(r.container) as HTMLIFrameElement).contentWindow })); });
+    vi.spyOn((frameOf(r.container) as HTMLIFrameElement).contentWindow!, 'postMessage').mockImplementation(() => {});
+    await waitFor(() => { from({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } }); expect(store.saveStateFor(FILE.path).phase).toBe('unsaved'); });
+    from({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
+    await waitFor(() => expect(store.saveStateFor(FILE.path).phase).toBe('failed'));
+    act(() => store.closeAnyway()); // approves one unload…
+    from({ yc: 'rpc', id: 3, cmd: 'set_document_modified', args: { modified: true } }); // …then more typing
+    expect(unloadBlocked()).toBe(true);
+  });
+
+  it('a reload\'s prompt says "Reload anyway"', async () => {
+    const { store } = await withEditor({ flush: 'failed' });
+    const { OfficeAlerts } = await import('../../src/renderer/components/office/OfficeAlerts');
+    render(<OfficeAlerts onReview={() => {}} />);
+    await act(async () => { store.reloadAfterOfficeSave(vi.fn()); await Promise.resolve(); await Promise.resolve(); });
+    expect(await screen.findByRole('button', { name: 'Reload anyway' })).toBeInTheDocument();
+    expect(screen.getByText(/Reloading anyway loses/)).toBeInTheDocument();
+  });
+
+  it('a reload treats a save that threw as not saved', async () => {
+    const store = await import('../../src/renderer/components/office/office-store');
+    store.registerFlush(FILE.path, () => Promise.reject(new Error('boom')), { unsaved: () => true });
+    const reload = vi.fn();
+    await act(async () => { store.reloadAfterOfficeSave(reload); await Promise.resolve(); await Promise.resolve(); });
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it('an open editor with a change blocks the unload', async () => {
@@ -627,7 +667,10 @@ describe('the window unload guard', () => {
     const iframe = await waitFor(() => { const f = frameOf(r.container) as HTMLIFrameElement; expect(f?.getAttribute('src')).toBe('office://t1/index.html'); return f; });
     vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation(() => {});
     expect(unloadBlocked()).toBe(false);
-    act(() => { window.dispatchEvent(new MessageEvent('message', { data: { yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } }, origin: 'office://t1', source: iframe.contentWindow })); });
-    expect(unloadBlocked()).toBe(true);
+    // Resent until the frame's listener (attached in an effect) has it — see the hidden-close test.
+    await waitFor(() => {
+      act(() => { window.dispatchEvent(new MessageEvent('message', { data: { yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } }, origin: 'office://t1', source: (frameOf(r.container) as HTMLIFrameElement).contentWindow })); });
+      expect(unloadBlocked()).toBe(true);
+    });
   });
 });

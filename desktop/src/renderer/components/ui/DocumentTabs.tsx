@@ -20,6 +20,9 @@ export interface DocumentTab {
   asleep?: boolean;
   /** false for a tab that cannot be closed (Office's Home). Default true. */
   closable?: boolean;
+  /** Set while the tab cannot close for a moment (Office: a copy is being written). The ✕ is
+   *  shown disabled with this as its tooltip, so pressing it is never a silent no-op. */
+  closeNote?: string;
 }
 
 export interface DocumentTabsProps {
@@ -57,11 +60,12 @@ export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, classNa
               <span className={`truncate ${t.asleep ? 'text-fg-muted' : ''}`}>{t.label}</span>
               {t.asleep && <MoonGlyph />}
             </button>
-            {closable && (
+            {closable && withNote(t.closeNote,
               <button
                 type="button"
-                aria-label={`Close ${t.label}`}
-                onClick={() => onClose(t.id)}
+                aria-label={t.closeNote ? `Close ${t.label}: ${t.closeNote}` : `Close ${t.label}`}
+                aria-disabled={t.closeNote ? true : undefined}
+                onClick={() => { if (!t.closeNote) onClose(t.id); }}
                 // Visible on the current tab; on the others it appears with
                 // hover or focus, and always on touch (.touch-reveal).
                 className={`coarse-hit mr-1 w-5 h-5 shrink-0 flex items-center justify-center rounded text-fg-muted hover:text-fg hover:bg-edge focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
@@ -71,7 +75,7 @@ export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, classNa
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path strokeLinecap="round" strokeWidth={2.5} d="M6 6l12 12M18 6L6 18" />
                 </svg>
-              </button>
+              </button>,
             )}
           </div>
         );
@@ -81,6 +85,11 @@ export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, classNa
       })}
     </div>
   );
+}
+
+/** The ✕ with its tooltip while it cannot close (an aria-disabled button still takes hover). */
+function withNote(note: string | undefined, button: React.ReactElement<Record<string, unknown>>): React.ReactNode {
+  return note ? <Tooltip text={note} placement="bottom">{button}</Tooltip> : button;
 }
 
 function MoonGlyph() {
