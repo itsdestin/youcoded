@@ -92,15 +92,25 @@ export async function prepareProjectInstructions(cwd: string, budgetTokens: numb
     const brief = '[Project instructions omitted.]';
     return omitted(detailed.length <= budget ? detailed : brief.length <= budget ? brief : null);
   }
+  // WHY nearest first (Destin, 2026-09-28 PR-review deck Q-4): the file in the
+  // session's own folder is the most specific and usually the most relevant, so
+  // it takes the room it needs before any broader parent file. Each broader file
+  // then gets what is left, outward toward the root. Only the one-line "Read
+  // <path>" notices of the files still waiting are held back, so a parent that
+  // is squeezed out is still named to the model, never silently lost. The
+  // result keeps broad-to-narrow ORDER; only who gets space first changes.
   let remaining = budget - wrappers;
-  return sources.map((source, index) => {
-    const reserved = notices.slice(index + 1).reduce((n, s) => n + s.length, 0);
-    const share = Math.min(remaining - reserved, Math.floor((remaining - reserved) / (sources.length - index)) + notices[index].length);
+  const fittedFiles: ProjectInstructionFile[] = new Array(sources.length);
+  for (let index = sources.length - 1; index >= 0; index--) {
+    const source = sources[index];
+    const reserved = notices.slice(0, index).reduce((n, s) => n + s.length, 0);
+    const share = Math.max(notices[index].length, remaining - reserved);
     const fitted = fitProjectInstructions(source.full, Math.floor(share / 4), source.path);
     const text = fitted.text.length <= share ? fitted.text : notices[index];
     const truncated = fitted.truncated || text !== source.full;
     remaining -= text.length;
-    return { ...source, text, truncated,
+    fittedFiles[index] = { ...source, text, truncated,
       ...(truncated ? { note: text === notices[index] ? LEFT_OUT : shortenedNote(text) } : {}) };
-  });
+  }
+  return fittedFiles;
 }

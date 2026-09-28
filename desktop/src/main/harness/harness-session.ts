@@ -2663,6 +2663,14 @@ export class HarnessSession extends EventEmitter {
       ? undefined
       : this.opts.harness.limits?.maxSteps;
     let stepsSinceApproval = 0;
+    // WHY (Destin, 2026-09-28 PR-review deck Q-2): a message you send mid-task
+    // is you taking part, so the "keep going?" count starts over whenever one
+    // joins the running turn — as it did when every message began a new turn.
+    const absorbReadyMessage = (): boolean => {
+      if (!this.acceptReadyBusyMessage()) return false;
+      stepsSinceApproval = 0;
+      return true;
+    };
     // Consecutive contentless steps (empty-step recovery, spec 2026-08-21).
     // The single silent retry is allowed only at count 1; any real step resets
     // it, so an all-empty turn costs exactly two provider calls.
@@ -2951,7 +2959,7 @@ export class HarnessSession extends EventEmitter {
             continue turnLoop;
           }
           // WHY: second empty is a final boundary; new input re-arms recovery.
-          if (this.acceptReadyBusyMessage()) {
+          if (absorbReadyMessage()) {
             consecutiveEmptySteps = 0;
             continue turnLoop;
           }
@@ -2962,7 +2970,7 @@ export class HarnessSession extends EventEmitter {
 
         if (step.toolCalls.length === 0) {
           // WHY: no await before completion; late heads use the host drain.
-          if (this.acceptReadyBusyMessage()) continue turnLoop;
+          if (absorbReadyMessage()) continue turnLoop;
           // Natural stop; mapStopReason handles truncated output as max_tokens.
           stopReason = mapStopReason(step.finishReason);
           break;
@@ -3004,17 +3012,6 @@ export class HarnessSession extends EventEmitter {
         const resultOrigins: string[] = [];
         const recordResult = (uuid: string): void => { this.capture.recordEvent(uuid); resultOrigins.push(uuid); };
         for (let i = 0; i < step.toolCalls.length; i++) {
-          // WHY: check before each call; announced siblings need not run.
-          if (!this.interrupted && !this.abort.signal.aborted && claimBusyMessage(
-            this.opts.takeReadyBusyMessage,
-            item => this.acceptUserMessage(item.text, item.attachments, () => this.emitEvent('user-message',
-              item.attachments.length ? { text: item.text, attachments: item.attachments } : { text: item.text })),
-            () => supersedeToolGroup(step.toolCalls, i, resultParts, resultOrigins,
-              data => this.emitEvent('tool-result', data), (rem, text) => this.toolResultPart(rem, text),
-              uuid => this.capture.recordEvent(uuid), (parts, origins) => {
-                this.history.push({ role: 'tool', content: parts });
-                this.historyOrigins.push(origins);
-              }, calls => this.injectPathTriggers(calls)))) continue turnLoop;
           const call = step.toolCalls[i];
           if ((call.toolName === 'Write' || call.toolName === 'Edit') &&
               !this.interrupted && !this.abort.signal.aborted) {
@@ -3039,7 +3036,7 @@ export class HarnessSession extends EventEmitter {
                 return;
               }
               if (refusal) { stopReason = 'end_turn'; break turnLoop; }
-              this.acceptReadyBusyMessage(); // ready human correction precedes replan
+              absorbReadyMessage(); // ready human correction precedes replan
               continue turnLoop;
             }
           }
@@ -3114,7 +3111,10 @@ export class HarnessSession extends EventEmitter {
         // just learned, and before it decides the next step.
         this.injectPathTriggers(step.toolCalls);
 
-        stepsSinceApproval++;
+        // WHY (Destin, 2026-09-28 PR-review deck Q-1): a message sent mid-task is
+        // read once the whole batch of actions the assistant already chose has
+        // run — never by discarding planned actions — then it replans with it.
+        if (this.interrupted || this.abort.signal.aborted || !absorbReadyMessage()) stepsSinceApproval++;
         // Budget gate (spec §2.4) — surfaces as a permission ASK, not a new
         // event. Allow resets the counter and continues; anything else ends the
         // turn with stopReason 'max_steps'; canceled is an interrupt.

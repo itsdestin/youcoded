@@ -149,6 +149,20 @@ describe('captured ancestor instruction inventory', () => {
     expect(out).toContain(`source="${path.join(dir, 'AGENTS.md')}"`);
   });
 
+  it('gives the session folder\'s own file first claim on space, and still names a squeezed parent', async () => {
+    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
+    const child = path.join(dir, 'project'); fs.mkdirSync(child);
+    const big = (tag: string) => Array.from({ length: 10 }, (_, i) => `## ${tag} ${i}\n${'Detail line. '.repeat(40)}`).join('\n\n');
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), big('Parent'));
+    fs.writeFileSync(path.join(child, 'CLAUDE.md'), big('Project'));
+    // Room for about one whole file: the project's own file must be the one kept.
+    const files = (await prepareProjectInstructions(child, 1700)).filter(f => f.path.startsWith(dir));
+    expect(files.map(f => f.path)).toEqual([path.join(dir, 'CLAUDE.md'), path.join(child, 'CLAUDE.md')]);
+    expect(files[1].truncated).toBe(false);
+    expect(files[0].truncated).toBe(true);
+    expect(files[0].text).toContain(path.join(dir, 'CLAUDE.md'));
+  });
+
   it('describes a shortened file to the person in plain words, never the model-facing notice', async () => {
     const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
     const body = Array.from({ length: 12 }, (_, i) => `## Section ${i}\n${'Detail line. '.repeat(80)}`).join('\n\n');

@@ -163,9 +163,9 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(events.some(e => e.type === 'session-error')).toBe(true);
   });
 
-  it.each(['before calls', 'during first call', 'after final text'] as const)('accepts queued human input %s inside the same turn', async (arrival) => {
+  it.each(['before calls', 'during first call', 'after final text'] as const)('accepts queued human input %s inside the same turn, after the whole batch runs', async (arrival) => {
     const read = fakeTool('Read', { onExecute: () => {
-      if (arrival === 'during first call') queue.push({ id: 'follow', text: 'correct this', attachments: [] });
+      if (arrival === 'during first call' && !(read as any).calls.slice(1).length) queue.push({ id: 'follow', text: 'correct this', attachments: [] });
       return { text: 'done' };
     } });
     const queue: Array<{ id: string; text: string; attachments: string[] }> = [];
@@ -185,11 +185,12 @@ describe('HarnessSession — multi-step turn driver', () => {
     await session.send('original');
     expect(prompts).toHaveLength(2);
     expect(events.filter(e => e.type === 'user-message').map(e => e.data.text)).toEqual(['original', 'correct this']);
-    expect((read as any).calls).toHaveLength(arrival === 'during first call' ? 1 : 0);
+    // The batch the assistant already chose runs in full; nothing is discarded.
+    expect((read as any).calls).toHaveLength(arrival === 'after final text' ? 0 : 2);
     if (arrival !== 'after final text') {
       const results = events.filter(e => e.type === 'tool-result');
       expect(results).toHaveLength(2);
-      expect(results.slice(arrival === 'during first call' ? 1 : 0).every(e => /not run/i.test(e.data.toolResult ?? ''))).toBe(true);
+      expect(results.every(e => !/not run/i.test(e.data.toolResult ?? ''))).toBe(true);
       expect(events.indexOf(results[1])).toBeLessThan(events.findIndex(e => e.type === 'user-message' && e.data.text === 'correct this'));
     }
     expect(JSON.stringify(prompts[1])).toContain('correct this');
@@ -233,7 +234,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect((read as any).calls).toHaveLength(0);
     answer({ behavior } as AskDecision);
     await turn;
-    expect((read as any).calls).toHaveLength(behavior === 'allow' ? 1 : 0);
+    expect((read as any).calls).toHaveLength(behavior === 'allow' ? 2 : 0);
     expect(events.filter(e => e.type === 'tool-result')).toHaveLength(2);
     expect(events.filter(e => e.type === 'user-message').map(e => e.data.text)).toEqual(['first', 'new instructions']);
     expect(JSON.stringify(seen[1])).toContain('new instructions');
@@ -868,6 +869,26 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(events.filter((event) => event.type === 'tool-use')).toHaveLength(51);
     expect(askUser).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: 'max_steps' }));
     expect(events.find((event) => event.type === 'turn-complete')?.data.stopReason).toBe('end_turn');
+  });
+
+  it('a message that joins the running turn starts the keep-going count over', async () => {
+    const twoStepHarness: HarnessManifest = { ...HARNESS, limits: { maxSteps: 2, maxTokens: 256 } };
+    const queue: Array<{ id: string; text: string; attachments: string[] }> = [];
+    const write = fakeTool('Write', { onExecute: () => {
+      // Arrives during the SECOND step: without a reset that step would reach
+      // the two-step limit and ask "keep going?".
+      if ((write as any).calls.length === 2) queue.push({ id: 'f', text: 'also do this', attachments: [] });
+      return { text: 'ok' };
+    } });
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
+    const tc = () => stream(toolCallChunk('c', 'Write', { file_path: 'x.ts' }), finishChunk('tool-calls'));
+    const model = scriptedModel([tc(), tc(), tc(), stream(...textChunks('z', 'done'), finishChunk('stop'))]);
+    const session = new HarnessSession(makeOpts({ harness: twoStepHarness, tools: [write], decide: async () => ALLOW, askUser,
+      takeReadyBusyMessage: () => queue.shift() }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(askUser.mock.calls.some((c) => c[0].toolName === 'max_steps')).toBe(false);
+    expect(events.find((e) => e.type === 'turn-complete')!.data.stopReason).toBe('end_turn');
   });
 
   it('maxSteps: allow → loop continues (counter resets); deny → turn-complete stopReason max_steps', async () => {
