@@ -63,7 +63,13 @@ export function initDocCommentsWatcher(onChange: (sourcePath: string, projectRoo
 }
 
 function keyFor(target: CommentsWatchTarget): string {
-  return target.kind === 'project' ? `project:${target.commentsDir}` : `fallback:${target.sidecarPath}`;
+  if (target.kind === 'project') return `project:${target.commentsDir}`;
+  // T3 follow-up: a 'document' target (a .docx/.xlsx's own bytes, §1.5) is
+  // keyed by its own absolute path — distinct from a 'fallback' sidecar path
+  // at the SAME location, so the two schemes can never collide even though
+  // neither is possible for the same source file in practice.
+  if (target.kind === 'document') return `document:${target.absolutePath}`;
+  return `fallback:${target.sidecarPath}`;
 }
 
 /** Inverse of doc-comments-store's own `<rel>.json` join (§1.3): converts an
@@ -107,16 +113,23 @@ export async function watchComments(target: CommentsWatchTarget, subscriberId: n
     refs: new Map([[subscriberId, 1]]),
     timers: new Map(),
     stopped: false,
-    projectRoot: target.kind === 'project' ? target.projectRoot : undefined,
+    // T3 follow-up: a 'document' target's own `projectRoot` rides along too
+    // (F3, T5 review's reasoning applies identically — two projects can share
+    // a `report.docx`), not just 'project's.
+    projectRoot: target.kind === 'project' || target.kind === 'document' ? target.projectRoot : undefined,
   };
   // Register BEFORE the async watcher start so a concurrent watchComments for
   // the same key refcounts THIS entry instead of starting a second watcher
   // (project-watcher.ts's own registration-order comment applies here too).
   entries.set(key, entry);
-  const watchPath = target.kind === 'project' ? target.commentsDir : target.sidecarPath;
+  // T3 follow-up: a 'document' target watches the SOURCE FILE'S OWN absolute
+  // path directly (§1.5) — there is no sidecar for a native-format target at
+  // all (§1.1), so this is neither the project's comments directory nor a
+  // fallback sidecar file.
+  const watchPath = target.kind === 'project' ? target.commentsDir : target.kind === 'document' ? target.absolutePath : target.sidecarPath;
   // Ensure the watched DIRECTORY exists before chokidar starts (project case
-  // only — a fallback watch targets one file, and chokidar handles a single
-  // not-yet-existing file's future creation robustly). Without this, a brand
+  // only — a fallback/document watch targets one file, and chokidar handles a
+  // single not-yet-existing file's future creation robustly). Without this, a brand
   // new project's very FIRST comment lands via addComment's own recursive
   // mkdir (doc-comments-store.ts's F2 note) creating `.youcoded/comments/`
   // AND a nested subdirectory AND the sidecar file all in one burst — deeper

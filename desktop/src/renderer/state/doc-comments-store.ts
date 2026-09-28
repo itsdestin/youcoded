@@ -240,7 +240,11 @@ function getIpc(): DocCommentsIpc | null {
   return bridge && typeof bridge.list === 'function' ? (bridge as DocCommentsIpc) : null;
 }
 
-type MutationResult = { ok: true; id?: string } | { ok: false; error?: string; field?: string; features?: string[] };
+// F2 fix (T5, design review round 3 — High): `reply` carries the persisted
+// `CommentReply` once `docComments:reply`'s response is enriched (§1.6) — see
+// `addReply`'s own reconciliation below, which mirrors `persistNewComment`'s
+// already-built `id` handling for `add`.
+type MutationResult = { ok: true; id?: string; reply?: CommentReply } | { ok: false; error?: string; field?: string; features?: string[] };
 
 /** A mutation IPC call can REJECT (remote's REJECT_ON_NOT_OK path — the
  *  Electron preload path resolves `{ok:false,...}` instead, see doc-comments/
@@ -284,8 +288,25 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
       return 'That text is no longer in this document.';
     case 'sheet-not-found': return 'That sheet no longer exists in this workbook.';
     case 'cell-already-has-comment': return 'This cell already has a comment.';
-    case 'cell-has-no-value': return 'Add a value to this cell before commenting on it.';
     case 'destination-cell-occupied': return 'The destination cell already has a comment.';
+    // Excel rebuild (2026-09-27, threaded-comments-only, design §4.1): a
+    // threaded comment can't be added on top of a genuine legacy Note — exact
+    // wording from the design's own §4.1 ("this app refuses the combination
+    // as its own policy... needs no unverified claim about Excel's own
+    // internals to be true").
+    case 'cell-has-note':
+      return 'This cell already has a note. Add your comment to a different cell, or remove the note in Excel first.';
+    // §4.2/§4.3 (design review round 2, F3): two threads happen to share the
+    // same GUID — a real, if rare, possibility this app refuses rather than
+    // guessing which one a caller meant from scan order.
+    case 'ambiguous-comment-id':
+      return "More than one comment thread in this file matches that id, so YouCoded won't guess which one to change.";
+    // §4 (design review 1, F3): the record-count ceiling — a workbook with an
+    // implausible number of comment records is refused before this app opens
+    // it for editing, the same "specific about what's known" bar as the
+    // decompression-bomb guard below.
+    case 'too-many-comments':
+      return 'This workbook has more comments than YouCoded can safely open for editing.';
     // F9/this rewrite: the xlsx write path now edits an existing workbook's
     // comment data in place instead of rebuilding the whole file, so it can
     // refuse a workbook whose comment wiring doesn't look like an ordinary
@@ -293,13 +314,14 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
     // comment) rather than risk guessing at it.
     case 'ambiguous-comment-wiring':
       return "This workbook's existing comments are set up in an unusual way YouCoded doesn't recognize, so it won't risk editing them.";
-    case 'unsupported-workbook-features':
-      return res.features?.length
-        ? `This workbook uses features YouCoded can't edit yet (${res.features.join(', ')}).`
-        : "This workbook uses features YouCoded can't edit yet.";
     case 'backup-failed': return "Couldn't make a safety copy before saving, so nothing was changed.";
     case 'write-failed': return "Couldn't save this change to the file.";
     case 'verify-failed': return "Saved, but the file didn't check out afterward, so the change was undone.";
+    // T11 follow-up (design §3.3's new step 0, review round 3 F4): a real
+    // Word/Excel/LibreOffice lock file sits beside the target — exact wording
+    // from the design's own §3.3 step 0.
+    case 'file-open-elsewhere':
+      return 'This file looks open in another app. Close it there, then try again.';
     case 'not-yet-supported': return "This kind of comment isn't supported yet.";
     case 'not-implemented-on-mobile': return "This isn't available on the phone yet.";
     default: return "Error: this comment couldn't be saved.";
@@ -451,6 +473,121 @@ function currentGeneration(key: string): number {
   return keyGeneration.get(key) ?? 0;
 }
 
+// ── §7's reconcile rule (design review round 2, F1) ─────────────────────────
+// An optimistic REPLY (unlike a brand-new comment, which `pendingLocalIds`
+// already tracks above) has no per-store "not yet persisted" flag of its own
+// — it lives inside its parent comment's `replies` array, which a
+// `docComments:changed` push's own `mergeServerComments` call REPLACES
+// wholesale (rule 1: "a push always replaces the whole array, never a
+// field-by-field patch"). Without tracking it separately, a push landing
+// before `addReply`'s own `docComments:reply` response resolves would
+// silently drop the optimistic reply the instant the fresh read replaced the
+// parent comment — exactly the race F1 exists to close. Keyed by the PARENT
+// comment's id (a `clientId`-shaped local reply id is already unique per
+// entry, §1.2's own account-ready-id convention extended to `r-...`).
+interface InFlightReply {
+  /** The optimistic reply's own local id (`r-${nextLocalSuffix()}`) —
+   *  distinct from the eventual persisted id (rule/F2's own reconciliation). */
+  localId: string;
+  author: CommentAuthor;
+  text: string;
+  /** This client's own issue time — the "order" half of rule 2's F3 tie-break
+   *  (design review round 3): two genuinely distinct, back-to-back identical
+   *  replies pair with the fresh read's own matches by ORDER, never by bare
+   *  content existence, since a real `<threadedComment>`/sidecar reply has no
+   *  field for a client-generated correlation token to round-trip. */
+  issuedAt: number;
+}
+const inFlightRepliesByParent = new Map<string, InFlightReply[]>();
+
+function trackInFlightReply(parentId: string, localId: string, author: CommentAuthor, text: string, issuedAt: number): void {
+  const list = inFlightRepliesByParent.get(parentId) ?? [];
+  list.push({ localId, author, text, issuedAt });
+  inFlightRepliesByParent.set(parentId, list);
+}
+
+/** Rule 3 (§7): the mutation's OWN response is the PRIMARY, fastest
+ *  reconciliation path — called unconditionally (success or failure) the
+ *  moment `docComments:reply`'s own response resolves, so a push that lands
+ *  afterward for the SAME change is just a no-op replace (nothing left
+ *  in-flight to re-append). */
+function dropInFlightReply(parentId: string, localId: string): void {
+  const list = inFlightRepliesByParent.get(parentId);
+  if (!list) return;
+  const next = list.filter((r) => r.localId !== localId);
+  if (next.length) inFlightRepliesByParent.set(parentId, next);
+  else inFlightRepliesByParent.delete(parentId);
+}
+
+/** F2 fix (T5, design review round 3 — High): swaps a reply's real, persisted
+ *  id/author/text/createdAt into the parent's `replies` array IN PLACE,
+ *  mirroring `persistNewComment`'s own already-built id-reconciliation shape
+ *  for `add` (same file) — including the identical "already landed via a
+ *  concurrent `list()`" guard: a `docComments:changed` push can resolve its
+ *  own re-`list()` WHILE this exact `reply()` call is still in flight, so the
+ *  server's own copy of this reply may already be present under the real id
+ *  by the time this runs. Renaming the local placeholder in that case would
+ *  create a duplicate-id crash the same way `persistNewComment`'s own WHY
+ *  describes; drop the placeholder instead. */
+function reconcileReplyId(parentId: string, localId: string, realReply: CommentReply): void {
+  const key = commentKeyIndex.get(parentId);
+  if (!key) return;
+  const arr = snap.commentsByKey[key];
+  if (!arr) return;
+  const parent = arr.find((c) => c.id === parentId);
+  if (!parent) return;
+  const alreadyLanded = parent.replies.some((r) => r.id === realReply.id);
+  const nextReplies = alreadyLanded
+    ? parent.replies.filter((r) => r.id !== localId)
+    : parent.replies.map((r) => (r.id === localId ? { ...realReply } : r));
+  publishKey(key, arr.map((c) => (c.id === parentId ? { ...c, replies: nextReplies } : c)));
+}
+
+/** Rule 2 (§7, design review round 2, F1), applied to ONE fresh comment at
+ *  `mergeServerComments` time: every reply still in `inFlightRepliesByParent`
+ *  for this comment is re-appended after the server's own fresh replies list
+ *  — UNLESS the fresh read's own content already reflects that specific
+ *  reply (the push-arrived-before-the-response race, a genuine race rather
+ *  than a bug). **F3 tie-break (design review round 3, Low):** a real reply
+ *  has no field for a client-generated correlation token, so "already
+ *  reflects it" can only ever match by content (author+text) — when MORE
+ *  THAN ONE in-flight entry under this parent shares identical content
+ *  (two back-to-back "thanks"), match by ORDER instead of bare existence:
+ *  sort the in-flight entries by their own issue time, sort the fresh read's
+ *  own matching replies by `createdAt` (the wire `dT`), and pair
+ *  position-for-position, consuming one fresh match per in-flight entry — an
+ *  unpaired remainder simply stays in-flight (that write hasn't settled or
+ *  failed yet). */
+function reconcileInFlightRepliesForComment(fresh: DocComment): DocComment {
+  const inFlight = inFlightRepliesByParent.get(fresh.id);
+  if (!inFlight || inFlight.length === 0) return fresh;
+  const groups = new Map<string, InFlightReply[]>();
+  for (const r of inFlight) {
+    const gkey = `${r.author}\u0000${r.text}`;
+    const arr = groups.get(gkey);
+    if (arr) arr.push(r);
+    else groups.set(gkey, [r]);
+  }
+  const consumedFreshIds = new Set<string>();
+  const stillPending: InFlightReply[] = [];
+  for (const [gkey, group] of groups) {
+    const sep = gkey.indexOf('\u0000');
+    const author = gkey.slice(0, sep) as CommentAuthor;
+    const text = gkey.slice(sep + 1);
+    const matches = fresh.replies
+      .filter((r) => !consumedFreshIds.has(r.id) && r.author === author && r.text === text)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    const ordered = [...group].sort((a, b) => a.issuedAt - b.issuedAt);
+    for (let i = 0; i < ordered.length; i++) {
+      if (i < matches.length) consumedFreshIds.add(matches[i].id);
+      else stillPending.push(ordered[i]);
+    }
+  }
+  if (stillPending.length === 0) return fresh;
+  const appended: CommentReply[] = stillPending.map((r) => ({ id: r.localId, author: r.author, text: r.text, createdAt: r.issuedAt }));
+  return { ...fresh, replies: [...fresh.replies, ...appended] };
+}
+
 /** Replaces every comment this store already knew about for `key` with the
  *  server's own list, but PRESERVES any comment that only exists locally so
  *  far (a draft still being composed, not yet persisted — see `addComment`) —
@@ -459,9 +596,12 @@ function currentGeneration(key: string): number {
  *  same file pushed a refresh. Also preserves a live per-comment `error`
  *  (F7): that is CLIENT-side state the server has never heard of, and a
  *  refresh landing mid-failure must not silently clear the very error it
- *  exists to keep visible until the user retries or the retry succeeds. */
+ *  exists to keep visible until the user retries or the retry succeeds.
+ *  Rule 1/2 (§7): the fresh read wholesale-replaces `replies` too (never a
+ *  field-by-field patch) — `reconcileInFlightRepliesForComment` is what
+ *  re-appends a reply still in flight so this replace never visibly drops it. */
 function mergeServerComments(key: string, serverComments: PersistedComment[]): void {
-  const fresh = serverComments.map(fromPersisted);
+  const fresh = serverComments.map(fromPersisted).map(reconcileInFlightRepliesForComment);
   for (const c of fresh) commentKeyIndex.set(c.id, key);
   const existing = snap.commentsByKey[key] ?? [];
   const keptLocal = existing.filter((c) => pendingLocalIds.has(c.id));
@@ -743,7 +883,8 @@ function addReply(id: string, author: CommentAuthor, text: string): void {
   if (!text.trim()) return;
   const trimmed = text.trim();
   const replyId = `r-${nextLocalSuffix()}`;
-  const reply: CommentReply = { id: replyId, author, text: trimmed, createdAt: Date.now() };
+  const issuedAt = Date.now();
+  const reply: CommentReply = { id: replyId, author, text: trimmed, createdAt: issuedAt };
   const before = updateComment(id, (c) => ({ ...c, replies: [...c.replies, reply] }));
   if (!before) return;
   const ipc = getIpc();
@@ -751,8 +892,25 @@ function addReply(id: string, author: CommentAuthor, text: string): void {
   const key = commentKeyIndex.get(id)!;
   const projectRoot = projectRootOfKey(key);
   const gen = currentGeneration(key);
+  // §7's reconcile rule (design review round 2, F1): tracked so a
+  // `docComments:changed` push landing before this call's own response
+  // resolves re-appends this optimistic reply instead of silently dropping it
+  // (`mergeServerComments` → `reconcileInFlightRepliesForComment`).
+  trackInFlightReply(id, replyId, author, trimmed, issuedAt);
   void callMutation(() => ipc.reply(before.path, id, trimmed, author, projectRoot)).then((res) => {
-    if (res.ok) return;
+    // Rule 3 (§7): the response is the PRIMARY, fastest reconciliation path —
+    // drop from the in-flight set the instant it resolves, success or
+    // failure, so a push arriving afterward for the SAME change is a no-op.
+    dropInFlightReply(id, replyId);
+    if (res.ok) {
+      // F2 fix (T5, design review round 3 — High): `addReply`'s success
+      // branch used to be `if (res.ok) return;` — it never read `res.reply`,
+      // never swapped the optimistic placeholder id, and the reconcile rule's
+      // in-flight set had nothing to remove it from either. Mirrors
+      // `persistNewComment`'s own already-built id-reconciliation shape.
+      if (res.reply) reconcileReplyId(id, replyId, res.reply);
+      return;
+    }
     // F9 fix (T5 review): a `docComments:changed` refresh can land WHILE this
     // mutation is in flight — reapplying `before` (captured before the
     // refresh) would silently undo that newer server truth. Re-list instead
@@ -972,6 +1130,7 @@ export function __resetDocCommentsStoreForTest(): void {
   keySnapCache.clear();
   keyGeneration.clear();
   refsByKey.clear();
+  inFlightRepliesByParent.clear();
   changedUnsub?.();
   changedUnsub = null;
   snap = emptySnap();

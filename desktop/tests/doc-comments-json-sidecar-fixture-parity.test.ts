@@ -90,7 +90,11 @@ describe('shared JSON sidecar fixture — desktop reads the same shape Android w
       text: 'from desktop',
       author: 'assistant',
     });
-    expect(replied).toEqual({ ok: true });
+    // T5 review (design §1.6, F2): `reply` returns the persisted `CommentReply`.
+    expect(replied).toEqual({
+      ok: true,
+      reply: { id: 'c-fixture-0001-r2', author: 'assistant', text: 'from desktop', createdAt: expect.any(Number) },
+    });
 
     const onDisk: CommentsSidecarFile = JSON.parse(await fs.promises.readFile(sidecarPath, 'utf8'));
     expect(onDisk.version).toBe(1);
@@ -178,7 +182,11 @@ describe('shared JSON sidecar fixture — desktop reads the same shape Android w
       text: 'from desktop too',
       author: 'assistant',
     });
-    expect(replied).toEqual({ ok: true });
+    // T5 review (design §1.6, F2): `reply` returns the persisted `CommentReply`.
+    expect(replied).toEqual({
+      ok: true,
+      reply: { id: 'c-fixture-0001-r3', author: 'assistant', text: 'from desktop too', createdAt: expect.any(Number) },
+    });
 
     const onDisk = JSON.parse(await fs.promises.readFile(sidecarPath, 'utf8'));
     // Desktop's own mutation preserved every unknown field Android wrote,

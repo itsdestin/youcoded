@@ -217,6 +217,86 @@ describe('write-pipeline — verify-after-write with automatic rollback', () => 
   });
 });
 
+// T11 follow-up (design §3.3's new step 0, design review round 3 F4): refuse
+// 'file-open-elsewhere' when a real Word/Excel `~$<name>` owner file or a
+// LibreOffice `.~lock.<name>#` lock file sits beside the target — BEFORE
+// step 1 (backup) ever runs. Implemented once, here, so every caller (the
+// renderer's direct IPC mutation, a native tool, and the MCP pending-mutation
+// queue's applier) gets the identical refusal automatically.
+describe('write-pipeline — step 0: refuses a file open elsewhere before backup', () => {
+  it('refuses \'file-open-elsewhere\' when a Word/Excel owner file (~$<name>) sits beside the target, before touching the backup or the target', async () => {
+    await withScratchFile('original bytes', async (target) => {
+      const dir = target.slice(0, target.lastIndexOf('/'));
+      const name = target.slice(target.lastIndexOf('/') + 1);
+      const ownerFile = join(dir, `~$${name}`);
+      await writeFile(ownerFile, 'winword');
+      const before = await readFile(target);
+      const backupPath = backupPathFor(target, '.xlsx.bak');
+      let mutateCalled = false;
+      const result = await writeFileMutation<{}, { ok: false; error: string }>(
+        target,
+        '.xlsx.bak',
+        async (bytes) => { mutateCalled = true; return { ok: true, bytes }; },
+        async () => true
+      );
+      expect(result).toEqual({ ok: false, error: 'file-open-elsewhere' });
+      expect(mutateCalled).toBe(false); // never even reached mutate/backup
+      expect(await exists(backupPath)).toBe(false);
+      expect(await readFile(target)).toEqual(before); // the target itself is untouched
+    });
+  });
+
+  it('refuses \'file-open-elsewhere\' when a LibreOffice lock file (.~lock.<name>#) sits beside the target', async () => {
+    await withScratchFile('original bytes', async (target) => {
+      const dir = target.slice(0, target.lastIndexOf('/'));
+      const name = target.slice(target.lastIndexOf('/') + 1);
+      const lockFile = join(dir, `.~lock.${name}#`);
+      await writeFile(lockFile, ',destin,localhost,01-01-2026 00:00,file:///home/destin;');
+      const backupPath = backupPathFor(target, '.xlsx.bak');
+      const result = await writeFileMutation<{}, { ok: false; error: string }>(
+        target,
+        '.xlsx.bak',
+        async (bytes) => ({ ok: true, bytes }),
+        async () => true
+      );
+      expect(result).toEqual({ ok: false, error: 'file-open-elsewhere' });
+      expect(await exists(backupPath)).toBe(false);
+    });
+  });
+
+  it('proceeds normally once the lock file is gone (the common "since closed it" case)', async () => {
+    await withScratchFile('original bytes', async (target) => {
+      const dir = target.slice(0, target.lastIndexOf('/'));
+      const name = target.slice(target.lastIndexOf('/') + 1);
+      const ownerFile = join(dir, `~$${name}`);
+      await writeFile(ownerFile, 'winword');
+      const firstAttempt = await writeFileMutation<{}, { ok: false; error: string }>(
+        target, '.xlsx.bak', async (bytes) => ({ ok: true, bytes }), async () => true
+      );
+      expect(firstAttempt).toEqual({ ok: false, error: 'file-open-elsewhere' });
+      await rm(ownerFile, { force: true });
+      const retry = await writeFileMutation<{}, { ok: false; error: string }>(
+        target, '.xlsx.bak', async (bytes) => ({ ok: true, bytes }), async () => true
+      );
+      expect(retry).toEqual({ ok: true });
+    });
+  });
+
+  it('a sibling file that merely SHARES a prefix (not the exact lock-file shape) does not refuse', async () => {
+    await withScratchFile('original bytes', async (target) => {
+      const dir = target.slice(0, target.lastIndexOf('/'));
+      // "target.xlsx.bak" and "~$other.xlsx" (a DIFFERENT file's owner marker)
+      // must never false-positive against "target.xlsx".
+      await writeFile(join(dir, 'target.xlsx.bak'), 'unrelated');
+      await writeFile(join(dir, '~$other.xlsx'), 'unrelated');
+      const result = await writeFileMutation<{}, { ok: false; error: string }>(
+        target, '.xlsx.bak', async (bytes) => ({ ok: true, bytes }), async () => true
+      );
+      expect(result).toEqual({ ok: true });
+    });
+  });
+});
+
 describe('write-pipeline — concurrency', () => {
   it('two mutations on one file serialize, and neither is lost', async () => {
     await withScratchFile('0', async (target) => {

@@ -23,7 +23,7 @@ import {
 import { OnScreenContext } from '../src/renderer/state/on-screen-context';
 
 type ListResult = { ok: true; comments: any[] } | { ok: false; error?: string };
-type MutationResult = { ok: true; id?: string } | { ok: false; error?: string; field?: string };
+type MutationResult = { ok: true; id?: string; reply?: any } | { ok: false; error?: string; field?: string };
 
 function makeFakeIpc() {
   const listeners = new Set<(evt: { path: string; projectRoot?: string }) => void>();
@@ -329,6 +329,155 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
     expect(ipc.reply).toHaveBeenCalledWith('thread.md', 'c-1', 'a reply', 'user', '/proj');
     await waitFor(() => expect(result.current.comments[0].replies).toHaveLength(0));
     expect(result.current.comments[0].error?.message).toBe("This comment couldn't be found anymore.");
+  });
+
+  // §7's reconcile rule (design review round 2, F1) — the SAME race
+  // `persistNewComment`'s own id-swap guards against, now closed for `reply`
+  // too (design review round 3, F2 — the built `addReply` used to be a bare
+  // `if (res.ok) return;`).
+  describe('addReply reconciles an in-flight optimistic reply against a docComments:changed push', () => {
+    function seedOneComment(ipc: ReturnType<typeof makeFakeIpc>['ipc'], path: string) {
+      ipc.list.mockResolvedValueOnce({
+        ok: true,
+        comments: [{
+          id: 'c-1', path,
+          selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'x', prefix: '', suffix: '', occurrence: 0 } },
+          text: 'note', author: 'user', createdAt: 1, replies: [], resolved: false, history: [],
+        }],
+      });
+    }
+
+    it('swaps the optimistic local reply id for the real persisted one on success (F2)', async () => {
+      const { ipc } = installIpc();
+      seedOneComment(ipc, 'thread.md');
+      const { result } = renderHook(() => useDocComments('thread.md', '/proj'));
+      await waitFor(() => expect(result.current.comments).toHaveLength(1));
+      let resolveReply!: (v: MutationResult) => void;
+      ipc.reply.mockReturnValueOnce(new Promise((resolve) => { resolveReply = resolve; }));
+      act(() => { result.current.addReply('c-1', 'user', 'a reply'); });
+      const localId = result.current.comments[0].replies[0].id;
+      expect(localId).toMatch(/^r-/);
+      await act(async () => {
+        resolveReply({ ok: true, reply: { id: 'w-3-r1', author: 'user', text: 'a reply', createdAt: 999 } });
+        await Promise.resolve();
+      });
+      expect(result.current.comments[0].replies).toHaveLength(1);
+      expect(result.current.comments[0].replies[0].id).toBe('w-3-r1');
+    });
+
+    it('a push landing BEFORE the reply\'s own response resolves never duplicates or loses the reply (interleaving)', async () => {
+      const { ipc, emitChanged } = installIpc();
+      seedOneComment(ipc, 'race.md');
+      const { result } = renderHook(() => useDocComments('race.md', '/proj'));
+      await waitFor(() => expect(result.current.comments).toHaveLength(1));
+
+      let resolveReply!: (v: MutationResult) => void;
+      ipc.reply.mockReturnValueOnce(new Promise((resolve) => { resolveReply = resolve; }));
+      act(() => { result.current.addReply('c-1', 'user', 'hello there'); });
+      expect(result.current.comments[0].replies).toHaveLength(1); // optimistic
+
+      // The push's own `list()` refresh already reflects the write (the write
+      // succeeded; the watcher's push simply arrived first — a genuine race,
+      // not a bug, per §7's own framing).
+      ipc.list.mockResolvedValueOnce({
+        ok: true,
+        comments: [{
+          id: 'c-1', path: 'race.md',
+          selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'x', prefix: '', suffix: '', occurrence: 0 } },
+          text: 'note', author: 'user', createdAt: 1, resolved: false, history: [],
+          replies: [{ id: 'w-1-r1', author: 'user', text: 'hello there', createdAt: 500 }],
+        }],
+      });
+      await act(async () => { emitChanged('race.md', '/proj'); await Promise.resolve(); await Promise.resolve(); });
+      // Rule 2: the fresh read's own content already reflects this in-flight
+      // reply — it is NOT re-appended a second time.
+      expect(result.current.comments[0].replies).toHaveLength(1);
+      expect(result.current.comments[0].replies[0].id).toBe('w-1-r1');
+
+      // The reply's own response finally resolves — a no-op replace, not a
+      // second entry (rule 3's own wording).
+      await act(async () => {
+        resolveReply({ ok: true, reply: { id: 'w-1-r1', author: 'user', text: 'hello there', createdAt: 500 } });
+        await Promise.resolve();
+      });
+      expect(result.current.comments[0].replies).toHaveLength(1);
+      expect(result.current.comments[0].replies[0].id).toBe('w-1-r1');
+    });
+
+    it('a push for an UNRELATED change while a reply is still in flight leaves the in-flight one visible, not dropped', async () => {
+      const { ipc, emitChanged } = installIpc();
+      seedOneComment(ipc, 'busy.md');
+      const { result } = renderHook(() => useDocComments('busy.md', '/proj'));
+      await waitFor(() => expect(result.current.comments).toHaveLength(1));
+
+      // Held open — this reply never resolves during this test.
+      ipc.reply.mockReturnValueOnce(new Promise(() => {}));
+      act(() => { result.current.addReply('c-1', 'user', 'still typing this one'); });
+      expect(result.current.comments[0].replies).toHaveLength(1);
+
+      // An unrelated change lands — the fresh read has NO knowledge of the
+      // in-flight reply (it hasn't settled on disk yet).
+      ipc.list.mockResolvedValueOnce({
+        ok: true,
+        comments: [{
+          id: 'c-1', path: 'busy.md',
+          selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'x', prefix: '', suffix: '', occurrence: 0 } },
+          text: 'note (edited by someone else)', author: 'user', createdAt: 1, resolved: false, history: [], replies: [],
+        }],
+      });
+      await act(async () => { emitChanged('busy.md', '/proj'); await Promise.resolve(); await Promise.resolve(); });
+      // The unrelated change's own fields land...
+      expect(result.current.comments[0].text).toBe('note (edited by someone else)');
+      // ...but the still-in-flight reply is re-appended, never dropped.
+      expect(result.current.comments[0].replies).toHaveLength(1);
+      expect(result.current.comments[0].replies[0].text).toBe('still typing this one');
+    });
+
+    it('two back-to-back identical replies with a push landing between them each resolve to their OWN correct id (F3 tie-break)', async () => {
+      const { ipc, emitChanged } = installIpc();
+      seedOneComment(ipc, 'dup.md');
+      const { result } = renderHook(() => useDocComments('dup.md', '/proj'));
+      await waitFor(() => expect(result.current.comments).toHaveLength(1));
+
+      let resolveFirst!: (v: MutationResult) => void;
+      let resolveSecond!: (v: MutationResult) => void;
+      ipc.reply.mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve; }));
+      act(() => { result.current.addReply('c-1', 'user', 'thanks'); });
+      const firstLocalId = result.current.comments[0].replies[0].id;
+
+      ipc.reply.mockReturnValueOnce(new Promise((resolve) => { resolveSecond = resolve; }));
+      act(() => { result.current.addReply('c-1', 'user', 'thanks'); });
+      expect(result.current.comments[0].replies).toHaveLength(2);
+      const secondLocalId = result.current.comments[0].replies[1].id;
+      expect(secondLocalId).not.toBe(firstLocalId);
+
+      // A push lands with BOTH real replies already settled, ordered by dT —
+      // the fresh read's own only signal, since a real reply carries no
+      // client-generated correlation token (§7 rule 2's own limitation, F3).
+      ipc.list.mockResolvedValueOnce({
+        ok: true,
+        comments: [{
+          id: 'c-1', path: 'dup.md',
+          selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'x', prefix: '', suffix: '', occurrence: 0 } },
+          text: 'note', author: 'user', createdAt: 1, resolved: false, history: [],
+          replies: [
+            { id: 'w-1-r1', author: 'user', text: 'thanks', createdAt: 100 },
+            { id: 'w-1-r2', author: 'user', text: 'thanks', createdAt: 200 },
+          ],
+        }],
+      });
+      await act(async () => { emitChanged('dup.md', '/proj'); await Promise.resolve(); await Promise.resolve(); });
+      // Paired by order (first in-flight <-> earliest dT), never duplicated —
+      // exactly two entries, not four.
+      expect(result.current.comments[0].replies.map((r: any) => r.id)).toEqual(['w-1-r1', 'w-1-r2']);
+
+      // Each call's OWN response, resolved in ARRIVAL order (not necessarily
+      // issue order), still lands on its OWN correct persisted id — never
+      // swapped between the two.
+      await act(async () => { resolveSecond({ ok: true, reply: { id: 'w-1-r2', author: 'user', text: 'thanks', createdAt: 200 } }); await Promise.resolve(); });
+      await act(async () => { resolveFirst({ ok: true, reply: { id: 'w-1-r1', author: 'user', text: 'thanks', createdAt: 100 } }); await Promise.resolve(); });
+      expect(result.current.comments[0].replies.map((r: any) => r.id)).toEqual(['w-1-r1', 'w-1-r2']);
+    });
   });
 
   it('resolveComment / reopenComment round-trip through the real channels and honor Retry, via the comment\'s own inline error', async () => {

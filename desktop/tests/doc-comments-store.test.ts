@@ -22,6 +22,7 @@ import {
   resolveComment,
   reopenComment,
   moveComment,
+  resolveWatchTarget,
 } from '../src/main/doc-comments/doc-comments-store';
 import type {
   CellSelector,
@@ -74,8 +75,13 @@ describe('read-modify-write', () => {
     expect(onDisk.comments).toHaveLength(1);
     expect(onDisk.comments[0]).toMatchObject({ id: added.id, text: 'Can we cut this?', resolved: false, history: [] });
 
+    // T5 review (design §1.6, F2): `reply` returns the persisted
+    // `CommentReply` uniformly for the plain sidecar too.
     const replied = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'Yes', author: 'assistant' });
-    expect(replied).toEqual({ ok: true });
+    expect(replied).toEqual({
+      ok: true,
+      reply: { id: `${added.id}-r1`, author: 'assistant', text: 'Yes', createdAt: expect.any(Number) },
+    });
 
     const resolved = await resolveComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, by: 'assistant' });
     expect(resolved).toEqual({ ok: true });
@@ -147,7 +153,11 @@ describe('every mutation carries its own path, so no warm list() cache is needed
     await fs.promises.writeFile(sidecarPath, JSON.stringify(seeded));
 
     const args = { path: 'docs/cold.md', projectRoot: root, id: 'c-cold-start' };
-    await expect(replyToComment({ ...args, text: 'hi', author: 'assistant' })).resolves.toEqual({ ok: true });
+    // T5 review (design §1.6, F2): the enriched reply shape applies here too.
+    await expect(replyToComment({ ...args, text: 'hi', author: 'assistant' })).resolves.toEqual({
+      ok: true,
+      reply: { id: 'c-cold-start-r1', author: 'assistant', text: 'hi', createdAt: expect.any(Number) },
+    });
     await expect(resolveComment({ ...args, by: 'assistant' })).resolves.toEqual({ ok: true });
     await expect(reopenComment({ ...args, by: 'user' })).resolves.toEqual({ ok: true });
     await expect(
@@ -442,5 +452,51 @@ describe('addComment — caller-supplied id (F4, T5 review)', () => {
     const onDisk = await readSidecar(sidecarPath);
     expect(onDisk.comments).toHaveLength(1);
     expect(onDisk.comments[0].text).toBe('first');
+  });
+});
+
+// T3 follow-up (design §1.5's new bullet, "A second, narrower watcher for a
+// .docx/.xlsx target's OWN file" — round 2 F1, corrected round 3 F1):
+// `resolveWatchTarget` must produce the THIRD `{kind:'document', ...}`
+// variant for a native-format target, INSTEAD OF (never alongside) the
+// `{kind:'project', ...}` sidecar-directory target — a native-format file has
+// no sidecar to watch at all (§1.1).
+describe('resolveWatchTarget — native-format target replaces the project sidecar watch (T3 follow-up)', () => {
+  it('resolves a .docx target inside a known project to a document watch target, not a project one', async () => {
+    const abs = path.join(root, 'report.docx');
+    await fs.promises.writeFile(abs, 'not a real docx, just needs to exist');
+    const result = await resolveWatchTarget({ path: 'report.docx', projectRoot: root });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.target.kind).toBe('document');
+    if (result.target.kind !== 'document') return;
+    expect(result.target.absolutePath).toBe(await fs.promises.realpath(abs));
+    expect(result.target.sourcePath).toBe('report.docx');
+    expect(result.target.projectRoot).toBe(root);
+  });
+
+  it('resolves an .xlsx target with no project root (fallback) to a document watch target too', async () => {
+    const abs = path.join(root, 'budget.xlsx');
+    await fs.promises.writeFile(abs, 'not a real xlsx, just needs to exist');
+    const result = await resolveWatchTarget({ path: abs });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.target.kind).toBe('document');
+    if (result.target.kind !== 'document') return;
+    expect(result.target.absolutePath).toBe(await fs.promises.realpath(abs));
+    expect(result.target.sourcePath).toBe(abs);
+    expect(result.target.projectRoot).toBeUndefined();
+  });
+
+  it('still resolves a plain-text target to the ordinary project sidecar-directory watch', async () => {
+    const result = await resolveWatchTarget({ path: 'notes.md', projectRoot: root });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.target.kind).toBe('project');
+  });
+
+  it('refuses a .docx target that resolves outside the project, same as list/add', async () => {
+    const result = await resolveWatchTarget({ path: '../../etc/passwd.docx', projectRoot: root });
+    expect(result).toEqual({ ok: false, error: 'path-outside-project' });
   });
 });

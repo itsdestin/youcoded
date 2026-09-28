@@ -23,7 +23,50 @@ import { createHash } from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
 
-export type PipelineError = 'read-failed' | 'backup-failed' | 'write-failed' | 'verify-failed';
+export type PipelineError = 'read-failed' | 'backup-failed' | 'write-failed' | 'verify-failed' | 'file-open-elsewhere';
+
+// T11 follow-up (design §3.3's new step 0, design review round 3, F4): refuse
+// a write for a file open concurrently in real Word/Excel/LibreOffice, BEFORE
+// step 1 (backup) even begins — this task (T11) shipped before step 0 existed
+// in the design, so the write path had no such check at all. Two real,
+// independent risks this closes, researched rather than assumed (cited in the
+// design's own changelog): Word/Excel's own "owner file" convention (a hidden
+// sibling `~$<filename>`, containing the current editor's username, deleted
+// on a clean close — Microsoft Q&A/Nextcloud community threads) and
+// LibreOffice's own lock-file convention (`.~lock.<filename>#`, same shape —
+// LibreOffice/OpenOffice community documentation). Either app's own save
+// could otherwise silently overwrite this write with a stale in-memory copy,
+// with no warning in either program.
+function officeOwnerFilePath(absolutePath: string): string {
+  return path.join(path.dirname(absolutePath), `~$${path.basename(absolutePath)}`);
+}
+function libreOfficeLockFilePath(absolutePath: string): string {
+  return path.join(path.dirname(absolutePath), `.~lock.${path.basename(absolutePath)}#`);
+}
+
+/** Checked once, in this SHARED entry point — every caller (the renderer's
+ *  direct IPC mutation, a native tool call, and the MCP pending-mutation
+ *  queue's applier, T9b/T20) goes through `writeFileMutation`, so this reaches
+ *  all three automatically; the assistant's own tool call gets the identical
+ *  `'file-open-elsewhere'` fact as its own tool error, never a different or
+ *  vaguer one (the doc-comments-tools.ts/pending-mutation-queue.ts error
+ *  paths already forward whatever string this pipeline returns, unchanged).
+ *  A `false` here does NOT prove the file is currently held open by another
+ *  program — only that one of the two lock-file conventions' sibling file
+ *  exists (design's own accepted, named limitation: a stale lock after a
+ *  crash, or a program that holds the file open without either convention,
+ *  are both out of this check's reach). */
+async function isFileOpenElsewhere(absolutePath: string): Promise<boolean> {
+  for (const candidate of [officeOwnerFilePath(absolutePath), libreOfficeLockFilePath(absolutePath)]) {
+    try {
+      await fs.access(candidate);
+      return true;
+    } catch {
+      /* doesn't exist — check the other convention */
+    }
+  }
+  return false;
+}
 
 // F5 (T11 review — major): backups now live in ONE place OUTSIDE every user
 // project — `~/.claude/youcoded-doc-backups/`, matching this app's own
@@ -129,6 +172,14 @@ export async function writeFileMutation<Extra extends Record<string, unknown>, E
   verify: (newBytes: Buffer, extra: Extra, originalBytes: Buffer) => Promise<boolean>
 ): Promise<({ ok: true } & Extra) | ErrorResult | { ok: false; error: PipelineError }> {
   return withWriteLock(absolutePath, async () => {
+    // Step 0 (design §3.3, review round 3 F4) — the VERY FIRST thing this
+    // pipeline does, before backup (step 1) or even the read below: refuse
+    // outright if a real Word/Excel/LibreOffice lock-file sits beside the
+    // target. Never proceeds to backup/mutate/verify once this fires.
+    if (await isFileOpenElsewhere(absolutePath)) {
+      return { ok: false, error: 'file-open-elsewhere' };
+    }
+
     let originalBytes: Buffer;
     try {
       originalBytes = await fs.readFile(absolutePath);

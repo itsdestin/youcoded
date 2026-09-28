@@ -19,8 +19,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomUUID, createHash } from 'crypto';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
+import { nativeFormatFor } from './native-format';
 import type {
   CommentAuthor,
+  CommentReply,
   CommentSelector,
   CommentsSidecarFile,
   PersistedComment,
@@ -440,24 +442,32 @@ export async function addComment(args: {
   });
 }
 
+/** T5 review (design §1.6, F2 — round 2's own reply-enrichment fix, never
+ *  applied to this plain-sidecar path either): returns the real persisted
+ *  `CommentReply` alongside `ok:true`, the same wire shape `docx-comments.ts`'s
+ *  `replyToDocxComment` now returns (§1.6's table entry is general, not
+ *  gated to native formats) — so the renderer's own optimistic placeholder
+ *  (today a purely local `r-${nextLocalSuffix()}` id) can be swapped in place
+ *  immediately for EVERY target type, not just Word/Excel. */
 export async function replyToComment(args: {
   path: string;
   projectRoot?: string;
   id: string;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true } | Refusal> {
+}): Promise<{ ok: true; reply: CommentReply } | Refusal> {
   const resolved = await resolveSidecarPath(args);
   if (!resolved.ok) return resolved;
-  return mutateSidecar(resolved.sidecarPath, (file) => {
+  return mutateSidecar<{ reply: CommentReply }>(resolved.sidecarPath, (file) => {
     const comment = findComment(file, args.id);
     if (!comment) return 'not-found';
     const replyId = `${comment.id}-r${comment.replies.length + 1}`;
+    const reply: CommentReply = { id: replyId, author: args.author, text: args.text, createdAt: Date.now() };
     const next: PersistedComment = {
       ...comment,
-      replies: [...comment.replies, { id: replyId, author: args.author, text: args.text, createdAt: Date.now() }],
+      replies: [...comment.replies, reply],
     };
-    return { file: replaceComment(file, args.id, next), extra: {} };
+    return { file: replaceComment(file, args.id, next), extra: { reply } };
   });
 }
 
@@ -545,12 +555,42 @@ export type CommentsWatchTarget =
   // renderer-side key, so a change in ONE project could re-list the wrong
   // project's open viewer.
   | { kind: 'project'; commentsDir: string; projectRoot: string }
-  | { kind: 'fallback'; sidecarPath: string; sourcePath: string };
+  | { kind: 'fallback'; sidecarPath: string; sourcePath: string }
+  // T3 follow-up (design section 1.5's new bullet, "A second, narrower
+  // watcher for a .docx/.xlsx target's OWN file" — design review round 2 F1,
+  // corrected round 3 F1): a native-format target has no sidecar to watch at
+  // all (section 1.1) — this watches the SOURCE FILE'S OWN bytes instead, and
+  // REPLACES the 'project' variant above for such a target, never runs
+  // alongside it (round 3's own correction from an earlier "also register"
+  // wording). `sourcePath` is the caller's ORIGINAL `path` argument (mirrors
+  // 'fallback' above) — what a `docComments:changed` push should carry back
+  // so the renderer's own `keyFor(path, projectRoot)` matches the value it
+  // watched with, whether that path came from a known project (relative) or
+  // the loose-file fallback (absolute). `projectRoot` mirrors 'project' above
+  // for the identical reason (F3, T5 review): two projects can both have a
+  // `report.docx`.
+  | { kind: 'document'; absolutePath: string; sourcePath: string; projectRoot: string | undefined };
 
 export async function resolveWatchTarget(args: {
   path: string;
   projectRoot?: string;
 }): Promise<{ ok: true; target: CommentsWatchTarget } | Refusal> {
+  // Checked FIRST, before either sidecar scheme below: a `.docx`/`.xlsx`
+  // target's comments live inside the file itself (section 1.1), so it never
+  // has a `.youcoded/comments/` sidecar to watch — the SAME `nativeFormatFor`
+  // decision `doc-comments-dispatch.ts`'s LIST/ADD/etc. already make on the
+  // SAME string, so this can never disagree with them about which files are
+  // native-format. `resolveSourceFilePath` (below) reuses the identical
+  // containment logic (project-contained realpath, or the fallback's
+  // absolute-path rule) every other native-format entry point already uses.
+  if (nativeFormatFor(args.path)) {
+    const resolved = await resolveSourceFilePath(args);
+    if (!resolved.ok) return resolved;
+    return {
+      ok: true,
+      target: { kind: 'document', absolutePath: resolved.absolutePath, sourcePath: args.path, projectRoot: args.projectRoot },
+    };
+  }
   if (args.projectRoot) {
     const located = await locateInProject(args.projectRoot, args.path);
     if ('error' in located) return located;

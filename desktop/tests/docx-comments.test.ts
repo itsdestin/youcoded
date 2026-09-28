@@ -471,7 +471,17 @@ describe('docx-comments write — reply', () => {
         text: 'Sounds good, thanks both.',
         author: 'user',
       });
-      expect(result).toEqual({ ok: true });
+      // T5 review (design §1.6, F2): `reply`'s response is enriched to carry
+      // the real persisted `CommentReply` — its own `author` is the CALLER'S
+      // original `CommentAuthor` value ('user'), not the round-tripped Word
+      // display name ('person:You') `readDocxComments` maps it to on the way
+      // back OUT of the file — this is what lets the renderer's optimistic
+      // entry (also 'user') be swapped in place without changing how it
+      // renders.
+      expect(result).toEqual({
+        ok: true,
+        reply: { id: 'w-1-r2', author: 'user', text: 'Sounds good, thanks both.', createdAt: expect.any(Number) },
+      });
 
       const read = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
       expect(read.ok).toBe(true);
@@ -480,6 +490,8 @@ describe('docx-comments write — reply', () => {
       expect(target1?.replies).toHaveLength(2);
       expect(target1?.replies[0]).toMatchObject({ author: 'person:Marcus Lee' }); // the ORIGINAL reply, unmoved
       expect(target1?.replies[1]).toMatchObject({ author: 'person:You', text: 'Sounds good, thanks both.' });
+      // The enriched response's own id matches what the read path independently computes for it.
+      expect(target1?.replies[1].id).toBe((result as any).reply.id);
     });
   });
 
@@ -591,6 +603,59 @@ describe('docx-comments write — move', () => {
         newSelector: textSelector('Keep support tickets'),
       });
       expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+});
+
+// T11 follow-up (design §3.3's new step 0, design review round 3 F4): this
+// task shipped before step 0 existed in the design, so the write path it
+// built had no such check at all — now added, and pinned here through
+// `addDocxComment` itself (not just the shared write-pipeline.ts unit tests)
+// to prove it reaches a REAL docx write, exactly the way §3.3 step 0's own
+// "implemented once, in write-pipeline.ts's shared entry point" claim
+// promises.
+describe('docx-comments write — refuses a file open elsewhere in real Word/LibreOffice before backup', () => {
+  it('refuses \'file-open-elsewhere\' before touching the backup or the target when a Word owner file (~$<name>.docx) sits beside it', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const dir = target.slice(0, target.lastIndexOf('/'));
+      const base = target.slice(target.lastIndexOf('/') + 1);
+      const ownerFile = join(dir, `~$${base}`);
+      await writeFile(ownerFile, 'destin');
+      const before = await readFile(target);
+      const backupPath = backupPathFor(target, DOCX_BACKUP_SUFFIX);
+      const result = await addDocxComment({
+        absolutePath: target, path: 'docs/launch-brief.docx',
+        selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 } },
+        text: 'x', author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'file-open-elsewhere' });
+      expect(await exists(backupPath)).toBe(false); // never even reached step 1 (backup)
+      expect(await readFile(target)).toEqual(before); // the target itself is untouched
+    });
+  });
+
+  it('refuses \'file-open-elsewhere\' when a LibreOffice lock file (.~lock.<name>.docx#) sits beside it', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const dir = target.slice(0, target.lastIndexOf('/'));
+      const base = target.slice(target.lastIndexOf('/') + 1);
+      const lockFile = join(dir, `.~lock.${base}#`);
+      await writeFile(lockFile, ',destin,localhost,01-01-2026 00:00,file:///home/destin;');
+      const result = await replyToDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-0', text: 'x', author: 'user' });
+      expect(result).toEqual({ ok: false, error: 'file-open-elsewhere' });
+    });
+  });
+
+  it('proceeds normally once the owner file is gone (the common "since closed it" case)', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const dir = target.slice(0, target.lastIndexOf('/'));
+      const base = target.slice(target.lastIndexOf('/') + 1);
+      const ownerFile = join(dir, `~$${base}`);
+      await writeFile(ownerFile, 'destin');
+      const first = await resolveDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-0' });
+      expect(first).toEqual({ ok: false, error: 'file-open-elsewhere' });
+      await rm(ownerFile, { force: true });
+      const retry = await resolveDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-0' });
+      expect(retry).toEqual({ ok: true });
     });
   });
 });

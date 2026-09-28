@@ -514,6 +514,11 @@ const EMPTY_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><
 //   refused honestly rather than silently coerced.
 // 'read-failed' / 'backup-failed' / 'write-failed' / 'verify-failed': the
 //   write pipeline's own stages (§3.3 steps 1 and 6).
+// 'file-open-elsewhere' (T11 follow-up, design §3.3's new step 0, review
+//   round 3 F4): a real Word/Excel `~$<name>` owner file or a LibreOffice
+//   `.~lock.<name>#` lock file sits beside the target — refused before step 1
+//   (backup) even runs, in the SHARED write-pipeline.ts every caller goes
+//   through.
 type DocxWriteError =
   | DocxReadError
   | 'comment-not-found'
@@ -522,7 +527,8 @@ type DocxWriteError =
   | 'read-failed'
   | 'backup-failed'
   | 'write-failed'
-  | 'verify-failed';
+  | 'verify-failed'
+  | 'file-open-elsewhere';
 
 function parseXml(xml: string): Document {
   return new DOMParser().parseFromString(xml, 'text/xml') as unknown as Document;
@@ -1283,10 +1289,38 @@ async function mutateAddComment(
   return { ok: true, bytes, id: `w-${newId}` };
 }
 
+/**
+ * Ordinal position (1-based) a NEW reply to `targetParaId` would get once
+ * written — mirrors `readDocxComments`'s own `w-${root.id}-r${list.length+1}`
+ * numbering (above) exactly, computed from the archive's CURRENT state
+ * (before this write's own `appendCommentEntry`/`upsertExtendedEntry` calls
+ * add the new entry), so the id minted here for the reply's enriched
+ * response (design §1.6, T5 review F2 — "the renderer cannot pre-compute
+ * it... reply's response is therefore enriched to return the full persisted
+ * CommentReply") is the SAME id a subsequent `readDocxComments` would compute
+ * for it. Reuses `resolveRootParaId` (the read path's own paraIdParent-chain
+ * walk) rather than a second copy of it.
+ */
+function nextReplyOrdinal(archive: LoadedArchive, targetParaId: string): number {
+  const extended = new Map<string, ExtendedInfo>();
+  for (const el of elementsByTag(archive.extendedDoc, 'w15:commentEx')) {
+    const paraId = el.getAttribute('w15:paraId');
+    if (paraId) extended.set(paraId, { done: el.getAttribute('w15:done') === '1', paraIdParent: el.getAttribute('w15:paraIdParent') });
+  }
+  let count = 0;
+  for (const el of elementsByTag(archive.commentsDoc, 'w:comment')) {
+    const p = elementsByTag(el as unknown as Document, 'w:p')[0];
+    const paraId = p ? p.getAttribute('w14:paraId') : null;
+    if (!paraId || paraId === targetParaId) continue;
+    if (resolveRootParaId(paraId, extended) === targetParaId) count++;
+  }
+  return count + 1;
+}
+
 async function mutateReplyToComment(
   currentBytes: Buffer,
   args: { id: string; text: string; author: CommentAuthor }
-): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: DocxWriteError }> {
+): Promise<{ ok: true; bytes: Buffer; reply: CommentReply } | { ok: false; error: DocxWriteError }> {
   const rawId = stripWPrefix(args.id);
   if (rawId === null) return { ok: false, error: 'comment-not-found' };
   const loaded = await loadArchiveForWrite(currentBytes);
@@ -1296,12 +1330,18 @@ async function mutateReplyToComment(
   const targetParaId = findCommentParaId(archive.commentsDoc, rawId);
   if (targetParaId === null) return { ok: false, error: 'comment-not-found' };
 
+  // Computed BEFORE this reply's own entry is appended below (§1.6, T5 review
+  // F2's own reasoning: the id depends on the file's CURRENT state at write
+  // time, not something the renderer could have pre-minted).
+  const ordinal = nextReplyOrdinal(archive, targetParaId);
+  const createdAtIso = new Date().toISOString();
+
   const newId = maxExistingCommentId(archive.commentsDoc) + 1;
   const paraId = generateParaId(collectAllParaIds(archive));
   appendCommentEntry(archive.commentsDoc, {
     id: newId,
     author: commentAuthorToDisplayName(args.author),
-    date: new Date().toISOString(),
+    date: createdAtIso,
     paraId,
     text: args.text,
   });
@@ -1313,7 +1353,13 @@ async function mutateReplyToComment(
   recordCommentExtensionParts(archive, paraId); // F4 — a reply is its own new comment
 
   const bytes = await serializeArchive(archive);
-  return { ok: true, bytes };
+  const reply: CommentReply = {
+    id: `w-${rawId}-r${ordinal}`,
+    author: args.author,
+    text: args.text,
+    createdAt: parseDate(createdAtIso),
+  };
+  return { ok: true, bytes, reply };
 }
 
 async function mutateSetResolved(
@@ -1535,22 +1581,28 @@ export async function addDocxComment(args: {
   );
 }
 
+/** T5 review (design §1.6, F2 — the enrichment round 2 already fixed for
+ *  `docComments:add`'s response, never built for `reply`'s): returns the real
+ *  persisted `CommentReply` (id, author, text, createdAt) alongside `ok:true`
+ *  so the renderer's own optimistic placeholder can be swapped in place
+ *  immediately, the same way `addDocxComment`'s own response already lets
+ *  `persistNewComment` do for a brand-new comment. */
 export async function replyToDocxComment(args: {
   absolutePath: string;
   path: string;
   id: string;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true } | { ok: false; error: DocxWriteError }> {
-  return writeDocxMutation(
+}): Promise<{ ok: true; reply: CommentReply } | { ok: false; error: DocxWriteError }> {
+  return writeDocxMutation<{ reply: CommentReply }>(
     args.absolutePath,
     (bytes) => mutateReplyToComment(bytes, args),
-    async (newBytes, _extra, originalBytes) => {
+    async (newBytes, extra, originalBytes) => {
       if (!(await verifyOoxmlWiring(newBytes, originalBytes))) return false;
       const result = await readDocxComments(newBytes, args.path);
       if (!result.ok) return false;
       const target = result.comments.find((c) => c.id === args.id);
-      return !!target && target.replies.some((r) => r.text === args.text);
+      return !!target && target.replies.some((r) => r.id === extra.reply.id && r.text === args.text);
     }
   );
 }

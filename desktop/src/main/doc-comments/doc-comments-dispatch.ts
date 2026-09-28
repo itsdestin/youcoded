@@ -19,7 +19,6 @@
 // and the remote WS surface (remote-server.ts) decide which files are
 // native-format vs. sidecar-backed.
 import { promises as fs } from 'fs';
-import path from 'path';
 import {
   readDocxComments,
   type DocxReadResult,
@@ -40,9 +39,14 @@ import {
 } from './xlsx-comments';
 import { resolveSourceFilePath, type Refusal } from './doc-comments-store';
 import { authorizeBytesRead } from '../artifacts/read-service';
-import type { CommentAuthor, CommentSelector } from '../../shared/doc-comments-types';
-
-export type NativeFormat = 'docx' | 'xlsx';
+import type { CommentAuthor, CommentReply, CommentSelector } from '../../shared/doc-comments-types';
+// T3 follow-up (design §1.5's per-document watcher): `nativeFormatFor` moved
+// to its own module so `doc-comments-store.ts` can reuse it without a
+// circular import (this file already imports FROM doc-comments-store.ts).
+// Re-exported here so every existing caller (`ipc-handlers.ts`,
+// `remote-server.ts`) keeps importing it from this module, unchanged.
+import type { NativeFormat } from './native-format';
+export { nativeFormatFor, type NativeFormat } from './native-format';
 
 /** F1 fix (post-T3 build review, blocker): the no-`projectRoot` fallback in
  *  `resolveSourceFilePath` resolves and returns ANY absolute path the caller
@@ -53,45 +57,6 @@ export type NativeFormat = 'docx' | 'xlsx';
  *  actual file BYTES to parse as docx/xlsx is a materially different
  *  operation, so it refuses here instead. */
 export type UntrackedSourceRefusal = { ok: false; error: 'path-not-tracked' };
-
-/**
- * T8 review F4: Windows' own filesystem API strips trailing '.'/' ' characters
- * off a path component when it resolves one — `report.docx.` and
- * `report.docx ` on disk both open as `report.docx` there (the same
- * normalization `fs.realpath` eventually inherits on that platform). A naive
- * `path.extname` knows nothing about this, so a caller naming
- * `report.docx.`/`report.docx ` on a real Windows machine would see this
- * function say "not native" while the OS itself opens the real Word/Excel
- * file underneath — a data-integrity gap (§3.2's dispatch and §5.2a's
- * permission-subject decision would BOTH agree "not native" here, so it is
- * not an ask/write mismatch, but the comment would silently land in the
- * inert JSON sidecar instead of the file's own `comments.xml`/note, per the
- * review's own write-up).
- *
- * Gated to `process.platform === 'win32'` because a trailing dot/space is
- * NOT insignificant on POSIX — `report.docx.` and `report.docx` are two
- * genuinely different files there, and stripping unconditionally would be
- * the over-matching bug in the opposite direction (a plain-text file that
- * happens to end in a dot getting treated as a Word file). Matches
- * guards.ts's `canonicalize` own `process.platform === 'win32'` gate for the
- * same class of platform-specific normalization.
- */
-function stripWindowsTrailingDotsAndSpaces(filePath: string): string {
-  return process.platform === 'win32' ? filePath.replace(/[. ]+$/, '') : filePath;
-}
-
-/** Extension-based dispatch decision — the ONE place that decides "does this
- *  path have its comments inside the file itself." Both `doc-comments-tools.ts`'s
- *  `permissionSubject` (the ask decision) and its `execute()` (the actual write
- *  dispatch) call this SAME function on the SAME string, so the two can never
- *  disagree about a given path — F4's trailing-dot/space fix lives here once,
- *  not duplicated at each call site. */
-export function nativeFormatFor(filePath: string): NativeFormat | null {
-  const ext = path.extname(stripWindowsTrailingDotsAndSpaces(filePath)).toLowerCase();
-  if (ext === '.docx') return 'docx';
-  if (ext === '.xlsx') return 'xlsx';
-  return null;
-}
 
 /** A mutation channel's shared first step: refuse immediately for a target
  *  this feature CANNOT yet write into. Both native formats now have a real
@@ -140,7 +105,7 @@ export async function replyToNativeDocxComment(args: {
   id: string;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
   return replyToDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text, author: args.author });
@@ -210,6 +175,18 @@ export async function addNativeXlsxComment(args: {
   return addXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, selector: args.selector, text: args.text, author: args.author });
 }
 
+/** T5 review scope note: unlike `replyToNativeDocxComment` above, this does
+ *  NOT return an enriched `reply` yet. `xlsx-comments.ts`'s reply path is now
+ *  the threaded-comments-only writer (design §4's 2026-09-27 rewrite,
+ *  `xl/threadedComments/threadedCommentN.xml`) — it DOES mint a real, discrete
+ *  per-reply GUID (`mintGuid()`) unlike the retired legacy-Notes design this
+ *  comment used to describe, so enriching this response is now technically
+ *  possible. It just hasn't been wired up here: `replyToXlsxComment` still
+ *  returns a bare `{ok:true}`. The renderer's own reconciliation
+ *  (doc-comments-store.ts's `addReply`) already guards on `res.reply` being
+ *  present, so an xlsx reply keeps working exactly as it does today via the
+ *  push-based reconcile path (§7 rule 2) rather than the response-based one
+ *  (§7 rule 3) — an accepted, narrower gap than before, not a bug. */
 export async function replyToNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;

@@ -518,7 +518,7 @@ describe('xlsx-comments — add a comment to a brand-new cell', () => {
     });
   });
 
-  it('lands `<legacyDrawing>` AFTER a pre-existing worksheet-level `<extLst>` (design review round 2, F4)', async () => {
+  it('lands `<legacyDrawing>` AFTER a pre-existing worksheet-level `<extLst>`, never before it', async () => {
     await withScratchCopy(EXTLST_FIXTURE, async (target) => {
       const result = await addXlsxComment({
         absolutePath: target,
@@ -735,7 +735,7 @@ describe('xlsx-comments — move (repoint)', () => {
   });
 });
 
-describe('xlsx-comments — ambiguous-id refusal (design review round 2, F3)', () => {
+describe('xlsx-comments — ambiguous-id refusal', () => {
   it('refuses `ambiguous-comment-id` when the fallback scan finds TWO roots sharing one GUID', async () => {
     await withScratchCopy(DOCLING_FIXTURE, async (target) => {
       // Hand-craft the ambiguity: duplicate F7's root id onto G12's own root
