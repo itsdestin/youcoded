@@ -189,6 +189,23 @@ describe('portable compaction restore', () => {
 });
 
 describe('rebuildHistory — the resume deep-equal contract', () => {
+  it('replays a busy correction after paired unstarted calls through the persisted store', async () => {
+    const queue = [{ id: 'correction', text: 'use the other file', attachments: [] }];
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Read', { file_path: 'a' }), toolCallChunk('c2', 'Read', { file_path: 'b' }), finishChunk('tool-calls')),
+      stream(...textChunks('done', 'revised'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ tools: [fakeTool('Read')], decide: async () => ALLOW,
+      takeReadyBusyMessage: () => queue.shift(),
+    }), async () => model as any);
+    const events = collect(session);
+    await session.send('original');
+    const persisted = await throughStore(events);
+    expect(rebuildHistory(persisted)).toEqual((session as any).history);
+    expect(events.filter(e => e.type === 'tool-result')).toHaveLength(2);
+    expect(persisted.filter(e => e.type === 'user-message').map(e => e.data.text)).toEqual(['original', 'use the other file']);
+    expect(session.acceptedHistory().eventUuids).toContain(events.find(e => e.type === 'user-message' && e.data.text === 'use the other file')!.uuid);
+  });
   it('two-step tool turn: rebuild(emitted) deep-equals the live history', async () => {
     const read = fakeTool('Read');
     const model = scriptedModel([
@@ -333,6 +350,39 @@ describe('rebuildHistory — the resume deep-equal contract', () => {
     }
     expect([...callIds].sort()).toEqual(['c1', 'c2']);
     for (const id of callIds) expect(resultIds.has(id)).toBe(true);
+  });
+
+  it('rebuilds completed and unstarted results after a later permission callback fails', async () => {
+    const executed: string[] = [];
+    const read = fakeTool('Read', { onExecute: (args: { file_path: string }) => {
+      executed.push(args.file_path); return { text: `read ${args.file_path}` };
+    } });
+    const seen: any[] = [];
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Read', { file_path: 'a.ts' }),
+        toolCallChunk('c2', 'Read', { file_path: 'b.ts' }),
+        toolCallChunk('c3', 'Read', { file_path: 'c.ts' }), finishChunk('tool-calls')),
+      stream(...textChunks('next', 'recovered'), finishChunk('stop')),
+    ], seen);
+    let decisions = 0;
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => {
+      if (++decisions === 2) throw new Error('permission store EACCES');
+      return ALLOW;
+    } }), async () => model as any);
+    const events = collect(session);
+    await session.send('first');
+    const persisted = await throughStore(events);
+    expect(rebuildHistory(persisted)).toEqual((session as any).history);
+    const results = (session as any).history.findLast((m: any) => m.role === 'tool')?.content;
+    expect(results.map((p: any) => p.toolCallId)).toEqual(['c1', 'c2', 'c3']);
+    expect(results[0].output.value).toBe('read a.ts');
+    expect(results[1].output.value).toContain('permission store EACCES');
+    expect(results[2].output.value).toMatch(/not run/i);
+    expect(executed).toEqual(['a.ts']);
+    await session.send('next');
+    expect(seen).toHaveLength(2);
+    expect(executed).toEqual(['a.ts']);
+    expect(rebuildHistory(await throughStore(events))).toEqual((session as any).history);
   });
 
   it('text-only turn rebuilds exactly like v0 (plain user/assistant exchange)', async () => {

@@ -53,7 +53,8 @@ export function isPrivateIp(ip: string): boolean {
 
 /** Scheme + address validation for ONE URL. Throws NetGuardError with an honest,
  *  specific message (docs/error-message-standards.md). Returns the parsed URL. */
-export async function assertPublicHttpUrl(raw: string, lookup: LookupFn = defaultLookup): Promise<URL> {
+export async function assertPublicHttpUrl(raw: string, lookup: LookupFn = defaultLookup, signal?: AbortSignal): Promise<URL> {
+  signal?.throwIfAborted();
   let url: URL;
   try { url = new URL(raw); } catch { throw new NetGuardError(`"${raw}" is not a valid URL.`); }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -69,10 +70,32 @@ export async function assertPublicHttpUrl(raw: string, lookup: LookupFn = defaul
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
     throw new NetGuardError(`${host} is a local address — fetching it is blocked.`);
   }
+  // WHY: DNS promises do not accept a portable cancellation signal. Settle our
+  // wait on abort while consuming any late lookup result/rejection. The listener
+  // is scoped to this hop; the same signal/deadline is shared by every hop.
+  const resolveHost = () => Promise.resolve().then(() => {
+    signal?.throwIfAborted();
+    try {
+      return Promise.resolve(lookup(host)).catch(() => {
+        throw new NetGuardError(`Could not resolve ${host} — check the URL or the network connection.`);
+      });
+    } catch {
+      throw new NetGuardError(`Could not resolve ${host} — check the URL or the network connection.`);
+    }
+  });
   let addrs: Array<{ address: string }>;
-  try { addrs = await lookup(host); } catch {
-    throw new NetGuardError(`Could not resolve ${host} — check the URL or the network connection.`);
-  }
+  if (signal) {
+    let onAbort!: () => void;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+      signal.throwIfAborted();
+      addrs = await Promise.race([resolveHost(), aborted]);
+    } finally { signal.removeEventListener('abort', onAbort); }
+  } else addrs = await resolveHost();
+  signal?.throwIfAborted();
   if (addrs.length === 0) throw new NetGuardError(`Could not resolve ${host}.`);
   const bad = addrs.find((a) => isPrivateIp(a.address));
   if (bad) throw new NetGuardError(`${host} resolves to the private/internal address ${bad.address} — fetching it is blocked.`);
@@ -122,8 +145,8 @@ export interface GuardedFetchOpts {
 }
 
 /** Fetch with MANUAL redirect following: every hop re-runs assertPublicHttpUrl.
- *  Timeout/abort surfaces as a DOMException (AbortError) from fetch — NOT a
- *  NetGuardError — which the tool layer translates for the user (spec §3.1). */
+ *  Caller abort / deadline (AbortError / TimeoutError) also ends DNS waiting;
+ *  neither is a NetGuardError or proof that OS resolution was canceled. */
 export async function guardedFetch(rawUrl: string, opts: GuardedFetchOpts): Promise<{ res: Response; finalUrl: string }> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const lookup = opts.lookup ?? defaultLookup;
@@ -136,7 +159,7 @@ export async function guardedFetch(rawUrl: string, opts: GuardedFetchOpts): Prom
   let method = (opts.method ?? 'GET').toUpperCase();
   let body = opts.body;
   for (let hop = 0; ; hop++) {
-    const url = await assertPublicHttpUrl(current, lookup);
+    const url = await assertPublicHttpUrl(current, lookup, deadline);
     const host = url.hostname.toLowerCase();
     if (originHost === null) originHost = host;
     const decision = opts.allowHost?.(url.hostname, hop);
@@ -147,6 +170,7 @@ export async function guardedFetch(rawUrl: string, opts: GuardedFetchOpts): Prom
     const onOrigin = host === originHost;
     if (!onOrigin) for (const p of opts.credentialQueryParams ?? []) url.searchParams.delete(p);
     const target = url.toString();
+    deadline.throwIfAborted(); // no dispatch after DNS or allowHost used the remaining budget
     const res = await fetchImpl(target, {
       redirect: 'manual',
       method,

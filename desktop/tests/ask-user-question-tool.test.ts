@@ -22,6 +22,26 @@ describe('AskUserQuestion schema', () => {
 });
 
 describe('formatAnswers', () => {
+  it('uses ordered native answers for repeated wording and the original question order', () => {
+    const questions = [q({ header: 'First' }), q({ header: 'Second', options: [{ label: 'Green' }, { label: 'Yellow' }] })];
+    const text = formatAnswers({ questions } as any, { questions: [q({ question: 'FAKE' })],
+      answers: { 'Which color?': 'WRONG' }, orderedAnswers: [
+        { answer: 'Blue', note: 'lighter' }, { answer: 'teal', note: '' },
+      ] });
+    expect(text).toBe('The user answered:\n\nQ: Which color?\nA: Blue\nNote from the user: lighter\n\nQ: Which color?\nA (the user typed their own answer): teal');
+    expect(text).not.toContain('FAKE');
+  });
+
+  it('falls back to the legacy answer map for malformed ordered arrays', () => {
+    const questions = [q(), q({ question: 'Size?', header: 'Size' })];
+    for (const orderedAnswers of [[{ answer: 'Blue' }], [{ answer: 42 }, { answer: 'Large' }],
+      [{ answer: 'Blue', note: 12 }, { answer: 'Large' }],
+      [{ answer: ['Blue', 4] }, { answer: 'Large' }], 'bad', null]) {
+      expect(formatAnswers({ questions } as any, { answers: { 'Which color?': 'Red', 'Size?': 'Small' }, orderedAnswers }))
+        .toBe('The user answered:\n\nQ: Which color?\nA: Red\n\nQ: Size?\nA (the user typed their own answer): Small');
+    }
+    expect(() => formatAnswers({ questions } as any, { orderedAnswers: [{ answer: 'Blue' }, { answer: 'Large' }] })).not.toThrow();
+  });
   it('pairs each question with its answer', () => {
     const text = formatAnswers({ questions: [q(), q({ question: 'Size?', header: 'Size' })] } as any,
       { questions: [], answers: { 'Which color?': 'Blue', 'Size?': 'Large, Medium' } });

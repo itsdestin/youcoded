@@ -70,6 +70,8 @@ export interface LoadOptions {
    *  "case": <name>}` line whose case matches — the OpenRouter failure cards
    *  (connection-trust review, 2026-09-18). `?providerError=<case>`. */
   providerError?: string | null;
+  /** Photo-only practice state: the same native session with captured ancestors. */
+  includeContextChain?: boolean;
 }
 
 // Fixed base timestamp, not Date.now(): fixtures must replay identically on
@@ -240,7 +242,12 @@ export function loadFixture(
         const action: ChatAction = {
           type: 'SESSION_CONTEXT',
           sessionId,
-          context: parsed.context ?? null,
+          context: opts.includeContextChain && name === 'native' && parsed.context
+            ? { ...parsed.context, projectInstructionFiles: [
+                { path: '/workspace/AGENTS.md', truncated: true, note: 'Outlined to fit' },
+                { path: '/workspace/repo/CLAUDE.md', truncated: false },
+              ] }
+            : parsed.context ?? null,
         };
         state = chatReducer(state, action);
         actions.push(action);

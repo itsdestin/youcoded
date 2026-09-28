@@ -17,6 +17,7 @@ import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllTog
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useCardKeysLive } from '../state/card-keys-context';
 import { asString } from '../utils/tool-input';
+import { normalizeQuestions, isValidQuestions } from './ask-question-normalize';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
 import { FullAutoStops, BROAD_ALLOW_COLORS } from './permissions/FullAutoStops';
@@ -923,45 +924,6 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 // Unlike regular tools (allow/deny), we must collect the user's selections
 // and return them via updatedInput.answers so Claude gets the actual answer.
 
-interface AskQuestion {
-  question: string;
-  header: string;
-  options: Array<{ label: string; description?: string }>;
-  multiSelect: boolean;
-}
-
-// Fix: isValidQuestions only checked questions[0].question, so an object-valued
-// header/label/description DEEPER in the array still reached React children in
-// the expanded card ("Objects are not valid as a React child" crashes the whole
-// Chat pane via its ErrorBoundary). Normalize the whole array up front with the
-// same asString idiom as friendlyToolDisplay: coerce every rendered field, and
-// drop members that can't render or be answered (no question text, no labeled
-// options) so one malformed member degrades gracefully instead of crashing or
-// invalidating the rest of the card.
-function normalizeQuestions(input: Record<string, unknown>): AskQuestion[] {
-  const raw = input.questions;
-  if (!Array.isArray(raw)) return [];
-  const out: AskQuestion[] = [];
-  for (const q of raw as Array<Record<string, unknown> | null | undefined>) {
-    const question = asString(q?.question);
-    if (!question) continue; // no question text — nothing to render or key answers by
-    const rawOptions = Array.isArray(q?.options) ? (q.options as Array<Record<string, unknown> | null | undefined>) : [];
-    const options: AskQuestion['options'] = [];
-    for (const o of rawOptions) {
-      const label = asString(o?.label);
-      if (!label) continue; // an unlabeled option can't be selected or echoed back
-      options.push({ label, description: asString(o?.description) || undefined });
-    }
-    if (options.length === 0) continue; // nothing selectable
-    out.push({ question, header: asString(q?.header), multiSelect: q?.multiSelect === true, options });
-  }
-  return out;
-}
-
-function isValidQuestions(input: Record<string, unknown>): boolean {
-  return normalizeQuestions(input).length > 0;
-}
-
 // Ledger G-2 (2026-08-26 harness comparison): every other harness lets the user
 // type their own answer; ours only offered the listed choices, and Dismiss ended
 // the turn. The card now adds an "Other" row per question plus one text box
@@ -991,11 +953,12 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   // see normalizeQuestions above. Memoized so the array identity is stable for
   // the hook deps below.
   const questions = useMemo(() => normalizeQuestions(tool.input), [tool.input]);
-  // answers: map from question text → selected label(s)
+  const isNative = requestId.startsWith('native-');
+  // WHY: native asks have independent request-local positions; Claude Code's
+  // legacy answer map and card state were keyed by question wording. Q22 keeps
+  // that CC behavior, including duplicates, without inventing CC transport IDs.
+  const keyFor = (question: string, index: number) => isNative ? String(index) : question;
   const [answers, setAnswers] = useState<Record<string, Set<string>>>({});
-  // text: question text → what the user typed in that question's box. One
-  // state serves both roles (Other's answer, or a note on a listed choice);
-  // which role it plays is decided at submit from the selection.
   const [text, setText] = useState<Record<string, string>>({});
   const textRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const [responding, setResponding] = useState(false);
@@ -1005,18 +968,18 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   // Track which question is "active" for keyboard nav, and which option is focused
   const [focusedOption, setFocusedOption] = useState(0);
 
-  const allAnswered = questions.every(q => {
-    const sel = answers[q.question];
+  const allAnswered = questions.every((q, qi) => {
+    const sel = answers[keyFor(q.question, qi)];
     if (!sel || sel.size === 0) return false;
     // "Other" with nothing typed is not an answer yet — Submit stays off until
     // the user explains, so the model never receives an empty "own answer".
-    if (sel.has(OTHER) && !(text[q.question] ?? '').trim()) return false;
+    if (sel.has(OTHER) && !(text[keyFor(q.question, qi)] ?? '').trim()) return false;
     return true;
   });
 
-  const handleSelect = useCallback((question: string, label: string, multiSelect: boolean) => {
+  const handleSelect = useCallback((key: string, label: string, multiSelect: boolean) => {
     setAnswers(prev => {
-      const current = prev[question] || new Set<string>();
+      const current = prev[key] || new Set<string>();
       const next = new Set(current);
       if (multiSelect) {
         // Toggle for multi-select
@@ -1027,12 +990,12 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
         next.clear();
         next.add(label);
       }
-      return { ...prev, [question]: next };
+      return { ...prev, [key]: next };
     });
     // Picking Other is an invitation to type — put the cursor in the box so the
     // user doesn't have to click twice. (Deselecting Other leaves focus alone.)
     if (label === OTHER) {
-      requestAnimationFrame(() => textRefs.current[question]?.focus());
+      requestAnimationFrame(() => textRefs.current[key]?.focus());
     }
   }, []);
 
@@ -1051,12 +1014,15 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
     // `annotations[question].notes` — send that shape too so a CC session
     // receives the note through the same contract its CLI uses.
     const annotationsObj: Record<string, { notes: string }> = {};
-    for (const q of questions) {
-      const sel = answers[q.question] ?? new Set<string>();
-      const typed = (text[q.question] ?? '').trim();
+    const orderedAnswers: Array<{ answer: string; note?: string }> = [];
+    for (const [qi, q] of questions.entries()) {
+      const key = keyFor(q.question, qi);
+      const sel = answers[key] ?? new Set<string>();
+      const typed = (text[key] ?? '').trim();
       const labels = Array.from(sel).filter((l) => l !== OTHER);
       if (sel.has(OTHER) && typed) labels.push(typed);
       answersObj[q.question] = labels.join(', ');
+      orderedAnswers.push({ answer: labels.join(', '), ...(!sel.has(OTHER) && typed ? { note: typed } : {}) });
       if (!sel.has(OTHER) && typed) {
         notesObj[q.question] = typed;
         annotationsObj[q.question] = { notes: typed };
@@ -1071,6 +1037,9 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
             questions,       // Echo back the (normalized) questions array
             answers: answersObj,
             ...(hasNotes ? { notes: notesObj, annotations: annotationsObj } : {}),
+            // Native broker alone understands this field. Never add it to CC's
+            // documented question-text-keyed response envelope.
+            ...(isNative ? { orderedAnswers } : {}),
           },
         },
       });
@@ -1088,7 +1057,7 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
       // The card stays answerable and says the answer could not be confirmed.
       setUnconfirmed(true);
     }
-  }, [allAnswered, responding, questions, answers, text, requestId, onResponded, onFailed]);
+  }, [allAnswered, responding, questions, answers, text, requestId, isNative, onResponded, onFailed]);
 
   const handleDeny = useCallback(async () => {
     setResponding(true);
@@ -1113,9 +1082,9 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   // Total flat list of all options across questions (for keyboard nav). The
   // synthetic Other row is a real stop in the list, after each question's own
   // options, so arrow keys reach it like any other choice.
-  const allOptions = questions.flatMap(q => [
-    ...q.options.map(o => ({ q, o })),
-    { q, o: { label: OTHER, description: OTHER_DESCRIPTION } },
+  const allOptions = questions.flatMap((q, qi) => [
+    ...q.options.map(o => ({ q, qi, o })),
+    { q, qi, o: { label: OTHER, description: OTHER_DESCRIPTION } },
   ]);
   const optionCount = allOptions.length;
 
@@ -1138,8 +1107,8 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
         e.preventDefault();
         // Select the focused option
         if (optionCount > 0) {
-          const { q, o } = allOptions[focusedOption];
-          handleSelect(q.question, o.label, q.multiSelect);
+          const { q, qi, o } = allOptions[focusedOption];
+          handleSelect(keyFor(q.question, qi), o.label, q.multiSelect);
         }
       } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         // Ctrl/Cmd+Enter to submit
@@ -1165,7 +1134,7 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
           <div className="space-y-1">
             {[...q.options, { label: OTHER, description: OTHER_DESCRIPTION }].map((opt, oi) => {
               const idx = flatIdx++;
-              const selected = answers[q.question]?.has(opt.label) ?? false;
+              const selected = answers[keyFor(q.question, qi)]?.has(opt.label) ?? false;
               const focused = idx === focusedOption;
               const isOther = opt.label === OTHER;
               return (
@@ -1173,7 +1142,7 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
                   key={oi}
                   aria-label={isOther ? `${OTHER_LABEL} — ${OTHER_DESCRIPTION}` : undefined}
                   disabled={responding}
-                  onClick={() => handleSelect(q.question, opt.label, q.multiSelect)}
+                  onClick={() => handleSelect(keyFor(q.question, qi), opt.label, q.multiSelect)}
                   // P-18: one row shape for both states — a visible dim border
                   // when unselected, the accent border when selected — so rows
                   // don't jump between "flat" and "outlined" as the user picks.
@@ -1205,16 +1174,16 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
                 inside the box, matching the card-wide shortcut — the window
                 handler skips typing targets, so the box handles it itself. */}
             <Textarea
-              ref={(el) => { textRefs.current[q.question] = el; }}
+              ref={(el) => { textRefs.current[keyFor(q.question, qi)] = el; }}
               size="sm"
               rows={1}
               disabled={responding}
-              value={text[q.question] ?? ''}
-              placeholder={textPlaceholder(answers[q.question])}
-              aria-label={textPlaceholder(answers[q.question])}
+              value={text[keyFor(q.question, qi)] ?? ''}
+              placeholder={textPlaceholder(answers[keyFor(q.question, qi)])}
+              aria-label={textPlaceholder(answers[keyFor(q.question, qi)])}
               onChange={(e) => {
                 const value = e.target.value;
-                setText(prev => ({ ...prev, [q.question]: value }));
+                setText(prev => ({ ...prev, [keyFor(q.question, qi)]: value }));
                 // Grow with the text instead of scrolling inside a one-line box.
                 e.target.style.height = 'auto';
                 e.target.style.height = `${e.target.scrollHeight}px`;
@@ -1488,6 +1457,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         };
         return isAskUser ? (
           <AskUserQuestionCard
+            key={tool.requestId} // WHY: indexes belong to this pending request, never the next one.
             tool={tool}
             requestId={tool.requestId}
             onResponded={onRespondedCb}

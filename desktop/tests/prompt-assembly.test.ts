@@ -126,6 +126,105 @@ describe('assembleSystemPrompt — fixture .git containment', () => {
   });
 });
 
+describe('captured ancestor instruction inventory', () => {
+  it('loads broad to narrow across git directory and worktree file, selecting one per folder', async () => {
+    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), 'OUTSIDE_GIT');
+    const repo = path.join(dir, 'repo');
+    const nested = path.join(repo, 'nested');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(repo, '.git'), 'gitdir: elsewhere');
+    fs.writeFileSync(path.join(repo, 'CLAUDE.md'), 'REPO_RULE');
+    fs.writeFileSync(path.join(nested, 'AGENTS.md'), 'CHILD_RULE');
+    fs.writeFileSync(path.join(nested, 'CLAUDE.md'), 'IGNORED_RULE');
+    const inventory = await prepareProjectInstructions(nested, 1000);
+    const selected = inventory.filter(f => f.path.startsWith(dir));
+    expect(selected.map(f => f.name)).toEqual(['AGENTS.md', 'CLAUDE.md', 'AGENTS.md']);
+    const out = assembleSystemPrompt({ presetBody: PRESET, cwd: nested, appVersion: '1', projectInstructionFiles: inventory });
+    expect(out.indexOf('OUTSIDE_GIT')).toBeLessThan(out.indexOf('REPO_RULE'));
+    expect(out.indexOf('REPO_RULE')).toBeLessThan(out.indexOf('CHILD_RULE'));
+    expect(out).not.toContain('IGNORED_RULE');
+    expect(out).toContain(`source="${path.join(dir, 'AGENTS.md')}"`);
+  });
+
+  it('includes ancestors outside a git directory without looking up a dedicated global file or repeating one source', async () => {
+    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
+    const repo = path.join(dir, 'repo'); const child = path.join(repo, 'child');
+    fs.mkdirSync(child, { recursive: true });
+    fs.mkdirSync(path.join(repo, '.git'));
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), 'ABOVE_REPO');
+    fs.writeFileSync(path.join(repo, 'AGENTS.md'), 'IN_REPO');
+    fs.writeFileSync(path.join(child, 'CLAUDE.md'), 'IN_CHILD');
+    fs.mkdirSync(path.join(dir, '.claude'));
+    fs.writeFileSync(path.join(dir, '.claude', 'CLAUDE.md'), 'DEDICATED_GLOBAL_NOT_SELECTED');
+    const files = (await prepareProjectInstructions(child, 1000)).filter(f => f.path.startsWith(dir));
+    expect(files.map(f => f.full)).toEqual(['ABOVE_REPO', 'IN_REPO', 'IN_CHILD']);
+    expect(new Set(files.map(f => f.path)).size).toBe(files.length);
+    expect(files.some(f => f.path.includes(path.join('.claude', 'CLAUDE.md')))).toBe(false);
+  });
+
+  it('deduplicates a symlinked ancestor file by physical identity while retaining first source spelling', async () => {
+    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
+    const child = path.join(dir, 'child'); fs.mkdirSync(child);
+    const parent = path.join(dir, 'AGENTS.md');
+    fs.writeFileSync(parent, 'PHYSICAL_INSTRUCTION');
+    try { fs.symlinkSync(parent, path.join(child, 'AGENTS.md')); }
+    catch (error) { if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') return; throw error; }
+    const files = (await prepareProjectInstructions(child, 1000)).filter(f => f.path.startsWith(dir));
+    expect(files.map(f => f.path)).toEqual([parent]);
+    expect(assembleSystemPromptParts({ presetBody: PRESET, cwd: child, appVersion: '1', projectInstructionFiles: files })
+      .find(p => p.id === 'project')?.text.match(/PHYSICAL_INSTRUCTION/g)).toHaveLength(1);
+  });
+
+  it.each([0, 1, 5, 30, 80, 400])('bounds final labelled project part and records omissions at %i tokens', async (tokens) => {
+    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
+    const child = path.join(dir, 'child'); fs.mkdirSync(child);
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Parent\n' + 'a'.repeat(3000));
+    fs.writeFileSync(path.join(child, 'CLAUDE.md'), '# Child\n' + 'b'.repeat(3000));
+    const files = (await prepareProjectInstructions(child, tokens)).filter(f => f.path.startsWith(dir));
+    const part = assembleSystemPromptParts({ presetBody: PRESET, cwd: child, appVersion: '1', projectInstructionFiles: files }).find(p => p.id === 'project');
+    expect(files).toHaveLength(2);
+    expect(part?.text.length ?? 0).toBeLessThanOrEqual(tokens * 4);
+    expect(files.every(f => f.truncated && !!f.note)).toBe(true);
+    if (tokens === 0) expect(part).toBeUndefined();
+    if (tokens === 80) {
+      expect(part?.text).toContain('Read');
+      expect(part?.text).toContain('AGENTS.md');
+      expect(part?.text).toContain('CLAUDE.md');
+    }
+    for (const file of files) if (file.text) expect(part?.text).toContain(file.text);
+  });
+
+  it('compares legacy nearest-only selection with the captured full ancestor chain', async () => {
+    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
+    const child = path.join(dir, 'child'); fs.mkdirSync(child);
+    fs.mkdirSync(path.join(dir, '.git'));
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), 'PARENT_RULE');
+    fs.writeFileSync(path.join(child, 'CLAUDE.md'), 'CHILD_RULE');
+    expect(findProjectInstructions(child)?.text).toBe('CHILD_RULE');
+    const files = (await prepareProjectInstructions(child, 1000)).filter(f => f.path.startsWith(dir));
+    expect(files.map(f => f.full)).toEqual(['PARENT_RULE', 'CHILD_RULE']);
+  });
+
+  it('fits the entire chain to one budget with honest per-source cuts and no fresh reads', async () => {
+    const { prepareProjectInstructions } = await import('../src/main/harness/injection/project-instructions');
+    const child = path.join(dir, 'child'); fs.mkdirSync(child);
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Parent\n' + 'a'.repeat(3000));
+    fs.writeFileSync(path.join(child, 'CLAUDE.md'), '# Child\n' + 'b'.repeat(3000));
+    const inventory = await prepareProjectInstructions(child, 400);
+    expect(inventory.filter(f => f.path.startsWith(dir))).toHaveLength(2);
+    expect(inventory.reduce((n, f) => n + f.text.length, 0)).toBeLessThanOrEqual(1600);
+    expect(inventory.filter(f => f.path.startsWith(dir)).every(f => f.truncated && f.text.includes(f.path))).toBe(true);
+    const inputs = { presetBody: PRESET, cwd: child, appVersion: '1', projectInstructionFiles: inventory };
+    const projectPart = assembleSystemPromptParts(inputs).find(p => p.id === 'project');
+    expect(projectPart?.text.length).toBeLessThanOrEqual(1600);
+    const first = assembleSystemPrompt(inputs);
+    fs.writeFileSync(path.join(child, 'CLAUDE.md'), 'CHANGED_ON_DISK');
+    expect(assembleSystemPrompt({ presetBody: PRESET, cwd: child, appVersion: '1', projectInstructionFiles: inventory })).toBe(first);
+    expect(first).not.toContain('CHANGED_ON_DISK');
+  });
+});
+
 describe('assembleSystemPrompt — byte stability (KV-cache pin)', () => {
   it('is byte-identical across two calls with the same inputs (non-git dir)', () => {
     // Non-git tmp dir → gitSnapshot returns the stable "not a repository" line,

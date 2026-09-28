@@ -829,6 +829,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     ? 'default'
     : new URLSearchParams(location.search).get('scenario') ?? 'default';
 
+  // WHY: conversation JSONL is replayed as reducer state, not a live scripted
+  // turn (reply-script.pending). This single native review ask needs a mock
+  // response so a successful Submit is not falsely reported as expired.
+  let visualNativeAskOpen = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('seed') === 'bubbles-questions-native';
+
   // `?arcade=<state>` overrides the mapping. WHY it needs its own switch: the
   // app's `empty` scenario has NO SESSIONS, so the header — and with it the
   // games button — never renders, making the brand-new-arcade state
@@ -1062,7 +1068,32 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     sendInput: (sessionId: string, text: string) => startReply(sessionId, text, true),
     // Real signature is Promise<boolean> (useIpc.ts/preload.ts), not {ok} —
     // resolvePermission already returns a boolean (false = stale/unknown id).
-    respondToPermission: async (requestId: string, _decision: object) => resolvePermission(requestId),
+    respondToPermission: async (requestId: string, decision: any) => {
+      if (requestId !== 'native-d4-visual' || !visualNativeAskOpen) return resolvePermission(requestId);
+      const behavior = decision?.decision?.behavior;
+      const ordered = decision?.decision?.updatedInput?.orderedAnswers;
+      // Never claim delivery for malformed/non-answer submissions. This is a
+      // dev fixture only; the production broker still validates real request IDs.
+      if (behavior !== 'deny' && (behavior !== 'allow' || !Array.isArray(ordered)
+          || ordered.length !== 2 || ordered.some((item: any) => !item || typeof item.answer !== 'string'
+            || (item.note !== undefined && typeof item.note !== 'string')))) return false;
+      visualNativeAskOpen = false;
+      const dismissed = behavior === 'deny';
+      const lines = dismissed ? [] : ordered.map((item: { answer: string; note?: string }) =>
+        `Q: Which color?\nA: ${item.answer}${item.note ? `\nNote from the user: ${item.note}` : ''}`);
+      subs.transcript.forEach(f => f({ type: 'tool-result', sessionId: 'wb-2',
+        uuid: 'wb-d4-native-result', timestamp: Date.now(),
+        data: { toolUseId: 'd4-native-ask',
+          toolResult: dismissed
+            ? 'The user closed this question without answering and took over. Stop here and wait for their next message.'
+            : `The user answered:\n\n${lines.join('\n\n')}`, isError: dismissed } }));
+      // This canned answer has no model continuation; settle its fixture turn
+      // rather than leaving a never-ending Thinking chip after the real result.
+      subs.transcript.forEach(f => f({ type: 'turn-complete', sessionId: 'wb-2',
+        uuid: 'wb-d4-native-end', timestamp: Date.now(),
+        data: { stopReason: dismissed ? 'question_dismissed' : 'end_turn', model: null } }));
+      return true;
+    },
 
     // Reads the live-session meta slice, falling back to a `past` row of the
     // same id, then to empty. `supported: true` always — the desktop refuses
@@ -1855,7 +1886,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // shortened one, because the got/cut comparison is most of what this panel
     // is for and a workbench that only ever shows whole files never renders it.
     sessionContextText: async (_sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) => {
-      const fixture = kind === 'project' ? CONTEXT_TEXT.project
+      const fixture = kind === 'project' && id === '/workspace/AGENTS.md'
+        ? { path: id, text: '# Workspace\n\n…\n\n[Outlined to fit]', full: '# Workspace\n\nAlways check your work.', truncated: true }
+        : kind === 'project' && id === '/workspace/repo/CLAUDE.md'
+          ? { path: id, text: '# Project\n\nFollow the task.', full: '# Project\n\nFollow the task.', truncated: false }
+          : kind === 'project' ? CONTEXT_TEXT.project
         : kind === 'user' ? CONTEXT_TEXT.user
           : CONTEXT_TEXT.skills[id ?? ''];
       if (!fixture) return { error: 'unreadable' };

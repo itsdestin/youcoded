@@ -1,4 +1,5 @@
 import type { CatalogMeta } from './catalog-types';
+import type { ProjectInstructionSummary } from './project-instruction-summary';
 
 // 'auto' is Claude Code's classifier-backed mode (CC v2.1.83+, March 2026).
 // Sits between 'auto-accept' (only file edits + 7 safe bash) and 'bypass'
@@ -1006,9 +1007,7 @@ export interface SessionContext {
   /** The whole assembled prompt. Kept as the fallback the panel shows when a host
    *  cannot split it — showing it whole beats showing nothing. */
   systemPrompt?: string | null;
-  /** The root instruction file (CLAUDE.md / AGENTS.md) baked into the system
-   *  prompt. This is the ONE thing genuinely cut at session start. Its text is
-   *  fetched on demand. */
+  /** Legacy single-file summary (also present on Claude Code records). */
   projectInstructions?: {
     path: string;
     /** True when the file was outlined to fit the window. */
@@ -1016,6 +1015,7 @@ export interface SessionContext {
     /** Human line when truncated — "3 of 12 sections shown as headings". */
     note?: string | null;
   } | null;
+  projectInstructionFiles?: ProjectInstructionSummary[]; // Captured chain; bodies on demand.
   /** Your own instructions, the ones that apply in every project
    *  (`~/.claude/CLAUDE.md`). Claude Code reads this file; the native harness
    *  does NOT — it only walks up from the working folder — which is a real

@@ -1,7 +1,7 @@
 // MCP connection manager (spec: native MCP phase 1, Task 4). Sits between the
 // registry (Task 2, WHICH servers exist) and the single-server client (Task 3,
 // HOW to talk to one) — its whole job is POOLING: one live connection per
-// server, shared and refcounted across every session that wants it. Two chat
+// effective server configuration, shared and refcounted across sessions. Two chat
 // sessions both using the Gmail server must share one subprocess, not spawn
 // two. Task 5 turns the tools acquire() hands back into app tools; Task 6
 // attaches them to a session.
@@ -81,6 +81,9 @@ export interface McpLease {
 // premature close.
 interface PooledEntry {
   server: ResolvedMcpServer;
+  /** Private in-memory comparison only: includes resolved credentials, NEVER log it. */
+  configKey: string;
+  closing?: Promise<void>;
   conn: McpConnectionLike;
   /** LEASE ids (see McpLease), not session ids. One acquire() call = one id,
    *  never reused, so two generations of a resumed session hold two separate
@@ -94,12 +97,29 @@ interface PooledEntry {
   connecting?: Promise<void>;
 }
 
+// WHY: only connection-effective values belong in the key. Credentials are
+// compared in process memory, never hashed into an identifier, persisted or logged.
+// Sort record keys so registry object ordering and label edits cannot reconnect.
+function effectiveConfig(server: ResolvedMcpServer): string {
+  const sorted = (record?: Record<string, string>) => Object.entries(record ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const t = server.transport;
+  return JSON.stringify({ transport: t.type === 'stdio'
+    ? ['stdio', t.command, t.args ?? [], t.cwd ?? null]
+    : ['http', t.url],
+    env: sorted(server.env), headers: sorted(server.headers),
+    missing: [...server.missingSecrets].sort(), credentialError: server.credentialError ?? null });
+}
+
 export class McpManager {
   private readonly registry: McpRegistryLike;
   private readonly connectionFactory: McpConnectionFactory;
-  // serverId -> pooled entry. Absence means "never touched yet" — NOT the
-  // same as a connected-but-errored server, which stays present (see acquire).
+  // serverId -> CURRENT pooled entry. Retired generations remain in entries
+  // until their holders release; an errored current entry stays reportable.
   private pool = new Map<string, PooledEntry>();
+  /** Retired entries stay alive until THEIR holders release, even if ID reused. */
+  private entries = new Set<PooledEntry>();
+  /** Exact entries held by a lease, including retired generations. */
+  private leaseEntries = new Map<string, PooledEntry[]>();
   // Monotonic, process-lifetime counter behind every lease id. Its ONLY job is
   // uniqueness — no ordering is read off it — so wraparound/overflow concerns
   // don't apply at any realistic session count.
@@ -156,20 +176,16 @@ export class McpManager {
         if (entry.conn.state === 'ready') {
           ready.push({
             id: entry.server.id,
-            label: entry.server.label,
+            label: servers.find(s => s.id === entry.server.id)?.label ?? entry.server.label,
             tools: entry.conn.listTools(),
             call: (tool, args, signal) => entry.conn.callTool(tool, args, signal),
           });
         } else {
-          // Fix (Finding 5): status()/lastError have always been correct —
-          // nothing has ever LOGGED them. A developer with a typo'd command
-          // got no tool, no error dialog, and (until now) no log line either:
-          // the exact silent failure this whole design exists to prevent, and
-          // the reason the dogfood checklist's "confirm the server drops and
-          // is reported" step could never actually pass. One line per
-          // excluded server, naming it and its real (never reworded) error.
+          // WHY: status() retains the real diagnostic, but a provider error
+          // may echo resolved credentials. Log only the ID/state, never the
+          // effective config or a possibly secret-bearing provider error.
           log('WARN', 'McpManager', 'MCP server excluded from this session — not ready', {
-            sessionId, serverId: entry.server.id, state: entry.conn.state, error: entry.conn.lastError,
+            sessionId, serverId: entry.server.id, state: entry.conn.state,
           });
         }
       }
@@ -209,22 +225,17 @@ export class McpManager {
   // awaits), so only one connect() ever runs no matter how many sessions ask
   // at once.
   //
-  // Except for a credential-error placeholder whose secrets now resolve (below),
-  // WHY no retry: if `entry` already exists — even in `error` or
-  // `needs-setup` state — it is returned as-is; connect() is never retried
-  // while the entry stays pooled (i.e. while any holder remains). This is
-  // deliberate, not an oversight: retry/backoff was out of scope for this
-  // manager. The user-visible effect is that fixing a broken server's config
-  // has no effect until every current holder releases (or the app
-  // restarts) — see status(), which surfaces the real lastError so this
-  // isn't silent.
+  // WHY no retry for unchanged settings: an error/needs-setup entry stays
+  // pooled until its holders release. A changed effective configuration gets
+  // a fresh generation immediately, without disturbing those older holders;
+  // retrying an unchanged broken connection on each acquire remains out of scope.
   private ensureConnected(server: ResolvedMcpServer, leaseId: string): PooledEntry {
+    const key = effectiveConfig(server);
     let entry = this.pool.get(server.id);
-    let recoveredHolders: Set<string> | undefined;
-    if (entry?.server.credentialError && !server.credentialError) {
-      // WHY: this entry was a resource-free error placeholder, never a live
-      // connection. Retry after wallet recovery without discarding older leases.
-      recoveredHolders = entry.holders;
+    if (entry && entry.configKey !== key) {
+      // WHY: old leases retain their exact connection. Never move holders into
+      // the replacement (even an error placeholder): release of OLD must not
+      // close NEW, and A→B→A must not resurrect the retired A connection.
       this.pool.delete(server.id);
       entry = undefined;
     }
@@ -244,6 +255,13 @@ export class McpManager {
       // case in mcp-client.ts); this reuses that same state value rather than
       // inventing a parallel one, so acquire()'s ready-check and status()
       // both treat it exactly like any other not-ready server.
+      // Snapshot before connectionFactory: a mutable registry object must not
+      // change the settings that an already-acquired connection actually uses.
+      const snapshot: ResolvedMcpServer = { ...server, transport: server.transport.type === 'stdio'
+        ? { ...server.transport, args: server.transport.args?.slice() } : { ...server.transport },
+        env: server.env ? { ...server.env } : undefined,
+        headers: server.headers ? { ...server.headers } : undefined,
+        missingSecrets: [...server.missingSecrets] };
       const credentialFailure = server.credentialError || (server.missingSecrets.length > 0
         ? `${server.label} needs setup — missing secret(s): ${server.missingSecrets.join(', ')}.` : null);
       const conn: McpConnectionLike = credentialFailure
@@ -261,9 +279,10 @@ export class McpManager {
             }),
             close: async () => {},
           }
-        : this.connectionFactory(server);
-      entry = { server, conn, holders: recoveredHolders ?? new Set() };
+        : this.connectionFactory(snapshot);
+      entry = { server: snapshot, configKey: key, conn, holders: new Set() };
       this.pool.set(server.id, entry);
+      this.entries.add(entry);
       if (!credentialFailure) {
         entry.connecting = conn.connect().finally(() => {
           entry!.connecting = undefined;
@@ -271,6 +290,9 @@ export class McpManager {
       }
     }
     entry.holders.add(leaseId);
+    const held = this.leaseEntries.get(leaseId) ?? [];
+    held.push(entry);
+    this.leaseEntries.set(leaseId, held);
     return entry;
   }
 
@@ -292,42 +314,54 @@ export class McpManager {
    * server" check; no separate `has()` is needed.
    */
   private async releaseLease(leaseId: string): Promise<void> {
-    for (const [id, entry] of [...this.pool.entries()]) {
-      if (!entry.holders.delete(leaseId)) continue;
-      if (entry.holders.size > 0) continue;
-      // Remove from the pool BEFORE awaiting close(): an acquire() that lands
-      // during the await must build a fresh entry rather than hand out this
-      // one, which is already on its way down.
-      this.pool.delete(id);
-      // Unguarded close() would throw out of this loop and strand every
-      // remaining entry this lease still holds. The connection is being
-      // discarded either way, so a close() failure isn't actionable for the
-      // caller — log the REAL error rather than swallow it
-      // (error-message-standards.md), matching McpConnection.close()'s own
-      // best-effort teardown policy.
+    const held = this.leaseEntries.get(leaseId) ?? [];
+    this.leaseEntries.delete(leaseId);
+    for (const entry of held) {
+      if (!entry.holders.delete(leaseId) || entry.holders.size > 0) continue;
+      // WHY: only delete an ID when this EXACT generation is still current.
+      // Remove before awaiting close so an acquire during teardown connects anew.
+      if (this.pool.get(entry.server.id) === entry) this.pool.delete(entry.server.id);
       try {
-        await entry.conn.close();
+        // WHY: keep the generation discoverable to destroyAll until close
+        // settles; removing it before this await let app teardown return while
+        // an older released transport was still closing.
+        await this.closeEntry(entry);
       } catch (err) {
         log('ERROR', 'McpManager', 'closing a released MCP connection failed', {
-          serverId: id, error: String(err),
+          serverId: entry.server.id, errorType: err instanceof Error ? err.name : 'unknown',
         });
+      } finally {
+        this.entries.delete(entry);
       }
     }
   }
 
-  /** App-quit teardown: close every pooled connection regardless of
-   *  refcount. A leaked MCP subprocess would otherwise outlive the app. */
-  async destroyAll(): Promise<void> {
-    const entries = [...this.pool.values()];
-    this.pool.clear();
-    for (const entry of entries) {
+  private closeEntry(entry: PooledEntry): Promise<void> {
+    // WHY: release and destroyAll may overlap; close exactly once and wait for
+    // a pending connect before closing its transport. Never reuse while closing.
+    if (!entry.closing) entry.closing = (async () => {
+      if (entry.connecting) { try { await entry.connecting; } catch { /* close failed connect too */ } }
       await entry.conn.close();
-    }
+    })();
+    return entry.closing;
   }
 
-  /** Every server this manager has ever touched, including ones that failed
-   *  to connect — their REAL error (McpConnection.lastError, never reworded)
-   *  so a session picker can show why a server is unavailable. */
+  /** App-quit teardown: close current AND retired/closing generations. */
+  async destroyAll(): Promise<void> {
+    const entries = [...this.entries];
+    this.pool.clear(); // no acquisition may reuse a closing connection
+    this.leaseEntries.clear();
+    // WHY: a second destroyAll must also await pending closes. Retain each
+    // generation in entries until its close settles, even across concurrent
+    // destroy/release calls. closeEntry ensures the transport closes only once.
+    await Promise.all(entries.map(async entry => {
+      try { await this.closeEntry(entry); }
+      finally { this.entries.delete(entry); }
+    }));
+  }
+
+  /** One current entry per server ID, including failed connections. Retired
+   *  generations remain usable through leases but never duplicate status rows. */
   status(): Array<{ id: string; state: string; error: string | null }> {
     return [...this.pool.values()].map((entry) => ({
       id: entry.server.id,

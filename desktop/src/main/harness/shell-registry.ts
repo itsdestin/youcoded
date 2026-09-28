@@ -270,11 +270,19 @@ export class ShellRegistry extends EventEmitter {
     } catch (e: any) {
       return { ok: false, reason: 'spawn-failed', detail: e?.message ?? String(e) };
     }
-    const run = this.register({
-      toolUseId: spec.toolUseId, command: spec.command, cwd: spec.cwd, child,
-      startedAt: Date.now(), seedLog: null, recent: '', logPath: null, logStream: null, captureEnv: false,
-    }, { detached: false, explicit: true });
-    return { ok: true, run, runningExplicit: running.length + 1 };
+    try {
+      const run = this.register({
+        toolUseId: spec.toolUseId, command: spec.command, cwd: spec.cwd, child,
+        startedAt: Date.now(), seedLog: null, recent: '', logPath: null, logStream: null, captureEnv: false,
+      }, { detached: false, explicit: true });
+      return { ok: true, run, runningExplicit: running.length + 1 };
+    } catch (e: any) {
+      // WHY: a spawned but unregistered child is still ours to stop; give the
+      // caller a real setup failure, never an id for a run no registry owns.
+      child.on('error', () => {}); // late spawn errors cannot crash main
+      if (child.exitCode === null && child.signalCode === null) killTree(child, { graceMs: 0 });
+      return { ok: false, reason: 'spawn-failed', detail: e?.message ?? String(e) };
+    }
   }
 
   /** Hand-off (spec §5.5): the same process bash.ts already spawned, adopted
@@ -296,6 +304,9 @@ export class ShellRegistry extends EventEmitter {
       fs.mkdirSync(dir, { recursive: true });
       logPath = path.join(dir, `bash-${Date.now()}-${shellId}.txt`);
       logStream = fs.createWriteStream(logPath);
+      // WHY: opening is asynchronous; an EACCES can arrive before the sweep or
+      // the registry's run listeners. Keep the tail as the fallback, not a crash.
+      logStream.on('error', () => {});
       // The 7-day sweep used to fire only from bash.ts's foreground spill; a
       // user whose long commands all run in the background would never have
       // triggered it, and these logs would pile up forever (2026-08-28 review).

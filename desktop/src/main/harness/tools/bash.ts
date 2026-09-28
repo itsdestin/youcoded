@@ -658,8 +658,10 @@ export const BashTool = defineTool({
         tailBuf = (tailBuf + s).slice(-TAIL_RETAIN_CHARS);
         if (probe) probeTail = (probeTail + s).slice(-4096);
       };
-      child.stdout.on('data', (d) => cap(String(d)));
-      child.stderr.on('data', (d) => cap(String(d)));
+      const onStdout = (d: Buffer) => cap(String(d));
+      const onStderr = (d: Buffer) => cap(String(d));
+      child.stdout.on('data', onStdout);
+      child.stderr.on('data', onStderr);
       let done = false;
       /** G-1: set by the timeout timer once the registry adopted this process. */
       let handedOffTo: string | null = null;
@@ -946,6 +948,7 @@ export const BashTool = defineTool({
         // restarted — and this call resolves with the output so far. Two
         // cases keep the old kill: no registry in this context (tests,
         // one-off tools), and a leading `sleep` (backgrounding a sleep is churn).
+        if (done) return; // A close/abort that won the deadline retains its result.
         if (!ctx.shells || LEADING_SLEEP.test(args.command)) {
           killTree(child, { graceMs: 0 });
           finish(
@@ -956,24 +959,37 @@ export const BashTool = defineTool({
           );
           return;
         }
-        // From here the registry reads the pipes; this call must stop
-        // listening or every byte would be counted twice.
-        child.stdout.removeAllListeners('data');
-        child.stderr.removeAllListeners('data');
-        child.removeAllListeners('close');
-        child.removeAllListeners('error');
+        // WHY: registration can throw before ownership transfers. Keep foreground
+        // listeners until it succeeds, then remove only OUR listeners (not the
+        // registry's) so no output or close/error is lost during a failed setup.
+        let run;
+        try {
+          run = ctx.shells.adopt({
+            toolUseId: ctx.toolCallId ?? 'unknown', command: args.command, cwd: startCwd, child, startedAt,
+            seedLog: spillStream ? null : headBuf,
+            recent: tailBuf, logPath: spillPath, logStream: spillStream, captureEnv,
+          });
+        } catch (e: any) {
+          // A failed handoff must neither strand the Bash promise nor leave an
+          // untracked command running. C2's deferred descendant guarantees do
+          // not follow from this best-effort stop of our freshly spawned child.
+          if (child.exitCode === null && child.signalCode === null) killTree(child, { graceMs: 0 });
+          finish(`Failed to hand off background command: ${e?.message ?? e}. Cleanup was attempted; process exit was not confirmed.\n`, true);
+          return;
+        }
+        child.stdout.off('data', onStdout);
+        child.stderr.off('data', onStderr);
+        child.off('close', onClose);
+        child.off('error', onError);
+        if (done) {
+          // An abort/close can settle during a re-entrant adoption callback.
+          // The registry now owns this run; stop it there, never report success.
+          void ctx.shells.kill(run.shellId, 'user').catch(() => {});
+          return;
+        }
         // D4: a handed-off command can no longer be answered — close stdin so
         // a prompt fails fast with its own error instead of hanging forever.
         try { child.stdin?.end(); } catch { /* already closed */ }
-        const run = ctx.shells.adopt({
-          toolUseId: ctx.toolCallId ?? 'unknown', command: args.command, cwd: startCwd, child, startedAt,
-          // headBuf is complete when no spill has started (nothing dropped yet);
-          // otherwise the spill stream already holds everything.
-          seedLog: spillStream ? null : headBuf,
-          recent: tailBuf,
-          logPath: spillPath, logStream: spillStream,
-          captureEnv,
-        });
         handedOffTo = run.shellId;
         spillPath = run.logPath;
         finish(
@@ -1003,12 +1019,14 @@ export const BashTool = defineTool({
       // Async spawn failure (the path Windows takes for a bad cwd): name the
       // shell + cwd actually used, not just Node's bare `spawn <cmd> <CODE>` —
       // same diagnosability contract as the sync catch above.
-      child.on('error', (err) => finish(`Failed to start shell: ${err.message} (shell=${shell.cmd}; cwd=${startCwd})\n`, true));
+      const onError = (err: Error) => finish(`Failed to start shell: ${err.message} (shell=${shell.cmd}; cwd=${startCwd})\n`, true);
+      child.on('error', onError);
       // WHY no exit-code prefix here anymore: the metadata line above now states
       // `exit N` for every result, so a leading "(exit code N)" duplicated the
       // same fact in two places. The timeout/abort handlers keep their prefixes —
       // those are messages, not exit codes.
-      child.on('close', (code) => finish('', code !== 0, code));
+      const onClose = (code: number | null) => finish('', code !== 0, code);
+      child.on('close', onClose);
     });
   },
 });

@@ -184,6 +184,96 @@ describe('path-scoped rules', () => {
     expect(bodies).toContain('Nested text.');
   });
 
+  it.each(['directory', 'worktree-file'] as const)('inherits owner-relative rules up to the nearest Git %s root', async (gitKind) => {
+    const outer = tmpRepo();
+    const root = path.join(outer, 'project');
+    fs.mkdirSync(root);
+    if (gitKind === 'directory') fs.mkdirSync(path.join(root, '.git'));
+    else write(root, '.git', 'gitdir: /elsewhere/worktrees/test\n');
+    const parent = outer;
+    write(root, '.claude/rules/root.md', '---\npaths:\n  - "**/src/**"\n---\nRoot rule.');
+    write(root, 'packages/.claude/rules/package.md', '---\npaths:\n  - "api/*.ts"\n---\nPackage rule.');
+    write(parent, '.claude/rules/outside.md', '---\npaths:\n  - "**"\n---\nOutside rule.');
+    try {
+      const idx = await buildTriggerIndex(path.join(root, 'packages', 'api'));
+      const hits = idx.match(path.join(root, 'packages', 'src', 'a.ts'));
+      expect(hits.map(h => h.body)).toEqual(['Root rule.']);
+      const ownerHits = idx.match(path.join(root, 'packages', 'api', 'a.ts'));
+      expect(ownerHits.map(h => h.body)).toEqual(['Package rule.']);
+      expect(ownerHits[0].id).toContain(path.join('packages', '.claude', 'rules', 'package.md'));
+      expect(ownerHits[0].source).toBe(path.join('..', '.claude', 'rules', 'package.md'));
+      expect(idx.match(path.join(parent, 'unrelated.ts'))).toEqual([]);
+    } finally {
+      fs.rmSync(path.join(parent, '.claude', 'rules', 'outside.md'), { force: true });
+    }
+  });
+
+  it('does not inject the same physical rule twice through two owned names', async () => {
+    const root = tmpRepo();
+    const original = path.join(root, '.claude', 'rules', 'original.md');
+    write(root, '.claude/rules/original.md', '---\npaths:\n  - "**/src/**"\n---\nShared rule.');
+    const alias = path.join(root, 'pkg', '.claude', 'rules', 'alias.md');
+    fs.mkdirSync(path.dirname(alias), { recursive: true });
+    fs.linkSync(original, alias);
+    const hits = (await buildTriggerIndex(path.join(root, 'pkg'))).match(path.join(root, 'pkg', 'src', 'a.ts'));
+    expect(hits.map(h => h.body)).toEqual(['Shared rule.']);
+  });
+
+  it('stacks root and child rules once for a narrowed specialist and excludes external files', async () => {
+    const root = tmpRepo();
+    write(root, '.claude/rules/root.md', '---\npaths:\n  - "**/src/**"\n---\nRoot rule.');
+    write(root, 'packages/.claude/rules/package.md', '---\npaths:\n  - "**/src/**"\n---\nPackage rule.');
+    const idx = await buildTriggerIndex(path.join(root, 'packages', 'api'));
+    const file = path.join(root, 'packages', 'api', 'src', 'a.ts');
+    expect(idx.match(file).map(h => h.body)).toEqual(['Root rule.', 'Package rule.']);
+    expect(new Set(idx.match(file).map(h => h.id)).size).toBe(2);
+    expect(idx.match(path.join(path.dirname(root), 'src', 'a.ts'))).toEqual([]);
+  });
+
+  it('parses quoted YAML with comments and matches globstar on segment boundaries', async () => {
+    const root = tmpRepo();
+    write(root, '.claude/rules/comment.md', '---\npaths:\n  - "src/**" # source files\n---\nCOMMENT_RULE');
+    write(root, '.claude/rules/glob.md', '---\npaths:\n  - "**/src/**"\n---\nGLOB_RULE');
+    const idx = await buildTriggerIndex(root);
+    expect(idx.match('src/a.ts').map(h => h.body)).toEqual(['COMMENT_RULE', 'GLOB_RULE']);
+    expect(idx.match('pkg/src/a.ts').map(h => h.body)).toEqual(['GLOB_RULE']);
+    expect(idx.match('notsrc/a.ts')).toEqual([]);
+  });
+
+  it('matches question marks, zero or multiple globstar folders, and ignores malformed patterns', async () => {
+    const root = tmpRepo();
+    write(root, '.claude/rules/pattern.md', '---\npaths:\n  - "src/**/file?.ts"\n  - "[unclosed"\n---\nMATCH');
+    write(root, '.claude/rules/malformed.md', '---\npaths: [bad\n---\nMALFORMED');
+    const idx = await buildTriggerIndex(root);
+    for (const rel of ['src/file1.ts', 'src/a/file2.ts', 'src/a/b/file3.ts']) {
+      expect(idx.match(rel).map(h => h.body)).toEqual(['MATCH']);
+    }
+    expect(idx.match('src/file12.ts')).toEqual([]);
+  });
+
+  it.each([
+    ['nested mapping', 'paths:\n  nested:\n    - "src/**"', []],
+    ['nested sequence', 'paths:\n  - nested:\n      - "src/**"', []],
+    ['nested sibling list', 'paths:\n  - "safe/**"\n  nested:\n    - "src/**"\n  - "other/**"', ['safe/**']],
+    ['malformed sibling indentation', 'paths:\n  - "safe/**"\n   - "src/**"\n  - "other/**"', ['safe/**']],
+  ] as const)('does not treat %s as paths list entries', async (_case, front, expected) => {
+    const root = tmpRepo();
+    write(root, '.claude/rules/shape.md', `---\n${front}\n---\nRule body.`);
+    const idx = await buildTriggerIndex(root);
+    expect(idx.match('src/a.ts')).toEqual([]);
+    expect(idx.match('nested:')).toEqual([]);
+    expect(idx.match('safe/a.ts').map(h => h.body)).toEqual(expected.length ? ['Rule body.'] : []);
+    expect(idx.match('other/a.ts')).toEqual([]);
+  });
+
+  it('preserves valid quoted comments and literal dashes inside paths entries', async () => {
+    const root = tmpRepo();
+    write(root, '.claude/rules/dashes.md', '---\npaths:\n  - "src/my-file.ts" # a comment\n  - "src/-draft.ts"\n---\nDashes.');
+    const idx = await buildTriggerIndex(root);
+    expect(idx.match('src/my-file.ts').map(h => h.body)).toEqual(['Dashes.']);
+    expect(idx.match('src/-draft.ts').map(h => h.body)).toEqual(['Dashes.']);
+  });
+
   it('a repo with no .claude/rules directory is fine', async () => {
     const root = tmpRepo();
     expect((await buildTriggerIndex(root)).match(path.join(root, 'x.ts'))).toEqual([]);

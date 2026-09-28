@@ -121,6 +121,18 @@ describe('PermissionBroker', () => {
     expect(d.dismissed).toBeFalsy();
   });
 
+  it('passes native ordered answers through the existing decision envelope without remapping', async () => {
+    const broker = new PermissionBroker();
+    const emitted: any[] = [];
+    broker.on('hook-event', e => emitted.push(e));
+    const questions = [{ question: 'Same?' }, { question: 'Same?' }];
+    const pending = broker.ask({ sessionId: 's1', toolName: 'AskUserQuestion', toolInput: { questions }, denyListed: false });
+    const updatedInput = { questions, answers: { 'Same?': 'second' },
+      orderedAnswers: [{ answer: 'first', note: 'a' }, { answer: 'second' }] };
+    broker.respond(emitted[0].payload._requestId, { decision: { behavior: 'allow', updatedInput } });
+    expect((await pending).updatedInput).toEqual(updatedInput);
+  });
+
   it('passes decision.updatedInput through to the resolver (AskUserQuestion answers)', async () => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];

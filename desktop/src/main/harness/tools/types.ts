@@ -212,13 +212,10 @@ export interface ToolServices {
   };
 }
 
-/** What an earlier Read served (G-11): the file's mtime at that moment, which
- *  tool call did it, and the line range it showed. */
+/** What an earlier text Read served: verified byte identity, call and slice. */
 export interface ServedRead {
   mtimeMs: number;
-  /** The content fingerprint recorded for the read gate at that Read, so a
-   *  dedupe hit (mtime unchanged) can re-stamp the registry without reading
-   *  the file again (2026-09-16). */
+  /** Compare against freshly read, validated bytes before claiming unchanged. */
   fingerprint: string;
   callIndex: number;
   from: number;

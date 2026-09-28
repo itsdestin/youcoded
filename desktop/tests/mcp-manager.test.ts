@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { McpManager } from '../src/main/harness/mcp/mcp-manager';
+import type { ResolvedMcpServer } from '../src/main/harness/mcp/types';
 
 function deps(connectSpy = vi.fn(), closeSpy = vi.fn()) {
   const registry = {
@@ -19,6 +20,230 @@ function deps(connectSpy = vi.fn(), closeSpy = vi.fn()) {
 }
 
 describe('McpManager', () => {
+  function generationHarness() {
+    let current: ResolvedMcpServer[] = [{ id: 'demo', label: 'Demo', enabled: true,
+      transport: { type: 'stdio', command: 'old', args: ['a'] }, origin: { kind: 'user' }, missingSecrets: [], env: { TOKEN: 'OLD' } }];
+    const connections: Array<{ config: ResolvedMcpServer; close: ReturnType<typeof vi.fn>; get closed(): boolean }> = [];
+    const manager = new McpManager({ registry: { resolveAllEnabled: async () => current },
+      connectionFactory: (config) => {
+        let closed = false;
+        const entry = { config, close: vi.fn(async () => { closed = true; }), get closed() { return closed; } };
+        connections.push(entry);
+        return { get state() { return closed ? 'idle' as const : 'ready' as const; }, lastError: null,
+          connect: async () => {}, listTools: () => [{ name: 'search', inputSchema: { type: 'object' } }],
+          callTool: async () => ({ text: config.env?.TOKEN ?? '', isError: closed }), close: entry.close };
+      } });
+    return { manager, connections, get current() { return current; }, set current(value: ResolvedMcpServer[]) { current = value; } };
+  }
+
+  it('keeps existing holders on old config while command and resolved credential changes create a new connection', async () => {
+    const h = generationHarness();
+    const old = await h.manager.acquire('old');
+    h.current[0].transport = { type: 'stdio', command: 'new', args: ['b'] }; // mutate SAME registry object
+    h.current[0].env!.TOKEN = 'NEW';
+    const fresh = await h.manager.acquire('fresh');
+    expect(h.connections).toHaveLength(2);
+    expect((await old.servers[0].call('search', {}, new AbortController().signal)).text).toBe('OLD');
+    expect((await fresh.servers[0].call('search', {}, new AbortController().signal)).text).toBe('NEW');
+    expect(h.manager.status().map(s => s.id)).toEqual(['demo']);
+    await old.release();
+    expect(h.connections[0].close).toHaveBeenCalledTimes(1);
+    expect(h.connections[1].close).not.toHaveBeenCalled();
+    await fresh.release();
+    expect(h.connections[1].close).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses unchanged config despite label changes and creates new generations for A to B to A', async () => {
+    const h = generationHarness();
+    const a1 = await h.manager.acquire('a1');
+    h.current = [{ ...h.current[0], label: 'Renamed' }];
+    const a2 = await h.manager.acquire('a2');
+    expect(h.connections).toHaveLength(1);
+    expect(a2.servers[0].label).toBe('Renamed');
+    h.current = [{ ...h.current[0], env: { TOKEN: 'B' } }];
+    const b = await h.manager.acquire('b');
+    h.current = [{ ...h.current[0], env: { TOKEN: 'OLD' } }];
+    const a3 = await h.manager.acquire('a3');
+    expect(h.connections).toHaveLength(3);
+    await a1.release(); await a2.release(); await b.release();
+    expect(h.connections[2].close).not.toHaveBeenCalled();
+    await a3.release();
+    expect(h.connections.map(c => c.close.mock.calls.length)).toEqual([1, 1, 1]);
+  });
+
+  it('compares HTTP url and headers, stdio cwd and args, and setup state without leaking old holders', async () => {
+    const h = generationHarness();
+    const leases = [await h.manager.acquire('a')];
+    for (const transport of [
+      { type: 'stdio' as const, command: 'old', args: ['a'], cwd: '/work' },
+      { type: 'http' as const, url: 'https://one.invalid' },
+      { type: 'http' as const, url: 'https://two.invalid' },
+    ]) {
+      h.current = [{ ...h.current[0], transport }];
+      leases.push(await h.manager.acquire('next'));
+    }
+    h.current = [{ ...h.current[0], headers: { Authorization: 'BEARER' } }];
+    leases.push(await h.manager.acquire('header'));
+    h.current = [{ ...h.current[0], missingSecrets: ['AUTH'], headers: {} }];
+    leases.push(await h.manager.acquire('missing'));
+    expect(leases.at(-1)!.servers).toEqual([]);
+    h.current = [{ ...h.current[0], missingSecrets: [], headers: { Authorization: 'BEARER' } }];
+    leases.push(await h.manager.acquire('restored'));
+    expect(h.connections).toHaveLength(6);
+    expect(leases.at(-1)!.servers).toHaveLength(1);
+    expect(h.manager.status()).toHaveLength(1);
+    for (const lease of leases) await lease.release();
+    expect(h.connections.every(c => c.close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('does not attach a disabled server to a new lease while an older snapshot works', async () => {
+    const h = generationHarness();
+    const old = await h.manager.acquire('old');
+    h.current = [];
+    const next = await h.manager.acquire('next');
+    expect(next.servers).toEqual([]);
+    expect((await old.servers[0].call('search', {}, new AbortController().signal)).text).toBe('OLD');
+    await next.release(); await old.release();
+    expect(h.connections[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes retired and current generations in destroyAll without double closing after release', async () => {
+    const h = generationHarness();
+    const a = await h.manager.acquire('a');
+    h.current = [{ ...h.current[0], env: { TOKEN: 'B' } }];
+    const b = await h.manager.acquire('b');
+    await h.manager.destroyAll();
+    expect(h.connections.map(c => c.close.mock.calls.length)).toEqual([1, 1]);
+    expect(h.manager.status()).toEqual([]);
+    await a.release(); await b.release();
+    expect(h.connections.map(c => c.close.mock.calls.length)).toEqual([1, 1]);
+  });
+  it('destroyAll waits for a released generation already closing, including repeated teardown', async () => {
+    let finishClose!: () => void;
+    const closeBlocked = new Promise<void>(resolve => { finishClose = resolve; });
+    let closeStarted!: () => void;
+    const started = new Promise<void>(resolve => { closeStarted = resolve; });
+    const close = vi.fn(async () => { closeStarted(); await closeBlocked; });
+    const mgr = new McpManager({ registry: deps().registry, connectionFactory: () => ({
+      state: 'ready' as const, lastError: null, connect: async () => {}, listTools: () => [],
+      callTool: async () => ({ text: 'ok', isError: false }), close,
+    }) });
+    const lease = await mgr.acquire('old');
+    const releasing = lease.release();
+    await started; // deterministic: close has begun; no timer or sleep
+    let firstSettled = false;
+    let secondSettled = false;
+    const first = mgr.destroyAll().then(() => { firstSettled = true; });
+    const second = mgr.destroyAll().then(() => { secondSettled = true; });
+    try {
+      // Let every already-resolved close and teardown continuation run; the
+      // blocked close alone must keep destroyAll pending.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(firstSettled).toBe(false);
+      expect(secondSettled).toBe(false);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      finishClose();
+      await Promise.all([releasing, first, second]);
+    }
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(mgr.status()).toEqual([]);
+  });
+
+  it('destroyAll waits for retiring generations and does not clobber a newly current ID', async () => {
+    let command = 'A';
+    let finishOld!: () => void;
+    const oldBlocked = new Promise<void>(resolve => { finishOld = resolve; });
+    let oldStarted!: () => void;
+    const started = new Promise<void>(resolve => { oldStarted = resolve; });
+    const closes = new Map<string, ReturnType<typeof vi.fn>>();
+    const factory = vi.fn((server: ResolvedMcpServer) => {
+      const name = server.transport.type === 'stdio' ? server.transport.command : '';
+      const close = vi.fn(async () => { if (name === 'A') { oldStarted(); await oldBlocked; } });
+      closes.set(name, close);
+      return { state: 'ready' as const, lastError: null, connect: async () => {}, listTools: () => [],
+        callTool: async () => ({ text: name, isError: false }), close };
+    });
+    const mgr = new McpManager({ registry: { resolveAllEnabled: async (): Promise<ResolvedMcpServer[]> => [
+      { id: 'demo', label: 'Demo', enabled: true, origin: { kind: 'user' }, missingSecrets: [],
+        transport: { type: 'stdio', command } },
+    ] }, connectionFactory: factory });
+    const a = await mgr.acquire('a');
+    command = 'B';
+    const b = await mgr.acquire('b');
+    const releaseA = a.release();
+    await started;
+    let settled = false;
+    const destroying = mgr.destroyAll().then(() => { settled = true; });
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(settled).toBe(false); // B closed; released A still pending
+      expect(closes.get('B')).toHaveBeenCalledTimes(1);
+      // A post-destroy acquisition gets C, not a stale entry or a hold on A/B.
+      command = 'C';
+      const c = await mgr.acquire('c');
+      try {
+        expect(factory).toHaveBeenCalledTimes(3);
+        expect(mgr.status()).toHaveLength(1);
+        await b.release(); // old lease cannot remove current C
+        expect(mgr.status()).toHaveLength(1);
+      } finally {
+        await c.release();
+      }
+    } finally {
+      finishOld();
+      await Promise.all([releaseA, destroying]);
+    }
+    expect(closes.get('A')).toHaveBeenCalledTimes(1);
+    expect(closes.get('B')).toHaveBeenCalledTimes(1);
+    expect(closes.get('C')).toHaveBeenCalledTimes(1);
+  });
+
+  it('a new acquisition during an old generation close cannot inherit the closing connection', async () => {
+    let command = 'A';
+    let finishClose!: () => void;
+    const closing = new Promise<void>(resolve => { finishClose = resolve; });
+    const close = vi.fn();
+    const factory = vi.fn((s: ResolvedMcpServer) => ({ state: 'ready' as const, lastError: null,
+      connect: async () => {}, listTools: () => [],
+      callTool: async () => ({ text: (s.transport as { command: string }).command, isError: false }),
+      close: async () => { close(s.transport); if ((s.transport as { command: string }).command === 'A') await closing; } }));
+    const mgr = new McpManager({ registry: { resolveAllEnabled: async () => [{ id: 'demo', label: 'Demo', enabled: true,
+      origin: { kind: 'user' as const }, missingSecrets: [], transport: { type: 'stdio' as const, command } }] }, connectionFactory: factory });
+    const a = await mgr.acquire('a');
+    command = 'B';
+    const b = await mgr.acquire('b');
+    const releaseA = a.release();
+    expect(close).toHaveBeenCalledTimes(1);
+    command = 'A';
+    const next = await mgr.acquire('next');
+    expect(factory).toHaveBeenCalledTimes(3);
+    expect((await next.servers[0].call('tool', {}, new AbortController().signal)).text).toBe('A');
+    finishClose(); await releaseA;
+    expect(mgr.status()).toHaveLength(1);
+    await b.release(); await next.release();
+    expect(close).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps a failed connect generation for existing holders but replaces it after settings change', async () => {
+    let command = 'broken';
+    const factory = vi.fn((s: ResolvedMcpServer) => ({
+      state: s.transport.type === 'stdio' && s.transport.command === 'broken' ? 'error' as const : 'ready' as const,
+      lastError: s.transport.type === 'stdio' && s.transport.command === 'broken' ? 'spawn failed' : null,
+      connect: async () => {}, listTools: () => [], callTool: async () => ({ text: 'ok', isError: false }), close: async () => {},
+    }));
+    const mgr = new McpManager({ registry: { resolveAllEnabled: async () => [{ id: 'demo', label: 'Demo', enabled: true,
+      origin: { kind: 'user' as const }, missingSecrets: [], transport: { type: 'stdio' as const, command } }] }, connectionFactory: factory });
+    const failed = await mgr.acquire('failed');
+    expect(failed.servers).toEqual([]);
+    command = 'fixed';
+    const good = await mgr.acquire('good');
+    expect(good.servers).toHaveLength(1);
+    expect(mgr.status()).toEqual([{ id: 'demo', state: 'ready', error: null }]);
+    expect(factory).toHaveBeenCalledTimes(2);
+    await failed.release(); await good.release();
+  });
+
   it('connects a server once for two sessions', async () => {
     const connect = vi.fn();
     const mgr = new McpManager(deps(connect));

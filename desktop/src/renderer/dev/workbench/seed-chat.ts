@@ -167,8 +167,13 @@ export function buildHydratePayload(): SerializedChatState {
   if (bubbleName) {
     const raw = bubbleConvos[`./fixtures/bubbles/${bubbleName}.jsonl`];
     if (raw) {
-      const i = sources.findIndex(([name]) => name === 'native');
-      sources.splice(i >= 0 ? i : sources.length, i >= 0 ? 1 : 0, [`bubbles-${bubbleName}`, raw, 'wb-2']);
+      // WHY: the question review needs the same shared card on both transport
+      // lanes; the CC fixture replaces wb-1, never masquerades as wb-2 native.
+      const isCcQuestion = bubbleName === 'questions-cc';
+      const target = isCcQuestion ? 'claude-code' : 'native';
+      const targetIndex = sources.findIndex(([name]) => name === target);
+      sources.splice(targetIndex >= 0 ? targetIndex : sources.length, targetIndex >= 0 ? 1 : 0,
+        [`bubbles-${bubbleName}`, raw, isCcQuestion ? 'wb-1' : 'wb-2']);
     } else {
       console.warn(`[workbench] no bubble-grouping fixture named "${bubbleName}"`);
     }
@@ -185,7 +190,7 @@ export function buildHydratePayload(): SerializedChatState {
       continue;
     }
 
-    const { actions, error } = loadFixture(name, raw, sessionId, { includeStalled: stalledRequested(), includePlanLimit: planLimitRequested(), providerError: providerErrorRequested() });
+    const { actions, error } = loadFixture(name, raw, sessionId, { includeStalled: stalledRequested(), includePlanLimit: planLimitRequested(), providerError: providerErrorRequested(), includeContextChain: typeof location !== 'undefined' && new URLSearchParams(location.search).get('contextChain') === '1' });
     if (error) { console.warn(`[workbench] ${error}`); continue; }
 
     state = chatReducer(state, { type: 'SESSION_INIT', sessionId });

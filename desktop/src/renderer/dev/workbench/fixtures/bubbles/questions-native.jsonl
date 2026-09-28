@@ -1,0 +1,4 @@
+{"type":"user_message","text":"Help me choose colors for my room."}
+{"type":"assistant_text","text":"I have two quick choices for you."}
+{"type":"tool_use","id":"d4-native-ask","name":"AskUserQuestion","input":{"questions":[{"question":"Which color?","header":"Walls","multiSelect":false,"options":[{"label":"Blue","description":"Calm and bright"},{"label":"Red","description":"Warm and bold"}]},{"question":"Which color?","header":"Trim","multiSelect":false,"options":[{"label":"Green","description":"Natural contrast"},{"label":"Yellow","description":"Sunny accent"}]}]}}
+{"type":"permission_request","tool_use_id":"d4-native-ask","requestId":"native-d4-visual"}

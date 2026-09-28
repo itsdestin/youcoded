@@ -219,6 +219,23 @@ describe('SessionStore', () => {
     expect((events[0] as any).data).toMatchObject({ text: 'Hello!', partId: 'p1' });
   });
 
+  it('a retry drop tombstones abandoned text and reasoning before replay, including reused part ids', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'abandoned', partId: 'text-0' }, 'a1') as any);
+    await store.append(HEADER.cwd, ev('assistant-thinking', { text: 'old thought', partId: 'reasoning-0' }, 'r1') as any);
+    await store.append(HEADER.cwd, ev('assistant-thinking', { dropPart: { partIds: ['text-0', 'reasoning-0'] } }, 'd1') as any);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'replacement', partId: 'text-0' }, 'a2') as any);
+    await store.append(HEADER.cwd, ev('turn-complete', { stopReason: 'end_turn' }, 't1') as any);
+    const replay = store.readEvents('s-1', HEADER.cwd);
+    // WHY: a reasoning event can flush the earlier text to JSONL; the durable
+    // tombstone must still precede replacement so replay removes that part.
+    const drop = replay.findIndex(e => e.data.dropPart);
+    expect(drop).toBeGreaterThan(0);
+    expect(replay[drop].data.dropPart!.partIds).toEqual(['text-0', 'reasoning-0']);
+    expect(replay.slice(drop + 1).filter(e => e.type === 'assistant-text').map(e => e.data.text)).toEqual(['replacement']);
+    expect(replay.slice(drop + 1).some(e => e.data.text === 'old thought')).toBe(false);
+  });
+
   it('dropPart discards the buffered open part instead of writing it', async () => {
     // Manual Retry: the abandoned half-sentence must never reach the JSONL, or
     // a resume would replay text the user watched disappear.
