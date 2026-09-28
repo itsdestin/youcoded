@@ -1,0 +1,28 @@
+{
+  "fixture": "fresh-single-comment.xlsx",
+  "path": "fresh-single-comment.xlsx",
+  "steps": [
+    {
+      "op": "add",
+      "args": {
+        "cell": "A1",
+        "text": "only comment",
+        "author": "user"
+      },
+      "result": {
+        "ok": true,
+        "id": "xt-1-A1-E1D9B337-F312-408B-9F98-C2B653E08D90",
+        "text": "only comment"
+      }
+    },
+    {
+      "op": "delete",
+      "args": {
+        "id": "xt-1-A1-E1D9B337-F312-408B-9F98-C2B653E08D90"
+      },
+      "result": {
+        "ok": true
+      }
+    }
+  ]
+}

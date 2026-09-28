@@ -307,6 +307,93 @@ class DocCommentsStoreTest {
         assertEquals("c-fixture-0001-r2", newReply.getString("id"))
     }
 
+    // Edit/delete build (2026-09-28, design doc §"Edit and delete") — this
+    // task's own T21 parity extension, previously "not extended in this
+    // pass". Same shared checked-in fixture, same "the field shape
+    // desktop's own reader/writer expects" claim the reply test above
+    // already makes; the TS mirror is doc-comments-json-sidecar-fixture-
+    // parity.test.ts's own edit/delete tests.
+    @Test
+    fun `editComment on the fixture keeps the exact field shape desktop's own reader expects`() = runTest {
+        val root = tempProjectRoot()
+        val sidecar = File(root, ".youcoded/comments/docs/plan.md.json")
+        sidecar.parentFile?.mkdirs()
+        sidecar.writeText(fixtureText("thread.json"))
+
+        val edited = editComment("docs/plan.md", root.path, "c-fixture-0001", "Edited from Android.", root)
+        assertTrue(edited is StoreResult.Ok, "expected Ok, got $edited")
+
+        val onDiskRaw = JSONObject(sidecar.readText())
+        val comment = onDiskRaw.getJSONArray("comments").getJSONObject(0)
+        assertEquals("Edited from Android.", comment.getString("text"))
+        // No "edited" marker is ever stored — every other field, including
+        // the reply, stays exactly as the fixture had it.
+        assertEquals("c-fixture-0001", comment.getString("id"))
+        assertEquals(true, comment.getBoolean("resolved"))
+        assertEquals(1, comment.getJSONArray("replies").length())
+    }
+
+    @Test
+    fun `editReply on the fixture keeps the exact field shape desktop's own reader expects`() = runTest {
+        val root = tempProjectRoot()
+        val sidecar = File(root, ".youcoded/comments/docs/plan.md.json")
+        sidecar.parentFile?.mkdirs()
+        sidecar.writeText(fixtureText("thread.json"))
+
+        val edited = editReply("docs/plan.md", root.path, "c-fixture-0001", "c-fixture-0001-r1", "Edited reply from Android.", root)
+        assertTrue(edited is StoreResult.Ok, "expected Ok, got $edited")
+        assertEquals(
+            CommentReply("c-fixture-0001-r1", "user", "Edited reply from Android.", 1758000100000L),
+            (edited as StoreResult.Ok).value,
+        )
+
+        val onDiskRaw = JSONObject(sidecar.readText())
+        val comment = onDiskRaw.getJSONArray("comments").getJSONObject(0)
+        assertEquals("Can we cut this?", comment.getString("text")) // root untouched
+        val replies = comment.getJSONArray("replies")
+        assertEquals(1, replies.length())
+        assertEquals("Edited reply from Android.", replies.getJSONObject(0).getString("text"))
+    }
+
+    @Test
+    fun `deleteReply on the fixture removes just the one reply, leaving the root comment's own field shape untouched`() = runTest {
+        val root = tempProjectRoot()
+        val sidecar = File(root, ".youcoded/comments/docs/plan.md.json")
+        sidecar.parentFile?.mkdirs()
+        sidecar.writeText(fixtureText("thread.json"))
+
+        val deleted = deleteReply("docs/plan.md", root.path, "c-fixture-0001", "c-fixture-0001-r1", root)
+        assertTrue(deleted is StoreResult.Ok, "expected Ok, got $deleted")
+
+        val onDiskRaw = JSONObject(sidecar.readText())
+        val comments = onDiskRaw.getJSONArray("comments")
+        assertEquals(1, comments.length())
+        val comment = comments.getJSONObject(0)
+        assertEquals("c-fixture-0001", comment.getString("id"))
+        assertEquals("Can we cut this?", comment.getString("text"))
+        assertEquals(true, comment.getBoolean("resolved"))
+        assertEquals(0, comment.getJSONArray("replies").length())
+    }
+
+    @Test
+    fun `deleteComment on the fixture removes the WHOLE thread -- root and reply both gone`() = runTest {
+        val root = tempProjectRoot()
+        val sidecar = File(root, ".youcoded/comments/docs/plan.md.json")
+        sidecar.parentFile?.mkdirs()
+        sidecar.writeText(fixtureText("thread.json"))
+
+        val deleted = deleteComment("docs/plan.md", root.path, "c-fixture-0001", root)
+        assertTrue(deleted is StoreResult.Ok, "expected Ok, got $deleted")
+
+        val onDiskRaw = JSONObject(sidecar.readText())
+        assertEquals(1, onDiskRaw.getInt("version"))
+        assertEquals(0, onDiskRaw.getJSONArray("comments").length())
+
+        val listed = listComments("docs/plan.md", root.path, root)
+        assertTrue(listed is StoreResult.Ok, "expected Ok, got $listed")
+        assertEquals(0, (listed as StoreResult.Ok).value.size)
+    }
+
     // ── F2 (T4 implementation review, major) — unknown fields survive ──────
     @Test
     fun `an Android reply and resolve preserve unknown top-level comment reply and history fields byte-equivalently`() = runTest {

@@ -33,6 +33,14 @@
 // Usage: `node desktop/tests/fixtures/doc-comments/generate-docx-write-golden.mjs`
 // (run BY HAND when a fixture or a writer's own output shape changes, never
 // as part of `npm test`/CI — same convention as generate-docx-golden.mjs).
+//
+// `edit-launch-brief`/`edit-reply-launch-brief`/`delete-reply-launch-brief`/
+// `delete-thread-launch-brief` (2026-09-28, design doc §"Edit and delete")
+// extend this same golden set to the edit/delete ops, added for this task's
+// own T21 parity extension — previously "not extended in this pass" per that
+// section's own closing note. All four reuse launch-brief.docx's real w-0
+// (no reply) and w-1 (one reply, w-1-r1) comments — the same ids docx-
+// comments.test.ts's own edit/delete suite already exercises.
 import { createServer } from 'vite';
 import { readFile, writeFile, mkdir, copyFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
@@ -108,6 +116,43 @@ const CASES = [
     op: 'move',
     args: { id: 'w-0', newExact: 'well ahead of plan' },
   },
+  // Edit/delete build (2026-09-28, design doc §"Edit and delete"), added for
+  // this task's own T21 parity extension. w-0 (no reply) and w-1 (one reply,
+  // w-1-r1) on launch-brief.docx are the same two comments the docx-
+  // comments.test.ts edit/delete suite already exercises — reused here so
+  // this golden pins the SAME real ids rather than inventing new ones.
+  {
+    name: 'edit-launch-brief',
+    fixture: 'launch-brief.docx',
+    path: 'docs/launch-brief.docx',
+    op: 'edit',
+    args: { id: 'w-0', text: 'Edited: is 30% still realistic after the beta feedback call?' },
+  },
+  {
+    name: 'edit-reply-launch-brief',
+    fixture: 'launch-brief.docx',
+    path: 'docs/launch-brief.docx',
+    op: 'edit-reply',
+    args: { id: 'w-1', replyId: 'w-1-r1', text: 'Edited: confirmed with legal this afternoon, terms are final.' },
+  },
+  {
+    name: 'delete-reply-launch-brief',
+    fixture: 'launch-brief.docx',
+    path: 'docs/launch-brief.docx',
+    op: 'delete-reply',
+    args: { id: 'w-1', replyId: 'w-1-r1' },
+  },
+  // Deletes w-1's WHOLE thread — root + its one reply (w-1-r1) — proving both
+  // the range markers AND the chained reply's own extended/ids/extensible
+  // entries are gone, not just the root (§"Edit and delete"'s own "root +
+  // replies chained via w15:paraIdParent" delete shape).
+  {
+    name: 'delete-thread-launch-brief',
+    fixture: 'launch-brief.docx',
+    path: 'docs/launch-brief.docx',
+    op: 'delete',
+    args: { id: 'w-1' },
+  },
 ];
 
 async function main() {
@@ -133,6 +178,14 @@ async function main() {
         result = await mod.reopenDocxComment({ absolutePath: outPath, path, id: args.id });
       } else if (op === 'move') {
         result = await mod.moveDocxComment({ absolutePath: outPath, path, id: args.id, newSelector: textSelector(args.newExact) });
+      } else if (op === 'edit') {
+        result = await mod.editDocxComment({ absolutePath: outPath, path, id: args.id, text: args.text });
+      } else if (op === 'edit-reply') {
+        result = await mod.editDocxReply({ absolutePath: outPath, path, id: args.id, replyId: args.replyId, text: args.text });
+      } else if (op === 'delete') {
+        result = await mod.deleteDocxComment({ absolutePath: outPath, path, id: args.id });
+      } else if (op === 'delete-reply') {
+        result = await mod.deleteDocxReply({ absolutePath: outPath, path, id: args.id, replyId: args.replyId });
       } else {
         throw new Error(`unknown op ${op}`);
       }

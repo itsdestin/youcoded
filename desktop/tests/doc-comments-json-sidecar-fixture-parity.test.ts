@@ -24,7 +24,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { listComments, replyToComment } from '../src/main/doc-comments/doc-comments-store';
+import { listComments, replyToComment, editComment, editReply, deleteComment, deleteReply } from '../src/main/doc-comments/doc-comments-store';
 import type { CommentsSidecarFile } from '../src/shared/doc-comments-types';
 
 const FIXTURE_PATH = path.join(
@@ -197,5 +197,81 @@ describe('shared JSON sidecar fixture — desktop reads the same shape Android w
     expect(comment.replies).toHaveLength(3);
     expect(comment.replies[0].reactedWith).toBe('👍');
     expect(comment.replies[2].text).toBe('from desktop too');
+  });
+
+  // Edit/delete build (2026-09-28, design doc §"Edit and delete") — this
+  // task's own T21 parity extension, previously "not extended in this pass".
+  // Same shared checked-in fixture, same "the field shape Android's own
+  // reader/writer expects" claim the reply tests above already make.
+  it("desktop's real editComment() keeps the exact field shape Android's own reader/writer expects", async () => {
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.promises.copyFile(FIXTURE_PATH, sidecarPath);
+
+    const edited = await editComment({ path: 'docs/plan.md', projectRoot: root, id: 'c-fixture-0001', text: 'Edited from desktop.' });
+    expect(edited).toEqual({ ok: true });
+
+    const onDisk: CommentsSidecarFile = JSON.parse(await fs.promises.readFile(sidecarPath, 'utf8'));
+    const comment = onDisk.comments[0];
+    expect(comment.text).toBe('Edited from desktop.');
+    // No "edited" marker is ever stored (design doc §"Edit and delete") —
+    // every other field, including the reply Android's own writer would
+    // expect unchanged, stays exactly as the fixture had it.
+    expect(comment.id).toBe('c-fixture-0001');
+    expect(comment.author).toBe('person:Priya Shah');
+    expect(comment.resolved).toBe(true);
+    expect(comment.replies).toHaveLength(1);
+    expect(comment.replies[0]).toEqual({ id: 'c-fixture-0001-r1', author: 'user', text: 'Agreed, cutting it.', createdAt: 1758000100000 });
+  });
+
+  it("desktop's real editReply() keeps the exact field shape Android's own reader/writer expects", async () => {
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.promises.copyFile(FIXTURE_PATH, sidecarPath);
+
+    const edited = await editReply({ path: 'docs/plan.md', projectRoot: root, id: 'c-fixture-0001', replyId: 'c-fixture-0001-r1', text: 'Edited reply from desktop.' });
+    expect(edited).toEqual({
+      ok: true,
+      reply: { id: 'c-fixture-0001-r1', author: 'user', text: 'Edited reply from desktop.', createdAt: 1758000100000 },
+    });
+
+    const onDisk: CommentsSidecarFile = JSON.parse(await fs.promises.readFile(sidecarPath, 'utf8'));
+    const comment = onDisk.comments[0];
+    expect(comment.text).toBe('Can we cut this?'); // root untouched
+    expect(comment.replies).toHaveLength(1);
+    expect(comment.replies[0]).toEqual({ id: 'c-fixture-0001-r1', author: 'user', text: 'Edited reply from desktop.', createdAt: 1758000100000 });
+  });
+
+  it("desktop's real deleteReply() removes just the one reply, leaving the root comment's own field shape untouched", async () => {
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.promises.copyFile(FIXTURE_PATH, sidecarPath);
+
+    const deleted = await deleteReply({ path: 'docs/plan.md', projectRoot: root, id: 'c-fixture-0001', replyId: 'c-fixture-0001-r1' });
+    expect(deleted).toEqual({ ok: true });
+
+    const onDisk: CommentsSidecarFile = JSON.parse(await fs.promises.readFile(sidecarPath, 'utf8'));
+    expect(onDisk.comments).toHaveLength(1);
+    const comment = onDisk.comments[0];
+    expect(comment.id).toBe('c-fixture-0001');
+    expect(comment.text).toBe('Can we cut this?');
+    expect(comment.resolved).toBe(true);
+    expect(comment.replies).toEqual([]);
+  });
+
+  it("desktop's real deleteComment() removes the WHOLE thread — root and reply both gone (decisions.json: \"deleting a thread's first comment deletes the whole thread\")", async () => {
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    await fs.promises.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.promises.copyFile(FIXTURE_PATH, sidecarPath);
+
+    const deleted = await deleteComment({ path: 'docs/plan.md', projectRoot: root, id: 'c-fixture-0001' });
+    expect(deleted).toEqual({ ok: true });
+
+    const onDisk: CommentsSidecarFile = JSON.parse(await fs.promises.readFile(sidecarPath, 'utf8'));
+    expect(onDisk.version).toBe(1);
+    expect(onDisk.comments).toEqual([]);
+
+    const listed = await listComments({ path: 'docs/plan.md', projectRoot: root });
+    expect(listed).toEqual({ ok: true, comments: [] });
   });
 });

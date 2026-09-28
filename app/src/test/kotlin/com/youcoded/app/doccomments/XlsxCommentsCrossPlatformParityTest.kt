@@ -50,6 +50,7 @@ import org.json.JSONObject
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.util.zip.ZipFile
 import kotlinx.coroutines.runBlocking
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -75,6 +76,21 @@ private fun xlsxParityScratchHome(): File {
 }
 
 private fun xlsxParitySelector(cell: String, sheet: String?): CommentSelector = CommentSelector.Cell(CellSelector(cell, sheet))
+
+/** File-private zip introspection for the delete-last-comment-fresh
+ *  structural cleanup check — DocxCommentsCrossPlatformParityTest.kt's own
+ *  `entryNames`/`entryBytes` are file-private in Kotlin, so this file needs
+ *  its own copies rather than sharing them. */
+private fun xlsxParityEntryNames(file: File): Set<String> {
+    ZipFile(file).use { zip -> return zip.entries().asSequence().filter { !it.isDirectory }.map { it.name }.toSet() }
+}
+
+private fun xlsxParityEntryBytes(file: File, name: String): ByteArray? {
+    ZipFile(file).use { zip ->
+        val entry = zip.getEntry(name) ?: return null
+        return zip.getInputStream(entry).use { it.readBytes() }
+    }
+}
 
 private fun xlsxParityReadOk(file: File, path: String): List<PersistedComment> {
     val r = readXlsxComments(file, path)
@@ -324,5 +340,175 @@ class XlsxCommentsCrossPlatformParityTest {
         // Every one of the ~700 OTHER real threads in this workbook —
         // including the other 4 threads sharing B19 — is untouched.
         assertUnrelatedThreadsUntouched(desktopComments, kotlinComments, setOf(desktopFinal.id, kotlinFinal.id), "eldenSequence")
+    }
+
+    // ── Edit/delete build (2026-09-28, design doc §"Edit and delete") — this
+    // task's own T21 parity extension, previously "not extended in this
+    // pass" per that section's own closing note. Reuses docling's real F7
+    // (root + one reply) and G12 (root only) — the same two threads xlsx-
+    // comments.test.ts's own edit/delete suite already exercises. ──────────
+
+    @Test
+    fun editDocling() {
+        val json = JSONObject(String(xlsxParityResourceBytes("write-golden/edit-docling.json"), Charsets.UTF_8))
+        val fixture = json.getString("fixture")
+        val path = json.getString("path")
+        val step = json.getJSONArray("steps").getJSONObject(0)
+        val args = step.getJSONObject("args")
+        val targetId = args.getString("id")
+
+        val originalBytes = xlsxParityResourceBytes(fixture)
+        val kotlinTarget = xlsxParityScratchCopy(originalBytes, fixture)
+        val home = xlsxParityScratchHome()
+
+        val result = runBlocking { editXlsxComment(kotlinTarget.absolutePath, path, targetId, args.getString("text"), home) }
+        assertTrue(result is XlsxWriteResult.Ok, "Kotlin edit failed: $result")
+
+        val desktopGolden = xlsxParityScratchCopy(xlsxParityResourceBytes("write-golden/edit-docling.xlsx"), "desktop-edit-docling.xlsx")
+        val desktopComments = xlsxParityReadOk(desktopGolden, path)
+        val kotlinComments = xlsxParityReadOk(kotlinTarget, path)
+
+        // G12's own pre-existing GUID is never re-minted by edit.
+        val desktopEdited = desktopComments.find { it.id == targetId } ?: fail("target $targetId missing from desktop golden")
+        val kotlinEdited = kotlinComments.find { it.id == targetId } ?: fail("target $targetId missing from Kotlin output")
+        assertSameThreadContentAndId(desktopEdited, kotlinEdited, "editDocling target")
+        assertEquals(args.getString("text"), kotlinEdited.text, "the edited text should read back")
+        assertUnrelatedThreadsUntouched(desktopComments, kotlinComments, setOf(targetId), "editDocling")
+    }
+
+    @Test
+    fun editReplyDocling() {
+        val json = JSONObject(String(xlsxParityResourceBytes("write-golden/edit-reply-docling.json"), Charsets.UTF_8))
+        val fixture = json.getString("fixture")
+        val path = json.getString("path")
+        val step = json.getJSONArray("steps").getJSONObject(0)
+        val args = step.getJSONObject("args")
+        val targetId = args.getString("id")
+
+        val originalBytes = xlsxParityResourceBytes(fixture)
+        val kotlinTarget = xlsxParityScratchCopy(originalBytes, fixture)
+        val home = xlsxParityScratchHome()
+
+        val result = runBlocking { editXlsxReply(kotlinTarget.absolutePath, path, targetId, args.getString("replyId"), args.getString("text"), home) }
+        assertTrue(result is XlsxWriteResult.Ok, "Kotlin edit-reply failed: $result")
+
+        val desktopGolden = xlsxParityScratchCopy(xlsxParityResourceBytes("write-golden/edit-reply-docling.xlsx"), "desktop-edit-reply-docling.xlsx")
+        val desktopComments = xlsxParityReadOk(desktopGolden, path)
+        val kotlinComments = xlsxParityReadOk(kotlinTarget, path)
+
+        val desktopTarget = desktopComments.find { it.id == targetId } ?: fail("target $targetId missing from desktop golden")
+        val kotlinTarget2 = kotlinComments.find { it.id == targetId } ?: fail("target $targetId missing from Kotlin output")
+        assertSameThreadContentAndId(desktopTarget, kotlinTarget2, "editReplyDocling target")
+        assertEquals(1, kotlinTarget2.replies.size, "the root's single reply must survive an edit")
+        assertEquals(args.getString("text"), kotlinTarget2.replies[0].text, "the edited reply text should read back")
+        assertUnrelatedThreadsUntouched(desktopComments, kotlinComments, setOf(targetId), "editReplyDocling")
+    }
+
+    @Test
+    fun deleteReplyDocling() {
+        val json = JSONObject(String(xlsxParityResourceBytes("write-golden/delete-reply-docling.json"), Charsets.UTF_8))
+        val fixture = json.getString("fixture")
+        val path = json.getString("path")
+        val step = json.getJSONArray("steps").getJSONObject(0)
+        val args = step.getJSONObject("args")
+        val targetId = args.getString("id")
+
+        val originalBytes = xlsxParityResourceBytes(fixture)
+        val kotlinTarget = xlsxParityScratchCopy(originalBytes, fixture)
+        val home = xlsxParityScratchHome()
+
+        val result = runBlocking { deleteXlsxReply(kotlinTarget.absolutePath, path, targetId, args.getString("replyId"), home) }
+        assertTrue(result is XlsxWriteResult.Ok, "Kotlin delete-reply failed: $result")
+
+        val desktopGolden = xlsxParityScratchCopy(xlsxParityResourceBytes("write-golden/delete-reply-docling.xlsx"), "desktop-delete-reply-docling.xlsx")
+        val desktopComments = xlsxParityReadOk(desktopGolden, path)
+        val kotlinComments = xlsxParityReadOk(kotlinTarget, path)
+
+        // The root survives, with the same pre-existing GUID (never re-minted
+        // by a reply delete), but now with zero replies.
+        val desktopTarget = desktopComments.find { it.id == targetId } ?: fail("target $targetId missing from desktop golden")
+        val kotlinTarget2 = kotlinComments.find { it.id == targetId } ?: fail("target $targetId missing from Kotlin output")
+        assertSameThreadContentAndId(desktopTarget, kotlinTarget2, "deleteReplyDocling target")
+        assertEquals(0, kotlinTarget2.replies.size, "the reply must be gone, the root must survive")
+        assertUnrelatedThreadsUntouched(desktopComments, kotlinComments, setOf(targetId), "deleteReplyDocling")
+    }
+
+    @Test
+    fun deleteThreadDocling() {
+        val json = JSONObject(String(xlsxParityResourceBytes("write-golden/delete-thread-docling.json"), Charsets.UTF_8))
+        val fixture = json.getString("fixture")
+        val path = json.getString("path")
+        val step = json.getJSONArray("steps").getJSONObject(0)
+        val args = step.getJSONObject("args")
+        val targetId = args.getString("id")
+
+        val originalBytes = xlsxParityResourceBytes(fixture)
+        val kotlinTarget = xlsxParityScratchCopy(originalBytes, fixture)
+        val home = xlsxParityScratchHome()
+
+        val result = runBlocking { deleteXlsxComment(kotlinTarget.absolutePath, path, targetId, home) }
+        assertTrue(result is XlsxWriteResult.Ok, "Kotlin delete failed: $result")
+
+        val desktopGolden = xlsxParityScratchCopy(xlsxParityResourceBytes("write-golden/delete-thread-docling.xlsx"), "desktop-delete-thread-docling.xlsx")
+        val desktopComments = xlsxParityReadOk(desktopGolden, path)
+        val kotlinComments = xlsxParityReadOk(kotlinTarget, path)
+
+        assertTrue(desktopComments.none { it.id == targetId }, "deleted thread must be gone from desktop's golden")
+        assertTrue(kotlinComments.none { it.id == targetId }, "deleted thread must be gone from Kotlin's output")
+        // G12's own independent thread on the same sheet survives untouched
+        // on BOTH sides.
+        assertTrue(kotlinComments.any { c -> val s = c.selector; s is CommentSelector.Cell && s.selector.cell == "G12" }, "G12's independent thread must survive")
+        assertUnrelatedThreadsUntouched(desktopComments, kotlinComments, setOf(targetId), "deleteThreadDocling")
+    }
+
+    // ── delete-last-comment-fresh: add the ONLY comment to a brand-new,
+    // comment-free workbook, then delete it — proves Kotlin's own
+    // `cleanupEmptyCommentPartsIfNeeded` removes every comment part/rel/
+    // content-type override/`<legacyDrawing>` the same way desktop's does,
+    // leaving the workbook exactly as if it never had comments. ────────────
+    @Test
+    fun deleteLastCommentFresh() {
+        val json = JSONObject(String(xlsxParityResourceBytes("write-golden/delete-last-comment-fresh.json"), Charsets.UTF_8))
+        val fixture = json.getString("fixture")
+        val path = json.getString("path")
+        val steps = json.getJSONArray("steps")
+        val addArgs = steps.getJSONObject(0).getJSONObject("args")
+
+        val originalBytes = xlsxParityResourceBytes(fixture)
+        val kotlinTarget = xlsxParityScratchCopy(originalBytes, fixture)
+        val home = xlsxParityScratchHome()
+
+        val addResult = runBlocking {
+            addXlsxComment(kotlinTarget.absolutePath, path, xlsxParitySelector(addArgs.getString("cell"), null), addArgs.getString("text"), addArgs.getString("author"), home)
+        }
+        assertTrue(addResult is XlsxWriteResult.Ok, "Kotlin add failed: $addResult")
+        val newId = (addResult as XlsxWriteResult.Ok).value
+
+        val deleteResult = runBlocking { deleteXlsxComment(kotlinTarget.absolutePath, path, newId, home) }
+        assertTrue(deleteResult is XlsxWriteResult.Ok, "Kotlin delete failed: $deleteResult")
+
+        val kotlinRead = readXlsxComments(kotlinTarget, path)
+        assertTrue(kotlinRead is XlsxReadResult.Ok, "expected Ok, got $kotlinRead")
+        assertEquals(0, (kotlinRead as XlsxReadResult.Ok).comments.size, "the workbook must read back with zero comments")
+
+        // Same structural cleanup as desktop's own committed golden: every
+        // comment part, its rels, content-type overrides and the worksheet's
+        // own <legacyDrawing> are all gone.
+        val entries = xlsxParityEntryNames(kotlinTarget)
+        assertTrue("xl/comments1.xml" !in entries, "comments1.xml must be gone")
+        assertTrue("xl/drawings/vmlDrawing1.vml" !in entries, "vmlDrawing1.vml must be gone")
+        assertTrue("xl/threadedComments/threadedComment1.xml" !in entries, "threadedComment1.xml must be gone")
+        val worksheetXml = String(xlsxParityEntryBytes(kotlinTarget, "xl/worksheets/sheet1.xml") ?: fail("sheet1.xml missing"), Charsets.UTF_8)
+        assertTrue(!worksheetXml.contains("legacyDrawing"), "legacyDrawing must be gone")
+
+        // The committed desktop golden itself must show the identical
+        // zero-comments, parts-gone end state.
+        val desktopGolden = xlsxParityScratchCopy(xlsxParityResourceBytes("write-golden/delete-last-comment-fresh.xlsx"), "desktop-delete-last-comment-fresh.xlsx")
+        val desktopRead = readXlsxComments(desktopGolden, path)
+        assertTrue(desktopRead is XlsxReadResult.Ok, "expected Ok, got $desktopRead")
+        assertEquals(0, (desktopRead as XlsxReadResult.Ok).comments.size, "desktop's golden must also read back with zero comments")
+        val desktopEntries = xlsxParityEntryNames(desktopGolden)
+        assertTrue("xl/comments1.xml" !in desktopEntries, "desktop golden: comments1.xml must be gone")
+        assertTrue("xl/threadedComments/threadedComment1.xml" !in desktopEntries, "desktop golden: threadedComment1.xml must be gone")
     }
 }

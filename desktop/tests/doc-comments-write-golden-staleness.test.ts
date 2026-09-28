@@ -35,6 +35,7 @@ import { describe, it, expect } from 'vitest';
 import { readFile, writeFile, mkdtemp } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import JSZip from 'jszip';
 import {
   readDocxComments,
   addDocxComment,
@@ -42,6 +43,10 @@ import {
   resolveDocxComment,
   reopenDocxComment,
   moveDocxComment,
+  editDocxComment,
+  editDocxReply,
+  deleteDocxComment,
+  deleteDocxReply,
 } from '../src/main/doc-comments/docx-comments';
 import {
   readXlsxComments,
@@ -50,6 +55,10 @@ import {
   resolveXlsxComment,
   reopenXlsxComment,
   moveXlsxComment,
+  editXlsxComment,
+  editXlsxReply,
+  deleteXlsxComment,
+  deleteXlsxReply,
 } from '../src/main/doc-comments/xlsx-comments';
 import type { CommentSelector, PersistedComment } from '../src/shared/doc-comments-types';
 
@@ -93,6 +102,12 @@ describe('doc-comments write-golden staleness self-check — docx', () => {
     { name: 'reopen-launch-brief', op: 'reopen', args: (a: any) => ({ id: a.id }) },
     { name: 'move-launch-brief', op: 'move', args: (a: any) => ({ id: a.id, newSelector: textSelector(a.newExact) }) },
     { name: 'move-word365-realistic', op: 'move', args: (a: any) => ({ id: a.id, newSelector: textSelector(a.newExact) }) },
+    // Edit/delete build (2026-09-28, design doc §"Edit and delete") — this
+    // task's own T21 parity extension, previously "not extended in this pass".
+    { name: 'edit-launch-brief', op: 'edit', args: (a: any) => ({ id: a.id, text: a.text }) },
+    { name: 'edit-reply-launch-brief', op: 'edit-reply', args: (a: any) => ({ id: a.id, replyId: a.replyId, text: a.text }) },
+    { name: 'delete-reply-launch-brief', op: 'delete-reply', args: (a: any) => ({ id: a.id, replyId: a.replyId }) },
+    { name: 'delete-thread-launch-brief', op: 'delete', args: (a: any) => ({ id: a.id }) },
   ] as const;
 
   for (const testCase of CASES) {
@@ -107,7 +122,11 @@ describe('doc-comments write-golden staleness self-check — docx', () => {
       else if (testCase.op === 'reply') result = await replyToDocxComment({ absolutePath: target, path: recipe.path, ...(callArgs as any) });
       else if (testCase.op === 'resolve') result = await resolveDocxComment({ absolutePath: target, path: recipe.path, ...(callArgs as any) });
       else if (testCase.op === 'reopen') result = await reopenDocxComment({ absolutePath: target, path: recipe.path, ...(callArgs as any) });
-      else result = await moveDocxComment({ absolutePath: target, path: recipe.path, ...(callArgs as any) });
+      else if (testCase.op === 'move') result = await moveDocxComment({ absolutePath: target, path: recipe.path, ...(callArgs as any) });
+      else if (testCase.op === 'edit') result = await editDocxComment({ absolutePath: target, path: recipe.path, ...(callArgs as any) });
+      else if (testCase.op === 'edit-reply') result = await editDocxReply({ absolutePath: target, path: recipe.path, ...(callArgs as any) });
+      else if (testCase.op === 'delete') result = await deleteDocxComment({ absolutePath: target, path: recipe.path, ...(callArgs as any) });
+      else result = await deleteDocxReply({ absolutePath: target, path: recipe.path, ...(callArgs as any) });
 
       expect(result.ok, `fresh write failed: ${JSON.stringify(result)}`).toBe(true);
 
@@ -258,5 +277,135 @@ describe('doc-comments write-golden staleness self-check — xlsx', () => {
     const freshRest = freshRead.comments.filter((c) => c.id !== freshFinal.id).sort((a, b) => a.id.localeCompare(b.id));
     expect(freshRest.length, 'unrelated thread count drifted (including the other 4 B19 siblings)').toBe(goldenRest.length);
     for (let i = 0; i < goldenRest.length; i++) assertSameContent(goldenRest[i], freshRest[i], `elden-sequence unrelated[${i}]`);
+  });
+
+  // Edit/delete build (2026-09-28, design doc §"Edit and delete") — this
+  // task's own T21 parity extension, previously "not extended in this pass".
+  // All four reuse docling's real F7 (root + one reply) and G12 (root only).
+  it("edit-docling: desktop's CURRENT writer still reproduces the committed golden", async () => {
+    const recipe = JSON.parse(await readFile(join(GOLDEN_DIR, 'edit-docling.json'), 'utf8'));
+    const step = recipe.steps[0];
+    const originalBytes = await readFile(join(THREADED_REF_DIR, recipe.fixture));
+    const target = await scratchCopyOf(originalBytes, recipe.fixture);
+
+    const result = await editXlsxComment({ absolutePath: target, path: recipe.path, id: step.args.id, text: step.args.text });
+    expect(result.ok, `fresh write failed: ${JSON.stringify(result)}`).toBe(true);
+
+    const goldenRead = await readXlsxComments(await readFile(join(GOLDEN_DIR, 'edit-docling.xlsx')), recipe.path);
+    const freshRead = await readXlsxComments(await readFile(target), recipe.path);
+    expect(goldenRead.ok).toBe(true);
+    expect(freshRead.ok).toBe(true);
+    if (!goldenRead.ok || !freshRead.ok) return;
+
+    const goldenComments = [...goldenRead.comments].sort((a, b) => a.id.localeCompare(b.id));
+    const freshComments = [...freshRead.comments].sort((a, b) => a.id.localeCompare(b.id));
+    expect(freshComments.length, 'edit-docling: comment count drifted from the committed golden').toBe(goldenComments.length);
+    for (let i = 0; i < goldenComments.length; i++) assertSameContent(goldenComments[i], freshComments[i], `edit-docling comments[${i}]`);
+  });
+
+  it("edit-reply-docling: desktop's CURRENT writer still reproduces the committed golden", async () => {
+    const recipe = JSON.parse(await readFile(join(GOLDEN_DIR, 'edit-reply-docling.json'), 'utf8'));
+    const step = recipe.steps[0];
+    const originalBytes = await readFile(join(THREADED_REF_DIR, recipe.fixture));
+    const target = await scratchCopyOf(originalBytes, recipe.fixture);
+
+    const result = await editXlsxReply({ absolutePath: target, path: recipe.path, id: step.args.id, replyId: step.args.replyId, text: step.args.text });
+    expect(result.ok, `fresh write failed: ${JSON.stringify(result)}`).toBe(true);
+
+    const goldenRead = await readXlsxComments(await readFile(join(GOLDEN_DIR, 'edit-reply-docling.xlsx')), recipe.path);
+    const freshRead = await readXlsxComments(await readFile(target), recipe.path);
+    expect(goldenRead.ok).toBe(true);
+    expect(freshRead.ok).toBe(true);
+    if (!goldenRead.ok || !freshRead.ok) return;
+
+    const goldenComments = [...goldenRead.comments].sort((a, b) => a.id.localeCompare(b.id));
+    const freshComments = [...freshRead.comments].sort((a, b) => a.id.localeCompare(b.id));
+    expect(freshComments.length, 'edit-reply-docling: comment count drifted from the committed golden').toBe(goldenComments.length);
+    for (let i = 0; i < goldenComments.length; i++) assertSameContent(goldenComments[i], freshComments[i], `edit-reply-docling comments[${i}]`);
+  });
+
+  it("delete-reply-docling: desktop's CURRENT writer still reproduces the committed golden", async () => {
+    const recipe = JSON.parse(await readFile(join(GOLDEN_DIR, 'delete-reply-docling.json'), 'utf8'));
+    const step = recipe.steps[0];
+    const originalBytes = await readFile(join(THREADED_REF_DIR, recipe.fixture));
+    const target = await scratchCopyOf(originalBytes, recipe.fixture);
+
+    const result = await deleteXlsxReply({ absolutePath: target, path: recipe.path, id: step.args.id, replyId: step.args.replyId });
+    expect(result.ok, `fresh write failed: ${JSON.stringify(result)}`).toBe(true);
+
+    const goldenRead = await readXlsxComments(await readFile(join(GOLDEN_DIR, 'delete-reply-docling.xlsx')), recipe.path);
+    const freshRead = await readXlsxComments(await readFile(target), recipe.path);
+    expect(goldenRead.ok).toBe(true);
+    expect(freshRead.ok).toBe(true);
+    if (!goldenRead.ok || !freshRead.ok) return;
+
+    const goldenComments = [...goldenRead.comments].sort((a, b) => a.id.localeCompare(b.id));
+    const freshComments = [...freshRead.comments].sort((a, b) => a.id.localeCompare(b.id));
+    expect(freshComments.length, 'delete-reply-docling: comment count drifted from the committed golden').toBe(goldenComments.length);
+    for (let i = 0; i < goldenComments.length; i++) assertSameContent(goldenComments[i], freshComments[i], `delete-reply-docling comments[${i}]`);
+  });
+
+  it("delete-thread-docling: desktop's CURRENT writer still reproduces the committed golden", async () => {
+    const recipe = JSON.parse(await readFile(join(GOLDEN_DIR, 'delete-thread-docling.json'), 'utf8'));
+    const step = recipe.steps[0];
+    const originalBytes = await readFile(join(THREADED_REF_DIR, recipe.fixture));
+    const target = await scratchCopyOf(originalBytes, recipe.fixture);
+
+    const result = await deleteXlsxComment({ absolutePath: target, path: recipe.path, id: step.args.id });
+    expect(result.ok, `fresh write failed: ${JSON.stringify(result)}`).toBe(true);
+
+    const goldenRead = await readXlsxComments(await readFile(join(GOLDEN_DIR, 'delete-thread-docling.xlsx')), recipe.path);
+    const freshRead = await readXlsxComments(await readFile(target), recipe.path);
+    expect(goldenRead.ok).toBe(true);
+    expect(freshRead.ok).toBe(true);
+    if (!goldenRead.ok || !freshRead.ok) return;
+
+    const goldenComments = [...goldenRead.comments].sort((a, b) => a.id.localeCompare(b.id));
+    const freshComments = [...freshRead.comments].sort((a, b) => a.id.localeCompare(b.id));
+    expect(freshComments.length, 'delete-thread-docling: comment count drifted from the committed golden').toBe(goldenComments.length);
+    for (let i = 0; i < goldenComments.length; i++) assertSameContent(goldenComments[i], freshComments[i], `delete-thread-docling comments[${i}]`);
+    // G12's independent thread must survive both the golden and the fresh write.
+    expect(freshComments.some((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'G12')).toBe(true);
+  });
+
+  it("delete-last-comment-fresh: desktop's CURRENT writer still reproduces the committed golden, including part cleanup", async () => {
+    const recipe = JSON.parse(await readFile(join(GOLDEN_DIR, 'delete-last-comment-fresh.json'), 'utf8'));
+    const [addStep, deleteStep] = recipe.steps;
+    const originalBytes = await readFile(join(FIXTURES_DIR, recipe.fixture));
+    const target = await scratchCopyOf(originalBytes, recipe.fixture);
+
+    const addResult = await addXlsxComment({ absolutePath: target, path: recipe.path, selector: cellSelector(addStep.args.cell), text: addStep.args.text, author: addStep.args.author });
+    expect(addResult.ok, `fresh add failed: ${JSON.stringify(addResult)}`).toBe(true);
+    if (!addResult.ok) return;
+    const deleteResult = await deleteXlsxComment({ absolutePath: target, path: recipe.path, id: addResult.id });
+    expect(deleteResult.ok, `fresh delete failed: ${JSON.stringify(deleteResult)}`).toBe(true);
+
+    const freshRead = await readXlsxComments(await readFile(target), recipe.path);
+    expect(freshRead).toEqual({ ok: true, comments: [] });
+
+    // The committed golden itself must still read back as zero comments too.
+    const goldenRead = await readXlsxComments(await readFile(join(GOLDEN_DIR, 'delete-last-comment-fresh.xlsx')), recipe.path);
+    expect(goldenRead).toEqual({ ok: true, comments: [] });
+
+    // Structural cleanup — every comment part, its rels, content-type
+    // overrides and the worksheet's own <legacyDrawing> are all gone, on
+    // BOTH the committed golden and the freshly-written output (mirrors
+    // xlsx-comments.test.ts's own from-scratch last-comment-cleanup pin).
+    for (const [label, bytes] of [
+      ['golden', await readFile(join(GOLDEN_DIR, 'delete-last-comment-fresh.xlsx'))],
+      ['fresh', await readFile(target)],
+    ] as const) {
+      const zip = await JSZip.loadAsync(bytes);
+      expect(zip.file('xl/comments1.xml'), `${label}: comments1.xml must be gone`).toBeNull();
+      expect(zip.file('xl/drawings/vmlDrawing1.vml'), `${label}: vmlDrawing1.vml must be gone`).toBeNull();
+      expect(zip.file('xl/threadedComments/threadedComment1.xml'), `${label}: threadedComment1.xml must be gone`).toBeNull();
+      const worksheetXml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+      expect(worksheetXml, `${label}: legacyDrawing must be gone`).not.toContain('legacyDrawing');
+      const relsFile = zip.file('xl/worksheets/_rels/sheet1.xml.rels');
+      if (relsFile) {
+        const relsXml = await relsFile.async('string');
+        expect(relsXml, `${label}: rels must not reference the removed comment parts`).not.toMatch(/comments1\.xml|vmlDrawing1\.vml|threadedComment1\.xml/);
+      }
+    }
   });
 });

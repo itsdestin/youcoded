@@ -152,6 +152,33 @@ class DocxCommentsCrossPlatformParityTest {
                 assertTrue(r is DocxWriteResult.Ok, "$caseName: Kotlin move failed: $r")
                 Unit
             }
+            // Edit/delete build (2026-09-28, design doc §"Edit and delete") —
+            // this task's own T21 parity extension, previously "not extended
+            // in this pass".
+            "edit" -> {
+                val r = kotlinx.coroutines.runBlocking { editDocxComment(kotlinTarget.absolutePath, path, args.getString("id"), args.getString("text"), home) }
+                assertTrue(r is DocxWriteResult.Ok, "$caseName: Kotlin edit failed: $r")
+                Unit
+            }
+            "edit-reply" -> {
+                val r = kotlinx.coroutines.runBlocking {
+                    editDocxReply(kotlinTarget.absolutePath, path, args.getString("id"), args.getString("replyId"), args.getString("text"), home)
+                }
+                assertTrue(r is DocxWriteResult.Ok, "$caseName: Kotlin edit-reply failed: $r")
+                Unit
+            }
+            "delete" -> {
+                val r = kotlinx.coroutines.runBlocking { deleteDocxComment(kotlinTarget.absolutePath, path, args.getString("id"), home) }
+                assertTrue(r is DocxWriteResult.Ok, "$caseName: Kotlin delete failed: $r")
+                Unit
+            }
+            "delete-reply" -> {
+                val r = kotlinx.coroutines.runBlocking {
+                    deleteDocxReply(kotlinTarget.absolutePath, path, args.getString("id"), args.getString("replyId"), home)
+                }
+                assertTrue(r is DocxWriteResult.Ok, "$caseName: Kotlin delete-reply failed: $r")
+                Unit
+            }
             else -> fail("unknown op $op")
         }
 
@@ -199,4 +226,16 @@ class DocxCommentsCrossPlatformParityTest {
     @Test fun reopenLaunchBrief() = runCase("reopen-launch-brief")
     @Test fun moveLaunchBrief() = runCase("move-launch-brief")
     @Test fun moveWord365Realistic() = runCase("move-word365-realistic")
+
+    // Edit/delete build (2026-09-28, design doc §"Edit and delete") — this
+    // task's own T21 parity extension, previously "not extended in this
+    // pass" per that section's own closing note. All four reuse launch-
+    // brief.docx's real w-0 (no reply) and w-1 (one reply, w-1-r1).
+    @Test fun editLaunchBrief() = runCase("edit-launch-brief")
+    @Test fun editReplyLaunchBrief() = runCase("edit-reply-launch-brief")
+    @Test fun deleteReplyLaunchBrief() = runCase("delete-reply-launch-brief")
+    // Deletes w-1's WHOLE thread — root + its one reply — the direct proof
+    // that a delete removes every reply chained to a root via
+    // w15:paraIdParent, not just the root's own document.xml anchor.
+    @Test fun deleteThreadLaunchBrief() = runCase("delete-thread-launch-brief")
 }

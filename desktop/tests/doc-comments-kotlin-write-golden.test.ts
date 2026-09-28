@@ -20,6 +20,16 @@
 // own framing) — this fixture pair is a snapshot of one JVM run, committed,
 // the same "both sides match a shared, checked-in golden fixture" structure
 // every other T21 guard uses, just with the writer/reader roles swapped.
+//
+// `docx-edit-delete.{docx,json}`/`xlsx-edit-delete.{xlsx,json}` (2026-09-28,
+// design doc §"Edit and delete") extend this same reverse direction to the
+// edit/delete ops, added for this task's own T21 parity extension —
+// previously "not extended in this pass" per that section's own closing
+// note. Same disposable-generator convention, run once via the (also
+// deleted) `GenerateKotlinWriteGoldenEditDeleteTmp.kt`: Kotlin edited one
+// real pre-existing comment's text and deleted a DIFFERENT real pre-existing
+// comment's whole thread (root + reply), in the same fixture, so one golden
+// proves both ops in reverse.
 import { describe, it, expect } from 'vitest';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -66,6 +76,39 @@ describe('doc-comments — desktop reads a Kotlin-WRITTEN docx (the reverse dire
       expect(result.comments.length).toBe(original.comments.length + 1);
     }
   });
+
+  // Edit/delete build (2026-09-28, design doc §"Edit and delete") — this
+  // task's own T21 parity extension, previously "not extended in this pass".
+  // Kotlin edited w-0's text and deleted w-1's WHOLE thread (root + its one
+  // reply, w-1-r1) against a fresh copy of the SAME real launch-brief.docx
+  // fixture desktop's own writer uses.
+  it('the edit -> delete sequence Kotlin wrote reads back correctly through the real desktop reader', async () => {
+    const recipe = JSON.parse(await readFile(join(KOTLIN_GOLDEN_DIR, 'docx-edit-delete.json'), 'utf8'));
+    const bytes = await readFile(join(KOTLIN_GOLDEN_DIR, 'docx-edit-delete.docx'));
+    const result = await readDocxComments(bytes, recipe.path);
+    expect(result.ok, `desktop's reader must parse what Kotlin wrote: ${JSON.stringify(result)}`).toBe(true);
+    if (!result.ok) return;
+
+    const edited = result.comments.find((c) => c.id === recipe.editId);
+    expect(edited, 'the comment Kotlin edited must still be found').toBeDefined();
+    expect(edited?.text).toBe(recipe.editText);
+
+    const deleted = result.comments.find((c) => c.id === recipe.deletedId);
+    expect(deleted, 'the thread Kotlin deleted must be completely gone').toBeUndefined();
+    // The deleted thread's own reply must be gone too — proof a Kotlin
+    // delete removes every reply chained to the root, not just the root's
+    // own document.xml anchor.
+    const danglingReply = result.comments.some((c) => c.replies.some((r) => r.id === recipe.deletedReplyId));
+    expect(danglingReply, "the deleted thread's reply must not survive anywhere").toBe(false);
+
+    // launch-brief.docx's own pre-existing comment count minus the one whole
+    // thread Kotlin deleted.
+    const original = await readDocxComments(await readFile(join(__dirname, 'fixtures', 'doc-comments', 'launch-brief.docx')), recipe.path);
+    expect(original.ok).toBe(true);
+    if (original.ok) {
+      expect(result.comments.length).toBe(original.comments.length - 1);
+    }
+  });
 });
 
 describe('doc-comments — desktop reads a Kotlin-WRITTEN xlsx (the reverse direction)', () => {
@@ -97,6 +140,37 @@ describe('doc-comments — desktop reads a Kotlin-WRITTEN xlsx (the reverse dire
     expect(original.ok).toBe(true);
     if (original.ok) {
       expect(result.comments.length).toBe(original.comments.length + 1);
+    }
+  });
+
+  // Edit/delete build (2026-09-28, design doc §"Edit and delete") — this
+  // task's own T21 parity extension, previously "not extended in this pass".
+  // Kotlin edited G12's (root-only) text and deleted F7's WHOLE thread (root
+  // + its one reply) against a fresh copy of the SAME real docling fixture
+  // desktop's own writer uses.
+  it('the edit -> delete sequence Kotlin wrote reads back correctly through the real desktop reader', async () => {
+    const recipe = JSON.parse(await readFile(join(KOTLIN_GOLDEN_DIR, 'xlsx-edit-delete.json'), 'utf8'));
+    const bytes = await readFile(join(KOTLIN_GOLDEN_DIR, 'xlsx-edit-delete.xlsx'));
+    const result = await readXlsxComments(bytes, recipe.path);
+    expect(result.ok, `desktop's reader must parse what Kotlin wrote: ${JSON.stringify(result)}`).toBe(true);
+    if (!result.ok) return;
+
+    const edited = result.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === recipe.editCell);
+    expect(edited, 'the thread Kotlin edited must still be found').toBeDefined();
+    expect(edited?.text).toBe(recipe.editText);
+
+    const deleted = result.comments.some((c) => c.selector.kind === 'cell' && c.selector.selector.cell === recipe.deletedCell);
+    expect(deleted, 'the thread Kotlin deleted must be completely gone').toBe(false);
+
+    // docling's own pre-existing thread count minus the one whole thread
+    // Kotlin deleted.
+    const original = await readXlsxComments(
+      await readFile(join(__dirname, '..', '..', 'shared-fixtures', 'doc-comments', 'xlsx-threaded-reference', 'docling-xlsx-comments.xlsx')),
+      recipe.path
+    );
+    expect(original.ok).toBe(true);
+    if (original.ok) {
+      expect(result.comments.length).toBe(original.comments.length - 1);
     }
   });
 });

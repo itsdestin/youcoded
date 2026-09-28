@@ -46,6 +46,18 @@
 // (run BY HAND when a fixture or the writer's own output shape changes,
 // never as part of `npm test`/CI — same convention as
 // generate-docx-write-golden.mjs).
+//
+// `edit-docling`/`edit-reply-docling`/`delete-reply-docling`/`delete-thread-
+// docling`/`delete-last-comment-fresh` (2026-09-28, design doc §"Edit and
+// delete") extend this same golden set to the edit/delete ops, added for
+// this task's own T21 parity extension — previously "not extended in this
+// pass" per that section's own closing note. `delete-last-comment-fresh`
+// runs against `fresh-single-comment.xlsx` (a brand-new, comment-free
+// workbook) specifically to prove `cleanupEmptyCommentPartsIfNeeded` removes
+// every comment part/rel/content-type override/`<legacyDrawing>` when a
+// sheet's LAST comment is deleted — the other four docling fixtures always
+// leave at least one sibling thread behind, so none of them can exercise
+// that cleanup path.
 import { createServer } from 'vite';
 import { readFile, writeFile, mkdir, copyFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
@@ -170,6 +182,119 @@ async function main() {
       steps.push({ op: 'move', args: moveArgs, result: moveResult });
 
       await finish(name, fixture, path, steps, outPath);
+    }
+
+    // ── Edit/delete build (2026-09-28, design doc §"Edit and delete"), added
+    // for this task's own T21 parity extension. Reuses docling's real F7
+    // (root + one reply) and G12 (root only) threads — the same two threads
+    // xlsx-comments.test.ts's own edit/delete suite already exercises. ──────
+
+    // edit-docling: overwrite G12's (root-only) text.
+    {
+      const name = 'edit-docling';
+      const fixture = 'docling-xlsx-comments.xlsx';
+      const path = 'reports/docling-xlsx-comments.xlsx';
+      const outPath = join(GOLDEN_DIR, `${name}.tmp.xlsx`);
+      const bytes = await readFile(join(THREADED_REF_DIR, fixture));
+      await writeFile(outPath, bytes);
+      const before = await mod.readXlsxComments(bytes, path);
+      if (!before.ok) throw new Error(`${name}: could not re-read original fixture`);
+      const g12 = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'G12');
+      if (!g12) throw new Error(`${name}: G12 thread not found`);
+      const newText = 'Edited: confirmed against the vendor spec sheet.';
+      const result = await mod.editXlsxComment({ absolutePath: outPath, path, id: g12.id, text: newText });
+      if (!result.ok) throw new Error(`${name}: desktop writer failed: ${JSON.stringify(result)}`);
+      await finish(name, fixture, path, [{ op: 'edit', args: { id: g12.id, text: newText }, result }], outPath);
+    }
+
+    // edit-reply-docling: overwrite F7's one reply.
+    {
+      const name = 'edit-reply-docling';
+      const fixture = 'docling-xlsx-comments.xlsx';
+      const path = 'reports/docling-xlsx-comments.xlsx';
+      const outPath = join(GOLDEN_DIR, `${name}.tmp.xlsx`);
+      const bytes = await readFile(join(THREADED_REF_DIR, fixture));
+      await writeFile(outPath, bytes);
+      const before = await mod.readXlsxComments(bytes, path);
+      if (!before.ok) throw new Error(`${name}: could not re-read original fixture`);
+      const f7 = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7');
+      if (!f7) throw new Error(`${name}: F7 thread not found`);
+      const reply = f7.replies[0];
+      if (!reply) throw new Error(`${name}: F7 has no reply to edit`);
+      const newText = 'Edited: it dropped further after the audit, actually.';
+      const result = await mod.editXlsxReply({ absolutePath: outPath, path, id: f7.id, replyId: reply.id, text: newText });
+      if (!result.ok) throw new Error(`${name}: desktop writer failed: ${JSON.stringify(result)}`);
+      await finish(name, fixture, path, [{ op: 'edit-reply', args: { id: f7.id, replyId: reply.id, text: newText }, result }], outPath);
+    }
+
+    // delete-reply-docling: remove F7's one reply, root survives.
+    {
+      const name = 'delete-reply-docling';
+      const fixture = 'docling-xlsx-comments.xlsx';
+      const path = 'reports/docling-xlsx-comments.xlsx';
+      const outPath = join(GOLDEN_DIR, `${name}.tmp.xlsx`);
+      const bytes = await readFile(join(THREADED_REF_DIR, fixture));
+      await writeFile(outPath, bytes);
+      const before = await mod.readXlsxComments(bytes, path);
+      if (!before.ok) throw new Error(`${name}: could not re-read original fixture`);
+      const f7 = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7');
+      if (!f7) throw new Error(`${name}: F7 thread not found`);
+      const reply = f7.replies[0];
+      if (!reply) throw new Error(`${name}: F7 has no reply to delete`);
+      const result = await mod.deleteXlsxReply({ absolutePath: outPath, path, id: f7.id, replyId: reply.id });
+      if (!result.ok) throw new Error(`${name}: desktop writer failed: ${JSON.stringify(result)}`);
+      await finish(name, fixture, path, [{ op: 'delete-reply', args: { id: f7.id, replyId: reply.id }, result }], outPath);
+    }
+
+    // delete-thread-docling: remove F7's WHOLE thread (root + reply); G12's
+    // independent thread on the same sheet survives untouched.
+    {
+      const name = 'delete-thread-docling';
+      const fixture = 'docling-xlsx-comments.xlsx';
+      const path = 'reports/docling-xlsx-comments.xlsx';
+      const outPath = join(GOLDEN_DIR, `${name}.tmp.xlsx`);
+      const bytes = await readFile(join(THREADED_REF_DIR, fixture));
+      await writeFile(outPath, bytes);
+      const before = await mod.readXlsxComments(bytes, path);
+      if (!before.ok) throw new Error(`${name}: could not re-read original fixture`);
+      const f7 = before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7');
+      if (!f7) throw new Error(`${name}: F7 thread not found`);
+      const result = await mod.deleteXlsxComment({ absolutePath: outPath, path, id: f7.id });
+      if (!result.ok) throw new Error(`${name}: desktop writer failed: ${JSON.stringify(result)}`);
+      await finish(name, fixture, path, [{ op: 'delete', args: { id: f7.id }, result }], outPath);
+    }
+
+    // delete-last-comment-fresh: add the ONLY comment to a brand-new,
+    // comment-free workbook (`fresh-single-comment.xlsx`, built the same way
+    // xlsx-comments.test.ts's own `writeMinimalXlsxTo` does, via exceljs),
+    // then delete it — proves ALL comment parts/rels/content-type overrides/
+    // <legacyDrawing> are removed, leaving the workbook exactly as if it
+    // never had comments (§"Edit and delete", `cleanupEmptyCommentPartsIfNeeded`).
+    {
+      const name = 'delete-last-comment-fresh';
+      const fixture = 'fresh-single-comment.xlsx';
+      const path = 'fresh-single-comment.xlsx';
+      const outPath = join(GOLDEN_DIR, `${name}.tmp.xlsx`);
+      await writeFile(outPath, await readFile(join(FIXTURES_DIR, fixture)));
+
+      const addArgs = { cell: 'A1', text: 'only comment', author: 'user' };
+      const addResult = await mod.addXlsxComment({ absolutePath: outPath, path, selector: cellSelector(addArgs.cell), text: addArgs.text, author: addArgs.author });
+      if (!addResult.ok) throw new Error(`${name}: add failed: ${JSON.stringify(addResult)}`);
+      const newId = addResult.id;
+
+      const deleteResult = await mod.deleteXlsxComment({ absolutePath: outPath, path, id: newId });
+      if (!deleteResult.ok) throw new Error(`${name}: delete failed: ${JSON.stringify(deleteResult)}`);
+
+      await finish(
+        name,
+        fixture,
+        path,
+        [
+          { op: 'add', args: addArgs, result: addResult },
+          { op: 'delete', args: { id: newId }, result: deleteResult },
+        ],
+        outPath
+      );
     }
   } finally {
     await server.close();
