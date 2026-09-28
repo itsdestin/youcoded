@@ -27,6 +27,7 @@
 // E-5: no "edited" marker — editing a comment/reply just replaces its text.
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/Button';
+import { FIELD_SIZE, FIELD_TEXT } from '../ui/field';
 
 /** 24×24 viewBox, stroke currentColor, the app's shared inline-icon
  *  convention (menu-icons.tsx, detail-tool-icons.tsx). */
@@ -113,7 +114,7 @@ export function EditDeleteButtons({ onEdit, onDelete, editLabel, deleteLabel, cl
  *  `field-sizing: content` does it with no script measuring the box on every
  *  keystroke (performance.md rule 6 — the InputBar's scrollHeight approach
  *  reads layout per key); Electron's Chromium supports it. */
-export const GROWING_FIELD_STYLE = { fieldSizing: 'content', minHeight: '3.2em', maxHeight: '14em', overflowY: 'auto' } as React.CSSProperties;
+const GROWING_FIELD_STYLE = { fieldSizing: 'content', minHeight: '3.2em', maxHeight: '14em', overflowY: 'auto' } as React.CSSProperties;
 
 /** Inline replacement for a comment/reply's text while editing it. Mounted
  *  only while the caller's own edit-mode flag is true, and that flag NEVER
@@ -158,7 +159,7 @@ export function InlineEditField({ text, onSave, onCancel, className = 'mt-1' }: 
         // Bare, like InputGroup.Field — FIELD_SURFACE's border/background
         // live on the wrapper div above; the Textarea primitive would put a
         // second border on this element instead.
-        className="w-full resize-none bg-transparent border-0 outline-none px-2.5 pt-1.5 text-2xs text-fg placeholder:text-fg-muted"
+        className={`w-full resize-none bg-transparent border-0 outline-none leading-snug ${FIELD_TEXT} ${FIELD_SIZE.sm}`}
         data-edit-menu
       />
       <div className="flex items-center justify-end gap-1.5 px-1.5 pb-1.5 pt-1">

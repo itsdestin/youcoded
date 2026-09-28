@@ -21,13 +21,11 @@
 // placeBubble's own clamp/flip treats that band as already outside the
 // panel — the popup either sits higher or flips above, but never over it.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Button } from '../ui/Button';
-import { InputGroup } from '../ui/InputGroup';
 import { ErrorState } from '../ui/states';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { placeBubble } from '../ui/anchor-position';
 import type { DocComment } from '../../state/doc-comments-store';
-import { GROWING_FIELD_STYLE } from './CommentActions';
+import { CommentComposer } from './CommentComposer';
 
 const GAP = 6;
 // The Edit FAB sits `bottom-9` (36px) with ~44px of button height above
@@ -112,7 +110,10 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
     >
       {/* A cell comment names its cell ("Cell C6"): the value alone ("88")
           would not say which of many identical-looking numbers it is. */}
-      <p className="text-fg-muted italic line-clamp-2 mb-1.5 border-l-2 border-edge-dim pl-2">
+      {/* 2026-09-28 (Destin: "fix the gross thumbnail styling of the quote
+          text"): one quiet line — no italic, no bar down the side — just
+          enough to say which words this note is about. */}
+      <p className="text-2xs text-fg-muted truncate mb-1.5">
         {comment.cell ? `Cell ${comment.cell}${comment.sheet ? ` on ${comment.sheet}` : ''}` : <>&ldquo;{comment.quote}&rdquo;</>}
       </p>
       {/* Same send control as ReplyField/CommentCard's draft box (the round
@@ -121,46 +122,17 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
           and the window-level mousedown listener above still commits a
           non-empty note or drops an empty one on click-away; only the
           on-screen buttons are gone. */}
-      <InputGroup size="sm" className="w-full">
-        <textarea
-          ref={textRef}
-          rows={3}
-          style={GROWING_FIELD_STYLE}
-          value={comment.text}
-          placeholder="Add a comment…"
-          // Bare, like InputGroup.Field — the wrapper carries the border.
-          // data-edit-menu (was the artifact-edit-textarea class, which design lint rejects on a bare textarea): right-click here gets real
-          // cut/copy/paste (build-menu.ts) — Electron ships no default
-          // context menu.
-          className="flex-1 min-w-0 bg-transparent border-0 outline-none resize-none text-2xs text-fg placeholder:text-fg-muted py-1.5"
-          data-edit-menu
-          onChange={(e) => onTextChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              onDone();
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              onCancel();
-            }
-          }}
-        />
-        {/* onMouseDown preventDefault: keeps focus (and the click-away
-            listener's target check) on the textarea/panel rather than
-            racing a blur against this button's own click. */}
-        <Button
-          size="icon-xs"
-          aria-label="Post comment"
-          disabled={!comment.text.trim()}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onDone}
-          className="mr-0.5 self-end mb-0.5"
-        >
-          <svg className="w-2.5 h-2.5 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
-          </svg>
-        </Button>
-      </InputGroup>
+      <CommentComposer
+        textRef={textRef}
+        value={comment.text}
+        onChange={onTextChange}
+        onSubmit={onDone}
+        onEscape={onCancel}
+        placeholder="Add a comment…"
+        ariaLabel="New comment"
+        sendLabel="Post comment"
+        keepFocusOnSend
+      />
       {/* F7 fix (T5 review): a failed `docComments:add` now keeps the draft
           open (doc-comments-store.ts's `persistNewComment`) with the real,
           typed cause here — error-message-standards.md's "specific and

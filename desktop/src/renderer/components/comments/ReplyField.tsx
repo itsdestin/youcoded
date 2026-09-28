@@ -4,8 +4,7 @@
 // "pull your mouse down over the actual comment and then add a reply right
 // there without entering the full comment view").
 import { useState } from 'react';
-import { Button } from '../ui/Button';
-import { InputGroup } from '../ui/InputGroup';
+import { CommentComposer } from './CommentComposer';
 
 interface Props {
   onSend: (text: string) => void;
@@ -23,31 +22,21 @@ export function ReplyField({ onSend, onDraftChange, onFocusChange, className = '
     setText('');
     onDraftChange?.(false);
   };
+  // 2026-09-28: the same box as a new comment (CommentComposer.tsx's WHY) —
+  // the reply box used to be a single-line input, the new-comment boxes a
+  // textarea, and their text and arrows never lined up. Enter sends;
+  // Shift+Enter now starts a new line in a reply too.
   return (
-    // Round 10 (Destin: "the send button for replies should be within the
-    // right side of the reply box"): InputGroup — the primitive for a field
-    // with its submit inside it (TagPicker's Create is the same shape).
-    // Enter sends.
-    <InputGroup size="sm" className={`${className} w-full`}>
-      <InputGroup.Field
-        aria-label="Reply"
-        value={text}
-        onChange={(e) => { setText(e.target.value); onDraftChange?.(!!e.target.value.trim()); }}
-        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } }}
-        onFocus={() => onFocusChange?.(true)}
-        onBlur={() => onFocusChange?.(false)}
-        placeholder="Reply…"
-      />
-      {/* Round 12/14 (Destin: "send button looks too big… too close to
-          edges"): icon-xs (16px), with the extra 2px of air over InputGroup's
-          own 4px inset put on the BUTTON as margin (design lint's no-restyle:
-          InputGroup owns its own padding, so the +2px goes here instead of
-          overriding InputGroup's pr-1) — same ~6px gutter Destin approved. */}
-      <Button size="icon-xs" aria-label="Send reply" disabled={!text.trim()} onClick={send} className="mr-0.5">
-        <svg className="w-2.5 h-2.5 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
-        </svg>
-      </Button>
-    </InputGroup>
+    <CommentComposer
+      className={className}
+      value={text}
+      onChange={(t) => { setText(t); onDraftChange?.(!!t.trim()); }}
+      onSubmit={send}
+      onFocus={() => onFocusChange?.(true)}
+      onBlur={() => onFocusChange?.(false)}
+      placeholder="Reply…"
+      ariaLabel="Reply"
+      sendLabel="Send reply"
+    />
   );
 }

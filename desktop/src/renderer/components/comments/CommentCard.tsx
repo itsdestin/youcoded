@@ -2,15 +2,14 @@
 // the note, replies (including an assistant reply), and resolve/reopen.
 // Used both in the margin (desktop) and inside a popover (narrow viewport).
 import React, { useEffect, useRef, useState } from 'react';
-import { Button } from '../ui/Button';
-import { InputGroup } from '../ui/InputGroup';
 import { ErrorState } from '../ui/states';
 import { CompleteToggle } from '../SessionCardDetails';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { DocComment } from '../../state/doc-comments-store';
 import { Avatar, authorName, authorNameInline } from './Avatar';
 import { ReplyField } from './ReplyField';
-import { EditDeleteButtons, InlineEditField, DeleteConfirmRow, deleteCommentLabel, GROWING_FIELD_STYLE } from './CommentActions';
+import { EditDeleteButtons, InlineEditField, DeleteConfirmRow, deleteCommentLabel } from './CommentActions';
+import { CommentComposer } from './CommentComposer';
 
 interface Props {
   comment: DocComment;
@@ -340,47 +339,22 @@ export function CommentCard({
             // be the only way to do that); a real blur (click/tab away)
             // posts a non-empty draft or discards an empty one, so the card
             // can never sit open with nothing in it once the button is gone.
-            <InputGroup size="sm" className="mt-1 w-full">
-              <textarea
-                ref={textRef}
-                rows={2}
-                style={GROWING_FIELD_STYLE}
-                value={comment.text}
-                onChange={(e) => onTextChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postDraft(); }
-                  else if (e.key === 'Escape') { e.preventDefault(); discardDraftIfEmpty(); }
-                }}
-                // WHY blur does both jobs: a real blur (click/tab away) is
-                // the one moment this panel-hosted draft ever gets saved
-                // (Data-loss fix, 2026-09-28 — typing no longer persists on
-                // its own, see Props' `onCommit` WHY) OR, now that the
-                // bottom Delete button is gone, the click-away path that
-                // drops a never-typed-in draft instead of leaving it stuck.
-                onBlur={() => { postDraft(); discardDraftIfEmpty(); }}
-                placeholder="Add a comment…"
-                // Bare, like InputGroup.Field — the wrapper above carries
-                // the border/background; a resize handle or a second border
-                // from the Textarea primitive doesn't belong inside it.
-                // data-edit-menu (was the artifact-edit-textarea class, which design lint rejects on a bare textarea): reuses the artifact editor's
-                // right-click routing (build-menu.ts) — Electron ships no
-                // default context menu, so without this marker cut/copy/
-                // paste here would do nothing.
-                className="flex-1 min-w-0 bg-transparent border-0 outline-none resize-none text-2xs text-fg placeholder:text-fg-muted py-1.5"
-                data-edit-menu
-              />
-              <Button
-                size="icon-xs"
-                aria-label="Post comment"
-                disabled={!comment.text.trim()}
-                onClick={postDraft}
-                className="mr-0.5 self-end mb-0.5"
-              >
-                <svg className="w-2.5 h-2.5 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
-                </svg>
-              </Button>
-            </InputGroup>
+            <CommentComposer
+              className="mt-1"
+              textRef={textRef}
+              value={comment.text}
+              onChange={onTextChange}
+              onSubmit={postDraft}
+              onEscape={discardDraftIfEmpty}
+              // WHY blur does both jobs: a real blur (click/tab away) is the
+              // one moment this panel-hosted draft ever gets saved (typing
+              // never persists on its own — Props' `onCommit` WHY) OR, with
+              // no Delete button, the click-away that drops an empty draft.
+              onBlur={() => { postDraft(); discardDraftIfEmpty(); }}
+              placeholder="Add a comment…"
+              ariaLabel="New comment"
+              sendLabel="Post comment"
+            />
           ) : (
             <p className="mt-0.5 text-fg-2 whitespace-pre-wrap">{comment.text}</p>
           )}
