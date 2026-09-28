@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
+import { loadDefaultAppIcon, fitForMacDock } from './app-icon';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
@@ -615,17 +616,16 @@ export function registerIpcHandlers(
   //   1. theme-asset://<slug>/<relative-path>  — a file in a community/user theme's
   //      asset dir (server resolves the path and confines reads to that dir, so
   //      renderer cannot read arbitrary files).
-  //   2. data:image/png;base64,<...>            — an in-memory PNG synthesized by
-  //      the renderer (theme-default-icon.ts), used for every theme that doesn't
-  //      declare its own appIcon. Capped at MAX_DATA_ICON_BYTES to prevent a
-  //      compromised renderer from flooding main with huge buffers.
-  // Anything else (or null, or failure) resets to the bundled default icon.
-  const DEFAULT_ICON_PATH = path.join(__dirname, '../../assets/icon.png');
+  //   2. data:image/png;base64,<...> — an icon the renderer draws (unused since the
+  //      tint was retired 2026-09-10; kept for theme-matched icons). Size-capped.
+  // null or failure resets to the platform's bundled default (app-icon.ts — it was
+  // icon.png, whose edge-to-edge tile looked oversized in the Mac Dock).
+  const ASSETS_DIR = path.join(__dirname, '../../assets');
   const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'wecoded-themes');
   const MAX_DATA_ICON_BYTES = 1024 * 1024; // 1 MB — a 256px PNG is typically <100KB
   ipcMain.handle(IPC.WINDOW_SET_ICON, (_e, url: string | null) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    let iconImg = nativeImage.createFromPath(DEFAULT_ICON_PATH);
+    let iconImg = loadDefaultAppIcon(ASSETS_DIR);
     if (url && typeof url === 'string') {
       try {
         if (url.startsWith('theme-asset://')) {
@@ -647,7 +647,8 @@ export function registerIpcHandlers(
       } catch { /* fall through to default */ }
     }
     mainWindow.setIcon(iconImg);
-    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(iconImg);
+    // WHY fitForMacDock: edge-to-edge theme art is shrunk onto Apple's grid, as shipped.
+    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(fitForMacDock(iconImg));
   });
 
   // Zoom controls — each returns the new zoom percentage for the overlay UI
