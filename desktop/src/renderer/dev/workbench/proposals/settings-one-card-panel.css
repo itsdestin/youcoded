@@ -1,0 +1,85 @@
+/* Card-recipe comparison (2026-09-27), candidate "panel" (lighter solid card).
+   WHY this exists: same measured problem as settings-one-card-well.css (see that file's
+   header) - this is the second candidate, differing only in which token fills the one card.
+   WHY --panel and not --well here: checked both tokens' actual hex values in globals.css
+   across themes before picking. In Midnight, --well (#0D1117) is IDENTICAL to --canvas
+   (#0D1117) - the "well" candidate's card has zero fill contrast there and reads as a card
+   only by its 1px border. --panel differs from canvas in every built-in theme (Light
+   #EAEAEA vs canvas #F2F2F2; Dark #191919 vs #111111; Midnight #161B22 vs #0D1117; Creme
+   #EBE1D1 vs #F6EEE1), so this candidate reads as a card by FILL, not just outline, on every
+   theme - the "still fully opaque, reads as a card in both Light and Midnight" requirement.
+   WORKBENCH-ONLY: ?proposal=settings-one-card-panel. Same Settings-family-only scope as the
+   well candidate - never touches chat, Marketplace, tool cards, or notice-box tones. */
+@layer proposal {
+
+/* ---- 1. Every grouping card -> one recipe, --panel fill --------------------------------- */
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer)
+  :is(div,section)[class~="rounded-lg"]:is(
+    [class~="bg-well"], [class~="bg-inset"], [class~="bg-inset/50"], [class~="bg-panel"]
+  ):not(.settings-drawer):not(button):not(input):not(textarea):not(select):not([role="tab"])
+  :not([class*="destructive"]):not([class*="amber-"]):not([class*="green-"]):not([class*="accent/10"])
+{
+  background: var(--panel) !important;
+  border: 1px solid var(--edge) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+/* WHY the whole "Backup & Sync" dialog is excluded: see settings-one-card-well.css's copy of
+   this comment for the full account (unresolved, flagged for a follow-up) - its status card
+   rendered a blank "Try again" button and stray text outlines even from a same-value, should-
+   be-no-op override, which several narrower guards did not stop. Meaning for the comparison:
+   Backup & Sync, its error state and its oversize-file state show no visible difference
+   between Today and this candidate on this pass. */
+
+/* ---- 2. Rows inside a card: the divider LINE is unified; padding and "flatten the inner
+   box" are deliberately NOT attempted (see settings-one-card-well.css for the full WHY —
+   a first version forced padding and stripped nested cards with plain attribute selectors
+   and broke Backup & Sync's real layout: the toggle drifted, "Try again" lost its fill and
+   read blank, and rows gained large gaps, all found in a capture and never shipped). CSS
+   selectors can restyle a box's paint from outside it, not the flex relationships inside
+   it — that needs the shared <Card> component card-measurements.md (e) already names. -- */
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) [class~="rounded-lg"] > [class~="border-t"] {
+  border-top: 1px solid var(--edge-dim) !important;
+}
+
+/* ---- 3. Notice boxes keep their tint, take the same radius/padding. Safe to normalize
+   (unlike section 2): a Callout is one shared component, not a bespoke card, so its own
+   layout does not depend on padding supplied from outside it. --------------------------- */
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) [class~="rounded-lg"]:is(
+  [class*="destructive"], [class*="amber-"], [class*="green-"], [class*="accent/10"]
+) {
+  border-radius: 12px !important;
+  padding: 12px !important;
+}
+
+/* ---- 4. Spacing: 16px between groups/cards, 8px section-label-to-card ------------------ */
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) [class~="space-y-5"] > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 16px !important;
+}
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) [class~="space-y-4"] > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 16px !important;
+}
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) [class~="space-y-2"] > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 8px !important;
+}
+
+/* ---- 5. Popup edge padding: 16px everywhere (fixes Donate 20px, Development doubled 32px;
+   see settings-one-card-well.css for why a wrapper div, not a deletion, is the CSS-only fix) */
+[aria-label="Donate"] [class~="p-5"] { padding: 16px !important; }
+[aria-label="Development"] [class~="p-4"]:first-child { padding: 0 !important; }
+
+/* ---- 6. Text: T4 in-card titles (12px/500), T6 hints (11px/400), T7 bumped to T4's size -- */
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) h3[class~="text-xs"][class~="font-medium"] {
+  font-size: 12px !important; font-weight: 500 !important;
+}
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) :is([class~="text-2xs"], [class~="text-3xs"]):not([class~="font-medium"]) {
+  font-size: 11px !important; font-weight: 400 !important;
+}
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) :is(button, a, [role="button"]):is([class*="text-2xs"], [class*="text-3xs"])[class*="font-medium"],
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) :is(button, a, [role="button"]) :is([class*="text-2xs"], [class*="text-3xs"])[class*="font-medium"] {
+  font-size: 12px !important; font-weight: 500 !important;
+}
+
+}
