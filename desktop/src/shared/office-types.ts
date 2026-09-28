@@ -59,3 +59,14 @@ export interface OfficeBridge {
   /** Replace the file with a kept copy; the current file is kept first. */
   restore(path: string, versionId: string): Promise<{ ok: true } | { ok: false; message: string }>;
 }
+
+/** The largest file Office will open (200 MB). WHY a cap: x2t translates the whole file in
+ *  one go and the editor holds all of it in memory; past this the app would stall or run out
+ *  of memory instead of opening. */
+export const OFFICE_MAX_BYTES = 200 * 1024 * 1024;
+
+/** The largest translated document the editor may hand back for a save (1 GB, decoded).
+ *  WHY 1 GB and not 200 MB: the editor's translated form runs about 5× the file — a 21 MB
+ *  workbook's Editor.bin measured 104 MB — so a file under OFFICE_MAX_BYTES can legitimately
+ *  grow well past it. The cap stops a runaway frame from exhausting the main process. */
+export const EDITOR_BIN_MAX_BYTES = 1024 * 1024 * 1024;

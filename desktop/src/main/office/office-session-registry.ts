@@ -5,6 +5,7 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { log } from '../logger';
+import { awaitIdle } from './office-commands';
 import { createSessions } from './office-sessions';
 
 // WHY per-instance temp base, not a fixed shared path (fix round 1, review of Task 3): a
@@ -73,4 +74,18 @@ export async function cleanupOfficeSessions(): Promise<void> {
   sessions = undefined;
   tempBase = undefined;
   await fsp.rm(base, { recursive: true, force: true }).catch(() => {});
+}
+
+// WHY (Task 3 review carry-over): cleanupOfficeSessions() removes every session's temp folder,
+// and with it the Editor.bin that a save in flight is still translating. So quit first waits
+// for the editor commands to go idle, capped at `capMs` so a wedged translation cannot hang
+// quit. Even when the cap is hit the user's file is safe: a save replaces it only by renaming
+// a finished copy (kept beside the file, not in the temp base) over it. The removal itself is
+// still started, not awaited, for the reason given on cleanupOfficeSessions above. main.ts
+// starts this early in shutdown and awaits it last, so the wait overlaps the other teardown.
+export async function quitOfficeSessions(capMs = 5_000): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([awaitIdle(), new Promise<void>((r) => (timer = setTimeout(r, capMs)))]).catch(() => {});
+  clearTimeout(timer);
+  void cleanupOfficeSessions();
 }

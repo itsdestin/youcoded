@@ -43,7 +43,7 @@ import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnosti
 import { registerThemeProtocol } from './theme-protocol';
 import { registerOfficeProtocol } from './office/office-protocol';
 import { officeRoot } from './office/office-root';
-import { cleanupOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
+import { initOfficeSessionsSafely, quitOfficeSessions } from './office/office-session-registry';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
 import { pickSuggestedModel } from './first-run-local';
@@ -2540,6 +2540,8 @@ async function runShutdown(): Promise<void> {
     welcomeBackStore?.flush() ?? Promise.resolve(),
     new Promise<void>((r) => setTimeout(r, 1_000)),
   ]).catch(() => {});
+  // Office: let a save mid-translation finish (≤5s), then remove its temp base. Awaited last.
+  const officeQuit = quitOfficeSessions();
   // Capture the engine-stop promise: cleanup() starts llama-server teardown and we
   // must let it finish before app.quit(), else the engine outlives the app and keeps
   // the fixed port bound for the next instance to wrongly adopt (2026-07-20 fix).
@@ -2577,9 +2579,6 @@ async function runShutdown(): Promise<void> {
   // Plan 2b Task 8: tear down the lease client so its per-session renew timers
   // don't linger past a hard quit (destroy clears all held timers). Sync fn.
   try { leaseClient?.destroy(); } catch {}
-  // Office editors: remove this instance's temp base. Not raced/awaited below —
-  // best-effort per its own WHY comment, a slow disk here must not hold up quit.
-  void cleanupOfficeSessions();
   // Stop sync service — clears timer, releases locks, removes .app-sync-active marker
   try { setSyncService(null); } catch {}
   // Wait for the engine to actually die, but never let a wedged teardown hang quit:
@@ -2593,6 +2592,7 @@ async function runShutdown(): Promise<void> {
     Promise.all([engineStopped, chatgptDisposed, syncStopped]),
     new Promise<void>((r) => setTimeout(r, 4_000)),
   ]).catch(() => {});
+  await officeQuit;
 }
 
 // Route 1: last window closed. Delegate to app.quit() rather than tearing down

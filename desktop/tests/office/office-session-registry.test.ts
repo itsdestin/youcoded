@@ -91,6 +91,49 @@ describe('office session registry lifecycle', () => {
     expect(mod.getOfficeSessions()).toBeNull();
   });
 
+  it('keeps the session temp folder until a save in flight finishes, then removes it at quit', async () => {
+    const docs = await fsp.mkdtemp(path.join(tmpdir(), 'office-quit-docs-'));
+    createdBases.push(docs);
+    const file = path.join(docs, 'a.docx');
+    await fsp.writeFile(file, 'original');
+    const sessions = await mod.initOfficeSessions();
+    const s = await sessions.open(file, 1);
+    const base = path.dirname(s.temp);
+    createdBases.push(base);
+    // Same module instance the registry imported (vi.resetModules ran in beforeEach).
+    const { createOfficeCommands } = await import('../../src/main/office/office-commands');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    // WHY a signal: the negative check below is only meaningful once the save has reached the
+    // translator — waiting on this instead of a fixed pause keeps it true under load.
+    let entered!: () => void;
+    const translating = new Promise<void>((r) => (entered = r));
+    let editorBinPresentAtTranslate = false;
+    const slow = async (_root: string, from: string, to: string) => {
+      entered();
+      await gate;
+      editorBinPresentAtTranslate = (await stat(from).catch(() => null)) !== null;
+      await fsp.writeFile(to, Buffer.concat([Buffer.from('PK\x03\x04'), Buffer.alloc(64)]));
+    };
+    const run = createOfficeCommands({ root: '/unused', sessions, convert: slow });
+    await run(s.token, 'write_editor_bin', { data: Buffer.from('bin').toString('base64') });
+    // WHY a spy and not a stat of the folder: removal runs on a background thread, so "the
+    // folder still exists" could pass by luck; "removal was never asked for" cannot.
+    const rm = vi.spyOn(fsp, 'rm');
+    const removedBase = () => rm.mock.calls.some(([p]) => p === base);
+    const saved = run(s.token, 'save_file', {});
+    const quit = mod.quitOfficeSessions();
+    await translating;
+    await new Promise((r) => setImmediate(r));
+    expect(removedBase()).toBe(false);
+    release();
+    expect(await saved).toBe('ok');
+    await quit;
+    expect(editorBinPresentAtTranslate).toBe(true);
+    expect(removedBase()).toBe(true);
+    expect(mod.getOfficeSessions()).toBeNull();
+  });
+
   it('does nothing (not throw) if cleanup runs before any init', async () => {
     await expect(mod.cleanupOfficeSessions()).resolves.toBeUndefined();
   });
