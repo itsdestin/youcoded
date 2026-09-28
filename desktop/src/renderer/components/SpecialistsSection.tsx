@@ -358,10 +358,6 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
         <span className="text-xs font-medium text-fg-2">{title}</span>
         <span className="text-2xs text-fg-muted">{hint}</span>
       </div>
-      {/* Destin (workbench pass): Clear sits BENEATH the picker at the same
-          width, not beside it. Side-by-side made two competing controls on one
-          line and shrank the picker — the destructive one should read as
-          secondary to the thing it undoes, not as its equal. */}
       <div className="space-y-1.5">
         <ModelPicker
           value={choice}
@@ -372,23 +368,25 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
           // the trigger matches every other nested control (level-2 default).
           triggerClassName=""
         />
+        {/* WHY moved here, right under the dropdown it describes (round 2 —
+            Destin: "Set to ... " read as loose text under Clear, not attached
+            to anything): this is the tier's own hint, not a free caption. */}
+        {(!loaded || value) && (
+          <div className="text-2xs">
+            {!loaded
+              ? <LoadingState what={`the ${tier} model`} variant="inline" />
+              : <span className="text-fg-dim">Set to <span className="text-fg-2">{value!.label}</span></span>}
+          </div>
+        )}
         {value && (
-          // Outlined, not bare text (fix batch 2 — decisions.md "Secondary
-          // buttons"/"Follow-up actions": never bare text as a button).
-          <Button size="sm" variant="secondary" className="w-full" onClick={onClear} title={`Unset the ${tier} model`}>Clear</Button>
+          // WHY not full-width (round 2 — Destin: read as "a full-width faint
+          // bar", not a button): a normal small outlined button, right-aligned
+          // as a follow-up action, same size/shape as every other row's Clear.
+          <div className="flex justify-end">
+            <Button size="sm" variant="secondary" onClick={onClear} title={`Unset the ${tier} model`}>Clear</Button>
+          </div>
         )}
       </div>
-      {/* Destin (2026-09-15 review): the unset explanation belongs INSIDE the
-          selector as its current value, not on a separate line beneath it.
-          The status line below therefore exists only while loading or when a
-          concrete override is selected. */}
-      {(!loaded || value) && (
-        <div className="text-2xs">
-          {!loaded
-            ? <LoadingState what={`the ${tier} model`} variant="inline" />
-            : <span className="text-fg-dim">Set to <span className="text-fg-2">{value!.label}</span></span>}
-        </div>
-      )}
     </div>
   );
 }

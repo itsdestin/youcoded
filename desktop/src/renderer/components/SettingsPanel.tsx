@@ -1806,17 +1806,18 @@ function RemoteButton(props: RemoteButtonProps) {
                   <LoadingState what="remote access" />
                 ) : (
                   <>
-                    {/* Setup banner — shown when no clients connected */}
+                    {/* Setup banner — shown when no clients connected. WHY a
+                        headed level-1 card (card-levels sweep, round 2 — this
+                        replaces the fix-batch-2 "no outer box" provisional,
+                        now decided): the intro text sat loose on the popup
+                        background with the status strip below it and nothing
+                        tying them together. One card, headed like "Server",
+                        settles it — the status strip's own bg-inset already
+                        reads as level-2 nested inside. */}
                     {(previewView ? previewView.stage !== 'ready' && previewView.stage !== 'consent' : !hasClients) && (
-                      // WHY no outer box (fix batch 2, 2026-09-26 — PROVISIONAL): this
-                      // was an accent-tinted box holding the intro AND a second box
-                      // (the status strip / warnings) — a box inside a box, the guide's
-                      // "no nesting" rule. Now: the intro as plain text, then the status
-                      // strip on its own. Destin has NOT decided this block's final look
-                      // (decisions.md "Status at the top of a popup", settings-pieces#P-7:
-                      // re-ask on the real screen), so this is the flattest honest
-                      // version for him to judge, not a ruling.
-                      <div className="space-y-2">
+                      <section>
+                        <SectionLabel className="mb-2">Status</SectionLabel>
+                        <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
                         <p className="text-xs text-fg-2">
                           Remote access lets you use YouCoded from any device — phone, tablet, or another computer.
                         </p>
@@ -1857,7 +1858,8 @@ function RemoteButton(props: RemoteButtonProps) {
                             </div>
                           )
                         ) : renderPrerequisite(tailscale, !!config?.hasPassword, onRunSetup, onConfirmSetup)}
-                      </div>
+                        </div>
+                      </section>
                     )}
 
                     {/* Server settings */}
@@ -1955,19 +1957,16 @@ function RemoteButton(props: RemoteButtonProps) {
                           )}
                         </FieldRow>
 
-                        {/* Keep awake — UNCHANGED (Destin: gets its own redesign
-                            later, showing time remaining; roadmap). Its 5-option
-                            segmented control and label placement stay exactly as
-                            they were before this batch. */}
-                        <div className="py-2">
+                        {/* Keep awake — level-1 card (round 2): was a bare div
+                            sitting loose between Password's card and the popup
+                            background — Destin: "sits loose". variant="nested"
+                            (level-2) matches every other nested track. */}
+                        <div className={`${CARD_LEVEL_1} px-3 py-2`}>
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs text-fg-2">Keep awake</span>
                           </div>
-                          {/* K3: four short options -> segmented. SegmentedTabs keys
-                              on string ids and keepAwakeHours is a number, so both
-                              directions convert at the boundary. */}
                           <SegmentedTabs
-                            variant="contained"
+                            variant="nested"
                             aria-label="Keep awake"
                             value={String(config?.keepAwakeHours ?? 0)}
                             onChange={(id) => onSetKeepAwake(Number(id))}

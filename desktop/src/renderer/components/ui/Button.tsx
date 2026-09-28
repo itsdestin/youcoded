@@ -62,11 +62,12 @@ const BUTTON_BASE =
  *  both roles at AA across our themes, which is why the token is split. */
 const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-on-accent hover:bg-accent/90 active:bg-accent/80',
-  // WHY border-edge, not border-edge-dim (2026-09-26, Destin "trust your judgement",
-  // ui-fix-batch-2-outline#O-1): on glassy wallpaper themes (Meadow Mist) the ~50%
-  // edge-dim outline vanished, so outlined buttons read as bare text, which the
-  // guide forbids ("never bare text"). Full-strength edge keeps them buttons.
-  secondary: 'border border-edge text-fg-2 hover:bg-inset active:bg-edge',
+  // WHY border-edge-strong, not border-edge (round 2, 2026-09-28, Destin's
+  // review found Meadow Mist's outline still nearly invisible after the prior
+  // border-edge fix — that theme's OWN --edge is a pastel that composites
+  // near 1:1 over its wallpaper): edge-strong (globals.css) mixes in --fg so
+  // the border is guaranteed visible on every theme, not just the 4 built-ins.
+  secondary: 'border border-edge-strong text-fg-2 hover:bg-inset active:bg-edge',
   ghost: 'text-fg-dim hover:text-fg hover:bg-inset active:bg-edge',
   danger: 'bg-destructive text-on-destructive hover:bg-destructive/90 active:bg-destructive/80',
   'danger-outline': 'border border-destructive/50 text-destructive-fg hover:bg-destructive/10 active:bg-destructive/20',

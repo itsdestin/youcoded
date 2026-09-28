@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { versionLine } from '../../app-version';
 import { plainMessage } from '../../utils/ipc-error';
-import { AnchorTip, Button, Callout, Checkbox, Dialog, ErrorState, LoadingState, SegmentedTabs, SettingRow, Textarea, TextInput } from '../ui';
+import { AnchorTip, Button, Callout, Checkbox, Dialog, ErrorState, LoadingState, SectionLabel, SegmentedTabs, SettingRow, Textarea, TextInput } from '../ui';
 import { useEscClose } from '../../hooks/use-esc-close';
 
 // WHY a phase rather than a boolean: the flow stopped at draft -> review, so
@@ -229,7 +229,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
         {!review && <SegmentedTabs aria-label="Report type" variant="contained" value={kind} onChange={setKind} tabs={[{ id: 'bug', label: 'Bug' }, { id: 'feature', label: 'Feature' }]} />}
         {/* WHY: one noun for one object. The flow previously said ticket, report, bug report and
             issue for the same thing across four controls, which reads as four different actions. */}
-        {review && <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Review your ticket</h3>}
+        {review && <SectionLabel>Review your ticket</SectionLabel>}
         <div className="space-y-2">
           <label htmlFor="report-title" className="block text-xs text-fg-2">Title</label>
           <TextInput id="report-title" className="w-full" value={title} onChange={e => setTitle(e.target.value)} placeholder="A short summary" />
@@ -239,7 +239,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
         {/* WHY: separate choosing evidence from reviewing its content; don't stack a full
             editor and explanatory paragraphs between every compact selection row. */}
         {!review ? <section className="space-y-2">
-          <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Include with ticket</h3>
+          <SectionLabel>Include with ticket</SectionLabel>
           {kind === 'bug' && <>
             <SettingRow title="Error details and version" control={<Checkbox aria-label="Include error details and YouCoded version" checked={includeContext} onChange={setIncludeContext} />} accessory={<AnchorTip label="About error details">Only the originating error and app version, not your conversation. You’ll review these before sharing.</AnchorTip>} />
             <SettingRow title="Recent logs" control={<Checkbox aria-label="Include recent logs" checked={logs} onChange={chooseLogs} />} accessory={<AnchorTip label="About recent logs">Logs record app activity and errors. They may contain private information. Review and remove private details before sharing.</AnchorTip>} />
@@ -252,7 +252,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
           <SettingRow title="Screenshots or files" control={<Checkbox aria-label="Finish with attachments in GitHub" checked={attachments} onChange={setAttachments} />} accessory={<AnchorTip label="About attachments">Ticking this finishes your ticket in your browser, where you attach the files yourself. They cannot be attached here: GitHub uploads a file the moment it is attached, so it has to happen where you can see it.</AnchorTip>} />
         </section> : <section className="space-y-3">
           {kind === 'bug' && includeContext && <div className="space-y-1">
-            <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Error details and version</h3>
+            <SectionLabel>Error details and version</SectionLabel>
             {/* WHY the real version (R22): this was a hardcoded string, so the one
                 thing the ticket promised to carry accurately was made up. */}
             <p className="text-xs text-fg-2 font-mono">{versionLine()}</p>
@@ -263,7 +263,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
           {/* WHY: both evidence blocks read as one pattern — section label, one line of
               explanation, then the content. A bare inline label made them look unrelated. */}
           {kind === 'bug' && logs && <div className="space-y-1">
-            <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Recent logs</h3>
+            <SectionLabel>Recent logs</SectionLabel>
             <p className="text-xs text-fg-2">Remove private details before sharing.</p>
             {/* WHY this is filled by logTail (code review C5): ticking "Recent logs"
                 used to collect nothing at all, and the empty box explained itself with

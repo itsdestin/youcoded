@@ -231,7 +231,6 @@
   --status-auto:   #9A3412;
   --status-bypass: #9F1239;
 }
-
 /* ─── Provider brand colours for COMMUNITY themes ───────────────────────────
    The four blocks above key off `data-theme="<slug>"`, so they only ever match
    the four built-in themes. A community theme's slug matches none of them, so
@@ -298,7 +297,7 @@
   /* Borders */
   --color-edge: var(--edge);
   --color-edge-dim: var(--edge-dim);
-
+  --color-edge-strong: var(--edge-strong);
   /* Border radius scale — maps Tailwind rounded-* utilities to theme variables */
   --radius: var(--radius);
   --radius-sm: var(--radius-sm);
@@ -1974,6 +1973,7 @@ pre.yc-code code {
 :root {
   --frame-edge: 10px;
   --frame-corner: 12px;
+  --edge-strong: color-mix(in srgb, var(--edge) 65%, var(--fg) 35%); /* outline border visible on every theme — glass packs' own --edge can near-vanish over their wallpaper */
   /* ── Motion vocabulary (2026-08-31; Destin picked "Soft" 2026-09-02) ──
      Three curves and three durations, so related motion in the session
      strip and on session switch reads as one decision instead of six.
