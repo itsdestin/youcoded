@@ -24,7 +24,9 @@ import { mergeClasses } from './Button';
  * (change 77) puts these on a WRAPPER while the input inside goes bare; without
  * the split the two would drift apart the first time either is edited.
  */
-export const FIELD_SURFACE = 'bg-inset border border-edge-dim rounded-lg';
+// WHY border-edge-card: the shared card outline (globals.css --edge-card), so a
+// text box and a nested box outline the same on every theme (2026-09-28).
+export const FIELD_SURFACE = 'bg-inset border border-edge-card rounded-lg';
 
 /** The text treatment — shared by a bare input and a bordered one alike. */
 export const FIELD_TEXT = 'text-fg placeholder:text-fg-muted';

@@ -92,7 +92,9 @@ const DENSITY: Record<SettingRowVariant, { title: string; desc: string }> = {
 // WHY border-edge-dim (round 4, 2026-09-28): kept equal to CARD_LEVEL_1 by
 // hand (a plain string literal, not an import — see the ast-grep guard below)
 // after Destin restored the level-1 border app-wide.
-const SETTING_ROW_BASE = 'w-full flex items-center gap-3 px-3 py-2 bg-inset/50 border border-edge-dim rounded-lg text-left transition-colors stepped-hover';
+// WHY surface-1 + border-edge-card (2026-09-28): same level marker and outline as
+// CARD_LEVEL_1, so a row nested inside a card re-levels itself (globals.css).
+const SETTING_ROW_BASE = 'surface-1 w-full flex items-center gap-3 px-3 py-2 bg-inset/50 border border-edge-card rounded-lg text-left transition-colors stepped-hover';
 
 /**
  * `items-center`, always — deviating from the spec's `items-start`.
@@ -263,7 +265,7 @@ export function SettingRow({
   );
 
   // `header` swaps only the box, never the layout: same text column and control slot.
-  const base = header ? SETTING_ROW_BASE.replace(' px-3 py-2 bg-inset/50 border border-edge-dim rounded-lg', ' py-1') : SETTING_ROW_BASE;
+  const base = header ? SETTING_ROW_BASE.replace('surface-1 ', '').replace(' px-3 py-2 bg-inset/50 border border-edge-card rounded-lg', ' py-1') : SETTING_ROW_BASE;
   const cls = `${base}${hover} ${disabled ? 'opacity-50' : ''} ${className}`.trim();
 
   if (isButton) {

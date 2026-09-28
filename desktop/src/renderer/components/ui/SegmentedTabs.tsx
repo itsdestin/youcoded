@@ -1,6 +1,6 @@
 import React from 'react';
 import { FOCUS_RING } from './Button';
-import { CARD_LEVEL_2 } from './cardLevels';
+import { CARD_LEVEL_1, CARD_LEVEL_2 } from './cardLevels';
 
 /**
  * Tab rows (change 45, §1.8).
@@ -86,7 +86,7 @@ export function SegmentedTabs({
         pill
           ? PILL_CONTAINER
           : variant === 'contained'
-            ? 'flex gap-1 p-1 bg-inset/50 rounded-lg'
+            ? `flex gap-1 p-1 ${CARD_LEVEL_1}` // WHY: it had no outline; now a first-level box like any other (2026-09-28)
             : variant === 'nested'
               ? `flex gap-1 p-1 ${CARD_LEVEL_2}`
               : 'flex gap-2',

@@ -298,6 +298,7 @@
   --color-edge: var(--edge);
   --color-edge-dim: var(--edge-dim);
   --color-edge-strong: var(--edge-strong);
+  --color-edge-card: var(--edge-card);
   /* Border radius scale — maps Tailwind rounded-* utilities to theme variables */
   --radius: var(--radius);
   --radius-sm: var(--radius-sm);
@@ -1371,6 +1372,26 @@ body[data-mode="buddy-chat"] #theme-bg {
   background-color: var(--inset);
 }
 
+/* Surface levels (trial, 2026-09-28): a box styled as a first-level card
+   (`surface-1`: CARD_LEVEL_1, SettingRow, the contained tab strip) that sits
+   INSIDE another first-level card is second level by definition, so it takes
+   the second-level fill here — one rule, instead of every screen remembering
+   to pick the right constant (the "Advanced" row inside Local models' engine
+   card was the miss that proved it). Unlayered, so it wins over the Tailwind
+   fill; the hover re-states a slightly lighter mix for the same reason. */
+.surface-1 .surface-1 {
+  background-color: var(--inset);
+}
+.surface-1 .surface-1:hover {
+  background-color: color-mix(in srgb, var(--inset) 92%, var(--fg));
+}
+/* A status line inside a card is a nested box too: give it the nested outline
+   (as an inset shadow, so nothing shifts by a pixel). Outside cards — the
+   chat's download strip — it keeps its plain look. */
+.surface-1 .status-strip {
+  box-shadow: inset 0 0 0 1px var(--edge-card);
+}
+
 .layer-surface .bg-accent:not(:hover) {
   background-color: var(--accent);
 }
@@ -1973,6 +1994,14 @@ pre.yc-code code {
 :root {
   --frame-edge: 10px;
   --frame-corner: 12px;
+  /* WHY --edge-card (surface-levels trial, 2026-09-28): measured on 168 real
+     screenshots, a card's fill barely differs from what it sits on in EVERY
+     theme — the outline is what tells the layers apart — and the theme's own
+     half-transparent --edge-dim fell to near-invisible on Cotton Candy Sky and
+     Golden Sunbreak. Mixing in a little text colour (like --edge-strong does for
+     buttons) makes it visible on any theme; it stays well under the buttons'
+     35% so a card never reads as a button. Used by both card levels + fields. */
+  --edge-card: color-mix(in srgb, var(--edge) 82%, var(--fg) 18%);
   --edge-strong: color-mix(in srgb, var(--edge) 65%, var(--fg) 35%); /* outline border visible on every theme — glass packs' own --edge can near-vanish over their wallpaper */
   /* ── Motion vocabulary (2026-08-31; Destin picked "Soft" 2026-09-02) ──
      Three curves and three durations, so related motion in the session

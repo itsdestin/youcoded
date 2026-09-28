@@ -33,5 +33,7 @@ import { FIELD_SURFACE } from './field';
  * makes "everything nested looks the same" true without inventing a ninth card
  * style — it already existed, just wasn't reused for non-field nested boxes.
  */
-export const CARD_LEVEL_1 = 'bg-inset/50 border border-edge-dim rounded-lg';
+// `surface-1` marks the level so globals.css can re-level a first-level box that
+// ends up nested inside another one (see "Surface levels" there).
+export const CARD_LEVEL_1 = 'surface-1 bg-inset/50 border border-edge-card rounded-lg';
 export const CARD_LEVEL_2 = FIELD_SURFACE;

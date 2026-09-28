@@ -45,7 +45,7 @@ export type StatusStripProps = {
 
 export function StatusStrip({ tone = 'idle', children, detail, action, className = '' }: StatusStripProps) {
   return (
-    <div className={`px-3 py-2.5 rounded-lg bg-inset flex items-center gap-3 ${className}`.trim()}>
+    <div className={`status-strip px-3 py-2.5 rounded-lg bg-inset flex items-center gap-3 ${className}`.trim()}>
       <span className="shrink-0 flex items-center justify-center w-2">
         {tone === 'busy' ? (
           <BrailleSpinner size="xs" />
