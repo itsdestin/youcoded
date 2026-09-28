@@ -23,6 +23,59 @@ import { Button } from './ui';
 // enqueue the message also never see it in their own strip — same
 // renderer-local scope.
 
+/** Same trash glyph as the doc-comments delete action (comments/CommentActions
+ *  .tsx on its branch, Destin 2026-09-28: "matching ... delete a comment") —
+ *  24×24 viewBox, stroke currentColor, the app's inline-icon convention. */
+function TrashGlyph() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </svg>
+  );
+}
+
+/** "Send now" (Destin, 2026-09-28 review deck S-1): a dark round button with an
+ *  up arrow, rightmost in the row. On hover (or keyboard focus) the words
+ *  "Interrupt and Send Now" roll out to the LEFT of the arrow inside the same
+ *  button, and the trash button beside it slides left with it at a fixed gap —
+ *  it is simply the next item in the row, so the flex layout carries it.
+ *
+ *  WHY a bare <button>, not the <Button> primitive: the primitive owns its
+ *  colours and effects (design lint `no-restyle`), and this needs an inverted
+ *  fill plus a label reveal — the same reason CommentActions.tsx gives.
+ *  WHY max-width with the motion tokens: this is the app's one sanctioned
+ *  width reveal, the session pills' (pill-label-style.ts; ast-grep
+ *  `pill-label-reveals-with-motion-tokens`) — a plain ease, never overshoot,
+ *  and a one-row hover, not a per-frame or per-keystroke path.
+ *  WHY inverted (bg-fg / text-canvas) rather than a fixed dark colour: it is
+ *  the darkest fill in light themes and stays high-contrast in dark ones.
+ *  Touch has no hover, so on a phone it stays the arrow alone; its full
+ *  meaning is in the accessible name for screen readers. */
+function SendNowButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Interrupt and send now"
+      className="group coarse-hit ml-1 flex h-7 items-center rounded-full bg-fg pl-2 pr-1.5 text-canvas cursor-pointer select-none hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+    >
+      <span
+        aria-hidden
+        className="max-w-0 overflow-hidden whitespace-nowrap text-xs font-medium opacity-0 group-hover:max-w-48 group-hover:opacity-100 group-hover:pr-1.5 group-focus-visible:max-w-48 group-focus-visible:opacity-100 group-focus-visible:pr-1.5"
+        style={{ transition: 'max-width var(--dur-reveal) var(--ease-reveal), opacity var(--dur-reveal) var(--ease-reveal), padding var(--dur-reveal) var(--ease-reveal)' }}
+      >
+        Interrupt and Send Now
+      </span>
+      <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M12 19V5" />
+        <path d="M5 12l7-7 7 7" />
+      </svg>
+    </button>
+  );
+}
+
 interface QueuedMessage {
   queueId: string;
   content: string;
@@ -75,19 +128,6 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
           <div className="flex-1 min-w-0 truncate text-sm text-fg-2">{q.content}</div>
           {(onEdit || onCancel || onSendNow) && (
             <div className="flex items-center gap-0.5 shrink-0">
-              {/* WHY words, not an icon: this one stops the running task, so
-                  what it does must be readable before it is pressed. */}
-              {onSendNow && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label="Stop the current task and send this message now"
-                  title="Stops the current task and sends this message now"
-                  onClick={() => onSendNow(q.queueId)}
-                >
-                  Send now
-                </Button>
-              )}
               {onEdit && (
                 <Button
                   variant="ghost"
@@ -107,9 +147,10 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
                   onClick={() => onCancel(q.queueId)}
                   className="w-6 h-6 rounded-full text-fg-dim hover:text-fg text-xs leading-none"
                 >
-                  ✕
+                  <TrashGlyph />
                 </Button>
               )}
+              {onSendNow && <SendNowButton onClick={() => onSendNow(q.queueId)} />}
             </div>
           )}
         </div>
