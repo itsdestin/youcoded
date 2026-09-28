@@ -309,5 +309,26 @@ describe('docComments over remote access', () => {
       }));
       expect(sent[0].payload).toEqual({ ok: false, error: 'path-not-tracked' });
     });
+
+    // Live-refresh review (2026-09-27, finding 1 — high): `docComments:watch`
+    // called `resolveWatchTarget` (the same function `list` uses to resolve
+    // its own target) but skipped Gate 2 entirely — a WS-connected client
+    // (already past password auth) could start a live filesystem watch on an
+    // arbitrary absolute `.docx`/`.xlsx` path with no `projectRoot`, learning
+    // "this file exists" and getting a live change signal for a path `list`
+    // on the SAME path would correctly refuse.
+    it('refuses to watch an untracked absolute .docx path with no projectRoot over remote', async () => {
+      const fixturesDir = path.join(__dirname, 'fixtures', 'doc-comments');
+      const loose = path.join(root, 'untracked-watch.docx');
+      await fs.promises.copyFile(path.join(fixturesDir, 'launch-brief.docx'), loose);
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
+      const sent: any[] = [];
+      const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+      await server.handleMessage({ id: 'phone-a', ws }, JSON.stringify({
+        type: 'docComments:watch', id: 'req-1', payload: { path: loose },
+      }));
+      expect(sent[0].payload).toEqual({ ok: false, error: 'path-not-tracked' });
+    });
   });
 });

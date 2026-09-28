@@ -306,5 +306,42 @@ describe('doc-comments watcher', () => {
       await settle();
       expect(changes).toEqual([]);
     });
+
+    // Live-refresh review (2026-09-27, finding 1 — high, compounding cause): a
+    // 'document' target has no root-scoping the way 'project' does, so with
+    // no cap a caller naming enough distinct absolute paths could accumulate
+    // an unbounded number of live OS file-watch handles. 32 distinct document
+    // targets fill the cap; a 33rd distinct target is refused (degrades to
+    // `{ok:false}`, the SAME shape every other watch-start failure already
+    // uses — never a hard error), while an ALREADY-watched target (a
+    // resubscribe, not a new one) is unaffected by being at capacity.
+    it('caps the number of distinct document watchers, degrading a NEW one past the cap without disturbing existing ones', async () => {
+      const targets: CommentsWatchTarget[] = [];
+      for (let i = 0; i < 32; i++) {
+        const docPath = path.join(root, `cap-${i}.docx`);
+        await fs.promises.writeFile(docPath, 'original bytes');
+        targets.push({ kind: 'document', absolutePath: docPath, sourcePath: `cap-${i}.docx`, projectRoot: root });
+      }
+      for (const target of targets) {
+        const res = await watchComments(target, 1);
+        expect(res.ok).toBe(true);
+      }
+      // The 33rd distinct target is refused — the cap is full.
+      const overflowPath = path.join(root, 'cap-overflow.docx');
+      await fs.promises.writeFile(overflowPath, 'original bytes');
+      const overflow: CommentsWatchTarget = {
+        kind: 'document', absolutePath: overflowPath, sourcePath: 'cap-overflow.docx', projectRoot: root,
+      };
+      const overflowRes = await watchComments(overflow, 1);
+      expect(overflowRes).toEqual({ ok: false });
+
+      // Re-subscribing (a SECOND subscriber) to an ALREADY-watched target is
+      // NOT a new watcher, so it is unaffected by being at capacity.
+      const resubscribe = await watchComments(targets[0], 2);
+      expect(resubscribe.ok).toBe(true);
+
+      for (const target of targets) unwatchComments(target, 1);
+      unwatchComments(targets[0], 2);
+    });
   });
 });

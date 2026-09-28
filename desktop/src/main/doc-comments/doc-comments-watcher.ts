@@ -56,6 +56,33 @@ interface Entry {
 let emit: ((sourcePath: string, projectRoot: string | undefined) => void) | null = null;
 const entries = new Map<string, Entry>(); // canonical watch key -> entry
 
+// Live-refresh review (2026-09-27, finding 1 — high): a 'document' target (a
+// .docx/.xlsx's own bytes, §1.5) has no root-scoping the way 'project' does —
+// a 'project' entry is at least bounded by "a root the app already
+// recognizes" (doc-comments-gate.ts's `refuseUnknownProjectRoot`), but a
+// 'document' target can be named by an arbitrary absolute path (now ALSO
+// gated by `authorizeBytesRead` when there's no `projectRoot` — see
+// doc-comments-store.ts's `resolveWatchTarget` — but a caller can still open
+// many DIFFERENT tracked files). With no cap, that could accumulate an
+// unbounded number of live OS file-watch handles (inotify on Linux, capped
+// per user — project-watcher.ts's own `MAX_GRACE_ENTRIES` comment cites the
+// same constraint). 32 comfortably covers every docx/xlsx pane open at once
+// across every window and remote client in ordinary use (§1.5's own "one
+// subscription per key for as long as the file is open" model), while still
+// bounding the resource against a caller naming many distinct paths. A NEW
+// document watch beyond the cap degrades the SAME way any other watch-start
+// failure already does below (`{ok:false}`; list()/add() still work via
+// re-`list()`, only the unprompted push is lost) — never a hard user-facing
+// error, and never counted against an ALREADY-watched key's own resubscribe
+// (the `if (entry) {...}` branch above returns before this check is reached).
+const MAX_DOCUMENT_WATCHERS = 32;
+
+function documentWatcherCount(): number {
+  let n = 0;
+  for (const k of entries.keys()) if (k.startsWith('document:')) n++;
+  return n;
+}
+
 /** Wire the broadcast sink once at startup (ipc-handlers.ts owns webContents
  *  + the remote broadcast, same shape as initProjectWatchers/initGitWatchers). */
 export function initDocCommentsWatcher(onChange: (sourcePath: string, projectRoot: string | undefined) => void): void {
@@ -107,6 +134,11 @@ export async function watchComments(target: CommentsWatchTarget, subscriberId: n
   if (entry) {
     entry.refs.set(subscriberId, (entry.refs.get(subscriberId) ?? 0) + 1);
     return { ok: entry.watcher !== null };
+  }
+  // Cap check (live-refresh review, finding 1): only a BRAND NEW 'document'
+  // key can hit this — an existing one already returned above.
+  if (target.kind === 'document' && documentWatcherCount() >= MAX_DOCUMENT_WATCHERS) {
+    return { ok: false };
   }
   entry = {
     watcher: null,

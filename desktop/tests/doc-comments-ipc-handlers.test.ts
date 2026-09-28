@@ -117,10 +117,12 @@ describe('registerDocCommentsHandlers', () => {
     expect(listed.comments.length).toBeGreaterThan(0);
     const id = added.id;
 
+    // Review leftover (a): reply is now enriched with the persisted
+    // CommentReply, mirroring docx's own already-enriched reply response.
     const replied = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
       path: 'reports/q3.xlsx', projectRoot: root, id, text: 'thanks', author: 'user',
     });
-    expect(replied).toEqual({ ok: true });
+    expect(replied).toEqual({ ok: true, reply: { id: expect.stringMatching(/^xt-.*-r1$/), author: 'user', text: 'thanks', createdAt: expect.any(Number) } });
 
     const resolved = await ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, {
       path: 'reports/q3.xlsx', projectRoot: root, id, by: 'user',
@@ -132,11 +134,13 @@ describe('registerDocCommentsHandlers', () => {
     });
     expect(reopened).toEqual({ ok: true });
 
+    // Review F3 (Medium) partial fix: move now returns the FRESH,
+    // hint-accurate id (embedding the new cell) rather than a bare {ok:true}.
     const moved = await ipcMain.call(DOC_COMMENTS_IPC.MOVE, {
       path: 'reports/q3.xlsx', projectRoot: root, id,
       newSelector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'C2', sheet: 'Q3' } },
     });
-    expect(moved).toEqual({ ok: true });
+    expect(moved).toEqual({ ok: true, id: expect.stringMatching(/^xt-\d+-C2-/) });
 
     // An id this file doesn't have refuses honestly rather than guessing.
     const missing = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
@@ -339,6 +343,44 @@ describe('registerDocCommentsHandlers', () => {
         path: 'docs/plan.md', projectRoot: root, selector: CELL_SELECTOR, text: 'legit', author: 'user',
       });
       expect(added).toEqual({ ok: true, id: expect.any(String) });
+    });
+  });
+
+  // Live-refresh review (2026-09-27, finding 1 — high): every OTHER
+  // native-format entry point with no `projectRoot` (list/add/reply/resolve/
+  // reopen/move) already ran the resolved absolute path through
+  // `authorizeBytesRead`, refusing `path-not-tracked` for anything that isn't
+  // a saved folder, an indexed project, or a tracked external artifact
+  // (doc-comments-dispatch.test.ts's own "fallback (no projectRoot)
+  // source-file gate" tests) — `docComments:watch` skipped this gate
+  // entirely, letting a caller start a live filesystem watch on an arbitrary
+  // absolute `.docx`/`.xlsx` path. Mirrors doc-comments-remote-relay.test.ts's
+  // identically-named block for the WS surface.
+  describe('fallback (no projectRoot) source-file gate (F1 blocker, Gate 2)', () => {
+    it('refuses to watch an untracked absolute .docx path with no projectRoot', async () => {
+      const untrackedDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-ipc-untracked-'));
+      try {
+        const loose = path.join(untrackedDir, 'untracked.docx');
+        await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), loose);
+        const ipcMain = fakeIpcMain();
+        registerDocCommentsHandlers(ipcMain as any, deps);
+        // No projectRoot in the payload at all — the fallback path — so
+        // Gate 1 (refuseUnknownProjectRoot) never even runs; Gate 2
+        // (authorizeBytesRead) is what must refuse this.
+        await expect(ipcMain.call(DOC_COMMENTS_IPC.WATCH, { path: loose }))
+          .resolves.toEqual({ ok: false, error: 'path-not-tracked' });
+      } finally {
+        await fs.promises.rm(untrackedDir, { recursive: true, force: true });
+      }
+    });
+
+    it('the identical untracked path with a real projectRoot is unaffected by Gate 2 (judged by ordinary containment instead)', async () => {
+      await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
+      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.WATCH, { path: 'docs/launch-brief.docx', projectRoot: root }))
+        .resolves.toEqual({ ok: true });
     });
   });
 

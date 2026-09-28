@@ -27,7 +27,7 @@
     "renderer/components/StatusBar.tsx": 1799,
     "renderer/components/ToolCard.tsx": 1605,
     "renderer/components/ChatView.tsx": 1538,
-    "main/doc-comments/docx-comments.ts": 1690,
-    "main/doc-comments/xlsx-comments.ts": 1860
+    "main/doc-comments/docx-comments.ts": 1703,
+    "main/doc-comments/xlsx-comments.ts": 1984
   }
 }

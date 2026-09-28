@@ -19,6 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomUUID, createHash } from 'crypto';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
+import { authorizeBytesRead } from '../artifacts/read-service';
 import { nativeFormatFor } from './native-format';
 import type {
   CommentAuthor,
@@ -43,6 +44,14 @@ const FALLBACK_DIR = ['.youcoded', 'loose-file-comments'];
 // `addComment`'s own WHY below): the renderer now mints and passes the
 // comment id up front; both are honest refusals for a caller-supplied id
 // this store cannot accept, never a silent overwrite or a thrown exception.
+// 'path-not-tracked' added for the live-refresh review (2026-09-27, finding
+// 1 — high): `resolveWatchTarget`'s own native-format branch, below, is the
+// one entry point in this module that reads bytes-adjacent state (it starts
+// a live filesystem watch) for a no-`projectRoot` absolute path — the SAME
+// authority `doc-comments-dispatch.ts`'s `resolveDocxTarget`/`resolveXlsxTarget`/
+// `listNativeComments` already gate a raw-byte read on (`authorizeBytesRead`,
+// `read-service.ts`), reused here rather than re-derived, so a watch can
+// never authorize a path a read would refuse.
 type DocCommentsError =
   | 'path-outside-project'
   | 'lock-timeout'
@@ -50,7 +59,8 @@ type DocCommentsError =
   | 'sidecar-corrupt'
   | 'path-not-absolute'
   | 'invalid-id'
-  | 'duplicate-id';
+  | 'duplicate-id'
+  | 'path-not-tracked';
 
 /** A refusal shared by every entry point below — a typed error the caller
  *  surfaces honestly (§1.5), never a silent clamp or a thrown exception. */
@@ -586,6 +596,24 @@ export async function resolveWatchTarget(args: {
   if (nativeFormatFor(args.path)) {
     const resolved = await resolveSourceFilePath(args);
     if (!resolved.ok) return resolved;
+    // Live-refresh review (2026-09-27, finding 1 — high): every OTHER
+    // native-format entry point with no `projectRoot` (list/add/reply/
+    // resolve/reopen/move, via `doc-comments-dispatch.ts`) runs the resolved
+    // absolute path through `authorizeBytesRead` before touching it, refusing
+    // `path-not-tracked` for anything that isn't a saved folder, an indexed
+    // project, or a tracked external artifact. This branch skipped that gate
+    // entirely — a WS-remote client (already past password auth) or a
+    // renderer call naming an arbitrary `{path: '/anywhere.docx'}` with no
+    // `projectRoot` could start a live filesystem watch (and learn "this file
+    // exists" plus a live change signal) on a path `list()` on the SAME path
+    // would correctly refuse. A watch never exposes the file's CONTENT the
+    // way a read does, but starting one is still an action on an
+    // unauthorized path, so it gets the identical gate a read already has —
+    // never a lighter check because "it's just a watch."
+    if (!args.projectRoot) {
+      const auth = await authorizeBytesRead(resolved.absolutePath);
+      if (!auth.ok) return { ok: false, error: 'path-not-tracked' };
+    }
     return {
       ok: true,
       target: { kind: 'document', absolutePath: resolved.absolutePath, sourcePath: args.path, projectRoot: args.projectRoot },

@@ -475,17 +475,21 @@ describe('resolveWatchTarget — native-format target replaces the project sidec
     expect(result.target.projectRoot).toBe(root);
   });
 
-  it('resolves an .xlsx target with no project root (fallback) to a document watch target too', async () => {
+  // Live-refresh review (2026-09-27, finding 1 — high): a no-`projectRoot`
+  // native-format watch must run the identical `authorizeBytesRead` gate
+  // `listNativeComments`/`resolveDocxTarget`/`resolveXlsxTarget` already run
+  // for a READ — a temp-dir file that is real and readable but never a saved
+  // folder, an indexed project, or a tracked external artifact is refused,
+  // mirroring doc-comments-dispatch.test.ts's own "fallback (no projectRoot)
+  // source-file gate" tests for list/add exactly (this suite has no fixture
+  // for the POSITIVE untracked-but-somehow-authorized case either, for the
+  // same reason: constructing a genuinely tracked root outside `tempProjectRoot()`
+  // would need the real artifacts-tracking registry this unit test doesn't stand up).
+  it('refuses an untracked absolute .xlsx path with no projectRoot, same as list/add', async () => {
     const abs = path.join(root, 'budget.xlsx');
     await fs.promises.writeFile(abs, 'not a real xlsx, just needs to exist');
     const result = await resolveWatchTarget({ path: abs });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.target.kind).toBe('document');
-    if (result.target.kind !== 'document') return;
-    expect(result.target.absolutePath).toBe(await fs.promises.realpath(abs));
-    expect(result.target.sourcePath).toBe(abs);
-    expect(result.target.projectRoot).toBeUndefined();
+    expect(result).toEqual({ ok: false, error: 'path-not-tracked' });
   });
 
   it('still resolves a plain-text target to the ordinary project sidecar-directory watch', async () => {
