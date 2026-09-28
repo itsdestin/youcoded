@@ -19,8 +19,10 @@ export function createSessions(tempBase: string) {
   const sessions = new Map<string, OfficeSession>();
 
   async function open(filePath: string, senderId: number): Promise<OfficeSession> {
-    // WHY mkdir first: tempBase (os.tmpdir()/youcoded-office in production) may
-    // not exist yet on a fresh machine; mkdtemp requires its parent to exist.
+    // WHY mkdir first: tempBase (a fresh, per-instance mkdtemp'd
+    // os.tmpdir()/youcoded-office-<random> directory in production — see
+    // office-session-registry.ts) may not exist yet the first time open() runs, and after
+    // cleanupOfficeSessions() removes it late in shutdown; mkdtemp requires its parent to exist.
     await mkdir(tempBase, { recursive: true });
     const temp = await mkdtemp(path.join(tempBase, 'doc-'));
     const session: OfficeSession = {

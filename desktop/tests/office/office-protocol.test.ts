@@ -87,12 +87,18 @@ describe('officeRequestHandler', () => {
   // ".." or "%2e%2e" PATH SEGMENT before the handler ever runs — the two cases above never
   // reach serveConfined's realpath check at all. An encoded slash (%2f) or backslash (%5c) is
   // not a segment separator to the URL parser, so it survives parsing untouched and only
-  // becomes a real "../" once this module's own decodeURIComponent runs — these are the cases
-  // that actually exercise the confinement guard. Each targets a REAL file placed outside the
-  // folder its request is nominally confined to, so a wrongly-permissive change reads real
-  // bytes back (200), not just a coincidental ENOENT.
+  // becomes a real "../" (or "..\") once this module's own decodeURIComponent runs. Each
+  // targets a REAL file placed outside the folder its request is nominally confined to, so a
+  // wrongly-permissive change reads real bytes back (200), not just a coincidental ENOENT. The
+  // %5c (backslash) case is Windows-only IN EFFECT: `path`'s POSIX implementation never treats
+  // `\` as a separator, so on this platform "..\..\<name>" is an inert single-component
+  // filename that 404s on plain ENOENT regardless of the guard — it only exercises the
+  // confinement check on win32, where `path.sep` is `\`.
   describe('traversal that only becomes real after this module\'s own decode', () => {
-    it('refuses an encoded slash that decodes into ../ escaping editors/', async () => {
+    // Shared by the encoded-slash and encoded-backslash editors/-escape cases below: a real
+    // add-on root with a real file (secret.txt) sitting one level ABOVE editors/, so a request
+    // that actually escapes editors/ reads real bytes back instead of coincidentally 404ing.
+    async function withEscapeFixture(run: (escapeHandler: (req: Request) => Promise<Response>, token: string) => Promise<void>) {
       const outer = await mkdtemp(path.join(tmpdir(), 'office-protocol-escape-'));
       try {
         const addonRoot = path.join(outer, 'addon');
@@ -102,12 +108,17 @@ describe('officeRequestHandler', () => {
         const escapeSessions = createSessions(path.join(outer, 'sessions-tmp'));
         const escapeHandler = officeRequestHandler({ root: addonRoot, sessions: escapeSessions });
         const session = await escapeSessions.open('/docs/report.docx', 1);
-
-        const res = await escapeHandler(new Request(`office://${session.token}/..%2f..%2fsecret.txt`));
-        expect(res.status).toBe(404);
+        await run(escapeHandler, session.token);
       } finally {
         await rm(outer, { recursive: true, force: true, maxRetries: 3 });
       }
+    }
+
+    it('refuses an encoded slash that decodes into ../ escaping editors/', async () => {
+      await withEscapeFixture(async (escapeHandler, token) => {
+        const res = await escapeHandler(new Request(`office://${token}/..%2f..%2fsecret.txt`));
+        expect(res.status).toBe(404);
+      });
     });
 
     it('refuses reaching another open session\'s media through an encoded ../', async () => {
@@ -131,10 +142,11 @@ describe('officeRequestHandler', () => {
       expect(res.status).toBe(404);
     });
 
-    it('refuses an encoded backslash traversal outside editors/', async () => {
-      const session = await sessions.open('/docs/report.docx', 1);
-      const res = await handler(new Request(`office://${session.token}/..%5c..%5cx`));
-      expect(res.status).toBe(404);
+    it('refuses an encoded backslash that decodes into ../ escaping editors/', async () => {
+      await withEscapeFixture(async (escapeHandler, token) => {
+        const res = await escapeHandler(new Request(`office://${token}/..%5c..%5csecret.txt`));
+        expect(res.status).toBe(404);
+      });
     });
   });
 
