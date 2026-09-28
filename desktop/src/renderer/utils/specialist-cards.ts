@@ -1,14 +1,34 @@
-import type { SubagentSegment, ToolCallState } from '../../shared/types';
+import type { PasswordAsk, SubagentSegment, ToolCallState } from '../../shared/types';
 
 type ToolSegment = Extract<SubagentSegment, { type: 'tool' }>;
 
+type AskShaped = { status: string; requestId?: string; passwordAsk?: PasswordAsk };
+
+/**
+ * True when a tool/segment row is genuinely waiting on the user to answer it
+ * — a permission ask (`requestId`) or an admin-password ask (`passwordAsk`).
+ * Nothing else ever sets `status: 'awaiting-approval'` without carrying one
+ * of these two, but a password ask keeps its OWN `requestId` nested inside
+ * `passwordAsk` rather than on the row's own `requestId` field (design
+ * 2026-09-25/26: the row's status flips the same way a permission ask's
+ * does, but the two asks are answered through different IPC calls, so they
+ * can't share one id field) — a bare `!!row.requestId` check silently
+ * excluded every password ask. Every consumer that used to write that check
+ * inline should call this instead, so the two ask kinds can never drift
+ * apart again (coordinator, 2026-09-26: "prefer a single shared predicate").
+ */
+export function needsUserAnswer(row: AskShaped): boolean {
+  return row.status === 'awaiting-approval' && (!!row.requestId || !!row.passwordAsk);
+}
+
 /**
  * Specialists 1c: does this Task card hold a helper's ask that is waiting on
- * the user? The card opens itself when it does (ToolCard, AgentSections).
+ * the user — a permission ask OR the helper's own sudo password ask? The
+ * card opens itself when it does (ToolCard, AgentSections).
  */
 export function hasNestedAsk(tool: ToolCallState): boolean {
   if (tool.toolName !== 'Task' || !tool.subagentSegments) return false;
-  return tool.subagentSegments.some(s => s.type === 'tool' && s.status === 'awaiting-approval' && !!s.requestId);
+  return tool.subagentSegments.some(s => s.type === 'tool' && needsUserAnswer(s));
 }
 
 /** True when any helper in the session is waiting on the user (see helperAsksOf). */
@@ -32,8 +52,21 @@ export function segmentToToolState(segment: ToolSegment): ToolCallState {
     requestId: segment.requestId,
     denyListed: segment.denyListed,
     external: segment.external,
+    floorStop: segment.floorStop,
     permissionMode: segment.permissionMode,
+    // admin-password (coordinator, 2026-09-26): without this, a nested
+    // password ask surfaced as a top-level-shaped card (helperAsksOf) lost
+    // its ask on the way — ToolCard had nothing to render.
+    passwordAsk: segment.passwordAsk,
   };
+}
+
+/** The id that identifies a pending ask on a row, whichever kind it is —
+ *  used for de-duplication and React keys where a permission ask's
+ *  `requestId` and a password ask's `passwordAsk.requestId` need one shared
+ *  lookup. */
+function askIdOf(row: AskShaped): string | undefined {
+  return row.requestId ?? row.passwordAsk?.requestId;
 }
 
 /**
@@ -54,13 +87,16 @@ export function helperAsksOf(toolCalls: Map<string, ToolCallState>): ToolCallSta
   // bottom — skip its nested twin so one request never shows twice.
   const topLevel = new Set<string>();
   for (const t of toolCalls.values()) {
-    if (t.status === 'awaiting-approval' && t.requestId) topLevel.add(t.requestId);
+    if (!needsUserAnswer(t)) continue;
+    const id = askIdOf(t);
+    if (id) topLevel.add(id);
   }
   for (const [id, card] of toolCalls) {
     if (!hasNestedAsk(card)) continue;
     for (const seg of card.subagentSegments!) {
-      if (seg.type !== 'tool' || seg.status !== 'awaiting-approval' || !seg.requestId) continue;
-      if (topLevel.has(seg.requestId)) continue;
+      if (seg.type !== 'tool' || !needsUserAnswer(seg)) continue;
+      const askId = askIdOf(seg);
+      if (askId && topLevel.has(askId)) continue;
       out.push({
         ...segmentToToolState(seg),
         specialist: {

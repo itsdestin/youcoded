@@ -173,7 +173,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
     }
   };
 
-  return <Dialog open={open} onClose={onClose} size="document" title="Submit a ticket">
+  return <Dialog screen="settings/development/bug-report" open={open} onClose={onClose} size="document" title="Submit a ticket">
     <div className="p-4 space-y-4">
 
       {phase === 'sending' && <LoadingState verb="Sending" what="your ticket" />}

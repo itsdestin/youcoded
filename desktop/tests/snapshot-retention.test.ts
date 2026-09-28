@@ -44,7 +44,7 @@ describe('snapshotsToDelete', () => {
   });
 
   it('never returns unparseable names for deletion', () => {
-    const names = ['personal', 'Backup', '2026-13-99', 'random', '2026-01-01'];
+    const names = ['personal', 'Backup', '2026-13-99', 'random', '2026-01-01', '2026-07-13'];
     // Only the valid, >90d date is deleted; every unparseable name is kept.
     expect(snapshotsToDelete(names, TODAY)).toEqual(['2026-01-01']);
   });
@@ -67,14 +67,26 @@ describe('snapshotsToDelete', () => {
 });
 
 describe('shouldStampDailyMarker', () => {
-  it('stamps only when due AND a snapshot succeeded', () => {
-    expect(shouldStampDailyMarker(true, true)).toBe(true);
+  it('stamps only when due, every destination was tried, and every one succeeded', () => {
+    expect(shouldStampDailyMarker(true, true, [true])).toBe(true);
+    expect(shouldStampDailyMarker(true, true, [true, true])).toBe(true);
   });
-  it('does NOT stamp when the snapshot failed this cycle (retry the same day)', () => {
-    expect(shouldStampDailyMarker(true, false)).toBe(false);
+  it('does NOT stamp when any destination failed (it must retry the same day)', () => {
+    expect(shouldStampDailyMarker(true, true, [true, false])).toBe(false);
+    expect(shouldStampDailyMarker(true, true, [false])).toBe(false);
+  });
+  it('does NOT stamp for a one-destination manual upload or a cycle with no snapshot destination', () => {
+    expect(shouldStampDailyMarker(true, false, [true])).toBe(false);
+    expect(shouldStampDailyMarker(true, true, [])).toBe(false);
   });
   it('does NOT stamp when not due, regardless of success', () => {
-    expect(shouldStampDailyMarker(false, true)).toBe(false);
-    expect(shouldStampDailyMarker(false, false)).toBe(false);
+    expect(shouldStampDailyMarker(false, true, [true])).toBe(false);
+    expect(shouldStampDailyMarker(false, true, [false])).toBe(false);
+  });
+});
+
+describe('snapshotsToDelete keeps the newest snapshot', () => {
+  it('never deletes the newest folder, even past 90 days', () => {
+    expect(snapshotsToDelete(['2025-01-01', '2025-02-01'], TODAY)).toEqual(['2025-01-01']);
   });
 });

@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { AdminRefusedNote } from '../permissions/AdminRefusedNote';
 import { ToolCallState, type ShellRunView } from '../../../shared/types';
 import { UnifiedDiff, FILE_BOX_CHUNK } from '../diff/UnifiedDiff';
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
@@ -8,7 +9,7 @@ import { buildTasksById, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../sta
 import { SubagentTimeline } from './SubagentTimeline';
 import { ChevronIcon } from '../Icons';
 import { useExpandAllToggle, getInitialExpanded, isExpandModeActive } from '../../hooks/useExpandAllToggle';
-import { useArtifactOptional } from '../../state/ArtifactContext';
+import { useArtifactSelectorOptional, useArtifactDispatchOptional } from '../../state/ArtifactContext';
 import { ArtifactThumbnail } from '../ArtifactThumbnail';
 import { matchSessionArtifact } from '../filepath-match';
 import { useSecondsTick } from '../../hooks/useSecondsTick';
@@ -135,11 +136,13 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
   // Optional: the buddy window / sandbox / tests render ToolCard without
   // ArtifactProvider. When absent, sessionArts is undefined → no match → we
   // fall back to the plain PathHeader below (no crash).
-  const artifactCtx = useArtifactOptional();
-  const sessionArts = artifactCtx?.state.sessionArtifacts;
+  // WHY a per-session selector (perf, 2026-09-23): this card now redraws only
+  // when ITS session's file list changes, not when any session writes a file.
+  const sessionArts = useArtifactSelectorOptional((s) => s.sessionArtifacts?.[sessionId ?? '']);
+  const artifactDispatch = useArtifactDispatchOptional();
   const artifact = useMemo(
-    () => matchSessionArtifact(sessionArts?.[sessionId ?? ''] ?? [], fp),
-    [sessionArts, sessionId, fp],
+    () => matchSessionArtifact(sessionArts ?? [], fp),
+    [sessionArts, fp],
   );
 
   if (!artifact) {
@@ -161,8 +164,8 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
 
   const open = () => {
     if (!sessionId) return; // per-session drawer needs a session to scope to
-    artifactCtx?.dispatch({ type: 'DRAWER_OPENED', sessionId });
-    artifactCtx?.dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: artifact.id });
+    artifactDispatch?.({ type: 'DRAWER_OPENED', sessionId });
+    artifactDispatch?.({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: artifact.id });
   };
 
   return (
@@ -321,7 +324,7 @@ function WriteView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
 // G-1 (background Bash): a ticking "2m 14s" for a running command, frozen at
 // its end time once it exits or is stopped. Rides the shared seconds clock
 // (useSecondsTick) only while running, so a finished card costs nothing.
-function useElapsed(startedAt: number | undefined, endedAt: number | undefined): string {
+export function useElapsed(startedAt: number | undefined, endedAt: number | undefined): string {
   const now = useSecondsTick(startedAt != null && endedAt == null);
   if (startedAt == null) return '';
   const ms = Math.max(0, (endedAt ?? now) - startedAt);
@@ -389,6 +392,8 @@ function ShellView({ tool, commandField, sessionId }: {
   return (
     <div className="space-y-2">
       {chips.length > 0 && <div className="flex items-center gap-1.5">{chips}</div>}
+      {/* Inside the details like any failed command's output — not pinned (Destin, review 5). */}
+      <AdminRefusedNote tool={tool} />
       <div className="relative group">
         <pre className="text-xs font-mono bg-canvas border border-edge rounded-sm px-2 py-1 pr-14 overflow-auto whitespace-pre-wrap break-all text-fg">
           {cmd || <span className="text-fg-muted italic">(no command)</span>}
@@ -399,7 +404,9 @@ function ShellView({ tool, commandField, sessionId }: {
           </div>
         )}
       </div>
-      {run?.status === 'running' && (
+      {/* An admin run's strip lives on the card itself (AdminRunStrip), outside
+          this body, so it is not drawn twice. */}
+      {run?.status === 'running' && !run.admin && (
         // G-1: the state in motion and the one action that resolves it. Stop
         // ends the command AND everything it launched (process family), so a
         // stopped `npm run dev` never leaves the real server behind.
@@ -720,8 +727,9 @@ function AgentView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
   const target = useSpecialistRunByChild(sessionId, taskId || undefined);
   // Task 10: same per-cwd lookup ToolCard/TaskConsentBlock use — a project's
   // OWN specialists only resolve here if this card's session cwd is passed.
-  const artifacts = useArtifactOptional();
-  const cwd = sessionId ? artifacts?.state.sessionCwd?.[sessionId] : undefined;
+  // Narrow selector: only this session's cwd, so other sessions' file writes
+  // don't redraw this card.
+  const cwd = useArtifactSelectorOptional((s) => (sessionId ? s.sessionCwd?.[sessionId] : undefined));
   const definition = useSpecialistDefinition(cwd, isNative ? subagent : undefined);
   const title = run?.title;
   const tone = SUBAGENT_TONE[subagent] || 'neutral';
@@ -801,7 +809,10 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
   // "Settled" is what auto-collapses Activity. For a background hire the tool
   // result is only the launch ack, so keying on `response` collapsed a card
   // whose child was still streaming (Test 4) — the run record is the truth.
-  const settled = run ? run.status !== 'running' : !!tool.response;
+  // Claude Code helpers run in the background too (2026-09-24): their tool
+  // result is the launch receipt, so the run record decides here as well.
+  const ccBg = isNative ? undefined : tool.ccBackground;
+  const settled = run ? run.status !== 'running' : ccBg ? ccBg.status !== 'running' : !!tool.response;
 
   // Auto-expand the activity section while running; auto-collapse once
   // settled. User toggles stick for the rest of the session.
@@ -831,9 +842,15 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
   // The report section. Foreground: the tool result IS the report. Background:
   // the delivered report folded into this card (specialistReport). A task_id
   // call's result is the management outcome ("Steer delivered…") — a Response.
+  // A CC background helper's report is the <result> of its end notice; until
+  // then there is none — the receipt ("Async agent launched… internal ID, do
+  // not mention to user") is Claude Code's note to the model, never a report.
+  const ccReport = ccBg ? (ccBg.result ?? (ccBg.status === 'completed' ? undefined : ccBg.summary)) : undefined;
   const report = tool.specialistReport
     ? { title: tool.specialistReport.status === 'failed' ? 'Report — failed' : 'Report', text: displayReport(tool.specialistReport.text) }
-    : tool.response && !taskId && (run ? run.background === false : isNative)
+    : ccBg
+      ? (ccReport ? { title: ccBg.status === 'failed' ? 'Report — failed' : 'Report', text: ccReport } : null)
+      : tool.response && !taskId && (run ? run.background === false : isNative)
       ? { title: 'Report', text: displayReport(tool.response) }
       : tool.response
         ? { title: 'Response', text: tool.response }

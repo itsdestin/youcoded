@@ -30,13 +30,14 @@ const WORKER_SRC = fs
 function loadWorker(subagentModel?: string) {
   const writes: string[] = [];
   let spawnedEnv: Record<string, string | undefined> = {};
+  let onExit: ((result: { exitCode: number }) => void) | undefined;
   const fakePty = {
     pid: 1234,
     write: (d: string) => { writes.push(d); },
     resize: vi.fn(),
     kill: vi.fn(),
     onData: () => ({ dispose() { /* no data in these tests */ } }),
-    onExit: () => undefined,
+    onExit: (cb: (result: { exitCode: number }) => void) => { onExit = cb; },
   };
   const fakeProcess: any = new EventEmitter();
   Object.assign(fakeProcess, {
@@ -68,7 +69,7 @@ function loadWorker(subagentModel?: string) {
   const deliver = listeners[0] as (msg: any) => void;
   deliver({ type: 'spawn', command: '/bin/sh', args: [], cwd: '/tmp', cols: 120, rows: 30, sessionId: 'test-claude-session' });
   writes.length = 0;   // drop anything the spawn itself wrote
-  return { deliver, writes, spawnedEnv };
+  return { deliver, writes, spawnedEnv, fakePty, fakeProcess, exitPty: () => onExit?.({ exitCode: 0 }) };
 }
 
 /** Let the worker's promise-based input queue, and its inter-chunk timers, run
@@ -82,6 +83,67 @@ describe('Claude Code specialist model launch default', () => {
 
   it('preserves an explicit subagent model from the launch environment', () => {
     expect(loadWorker('sonnet').spawnedEnv.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
+  });
+});
+
+describe('pty-worker handoff stop', () => {
+  it('bounds the parent acknowledgment wait and exits on failed send or disconnect', async () => {
+    vi.useFakeTimers();
+    try {
+      const timed = loadWorker();
+      timed.deliver({ type: 'stop-for-handoff' });
+      timed.exitPty();
+      expect(timed.fakeProcess.exit).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      expect(timed.fakeProcess.exit).toHaveBeenCalledWith(1);
+      const failed = loadWorker();
+      failed.deliver({ type: 'stop-for-handoff' });
+      failed.exitPty();
+      failed.fakeProcess.send.mock.lastCall?.[1](new Error('IPC closed'));
+      expect(failed.fakeProcess.exit).toHaveBeenCalledWith(1);
+      const disconnected = loadWorker();
+      disconnected.deliver({ type: 'stop-for-handoff' });
+      disconnected.exitPty();
+      disconnected.fakeProcess.emit('disconnect');
+      expect(disconnected.fakeProcess.exit).toHaveBeenCalled();
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it('parent receipt wins if it arrives before the transport callback', () => {
+    const { deliver, fakeProcess, exitPty } = loadWorker();
+    deliver({ type: 'stop-for-handoff' });
+    exitPty();
+    deliver({ type: 'handoff-exit-received' });
+    fakeProcess.send.mock.lastCall?.[1](new Error('late callback'));
+    expect(fakeProcess.exit.mock.calls).toEqual([[0]]);
+  });
+
+  it('never fabricates an exit acknowledgment if PTY kill throws', () => {
+    const { deliver, fakePty, fakeProcess } = loadWorker();
+    fakePty.kill.mockImplementationOnce(() => { throw new Error('PTY kill failed'); });
+    expect(() => deliver({ type: 'stop-for-handoff' })).toThrow('PTY kill failed');
+    expect(fakeProcess.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'exit' }), expect.anything());
+  });
+
+  it('waits for onExit and for exit IPC flush before exiting, refusing late input', async () => {
+    const { deliver, writes, fakePty, fakeProcess, exitPty } = loadWorker();
+    deliver({ type: 'input', data: 'queued turn\r' });
+    deliver({ type: 'stop-for-handoff' });
+    deliver({ type: 'input', data: 'late turn\r' });
+    await Promise.resolve();
+    expect(writes).toEqual([]);
+    expect(fakePty.kill).toHaveBeenCalledTimes(1);
+    expect(fakeProcess.exit).not.toHaveBeenCalled();
+    exitPty();
+    expect(fakeProcess.send).toHaveBeenCalledWith({ type: 'exit', exitCode: 0 }, expect.any(Function));
+    expect(fakeProcess.exit).not.toHaveBeenCalled();
+    fakeProcess.send.mock.lastCall?.[1](null);
+    // IPC send callback only confirms enqueue/flush, not receipt by main.
+    expect(fakeProcess.exit).not.toHaveBeenCalled();
+    deliver({ type: 'handoff-exit-received' });
+    expect(fakeProcess.exit).toHaveBeenCalledWith(0);
+    deliver({ type: 'handoff-exit-received' });
+    expect(fakeProcess.exit).toHaveBeenCalledTimes(1);
   });
 });
 

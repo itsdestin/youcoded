@@ -109,6 +109,13 @@ describe('AcceptedHistoryCapture', () => {
     expect(capture.revision).toBe(beforePrune + 2);
   });
 
+  it('retires pre-cut UUIDs before a sidecar can match repeated text to an older event', () => {
+    const capture = new AcceptedHistoryCapture();
+    for (const uuid of ['old', 'repeat-before', 'retained', 'repeat-after', 'summary']) capture.recordEvent(uuid);
+    capture.markSummary('summary', 'retained');
+    expect(capture.snapshot().eventUuids).toEqual(['retained', 'repeat-after', 'summary']);
+  });
+
   it('a later prune keeps an existing summary transformation, and is still a durable change', () => {
     // WHY (fix pass, review finding 2): the summary uuid is the ONLY way the
     // store can reference the summary message instead of copying its text, and

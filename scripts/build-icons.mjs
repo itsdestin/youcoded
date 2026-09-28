@@ -15,6 +15,7 @@
 // Writes:
 //   desktop/assets/icon.svg, icon.png (1024), icon.ico   app + window icon (Windows, Linux)
 //   desktop/assets/icon-mac.svg, icon-mac.icns           macOS app icon (Apple's ~80% grid)
+//   desktop/assets/icon-mac.png (1024)                   the Dock icon the RUNNING app sets on macOS
 //   desktop/assets/installer-icon.svg/.ico/.icns         Windows installer + the opened Mac disk
 //   app/src/main/res/mipmap-*dpi/ic_launcher_foreground.png, ic_launcher_monochrome.png
 import fs from 'node:fs';
@@ -79,6 +80,11 @@ for (const [name, body] of Object.entries(sources)) fs.writeFileSync(path.join(A
 render(path.join(ASSETS, 'icon.svg'), 1024, path.join(ASSETS, 'icon.png'));
 ico(path.join(ASSETS, 'icon.svg'), path.join(ASSETS, 'icon.ico'));
 icns(path.join(ASSETS, 'icon-mac.svg'), path.join(ASSETS, 'icon-mac.icns'));
+// WHY a PNG twin of the .icns: the running app swaps the Dock icon per theme and must be able to
+// put the default back. nativeImage reads PNG everywhere; it cannot be relied on to read .icns.
+// Without this file the reset used icon.png — the edge-to-edge Windows tile — so every Mac Dock
+// icon grew a size the moment the app opened (2026-09-27).
+render(path.join(ASSETS, 'icon-mac.svg'), 1024, path.join(ASSETS, 'icon-mac.png'));
 ico(path.join(ASSETS, 'installer-icon.svg'), path.join(ASSETS, 'installer-icon.ico'));
 icns(path.join(ASSETS, 'installer-icon.svg'), path.join(ASSETS, 'installer-icon.icns'));
 

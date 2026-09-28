@@ -38,7 +38,16 @@ export function clampDrawerWidth(width: number, windowWidth: number): number {
  *  artifact drawer and the games pane share this one writer instead of each
  *  growing their own copy. */
 export function applyPaneWidthVar(varName: string, px: number): void {
-  document.documentElement.style.setProperty(varName, `${px}px`);
+  const value = `${px}px`;
+  const style = document.documentElement.style;
+  // WHY skip an identical write: every write to a var on <html> makes the browser
+  // restyle the whole page (all elements inherit it) and recompute the frame's
+  // cut-out shape. During a drag the pointer often moves without the clamped width
+  // changing (pinned at the min/max, or a sub-pixel move), and ThemeProvider re-applies
+  // the committed width on pointer-up — those writes changed nothing on screen.
+  // The drag handlers already coalesce to one write per animation frame (rAF).
+  if (style.getPropertyValue(varName) === value) return;
+  style.setProperty(varName, value);
 }
 
 /** Artifact-drawer flavour of {@link applyPaneWidthVar}. Kept as its own export

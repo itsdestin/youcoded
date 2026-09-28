@@ -85,6 +85,44 @@ export function protectedReadPath(canonicalPath: string): boolean {
   return SENSITIVE_SUBPATHS.some((sub) => canonicalPath.includes(sub));
 }
 
+/**
+ * Credential and history files that a RECORDED path (a file the assistant wrote
+ * through `../`, write-authorization.ts judgeRelativeRecord) may never be
+ * trusted to name — on top of everything editTier already refuses.
+ *
+ * WHY a separate list rather than widening SENSITIVE_* (review 2026-09-23, F1):
+ * SENSITIVE_* also drives the file VIEWER, and a 2026-09-10 security review kept
+ * it narrow on purpose so you can still open your own .npmrc or shell history
+ * by clicking it. A planted `../` record is different — nobody chose it — so it
+ * gets this stricter check. The names overlap the harness file tools' list
+ * (main/harness/tools/credential-paths.ts), which additionally covers browser
+ * profiles; that list is home-anchored, this one matches anywhere. Mirrored in
+ * Kotlin (EditablePathPolicy.privateForRecordTrust), pinned by the shared
+ * fixture's `recordPrivate` field. Lowercased before matching.
+ */
+const RECORD_PRIVATE_BASENAMES = new Set([
+  '.git-credentials', '.git-credentials-store', '.npmrc', '.pypirc', '.pgpass', '.claude.json',
+  '.bash_history', '.zsh_history', '.sh_history', '.history', 'fish_history', '.python_history',
+  '.node_repl_history', '.psql_history', '.mysql_history', '.sqlite_history', '.irb_history', '.lesshst',
+]);
+const RECORD_PRIVATE_SUBPATHS = [
+  '/.docker/config.json', '/.config/gcloud/', '/keyrings/', '/.password-store/',
+  '/.cargo/credentials', '/.gem/credentials', '/.config/hub', '/.config/git/credentials',
+  '/.terraform.d/credentials.tfrc.json', '/library/keychains/',
+];
+
+export function privateForRecordTrust(canonicalPath: string): boolean {
+  // WHY lowercase BEFORE editTier too (re-review C3): editTier's names are
+  // case-sensitive (.ssh, .env, .netrc), and on a case-insensitive disk
+  // (Windows, macOS) `.SSH/id_rsa` IS the key. A trust decision must not be
+  // dodged by capital letters.
+  const lower = canonicalPath.toLowerCase();
+  if (editTier(lower) !== 'free') return true;
+  const base = lower.split('/').pop() ?? '';
+  if (RECORD_PRIVATE_BASENAMES.has(base)) return true;
+  return RECORD_PRIVATE_SUBPATHS.some((sub) => lower.includes(sub) || lower.endsWith(sub.replace(/\/$/, '')));
+}
+
 /** How much of a text file is served on the FIRST read. A naked multi-MB
  * readFile blocks the main thread, transits IPC/WS whole, then blocks the
  * renderer highlighting it (spec §2.3).

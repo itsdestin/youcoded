@@ -72,3 +72,29 @@ describe('roster cache states', () => {
     await waitFor(() => expect(result.current.status === 'ready' && result.current.result.skipped.length).toBe(1));
   });
 });
+
+// A roster whose read failed (a phone's connection dropping mid-read) used to stay failed
+// until Settings forced a refresh.
+describe('a failed roster is asked again', () => {
+  it('by the next screen that needs it', async () => {
+    mockList(vi.fn().mockRejectedValueOnce(new Error('lost')).mockResolvedValue(READY) as any);
+    const first = renderHook(() => useSpecialistRoster('cwd-failed-remount'));
+    await waitFor(() => expect(first.result.current.status).toBe('failed'));
+    first.unmount();
+    const second = renderHook(() => useSpecialistRoster('cwd-failed-remount'));
+    await waitFor(() => expect(second.result.current.status).toBe('ready'));
+  });
+
+  it('after a remote reconnect, once for every screen sharing the folder', async () => {
+    const { REMOTE_RECONNECTED_EVENT } = await import('../src/renderer/remote-events');
+    const list = vi.fn().mockRejectedValueOnce(new Error('lost')).mockResolvedValue(READY);
+    mockList(list as any);
+    const a = renderHook(() => useSpecialistRoster('cwd-failed-reconnect'));
+    const b = renderHook(() => useSpecialistRoster('cwd-failed-reconnect'));
+    await waitFor(() => expect(a.result.current.status).toBe('failed'));
+    const before = list.mock.calls.length;
+    await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+    await waitFor(() => expect(b.result.current.status).toBe('ready'));
+    expect(list.mock.calls.length).toBe(before + 1);
+  });
+});

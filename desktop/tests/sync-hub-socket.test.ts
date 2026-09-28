@@ -66,6 +66,23 @@ describe('sync-hub-socket state machine', () => {
     sock.destroy();
   });
 
+  it('sends expected holder only on conditional force and refuses malformed force rather than sending legacy force', async () => {
+    const { sock } = makeSocket(() => 'tok');
+    sock.setDesired(true); const ws = FakeSocket.instances[0]; ws.emit('open');
+    expect(await sock.request('force-acquire-if-holder', 'session', 'requester')).toBeNull();
+    expect(await sock.request('force-acquire-if-holder', 'session', 'requester', undefined, '../bad')).toBeNull();
+    expect(ws.sent).toHaveLength(0);
+    const result = sock.request('force-acquire-if-holder', 'session', 'requester', undefined, 'original');
+    const sent = JSON.parse(ws.sent[0]);
+    expect(sent).toMatchObject({ type: 'lease', op: 'force-acquire-if-holder', sessionId: 'session',
+      deviceId: 'requester', expectedHolderId: 'original' });
+    expect(sent).not.toHaveProperty('transferNonce');
+    ws.emit('message', JSON.stringify({ type: 'lease-result', reqId: sent.reqId,
+      op: 'force-acquire-if-holder', sessionId: 'session', ok: true, holder: { deviceId: 'requester' } }));
+    expect(await result).toMatchObject({ ok: true, op: 'force-acquire-if-holder', holder: { deviceId: 'requester' } });
+    sock.destroy();
+  });
+
   // Behavior 2: No token → no socket construction; a retry is scheduled at the
   // max backoff. Once a token appears, advancing the timer constructs a socket.
   it('bails without a token but retries on a timer; connects once a token appears', () => {
@@ -482,6 +499,31 @@ describe('sync-hub-socket state machine', () => {
     const p = sock.request('acquire', 'sess-1', 'dev-1');
     sock.setDesired(false); // intentional teardown → failAllPending
     await expect(p).resolves.toBeNull();
+    sock.destroy();
+  });
+
+  it('relays an optional takeover nonce and authoritative holder identity without confusing reqId', async () => {
+    const { sock, events } = makeSocket(() => 'tok');
+    sock.setDesired(true);
+    const inst = FakeSocket.instances[0]; inst.emit('open');
+    const nonce = '3db07e20-1244-4a1b-85bf-bde2db925e41';
+    const pending = sock.request('takeover', 's', 'requester-1', nonce);
+    const frame = JSON.parse(inst.sent.at(-1)!);
+    expect(frame.transferNonce).toBe(nonce);
+    expect(frame.reqId).not.toBe(nonce);
+    inst.emit('message', JSON.stringify({ type: 'lease-result', reqId: frame.reqId, ok: true, op: 'takeover', sessionId: 's' }));
+    await pending;
+    inst.emit('message', JSON.stringify({ type: 'lease-event', kind: 'takeover-request', sessionId: 's',
+      from: { deviceId: 'requester-1', device: 'Label' }, senderDeviceId: 'holder-1', transferNonce: nonce }));
+    expect(events.at(-1)).toMatchObject({ transferNonce: nonce, senderDeviceId: 'holder-1' });
+    const beforeInvalid = inst.sent.length;
+    expect(await sock.request('takeover', 's', 'requester-1', 'not-a-uuid')).toBeNull();
+    expect(inst.sent).toHaveLength(beforeInvalid);
+    const legacy = sock.request('takeover', 's', 'requester-1');
+    expect(JSON.parse(inst.sent.at(-1)!)).not.toHaveProperty('transferNonce');
+    const oldFrame = JSON.parse(inst.sent.at(-1)!);
+    inst.emit('message', JSON.stringify({ type: 'lease-result', reqId: oldFrame.reqId, ok: true, op: 'takeover', sessionId: 's' }));
+    await legacy;
     sock.destroy();
   });
 

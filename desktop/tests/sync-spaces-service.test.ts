@@ -542,6 +542,29 @@ describe('sync-spaces service transition serialization', () => {
     );
   });
 
+  // A project's name is its sync identity (lowercased). A name that would join
+  // another project's online copy is refused BEFORE anything is created.
+  it('refuses a name the user stopped syncing (its old files would return)', async () => {
+    h.autoAddSpace = true;
+    const svc = await freshService();
+    await svc.syncSpacesEnable(true);
+    h.registry = [{ schemaVersion: 1, name: 'Foo', repoName: 'r', displayName: 'Foo', state: 'stopped', updatedAt: 1 }];
+    const r = await svc.syncSpacesCreateProject('foo');
+    expect(r).toEqual({ ok: false, error: 'A project named "Foo" was stopped from syncing earlier. Choose a different name.' });
+    expect(h.projects).not.toContain('foo');
+    expect(h.engines[0].added).not.toContain('project:foo');
+  });
+
+  it('refuses a name that differs from an existing project only by capital letters', async () => {
+    h.autoAddSpace = true;
+    const svc = await freshService();
+    await svc.syncSpacesEnable(true);
+    await svc.syncSpacesCreateProject('Notes');
+    const r = await svc.syncSpacesCreateProject('notes');
+    expect(r).toEqual({ ok: false, error: 'A project named "Notes" already exists. Names can\'t differ only by capital letters.' });
+    expect(h.projects).toEqual(['Notes']);
+  });
+
   // ---- Discovery / materialize / stop gate / triggers (2026-07-12) ----
 
   async function enabledSvc() {
@@ -560,6 +583,18 @@ describe('sync-spaces service transition serialization', () => {
     await vi.waitFor(() => expect(h.projects).toContain('gamma'));
     expect(engine.added).toContain('project:gamma');
     void svc;
+  });
+
+  it("discovery never adds a second folder for a name that differs only by capital letters", async () => {
+    const svc = await enabledSvc();
+    await svc.syncSpacesCreateProject('gamma');
+    h.registry = [
+      { schemaVersion: 1, name: 'Gamma', repoName: 'r-G', displayName: 'Gamma', state: 'active', updatedAt: 1 },
+      { schemaVersion: 1, name: 'delta', repoName: 'r-d', displayName: 'delta', state: 'active', updatedAt: 1 },
+    ];
+    h.hub.opts.onEvent({ type: 'connected' });
+    await vi.waitFor(() => expect(h.projects).toContain('delta')); // discovery ran
+    expect(h.projects).not.toContain('Gamma');
   });
 
   it('discovery skips an already-local project', async () => {
@@ -657,6 +692,10 @@ describe('sync-spaces service transition serialization', () => {
     const res = await svc.hubLeaseRequest('acquire', 's2', 'dev-a');
     expect(h.hub.request).toHaveBeenCalledWith('acquire', 's2', 'dev-a');
     expect(res).toMatchObject({ ok: true, op: 'acquire', sessionId: 's2' });
+    // WHY: the facade cannot silently discard a nonce before the socket sees it.
+    const nonce = '3db07e20-1244-4a1b-85bf-bde2db925e41';
+    await svc.hubLeaseRequest('takeover', 's2', 'dev-a', nonce);
+    expect(h.hub.request).toHaveBeenCalledWith('takeover', 's2', 'dev-a', nonce);
   });
 
   it('a hub lease-event reaches the registered lease-event listener', async () => {

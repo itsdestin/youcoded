@@ -127,7 +127,10 @@ async function extract(absPath: string, requested: PageRange | undefined): Promi
   const pdfjs = await loadPdfJs();
   // pdf.js takes ownership of (detaches) the buffer it is handed, so give it
   // its own copy rather than a view that anything else might still hold.
-  const data = new Uint8Array(fs.readFileSync(absPath));
+  // WHY async (2026-09-24 blocking-calls B8): a whole PDF read synchronously
+  // froze every window for the length of the read on each Read of a .pdf.
+  // Still inside serialized(), so at most one PDF's bytes are in flight.
+  const data = new Uint8Array(await fs.promises.readFile(absPath));
   const task = pdfjs.getDocument({
     data,
     // No probing the OS for fonts, no console chatter — we only want the text

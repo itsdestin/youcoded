@@ -9,10 +9,9 @@ updated: 2026-07-22
 
 > **The colour/token half of this spec was deleted on 2026-07-22.** It documented
 > a pre-engine workflow that no longer exists — hand-written `[data-theme]` CSS
-> blocks, a `ThemeName` union, a `DARK_THEMES` array — plus the wrong product
-> name ("DestinCode") and the wrong localStorage key (`destincode-theme`; the
-> real key is `youcoded-theme`). Following it would have produced a theme the
-> engine never loads.
+> blocks, a `ThemeName` union, a `DARK_THEMES` array — plus the app's old
+> pre-rename name and localStorage key (the real key is `youcoded-theme`).
+> Following it would have produced a theme the engine never loads.
 >
 > The mascot-rig sections below were re-verified against code on the same date
 > and are kept: every file and type they cite still exists.
@@ -27,6 +26,7 @@ these are its entry points:
 | Token computation, overlay/derived tokens (`--scrim`, `--destructive`, `--on-destructive`, `--code`, `--link`) | `src/renderer/themes/theme-engine.ts` |
 | Active theme, cycle list, font, persistence, `data-theme` on `<html>` | `src/renderer/state/theme-context.tsx` |
 | Manifest shape a theme pack must satisfy | `src/renderer/themes/theme-types.ts` |
+| The user's global Look (layout — which brings its preset message box, `input-style` — glass, bubble shape, roundness) laid over whichever theme is active; absent field = the theme's own. A theme ships ONE set of these; there are no per-theme user tweaks (retired 2026-09-24) | `src/renderer/themes/look-overrides.ts` (UI: `components/appearance/LookSettings.tsx`) |
 | Validation + non-fatal `custom_css` lint | `src/renderer/themes/theme-validator.ts` |
 | Built-in theme values (the four packs) | `src/renderer/themes/builtin/*.json` |
 | Anti-FOUC duplicate of those values | the `[data-theme]` blocks in `src/renderer/styles/globals.css` |
@@ -44,6 +44,27 @@ the vendored copy by hand. Audit every theme with:
 ```bash
 node scripts/audit-theme-contrast.mjs
 ```
+
+## Chrome styles (`layout.chrome-style`)
+
+A theme picks how the app's chrome sits around the chat. The user can override the
+pick for every theme (Settings → Appearance → Layout; `look-overrides.ts`).
+
+| Value | Picker name | What it does | Where it lives |
+|---|---|---|---|
+| `default` (or absent) | Framed | Header, frame edges and the bottom bars are one continuous surface with the chat cut out of it. | `.chrome-glass` in `globals.css` |
+| `floating` | Floating bars | The three bars become detached rounded cards; the controls inside them stay flat. | `[data-chrome-style='floating']` rules in `globals.css`; frost in `theme-engine.ts` |
+| `float` | Minimalist | No bars at all: every control (header buttons, session switcher, quick chips, message box, status chips) wears its own light frosted surface over the wallpaper, and messages fade out beneath them. | `styles/float-chrome.css`; frost in `theme-engine.ts` (`FLOAT_CHROME_GLASS`) |
+
+- **Every rule is gated on `[data-chrome-style='<value>']`** on `<body>`, so a style
+  never touches themes that do not pick it (`tests/float-chrome-pops.test.ts`).
+- **Blur only through the theme engine's glass sheet**, which is written only with a
+  wallpaper/gradient, Reduced effects off and panel blur above zero — so both user
+  settings turn a style's frost off.
+- **`float` without a wallpaper** still floats every control; they are simply not see-through.
+- The theme builder offers all three (Kit → Chrome & Layout: Classic, Floating,
+  Minimalist; plus Minimal, which is `default` with slimmer header/input/status styles).
+  Its mockup mirrors these rules in `theme-preview.css`, guarded by `sync-check.cjs`.
 
 ## Adding a theme or a token
 

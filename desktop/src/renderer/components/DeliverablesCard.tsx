@@ -32,7 +32,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ToolCallState } from '../../shared/types';
 import type { ArtifactRecord } from '../../shared/artifacts/types';
-import { useArtifactOptional } from '../state/ArtifactContext';
+import { useArtifactSelectorOptional } from '../state/ArtifactContext';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllToggle';
 import { ChevronIcon } from './Icons';
@@ -163,10 +163,11 @@ export interface SentFileTileProps {
 }
 
 export function SentFileTile({ path, sessionId, status, error, narrow, tileBg = 'bg-well', compact = false }: SentFileTileProps) {
-  const artifactCtx = useArtifactOptional();
   const open = useOpenFilepath(sessionId);
-  const cwd = artifactCtx?.state.sessionCwd?.[sessionId];
-  const sessionArts = artifactCtx?.state.sessionArtifacts?.[sessionId];
+  // WHY narrow selectors (perf, 2026-09-23): this tile redraws only when its
+  // own session's cwd or file list changes, not when any session writes a file.
+  const cwd = useArtifactSelectorOptional((s) => s.sessionCwd?.[sessionId]);
+  const sessionArts = useArtifactSelectorOptional((s) => s.sessionArtifacts?.[sessionId]);
   const abs = resolveAbsolute(path, cwd);
 
   const matched = useMemo(

@@ -27,4 +27,11 @@ describe('page view state', () => {
     // …and back: Pages replaces Projects in place.
     expect(artifactReducer(projects, { type: 'PAGE_VIEW_OPENED' })).toMatchObject({ projectViewOpen: false, pageViewOpen: true });
   });
+
+  it('closing the page (it was deleted) keeps the view open on "No page selected" with the panel back', () => {
+    const open = artifactReducer(initialArtifactState, { type: 'PAGE_OPENED', pageId: 'p', focus: true });
+    // Focus hid the panel; with no page left, the panel is the only way on.
+    expect(artifactReducer(open, { type: 'PAGE_CLOSED' })).toMatchObject({ pageViewOpen: true, openPageId: null, pageFocus: false });
+  });
 });
+

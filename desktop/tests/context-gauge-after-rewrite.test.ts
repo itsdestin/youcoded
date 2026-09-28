@@ -9,7 +9,9 @@
 //
 // Companion files: native-context-occupancy.test.ts (the harness half),
 // statusbar-native-usage.test.ts (the rest of the chip selector).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatState, ChatAction } from '../src/renderer/state/chat-types';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
@@ -129,6 +131,98 @@ describe('the compaction marker can finally say what it freed', () => {
     });
     const marker = sess(state).timeline.find((e: any) => e.kind === 'system-marker') as any;
     expect(marker.marker.label).toBe('Compacted · freed 68,000 tokens');
+  });
+
+  it('auto compaction keeps an active native turn and its running tool alive, with one marker on replay', () => {
+    let state = init();
+    const current = sess(state);
+    state = new Map(state).set(SESSION, { ...current, isThinking: true,
+      activeTurnToolIds: new Set(['running-tool']), currentTurnId: 'turn-live',
+      toolCalls: new Map([['background-specialist', { status: 'running', name: 'Task' } as any]]),
+      timeline: [...current.timeline, { kind: 'compacting', id: 'spinner' } as any],
+    });
+    const action: ChatAction = { type: 'COMPACTION_COMPLETE', sessionId: SESSION,
+      markerId: 'compact-1', auto: true, beforeContextTokens: 80_000,
+      afterContextTokens: 12_000, summary: 'summary' };
+    state = run(state, action);
+    expect(sess(state).isThinking).toBe(true);
+    expect(sess(state).currentTurnId).toBe('turn-live');
+    expect(sess(state).activeTurnToolIds.has('running-tool')).toBe(true);
+    expect(sess(state).toolCalls.get('background-specialist')?.status).toBe('running');
+    expect(sess(state).timeline.filter(e => e.kind === 'compacting')).toHaveLength(0);
+    expect(sess(state).timeline.filter(e => e.kind === 'system-marker' && e.marker.id === 'compact-1')).toHaveLength(1);
+    state = run(state, action);
+    expect(sess(state).timeline.filter(e => e.kind === 'system-marker' && e.marker.id === 'compact-1')).toHaveLength(1);
+  });
+
+  it('carries the kept tail\'s first user message onto the marker (null too); CC markers stay without it', () => {
+    for (const retainedFromUuid of ['u-kept', null] as const) {
+      const state = run(init(), { type: 'COMPACTION_COMPLETE', sessionId: SESSION, markerId: 'k', auto: true,
+        afterContextTokens: 1, retainedFromUuid });
+      const marker = sess(state).timeline.find((e: any) => e.kind === 'system-marker') as any;
+      expect(marker.marker.retainedFromUuid).toBe(retainedFromUuid);
+    }
+    let cc = run(init(), { type: 'COMPACTION_PENDING', sessionId: SESSION, cardId: 'p', beforeContextTokens: 1 });
+    cc = run(cc, { type: 'COMPACTION_COMPLETE', sessionId: SESSION, markerId: 'cc', afterContextTokens: 1 });
+    const marker = sess(cc).timeline.find((e: any) => e.kind === 'system-marker') as any;
+    expect('retainedFromUuid' in marker.marker).toBe(false);
+  });
+
+  it('a stopped native summary drops its card with no marker; awaitsResult is kept for the watchdog', () => {
+    let state = run(init(), { type: 'COMPACTION_PENDING', sessionId: SESSION, cardId: 'p', beforeContextTokens: null, awaitsResult: true });
+    expect(sess(state).compactionPending?.awaitsResult).toBe(true);
+    state = run(state, { type: 'COMPACTION_CANCELLED', sessionId: SESSION });
+    expect(sess(state).compactionPending).toBeNull();
+    expect(sess(state).timeline.filter(e => e.kind === 'compacting' || e.kind === 'system-marker')).toHaveLength(0);
+    // Idempotent: nothing pending → same state object.
+    expect(run(state, { type: 'COMPACTION_CANCELLED', sessionId: SESSION })).toBe(state);
+  });
+
+  it('native /compact marks its card awaitsResult so the 3-minute watchdog never guesses; CC does not', async () => {
+    const { dispatchSlashCommand } = await import('../src/renderer/state/slash-command-dispatcher');
+    for (const native of [true, false]) {
+      const dispatch = vi.fn();
+      dispatchSlashCommand({ raw: '/compact', sessionId: SESSION, view: 'chat', files: [], dispatch, timeline: [],
+        callbacks: {}, deferUiEffectsToRuntime: native } as any);
+      const pending = dispatch.mock.calls.map(c => c[0]).find(a => a.type === 'COMPACTION_PENDING');
+      expect(pending.awaitsResult).toBe(native ? true : undefined);
+    }
+  });
+
+  it('a Stop during native /compact cancels the card instead of "Compaction may have failed"', async () => {
+    const { runNativeSlashAction } = await import('../src/renderer/state/native-slash-actions');
+    const dispatch = vi.fn();
+    const onToast = vi.fn();
+    (globalThis as any).window = { claude: { native: { compact: async () => ({ ok: false, reason: 'interrupted' }) } } };
+    try {
+      expect(await runNativeSlashAction({ kind: 'compact' }, { sessionId: SESSION, dispatch, onToast })).toBe(false);
+    } finally { delete (globalThis as any).window; }
+    expect(dispatch).toHaveBeenCalledWith({ type: 'COMPACTION_CANCELLED', sessionId: SESSION });
+    expect(onToast).toHaveBeenCalledWith('Compaction stopped. The conversation was left as it was.');
+  });
+
+  it('manual /compact and Claude Code completion still close the active turn', () => {
+    for (const native of [true, false]) {
+      let state = init();
+      const current = sess(state);
+      state = new Map(state).set(SESSION, { ...current, isThinking: true,
+        activeTurnToolIds: new Set(['tool']), currentTurnId: 'turn-live' });
+      state = run(state, { type: 'COMPACTION_PENDING', sessionId: SESSION, cardId: 'pending', beforeContextTokens: 80_000 });
+      state = run(state, { type: 'COMPACTION_COMPLETE', sessionId: SESSION,
+        markerId: native ? 'manual-native' : 'manual-cc', afterContextTokens: 12_000 });
+      expect(sess(state).isThinking).toBe(false);
+      expect(sess(state).currentTurnId).toBeNull();
+      expect(sess(state).activeTurnToolIds.size).toBe(0);
+    }
+  });
+
+  it('uses the transcript uuid as the marker id so the reducer can dedupe event replay', () => {
+    // WHY a cross-file source guard: the App transcript callback depends on live
+    // IPC wiring, while the reducer's replay test above alone cannot catch a
+    // fresh clock-based id minted by the event adapter on every delivery.
+    const source = readFileSync(fileURLToPath(new URL('../src/renderer/App.tsx', import.meta.url)), 'utf8');
+    const compactCase = source.split("case 'compact-summary': {")[1]?.split("case '")[0];
+    expect(compactCase).toMatch(/markerId:\s*`compact-done-\$\{event\.uuid\}`/);
   });
 
   it('still falls back to Claude Code’s own reading when the event carries none', () => {

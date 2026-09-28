@@ -19,12 +19,13 @@
 import { guardDirtyEditor } from './artifact-views/dirty-editor-guard';
 import { PagesIcon } from './pages/page-icons';
 import { createPortal } from 'react-dom';
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import { GamepadIcon } from './Icons';
 import { useAnchoredMenu } from '../hooks/useAnchoredMenu';
 import { useArtifactCount } from '../hooks/useArtifactCount';
 import { Tooltip } from './ui';
 import { FOCUS_RING } from './ui/Button';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 const MENU_WIDTH = 208; // w-52
 
@@ -45,15 +46,17 @@ export default function OverflowMenu({
   onToggleSettings, settingsBadge, settingsDangerBadge,
   onToggleGamePanel, gamePanelOpen, gameConnected, challengePending,
 }: Props) {
-  const { state, dispatch } = useArtifact();
+  const dispatch = useArtifactDispatch();
   // Session Files joined this menu on narrow (Destin, 2026-07-20; renamed from
   // "Session artifacts" 2026-07-23) — the header's right cluster is now the
   // chat/terminal toggle's home.
-  const drawerOpen = activeSessionId ? (state.drawerOpenBySession[activeSessionId] ?? false) : false;
+  // Narrow selector: only the active session's drawer flag redraws this menu.
+  const drawerOpen = useArtifactSelector((s) => (activeSessionId ? (s.drawerOpenBySession[activeSessionId] ?? false) : false));
   const artifactCount = useArtifactCount(activeSessionId, projectRoot);
   // Positioning + outside/Escape dismissal live in the shared hook, which the
   // project-view hero menu also uses.
   const { open, toggle, anchorRef, menuRef, pos, choose } = useAnchoredMenu<HTMLButtonElement>(MENU_WIDTH);
+  useScreenOpen('chat/overflow', () => { if (!open) toggle(); }); // photo-only build (a phone-width screen)
 
   // Any badge on a collapsed item has to surface on the ||| button itself,
   // otherwise collapsing the header silently swallows the notification that
@@ -167,6 +170,7 @@ export default function OverflowMenu({
           className="glass-overlay overlay-no-drag fixed w-52 bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden py-1"
           style={{ top: pos.top, left: pos.left }}
         >
+          <ScreenMark name="chat/overflow" />
           {rows.map(r => (
             <button
               key={r.key}

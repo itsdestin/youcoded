@@ -97,6 +97,15 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // Welcome back's session.reopenList/session.forgetReopen rows are GONE
+  // (T2, 2026-09-24): main + preload + remote-shim now carry the real
+  // channels; the mock implementations in mock-shim.ts stay (the workbench
+  // still has no real userData or transcript files to answer from).
+  // Welcome back's in-app quit warning rows (window.onCloseRequest,
+  // window.answerClose) are GONE too (T3, 2026-09-24): main + preload now
+  // carry the real request/answer pair (Electron-only, design §3 — no
+  // shim/Android twin needed). The mock implementations in mock-shim.ts stay
+  // so `?quit=ask` keeps reviewing the prompt without a real window manager.
   // Pages Phase 2 (2026-09-19): the approval screen, the band's "Updated" line, a card's
   // connections and the saved keys under Connected services were designed here first, and the
   // five `pages.*` rows came off on 2026-09-20 when the real channels landed — the manifest's

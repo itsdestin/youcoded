@@ -60,7 +60,7 @@ export function ConnectedAccountsBody({ status, refresh }: {
 
   return (
     <div className="space-y-4">
-      {/* How this page relates to the WeCoded sign-in the user just came from —
+      {/* How this page relates to the YouCoded sign-in the user just came from —
           the exact confusion this layout exists to prevent: both use GitHub,
           for two different jobs. */}
       <p className="text-2xs text-fg-dim leading-relaxed">

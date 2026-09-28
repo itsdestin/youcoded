@@ -110,6 +110,11 @@ export function createArtifactToolUseTracker(deps: ArtifactToolUseTrackerDeps): 
       Promise.resolve(deps.listSession(sessionId, projectRoot))
         .then((res) => {
           if (disposed) return;
+          // WHY: the append + list round trip can finish after the tab closed.
+          // Loading it then would re-create the list App just freed
+          // (SESSION_REMOVED) for a tab that no longer exists. A resumed
+          // conversation that reuses the id is back in the list, so it loads.
+          if (!deps.getSessions()?.some?.((s) => s.id === sessionId)) return;
           if (res && res.ok && Array.isArray(res.artifacts)) deps.onSessionArtifacts(sessionId, res.artifacts);
         })
         .catch((e) => log('[artifact-tracker] listSession failed', e));

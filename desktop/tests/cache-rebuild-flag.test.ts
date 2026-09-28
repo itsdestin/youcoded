@@ -24,7 +24,9 @@ describe('turn-complete usage.expectedRebuild', () => {
   it('is true on the turn whose request followed a summary compaction', async () => {
     const events: any[] = [];
     const session = makeSession({
-      contextLength: 4096, seedBulkHistoryTokens: 6000, onEvent: (e) => events.push(e),
+      // WHY: reserve the summary output separately; a 6k history cannot
+      // produce a complete handoff inside a 4k window.
+      contextLength: 32_768, seedBulkHistoryTokens: 25_000, onEvent: (e) => events.push(e),
       model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
     });
     await drainTurn(session, 'continue');

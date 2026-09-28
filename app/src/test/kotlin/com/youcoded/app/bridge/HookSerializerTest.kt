@@ -140,6 +140,14 @@ class HookSerializerTest {
         assertFalse("Should not have 'requestId'", inner.has("requestId"))
     }
 
+    @Test
+    fun `permissionExpired carries _reason when present and omits it when null`() {
+        val with = HookSerializer.permissionExpired("s1", "r1", "hook-closed")
+        assertEquals("hook-closed", with.getJSONObject("payload").getJSONObject("payload").getString("_reason"))
+        val without = HookSerializer.permissionExpired("s1", "r1", null)
+        assertFalse(without.getJSONObject("payload").getJSONObject("payload").has("_reason"))
+    }
+
     // ── notification ─────────────────────────────────────────────────────────
 
     @Test

@@ -16,6 +16,7 @@ import { useTheme } from '../state/theme-context';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { Scrim } from './overlays/Overlay';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import AboutPopup from './AboutPopup';
 import { DevelopmentPopup } from './development/DevelopmentPopup';
 import { HelpPopup } from './HelpPopup';
@@ -26,6 +27,7 @@ import PerformanceButton from './PerformanceButton';
 import AccountSection from './AccountSection';
 import { DonateConfirm } from './DonateConfirm';
 import AssistantSettingsRow from './assistant-settings/AssistantSettings';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import type { AssistantDefaults } from './assistant-settings/pages';
 import { formatVersionLine } from '../../shared/version-line';
 // The Linux/KDE buddy helper's three-state answer. Typed centrally so the popup
@@ -227,7 +229,7 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
           header + scrolling body (scrollBody defaults true) fixes the reachability;
           "panel" (420px) stops the wrapping. The grid keeps the key chips in their
           own column so a long label can never push one out of line. */}
-      <Dialog open onClose={onClose} size="panel" title="Keyboard Shortcuts">
+      <Dialog screen="settings/shortcuts" open onClose={onClose} size="panel" title="Keyboard Shortcuts">
         <div className="grid grid-cols-[1fr_auto] gap-x-4 items-center">
           {SHORTCUTS.map(({ keys, description }) => (
             <React.Fragment key={keys}>
@@ -332,6 +334,7 @@ export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand
               style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             />
           </div>
+          <ScreenMark name="settings" />
 
           <div ref={outerScrollRef} className="scroll-fade settings-drawer-scroll flex-1 min-h-0">
             {isAndroid() ? (
@@ -584,6 +587,7 @@ const SOUND_CATEGORY_META: Record<SoundCategory, { label: string; description: s
 /** Sound settings — compact row that opens a popout modal (matches ThemeButton pattern) */
 function SoundButton() {
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/sound', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   const popupRef = useRef<HTMLDivElement>(null);
   // Which notification the shared sound list is currently editing.
   const [soundCategory, setSoundCategory] = useState<SoundCategory>('attention');
@@ -651,7 +655,7 @@ function SoundButton() {
         onClick={() => setOpen(true)}
       />
 
-      <Dialog
+      <Dialog screen="settings/sound"
         open={open}
         onClose={() => setOpen(false)}
         title="Sound & Notifications"
@@ -732,6 +736,7 @@ function SoundButton() {
 function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTheme }: { onSendInput?: (text: string) => void; onRunCommand?: (command: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void }) {
   const { activeTheme, allThemes } = useTheme();
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/appearance', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   // The first-run tour moving on closes this dialog (guide-events.ts).
   useGuideReset(useCallback(() => setOpen(false), []));
   // ThemeScreen fills this Dialog but does not own it, so it cannot reach the
@@ -740,6 +745,8 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
   // extended to the theme editor so its header can go too.
   const [showInfo, setShowInfo] = useState(false);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
+  useScreenOpen('settings/appearance/about', () => setShowInfo(true));
+  useScreenOpen('settings/appearance/edit', () => setEditingSlug('halftone-dimension')); // a fixture community theme
   const editingTheme = editingSlug ? (allThemes.find((t) => t.slug === editingSlug) ?? null) : null;
   const popupRef = useRef<HTMLDivElement>(null);
 
@@ -775,13 +782,13 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
       </div>
 
       {/* D1: one header for all three of ThemeScreen's views. */}
-      <Dialog
+      <Dialog screen="settings/appearance"
         open={open}
         onClose={() => setOpen(false)}
         title={
           showInfo ? 'About Appearance'
             : editingTheme ? `Edit: ${editingTheme.name}`
-              : 'Themes'
+              : 'Appearance' // holds Look + Effects too since 2026-09-24, not only themes
         }
         onBack={
           showInfo ? () => setShowInfo(false)
@@ -799,6 +806,8 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
         fill
         panelRef={popupRef}
       >
+        {showInfo && <ScreenMark name="settings/appearance/about" />}
+        {editingTheme && <ScreenMark name="settings/appearance/edit" />}
         <ThemeScreen
           onClose={() => setOpen(false)}
           onSendInput={onSendInput}
@@ -843,7 +852,8 @@ function BuddyIcon() {
 // Rather than sprinkle try/catch over four call sites, don't render a
 // desktop-only control on clients that can't use it. window.claude.window is
 // the Electron-only surface the shim deliberately omits; getPlatform() is not
-// usable because the shim sets __PLATFORM__ to the host's 'desktop' on auth:ok.
+// usable because a remote client's platform varies ('browser' on a touch-first
+// phone, the host's 'desktop' on a mouse-first browser, 'android' when paired).
 const isDesktopShell = () => !!(window as any).claude?.window;
 
 // Exported for tests/buddy-helper-states.test.tsx, which drives design §4's
@@ -864,6 +874,7 @@ export function BuddyButton() {
   // recovery (show() clears the dismissed flag main-side).
   const [dismissed, setDismissed] = useState(false);
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/buddy', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   const popupRef = useRef<HTMLDivElement>(null);
   // Gates the KDE helper lookup below. The real OS platform, not the app-shell
   // 'electron'/'android'/'browser' axis in ../platform, because it must not fire
@@ -1147,7 +1158,7 @@ export function BuddyButton() {
           taller states instead of letting it grow. (Written for the Linux
           keep-above row, which review B-2 deleted; the consent card and the
           Remove helper action are what make this popup tall now.) */}
-      <Dialog
+      <Dialog screen="settings/buddy"
         open={open}
         onClose={() => setOpen(false)}
         title="Buddy Floater"
@@ -1555,6 +1566,7 @@ function RemoteButton(props: RemoteButtonProps) {
   onSetShowSetupQR, onSetShowAddDevice, onReportIssue,
   } = props;
   const [open, setOpen] = useState(!!props.mockView);
+  useScreenOpen('settings/remote', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   const [mockPassword, setMockPassword] = useState('');
   const [mockSaved, setMockSaved] = useState(false);
   const [mockAwake, setMockAwake] = useState(4); // WHY 4: matches the Before capture's fixture, so the deck shows only the changes under review
@@ -1734,7 +1746,7 @@ function RemoteButton(props: RemoteButtonProps) {
           exists to own, and the exact set two of SettingsPopup's seven callers
           got wrong. `space-y-6` rather than Dialog's default `space-y-5`, so
           the section rhythm here is unchanged. */}
-      <Dialog
+      <Dialog screen="settings/remote"
         open={open}
         onClose={() => setOpen(false)}
         title={showInfo ? 'About Remote Access' : showEncryption ? 'Browser encryption' : 'Remote Access'}
@@ -2184,6 +2196,8 @@ const TIER_OPTIONS = [
 function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string) => void }) {
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+  // photo-only build: only mounted inside AndroidSettings (`?platform=android`).
+  useScreenOpen('settings/android/tier', () => setOpen(true));
 
   useEffect(() => {
     if (!open) return;
@@ -2223,6 +2237,7 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
         title="Package Tier"
         size="prompt"
         panelRef={popupRef}
+        screen="settings/android/tier"
       >
               {TIER_OPTIONS.map(t => {
                 const isActive = tier === t.id;
@@ -2261,13 +2276,17 @@ interface PairedDevice {
   password: string;
 }
 
-function ConnectToDesktopButton() {
+export function ConnectToDesktopButton() {
   const [open, setOpen] = useState(false);
   const [pairedDevices, setPairedDevices] = useState<PairedDevice[]>([]);
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [connectedDeviceName, setConnectedDeviceName] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // A saved computer that could not be saved or removed, with the action to try again.
+  // WHY: while paired, Save and Remove really ask the phone's own runtime now, and that can
+  // fail or time out; before, the failure went nowhere and the row just stayed.
+  const [deviceError, setDeviceError] = useState<{ message: string; retry: () => void } | null>(null);
   const [showConnectForm, setShowConnectForm] = useState(false);
   const [formName, setFormName] = useState('Desktop');
   const [formHost, setFormHost] = useState('');
@@ -2277,6 +2296,10 @@ function ConnectToDesktopButton() {
   const [tailscaleLoading, setTailscaleLoading] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   const claude = (window as any).claude;
+  // photo-only build: only mounted inside AndroidSettings (`?platform=android`);
+  // its default (not-connected, no form) view — a static Scan QR / Enter
+  // Manually choice, no live pairing handshake needed to show it correctly.
+  useScreenOpen('settings/android/connect-desktop', () => { setOpen(true); setShowConnectForm(false); });
 
   // Track connection mode
   useEffect(() => {
@@ -2330,7 +2353,14 @@ function ConnectToDesktopButton() {
       port: parseInt(formPort) || 9900,
       password: formPassword,
     };
-    await claude.android?.savePairedDevice?.(device);
+    setDeviceError(null);
+    try {
+      await claude.android?.savePairedDevice?.(device);
+    } catch (err: any) {
+      // The runtime's own words (it did not answer / could not be reached) — no guessed cause.
+      setDeviceError({ message: `Couldn't save ${device.name}: ${err?.message || 'the phone gave no reason.'}`, retry: () => { void handleSaveDevice(); } });
+      return;
+    }
     setPairedDevices(prev => [...prev.filter(d => d.host !== device.host || d.port !== device.port), device]);
     setShowConnectForm(false);
     setFormName('Desktop');
@@ -2340,8 +2370,15 @@ function ConnectToDesktopButton() {
     await doConnect(device);
   }, [formName, formHost, formPort, formPassword, doConnect]);
 
-  const handleRemoveDevice = useCallback(async (device: PairedDevice) => {
-    await claude.android?.removePairedDevice?.(device.host, device.port);
+  const handleRemoveDevice = useCallback(async (device: PairedDevice): Promise<void> => {
+    setDeviceError(null);
+    try {
+      await claude.android?.removePairedDevice?.(device.host, device.port);
+    } catch (err: any) {
+      // The row stays: the computer is still saved on the phone, so saying otherwise would be false.
+      setDeviceError({ message: `Couldn't remove ${device.name}: ${err?.message || 'the phone gave no reason.'}`, retry: () => { void handleRemoveDevice(device); } });
+      return;
+    }
     setPairedDevices(prev => prev.filter(d => d.host !== device.host || d.port !== device.port));
   }, []);
 
@@ -2403,6 +2440,7 @@ function ConnectToDesktopButton() {
         title="Connect to Desktop"
         size="panel"
         panelRef={popupRef}
+        screen="settings/android/connect-desktop"
       >
 
               {/* Tailscale warning */}
@@ -2454,6 +2492,10 @@ function ConnectToDesktopButton() {
                 // they were. Change 17 moved the app's reds onto the token so
                 // theme packs can restyle them; this one survived that sweep.
                 <Callout tone="danger">{connectError}</Callout>
+              )}
+
+              {deviceError && (
+                <ErrorState mode="recoverable" message={deviceError.message} onRetry={deviceError.retry} variant="inline" />
               )}
 
               {/* Saved devices — always listed */}
@@ -2830,6 +2872,16 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   // (is it open / what is it about) drift; one cannot.
   const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   const [showContribute, setShowContribute] = useState(false);
+  // Photo-only build: `shoot` opens these by name (shoot-mode.tsx). The two
+  // development sub-screens open the way their menu rows do — the menu closes
+  // and the popup takes its place.
+  useScreenOpen('settings/help', () => setShowHelp(true));
+  useScreenOpen('settings/development', () => setShowDevMenu(true));
+  useScreenOpen('settings/development/bug-report', () => { setShowDevMenu(false); setReportContext({}); });
+  useScreenOpen('settings/development/contribute', () => { setShowDevMenu(false); setShowContribute(true); });
+  useScreenOpen('settings/shortcuts', () => setShowShortcuts(true));
+  useScreenOpen('settings/donate', () => setShowDonateConfirm(true));
+  useScreenOpen('settings/about', () => setShowAbout(true));
 
   useEffect(() => {
     if (!open) return;
@@ -2846,7 +2898,17 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     if (!claude?.remote) { setLoading(false); return; }
     // Fix: defer IPC calls until after the 300ms slide-in animation. detectTailscale
     // in particular blocks the main thread long enough to visibly stutter the panel.
-    const _deferTimer = setTimeout(() => {
+    const _deferTimer = setTimeout(loadRemotePanel, 350);
+    return () => clearTimeout(_deferTimer);
+  }, [open]);
+
+  // The panel's five reads. Its own function so a remote reconnect can repeat them while the
+  // panel is open. WHY (2026-09-11 phone pass sweep): they ran once per open, so one read
+  // lost during a phone's drop left the Remote Access panel empty or wrong until it was
+  // closed and reopened. The reconnect re-read leaves the setup steps where they are.
+  function loadRemotePanel() {
+    const claude = (window as any).claude;
+    if (!claude?.remote) return;
     Promise.all([
       claude.remote.getConfig(),
       claude.remote.detectTailscale(),
@@ -2861,9 +2923,8 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       setDefaults(defs);
       setLoading(false);
     }).catch(() => setLoading(false));
-    }, 350);
-    return () => clearTimeout(_deferTimer);
-  }, [open]);
+  }
+  useOnRemoteReconnect(() => { if (open) loadRemotePanel(); });
 
   const handleSetPassword = useCallback(async () => {
     if (!newPassword.trim()) return;

@@ -28,6 +28,8 @@ import { latestUnresolvedError, deriveSyncBoxState, oversizeNotice, type SyncSta
 import { deviceActivityLabel, relativeMs } from './device-activity-label';
 import { summarizeSpaceSyncError } from './sync-space-error-summary';
 import { plainMessage } from '../utils/ipc-error';
+import { HANDOFF_EXPLANATION } from './takeover-dialog-copy';
+import { useScreenOpen } from '../shoot-mode';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -71,11 +73,19 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       ],
     },
     {
+      // WHY (lease-handoff deck Q-5, 2026-09-21): the only place handoff rules
+      // appeared was the takeover dialog itself — mid-task. Destin chose a
+      // short paragraph here over a full section.
+      heading: 'Using the same conversation on two devices',
+      paragraphs: [HANDOFF_EXPLANATION],
+    },
+    {
       heading: 'If something looks off',
       bullets: [
         { term: "Sync won't turn on", text: 'It needs GitHub. If you see a "GitHub CLI / not signed in" message, connect GitHub and try again.' },
         { term: '"No Internet Connection"', text: 'Check your WiFi or cellular and try again.' },
-        { term: 'A conflict note appeared', text: 'Two devices edited the same file — YouCoded kept both, saving the other device\'s version as a "(from …)" copy next to yours.' },
+        // WHY: give a filename cue without promising a deleted file remains.
+        { term: 'A conflict note appeared', text: 'Conflicting changes were saved in separate files. Look for “(from …)” in their names. They appear in the same folder as the affected file.' },
         { term: 'Something seems stuck', text: 'Open Sync Log and look for ERROR or WARN lines.' },
       ],
     },
@@ -275,6 +285,7 @@ interface SyncSectionProps {
 
 export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSectionProps) {
   const [open, setOpen] = useState(false);
+  useScreenOpen('settings/sync', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const popupRef = useRef<HTMLDivElement>(null);
@@ -507,6 +518,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   // Confirmation dialog state
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  // photo-only build: the "Remove backup?" confirmation on the first backend row
+  // (the default fixture's only backend, `drive-1`) — same fixture the row itself uses.
+  useScreenOpen('settings/sync/remove-backend', () => setConfirmRemoveId(status?.backends[0]?.id ?? null));
   // Cross-device sync spaces (spec 2026-07-03) — separate from the backend backups
   // above. Status refetches whenever the engine emits an event so the list and
   // per-space connected/local state stay live.
@@ -865,8 +879,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     // otherwise stay non-committal — we genuinely don't know why it failed, and
     // guessing a cause here would be a misleading error.
     if (!res?.ok) return res?.error || 'Could not remove this device.';
-    // ok:true is not proof the row is gone: removeDevice skips a file it can't
-    // delete (a locked or permission-denied handle on Windows) and still resolves.
+    // ok:true is not proof the row is gone: a peer's sync can bring a conflict
+    // copy back right after the delete (a locked file now fails as ok:false).
     // Trust the refetch over the answer — but say nothing about a cause we can't see.
     if (after.some(d => d.id === id)) return 'This device is still listed. The remove did not take.';
     return null;
@@ -944,7 +958,15 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     // Overlay layer L2 — theme-driven via Scrim/OverlayPanel (matches SettingsPanel popups).
     return (
       <>
-        <Dialog open onClose={onClose} aria-label="Backup & Sync" size="panel" fill scrollBody={false}>
+        <Dialog
+          open
+          onClose={onClose}
+          aria-label="Backup & Sync"
+          size="panel"
+          fill
+          scrollBody={false}
+          noScreen="a transient loading spinner before settings/sync replaces it; never worth a picture"
+        >
           <LoadingState what="sync status" className="h-full" />
         </Dialog>
       </>
@@ -961,7 +983,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           affordance and scroll body are all derived from the same state that
           picks the body below, so they cannot disagree about which view you are
           on — which is what four separately-maintained headers could. */}
+      {/* The loading view above carries no screen mark on purpose: `shoot`
+          waits for this one, so a picture never shows the spinner. */}
       <Dialog
+        screen="settings/sync"
         open
         onClose={onClose}
         panelRef={popupRef}
@@ -1382,8 +1407,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                             warning is the one tinted box). Same words. */}
                         {conflict && (
                           <Callout tone="warning">
-                            Some files had conflicting edits — the other device's copy was kept alongside yours
-                            (look for "(from …)" files).
+                            Conflicting changes were saved in separate files. Look for “(from …)” in their names.
                           </Callout>
                         )}
                         {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
@@ -1799,6 +1823,9 @@ function ConfirmDialog({
         size="prompt"
         title={title}
         scrollBody={false}
+        // Only call site is SyncPanel's "Remove backup?" — a literal name is
+        // correct here rather than a prop, since nothing else renders this.
+        screen="settings/sync/remove-backend"
       >
         {/* The hand-rolled tinted header is gone. Tranche 2 recorded the confirm
             cards as residue — "titling them is a copy decision, not a mechanical

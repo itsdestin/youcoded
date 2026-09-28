@@ -6,12 +6,13 @@ import type { SessionStatusColor } from './StatusDot';
 import type { SessionProvider } from '../../shared/types';
 import { isAndroid, isRemoteMode } from '../platform';
 // Artifact drawer trigger — reads session artifact count for the badge.
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import OverflowMenu from './OverflowMenu';
 import NarrowViewToggle from './NarrowViewToggle';
 import WideViewToggle from './WideViewToggle';
 import { useArtifactCount } from '../hooks/useArtifactCount';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { useWallpaperHeaderInk } from '../hooks/use-wallpaper-header-ink';
 import { Tooltip } from './ui';
 import { ON_INSET_CONTROL, HEADER_ICON_BUTTON } from './header/control-states';
 import { FOCUS_RING } from './ui/Button';
@@ -61,7 +62,9 @@ export function CaptionButtons() {
   const btnClass = `px-2 py-1 rounded-[var(--radius-toggle)] flex items-center justify-center ${ON_INSET_CONTROL}`;
 
   return (
-    <div className="flex bg-inset rounded-md p-0.5 gap-0.5">
+    // `caption-buttons`: float chrome drops this shared pill and gives each of
+    // the three its own chip (styles/float-chrome.css).
+    <div className="caption-buttons flex bg-inset rounded-md p-0.5 gap-0.5">
       {/* Placement "bottom": these sit in the very top row of the window, where
           there is no room above them for a hint. */}
       <Tooltip text="Minimize" placement="bottom">
@@ -249,13 +252,14 @@ interface Props {
 /** Projects button — always visible (projects are persistent, not session-local).
  *  Opens ProjectView as a full-screen overlay via PROJECT_VIEW_OPENED dispatch.
  *  HeaderBar must always render inside ArtifactProvider (its only render site,
- *  App.tsx, does) — useArtifact() needs a provider ancestor regardless of which
- *  component calls it. Keeping this in its own small component is just code
- *  organization; SessionStrip now also calls useArtifact() at its top level. */
+ *  App.tsx, does) — the artifact hooks need a provider ancestor regardless of
+ *  which component calls them. Keeping this in its own small component is just
+ *  code organization; SessionStrip now also calls useArtifactDispatch() at its top level. */
 /** `active` lights it inside Project View's own band (ScreenBand), where a
  *  second press returns to chat — the same toggle the Pages button has. */
 export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
-  const { dispatch } = useArtifact();
+  // Dispatch only: this button never redraws for an artifact state change.
+  const dispatch = useArtifactDispatch();
   return (
     <Tooltip text={active ? 'Back to chat' : 'Projects'} placement="bottom">
     <button
@@ -275,16 +279,17 @@ export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
   );
 }
 
-/** Files-drawer button — isolated so it can safely call useArtifact().
+/** Files-drawer button — isolated so it can safely call the artifact hooks.
  *  Placed inside <ArtifactContext.Provider> (mounted in App.tsx), so the hook
  *  is always in-context when the main app is rendering HeaderBar.
  *  Always rendered (so the drawer is reachable before any files exist); only
  *  the count badge is conditional. (An earlier plan hid the whole button at
  *  zero — that changed; this comment used to say so and was stale.) */
 function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionId: string | null; projectRoot?: string }) {
-  const { state, dispatch } = useArtifact();
+  const dispatch = useArtifactDispatch();
   // Open/closed is per-session — reflect (and toggle) the ACTIVE session's flag.
-  const drawerOpen = activeSessionId ? (state.drawerOpenBySession[activeSessionId] ?? false) : false;
+  // A narrow selector, so another session's file activity does not redraw it.
+  const drawerOpen = useArtifactSelector((s) => (activeSessionId ? (s.drawerOpenBySession[activeSessionId] ?? false) : false));
   // Count logic shared with the narrow overflow menu's "Session Files" row.
   const artifactCount = useArtifactCount(activeSessionId, projectRoot);
 
@@ -386,6 +391,8 @@ export default React.memo(function HeaderBar({
   windowDirectory, myWindowId,
 }: Props) {
   const headerRef = useRef<HTMLDivElement>(null);
+  // WHY: one header-owned sampler also covers late-mounting session dots via inherited CSS vars.
+  useWallpaperHeaderInk(headerRef);
   const [showToggleLabels, setShowToggleLabels] = useState(true);
 
   // Below 640px the settings cog, projects button, and gamepad collapse into a
@@ -526,7 +533,7 @@ export default React.memo(function HeaderBar({
           sides reserve equal space; when unset we fall back to flex-1. */}
       <div
         ref={leftClusterRef}
-        className={`${clusterFlexClass}flex items-center gap-1 sm:gap-2`}
+        className={`header-controls-left ${clusterFlexClass}flex items-center gap-1 sm:gap-2`}
         style={clusterStyle}
       >
         {narrow ? (
@@ -597,7 +604,7 @@ export default React.memo(function HeaderBar({
           (see clusterStyle above) keeps the session strip window-centered. */}
       <div
         ref={rightClusterRef}
-        className={`${clusterFlexClass}flex items-center justify-end gap-1 sm:gap-2`}
+        className={`header-controls-right ${clusterFlexClass}flex items-center justify-end gap-1 sm:gap-2`}
         style={clusterStyle}
       >
         {(narrow || !toggleOnLeft) && showToggle && toggleElement}
@@ -678,15 +685,16 @@ export function BareHeaderBar({ settingsOpen, onToggleSettings, settingsBadge, s
   settingsBadge?: boolean;
   settingsDangerBadge?: boolean;
 }) {
-  // MacTrafficLights measures the .header-bar element it sits in.
+  // WHY: the welcome screen has no session dots, but its controls share the wallpaper crop.
   const headerRef = useRef<HTMLDivElement>(null);
+  useWallpaperHeaderInk(headerRef);
   return (
     // select-none: the header is chrome, not highlightable or copyable (Destin,
     // 2026-09-10). A session rename box inside stays editable: globals.css
     // re-enables text fields.
     <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 shrink-0 select-none" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       <MacTrafficLights headerRef={headerRef} />
-      <div className="flex items-center gap-1 sm:gap-2">
+      <div className="header-controls-left flex items-center gap-1 sm:gap-2">
         <SettingsGearButton
           settingsOpen={settingsOpen}
           onToggleSettings={onToggleSettings}
@@ -699,7 +707,7 @@ export function BareHeaderBar({ settingsOpen, onToggleSettings, settingsBadge, s
       </div>
       {/* Empty middle — stays part of the drag region. */}
       <div className="flex-1 min-w-0" />
-      <div className="flex items-center justify-end gap-1 sm:gap-2">
+      <div className="header-controls-right flex items-center justify-end gap-1 sm:gap-2">
         {showCaptionButtons() && <CaptionButtons />}
       </div>
     </div>

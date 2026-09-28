@@ -9,6 +9,7 @@ import { friendlyToolDisplay } from './ToolCard';
 import { Dialog, Tooltip } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
+import { useScreenOpen } from '../shoot-mode';
 
 /**
  * Specialists 1c — the status-bar chip (spec §6 "attention, not vigilance")
@@ -27,6 +28,7 @@ import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
 export default function SpecialistsChip({ sessionId }: { sessionId: string | null | undefined }) {
   const summary = useSpecialistSummary(sessionId ?? undefined);
   const [open, setOpen] = useState(false);
+  useScreenOpen('chat/specialists', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   useEscClose(open, () => setOpen(false));
   if (summary.helpers.length === 0) return null;
 
@@ -66,6 +68,7 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
       </Tooltip>
       {open && (
         <Dialog
+          screen="chat/specialists"
           open
           title={Noun}
           onClose={() => setOpen(false)}
@@ -194,7 +197,7 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
         const { label } = friendlyToolDisplay(segToTool(seg));
         const subject = askSubject(seg.input);
         return (
-          <div key={seg.requestId} className="border-t border-amber-700/30 bg-amber-700/[0.06] px-3 py-2" data-testid="helper-card-ask">
+          <div key={seg.requestId ?? seg.passwordAsk?.requestId} className="border-t border-amber-700/30 bg-amber-700/[0.06] px-3 py-2" data-testid="helper-card-ask">
             <SpecialistAskBlock
               segment={seg}
               sessionId={sessionId}

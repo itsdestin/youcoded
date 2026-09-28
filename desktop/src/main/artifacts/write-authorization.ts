@@ -12,9 +12,10 @@
 // Windows on-disk casing, so `.ENV` resolves to the real `.env` before the
 // policy match.
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
-import { editTier, protectedReadPath } from '../../shared/artifacts/editable-path-policy';
+import { editTier, protectedReadPath, privateForRecordTrust } from '../../shared/artifacts/editable-path-policy';
 
 export type ReadResolution =
   | { ok: true; realPath: string }
@@ -52,10 +53,90 @@ export function isAbsoluteRecorded(p: string): boolean {
   return path.isAbsolute(p);
 }
 
+/** Why a relative external record may not be opened (see judgeRelativeRecord).
+ *  'unreadable' = the check itself failed (permission denied, a symlink loop);
+ *  `code` carries the filesystem's own error code, never a guessed cause. */
+export type RelativeRecordVerdict =
+  | { ok: true; realPath: string }
+  | { ok: false; reason: 'missing' | 'protected-path' | 'outside-projects' | 'not-in-home-project' }
+  | { ok: false; reason: 'unreadable'; code: string };
+
+/**
+ * May this folder vouch for a recorded path? Only a specific folder strictly
+ * INSIDE the home folder.
+ *
+ * WHY (review 2026-09-23, F1): saved folders routinely include the home folder
+ * itself (Destin's do). "Inside a saved folder" then covered every credential
+ * file in home — .git-credentials, .claude.json, .npmrc, the login keyring —
+ * and a planted `../` record was trusted for all of them. A folder that IS
+ * home, contains home, or is a filesystem root vouches for nothing.
+ */
+async function vouchingRoot(root: string, realHome: string | null): Promise<string | null> {
+  if (!root || !realHome) return null;
+  const realRoot = await fs.promises.realpath(path.resolve(root)).catch(() => null);
+  if (!realRoot) return null;
+  return realRoot.startsWith(realHome + path.sep) ? realRoot : null;
+}
+
+/**
+ * Decide whether a legacy external record whose `absolutePath` is RELATIVE —
+ * typically a file the agent wrote through `../` — may be trusted.
+ *
+ * WHY this exists (Destin, 2026-09-23, option A): those records used to be
+ * refused on every platform as "no longer on disk", even when the file was
+ * right there. They cannot simply all be trusted: the sidecar lives inside
+ * the project (`.youcoded/artifacts.json`), so a folder copied from someone
+ * else can carry a PLANTED record like `../../.ssh/id_rsa`. So a record is
+ * trusted only when, with symlinks resolved, it lands:
+ *   1. inside the record's own project or one of the user's saved project
+ *      folders — and only one strictly below the home folder (vouchingRoot);
+ *   2. somewhere privateForRecordTrust allows: everything editTier refuses
+ *      (credentials, .git/.youcoded, .claude, dotenv) plus credential and
+ *      shell-history files a recorded path must never name.
+ * The relative path is resolved against the PROJECT ROOT (what the agent's
+ * tools resolved it against), never the process cwd. Mirrored in Kotlin
+ * (ProjectManager.kt judgeRelativeRecord).
+ */
+export async function judgeRelativeRecord(
+  projectRoot: string,
+  recordedPath: string,
+  allowedRoots: string[],
+  home: string = os.homedir(),
+): Promise<RelativeRecordVerdict> {
+  let realPath: string;
+  try {
+    realPath = await fs.promises.realpath(path.resolve(projectRoot, recordedPath));
+  } catch (e: any) {
+    if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') return { ok: false, reason: 'missing' };
+    // F4: a symlink loop or a permission error is not "missing" and not a
+    // crash — say the check failed, with the filesystem's own code.
+    // Only the CODE travels (review C4): a message can carry the path.
+    return { ok: false, reason: 'unreadable', code: typeof e?.code === 'string' ? e.code : 'unknown' };
+  }
+  // Checked BEFORE the root test, so a secret is refused as private whatever
+  // folder it sits in.
+  if (privateForRecordTrust(canonicalize(realPath, null))) return { ok: false, reason: 'protected-path' };
+  const realHome = await fs.promises.realpath(home).catch(() => null);
+  const roots = [...new Set([projectRoot, ...allowedRoots])];
+  for (const root of roots) {
+    const r = await vouchingRoot(root, realHome);
+    if (r && (realPath === r || realPath.startsWith(r + path.sep))) return { ok: true, realPath };
+  }
+  // WHY a second reason (re-review C1): a file inside a project that is NOT
+  // below home (/opt/work, /mnt/data, an external drive) or directly in a saved
+  // HOME folder is refused by design — but "outside your project folders"
+  // would be false for it. Say what the rule actually is.
+  for (const root of roots) {
+    if (root && await inRealRoot(root, realPath)) return { ok: false, reason: 'not-in-home-project' };
+  }
+  return { ok: false, reason: 'outside-projects' };
+}
+
 async function inRealRoot(projectRoot: string, realPath: string): Promise<boolean> {
   const realRoot = await fs.promises.realpath(path.resolve(projectRoot)).catch(() => null);
   if (!realRoot) return false;
-  return realPath === realRoot || realPath.startsWith(realRoot + path.sep);
+  // A filesystem root already ends in its separator ("/", "C:\\").
+  return realPath === realRoot || realPath.startsWith(realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep);
 }
 
 /**

@@ -84,7 +84,8 @@ function ReasoningSection({ content }: { content: string }) {
       </button>
       {expanded && (
         <div className="mt-1 pl-2 border-l-2 border-edge-dim text-xs text-fg-dim">
-          <MarkdownContent content={content} />
+          {/* Reasoning streams in too (before the reply) — same per-word saving. */}
+          <MarkdownContent content={content} incremental />
         </div>
       )}
     </div>
@@ -159,18 +160,21 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
   // running even though its tool result (the launch ack) already landed —
   // otherwise a group of background hires read "all complete" while one of
   // them was mid-job. A helper waiting on the user is called out too.
-  const stillWorking = (t: ToolCallState) => t.specialistRun?.status === 'running';
+  // Claude Code background helpers/commands (2026-09-24) are the same case:
+  // a group of parallel Agents read ✓ while all of them were still working.
+  const stillWorking = (t: ToolCallState) => t.specialistRun?.status === 'running'
+    || (t.status === 'complete' && t.ccBackground?.status === 'running');
   // WHY a stopped Task can retain `status: 'running'` until its interrupted
   // tool result arrives. Its specialist run is the authoritative lifecycle,
   // so a terminal run must immediately settle this group's spinner.
-  const groupRunning = (t: ToolCallState) => t.specialistRun ? stillWorking(t) : t.status === 'running';
+  const groupRunning = (t: ToolCallState) => t.specialistRun ? stillWorking(t) : t.status === 'running' || stillWorking(t);
   const runningCount = tools.filter(groupRunning).length;
   const failedCount = tools.filter((t) => t.status === 'failed').length;
   // WHY the group icon reflects only the latest call: an earlier failure is
   // already preserved in the group's detail text, while the top-level status
   // should describe the most recent result.
   const latestToolFailed = tools.at(-1)?.status === 'failed';
-  const stoppedCount = tools.filter((t) => t.specialistRun?.status === 'interrupted').length;
+  const stoppedCount = tools.filter((t) => t.specialistRun?.status === 'interrupted' || t.ccBackground?.status === 'stopped').length;
   const askingCount = tools.filter(hasNestedAsk).length;
   // Plain-language "Created a file and ran a command" in place of the raw
   // "N tools (Bash, Write)" — Q1-Q5, 2026-09-06 tool-group-readability deck.
@@ -538,7 +542,9 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                 // conversation, an artifact) it stays plain text — ids from
                 // another device would resolve to a block of dead rows.
                 <SessionRefsEnabled.Provider value={true}>
-                  <MarkdownContent content={bubble.text.content} sessionId={sessionId} />
+                  {/* incremental: this text grows while the reply streams, so finished
+                      blocks are drawn once instead of re-parsed per word (sweep A5). */}
+                  <MarkdownContent content={bubble.text.content} sessionId={sessionId} incremental />
                 </SessionRefsEnabled.Provider>
               )}
               {bubble.plan && (

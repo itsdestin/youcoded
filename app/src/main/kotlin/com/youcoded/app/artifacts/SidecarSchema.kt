@@ -35,6 +35,11 @@ data class VersionEvent(
     // per-device sidecar, so it needs the same key, round-tripped through
     // toJson/toVersionEvent (org.json marshalling drops unknown fields).
     val toolUseId: String? = null,
+    // Mirror of types.ts VersionEvent.conversationId: the conversation's own id
+    // when it differs from sessionId (a Claude Code session's id, which a
+    // resume keeps). Desktop stamps it; round-tripped here so a record never
+    // loses it (org.json marshalling drops unknown fields).
+    val conversationId: String? = null,
 )
 
 data class ArtifactRecord(
@@ -98,6 +103,7 @@ fun VersionEvent.toJson(): JSONObject = JSONObject().apply {
     // Omitted when absent (not written as null) so records that never had one
     // stay byte-identical to what desktop writes.
     if (toolUseId != null) put("toolUseId", toolUseId)
+    if (conversationId != null) put("conversationId", conversationId)
 }
 
 fun JSONObject.toVersionEvent() = VersionEvent(
@@ -107,6 +113,7 @@ fun JSONObject.toVersionEvent() = VersionEvent(
     type      = getString("type"),
     author    = getString("author"),
     toolUseId = if (has("toolUseId") && !isNull("toolUseId")) getString("toolUseId") else null,
+    conversationId = if (has("conversationId") && !isNull("conversationId")) getString("conversationId") else null,
 )
 
 // ArtifactRecord ↔ JSONObject

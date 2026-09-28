@@ -23,6 +23,7 @@ import { stripSplitSuffix } from '../../shared/gguf-split';
 import { matchesQuery } from '../../shared/text-match';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
+import { useScreenOpen } from '../shoot-mode';
 
 // quants() decorates every option with a GPU-aware fit label.
 type QuantWithFit = QuantOption & { fit: FitEstimate };
@@ -93,6 +94,11 @@ export function SizeLine({ q }: { q: { totalSizeBytes: number; quant: string; fi
 // The few quants a non-technical user should see first (spec §4 — a raw 15–24
 // row list is hostile). Everything else hides behind "Show all N".
 const RECOMMENDED_QUANTS = new Set(['UD-Q4_K_XL', 'Q4_K_M', 'Q8_0']);
+// WHY case-folded: some publishers (Mungert, Google's QAT repos) write quants in
+// lowercase (`q4_k_m`), which the parser now keeps verbatim. Without folding,
+// those repos would never show a recommended quant and the one-click download
+// would pick the smallest file instead.
+const isRecommendedQuant = (quant: string) => RECOMMENDED_QUANTS.has(quant.toUpperCase());
 
 const key = (repo: string, quant: string) => `${repo}::${quant}`;
 
@@ -444,7 +450,7 @@ export function RepoCard({
   // one, else the first.
   const chosen = quants
     ? ((preferredQuant && quants.find((o) => o.quant === preferredQuant))
-        || quants.find((o) => RECOMMENDED_QUANTS.has(o.quant))
+        || quants.find((o) => isRecommendedQuant(o.quant))
         || quants[0])
     : undefined;
   const dl = chosen ? activeDownload(downloads, repo, chosen.quant) : undefined;
@@ -457,8 +463,8 @@ export function RepoCard({
   };
 
   // Recommended quants first; the rest hide behind "Show all N".
-  const recommended = (quants ?? []).filter((x) => RECOMMENDED_QUANTS.has(x.quant));
-  const rest = (quants ?? []).filter((x) => !RECOMMENDED_QUANTS.has(x.quant));
+  const recommended = (quants ?? []).filter((x) => isRecommendedQuant(x.quant));
+  const rest = (quants ?? []).filter((x) => !isRecommendedQuant(x.quant));
   const visible = showAll ? [...recommended, ...rest] : (recommended.length > 0 ? recommended : (quants ?? []).slice(0, 3));
   const hiddenCount = (quants ?? []).length - visible.length;
 
@@ -635,6 +641,10 @@ export function LocalModelRow({
   // non-developer sees the row exactly as before; the controls inside each carry
   // an (i). Only a complete model has settings to offer.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Photo-only build: one row (the fixture with a load-failure state, the
+  // richest Settings dialog) opens by name — every row registers the same
+  // name, so only that one is `enabled`.
+  useScreenOpen('settings/assistant/local/model-settings', () => setSettingsOpen(true), undefined, model.id === 'Qwen3.5-9B-Q8_0');
 
   // S-3: fetch the vision file for a model whose family has one. Progress then
   // arrives on the same download stream as any other download for this row.
@@ -1086,7 +1096,9 @@ function ModelSettingsDialog({ open, modelId, name, onClose }: { open: boolean; 
   // width — the settings-screen width, so a row title, its hint and a Select fit
   // side by side (at `prompt` width the GPU-layers title wrapped one word per line).
   return (
-    <Dialog open={open} onClose={onClose} title="Model settings" subtitle={name} size="panel" layer={3}>
+    // WHY the conditional screen: the dialog opens on "Loading settings…"
+    // until the poll's first answer lands — the mark must wait for it too.
+    <Dialog open={open} onClose={onClose} title="Model settings" subtitle={name} size="panel" layer={3} screen={settings ? 'settings/assistant/local/model-settings' : undefined}>
       {readError && !settings && <FieldError as="p">{readError}</FieldError>}
       {!settings && !readError && <p className="text-3xs text-fg-muted">Loading settings…</p>}
       {settings && (

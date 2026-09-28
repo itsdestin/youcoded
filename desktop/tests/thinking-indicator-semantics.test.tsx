@@ -341,3 +341,75 @@ describe('ThinkingIndicator — a new reading is not projected forward on arriva
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// A chat that is not on screen. Every open session keeps its chat mounted, so a
+// thinking line in a background tab used to run its word rotation, countdown
+// and prefill ticks for nobody. They stand still while hidden; each number is
+// worked out from timestamps, so the first frame back is already right.
+// ---------------------------------------------------------------------------
+import { OnScreenContext } from '../src/renderer/state/on-screen-context';
+import BrailleSpinner from '../src/renderer/components/BrailleSpinner';
+
+describe('ThinkingIndicator in a hidden chat', () => {
+  // The spinner glyph has its own shared driver (BrailleSpinner.tsx), outside
+  // this change; these tests count the indicator's OWN timers on top of it.
+  const spinnerTimers = () => {
+    const r = render(<BrailleSpinner size="base" />);
+    const n = vi.getTimerCount();
+    r.unmount();
+    return n;
+  };
+  const inPane = (onScreen: boolean, props: React.ComponentProps<typeof ThinkingIndicator>) => (
+    <OnScreenContext.Provider value={onScreen}>
+      <ThinkingIndicator {...props} />
+    </OnScreenContext.Provider>
+  );
+  const prefill = { promptTokens: 10_000, budgetMs: 0, source: 'prompt' as const, processed: 2_000, timeMs: 4_000, etaMs: null };
+  const stall = { retryInMs: 15_000, willRetry: true };
+
+  it('runs no timers while hidden — words, prefill ticks or countdown', () => {
+    vi.useFakeTimers();
+    const base = spinnerTimers();
+    render(inPane(false, { promptProcessing: prefill }));
+    expect(vi.getTimerCount()).toBe(base);
+    cleanup();
+    render(inPane(false, { stallWarning: stall }));
+    expect(vi.getTimerCount()).toBe(base);
+  });
+
+  it('runs them on screen (so the test above can fail)', () => {
+    vi.useFakeTimers();
+    const base = spinnerTimers();
+    render(inPane(true, { promptProcessing: prefill }));
+    expect(vi.getTimerCount()).toBeGreaterThan(base);
+  });
+
+  it('shows the true countdown the moment the chat comes back', () => {
+    vi.useFakeTimers();
+    const stallWarning = { ...stall };
+    const r = render(inPane(true, { stallWarning }));
+    act(() => { vi.advanceTimersByTime(2_000); });
+    expect(screen.getByText(/Retrying in 13s/)).toBeTruthy();
+    r.rerender(inPane(false, { stallWarning }));
+    act(() => { vi.advanceTimersByTime(5_000); });
+    r.rerender(inPane(true, { stallWarning }));
+    expect(screen.getByText(/Retrying in 8s/)).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(screen.getByText(/Retrying in 7s/)).toBeTruthy();
+  });
+
+  it('counts on the same whole seconds after the stall began as before', () => {
+    vi.useFakeTimers();
+    const base = spinnerTimers();
+    render(inPane(true, { stallWarning: { retryInMs: 4_500, willRetry: true } }));
+    expect(screen.getByText(/Retrying in 5s/)).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(999); });
+    expect(screen.getByText(/Retrying in 5s/)).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(screen.getByText(/Retrying in 4s/)).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(4_000); });
+    expect(screen.getByText(/Retrying\.\.\./)).toBeTruthy();
+    expect(vi.getTimerCount()).toBe(base);   // nothing left to count
+  });
+});

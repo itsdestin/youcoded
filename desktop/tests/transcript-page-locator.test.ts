@@ -96,7 +96,7 @@ describe('transcript:page locator memory', () => {
     fs.writeFileSync(path.join(dir, `${ccId}.jsonl`), body);
   }
 
-  function pageHandler(windowRegistry?: WindowRegistry, sessionManagerOverride?: any) {
+  function pageHandler(windowRegistry?: WindowRegistry, sessionManagerOverride?: any, remoteServer?: any) {
     const mockSessionManager: any = {
       createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []),
       getSession: vi.fn(() => undefined),
@@ -111,13 +111,22 @@ describe('transcript:page locator memory', () => {
     const mockCommandProvider: any = { list: vi.fn(() => []), refresh: vi.fn() };
     registerIpcHandlers(
       mockIpcMain as any, sessionManagerOverride ?? mockSessionManager, mockWindow, mockSkillProvider, mockCommandProvider,
-      undefined, undefined, undefined, windowRegistry,
+      undefined, undefined, remoteServer, windowRegistry,
     );
     const call = [...(mockIpcMain.handle as any).mock.calls].reverse().find((c: any) => c[0] === 'transcript:page');
     return call[1] as (evt: any, req: any) => Promise<any>;
   }
 
   const evt = { sender: { id: 1 } };
+
+  it('a native transcript that cannot be read is unresolved (retry), never an empty beginning', async () => {
+    const history = vi.spyOn(NativeSessionHost.prototype, 'getHistoryPageAsync')
+      .mockRejectedValue(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    try {
+      const page = await pageHandler()(evt, { sessionId: 'native-1', beforeCursor: null });
+      expect(page).toMatchObject({ events: [], hasMore: false, unresolved: true });
+    } finally { history.mockRestore(); }
+  });
 
   it('does not interrupt a native turn that starts while history is being read', async () => {
     const history = vi.spyOn(NativeSessionHost.prototype, 'getHistoryPageAsync').mockResolvedValue({
@@ -182,6 +191,35 @@ describe('transcript:page locator memory', () => {
     expect(older.reconcileInterrupted).toBe(true);
   });
 
+  // The phone's session:create runs the desktop's own create path (setSessionCreate), so a
+  // Claude Code resume started from a phone takes the same pre-spawn snapshot.
+  it('a Claude Code resume started from a phone is bounded the same way', async () => {
+    writeTranscript(2);
+    const file = path.join(tmpHome, '.claude', 'projects', SLUG, `${CC_ID}.jsonl`);
+    fs.appendFileSync(file, JSON.stringify({ type: 'assistant', uuid: 'old-tool-line',
+      timestamp: new Date(1_700_000_000_003).toISOString(),
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'old-tool', name: 'Bash', input: {} }] },
+    }) + '\n');
+    const manager: any = {
+      createSession: vi.fn(() => ({ id: 'desktop-2', provider: 'claude', cwd: '/home/destin/project', status: 'active' })),
+      destroySession: vi.fn(), listSessions: vi.fn(() => []), getSession: vi.fn(),
+      sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn(),
+    };
+    let createFromPhone: ((opts: any) => Promise<any>) | null = null;
+    const remote = {
+      broadcast: vi.fn(), setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(),
+      setLastTopic: vi.fn(), getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
+      setSessionCreate: vi.fn((fn: any) => { createFromPhone = fn; }),
+    };
+    const handler = pageHandler(new WindowRegistry(), manager, remote);
+    await createFromPhone!({ provider: 'claude', cwd: '/home/destin/project', resumeSessionId: CC_ID, name: 'Resuming' });
+    fs.appendFileSync(file, turnLines(2)); // a live turn appended after the resume began
+    const page = await handler(evt, {
+      sessionId: 'desktop-2', beforeCursor: null, claudeSessionId: CC_ID, projectSlug: SLUG,
+    });
+    expect(page.reconcileInterruptedToolIds).toEqual(['old-tool']);
+  });
+
   it('a scroll-up request resolves the file the first page already located', async () => {
     writeTranscript(40);
     const handler = pageHandler();
@@ -205,7 +243,7 @@ describe('transcript:page locator memory', () => {
     const file = path.join(tmpHome, '.claude', 'projects', SLUG, `${CC_ID}.jsonl`);
     const spy = vi.spyOn(TranscriptWatcher.prototype, 'pageSourceFor').mockReturnValue({
       jsonlPath: file, subagentsDir: path.join(path.dirname(file), CC_ID, 'subagents'),
-      startOffset: fs.statSync(file).size,
+      startOffset: fs.statSync(file).size, cwd: tmpHome,
     });
     try {
       const handler = pageHandler();

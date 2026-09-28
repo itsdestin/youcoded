@@ -135,6 +135,23 @@ describe('HarnessSession', () => {
     expect(events.find((e) => e.type === 'turn-complete')).toBeUndefined();
   });
 
+  // The catch's own push uses the same emptiness rule as every other assistant
+  // push (trim()): a whitespace-only partial before an error must not become a
+  // blank assistant message live, which a resume would then not reproduce.
+  it('a whitespace-only partial before a mid-stream error adds no assistant message', async () => {
+    const ERROR_AFTER_WHITESPACE = [
+      { type: 'stream-start', warnings: [] },
+      { type: 'text-start', id: 'p1' },
+      { type: 'text-delta', id: 'p1', delta: '\n  \n' },
+      { type: 'error', error: new Error('upstream 502 from the provider') },
+    ];
+    const session = new HarnessSession(opts, async () => mockModel(ERROR_AFTER_WHITESPACE) as any);
+    const events = collect(session);
+    await session.send('hi');
+    expect(events.some((e) => e.type === 'session-error')).toBe(true);
+    expect(((session as any).history as any[]).some((m) => m.role === 'assistant')).toBe(false);
+  });
+
   // 2026-08-10 incident: the live roster run's Kimi K3 session died after 37
   // tool calls with session-error text literally '[object Object]' — the
   // ENTIRE error the user got, even though a *different* model's 402 (same

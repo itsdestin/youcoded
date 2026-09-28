@@ -33,7 +33,7 @@ The `linker64-env.sh` bash wrappers only cover binaries YOU invoke from bash. Th
 
 ## Canonical sources
 
-- `claude-wrapper.js` — canonical at `app/src/main/assets/claude-wrapper.js`. Deployed at every PTY start (inline in `PtyBridge.start()` at `PtyBridge.kt:129-132` — reads the asset and writes it to `$HOME/.claude-mobile/claude-wrapper.js` before each launch). There is no separate `Bootstrap.deployWrapperJs()` method. **Edit the asset file directly.**
+- `claude-wrapper.js` — canonical at `app/src/main/assets/claude-wrapper.js`. Deployed at every PTY start (inline in `PtyBridge.start()` — search `claude-wrapper.js` there; line numbers drift — reads the asset and writes it to `$HOME/.claude-mobile/claude-wrapper.js` before each launch). There is no separate `Bootstrap.deployWrapperJs()` method. **Edit the asset file directly.**
 
 ## Vendored Termux terminal-emulator
 
@@ -60,8 +60,8 @@ The `layoutInsets` SharedFlow, its `LayoutInsets` data class and the React `layo
 ## Shared runtime environment
 
 Runtime fixes MUST work in both `PtyBridge` and `DirectShellBridge`. Both share:
-- `Bootstrap.buildRuntimeEnv()` (PtyBridge.kt:115, DirectShellBridge.kt:43)
-- `Bootstrap.deployBashEnv()` (PtyBridge.kt:140, DirectShellBridge.kt:49)
+- `Bootstrap.buildRuntimeEnv()` (called from `start()` in both `PtyBridge.kt` and `DirectShellBridge.kt`)
+- `Bootstrap.deployBashEnv()` (likewise, as `env["BASH_ENV"]`)
 
 ## Reactivity
 
@@ -87,13 +87,17 @@ Used by: `dialog:open-file`, `dialog:open-folder`, `android:scan-qr`.
 | `app/.../bridge/LocalBridgeServer.kt` | WebSocket server on :9901, bridges React IPC to Kotlin |
 | `app/.../bridge/PlatformBridge.kt` | Android-native operations (file picker, clipboard, URLs) |
 | `app/.../runtime/Bootstrap.kt` | Package management, environment setup, shell function generation |
-| `app/.../runtime/SessionService.kt` | Main IPC dispatcher — ~200 `"ns:verb" ->` branches |
+| `app/.../runtime/SessionService.kt` | Main IPC dispatcher — a `"ns:verb" ->` branch per channel (hundreds; the workspace `ipc-bridge.md` rule carries the latest count) |
 | `app/.../runtime/PtyBridge.kt` | Claude Code terminal session (PTY + event bridge) |
 | `app/.../runtime/DirectShellBridge.kt` | Standalone bash shell session |
-| `app/.../runtime/ManagedSession.kt` | Session lifecycle, status, approval flow, prompt detection |
+| `app/.../runtime/ManagedSession.kt` | Session lifecycle, status, approval flow, prompt detection; a session counts as STARTED only when Claude Code's first hook arrives (`sessionStarted`, then `_session_ready`), and `awaitingStart` rides `session:list` |
+| `app/.../parser/EventBridge.kt` | Hook socket: `admit()` (owner gate — only a SessionStart claims a session; a nested `claude` is dropped) then `route()` (fire-and-forget / pass an ask for another session straight back / hold for a card); the 2h app hold (`PERMISSION_HOLD_MS`) under the relay's 2h30m backstop and Claude Code's 3h hook timeout |
+| `app/.../parser/InkSelectParser.kt` | Reads Claude Code's menus; unnumbered startup dialogs become `pick` buttons the shared renderer answers by verified navigation (pinned by `InkSelectParserStartupTest`) |
+| `app/.../runtime/MenuAnswerLock.kt` | One device answers a session's menu at a time (`session:menu-lock`, 20 s lease) — mirror of desktop `menu-answer-lock.ts` |
+| `app/.../artifacts/ProjectManager.kt` | `judgeRelativeRecord` — when a `../` file record may be trusted (mirror of desktop `write-authorization.ts`) |
 | `app/.../runtime/SessionRegistry.kt` | Multi-session management |
 | `app/.../assets/claude-wrapper.js` | Node.js monkey-patch (CANONICAL SOURCE) |
-| `app/.../assets/hook-relay.js` | Unix socket event relay for structured hook events |
+| `app/.../assets/hook-relay.js` + `hook-relay-blocking.js` | Unix socket event relay for structured hook events (the blocking one holds a PermissionRequest open for an answer) |
 | `app/.../skills/LocalSkillProvider.kt` | Skill marketplace backend |
 | `app/.../skills/PluginInstaller.kt` | Installs Claude Code plugins via git clone/copy |
 | `app/.../ui/TierPickerScreen.kt` | First-run package tier selection (Compose) |

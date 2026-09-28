@@ -4,7 +4,7 @@
 // every call needs the bearer token, so all logic lives in the main process —
 // the token never crosses the contextBridge into the renderer bundle.
 
-import { ipcMain, webContents, powerMonitor } from "electron";
+import { app, ipcMain, webContents, powerMonitor, type WebContents } from "electron";
 import type { MarketplaceAuthStore } from "./marketplace-auth-store";
 import { createMarketplaceApiClient, MARKETPLACE_API_HOST } from "../renderer/state/marketplace-api-client";
 import type {
@@ -20,7 +20,8 @@ import { wrap, makeClearSessionOn401 } from "./handler-utils";
 // Platform-owned presence socket (Task 6). The account session token and the
 // WebSocket live in the main process; the renderer only ever sees relayed
 // social:presence-event pushes and expresses desired connection state.
-import { createPresenceSocket, type PresenceSocket } from "./presence-socket";
+import { createPresenceSocket, wakeEvidence, HUMAN_INPUT_TYPES, type PresenceSocket } from "./presence-socket";
+import { log } from "./logger";
 import type { WindowRegistry } from "./window-registry";
 import type { RemoteServer } from "./remote-server";
 
@@ -35,6 +36,25 @@ let presenceSocket: PresenceSocket | null = null;
 // on a destroyed socket and could resurrect it via the engine).
 let onSuspend: (() => void) | null = null;
 let onResume: (() => void) | null = null;
+// When the OS last reported suspend, cleared on any wake signal. Module scope
+// so a hot-reload re-registration can't strand a stale value in a closure.
+let suspendedAt: number | null = null;
+// OS "a person is back" signals that also clear the suspend latch. Both need a
+// human by definition: unlock-screen (darwin, win32 — an unlock) and
+// user-did-become-active (darwin — a login session switched to).
+const WAKE_EVENTS = ["unlock-screen", "user-did-become-active"] as const;
+// Last deliberate input to any YouCoded window — see wakeEvidence(). Module
+// scope + a WeakSet so hot-reload re-registration never stacks listeners.
+let lastAppInputAt: number | null = null;
+const inputWatched = new WeakSet<WebContents>();
+let watchingNewWebContents = false;
+function watchAppInput(wc: WebContents): void {
+  if (inputWatched.has(wc)) return;
+  inputWatched.add(wc);
+  wc.on("input-event", (_e, input) => {
+    if (HUMAN_INPUT_TYPES.has(input.type)) lastAppInputAt = Date.now();
+  });
+}
 let idlePoller: NodeJS.Timeout | null = null;
 
 // Presence idle threshold: no system input AND no remote-client activity for
@@ -122,11 +142,29 @@ export function registerSocialHandlers(
   // wakes. Renderer intent (sign-in/incognito/leader) is preserved across the
   // sleep cycle by the setDesired/setSuspended split.
   if (onSuspend) powerMonitor.removeListener("suspend", onSuspend);
-  if (onResume) powerMonitor.removeListener("resume", onResume);
-  onSuspend = () => presence.setSuspended(true);
-  onResume = () => presence.setSuspended(false);
+  if (onResume) {
+    powerMonitor.removeListener("resume", onResume);
+    for (const ev of WAKE_EVENTS) powerMonitor.removeListener(ev as any, onResume);
+  }
+  suspendedAt = null;
+  onSuspend = () => {
+    suspendedAt = Date.now();
+    log("INFO", "Presence", "gate: suspend");
+    presence.setSuspended(true);
+  };
+  // WHY the extra wake events (2026-09-23, presence self-healing spec Part 1):
+  // 'resume' used to be the ONLY thing that could clear the suspend latch, and
+  // one missed delivery kept presence off until a relaunch. unlock-screen and
+  // user-did-become-active are the OS's own "the user is back" notices; the
+  // idle poller below adds evidence-based clearing that needs no OS event.
+  onResume = () => {
+    if (suspendedAt !== null) log("INFO", "Presence", "gate: resume");
+    suspendedAt = null;
+    presence.setSuspended(false);
+  };
   powerMonitor.on("suspend", onSuspend);
   powerMonitor.on("resume", onResume);
+  for (const ev of WAKE_EVENTS) powerMonitor.on(ev as any, onResume);
 
   // Idle gate poller (see IDLE_DISCONNECT_MS). Two activity sources, either
   // keeps presence alive: local keyboard/mouse (getSystemIdleTime — returns
@@ -144,11 +182,32 @@ export function registerSocialHandlers(
   // takes the socket DOWN when the user goes idle, so "stop on disconnect"
   // would have stopped the only thing able to notice them coming back.
   stopIdlePoller(); // hot-reload: never stack a second poller
+  for (const wc of webContents.getAllWebContents()) watchAppInput(wc);
+  if (!watchingNewWebContents) {
+    watchingNewWebContents = true;
+    app.on("web-contents-created", (_e, wc) => watchAppInput(wc));
+  }
   const pollIdle = () => {
+    const now = Date.now();
     const localIdleMs = powerMonitor.getSystemIdleTime() * 1000;
+    // Evidence-based escape from the suspend latch — ONLY deliberate input to
+    // our own windows counts; see wakeEvidence() for why the idle clock and
+    // wall-clock gaps are not trusted.
+    if (suspendedAt !== null) {
+      const why = wakeEvidence({ now, suspendedAt, lastAppInputAt });
+      if (why) {
+        log("INFO", "Presence", "gate: wake-evidence", { why });
+        suspendedAt = null;
+        presence.setSuspended(false);
+      }
+    }
     const lastRemote = remoteServer?.getLastClientActivityMs() ?? 0;
-    const remoteIdleMs = lastRemote === 0 ? Number.POSITIVE_INFINITY : Date.now() - lastRemote;
+    const remoteIdleMs = lastRemote === 0 ? Number.POSITIVE_INFINITY : now - lastRemote;
     presence.setIdle(localIdleMs >= IDLE_DISCONNECT_MS && remoteIdleMs >= IDLE_DISCONNECT_MS);
+    // Part 2: a socket that is wanted, gone, and has no retry scheduled is
+    // wedged (e.g. the 'wait' no-token policy). Healthy or backing-off
+    // sockets are never touched, so this cannot defeat backoff.
+    if (presence.repairIfStalled()) log("INFO", "Presence", "gate: stall-repair");
   };
   const startIdlePoller = () => {
     stopIdlePoller();

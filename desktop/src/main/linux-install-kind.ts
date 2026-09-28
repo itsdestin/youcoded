@@ -11,7 +11,7 @@
 // package manager that OWNS process.execPath is the honest answer — better than
 // reading /etc/os-release, which says what the distro is, not how this copy got
 // here (an AppImage on Arch, or a .deb installed on a distro with rpm present).
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 
 export type LinuxInstallKind =
@@ -64,7 +64,51 @@ export function detectLinuxInstallKind(deps: LinuxInstallKindDeps = {}): LinuxIn
   return 'unknown';
 }
 
+// WHY an async twin (2026-09-26): the first question used to run on the main
+// thread as up to three blocking spawnSync calls — measured ~170 ms of app-wide
+// freeze on every launch (pacman here), and up to 2 s per manager on a machine
+// where one is slow. The update check now awaits primeLinuxInstallKind() before
+// it reads the answer, so the blocking path below is only a fallback.
+function defaultRunAsync(cmd: string, args: string[]): Promise<number | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try { child = spawn(cmd, args, { stdio: 'ignore' }); } catch { resolve(null); return; }
+    // Same 2 s budget as defaultRun; a killed child exits with a null status,
+    // which reads as "not the owner" exactly like spawnSync's timeout did.
+    const timer = setTimeout(() => child.kill(), 2000);
+    child.on('error', () => { clearTimeout(timer); resolve(null); });
+    child.on('exit', (code) => { clearTimeout(timer); resolve(code); });
+  });
+}
+
+export async function detectLinuxInstallKindAsync(
+  deps: Omit<LinuxInstallKindDeps, 'run' | 'exists'> & {
+    exists?: (p: string) => boolean | Promise<boolean>;
+    run?: (cmd: string, args: string[]) => Promise<number | null>;
+  } = {},
+): Promise<LinuxInstallKind> {
+  const platform = deps.platform ?? process.platform;
+  if (platform !== 'linux') return 'unknown';
+  const exists = deps.exists ?? ((p: string) => fs.promises.access(p).then(() => true, () => false));
+  const appImage = deps.envAppImage ?? process.env.APPIMAGE;
+  if (appImage && (await exists(appImage))) return 'appimage';
+  const run = deps.run ?? defaultRunAsync;
+  const execPath = deps.execPath ?? process.execPath;
+  // In order, one at a time — same precedence as the sync version.
+  for (const owner of OWNERS) {
+    if ((await run(owner.cmd, owner.args(execPath))) === 0) return owner.kind;
+  }
+  return 'unknown';
+}
+
 let cached: LinuxInstallKind | undefined;
+let priming: Promise<LinuxInstallKind> | undefined;
+
+/** Works the answer out without blocking and caches it; safe to call repeatedly. */
+export function primeLinuxInstallKind(): Promise<LinuxInstallKind> {
+  priming ??= detectLinuxInstallKindAsync().then((k) => (cached ??= k), () => (cached ??= 'unknown'));
+  return priming;
+}
 
 /** The process-wide answer. Cached: it cannot change while the app runs, and
  *  the update check asks on every poll. */

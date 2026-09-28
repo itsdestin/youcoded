@@ -83,6 +83,16 @@ async function openSetup(): Promise<HTMLElement> {
 describe('Backup & Sync reports only what the backend confirmed', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
+  it('explains handoff limits without promising exclusive offline use or lossless merging', async () => {
+    stub({}, []);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: 'What is this?' }));
+    expect(await screen.findByText(/conflicting updates may be kept as separate copies/)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing is lost|runs on one device at a time/)).toBeNull();
+    expect(screen.getByText(/not in the phone app/)).toBeInTheDocument();
+    expect(screen.getByText(/Recent messages may still be syncing/)).toBeInTheDocument();
+  });
+
   it('a warning Retry whose upload failed does not say "Uploaded!"', async () => {
     const api = stub(
       { pushBackend: vi.fn(async () => ({ success: false, error: "Some files didn't upload." })) },
@@ -277,6 +287,21 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
   }
 
   afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  it('explains conflict copies and where to find them without sync jargon', async () => {
+    installClaudeMock([]);
+    (window as any).claude.syncSpaces.status.mockResolvedValue({
+      ...spacesStatus(), recentEvents: [{ type: 'conflict', spaceId: 'personal', copies: ['notes (from Laptop, 2026-09-09).md'], at: Date.now() }],
+    });
+    await renderOpen();
+    // WHY: pin the exact approved notice and the help's additional folder cue in the real popup.
+    const explanation = 'Conflicting changes were saved in separate files. Look for “(from …)” in their names.';
+    const notice = screen.getByText(explanation);
+    expect(notice.textContent).not.toMatch(/local|remote|canonical|resolving device|original filename/i);
+    fireEvent.click(screen.getByRole('button', { name: 'What is this?' }));
+    await waitFor(() => expect(document.body.textContent).toContain('About Backup & Sync'));
+    expect(document.body.textContent).toContain(`${explanation} They appear in the same folder as the affected file.`);
+  });
 
   // The exact payload the workbench catch-all used to return.
   it('survives getStatus() answering [] (the workbench catch-all default)', async () => {

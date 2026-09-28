@@ -171,14 +171,61 @@ function useStore(): ChatStore {
   return store;
 }
 
-export function useChatState(sessionId: string): SessionChatState {
+export interface UseChatStateOptions {
+  /** True while the reader is off screen. The hook then keeps returning the
+   *  last state it rendered with, catching up at most once a second; see the WHY below. */
+  paused?: boolean;
+}
+
+/** How often a paused (hidden) reader may catch up with its live state. */
+export const PAUSED_REFRESH_MS = 1000;
+
+export function useChatState(sessionId: string, options?: UseChatStateOptions): SessionChatState {
   const store = useStore();
+  const paused = options?.paused === true;
+  // WHY `paused` (2026-09-23, many-tabs perf): App keeps a ChatView mounted for
+  // every open session and only hides the others. A hidden chat still re-drew
+  // its whole timeline once per streamed word (45 redraws for a 40-word reply)
+  // for a screen nobody could see. While paused the hook hands back the
+  // snapshot it last rendered with (refreshed at most once a second, below), so
+  // a hidden reader stays nearly still. The reducer is untouched — the store keeps applying every event, and
+  // every other reader (tab-strip attention, unread dots, the buddy) keeps its
+  // own subscription. On the render that un-pauses, `getSnapshot` changes
+  // identity, so React reads the LIVE state in that same render: the chat is
+  // current on the very first frame it is shown (no stale frame, no catch-up).
+  // Guard: tests/busy-app-render-budget.test.tsx ("never once per word") and
+  // tests/chat-state-paused.test.tsx.
+  const lastRef = useRef<{ id: string; state: SessionChatState } | null>(null);
+  // WHY paused readers still catch up once a second (2026-09-23, measured):
+  // never redrawing while hidden moved ALL of a background reply's drawing into
+  // the click that shows the tab — the rig's switch into a streaming session went
+  // from ~150 to ~360 ms at p95. Letting a hidden reader take the live state at
+  // most once per PAUSED_REFRESH_MS keeps ~98% of the saving (1 redraw a second
+  // instead of one per word) and leaves at most a second's worth to draw on show.
+  const catchUpRef = useRef(false);
   const subscribe = useCallback(
-    (cb: () => void) => store.subscribeSession(sessionId, cb),
-    [store, sessionId],
+    (cb: () => void) => {
+      if (!paused) return store.subscribeSession(sessionId, cb);
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const unsubscribe = store.subscribeSession(sessionId, () => {
+        if (timer) return;
+        timer = setTimeout(() => { timer = null; catchUpRef.current = true; cb(); }, PAUSED_REFRESH_MS);
+      });
+      return () => { if (timer) clearTimeout(timer); unsubscribe(); };
+    },
+    [store, sessionId, paused],
   );
-  const getSnapshot = useCallback(() => store.getSession(sessionId), [store, sessionId]);
-  return useSyncExternalStore(subscribe, getSnapshot);
+  const getSnapshot = useCallback(() => {
+    const last = lastRef.current;
+    // Nothing rendered yet for this session (mounted hidden, or the id
+    // changed): the live state is the only honest answer.
+    if (paused && last && last.id === sessionId && !catchUpRef.current) return last.state;
+    return store.getSession(sessionId);
+  }, [store, sessionId, paused]);
+  const state = useSyncExternalStore(subscribe, getSnapshot);
+  lastRef.current = { id: sessionId, state };
+  catchUpRef.current = false;
+  return state;
 }
 
 // WHY these two exist (2026-09-16 smoothness sweep, A1): AppInner read the

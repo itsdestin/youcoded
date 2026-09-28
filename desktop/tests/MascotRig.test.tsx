@@ -275,3 +275,36 @@ describe('MascotRig cursor tracking', () => {
     expect(pointermoveListeners()).toBe(0);
   });
 });
+
+// The idle body loop (breathe, bounce, …) is drawn by the rig's own 30 fps
+// update, not by a CSS keyframe loop — a smooth CSS loop made the browser draw
+// at the panel's full refresh rate (measured 2026-09-26: most of an idle
+// welcome screen's graphics cost at 180 Hz).
+describe('idle body loop rides the 30 fps update', () => {
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
+  const rootOf = (c: HTMLElement) => c.querySelector<SVGGElement>('#rig-root');
+
+  it('breathes by writing #rig-root on each tick, with no CSS loop class', async () => {
+    vi.useFakeTimers();
+    const motionRef = { current: { vx: 0, vy: 0, dragging: false } as RigMotion };
+    const r = render(<MascotRig svgUrl={null} pose="idle" motionRef={motionRef} reducedEffects={false} />);
+    const root = rootOf(r.container)!;
+    expect(root).toBeTruthy();
+    const seen = new Set<string>();
+    for (let i = 0; i < 40; i++) { act(() => { vi.advanceTimersByTime(33); }); seen.add(root.style.transform); }
+    expect(root.style.transform).toMatch(/^translateY\(/);
+    expect(seen.size).toBeGreaterThan(10);            // it actually moves
+    expect(root.getAttribute('class') ?? '').not.toMatch(/rig-(breathing|bounce-loop|float-loop|sleep-loop|dizzy-sway)/);
+  });
+
+  it('holds still with Reduced effects and while peeking', async () => {
+    const motionRef = { current: { vx: 0, vy: 0, dragging: false } as RigMotion };
+    const reduced = render(<MascotRig svgUrl={null} pose="idle" motionRef={motionRef} reducedEffects />);
+    expect(rootOf(reduced.container)!.style.transform).toBe('');
+    cleanup();
+    vi.useFakeTimers();
+    const peek = render(<MascotRig svgUrl={null} pose="peek-left" motionRef={motionRef} reducedEffects={false} />);
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(rootOf(peek.container)!.style.transform).toBe('');
+  });
+});

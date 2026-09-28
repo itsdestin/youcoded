@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { ToolCallState } from '../../shared/types';
+import { ToolCallState, type FloorStop } from '../../shared/types';
 import { useChatDispatch } from '../state/chat-context';
 import { useSpecialistDefinition, useSpecialistRunByChild } from '../hooks/useSpecialists';
 import { TaskConsentBlock } from './SpecialistEnvelope';
 import { hasNestedAsk } from '../utils/specialist-cards';
-import { useArtifactOptional } from '../state/ArtifactContext';
+import { useArtifactSelectorOptional } from '../state/ArtifactContext';
 import { Button, Radio, RadioGroup, Textarea, Tooltip } from './ui';
 // The card renders the widths this SHARED derivation produced and sends back only
 // which one was chosen — it never builds a rule pattern of its own.
@@ -19,12 +19,16 @@ import { useCardKeysLive } from '../state/card-keys-context';
 import { asString } from '../utils/tool-input';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
-import { fullAutoStopCopy } from './permissions/deny-list-copy';
-import { PERMISSION_DISPLAY } from './StatusBar';
+import { FullAutoStops, BROAD_ALLOW_COLORS } from './permissions/FullAutoStops';
+import { floorAskNote } from './permissions/deny-list-copy';
+import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
+import { AdminRunStrip } from './permissions/AdminRunStrip';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-user-link';
 import { toolActionLabel } from '../utils/tool-group-summary';
+import { PlanApprovalCard } from './PlanApprovalCard';
+import { ExpiredApprovalActions } from './ExpiredApprovalActions';
 
 // --- Helpers for friendly display ---
 
@@ -156,7 +160,10 @@ export function friendlyToolDisplay(
   // detail line so the label stays the plain-language action, not the argument.
   // awaiting-approval counts as "active" too — it hasn't happened yet, so the
   // past-tense form ("Ran a command") would claim something that isn't true.
-  const active = tool.status === 'running' || tool.status === 'awaiting-approval';
+  // A Claude Code background run is still active after its call returned —
+  // "Running a command" while it works, "Ran a command" only once it ends.
+  const active = tool.status === 'running' || tool.status === 'awaiting-approval'
+    || tool.ccBackground?.status === 'running';
 
   switch (toolName) {
     case 'Bash': {
@@ -172,7 +179,9 @@ export function friendlyToolDisplay(
       // as a background hire). CC cards keep their ⟳ mark.
       const bg = tool.shellRun
         ? (tool.shellRun.status === 'running' ? ' · in the background' : '')
-        : (input.run_in_background ? ' ⟳' : '');
+        : tool.ccBackground
+          ? (tool.ccBackground.status === 'running' ? ' ⟳' : '')
+          : (input.run_in_background ? ' ⟳' : '');
       const label = toolActionLabel('Bash', active) + bg;
       // The model's own description reads better quoted than the raw shell
       // command — fall back to the command itself when there's no description.
@@ -306,7 +315,10 @@ export function friendlyToolDisplay(
     case 'Agent': {
       // Fix: a non-string description rendered "Agent: [object Object]".
       const desc = asString(input.description);
-      const bg = input.run_in_background ? ' ⟳' : '';
+      // ⟳ only while the helper is still out there — same rule as Bash above.
+      const bg = tool.ccBackground
+        ? (tool.ccBackground.status === 'running' && input.run_in_background ? ' ⟳' : '')
+        : (input.run_in_background ? ' ⟳' : '');
       const label = desc ? `Agent: ${desc}` : 'Running Sub-Agent';
       // Fix: a malformed (non-string) subagent_type used to render "[object Object]".
       const subagentType = asString(input.subagent_type);
@@ -509,7 +521,7 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, suppressAlwaysAllow, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false, noKeyboard = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false, noKeyboard = false }: {
   requestId: string;
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
@@ -528,11 +540,17 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
    *  (permission-store.ts:35-43), so naming the folder is what makes the grant's
    *  scope checkable — a worktree does NOT inherit its parent repo's rules. */
   folderName?: string;
+  toolName?: string;
+  external?: boolean;
+  specialistName?: string;
   /** Budget gates (max_steps / doom_loop) are a binary "Continue?" — never offer
    *  "Always Allow" (it'd persist a rule that permanently disables the guard).
    *  Also set for an external-directory ask, where a remembered rule could
    *  never be consulted (harness-session.ts, step 4). */
   suppressAlwaysAllow?: boolean;
+  /** Which floor below the rules forced this ask, if any — names the Full-auto
+   *  stop band when the deny-list has no family for the command. */
+  floorStop?: FloorStop;
   /** D2: one line stating HOW WIDE this card's "Always allow" actually is.
    *  Only the caller knows (a hire card reads the specialist's grantScope), and
    *  the button label cannot carry it without becoming a sentence. Shown only
@@ -565,7 +583,18 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // Full-auto's only rule-based ask is a deny-list stop — swap the generic row
   // for the safety-stop footer the compare view settled (workbench surface
   // 'full-auto-ask', R1–R4). Every other combination keeps the row as-is.
-  const fullAutoStop = permissionMode === 'full-auto' && !!denyListed;
+  // An admin command gets the same stop band in EVERY mode (admin-password
+  // design, review R-1: "should match push/deletion prompt… no extra subtext
+  // below the buttons"). It never offers Always Allow (floorStop suppresses it).
+  const adminStop = floorStop === 'admin';
+  const fullAutoStop = (permissionMode === 'full-auto' && !!denyListed) || adminStop;
+  // WHY: a forced outside-folder ask isn't deny-listed, but without its own
+  // safety-stop copy Full Auto looks broken and offers no session-scoped choice.
+  const externalStop = isNative && permissionMode === 'full-auto' && external === true
+    && !specialistName && (toolName === 'Write' || toolName === 'Edit');
+  const budgetStop = isNative && permissionMode === 'full-auto'
+    && (toolName === 'doom_loop' || toolName === 'max_steps');
+  const [confirmingExternal, setConfirmingExternal] = useState(false);
   // Consequence-gated confirm strip (deny-listed asks) — mirrors the delete-model
   // confirm in LocalModelsSection: replace the button row with a plain-language
   // warning + Cancel / confirm.
@@ -655,14 +684,22 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 
   // Build actions list so keyboard handler can index into it. The array MUST
   // match the VISUAL order so Arrow Left/Right walk the row: the safety stop
-  // puts deny in the MIDDLE (Run it / Skip it | Always Allow) — red mid-row is
+  // puts deny in the MIDDLE (Run it / Deny | Always Allow) — red mid-row is
   // owner-approved (compare R2) even though every other row ends on red.
   const actions = useRef<(() => void)[]>([]);
-  actions.current = fullAutoStop
+  actions.current = externalStop || budgetStop
     ? [
         () => handleRespond({ decision: { behavior: 'allow' } }),
         () => handleRespond({ decision: { behavior: 'deny' } }),
-        onAlwaysAllow,
+        ...(externalStop ? [() => setConfirmingExternal(true)] : []),
+      ]
+    : fullAutoStop
+    ? [
+        () => handleRespond({ decision: { behavior: 'allow' } }),
+        () => handleRespond({ decision: { behavior: 'deny' } }),
+        // Hidden (and so not in the arrow-key walk) when the ask can never be
+        // remembered — the removal-target floor's stop is one.
+        ...(suppressAlwaysAllow ? [] : [onAlwaysAllow]),
       ]
     : [
         () => handleRespond({ decision: { behavior: 'allow' } }),
@@ -676,7 +713,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // and while this card's chat is not the one on screen.
   const keysLive = useCardKeysLive();
   useEffect(() => {
-    if (responding || confirmingAlways || !keysLive || noKeyboard) return;
+    if (responding || confirmingAlways || confirmingExternal || !keysLive || noKeyboard) return;
     const handler = (e: KeyboardEvent) => {
       // WHY: InputBar sends on an Enter that reaches the page body and marks it
       // handled. That one keypress is the message, not an answer to this card.
@@ -698,7 +735,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [responding, confirmingAlways, keysLive, noKeyboard, focusIdx, count]);
+  }, [responding, confirmingAlways, confirmingExternal, keysLive, noKeyboard, focusIdx, count]);
 
   const pad = isAndroid() ? 'py-2' : 'py-1';
   const ring = 'ring-2 ring-white/40';
@@ -807,58 +844,23 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     );
   }
 
-  // The full-auto safety stop (compare surface 'full-auto-ask', settled R4).
-  // Same §11/change-61 carve-out as the rows below: green/red/orange are STATUS
-  // colors; the band wears the chip's own colors so it reads as the MODE
-  // stopping itself, not a generic permission question.
-  if (fullAutoStop) {
-    const fa = PERMISSION_DISPLAY['full-auto'];
-    const stop = fullAutoStopCopy(command);
-    return (
-      <div className="px-3 py-2 space-y-2 border-t" style={{ background: fa.bg, borderColor: fa.border }}>
-        {/* Header + subheader as ONE tight block; the footer's only real gap
-            sits before the buttons (owner spacing direction, compare R3). */}
-        <div className="space-y-0.5">
-          <p className="text-xs font-medium" style={{ color: fa.color }}>{stop.header}</p>
-          <p className="text-2xs text-fg-dim leading-relaxed">{stop.subline}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            ref={el => { buttonsRef.current[0] = el; }}
-            disabled={responding}
-            onClick={() => handleRespond({ decision: { behavior: 'allow' } })}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-400/60 hover:bg-green-400/80 text-green-100 transition-colors disabled:opacity-50 ${focusIdx === 0 ? ring : ''}`}
-          >
-            Run it
-          </button>
-          <button
-            ref={el => { buttonsRef.current[1] = el; }}
-            disabled={responding}
-            onClick={() => handleRespond({ decision: { behavior: 'deny' } })}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
-          >
-            Skip it
-          </button>
-          {/* P-18: a real 1px divider instead of a typed "|" — takes the theme's
-              edge colour and is silent to screen readers. */}
-          <span aria-hidden="true" className="w-px h-3.5 bg-edge shrink-0" />
-          {/* Orange, not the generic row's blue: a fourth member of the status
-              button set, distinct from the amber band behind it (compare R2·A).
-              fullAutoStop implies a native deny-listed ask, so onAlwaysAllow
-              always routes through the consequence confirm above. */}
-          <button
-            ref={el => { buttonsRef.current[2] = el; }}
-            disabled={responding}
-            onClick={onAlwaysAllow}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-orange-100 transition-colors disabled:opacity-50 ${focusIdx === 2 ? ring : ''}`}
-          >
-            Always Allow
-          </button>
-        </div>
-        {unconfirmedNote}
-      </div>
-    );
-  }
+  // WHY: the new permission floor cannot be remembered; keep its stop in the
+  // same explained band but with no persistent Always Allow choice.
+  if (confirmingExternal || externalStop || budgetStop || fullAutoStop) return (
+    <FullAutoStops
+      kind={externalStop || confirmingExternal ? 'external' : budgetStop ? 'budget' : 'danger'}
+      confirmingExternal={confirmingExternal} toolName={toolName} command={command}
+      floorStop={floorStop} suppressAlwaysAllow={suppressAlwaysAllow}
+      adminOutsideFullAuto={adminStop && permissionMode !== 'full-auto'}
+      specialistName={specialistName} folderName={folderName} responding={responding}
+      focusIdx={focusIdx} buttonsRef={buttonsRef} pad={pad} ring={ring} unconfirmedNote={unconfirmedNote}
+      onAllow={() => handleRespond({ decision: { behavior: 'allow' } })}
+      onDeny={() => handleRespond({ decision: { behavior: 'deny' } })}
+      onAlways={onAlwaysAllow} onOpenExternal={() => setConfirmingExternal(true)}
+      onBackExternal={() => setConfirmingExternal(false)}
+      onGrantExternal={() => handleRespond({ decision: { behavior: 'allow' }, allowExternalEditsForSession: true })}
+    />
+  );
 
   return (
     // Same §11/change-61 carve-out as the confirm row above: status colors stay,
@@ -882,7 +884,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
           ref={el => { buttonsRef.current[1] = el; }}
           disabled={responding}
           onClick={onAlwaysAllow}
-          className={`px-3 ${pad} text-xs font-medium rounded-lg bg-blue-600/60 hover:bg-blue-600/80 text-blue-100 transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
+          className={`px-3 ${pad} text-xs font-medium rounded-lg ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
         >
           Always Allow
         </button>
@@ -899,8 +901,14 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       {/* Why there is no "Always Allow" here. Without it a missing button on a
           command the user runs constantly reads as a bug rather than a decision
           (compare R2·C). Shape-owned copy — see CommandShape.noGrantNote. */}
-      {noGrantPossible && noGrantNote && (
+      {noGrantPossible && noGrantNote && !floorStop && (
         <p className="text-3xs text-fg-muted leading-relaxed">{noGrantNote}</p>
+      )}
+      {/* A floor below the rules forced this card (rm-target / secret paths):
+          say why it has no "Always Allow" and will keep asking. Replaces the
+          shape note above so the card never gives two reasons. */}
+      {floorStop && (
+        <p className="text-3xs text-fg-muted leading-relaxed">{floorAskNote(floorStop)}</p>
       )}
       {/* D2: the promise "Always allow" is about to make, in the user's words.
           Gated on canAlwaysAllow so it never describes a button that isn't
@@ -914,61 +922,8 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 }
 
 // --- ExitPlanMode UI ---
-// The CLI shows a 4-option Ink menu for plan approval, not a standard Yes/No
-// permission prompt. We render the real options and send PTY input (arrow keys
-// + Enter) to select the chosen option in the Ink menu, then close the hook
-// socket so the relay exits cleanly.
-
-const PLAN_INTENT_STYLES = {
-  accept: 'bg-green-600/60 hover:bg-green-600/80 text-green-100',
-  reject: 'bg-red-600/60 hover:bg-red-600/80 text-red-100',
-  neutral: 'bg-blue-600/60 hover:bg-blue-600/80 text-blue-100',
-};
-
-const PLAN_OPTIONS = [
-  { label: 'Yes, and bypass permissions', intent: 'accept' as const },
-  { label: 'Yes, manually approve edits', intent: 'accept' as const },
-  { label: 'No, refine plan', intent: 'reject' as const },
-  { label: 'Tell Claude what to change', intent: 'neutral' as const },
-];
-
-function PlanApprovalButtons({ requestId, sessionId, onResponded }: {
-  requestId: string;
-  sessionId: string;
-  onResponded?: () => void;
-}) {
-  const [responding, setResponding] = useState(false);
-  const DOWN = '\u001b[B';
-
-  const handleSelect = useCallback((optionIndex: number) => {
-    setResponding(true);
-    // Send arrow-down keys to navigate from option 1 (default) to the target,
-    // then Enter to confirm the selection in the Ink menu
-    const input = DOWN.repeat(optionIndex) + '\r';
-    window.claude.session.sendInput(sessionId, input);
-    // Close the hook socket — the Ink menu handles the decision, so we don't
-    // need to send a hook response. Closing prevents the relay from timing out.
-    (window as any).claude.session.respondToPermission(requestId, { decision: { behavior: 'deny' } }).catch(() => {});
-    if (onResponded) onResponded();
-  }, [requestId, sessionId, onResponded, DOWN]);
-
-  const pad = isAndroid() ? 'py-2' : 'py-1';
-
-  return (
-    <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-t border-edge bg-inset/30">
-      {PLAN_OPTIONS.map((opt, idx) => (
-        <button
-          key={opt.label}
-          disabled={responding}
-          onClick={() => handleSelect(idx)}
-          className={`px-3 ${pad} text-xs font-medium rounded-sm transition-colors disabled:opacity-50 ${PLAN_INTENT_STYLES[opt.intent]}`}
-        >
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  );
-}
+// Lives in PlanApprovalCard.tsx: its buttons are read off Claude Code's real
+// menu, never a fixed list (the old fixed list could approve on "No").
 
 // --- AskUserQuestion UI ---
 // Claude Code's AskUserQuestion tool sends 1-4 multiple-choice questions.
@@ -1342,8 +1297,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   // Optional: the workbench tool gallery (?mode=workbench&view=tools) renders
   // ToolCard outside the ArtifactProvider. Missing cwd just drops the folder
   // name from the confirm header rather than crashing the card.
-  const artifacts = useArtifactOptional();
-  const sessionCwd = sessionId ? artifacts?.state.sessionCwd?.[sessionId] : undefined;
+  // WHY a narrow selector (perf, 2026-09-23): the whole state redrew this memoized card on any file write.
+  const sessionCwd = useArtifactSelectorOptional((s) => (sessionId ? s.sessionCwd?.[sessionId] : undefined));
   // Specialists 1c: a `task_id` call names ANOTHER card's child — look up that
   // child's run so the header can say "Note to Wren…" (a narrow selector, so
   // this memoized card does not re-render on every session update).
@@ -1376,8 +1331,13 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   // G-1: a Bash card with a shell-run record shows the RUN's state the same
   // way — its tool result is only the launch acknowledgment.
   const shell = tool.toolName === 'Bash' ? tool.shellRun : undefined;
+  // Claude Code's background Agent / Bash (2026-09-24): same idea — the
+  // receipt says 'complete', the run record says whether the work is done.
+  // Only on a receipt that succeeded; a failed launch shows the tool's failure.
+  const ccBg = tool.status === 'complete' ? tool.ccBackground : undefined;
   const runIcon: 'spinner' | 'check' | 'fail' | 'stopped' | null =
     tool.status === 'awaiting-approval' ? null
+    : ccBg ? (ccBg.status === 'running' ? 'spinner' : ccBg.status === 'completed' ? 'check' : ccBg.status === 'failed' ? 'fail' : 'stopped')
     : shell ? (shell.status === 'running' ? 'spinner' : shell.status === 'stopped' ? 'stopped' : shell.exitCode === 0 ? 'check' : 'fail')
     : !run ? null
     : run.status === 'running' ? 'spinner'
@@ -1490,12 +1450,29 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
       )}
 
       {/* Permission / AskUserQuestion / ExitPlanMode UI */}
-      {tool.status === 'awaiting-approval' && tool.requestId && (() => {
+      {tool.status === 'awaiting-approval' && (tool.requestId || tool.expired) && (() => {
         // AskUserQuestion needs its own UI with option selection instead of Yes/No
         const isAskUser = tool.toolName === 'AskUserQuestion' && isValidQuestions(tool.input);
-        // ExitPlanMode has a 4-option Ink menu in the CLI (bypass/manual/refine/feedback),
-        // not a standard Yes/No permission — render the real options
+        // ExitPlanMode is Claude Code's own plan menu, not a Yes/No permission —
+        // PlanApprovalCard renders the rows that menu is actually showing.
         const isPlanApproval = tool.toolName === 'ExitPlanMode';
+        // A KEPT card (the hook socket died, requestId cleared) whose Claude Code
+        // menu may still be live. The plan card needs no socket — it answers by
+        // typing into the menu — so it keeps working unchanged and settles the
+        // card quietly. Every other kept card gets ExpiredApprovalActions.
+        // `expired` is only ever set on the Claude Code hook path ('hook-closed');
+        // native sessions have no terminal and never keep a card (chat-reducer).
+        if (tool.expired || !tool.requestId) {
+          const settle = () => {
+            if (!sessionId) return;
+            const action = { type: 'PERMISSION_CARD_RESOLVED' as const, sessionId, toolUseId: tool.toolUseId };
+            dispatch(action);
+            (window as any).claude?.remote?.broadcastAction?.(action);
+          };
+          return isPlanApproval && sessionId
+            ? <PlanApprovalCard sessionId={sessionId} onAnswered={settle} />
+            : <ExpiredApprovalActions sessionId={sessionId} toolName={tool.toolName} input={tool.input as Record<string, unknown> | undefined} cwd={sessionCwd} onDismiss={settle} />;
+        }
         const onRespondedCb = () => {
           if (sessionId && tool.requestId) {
             const action = { type: 'PERMISSION_RESPONDED' as const, sessionId, requestId: tool.requestId };
@@ -1505,7 +1482,13 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         };
         const onFailedCb = () => {
           if (sessionId && tool.requestId) {
-            const action = { type: 'PERMISSION_EXPIRED' as const, sessionId, requestId: tool.requestId };
+            // 'delivery-failed': the host confirmed the socket is gone, so this
+            // must RESOLVE the card — keeping it would pin buttons that cannot
+            // work (chat-reducer PERMISSION_EXPIRED).
+            const action = {
+              type: 'PERMISSION_EXPIRED' as const, sessionId,
+              requestId: tool.requestId, reason: 'delivery-failed' as const,
+            };
             dispatch(action);
             (window as any).claude?.remote?.broadcastAction(action);
           }
@@ -1518,10 +1501,26 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             onFailed={onFailedCb}
           />
         ) : isPlanApproval && sessionId ? (
-          <PlanApprovalButtons
-            requestId={tool.requestId}
+          <PlanApprovalCard
             sessionId={sessionId}
-            onResponded={onRespondedCb}
+            onAnswered={() => {
+              // Claude Code took the answer through its menu. Resolve the card
+              // FIRST, so the socket release below cannot come back to this
+              // device as "answered elsewhere"…
+              onRespondedCb();
+              // (A card that became KEPT while the keys went in — Esc and
+              // clear-context make Claude Code kill the hook — is rendered by
+              // the kept branch above, and PlanApprovalCard calls the LATEST
+              // onAnswered, so that branch's settle runs instead of this.)
+              // …then release the hook's held socket with NO decision. The relay
+              // prints no decision and Claude Code ignores it (measured on
+              // 2.1.281: a decision-less hook answer leaves its own menu live and
+              // a late one changes nothing). Never a deny here: a deny that beat
+              // the keystroke would reject the plan the user just approved.
+              if (tool.requestId) {
+                (window as any).claude.session.respondToPermission(tool.requestId, {}).catch(() => {});
+              }
+            }}
           />
         ) : (
           <PermissionButtons
@@ -1530,6 +1529,9 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             noKeyboard={!!tool.specialist}
             suggestions={tool.permissionSuggestions}
             denyListed={tool.denyListed}
+            toolName={tool.toolName}
+            external={tool.external}
+            specialistName={tool.specialist?.title}
             permissionMode={tool.permissionMode}
             command={typeof (tool.input as any)?.command === 'string' ? (tool.input as any).command : undefined}
             folderName={sessionCwd ? basename(sessionCwd) : undefined}
@@ -1559,7 +1561,11 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             // lookup POSITIVELY resolves (never shown-then-hidden), and an
             // unresolved hire must never be offered a grant optimistically —
             // we would not know which width it was even asking for.
+            floorStop={tool.floorStop}
+            // `tool.floorStop`: a floor (protected-folder removal, secret file)
+            // forced this ask below every rule, so a grant could never skip it.
             suppressAlwaysAllow={tool.toolName === 'max_steps' || tool.toolName === 'doom_loop' || tool.external === true
+              || !!tool.floorStop
               || (tool.toolName === 'Task' && !!tool.input?.task_id)
               || (tool.toolName === 'Task' && !tool.input?.task_id && !hireDefinition)
               // A hire with no work_dir has NO permission subject at all
@@ -1586,6 +1592,36 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
           />
         );
       })()}
+
+      {/* The admin password card: this command's sudo is waiting for the
+          computer password (design 2026-09-25, status flip 2026-09-26 —
+          the card now reads 'awaiting-approval', same as a permission ask,
+          so it can't be mistaken for a still-running command). */}
+      {tool.status === 'awaiting-approval' && tool.passwordAsk && (
+        <AdminPasswordPrompt
+          ask={tool.passwordAsk}
+          onSubmit={async (password) => {
+            const requestId = tool.passwordAsk!.requestId;
+            const ok = await window.claude.native.submitAdminPassword(requestId, password);
+            // WHY dispatch on false: an expired ask has nothing left on the
+            // main side to send a PasswordResolved push for THIS device (the
+            // socket it would have delivered to is already gone) — say so
+            // locally instead of leaving the field disabled forever (design
+            // §2.6: "a card whose ask was withdrawn shows the ask as ended;
+            // no field"). A successful submit needs no local dispatch: main's
+            // own broker.withdraw() already broadcasts PasswordResolved to
+            // every device, this one included.
+            // sessionId is absent only in the workbench's standalone tool
+            // gallery (?view=tools), which never wires a real IPC call for
+            // this to matter — guarded rather than asserted so that view
+            // still renders.
+            if (!ok && sessionId) dispatch({ type: 'PASSWORD_RESOLVED', sessionId, requestId });
+          }}
+        />
+      )}
+      {tool.shellRun?.status === 'running' && tool.shellRun.admin && (
+        <AdminRunStrip run={tool.shellRun} sessionId={sessionId} />
+      )}
 
       {/* Expanded details — per-tool parsed views, raw fallback otherwise.
           Skill cards never render a body (the only response is the redundant

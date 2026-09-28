@@ -39,3 +39,27 @@ export function resolveMappingAction(
   // 'clear'/'resume' (and anything unrecognized) still adopt.
   return source === 'startup' ? 'ignore' : 'adopt';
 }
+
+// Which live desktop session, if any, already holds a conversation. Used by
+// session:create before it resumes one.
+//
+// WHY: resuming a conversation that is already open in a tab used to spawn a
+// SECOND session on the same transcript — a second tab with the same name, and
+// two writers appending to one file. The Resume browser hides live rows, but
+// other doors (a chat-search card, a project's conversation list, the buddy's
+// list) do not, so the check belongs at the one place every resume passes.
+//
+// A native session's desktop id IS its conversation id; a Claude Code session's
+// conversation id is whatever the map last adopted for it. Only sessions still
+// in `liveSessions` count — the map is a cache that can outlive an exit (the
+// same reason session:browse filters it, "Bug 1").
+export function findLiveSessionForConversation<T extends { id: string; status?: string }>(
+  conversationId: string,
+  liveSessions: ReadonlyArray<T>,
+  // desktop id → the conversation id it last adopted (undefined = not mapped)
+  conversationIdOf: (desktopId: string) => string | undefined,
+): T | undefined {
+  const live = liveSessions.filter((s) => s.status !== 'destroyed');
+  return live.find((s) => s.id === conversationId)
+    ?? live.find((s) => conversationIdOf(s.id) === conversationId);
+}

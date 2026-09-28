@@ -103,7 +103,7 @@ describe('lease-client', () => {
     // so it can only finish once the hub has answered, exactly as in the app.
     const releasing = client.release('s1');
     answerAcquire(okResult('acquire', 's1', Date.now() + 300_000));
-    await acquiring;
+    expect((await acquiring)?.ok).toBe(false);
     await releasing;
 
     expect(client.isHeld('s1')).toBe(false);
@@ -115,6 +115,23 @@ describe('lease-client', () => {
     hubRequest.mockClear();
     await vi.advanceTimersByTimeAsync(RENEW_MS * 2);
     expect(hubRequest).not.toHaveBeenCalledWith('renew', 's1', DEVICE_ID);
+  });
+
+  it('forwards takeover during acquisition so admission can cancel a late grant', async () => {
+    let answer!: (r: LeaseResult) => void;
+    hubRequest.mockImplementation((op: string, sid: string) => op === 'acquire'
+      ? new Promise<LeaseResult>((resolve) => { answer = resolve; })
+      : Promise.resolve(okResult(op, sid, 0)));
+    let released: Promise<void> | undefined;
+    takeoverSpy.mockImplementation(() => { released = client.release('s1'); });
+    const acquiring = client.acquire('s1');
+    client.handleTakeoverRequest('s1', { deviceId: 'peer', device: 'laptop' });
+    expect(takeoverSpy).toHaveBeenCalledWith('s1', { deviceId: 'peer', device: 'laptop' });
+    answer(okResult('acquire', 's1', Date.now() + 300_000));
+    expect((await acquiring)?.ok).toBe(false);
+    await released;
+    expect(client.isHeld('s1')).toBe(false);
+    expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
   });
 
   it('release stops the timer, deletes the file, and calls the hub', async () => {
@@ -191,6 +208,19 @@ describe('lease-client', () => {
     hubRequest.mockResolvedValue(null);
     const r = await client.query('s1');
     expect(r).toEqual({ held: false, self: false, source: 'none' });
+  });
+
+  it('preserves a caller nonce and ignores a nonce for a different holder', async () => {
+    const nonce = '3db07e20-1244-4a1b-85bf-bde2db925e41';
+    hubRequest.mockResolvedValue(okResult('acquire', 's1', Date.now() + 300_000));
+    await client.acquire('s1');
+    await client.takeover('s2', nonce);
+    expect(hubRequest).toHaveBeenCalledWith('takeover', 's2', DEVICE_ID, nonce);
+    const from = { deviceId: 'dev-B', device: 'same-machine' };
+    client.handleTakeoverRequest('s1', from, nonce, 'not-this-install');
+    expect(takeoverSpy).not.toHaveBeenCalled();
+    client.handleTakeoverRequest('s1', from, nonce, DEVICE_ID);
+    expect(takeoverSpy).toHaveBeenCalledWith('s1', from, nonce);
   });
 
   it('handleTakeoverRequest invokes the callback only for a HELD session', async () => {
@@ -434,11 +464,11 @@ describe('lease-client', () => {
     expect(hubRequest).not.toHaveBeenCalledWith('renew', 's1', DEVICE_ID);
   });
 
-  it('acquire on hub-disconnected (null) optimistically holds locally', async () => {
+  it('acquire on hub-disconnected holds locally without claiming the hub confirmed ownership', async () => {
     hubRequest.mockResolvedValue(null);
     const res = await client.acquire('s1');
 
-    expect(res && res.ok).toBe(true);
+    expect(res).toBeNull();
     expect(client.isHeld('s1')).toBe(true);
     // File written with a locally-synthesized expiry.
     const file = leaseFilePath(tmpRoot, 's1');

@@ -374,6 +374,26 @@ describe('conversations service composition root', () => {
     expect(h.materializeOut.mock.calls[0][0].localJsonlPath).toContain(`${rec.id}.jsonl`);
   });
 
+  it('does not materialize peer bytes on exit or synced sweep while sender snapshot is pinned', async () => {
+    const dir = path.join(tmpRoot, 'pinned-proj'); fs.mkdirSync(dir, { recursive: true });
+    const id = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+    const rec = { id, provider: 'claude', projectName: 'pinned-proj', originalPath: dir,
+      transcriptRef: `claude/transcripts/pinned-proj/${id}.jsonl` };
+    const svc = await freshService(startOpts());
+    svc.noteSessionStarted(id, dir, 'claude');
+    h.store.get.mockResolvedValue(rec);
+    h.store.list.mockImplementation(async (p: string) => p === 'claude' ? [rec] : []);
+    const pin = svc.pinHandoffDestination(id);
+    expect(pin?.active()).toBe(true);
+    svc.noteSessionEnded(id);
+    fireSync({ type: 'synced', spaceId: 'personal', updated: true, pushed: false });
+    await vi.waitFor(() => expect(h.store.list).toHaveBeenCalled());
+    expect(h.materializeOut).not.toHaveBeenCalled();
+    pin?.release();
+    fireSync({ type: 'synced', spaceId: 'personal', updated: true, pushed: false });
+    await vi.waitFor(() => expect(h.materializeOut).toHaveBeenCalled());
+  });
+
   // The targeted materialize gates on the LOCAL transcript being quiescent:
   // session-exit fires before CC finishes flushing its final turn, so the copy
   // waits until the file's size stops changing across one probe interval.

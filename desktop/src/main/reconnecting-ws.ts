@@ -52,6 +52,10 @@ export interface ReconnectingWs {
   setDesired(want: boolean): void;
   send(data: string): boolean;   // true only when written on an OPEN socket
   isOpen(): boolean;             // socket exists AND finished its handshake
+  /** Wanted on, no socket, and NO retry scheduled — a wedge, not a backoff.
+   *  False while healthy, while backing off, and while intentionally off, so
+   *  it is safe to poll (presence self-healing spec, Part 2). */
+  isStalled(): boolean;
   destroy(): void;
 }
 
@@ -68,6 +72,14 @@ export function createReconnectingWs(hooks: ReconnectingWsHooks): ReconnectingWs
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   }
 
+  // WHY a wrapper (2026-09-23): a fired timer's id used to stay in `retryTimer`,
+  // so "is a retry scheduled?" could not be answered — and isStalled() needs
+  // exactly that. Clearing it as the retry fires makes the variable honest.
+  function fireRetry() {
+    retryTimer = null;
+    connect();
+  }
+
   function connect() {
     if (!desired || ws) return;
     const token = hooks.getToken();
@@ -80,7 +92,7 @@ export function createReconnectingWs(hooks: ReconnectingWsHooks): ReconnectingWs
       // dead after one attempt. clearTimeout on an already-fired timer is a no-op.
       if (hooks.noToken === 'poll') {
         if (retryTimer) clearTimeout(retryTimer);
-        retryTimer = setTimeout(connect, BACKOFF_MS[BACKOFF_MS.length - 1]);
+        retryTimer = setTimeout(fireRetry, BACKOFF_MS[BACKOFF_MS.length - 1]);
       }
       return;
     }
@@ -116,7 +128,7 @@ export function createReconnectingWs(hooks: ReconnectingWsHooks): ReconnectingWs
       // contract is pinned.
       const delay = BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length - 1)];
       attempts += 1;
-      retryTimer = setTimeout(connect, delay);
+      retryTimer = setTimeout(fireRetry, delay);
     }
   }
 
@@ -154,6 +166,7 @@ export function createReconnectingWs(hooks: ReconnectingWsHooks): ReconnectingWs
       try { ws.send(data); return true; } catch { return false; }
     },
     isOpen() { return ws !== null && ws.readyState === WebSocket.OPEN; },
+    isStalled() { return desired && ws === null && retryTimer === null; },
     destroy() {
       desired = false;
       clearTimers();

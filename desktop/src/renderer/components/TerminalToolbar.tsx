@@ -40,6 +40,12 @@ export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
       />
       <ToolbarButton label="Esc" onClick={() => send('\x1b')} heightClass={buttonHeight} />
       <ToolbarButton label="Tab" onClick={() => send('\t')} heightClass={buttonHeight} />
+      {/* Enter and Space as their own keys (second review F2): answering a
+          menu in terminal view on a phone — above all a startup dialog the chat
+          cannot show — needs Enter to confirm and Space to tick a box in a
+          multi-select (the several-MCP-servers list). */}
+      <ToolbarButton label="Enter" onClick={() => send('\r')} heightClass={buttonHeight} />
+      <ToolbarButton label="Space" onClick={() => send(' ')} heightClass={buttonHeight} />
       <div className={`shrink-0 w-px ${separatorHeight} bg-edge-dim mx-0.5`} />
       <ToolbarButton label="←" onClick={() => send('\x1b[D')} heightClass={buttonHeight} />
       <ToolbarButton label="→" onClick={() => send('\x1b[C')} heightClass={buttonHeight} />

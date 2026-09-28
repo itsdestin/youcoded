@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01SudoRefused","name":"Bash","input":{"command":"sudo whoami","description":"Check which user admin commands run as"}}
+{"type":"tool_result","tool_use_id":"toolu_01SudoRefused","content":"sudo: no password was provided\nsudo: a password is required\n[YouCoded] The admin password request was refused because it could not be verified as coming from the system's sudo (reason: parent-not-sudo). Do not retry the same way; tell the user sudo couldn't be used here.\n[exit 1 · 0.4s]","is_error":true}

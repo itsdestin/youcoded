@@ -30,7 +30,7 @@ class SubagentWatcher(
     private data class PerFileState(
         val agentId: String,
         val jsonlFile: File,
-        val meta: Pair<String, String>,          // cached at construction time; avoids disk re-read in deliver()
+        val meta: Triple<String, String, String?>, // description, agentType, parent toolUseId — cached; avoids disk re-read in deliver()
         var offset: Long = 0L,
         val seenUuids: MutableSet<String> = mutableSetOf(),
     )
@@ -120,7 +120,7 @@ class SubagentWatcher(
             val meta = readMeta(agentId) ?: continue
             // Use the caller-supplied replay index, NOT this.index, to avoid
             // corrupting live parent-binding state.
-            val parentToolUseId = replayIndex.bindSubagent(agentId, meta.first, meta.second) ?: continue
+            val parentToolUseId = replayIndex.bindSubagent(agentId, meta.first, meta.second, meta.third) ?: continue
             val jsonlFile = File(subagentsDir, name)
             if (!jsonlFile.exists()) continue
             for (line in jsonlFile.readLines()) {
@@ -133,14 +133,16 @@ class SubagentWatcher(
 
     // ---- internals ----
 
-    private fun readMeta(agentId: String): Pair<String, String>? {
+    private fun readMeta(agentId: String): Triple<String, String, String?>? {
         val metaFile = File(subagentsDir, "agent-$agentId.meta.json")
         if (!metaFile.exists()) return null
         return try {
             val obj = JSONObject(metaFile.readText())
             val description = obj.optString("description", "")
             val agentType = obj.optString("agentType", "")
-            if (description.isEmpty() || agentType.isEmpty()) null else description to agentType
+            // toolUseId: the exact parent card — see SubagentIndex.bindSubagent.
+            val toolUseId = obj.optString("toolUseId", "").ifEmpty { null }
+            if (description.isEmpty() || agentType.isEmpty()) null else Triple(description, agentType, toolUseId)
         } catch (_: Exception) { null }
     }
 
@@ -159,7 +161,7 @@ class SubagentWatcher(
         val existing = perFile.putIfAbsent(agentId, state)
         if (existing != null) return
         // Try immediate bind; if no parent yet, reads will buffer until flushAllPending() is called.
-        index.bindSubagent(agentId, meta.first, meta.second)
+        index.bindSubagent(agentId, meta.first, meta.second, meta.third)
         readNewLines(state)
     }
 
@@ -208,7 +210,7 @@ class SubagentWatcher(
             return
         }
         // Not bound yet — buffer for eventual flush.
-        index.bufferPendingEvent(state.agentId, state.meta.first, state.meta.second, ev)
+        index.bufferPendingEvent(state.agentId, state.meta.first, state.meta.second, ev, state.meta.third)
     }
 
     private fun stamp(ev: TranscriptEvent, parentToolUseId: String, agentId: String): TranscriptEvent = when (ev) {

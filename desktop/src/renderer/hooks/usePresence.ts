@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { useGameDispatch } from '../state/game-context';
 import { useAccount } from '../state/account-context';
 import { OnlineUser } from '../state/game-types';
+import { useOnRemoteReconnect } from './useOnRemoteReconnect';
 
 // Replaces usePartyLobby (PartyKit global lobby, retired — spec §3). The
 // socket itself lives in the PLATFORM layer (Electron main / SessionService);
@@ -56,6 +57,13 @@ export function usePresence(isLeader: boolean = true) {
       setIncognitoLoaded(true);
     }
   }, []);
+  // After a remote reconnect, read the choice again. WHY: it was read once, and a read lost
+  // during a phone's drop fell back to "not incognito" for the page's life (2026-09-11 phone
+  // pass sweep). Only an answer changes it — a failed re-read keeps what is shown.
+  useOnRemoteReconnect(() => {
+    const p = (window as any).claude?.getIncognito?.();
+    p?.then((val: boolean) => { setIncognitoState(val ?? false); setIncognitoLoaded(true); }).catch(() => {});
+  });
 
   // Desired-state effect: connect only when signed in, not incognito, and this
   // is the leader window. The platform layer owns the actual socket; we just

@@ -3,7 +3,7 @@
 // 'ws' sockets. The fake models exactly the event-emitter surface the manager
 // consumes (on/send/close/readyState).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createPresenceSocket, type PresenceWebSocketLike } from '../src/main/presence-socket';
+import { createPresenceSocket, wakeEvidence, SUSPEND_GRACE_MS, HUMAN_INPUT_TYPES, type PresenceWebSocketLike } from '../src/main/presence-socket';
 
 class FakeSocket implements PresenceWebSocketLike {
   static instances: FakeSocket[] = [];
@@ -320,5 +320,119 @@ describe('presence-socket state machine', () => {
     sock.send({ type: 'status', status: 'idle' });
     expect(inst.sent).toEqual([JSON.stringify({ type: 'status', status: 'idle' })]);
     sock.destroy();
+  });
+});
+
+// Roadmap (other-features, 2026-08-11): a friend read "Last seen 7/26/2026"
+// while using the app; presence never came back short of a relaunch. The
+// suspend latch had exactly one clearing edge (powerMonitor 'resume'), and the
+// 'wait' no-token policy could wedge the engine with no retry scheduled.
+// Spec: docs/active/specs/2026-08-11-presence-self-healing-design.md.
+describe('presence self-healing', () => {
+  beforeEach(() => { FakeSocket.instances = []; vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  describe('wakeEvidence', () => {
+    const t0 = 1_000_000_000;
+    it('THE WEDGE: suspend, no resume ever, then a click in a YouCoded window → the latch clears', () => {
+      expect(wakeEvidence({ now: t0 + 120_000, suspendedAt: t0, lastAppInputAt: t0 + 110_000 })).toBe('app-input');
+    });
+    // Review F1: macOS / Windows Modern Standby may pause or RESET the system
+    // idle clock across sleep. A lid-shut maintenance wake then reports
+    // idleSeconds 0 and a huge wall-clock gap — neither may release the latch.
+    it('an idle clock that reset across sleep, plus a clock gap, does NOT clear it', () => {
+      expect(wakeEvidence({
+        now: t0 + 3_600_000, suspendedAt: t0, lastAppInputAt: null, idleSeconds: 0, sinceLastTickMs: 3_600_000,
+      })).toBeNull();
+      // App input from before the lid closed does not count either.
+      expect(wakeEvidence({
+        now: t0 + 3_600_000, suspendedAt: t0, lastAppInputAt: t0 - 5_000, idleSeconds: 0, sinceLastTickMs: 3_600_000,
+      })).toBeNull();
+    });
+    it('input inside the grace window after suspend does not count (queued from before it)', () => {
+      expect(wakeEvidence({ now: t0 + 120_000, suspendedAt: t0, lastAppInputAt: t0 + 10_000 })).toBeNull();
+      expect(wakeEvidence({ now: t0 + 120_000, suspendedAt: t0, lastAppInputAt: t0 + SUSPEND_GRACE_MS })).toBe('app-input');
+    });
+    it('only deliberate input types count — a resting cursor re-entering the window does not', () => {
+      expect(HUMAN_INPUT_TYPES.has('mouseDown')).toBe(true);
+      expect(HUMAN_INPUT_TYPES.has('keyDown')).toBe(true);
+      for (const t of ['mouseMove', 'mouseEnter', 'mouseLeave', 'pointerMove', 'pointerRawUpdate']) {
+        expect(HUMAN_INPUT_TYPES.has(t)).toBe(false);
+      }
+    });
+  });
+
+  it('clearing suspended while still idle does not connect (a dark wake cannot flash Online)', () => {
+    const { sock } = makeSocket(() => 'tok');
+    sock.setDesired(true);
+    FakeSocket.instances[0].emit('open');
+    sock.setSuspended(true);
+    sock.setIdle(true);
+    sock.setSuspended(false); // e.g. an unlock while the idle gate still holds
+    expect(FakeSocket.instances).toHaveLength(1);
+    sock.setIdle(false);      // real input
+    expect(FakeSocket.instances).toHaveLength(2);
+    sock.destroy();
+  });
+
+  describe('repairIfStalled', () => {
+    it('re-drives a wedged socket: wanted, no token at connect, token arrives later', () => {
+      let token: string | null = null;
+      const { sock } = makeSocket(() => token);
+      sock.setDesired(true);              // 'wait' policy: no socket, no retry
+      expect(FakeSocket.instances).toHaveLength(0);
+      expect(sock.repairIfStalled()).toBe(false); // still no token → nothing sent
+      token = 'tok';
+      expect(sock.repairIfStalled()).toBe(true);
+      expect(FakeSocket.instances).toHaveLength(1);
+      sock.destroy();
+    });
+    it('never touches a healthy socket (no replay spam)', () => {
+      const { sock, events } = makeSocket(() => 'tok');
+      sock.setDesired(true);
+      FakeSocket.instances[0].emit('open');
+      const before = events.length;
+      expect(sock.repairIfStalled()).toBe(false);
+      expect(events.length).toBe(before);
+      expect(FakeSocket.instances).toHaveLength(1);
+      sock.destroy();
+    });
+    it('never cuts a backoff short', () => {
+      const { sock } = makeSocket(() => 'tok');
+      sock.setDesired(true);
+      const first = FakeSocket.instances[0];
+      first.emit('open');
+      first.emit('close', 1006, 'drop');   // retry scheduled at 1 s
+      expect(sock.repairIfStalled()).toBe(false);
+      expect(FakeSocket.instances).toHaveLength(1);
+      vi.advanceTimersByTime(1_000);
+      expect(FakeSocket.instances).toHaveLength(2);
+      sock.destroy();
+    });
+    it('does nothing when presence is intentionally off, asleep or idle', () => {
+      const { sock } = makeSocket(() => 'tok');
+      expect(sock.repairIfStalled()).toBe(false);
+      sock.setDesired(true);
+      sock.setSuspended(true);
+      expect(sock.repairIfStalled()).toBe(false);
+      sock.setSuspended(false);
+      sock.setIdle(true);
+      expect(sock.repairIfStalled()).toBe(false);
+      sock.destroy();
+    });
+    it('a fired retry that found no token leaves the engine stalled (and repairable), not "retry pending"', () => {
+      let token: string | null = 'tok';
+      const { sock } = makeSocket(() => token);
+      sock.setDesired(true);
+      FakeSocket.instances[0].emit('open');
+      token = null;
+      FakeSocket.instances[0].emit('close', 1006, 'drop'); // retry at 1 s
+      vi.advanceTimersByTime(1_000);                         // fires: no token → 'wait'
+      expect(FakeSocket.instances).toHaveLength(1);
+      token = 'tok2';
+      expect(sock.repairIfStalled()).toBe(true);
+      expect(FakeSocket.instances).toHaveLength(2);
+      sock.destroy();
+    });
   });
 });

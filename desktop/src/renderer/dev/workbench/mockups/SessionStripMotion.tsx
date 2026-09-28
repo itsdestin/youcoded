@@ -95,7 +95,7 @@ function Pane({ session, active }: { session: DemoSession; active: boolean }) {
 export function SessionStripMotionDemo() {
   const [sessions, setSessions] = useState(SESSIONS);
   const [activeId, setActiveId] = useState(SESSIONS[0].id);
-  // SessionStrip calls useArtifact() at its top level (the All Sessions menu's
+  // SessionStrip calls useArtifactDispatch() at its top level (the All Sessions menu's
   // "Manage projects…" dispatches into it). A real reducer, so the menu works.
   const [artifactState, artifactDispatch] = useReducer(artifactReducer, initialArtifactState);
   const artifact = useMemo(() => ({ state: artifactState, dispatch: artifactDispatch }), [artifactState]);

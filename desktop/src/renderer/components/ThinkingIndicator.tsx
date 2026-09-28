@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import BrailleSpinner from './BrailleSpinner';
+import { useOnScreen } from '../state/on-screen-context';
 
 // How long after the last token the model still counts as "actively streaming".
 // Long enough to bridge normal inter-token gaps, short enough that a real pause
@@ -168,30 +169,49 @@ export default function ThinkingIndicator({ stallWarning, promptProcessing, last
   // the whole point) and reset when the run ends, so the next turn starts at zero
   // rather than inheriting the last turn's ceiling.
   const clampRef = useRef<((v: number | undefined) => number | undefined) | null>(null);
+  // WHY (2026-09-23): every open session keeps its chat mounted, so a thinking
+  // line in a background tab ran all of the timers below for nobody. They stand
+  // still while this chat is hidden. Nothing here counts ticks — each number is
+  // worked out from timestamps — so the first frame back is already right.
+  const onScreen = useOnScreen();
+  // When the current stall's countdown started, for the stall it belongs to.
+  const stallStart = useRef<{ warning: object; at: number } | null>(null);
 
   // Rotate the playful words only while NOT stalled — a stall shows fixed copy.
   useEffect(() => {
-    if (stallWarning) return;
+    if (stallWarning || !onScreen) return;
     const id = setInterval(() => {
       setLineIndex(Math.floor(Math.random() * THINKING_LINES.length));
     }, 2500);
     return () => clearInterval(id);
-  }, [stallWarning]);
+  }, [stallWarning, onScreen]);
 
-  // Countdown while stalled. Seeded from the watchdog's retryInMs and ticked to
-  // zero. A fresh stallWarning object (each distinct stall) restarts the timer;
+  // Countdown while stalled. Seeded from the watchdog's retryInMs and counted to
+  // zero. A fresh stallWarning object (each distinct stall) restarts it;
   // clearing it (-> null, activity resumed) tears the timer down.
+  //
+  // Derived from the stall's start time rather than decremented per tick, so a
+  // chat that was hidden for part of the countdown shows the true number when it
+  // comes back. The ticks land on the same whole seconds after the stall began
+  // that the old per-second interval did, so on screen it counts identically.
   useEffect(() => {
-    if (!stallWarning) { setSecondsLeft(0); return; }
-    let n = Math.ceil(stallWarning.retryInMs / 1000);
-    setSecondsLeft(n);
-    const id = setInterval(() => {
-      n = Math.max(0, n - 1);
+    if (!stallWarning) { stallStart.current = null; setSecondsLeft(0); return; }
+    if (stallStart.current?.warning !== stallWarning) {
+      stallStart.current = { warning: stallWarning, at: Date.now() };
+    }
+    const at = stallStart.current.at;
+    const total = Math.ceil(stallWarning.retryInMs / 1000);
+    let id: ReturnType<typeof setTimeout> | null = null;
+    const update = () => {
+      const elapsed = Date.now() - at;
+      const n = Math.max(0, total - Math.floor(elapsed / 1000));
       setSecondsLeft(n);
-      if (n === 0) clearInterval(id);
-    }, 1000);
-    return () => clearInterval(id);
-  }, [stallWarning]);
+      // Next whole second after the stall began; nothing left to count at zero.
+      if (n > 0 && onScreen) id = setTimeout(update, 1000 - (elapsed % 1000));
+    };
+    update();
+    return () => { if (id != null) clearTimeout(id); };
+  }, [stallWarning, onScreen]);
 
   // Identity of the current server reading. Changing it restarts the clock.
   const ppKey = promptProcessing
@@ -212,20 +232,23 @@ export default function ThinkingIndicator({ stallWarning, promptProcessing, last
   // Tick while a prefill reading is on screen so the extrapolation can advance
   // it between the server's sparse per-batch reports. 250ms is smooth to the eye
   // and trivial next to the work the model is doing.
+  // Paused while hidden: the render works `since` out from the clock, so coming
+  // back (a re-render — the on-screen flag changed) shows the current reading.
   useEffect(() => {
-    if (!promptProcessing) return;
+    if (!promptProcessing || !onScreen) return;
     const id = setInterval(() => setPrefillTick((n) => n + 1), 250);
     return () => clearInterval(id);
-  }, [promptProcessing]);
+  }, [promptProcessing, onScreen]);
 
   const streamingNow = lastOutputAt != null && Date.now() - lastOutputAt < STREAMING_GRACE_MS;
   useEffect(() => {
-    if (!streamingNow) return;
+    // Hidden: coming back re-renders, which re-checks the grace from the clock.
+    if (!streamingNow || !onScreen) return;
     // Re-evaluate once the grace expires so the indicator reappears on a pause.
     const remaining = STREAMING_GRACE_MS - (Date.now() - (lastOutputAt ?? 0));
     const id = setTimeout(() => forceTick((n) => n + 1), Math.max(50, remaining));
     return () => clearTimeout(id);
-  }, [streamingNow, lastOutputAt]);
+  }, [streamingNow, lastOutputAt, onScreen]);
 
   // ── Hooks done; conditional rendering from here ───────────────────────────
   //

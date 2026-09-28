@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { OverlayPanel } from '../overlays/Overlay';
+import { OverlayPanel, TOOLTIP_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { placeBubble } from './anchor-position';
 
@@ -233,7 +233,8 @@ export function AnchorTip({
             // Plain left/top, no transform: `measure()` above has already done
             // the centring arithmetic, because a bubble positioned by transform
             // cannot also be clamped back inside its panel.
-            style={{ left: pos.left, top: pos.top }}
+            // TOOLTIP_Z so a bubble opened inside a z-9000 menu clears it (Overlay.tsx).
+            style={{ left: pos.left, top: pos.top, zIndex: TOOLTIP_Z }}
             onClick={(e) => e.stopPropagation()}
           >
             {title && <p className="text-xs font-semibold text-fg mb-1.5">{title}</p>}

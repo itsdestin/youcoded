@@ -11,7 +11,10 @@ import {
   isPresetStartupFailure,
   presetErrorLine,
   requestModelId,
+  findModelChildRss,
+  type ProcFs,
 } from '../src/main/engine/engine-supervisor';
+import { scanGgufCacheAsync } from '../src/main/engine/cache-scan';
 
 const mockSpawn = vi.fn();
 vi.mock('child_process', async (orig) => ({
@@ -55,6 +58,30 @@ const PRESET_PATH = 'C:/fake/home/.youcoded/engine/models.ini';
  *  care about the preset still gets a working one. */
 let presetStore: Map<string, string>;
 
+const FAKE_CACHE = 'C:/fake/cache';
+const enoent = () => Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+const emptyProcFs: ProcFs = { readFile: enoent, readdir: enoent };
+
+/** An in-memory /proc: `files` maps a path to its contents, and a directory is
+ *  listed from the paths beneath it. Records every read so a test can prove
+ *  which files were (not) touched. */
+function fakeProcFs(files: Record<string, string>) {
+  const reads: string[] = [];
+  const dirs: string[] = [];
+  const procFs: ProcFs = {
+    readFile: async (p) => { reads.push(p); if (p in files) return files[p]; return enoent(); },
+    readdir: async (d) => {
+      dirs.push(d);
+      const prefix = d.endsWith('/') ? d : `${d}/`;
+      const names = new Set<string>();
+      for (const k of Object.keys(files)) if (k.startsWith(prefix)) names.add(k.slice(prefix.length).split('/')[0]);
+      if (names.size === 0) return enoent();
+      return [...names];
+    },
+  };
+  return { procFs, reads, dirs };
+}
+
 /** `extra` accepts the CONFIG values (cacheDir, contextSize, speed, models…) as
  *  well as supervisor options: readConfig is a callback now, so a test that
  *  wants a spawn to see different values on its second attempt passes its own. */
@@ -82,6 +109,14 @@ function makeSupervisor(fetchImpl: any, extra: Record<string, any> = {}) {
     readyPollMs: 10,
     idleMs: 25 * 60_000,
     idleCheckMs: 60_000,
+    // An empty /proc by default: the load progress bar reads it asynchronously
+    // now, and a test must never depend on the real machine's processes.
+    procFs: emptyProcFs,
+    // The placeholder cache dir does not exist, so its scan is [] — answered
+    // instantly here, because the real scan is async disk I/O now and a
+    // fake-timer test cannot wait for it (under full-suite load the model poll
+    // never landed and the keep-loaded idle test flaked). A real dir is scanned.
+    scanCacheImpl: (d: string) => (d === FAKE_CACHE ? Promise.resolve([]) : scanGgufCacheAsync(d)),
     ...opts,
   });
 }
@@ -1513,7 +1548,8 @@ describe('EngineSupervisor model poll cadence', () => {
   async function bootUnderFakeTimers(fetchImpl: any) {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     mockSpawn.mockReturnValue(makeFakeChild());
-    sup = makeSupervisor(fetchImpl, { readyPollMs: 1 });
+    // The disk scan is real async I/O, which fake timers cannot step through.
+    sup = makeSupervisor(fetchImpl, { readyPollMs: 1, scanCacheImpl: async () => [] });
     const ready = sup.ensureRunning();
     await vi.advanceTimersByTimeAsync(50);
     await ready;
@@ -1563,5 +1599,147 @@ describe('EngineSupervisor model poll cadence', () => {
     const base = models();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(models()).toBe(base + 2);   // two 400 ms ticks; not zero as on the idle cadence
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Loading progress bar — the model child's resident memory, read from /proc.
+// WHY (perf, 2026-09-24): this used to read the command line of EVERY process
+// on the machine, synchronously, every 400 ms of a model load, hitching every
+// window. It is async now, looks at the router's own children first, remembers
+// the pid it found, and never runs twice at once for one model.
+// ---------------------------------------------------------------------------
+const MODEL_CMD = 'llama-server\0--model\0/cache/m-Q4_K_M.gguf\0';
+const statusWith = (kb: number) => `Name:\tllama-server\nVmRSS:\t   ${kb} kB\n`;
+
+describe('findModelChildRss', () => {
+  it("finds the model child among the ROUTER's children without listing all of /proc", async () => {
+    const { procFs, dirs, reads } = fakeProcFs({
+      '/proc/100/task/100/children': '200 300',
+      '/proc/200/cmdline': 'llama-server\0--model\0/cache/other.gguf\0',
+      '/proc/300/cmdline': MODEL_CMD,
+      '/proc/300/status': statusWith(2048),
+      '/proc/999/cmdline': MODEL_CMD, // a stranger — must never be needed
+    });
+    expect(await findModelChildRss('m-Q4_K_M', 100, undefined, procFs)).toEqual({ pid: 300, bytes: 2048 * 1024 });
+    expect(dirs).not.toContain('/proc');
+    expect(reads).not.toContain('/proc/999/cmdline');
+  });
+
+  it('a pid found on an earlier tick costs two reads and no directory listing', async () => {
+    const { procFs, dirs, reads } = fakeProcFs({
+      '/proc/100/task/100/children': '300',
+      '/proc/300/cmdline': MODEL_CMD,
+      '/proc/300/status': statusWith(4096),
+    });
+    expect(await findModelChildRss('m-Q4_K_M', 100, 300, procFs)).toEqual({ pid: 300, bytes: 4096 * 1024 });
+    expect(reads).toEqual(['/proc/300/cmdline', '/proc/300/status']);
+    expect(dirs).toEqual([]);
+  });
+
+  it('a remembered pid now running something else is NOT reported — the search runs again', async () => {
+    const { procFs } = fakeProcFs({
+      '/proc/300/cmdline': 'bash\0',            // pid reused by the kernel
+      '/proc/300/status': statusWith(1),
+      '/proc/100/task/100/children': '400',
+      '/proc/400/cmdline': MODEL_CMD,
+      '/proc/400/status': statusWith(8),
+    });
+    expect(await findModelChildRss('m-Q4_K_M', 100, 300, procFs)).toEqual({ pid: 400, bytes: 8 * 1024 });
+  });
+
+  it('falls back to the whole-/proc scan when the router has no children file (same answer as before)', async () => {
+    const { procFs, dirs } = fakeProcFs({
+      '/proc/1/cmdline': 'init\0',
+      '/proc/555/cmdline': MODEL_CMD,
+      '/proc/555/status': statusWith(16),
+      '/proc/self/cmdline': MODEL_CMD, // not a pid — skipped, as before
+    });
+    expect(await findModelChildRss('m-Q4_K_M', 100, undefined, procFs)).toEqual({ pid: 555, bytes: 16 * 1024 });
+    expect(dirs).toContain('/proc');
+  });
+
+  it('undefined when no process is loading the model, or /proc is unreadable', async () => {
+    expect(await findModelChildRss('m-Q4_K_M', 100, undefined, fakeProcFs({ '/proc/1/cmdline': 'init\0' }).procFs)).toBeUndefined();
+    expect(await findModelChildRss('m-Q4_K_M', 100, 300, emptyProcFs)).toBeUndefined();
+  });
+});
+
+describe('EngineSupervisor — loading progress without blocking', () => {
+  /** /proc for the fake router (pid 4242, makeFakeChild) with one model child
+   *  whose status read waits until the test releases it. */
+  function gatedProc() {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let statusReads = 0;
+    const procFs: ProcFs = {
+      readdir: async (d) => { if (d === '/proc/4242/task') return ['4242']; return enoent(); },
+      readFile: async (p) => {
+        if (p === '/proc/4242/task/4242/children') return '5000';
+        if (p === '/proc/5000/cmdline') return MODEL_CMD;
+        if (p === '/proc/5000/status') { statusReads += 1; await gate; return statusWith(500); }
+        return enoent();
+      },
+    };
+    return { procFs, release, statusReads: () => statusReads };
+  }
+
+  function loadingFetch() {
+    let state: 'loaded' | 'loading' = 'loaded';
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/health')) return { ok: true, status: 200, json: async () => ({ status: 'ok' }) } as any;
+      if (u.includes('/models')) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: 'm-Q4_K_M', size: 10_000_000, status: { value: state } }] }) } as any;
+      }
+      return { ok: true, status: 200, text: async () => '' } as any;
+    });
+    return { fetchImpl, setLoading: () => { state = 'loading'; } };
+  }
+
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  it('overlapping polls share ONE memory lookup, and the bar shows its reading', async () => {
+    const proc = gatedProc();
+    const { fetchImpl, setLoading } = loadingFetch();
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(fetchImpl, { procFs: proc.procFs, scanCacheImpl: async () => [] });
+    await sup.ensureRunning();
+    await flush();
+    setLoading();
+    const emitted: any[] = [];
+    sup.on('models-changed', (ms) => emitted.push(ms));
+    const a = sup.pollModelsNow();
+    const b = sup.pollModelsNow();
+    for (let i = 0; i < 5; i++) await flush();
+    expect(proc.statusReads()).toBe(1);   // the second poll joined the first lookup
+    proc.release();
+    await Promise.all([a, b]);
+    expect(emitted.at(-1)?.[0]).toMatchObject({ id: 'm-Q4_K_M', state: 'loading', loadedBytes: 500 * 1024 });
+  });
+
+  it('a lookup that finishes after the engine stopped leaves nothing behind', async () => {
+    const proc = gatedProc();
+    const { fetchImpl, setLoading } = loadingFetch();
+    mockSpawn.mockReturnValue(makeFakeChild());
+    sup = makeSupervisor(fetchImpl, { procFs: proc.procFs, scanCacheImpl: async () => [] });
+    await sup.ensureRunning();
+    await flush();
+    setLoading();
+    const emitted: any[] = [];
+    sup.on('models-changed', (ms) => emitted.push(ms));
+    const poll = sup.pollModelsNow();
+    for (let i = 0; i < 5; i++) await flush();
+    expect(proc.statusReads()).toBe(1);
+    await sup.stop();
+    proc.release();
+    await poll;
+    // The stale reading must not become a "loading" tracker (which would hold
+    // the next run's poll at the fast cadence) or a remembered pid, and must
+    // not repopulate the memory figure the stop just cleared.
+    expect((sup as any).loadProgress.size).toBe(0);
+    expect((sup as any).loadingPid.size).toBe(0);
+    expect(sup.loadedModelsBytes()).toBeUndefined();
+    expect(emitted).toEqual([]);
   });
 });

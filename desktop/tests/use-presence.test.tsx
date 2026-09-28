@@ -131,3 +131,23 @@ describe('usePresence — challenge send', () => {
     expect(h.dispatch).not.toHaveBeenCalledWith({ type: 'CHALLENGE_FAILED', target: 'github:9' });
   });
 });
+
+// The incognito choice was read once; a read lost during a phone's drop fell back to
+// "not incognito" for the page's life.
+describe('usePresence — incognito after a remote reconnect', () => {
+  it('reads the choice again, and a failed re-read keeps what is shown', async () => {
+    const { REMOTE_RECONNECTED_EVENT } = await import('../src/renderer/remote-events');
+    const getIncognito = vi.fn()
+      .mockRejectedValueOnce(new Error('lost'))
+      .mockResolvedValueOnce(true)
+      .mockRejectedValue(new Error('lost again'));
+    (window as any).claude.getIncognito = getIncognito;
+    const { result } = renderHook(() => usePresence());
+    await waitFor(() => expect(getIncognito).toHaveBeenCalledTimes(1));
+    await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+    await waitFor(() => expect(result.current.incognito).toBe(true));
+    await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+    expect(getIncognito).toHaveBeenCalledTimes(3);
+    expect(result.current.incognito).toBe(true);
+  });
+});

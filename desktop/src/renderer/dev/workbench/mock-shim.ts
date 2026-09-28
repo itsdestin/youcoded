@@ -1,3 +1,4 @@
+import type { NativePermissionMode } from '../../../shared/permission-types';
 import { MARKETPLACE_API_HOST } from '../../state/marketplace-api-client';
 import type { ChatGptAccountStatus } from '../../../shared/chatgpt-types';
 import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
@@ -95,8 +96,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'off', 'removeAllListeners',
   'session.list', 'session.create', 'session.browse', 'session.destroy',
   'session.setFlag', 'session.setTag', 'session.setNote', 'session.getMeta',
-  'session.sendInput', 'session.respondToPermission', 'on.transcriptEvent', 'on.hookEvent',
-  'native.send', 'native.setBinding',
+  'session.sendInput', 'session.respondToPermission', 'session.handoff', 'on.transcriptEvent', 'on.hookEvent',
+  'native.send', 'native.setBinding', 'native.switchModel',
   'providers.list', 'providers.catalog', 'providers.test', 'providers.setKey', 'models.memoryCheck',
   // Local Models rows + Resume (2026-08-26). WHY these must be listed: the
   // contract test only checks members named here, so a hand-written mock left
@@ -131,9 +132,17 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // Web search keys — real channels (search:* in main); listed so the
   // contract test checks them like every other hand-written fake.
   'search.list', 'search.test', 'search.setKey', 'search.removeKey',
+  // Settings → Performance (`?gpus=2` shows it) — real channels, a fixture machine here.
+  'performance.get', 'performance.set',
   // G-1 — real backend as of 2026-08-28; hand-written so the gallery's Bash
   // cards keep their fixture state instead of talking to a real process.
   'native.killShell', 'on.shellEvent',
+  // admin-password (2026-09-26) — real backend on all five surfaces
+  // (permission-broker.ts's password kind, admin-password-service.ts,
+  // ipc-handlers/preload/remote-shim/remote-server/SessionService.kt);
+  // hand-written so the gallery's password card can be reviewed with no
+  // real sudo, socket or askpass helper.
+  'native.submitAdminPassword',
   // "What the assistant was given" — real backend as of 2026-09-10; hand-written
   // here so the panel has file text to show without a filesystem.
   'native.sessionContextText', 'native.onSessionContext',
@@ -494,6 +503,26 @@ function applyFailSwitch(impls: Record<string, Record<string, unknown>>): void {
   }
 }
 
+/** `?stall=session.browse` — the stall twin of `?fail=`: each named channel never
+ *  answers, so a spinner's long-wait state (Resume's "still loading", 2026-09-26)
+ *  can be photographed. Same nested-path rules as applyFailSwitch. */
+function applyStallSwitch(impls: Record<string, Record<string, unknown>>): void {
+  const raw = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('stall') : null;
+  if (!raw) return;
+  for (const path of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const parts = path.split('.');
+    if (parts.length < 2) continue;
+    let parent: Record<string, unknown> = impls;
+    for (const key of parts.slice(0, -1)) {
+      const current = parent[key];
+      const copy = current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
+      parent[key] = copy;
+      parent = copy;
+    }
+    parent[parts[parts.length - 1]] = () => new Promise(() => {});
+  }
+}
+
 /** `?update=available` — the status pill's update, which no scenario otherwise sends. */
 function updateStatusSwitch(): { current: string; latest: string; update_available: true; download_url: string } | null {
   if (typeof location === 'undefined' || new URLSearchParams(location.search).get('update') !== 'available') return null;
@@ -503,6 +532,14 @@ function updateStatusSwitch(): { current: string; latest: string; update_availab
     update_available: true,
     download_url: 'https://github.com/itsdestin/youcoded/releases/tag/v1.3.0',
   };
+}
+
+/** `?announcement=1` — a real, unexpired announcement, so `chat/announcement` can
+ *  open StatusBar's own Announcement <Dialog> (statusData otherwise always sends
+ *  `announcement: null`, matching the fetch-not-run default). */
+function announcementSwitch(): { message: string; fetched_at: string; expires?: string } | null {
+  if (typeof location === 'undefined' || new URLSearchParams(location.search).get('announcement') !== '1') return null;
+  return { message: 'YouCoded 1.3.0 is out — new themes, faster sync, and the games arcade.', fetched_at: new Date().toISOString() };
 }
 
 export function createMockShim(store: MockStore): Window['claude'] {
@@ -551,6 +588,7 @@ export function createMockShim(store: MockStore): Window['claude'] {
   // "Cannot read properties of undefined (reading 'find')". Driving the impl
   // keys means a new namespace works the moment it is written.
   applyFailSwitch(impls);
+  applyStallSwitch(impls);
   for (const ns of new Set([...NAMESPACES, ...Object.keys(impls)])) {
     bridge[ns] = withCatchAll(ns, impls[ns] ?? {});
   }
@@ -664,6 +702,9 @@ interface UntypedSessionWrites {
   setTag: (sessionId: string, tagId: string, value: boolean) => Promise<{ ok: boolean }>;
   setNote: (sessionId: string, note: string) => Promise<{ ok: boolean }>;
   getMeta: (sessionId: string) => Promise<{ tags: string[]; note: string; supported: boolean; flags: Record<string, boolean> }>;
+  // Welcome back (MOCK_ONLY — see mock-only.ts).
+  reopenList: () => Promise<string[]>;
+  forgetReopen: (ids: string[]) => Promise<{ ok: boolean }>;
 }
 
 /** Upsert one session's meta slice, seeding from a `past` row of the same id so
@@ -785,6 +826,11 @@ function statusBarFixtureFor(scenario: string): { usage: unknown; sessionStatsMa
 }
 
 /** Hand-written channel implementations, backed by the store. */
+// Main's session:focus-request, as the workbench's one window receives it.
+// session.create fires it for a reused writer (as ipc-handlers.ts createSession
+// does); buddy.onFocusSession is how App listens for it.
+const focusSessionSubs = new Set<(sessionId: string) => void>();
+
 function handWritten(store: MockStore): Record<string, Record<string, unknown>> {
   // `location` is guarded the same way latencyFromQuery() above guards it —
   // this module has no node-test importer today, but the pattern is load-
@@ -846,7 +892,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // is switched, Grok answers, the user reacts) — replaying one fixed answer
   // to every message could not film it. One-turn fixtures behave as before.
   const replyCursor = new Map<string, number>();
-  const startReply = (sessionId: string, text: string) => {
+  // `echoUser`: Claude Code sessions only (session.sendInput) — Claude Code records the typed
+  // message in its transcript; a native session's app draws the user's bubble itself.
+  const startReply = (sessionId: string, text: string, echoUser = false) => {
     const raw = REPLY_SCRIPTS[`./fixtures/replies/${replyScriptName()}.jsonl`];
     if (!raw) { console.warn(`[workbench] no reply script "${replyScriptName()}"`); return; }
     const turns = splitTurns(parseReplyScript(raw));
@@ -867,6 +915,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       transcript: (e) => subs.transcript.forEach((f) => f(e)),
       hook: (e) => subs.hook.forEach((f) => f(e)),
       speed,
+      echoUser,
     });
   };
 
@@ -884,11 +933,64 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // once from the resume path with the row's id — and only the FIRST ask per
   // session id runs. So the locator-less ask must already know the row.
   const resumedFrom = new Map<string, string>();
+  // Explicit handoff (?lease=held:<device>): the real pending tab, notices and
+  // draft rules run against this. The first wait ends "may have newer
+  // messages"; Try again, Continue or a forced takeover then opens the session.
+  // No ownership or freshness is proven here — the backend owns that.
+  const handoffs = new Map<string, { create?: any; state: any; tries: number }>();
+  const handoffRows = new Set<string>();
+  const handoffOpen = async (id: string, source: 'confirmed' | 'saved-copy') => {
+    const h = handoffs.get(id)!;
+    leaseReleased = true;
+    const created = await session.create!(h.create);
+    h.state = { id, status: 'admitted', source, session: created };
+    return h.state;
+  };
+  const handoff = {
+    begin: async (conversationId: string, _provider: string, create?: any) => {
+      handoffRows.add(conversationId);
+      const id = `wb-handoff-${handoffs.size + 1}`;
+      handoffs.set(id, { create, state: { id, status: 'waiting' }, tries: 0 });
+      return { id, status: 'waiting' };
+    },
+    status: async (id: string) => handoffs.get(id)?.state ?? { id, status: 'failed' },
+    wait: async (id: string) => {
+      const h = handoffs.get(id);
+      if (!h) return { id, status: 'failed' };
+      await new Promise((r) => setTimeout(r, 5000));
+      if (h.state.status !== 'waiting') return h.state;
+      if (h.tries === 0) {
+        h.state = { id, status: 'incomplete', cause: 'receipt not confirmed', holder: { deviceId: 'wb-holder', device: leaseHolder ?? 'Laptop' } };
+        return h.state;
+      }
+      return handoffOpen(id, 'confirmed');
+    },
+    retry: async (id: string) => {
+      const h = handoffs.get(id)!;
+      h.tries++;
+      h.state = { id, status: 'waiting' };
+      return h.state;
+    },
+    savedCopy: async (id: string) => handoffOpen(id, 'saved-copy'),
+    force: async (id: string) => handoffOpen(id, 'saved-copy'),
+    cancel: async (id: string) => { const h = handoffs.get(id); if (h) h.state = { id, status: 'cancelled' }; return h?.state ?? { id, status: 'cancelled' }; },
+    setCreateParams: async (id: string, create: any) => { const h = handoffs.get(id)!; h.create = create; return h.state; },
+  };
   const session: Ns<'session'> & UntypedSessionWrites = {
+    handoff: handoff as any,
     list: async () => store.getState().sessions,
     browse: async () => store.getState().past,
+    // Welcome back — MOCK_ONLY until the per-install list lands in main.
+    reopenList: async () => delay(store.getState().reopen),
+    forgetReopen: async (ids: string[]) => {
+      store.setState((s) => ({ ...s, reopen: s.reopen.filter((id) => !ids.includes(id)) }));
+      return delay({ ok: true });
+    },
 
     create: async (opts) => {
+      // Admission belongs to creation, just like the desktop backend. A race
+      // fixture must deny BEFORE it emits a session-created event or adds a row.
+      if (opts.resumeSessionId && leaseHolder && !leaseReleased) return { status: 'lease-denied', device: leaseHolder };
       // Deterministic-ish id without Date.now(): the store's length is enough
       // to keep ids unique within a page, and stable across reloads.
       const id = `wb-new-${store.getState().sessions.length + 1}`;
@@ -899,8 +1001,25 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // session..." for good. Take the title from the Resume row itself, and
       // send the first hook event App is waiting for (below) — the promo's
       // phone beat takes a session over and has to land in its conversation.
-      const resumedRow = (opts as any).resumeSessionId
-        ? store.getState().past.find((p) => p.sessionId === (opts as any).resumeSessionId) : undefined;
+      // Inline conversation cards use the separate UUID-backed fixture index,
+      // not wb-past-* ids. They must emit initialization too, or testing a real
+      // resume route here strands the screen behind a fake startup failure.
+      const ref = opts.resumeSessionId ? resolveFixture(opts.resumeSessionId) : undefined;
+      const resumedRow = store.getState().past.find((p) => p.sessionId === opts.resumeSessionId)
+        ?? (ref?.status === 'ok' ? { sessionId: ref.id, name: ref.title } : undefined);
+      // Mirrors main's session:create: a conversation already open in a tab
+      // answers with that tab (`reused`, resume admission) instead of a second copy,
+      // and asks the window to select it, as main's focus request does.
+      if (resumedRow) {
+        const openId = [...resumedFrom].find(([sid, row]) => row === resumedRow.sessionId
+          && store.getState().sessions.some((x) => x.id === sid))?.[0];
+        const open = openId ? store.getState().sessions.find((x) => x.id === openId) : undefined;
+        if (open) {
+          // Main also asks the owning window to select it (session:focus-request).
+          queueMicrotask(() => focusSessionSubs.forEach((cb) => cb(open.id)));
+          return { ...open, reused: true } as any;
+        }
+      }
       if (resumedRow) resumedFrom.set(id, resumedRow.sessionId);
       const created = {
         id,
@@ -915,6 +1034,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         provider: opts.provider ?? 'claude',
         harnessId: (opts as any).harnessId,
         model: opts.model,
+        ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
       };
       store.setState((s) => ({ ...s, sessions: [...s.sessions, created as any] }));
       // WHY emit: the renderer does not poll. App re-fetches on
@@ -926,7 +1046,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // hookHandler). SessionStart maps to no chat action, so the only effect
       // is lifting the Initializing overlay. Deferred so App has run its
       // sessionCreated handler (SESSION_INIT) before the hook arrives.
-      if (resumedRow && created.provider === 'claude') {
+      // Every Claude Code session, not only a resumed one (2026-09-26): a brand-new one
+      // otherwise sat on "Initializing session…" forever, so no journey could send its
+      // first message — the real app lifts it within seconds.
+      if (created.provider === 'claude') {
         setTimeout(() => subs.hook.forEach((f) => f({ type: 'SessionStart', sessionId: id, payload: {} })), 50);
       }
       return created;
@@ -946,7 +1069,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // Control bytes are ignored inside playReply so the PTY-shaped calls App
     // makes for Claude Code sessions ('\r', '\x1b') never start a script.
     canSend: () => true,
-    sendInput: (sessionId: string, text: string) => startReply(sessionId, text),
+    sendInput: (sessionId: string, text: string) => startReply(sessionId, text, true),
     // Real signature is Promise<boolean> (useIpc.ts/preload.ts), not {ok} —
     // resolvePermission already returns a boolean (false = stale/unknown id).
     respondToPermission: async (requestId: string, _decision: object) => resolvePermission(requestId),
@@ -1129,6 +1252,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     test: async (_id: string, key: string) => ({ ok: key.trim().length > 8, message: key.trim().length > 8 ? 'Connected.' : 'That key is too short to be valid.' }),
     setKey: async (id: string) => { if (store.refuseWrites) throw new Error('refused'); searchKeys.add(id); return true; },
     removeKey: async (id: string) => { if (store.refuseWrites) throw new Error('refused'); searchKeys.delete(id); return true; },
+  };
+
+  // Settings → Performance only appears on a computer with two graphics chips.
+  // `?gpus=2` pretends to be one, so the row and its popup can be opened and
+  // photographed (`shoot settings/performance`); without it the row stays
+  // hidden, exactly as on a one-chip machine.
+  const twoGpus = typeof location !== 'undefined' && new URLSearchParams(location.search).get('gpus') === '2';
+  let preferPowerSaving = false;
+  // Named perfMock: a local `performance` would shadow the browser's own for
+  // everything else in this function.
+  const perfMock = {
+    get: async () => ({
+      preferPowerSaving,
+      appliedAtLaunch: false,
+      multiGpuDetected: twoGpus,
+      gpuList: twoGpus ? ['AMD Radeon 8060S (built in)', 'NVIDIA GeForce RTX 4070 Laptop GPU'] : ['AMD Radeon 8060S (built in)'],
+    }),
+    set: async (value: boolean) => { if (store.refuseWrites) throw new Error('refused'); preferPowerSaving = value; return { ok: true as const }; },
   };
 
   // A key saved through the fake Connect dialog, so the card re-reads as
@@ -1644,6 +1785,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
 
   let contextPreferences: import('../../../shared/context-preferences').ContextPreferences = { openrouter: 'standard', chatgpt: 'standard' };
   let stepGuard: number | null = null;
+  const nativeModes = new Map<string, NativePermissionMode>();
+  const nativePermission = {
+    getPermissionMode: async (sessionId: string) => nativeModes.get(sessionId) ?? 'ask',
+    setPermissionMode: async (sessionId: string, mode: NativePermissionMode) => {
+      if (store.refuseWrites) return nativeModes.get(sessionId) ?? 'ask';
+      nativeModes.set(sessionId, mode);
+      return mode;
+    },
+  };
   const native: Ns<'native'> = {
     supported: true,
     getContextPreferences: async () => ({ ...contextPreferences }),
@@ -1652,6 +1802,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       contextPreferences = { ...contextPreferences, ...patch };
       return { ...contextPreferences };
     },
+    // Permission mode per native session. WHY (2026-09-24): with no entry here the
+    // catch-all proxy answered `[]`, which App.tsx reads as 'unknown' — so every
+    // native session in the workbench wore a red "PERMISSION UNKNOWN" chip no real
+    // session shows (seen in the themes' preview screenshots). A new session starts
+    // on 'ask', the preset default (main/harness/preset-registry.ts).
+    // getPermissionMode is in preload but not in the renderer's Window type (App.tsx
+    // reaches it through `as any`), so it is spread in rather than written here.
+    ...nativePermission,
     getStepGuard: async () => stepGuard,
     setStepGuard: async (value: number | null) => {
       if (store.refuseWrites) throw new Error('The workbench is refusing writes.');
@@ -1683,9 +1841,30 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       }));
       return true;
     },
+    // U11 model-switch popup. `?switchFit=summary` makes every pick ask first
+    // (so the popup can be reviewed); `?switchFit=working` also leaves the
+    // summary running forever, `?switchFit=error` makes it fail. Default: fits.
+    switchModel: async (sessionId: string, b: { providerId: string; modelId: string }, summarize?: boolean) => {
+      const fit = new URLSearchParams(location.search).get('switchFit');
+      if (fit && !summarize) return { status: 'needs-summary' };
+      if (fit === 'working') return new Promise(() => {});
+      if (fit === 'error') return { status: 'failed', reason: 'cannot-fit' };
+      if (store.refuseWrites) return { status: 'failed', reason: 'not-live' };
+      store.setState((s) => ({
+        ...s,
+        sessions: s.sessions.map((x: any) => x.id === sessionId ? { ...x, model: b.modelId, providerId: b.providerId } : x),
+      }));
+      return { status: 'switched' };
+    },
     // G-1: the card's Stop just resolves — the gallery fixture stays in its
     // captured state rather than spawning anything real.
     killShell: async (_sessionId: string, _shellId: string) => ({ ok: true }),
+    // admin-password (2026-09-26): the fixture stays in its captured state —
+    // there is no real sudo/askpass here to actually deliver a password to.
+    // `?adminPasswordFail=1` lets a reviewer pin the "ask expired" card state
+    // (submit returns false) without needing a real socket to close.
+    submitAdminPassword: async (_requestId: string, _password: string) =>
+      new URLSearchParams(location.search).get('adminPasswordFail') !== '1',
     // "What the assistant was given": one file's text, read on demand. The real
     // one reads the file and runs the session's own fitter; there is no
     // filesystem here, so the fixtures below stand in — including a genuinely
@@ -1877,10 +2056,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     syncNow: async () => ({ ok: true }),
     stopProject: async () => ({ ok: true }),
     renameProject: async () => ({ ok: true }),
-    // Promo: the conversation-lease gate App.tsx runs before a resume.
-    leaseQuery: async () => leaseHolder ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },
-    leaseTakeover: async () => ({ outcome: 'acquired' as const }),
-    leaseForce: async () => ({ ok: true }),
+    leaseQuery: async () => leaseHolder && leaseMode !== 'raced' && !leaseReleased
+      ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },
+    leaseTakeover: async () => {
+      if (leaseMode === 'timeout' || leaseMode === 'undeliverable') return { outcome: leaseMode };
+      leaseReleased = true;
+      return { outcome: 'ready' as const };
+    },
+    leaseForce: async () => { leaseReleased = true; return { ok: true }; },
     // The synced device registry behind the popup's Devices count-tab. Without
     // it the catch-all answers [] and the demo reads "0 Devices / No devices
     // yet" directly under "All synced", which contradicts itself — cross-device
@@ -1893,6 +2076,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     renameDevice: async () => ({ ok: true }),
     removeDevice: async () => ({ ok: true }),
   };
+  // `?sync=<state>` — the Backup & Sync states the review plans used to patch in by hand:
+  // `ok` (every space synced), `auth-error` (GitHub sign-in expired), `oversize` (files
+  // too big to sync). The default stays the failing-sync state the panel already shows.
+  const syncSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('sync') : null;
+  if (syncSwitch) {
+    const base = syncSpaces.status;
+    (syncSpaces as { status: () => Promise<unknown> }).status = async () => {
+      const st = await base();
+      const events = st.recentEvents.filter((e: { type: string }) => e.type !== 'error');
+      if (syncSwitch === 'auth-error') return { ...st, recentEvents: [...events, { type: 'error', spaceId: 'personal', at: SYNC_NOW - 30_000, errorCode: 'github-auth', message: 'GitHub sign-in expired — reconnect your GitHub account in the Sync settings' }] };
+      if (syncSwitch === 'oversize') return { ...st, recentEvents: events, oversize: [{ spaceId: 'personal', files: ['Conversations/claude/transcripts/youcoded-dev/84ee31a9.jsonl', 'Conversations/claude/transcripts/youcoded-dev/b4c2255f.jsonl'] }], oversizeLimitMb: 50 };
+      return { ...st, recentEvents: events };
+    };
+  }
 
   // The LEGACY rclone half of Backup & Sync (Drive/iCloud/GitHub backends), which
   // SyncPanel reads alongside syncSpaces above.
@@ -2167,7 +2364,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // resume raise the "active on another device" takeover dialog.
   const remoteSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('remote') : null;
   const leaseSwitch = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('lease') : null;
-  const leaseHolder = leaseSwitch?.startsWith('held:') ? leaseSwitch.slice(5) : null;
+  const leaseMode = leaseSwitch?.split(':', 1)[0];
+  const leaseHolder = leaseSwitch?.includes(':') ? leaseSwitch.slice(leaseSwitch.indexOf(':') + 1) : null;
+  let leaseReleased = false;
   // `&student=1` (scenarios.ts reads the same flag for sessions/past/tags):
   // the student persona also owns Project View, the Session Files drawer and
   // the history of a resumed session below, so a promo scene never shows the
@@ -2264,8 +2463,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // stay reviewable.
   const signedInSwitch = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('signedIn') === '1';
+  // `?handleMissing=1` (with `?signedIn=1`) fakes a just-signed-in account with no
+  // handle yet, so `chat/handle-prompt`'s screen entry can open the real
+  // HandlePrompt dialog instead of needing `noScreen`.
+  const handleMissingSwitch = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('handleMissing') === '1';
   const FIXTURE_USER: MarketplaceUser = {
-    id: 'workbench:you', login: 'you', avatar_url: '', display_name: 'You', handle: 'you',
+    id: 'workbench:you', login: 'you', avatar_url: '', display_name: 'You',
+    handle: handleMissingSwitch ? null : 'you',
   };
   const account: Ns<'account'> = {
     signedIn: async () => signedInSwitch,
@@ -2741,6 +2946,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // object.
   const windowNs = {
     getId: async () => WORKBENCH_WINDOW_ID,
+    // Welcome back's in-app quit warning — MOCK_ONLY. `?quit=ask` plays the
+    // close button being pressed, so the prompt is reviewable without a window
+    // manager; the answer is only logged. requestId is a fixed string: the
+    // workbench is a single tab with no whole-app quit to race this prompt
+    // against, so nothing here needs it to be unique.
+    onCloseRequest: (cb: (req: { requestId: string; sessions: number }) => void) => {
+      if (typeof location === 'undefined' || new URLSearchParams(location.search).get('quit') !== 'ask') return () => {};
+      const t = setTimeout(() => cb({ requestId: 'workbench-close', sessions: store.getState().sessions.length }), 400);
+      return () => clearTimeout(t);
+    },
+    answerClose: (answer: { requestId: string; close: boolean; reopen?: boolean }) => {
+      console.info('[workbench] close answer', answer);
+    },
+    // Real main.ts pushes this only when a whole-app quit settles a request
+    // the renderer was still waiting on (design §4 step 5) — never reachable
+    // here, but the subscription must exist so App's effect has something to
+    // call.
+    onCloseRequestCancelled: (_cb: (payload: { requestId: string }) => void) => () => {},
   };
   const detach: Ns<'detach'> & { openDetached: (payload: { sessionId: string }) => void } = {
     // Present so `detachAvailable` is true and the "Launch in New Window"
@@ -2764,6 +2987,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     requestTranscriptPage: async (req: { sessionId: string; claudeSessionId?: string }) => {
       const empty = { events: [] as TranscriptEvent[], cursor: null, hasMore: false };
       const row = req.claudeSessionId ?? resumedFrom.get(req.sessionId);
+      // A handoff opens on the same saved history its pending tab previewed.
+      if (row && handoffRows.has(row)) {
+        const page = await chatsearch.read({ provider: 'claude', id: row });
+        return { events: (page.events ?? []).map((e: any) => ({ ...e, sessionId: req.sessionId })) as TranscriptEvent[], cursor: null, hasMore: false };
+      }
       if (!studentSwitch || row !== 'wb-past-0') return empty;
       const raw = REPLY_SCRIPTS['./fixtures/replies/briefing.jsonl'];
       if (!raw) return empty;
@@ -2845,7 +3073,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         cb({
           usage: fixture.usage,
           chatgptUsage: chatgptUsageFixture(),
-          announcement: null,
+          announcement: announcementSwitch(),
           updateStatus: updateStatusSwitch(),
           syncWarnings: [],
           contextMap: {},
@@ -2863,9 +3091,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // effort: 'auto'`, which is exactly what App.tsx read before this namespace
   // existed (the untyped `(window.claude as any).modes` access resolved to the
   // catch-all's `[]`, so `m?.fast` was always undefined -> false).
+  // Remembers a set() for the page's life, as the real handler keeps a file: a tester
+  // who picked Low saw Auto again on reopening and reported it as an app bug (2026-09-26).
+  let modesState = { fast: activeScenario === 'statusbar-cc', effort: 'auto' };
   const modes = {
-    get: async () => ({ fast: activeScenario === 'statusbar-cc', effort: 'auto' }),
-    set: async () => ({ ok: true }),
+    get: async () => ({ ...modesState }),
+    set: async (m: { fast?: boolean; effort?: string }) => { modesState = { ...modesState, ...m }; return { ...modesState }; },
   };
 
   // Git surface (spec docs/archive/specs/2026-07-22-git-surface.md) — WHY this
@@ -2937,6 +3168,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // (playReply in sendInput above). Same attachment pattern as specialistEvent
   // below — Ns<'on'> doesn't carry these members.
   (on as any).transcriptEvent = (cb: (e: any) => void) => { subs.transcript.add(cb); return () => { subs.transcript.delete(cb); }; };
+  // Probe hook, same shape as __workbenchAppearanceSync: play one transcript
+  // event (e.g. a native compact-summary) into the renderer for a screenshot.
+  if (typeof window !== 'undefined') (window as any).__workbenchTranscript = (e: unknown) => { subs.transcript.forEach((f) => f(e)); return subs.transcript.size; };
   (on as any).hookEvent = (cb: (e: any) => void) => { subs.hook.add(cb); return () => { subs.hook.delete(cb); }; };
   // Specialists 1c: the delegation feed (run records + delivered notes). Not
   // on Ns<'on'> yet (no real channel) — attached separately so the typed
@@ -2974,6 +3208,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // throwing synchronously inside marketplace-context's Promise.all.
     marketplace: {
       list: async () => (marketplaceEmpty ? [] : MARKETPLACE_THEMES.map((t) => ({ ...t }))),
+      // Real implementations for ThemeShareSheet's two mount-time calls: left to
+      // the catch-all, both resolve `[]` (truthy), and `previewPath.replace(...)`
+      // on an array crashes the dialog on open (found opening `marketplace/theme-share`).
+      generatePreview: async () => null,
+      resolvePublishState: async () => ({ kind: 'draft' }),
     },
   };
 
@@ -3064,6 +3303,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return [...skillFavourites];
     },
     getFeatured: async () => (marketplaceEmpty ? { hero: [], rails: [] } : JSON.parse(JSON.stringify(FEATURED))),
+    // ShareSheet's mount-time call: left to the catch-all, it resolves `[]`
+    // (truthy), and the QR code renders garbage instead of a real-looking link.
+    getShareLink: async (id: string) => `https://youcoded.app/skill/${id}`,
   };
   // fs:read-head — the first bytes of an attached file, for the composer's
   // attachment cards. Canned per file kind so the screenshot rig sees a REAL
@@ -3170,6 +3412,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       buddyStatusSubs.add(cb);
       return () => buddyStatusSubs.delete(cb);
     },
+    onFocusSession: (cb: (sessionId: string) => void) => {
+      focusSessionSubs.add(cb);
+      return () => { focusSessionSubs.delete(cb); };
+    },
     // needed = the app cannot move its own windows here, so a helper is required
     // at all; supported = a helper could work on this desktop (KDE 6 Wayland);
     // installed = the helper package is loaded in the compositor. `installed` is
@@ -3253,7 +3499,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search,
+    skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;

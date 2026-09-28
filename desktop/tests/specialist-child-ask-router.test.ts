@@ -21,6 +21,20 @@ describe('childAskRouter', () => {
     expect(BUDGET_ASK_TOOL_NAMES).not.toContain('max_steps');
   });
 
+  it('carries the parent Full Auto mode on specialist safety stops', async () => {
+    const broker = new PermissionBroker();
+    const emitted: any[] = [];
+    broker.on('hook-event', (e) => emitted.push(e));
+    const router = childAskRouter({
+      broker, parentId: 'parent-1', childId: 'child-1', agentType: 'worker', title: 'W',
+      parentToolCallId: 'tc-1', permissionMode: () => 'full-auto',
+    });
+    const pending = router({ sessionId: 'child-1', toolName: 'Bash', toolInput: { command: 'git push origin main' }, denyListed: true });
+    expect(firstPayload(emitted).permissionMode).toBe('full-auto');
+    broker.respond(firstPayload(emitted)._requestId, { behavior: 'deny' });
+    await pending;
+  });
+
   it('a routed ask reaches the broker under the PARENT sessionId with the specialist payload', async () => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];
@@ -159,6 +173,39 @@ describe('childAskRouter', () => {
       expect(remember).toHaveBeenCalledWith({
         tool: 'Bash', pattern: 'git push*origin feat/x', action: 'allow', match: 'glob', specialist: 'worker',
       });
+    });
+
+    it('a removal the floor always asks about reaches the person, and an "always" answer stores nothing', async () => {
+      const broker = new PermissionBroker();
+      const emitted: any[] = [];
+      broker.on('hook-event', (e) => emitted.push(e));
+      const remember = vi.fn();
+      const router = childAskRouter({
+        broker, parentId: 'parent-1', childId: 'child-1', agentType: 'worker', title: 'W', parentToolCallId: 'tc-1', remember,
+      });
+      const p = router({
+        sessionId: 'child-1', toolName: 'Bash', toolInput: { command: 'rm -rf build/../..' },
+        denyListed: true, floorStop: 'removal', subject: 'rm -rf build/../..',
+      });
+      const payload = firstPayload(emitted);
+      expect(payload.floorStop).toBe('removal'); // routed to the card, not refused like an external ask
+      expect(broker.respond(payload._requestId as string, { decision: { behavior: 'allow' }, updatedPermissions: [{ tool: 'Bash' }] })).toBe(true);
+      expect((await p).behavior).toBe('allow');
+      expect(remember).not.toHaveBeenCalled();
+    });
+
+    it('a helper command that names a secret file also reaches the person, not an automatic refusal', async () => {
+      const broker = new PermissionBroker();
+      const emitted: any[] = [];
+      broker.on('hook-event', (e) => emitted.push(e));
+      const router = childAskRouter({
+        broker, parentId: 'parent-1', childId: 'child-1', agentType: 'worker', title: 'W', parentToolCallId: 'tc-1', remember: vi.fn(),
+      });
+      void router({
+        sessionId: 'child-1', toolName: 'Bash', toolInput: { command: 'cat .env' },
+        denyListed: true, floorStop: 'secret-path', subject: 'cat .env',
+      });
+      expect(firstPayload(emitted).floorStop).toBe('secret-path');
     });
 
     it('a command with NO safe grant width is never remembered at all — the router used to remember it anyway', async () => {

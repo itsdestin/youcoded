@@ -19,38 +19,49 @@ function seeded(session: any): any {
   ]);
   session.servedReads.set('/x/a.txt|1|2000', { mtimeMs: 1, fingerprint: '0:x', callIndex: 1, from: 1, to: 3 });
   expect(session.servedReads.size).toBe(1);
+  // The Skill tool's repeat guard (2026-09-23) shares this lifetime contract:
+  // "already loaded" is only true while the skill's body is still in view.
+  session.servedSkills.add('superpowers:brainstorming');
   return session;
 }
 
-describe('servedReads is forgotten wherever history is discarded or shrunk', () => {
+describe('servedReads and servedSkills are forgotten wherever history is discarded or shrunk', () => {
   it('seedHistory (resume) clears it', () => {
     const s = seeded(makeSession({ contextLength: 4096 }) as any);
     s.seedHistory([]);
     expect(s.servedReads.size).toBe(0);
+    expect(s.servedSkills.size).toBe(0);
   });
 
   it('clearHistory (/clear) clears it', () => {
     const s = seeded(makeSession({ contextLength: 4096 }) as any);
     expect(s.clearHistory()).toEqual({ ok: true });
     expect(s.servedReads.size).toBe(0);
+    expect(s.servedSkills.size).toBe(0);
   });
 
-  it('automatic compaction (maybeCompact) clears it whenever it acts', async () => {
-    const s = seeded(makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY' }]) }) as any);
-    // 4,000 real input tokens > 75% of a 4,096 window → compaction acts (prune or summarize).
-    await s.maybeCompact(scriptModel([{ text: 'SUMMARY' }]), 4_000);
+  it('automatic compaction clears it when a complete summary retires old history', async () => {
+    const s = seeded(makeSession({ contextLength: 32_768, model: scriptModel([{ text: 'SUMMARY' }]) }) as any);
+    // WHY: 30k reported input crosses the legacy trigger in a window that
+    // still has room for the summary request and its output allowance.
+    s.abort = new AbortController(); // normally owned by send() around maybeCompact
+    try { await s.maybeCompact(scriptModel([{ text: 'SUMMARY' }]), 30_000, {}); }
+    finally { s.abort = null; }
     expect(s.servedReads.size).toBe(0);
+    expect(s.servedSkills.size).toBe(0);
   });
 
   it('automatic compaction leaves it alone when nothing needs compacting', async () => {
     const s = seeded(makeSession({ contextLength: 4096 }) as any);
     await s.maybeCompact(scriptModel([{ text: 'SUMMARY' }]), 10);
     expect(s.servedReads.size).toBe(1);
+    expect(s.servedSkills.size).toBe(1);
   });
 
   it('manual compaction (compactNow) clears it', async () => {
-    const s = seeded(makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY' }]) }) as any);
-    await s.compactNow();
+    const s = seeded(makeSession({ contextLength: 32_768, model: scriptModel([{ text: 'SUMMARY' }]) }) as any);
+    expect(await s.compactNow()).toEqual({ ok: true });
     expect(s.servedReads.size).toBe(0);
+    expect(s.servedSkills.size).toBe(0);
   });
 });

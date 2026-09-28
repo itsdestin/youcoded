@@ -1,8 +1,9 @@
 import type React from 'react';
 import type { SubagentSegment } from '../../../shared/types';
 import { PermissionButtons } from '../ToolCard';
+import { AdminPasswordPrompt } from '../permissions/AdminPasswordPrompt';
 import { useChatDispatch } from '../../state/chat-context';
-import { useArtifactOptional } from '../../state/ArtifactContext';
+import { useArtifactSelectorOptional } from '../../state/ArtifactContext';
 
 type ToolSegment = Extract<SubagentSegment, { type: 'tool' }>;
 
@@ -30,8 +31,35 @@ export function SpecialistAskBlock({ segment, sessionId, specialistName, compact
   leading?: React.ReactNode;
 }) {
   const dispatch = useChatDispatch();
-  const artifacts = useArtifactOptional();
-  const sessionCwd = sessionId ? artifacts?.state.sessionCwd?.[sessionId] : undefined;
+  // Narrow selector: redraws only when this session's cwd changes.
+  const sessionCwd = useArtifactSelectorOptional((s) => (sessionId ? s.sessionCwd?.[sessionId] : undefined));
+
+  // admin-password (coordinator, 2026-09-26): a helper's OWN sudo nests here
+  // exactly like its permission ask (chat-types.ts's own comment on the
+  // segment's passwordAsk field) — same card position, different UI: the
+  // password field, never Yes/No/Always (a password ask has no requestId of
+  // its own on this row — see needsUserAnswer/askIdOf in specialist-cards.ts).
+  if (segment.passwordAsk) {
+    const ask = segment.passwordAsk;
+    return (
+      <div data-testid="nested-ask" className={compact ? 'space-y-1' : 'border-t border-edge/60 bg-canvas/40'}>
+        {compact && leading}
+        <AdminPasswordPrompt
+          ask={ask}
+          onSubmit={async (password) => {
+            const requestId = ask.requestId;
+            const ok = await window.claude.native.submitAdminPassword(requestId, password);
+            // Mirrors ToolCard's own top-level password card: an expired ask
+            // has nothing left on the main side to push a resolution for
+            // THIS device, so say so locally rather than leave the field
+            // disabled forever.
+            if (!ok && sessionId) dispatch({ type: 'PASSWORD_RESOLVED', sessionId, requestId });
+          }}
+        />
+      </div>
+    );
+  }
+
   const requestId = segment.requestId!;
   // Destin's 2026-08-26/27 copy review: the outside-the-folder note is now a
   // full sentence, so the name lands MID-sentence — "The specialist" would
@@ -56,10 +84,14 @@ export function SpecialistAskBlock({ segment, sessionId, specialistName, compact
       // Helper requests are click-only — see PermissionButtons.noKeyboard.
       noKeyboard
       denyListed={segment.denyListed}
+      toolName={segment.toolName}
+      external={segment.external}
+      specialistName={specialistName ?? 'the specialist'}
       permissionMode={segment.permissionMode}
       command={typeof segment.input?.command === 'string' ? (segment.input.command as string) : undefined}
       folderName={sessionCwd ? sessionCwd.split(/[\\/]/).filter(Boolean).pop() : undefined}
-      suppressAlwaysAllow={segment.external === true}
+      suppressAlwaysAllow={segment.external === true || !!segment.floorStop}
+      floorStop={segment.floorStop}
       onResponded={onResponded}
       onFailed={onFailed}
       bare={compact}

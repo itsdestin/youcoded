@@ -1,7 +1,7 @@
 // Plan 2b Task 9 — pins the requester-side takeover flow (createRequesterTakeover).
 // When the user resumes a conversation another device holds, THIS device asks the
 // holder to hand off, polls the lease until it frees (or times out at MAX_MS), then
-// pulls the peer's final turn and acquires the lease. All collaborators are
+// pulls the peer's final turn; admission during creation acquires the lease. All collaborators are
 // injected fakes; the poll loop is driven with fake timers. The flow must NEVER
 // throw (spec §3 never-block) — errors surface as {outcome:'error'}/{ok:false}.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -46,6 +46,7 @@ function makeDeps(opts: {
     forceAcquire: vi.fn(async (sid: string) => {
       order.push(`force:${sid}`);
       if (opts.forceThrows) throw new Error('force blew up');
+      return { ok: true };
     }),
     // Real timer-backed delay so vi.advanceTimersByTimeAsync drives the poll.
     delay: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
@@ -67,9 +68,9 @@ describe('createRequesterTakeover', () => {
     // Drive the two 1s poll gaps.
     await vi.advanceTimersByTimeAsync(2_000);
     const res = await p;
-    expect(res).toEqual({ outcome: 'acquired' });
+    expect(res).toEqual({ outcome: 'ready' });
     // takeover first, then the free-path trio in the required order.
-    expect(deps.order).toEqual(['takeover:c1', 'syncNow', 'materialize:c1', 'acquire:c1']);
+    expect(deps.order).toEqual(['takeover:c1', 'syncNow', 'materialize:c1']);
     expect(deps.leaseClient.query).toHaveBeenCalledTimes(3);
   });
 
@@ -78,9 +79,9 @@ describe('createRequesterTakeover', () => {
     const flow = createRequesterTakeover(deps as any);
     // No timer advance — the free check happens BEFORE the first sleep.
     const res = await flow.takeover('c1');
-    expect(res).toEqual({ outcome: 'acquired' });
+    expect(res).toEqual({ outcome: 'ready' });
     expect(deps.leaseClient.query).toHaveBeenCalledTimes(1);
-    expect(deps.order).toEqual(['takeover:c1', 'syncNow', 'materialize:c1', 'acquire:c1']);
+    expect(deps.order).toEqual(['takeover:c1', 'syncNow', 'materialize:c1']);
   });
 
   it('takeover: a lease held by US (self:true, deviceId match) counts as free', async () => {
@@ -88,8 +89,8 @@ describe('createRequesterTakeover', () => {
     const deps = makeDeps({ queryResults: [{ held: true, device: 'This-Device', self: true }] });
     const flow = createRequesterTakeover(deps as any);
     const res = await flow.takeover('c1');
-    expect(res).toEqual({ outcome: 'acquired' });
-    expect(deps.order).toContain('acquire:c1');
+    expect(res).toEqual({ outcome: 'ready' });
+    expect(deps.leaseClient.acquire).not.toHaveBeenCalled();
   });
 
   it('takeover: a DIFFERENT install with the SAME device label is NOT self — the requester waits, never short-circuits', async () => {
@@ -168,6 +169,13 @@ describe('createRequesterTakeover', () => {
     expect(deps.order).toEqual(['force:c1', 'syncNow', 'materialize:c1']);
   });
 
+  it('force: a hub timeout is not a confirmed takeover', async () => {
+    const deps = makeDeps({ queryResults: [{ held: false }] });
+    deps.forceAcquire.mockResolvedValueOnce(null as never);
+    expect(await createRequesterTakeover(deps as any).force('c1')).toEqual({ ok: false });
+    expect(deps.syncNow).not.toHaveBeenCalled();
+  });
+
   it('force: forceAcquire throwing -> {ok:false}', async () => {
     const deps = makeDeps({ queryResults: [{ held: false }], forceThrows: true });
     const flow = createRequesterTakeover(deps as any);
@@ -199,7 +207,7 @@ describe('createRequesterTakeover', () => {
     // Release the sync (push landed) -> NOW materialize + acquire run.
     releaseSync();
     const res = await p;
-    expect(res).toEqual({ outcome: 'acquired' });
-    expect(deps.order).toEqual(['takeover:c1', 'syncNow', 'materialize:c1', 'acquire:c1']);
+    expect(res).toEqual({ outcome: 'ready' });
+    expect(deps.order).toEqual(['takeover:c1', 'syncNow', 'materialize:c1']);
   });
 });

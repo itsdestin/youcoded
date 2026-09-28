@@ -36,11 +36,14 @@ vi.mock('../src/renderer/state/chat-context', () => ({
 // ChatView pulls several app-wide contexts it would normally get from App.
 // These tests only care about the pane itself, so they are stubbed rather
 // than provided for real.
+// The drawer's contents are unrelated; keep its pane open without needing a
+// project/artifact fixture just to test the model strip's containing block.
+vi.mock('../src/renderer/components/SessionDrawer', () => ({ SessionDrawer: () => <div>Files</div> }));
+
 vi.mock('../src/renderer/state/ArtifactContext', () => ({
-  useArtifact: () => ({
-    state: mocks.artifact,
-    dispatch: vi.fn(),
-  }),
+  // ChatView reads the artifact store through narrow selectors (perf, 2026-09-23).
+  useArtifactSelector: (select: (s: any) => unknown) => select(mocks.artifact),
+  useArtifactDispatch: () => vi.fn(),
 }));
 
 // jsdom ships no IntersectionObserver; ChatView constructs one for its
@@ -65,6 +68,22 @@ import { ContentFindBar } from '../src/renderer/components/ContentFindBar';
 // not under the header. The artifact viewer keeps the floating card
 // (ContentFindBar's default layout) — untouched.
 const ctrlF = () => fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+
+describe('model status placement', () => {
+  beforeEach(() => { cleanup(); mocks.artifact.drawerOpenBySession = {}; });
+
+  it('keeps the local-model floater within the chat column even with a drawer', () => {
+    mocks.artifact.drawerOpenBySession.s1 = true;
+    const { container } = render(<ChatView sessionId="s1" visible sessionActive modelLoadingDemo />);
+    expect(container.querySelector('.drawer-pane')).toBeTruthy();
+    const model = container.querySelector('.model-status-strip') as HTMLElement;
+    expect(model).toBeTruthy();
+    expect(model.parentElement?.classList.contains('chat-pane')).toBe(true);
+    expect(model.className).toContain('inset-x-3');
+    expect(model.className).not.toContain('w-[min(');
+    delete mocks.artifact.drawerOpenBySession.s1;
+  });
+});
 
 describe('chat find bar row', () => {
   beforeEach(() => cleanup());
@@ -198,5 +217,52 @@ describe('ChatView expanded drawer', () => {
 
   it('expands the session whose drawer is open', () => {
     expect(shellClass({ s1: true })).toContain('drawer-expanded');
+  });
+});
+
+// Every open session keeps its ChatView mounted; only the one on screen gets
+// `visible`. Window-level listeners registered regardless of that ran once per
+// open chat on every key — and ArrowUp called releaseStick() in EVERY chat, so
+// a background conversation stopped following its newest message because the
+// user scrolled a different one.
+describe('ChatView window keys reach only the chat on screen', () => {
+  // jsdom has no Element.scrollBy; the arrow handler calls it after releaseStick.
+  beforeEach(() => { (HTMLElement.prototype as any).scrollBy ??= function scrollBy() {}; });
+
+  it('ArrowUp un-pins the chat on screen (shows Jump to bottom)', () => {
+    render(<ChatView sessionId="s1" visible sessionActive />);
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    expect(screen.queryByText('Jump to bottom')).not.toBeNull();
+  });
+
+  it('ArrowUp leaves a hidden chat pinned to its newest message', () => {
+    render(<ChatView sessionId="s1" visible={false} sessionActive={false} />);
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    expect(screen.queryByText('Jump to bottom')).toBeNull();
+  });
+
+  it('a hidden chat registers no window key or pointer listeners of its own', () => {
+    const add = vi.spyOn(window, 'addEventListener');
+    try {
+      render(<ChatView sessionId="s1" visible={false} sessionActive={false} />);
+      const windowInput = add.mock.calls
+        .map(([type]) => type)
+        .filter((type) => type === 'keydown' || type === 'keyup' || type === 'pointerdown');
+      expect(windowInput).toEqual([]);
+    } finally {
+      add.mockRestore();
+    }
+  });
+
+  it('the chat on screen does register them (so the test above can fail)', () => {
+    const add = vi.spyOn(window, 'addEventListener');
+    try {
+      render(<ChatView sessionId="s1" visible sessionActive />);
+      const types = add.mock.calls.map(([type]) => type);
+      expect(types).toContain('keyup');
+      expect(types).toContain('pointerdown');
+    } finally {
+      add.mockRestore();
+    }
   });
 });
