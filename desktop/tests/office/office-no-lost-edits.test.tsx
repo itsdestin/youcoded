@@ -215,3 +215,101 @@ describe('the header briefcase ("Open in Office") on an in-place edit', () => {
     expect(officeDocFor(FILE.path)).toBeNull();
   });
 });
+
+describe('closing the window or quitting with a document whose save failed', () => {
+  function host(open: boolean, dispatch = vi.fn()) {
+    return (
+      <ArtifactProvider value={{ state: { ...initialArtifactState, pageViewOpen: open, openPageId: open ? OFFICE_PAGE_ID : null }, dispatch }}>
+        <PageHost settingsOpen={false} onToggleSettings={() => {}} onCreatePage={() => {}} />
+      </ArtifactProvider>
+    );
+  }
+  async function askedToFlush(open: boolean, dispatch = vi.fn()) {
+    let request!: (id: string) => void;
+    const flushDone = vi.fn();
+    const proceedClose = vi.fn();
+    withOffice({ onFlushRequest: vi.fn((cb: (id: string) => void) => { request = cb; return () => {}; }), flushDone, proceedClose } as Partial<OfficeBridge>);
+    act(() => openDoc(FILE));
+    const r = render(host(open, dispatch));
+    await waitFor(() => expect(frameOf(r.container)).not.toBeNull());
+    // The document's save fails, then main asks this window to save before closing.
+    const { registerFlush } = await import('../../src/renderer/components/office/office-store');
+    registerFlush(FILE.path, async () => ({ ok: false, message: "Office doesn't have permission to save this file." }));
+    await act(async () => { request('flush-1'); await new Promise((res) => setTimeout(res, 0)); });
+    return { flushDone, proceedClose, dispatch, ...r };
+  }
+
+  it('answers main that it failed, and asks the person — even with the Office page closed', async () => {
+    const { flushDone } = await askedToFlush(false);
+    expect(flushDone).toHaveBeenCalledWith('flush-1', { failed: 1 });
+    expect(await screen.findByText("1 Office document couldn't be saved.")).toBeInTheDocument();
+  });
+
+  it('Close anyway lets main go ahead with the close or quit it held', async () => {
+    const { proceedClose } = await askedToFlush(false);
+    fireEvent.click(await screen.findByRole('button', { name: 'Close anyway' }));
+    expect(proceedClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("1 Office document couldn't be saved.")).toBeNull();
+  });
+
+  it('Review opens the Office page on the tab that could not be saved, and does not close', async () => {
+    const dispatch = vi.fn();
+    const { proceedClose } = await askedToFlush(false, dispatch);
+    fireEvent.click(await screen.findByRole('button', { name: 'Review' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true });
+    expect(proceedClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('the kept, hidden Office view', () => {
+  function host(open: boolean) {
+    return (
+      <ArtifactProvider value={{ state: { ...initialArtifactState, pageViewOpen: open, openPageId: OFFICE_PAGE_ID }, dispatch: vi.fn() }}>
+        <PageHost settingsOpen={false} onToggleSettings={() => {}} onCreatePage={() => {}} />
+      </ArtifactProvider>
+    );
+  }
+
+  it('takes no focus or keyboard while hidden, and lets go of a focused editor', async () => {
+    withOffice();
+    act(() => openDoc(FILE));
+    const { container, rerender } = render(host(true));
+    const frame = await waitFor(() => { const f = frameOf(container) as HTMLIFrameElement; expect(f).not.toBeNull(); return f; });
+    frame.focus();
+    expect(document.activeElement).toBe(frame);
+    rerender(host(false));
+    expect(frame.closest('[inert]')).not.toBeNull();
+    expect(document.activeElement).not.toBe(frame);
+    rerender(host(true));
+    expect(frame.closest('[inert]')).toBeNull();
+  });
+
+  it('does not show (or hold Escape for) its Versions window while hidden', async () => {
+    withOffice({ versions: vi.fn(async () => []) });
+    act(() => openDoc(FILE));
+    const { rerender } = render(host(true));
+    const { showVersions } = await import('../../src/renderer/components/office/office-store');
+    act(() => showVersions(FILE));
+    expect(await screen.findByText('No earlier versions yet.')).toBeInTheDocument();
+    rerender(host(false));
+    expect(screen.queryByText('No earlier versions yet.')).toBeNull();
+    rerender(host(true));
+    expect(await screen.findByText('No earlier versions yet.')).toBeInTheDocument();
+  });
+
+  it('says so outside the page when a tab closed while hidden could not save', async () => {
+    withOffice({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("Office doesn't have permission to save this file."); return null; }) });
+    act(() => openDoc(FILE));
+    const { container, rerender } = render(host(true));
+    const frame = await waitFor(() => { const f = frameOf(container) as HTMLIFrameElement; expect(f?.getAttribute('src')).toBe('office://t1/index.html'); return f; });
+    vi.spyOn(frame.contentWindow!, 'postMessage').mockImplementation(() => {});
+    const send = (data: unknown) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: frame.contentWindow })); });
+    send({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    rerender(host(false));
+    const { closeDoc } = await import('../../src/renderer/components/office/office-store');
+    act(() => closeDoc(FILE.path));
+    send({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
+    expect(await screen.findByText("An Office document couldn't be saved.")).toBeInTheDocument();
+    expect(officeDocFor(FILE.path)).toMatchObject({ closing: false });
+  });
+});

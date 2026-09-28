@@ -80,7 +80,7 @@ export interface OfficeIpcDeps {
   /** Where "Save a copy…" goes (the system save dialog); null when cancelled. Tests pass a fake.
    *  WHY optional: main.ts does not pass it — the real one lives in office-dialogs.ts, loaded
    *  only when a copy is asked for, so this file itself never imports electron. */
-  pickCopyTarget?(sender: unknown, filePath: string): Promise<string | null>;
+  pickCopyTarget?(sender: unknown, filePath: string): Promise<string | null | { refused: string }>;
 }
 
 
@@ -231,6 +231,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     const pick = deps.pickCopyTarget ?? (await import('./office-dialogs')).pickCopyTarget;
     const target = await pick(sender, s.path);
     if (!target) return { ok: false, cancelled: true };
+    if (typeof target !== 'string') return { ok: false, message: target.refused };
     try {
       await run.saveCopy(s.token, target);
       // The folder's name only — never a full path on screen (the owner's rule for this message).

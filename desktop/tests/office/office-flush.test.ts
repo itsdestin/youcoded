@@ -3,11 +3,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
-  OFFICE_FLUSH_DONE, OFFICE_FLUSH_REQUEST, askToFlush, flushThenQuitOfficeSessions, holdCloseForOfficeSave,
+  OFFICE_FLUSH_DONE, OFFICE_FLUSH_REQUEST, OFFICE_PROCEED, askToFlush, flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate,
 } from '../../src/main/office/office-flush';
 
 /** A fake ipcMain and a window whose renderer answers flush requests (or not). */
-function setup(opts: { answers?: boolean } = {}) {
+function setup(opts: { answers?: boolean; failed?: number } = {}) {
   const ipc = new EventEmitter();
   const requests: string[] = [];
   const webContents = {
@@ -16,7 +16,7 @@ function setup(opts: { answers?: boolean } = {}) {
     send: vi.fn((channel: string, id: string) => {
       if (channel !== OFFICE_FLUSH_REQUEST) return;
       requests.push(id);
-      if (opts.answers !== false) queueMicrotask(() => ipc.emit(OFFICE_FLUSH_DONE, {}, id));
+      if (opts.answers !== false) queueMicrotask(() => ipc.emit(OFFICE_FLUSH_DONE, { sender: webContents }, id, { failed: opts.failed ?? 0 }));
     }),
   };
   const win = { webContents, destroyed: false, isDestroyed() { return this.destroyed; }, close: vi.fn() };
@@ -108,5 +108,60 @@ describe('quitting with Office documents open', () => {
     await vi.advanceTimersByTimeAsync(1);
     await p;
     expect(quit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a window whose documents could not all be saved', () => {
+  it("ignores an answer from any window but the one asked", async () => {
+    vi.useFakeTimers();
+    const { webContents, ipc } = setup({ answers: false });
+    const p = askToFlush(webContents, ipc as never, 5_000);
+    const [id] = webContents.send.mock.calls.map((c) => c[1] as string);
+    ipc.emit(OFFICE_FLUSH_DONE, { sender: { id: 99 } }, id, { failed: 0 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(p).resolves.toBe('timeout');
+  });
+
+  it('keeps the window open when it answers that a document could not be saved, however long the person takes', async () => {
+    vi.useFakeTimers();
+    const { win, deps } = setup({ failed: 1 });
+    expect(holdCloseForOfficeSave(win, { preventDefault() {} }, deps)).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(win.close).not.toHaveBeenCalled();
+  });
+
+  it('closes on "Close anyway" from that window — and not from another', async () => {
+    const { win, deps, ipc, webContents } = setup({ failed: 1 });
+    holdCloseForOfficeSave(win, { preventDefault() {} }, deps);
+    await new Promise((r) => setTimeout(r, 0));
+    ipc.emit(OFFICE_PROCEED, { sender: { id: 99 } });
+    expect(win.close).not.toHaveBeenCalled();
+    ipc.emit(OFFICE_PROCEED, { sender: webContents });
+    expect(win.close).toHaveBeenCalledTimes(1);
+    // The close it re-issued goes straight through.
+    expect(holdCloseForOfficeSave(win, { preventDefault() {} }, deps)).toBe(false);
+  });
+
+  it('holds a quit the same way, and "Close anyway" quits — the gate then lets it by', async () => {
+    const { win, deps, ipc, webContents } = setup({ failed: 2 });
+    const quitApp = vi.fn();
+    await expect(officeQuitGate([win], { ...deps, quitApp })).resolves.toBe(false);
+    expect(quitApp).not.toHaveBeenCalled();
+    ipc.emit(OFFICE_PROCEED, { sender: webContents });
+    expect(quitApp).toHaveBeenCalledTimes(1);
+    await expect(officeQuitGate([win], { ...deps, quitApp })).resolves.toBe(true);
+  });
+
+  it('lets a quit go ahead when every document saved', async () => {
+    const { win, deps } = setup();
+    await expect(officeQuitGate([win], deps)).resolves.toBe(true);
+  });
+
+  it('lets a quit go ahead after 5 s when a window never answers (a hung renderer)', async () => {
+    vi.useFakeTimers();
+    const { win, deps } = setup({ answers: false });
+    const p = officeQuitGate([win], deps);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(p).resolves.toBe(true);
   });
 });

@@ -54,6 +54,13 @@ async function mountFrame(props: Partial<React.ComponentProps<typeof EditorFrame
   return { ...r, iframe, posted, fromEditor, sent, saves };
 }
 
+/** mountFrame, plus the frame's imperative handle. */
+async function mountWithHandle() {
+  const handle = React.createRef<import('../../src/renderer/components/office/EditorFrame').EditorFrameHandle>();
+  const r = await mountFrame({ ref: handle } as never);
+  return { ...r, handle };
+}
+
 /** Lets the relay's promise chain (invoke → then → post) run. */
 const settle = () => act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
 
@@ -218,6 +225,48 @@ describe('EditorFrame autosave', () => {
     expect(onCloseFailed).not.toHaveBeenCalled();
   });
 
+  it('never lets a close go after 5 s while a change is still unsaved, even with a save_file out', async () => {
+    fakeBridge({ invoke: vi.fn((_t: string, cmd: string) => (cmd === 'save_file' ? new Promise(() => {}) : Promise.resolve(null))) });
+    const onClosed = vi.fn();
+    const onCloseFailed = vi.fn();
+    const { fromEditor, rerender } = await mountFrame({ onClosed, onCloseFailed });
+    vi.useFakeTimers();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    rerender(<EditorFrame file={FILE} closing onClosed={onClosed} onCloseFailed={onCloseFailed} />);
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'save_file', args: { data: '' } });
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'set_document_modified', args: { modified: true } }); // typed during it
+    await act(async () => { vi.advanceTimersByTime(5_000); });
+    expect(onClosed).not.toHaveBeenCalled();
+    expect(onCloseFailed).toHaveBeenCalledWith("Office didn't finish saving this file.");
+    expect(saveStateFor(FILE.path)).toMatchObject({ phase: 'failed', message: "Office didn't finish saving this file." });
+  });
+
+  it("counts a refused write_editor_bin as a failed save, with main's reason", async () => {
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'write_editor_bin') throw new Error("The disk is full, so Office couldn't save this file."); return null; }) });
+    const onClosed = vi.fn();
+    const onCloseFailed = vi.fn();
+    const { fromEditor, rerender } = await mountFrame({ onClosed, onCloseFailed });
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    rerender(<EditorFrame file={FILE} closing onClosed={onClosed} onCloseFailed={onCloseFailed} />);
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'write_editor_bin', args: { data: 'RE9D' } });
+    await settle();
+    expect(saveStateFor(FILE.path)).toMatchObject({ phase: 'failed', message: "The disk is full, so Office couldn't save this file." });
+    await vi.waitFor(() => expect(onCloseFailed).toHaveBeenCalledWith("The disk is full, so Office couldn't save this file."));
+    expect(onClosed).not.toHaveBeenCalled();
+  });
+
+  it('counts an asked-for save that never reaches save_file within 60 s as failed', async () => {
+    fakeBridge();
+    const { fromEditor, handle } = await mountWithHandle();
+    vi.useFakeTimers();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    act(() => handle.current!.save());
+    await act(async () => { vi.advanceTimersByTime(59_999); });
+    expect(saveStateFor(FILE.path).phase).not.toBe('failed');
+    await act(async () => { vi.advanceTimersByTime(1); });
+    expect(saveStateFor(FILE.path)).toMatchObject({ phase: 'failed', message: "Office didn't finish saving this file." });
+  });
+
   it('a closed tab whose editor never starts the save keeps the tab and says so after 5 s', async () => {
     fakeBridge();
     const onClosed = vi.fn();
@@ -253,7 +302,7 @@ describe('EditorFrame autosave', () => {
     await vi.waitFor(() => expect(onClosed).toHaveBeenCalledTimes(1));
   });
 
-  it("waits through the editor's own save — change log, name, bytes, then save_file — before a close lets go", async () => {
+  it("waits through the editor's own save — change log, bytes, name, then save_file — before a close lets go", async () => {
     let answerSave!: (v: unknown) => void;
     const calls: string[] = [];
     fakeBridge({ invoke: vi.fn((_t: string, cmd: string) => { calls.push(cmd); return cmd === 'save_file' ? new Promise((r) => (answerSave = r)) : Promise.resolve(cmd === 'get_current_path' ? 'plan.docx' : 'ok'); }) });
@@ -265,8 +314,8 @@ describe('EditorFrame autosave', () => {
     // What asc_Save sends, in order (measured in the dev window).
     fromEditor({ yc: 'rpc', id: 2, cmd: 'save_changes', args: { changes: [], deleteIndex: 11, count: 0 } });
     fromEditor({ yc: 'rpc', id: 3, cmd: 'set_document_modified', args: { modified: false } });
-    fromEditor({ yc: 'rpc', id: 4, cmd: 'get_current_path', args: {} });
-    fromEditor({ yc: 'rpc', id: 5, cmd: 'write_editor_bin', args: { data: 'RE9D' } });
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'write_editor_bin', args: { data: 'RE9D' } });
+    fromEditor({ yc: 'rpc', id: 5, cmd: 'get_current_path', args: {} });
     await settle();
     expect(saveStateFor(FILE.path).phase).not.toBe('saved'); // save_changes is not the save
     expect(onClosed).not.toHaveBeenCalled();
@@ -275,7 +324,7 @@ describe('EditorFrame autosave', () => {
     expect(onClosed).not.toHaveBeenCalled();
     answerSave('ok');
     await vi.waitFor(() => expect(onClosed).toHaveBeenCalledTimes(1));
-    expect(calls).toEqual(['set_document_modified', 'save_changes', 'set_document_modified', 'get_current_path', 'write_editor_bin', 'save_file']);
+    expect(calls).toEqual(['set_document_modified', 'save_changes', 'set_document_modified', 'write_editor_bin', 'get_current_path', 'save_file']);
   });
 
   it("does not retry a failed save on its own when the editor re-marks the document modified", async () => {

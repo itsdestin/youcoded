@@ -436,6 +436,10 @@ export function createOfficeCommands(deps: {
       await convert(deps.root, editorBin(s), tmp, fmt, jobsBase(s), abortOf(s).signal);
       await finishCopy(tmp, null);
       if (isClosing(s)) throw userError(MSG.closing, true);
+      // Again right before the rename (fix round 2), as a save does: the translation takes time,
+      // and the folder may have become protected, or a link swapped in, meanwhile.
+      const again = await authorizeArtifactWrite({ projectRoot: path.dirname(target), fullPath: target, mustStayInRoot: false });
+      if (!again.ok || again.realPath === real) throw userError(MSG.copyRefused);
       noteOwnWrite(target);
       await renameReplacing(tmp, target, process.platform, () => isClosing(s));
     } finally {
