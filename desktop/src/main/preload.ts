@@ -1944,9 +1944,9 @@ contextBridge.exposeInMainWorld('claude', {
     invoke: (token: string, cmd: string, args: unknown) => ipcRenderer.invoke('office:invoke', token, cmd, args),
     close: (token: string) => ipcRenderer.invoke('office:close', token),
     versions: (p: string) => ipcRenderer.invoke('office:versions', p),
-    restore: (p: string, id: string) => ipcRenderer.invoke('office:restore', p, id), saveCopy: (token: string, mode: string) => ipcRenderer.invoke('office:save-copy', token, mode), flushDone: (id: string, result: unknown) => ipcRenderer.send('office:flush-done', id, result), proceedClose: () => ipcRenderer.send('office:proceed'),
-    onFlushRequest: (cb: (id: string, reason: string) => void) => { const h = (_e: IpcRendererEvent, id: string, reason: string) => cb(id, reason); ipcRenderer.on('office:flush-request', h); return () => { ipcRenderer.off('office:flush-request', h); }; },
-    onUnsavedPrompt: (cb: (p: unknown) => void) => { const h = (_e: IpcRendererEvent, p: unknown) => cb(p); ipcRenderer.on('office:unsaved-prompt', h); return () => { ipcRenderer.off('office:unsaved-prompt', h); }; },
+    restore: (p: string, id: string) => ipcRenderer.invoke('office:restore', p, id),
+    saveCopy: (token: string, mode: string) => ipcRenderer.invoke('office:save-copy', token, mode), flushDone: (id: string, result: unknown) => ipcRenderer.send('office:flush-done', id, result), proceedClose: () => ipcRenderer.send('office:proceed'),
+    onFlushRequest: (cb: (id: string, reason: string) => void) => { const h = (_e: IpcRendererEvent, id: string, reason: string) => cb(id, reason); ipcRenderer.on('office:flush-request', h); return () => { ipcRenderer.off('office:flush-request', h); }; }, onUnsavedPrompt: (cb: (p: unknown) => void) => { const h = (_e: IpcRendererEvent, p: unknown) => cb(p); ipcRenderer.on('office:unsaved-prompt', h); return () => { ipcRenderer.off('office:unsaved-prompt', h); }; },
   },
   // Project View IPC — sibling to artifacts. Backs the project overlay's
   // conversations / repo / context tabs.

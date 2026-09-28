@@ -360,8 +360,11 @@ describe('the kept, hidden Office view', () => {
     act(() => openDoc(FILE));
     const { container, rerender } = render(host(true));
     const frame = await waitFor(() => { const f = frameOf(container) as HTMLIFrameElement; expect(f?.getAttribute('src')).toBe('office://t1/index.html'); return f; });
-    vi.spyOn(frame.contentWindow!, 'postMessage').mockImplementation(() => {});
-    const send = (data: unknown) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: frame.contentWindow })); });
+    // WHY re-read the frame's window each time: jsdom can swap it after the src is set (see
+    // editor-frame-relay.test.tsx), and under load that happens after this point.
+    const win = () => { const w = (frameOf(container) as HTMLIFrameElement).contentWindow!; if (!vi.isMockFunction(w.postMessage)) vi.spyOn(w, 'postMessage').mockImplementation(() => {}); return w; };
+    void frame;
+    const send = (data: unknown) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: win() })); });
     send({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
     rerender(host(false));
     const { closeDoc } = await import('../../src/renderer/components/office/office-store');

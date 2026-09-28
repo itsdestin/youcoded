@@ -111,7 +111,7 @@ let suspended = false;
 let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 const suspendListeners = new Set<() => void>();
 const OFFICE_RESUME_MS = 10_000;
-export function suspendOfficeEditors(): void {
+function suspendOfficeEditors(): void {
   suspended = true;
   clearTimeout(resumeTimer);
   resumeTimer = setTimeout(() => { suspended = false; suspendListeners.forEach((l) => l()); }, OFFICE_RESUME_MS);
