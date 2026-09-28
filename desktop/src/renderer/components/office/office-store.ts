@@ -64,12 +64,16 @@ export type FlushResult = { ok: true } | { ok: false; message: string };
 // WHY: autosave waits 3 s after the last change, so anything that ends an editor — Done, the
 // briefcase, closing the panel, leaving a tab, the hand-off to an Office tab, window close and
 // quit — would drop the last few seconds of typing. Those paths wait for this first (≤5 s).
-const flushers = new Map<string, () => Promise<FlushResult>>();
+const flushers = new Map<string, (capMs?: number) => Promise<FlushResult>>();
+/** WHY 4 s (fix round 4): a window close or quit must answer inside main's 5 s cap, or main
+ *  takes silence for a hung window and closes it anyway. Every document is saved at once, each
+ *  capped at 4 s, so the answer always beats main's timeout. */
+const CLOSE_FLUSH_CAP_MS = 4_000;
 // Paths whose flusher only forwards to another editor's (an in-place edit that moved to its
 // copy). WHY kept apart (fix round 3): a close or quit counts each failed document once.
 const aliasPaths = new Set<string>();
 
-export function registerFlush(path: string, flush: () => Promise<FlushResult>, opts: { alias?: boolean } = {}): () => void {
+export function registerFlush(path: string, flush: (capMs?: number) => Promise<FlushResult>, opts: { alias?: boolean } = {}): () => void {
   flushers.set(path, flush);
   if (opts.alias) aliasPaths.add(path); else aliasPaths.delete(path);
   answerFlushRequests();
@@ -100,36 +104,6 @@ export function revealInline(path: string): boolean {
   return true;
 }
 
-// ── Taking the editors down before a window goes (fix round 3) ──
-// WHY: an editor page with unsaved changes cancels its window's unload (its own beforeunload),
-// and main must not override unload vetoes — an unsaved text-file edit uses the same veto and
-// must keep the window open. So once every document is saved (or the person chose Close
-// anyway), the renderer removes the editors' frames itself before answering main: no editor
-// page, no editor veto. If the window then stays open anyway (another veto, a cancelled
-// prompt), the frames come back after a moment and load their documents again.
-let suspended = false;
-let resumeTimer: ReturnType<typeof setTimeout> | undefined;
-const suspendListeners = new Set<() => void>();
-const OFFICE_RESUME_MS = 10_000;
-function suspendOfficeEditors(): void {
-  suspended = true;
-  clearTimeout(resumeTimer);
-  resumeTimer = setTimeout(() => { suspended = false; suspendListeners.forEach((l) => l()); }, OFFICE_RESUME_MS);
-  suspendListeners.forEach((l) => l());
-}
-export function officeEditorsSuspended(): boolean { return suspended; }
-/** Resolves once no editor frame is left in the page (React removes them on its next render),
- *  so main's close only starts after they are gone. Capped at 1 s: main still has its own cap. */
-async function whenEditorFramesGone(): Promise<void> {
-  const until = Date.now() + 1_000;
-  while (typeof document !== 'undefined' && document.querySelector('iframe[data-office-editor]') && Date.now() < until) {
-    await new Promise((r) => setTimeout(r, 16));
-  }
-}
-export function useOfficeEditorsSuspended(): boolean {
-  return useSyncExternalStore((l) => { suspendListeners.add(l); return () => { suspendListeners.delete(l); }; }, () => suspended, () => suspended);
-}
-
 /** Save the file's unsaved changes, if an editor has it open. */
 export function flushOffice(path: string): Promise<FlushResult> {
   return flushers.get(path)?.() ?? Promise.resolve({ ok: true });
@@ -145,27 +119,28 @@ function answerFlushRequests(): void {
   answering = true;
   office.onFlushRequest((id, reason) => {
     const entries = [...flushers.entries()].filter(([path]) => !aliasPaths.has(path));
-    void Promise.all(entries.map(([, f]) => f().catch(() => null))).then((results) => {
+    void Promise.all(entries.map(([, f]) => f(CLOSE_FLUSH_CAP_MS).catch(() => null))).then((results) => {
       // WHY report failures (fix round 2): a document whose save failed must not be closed with
       // its window without the person choosing that. Main holds the close (or quit) and sends
       // the prompt (counting every window's documents, office:unsaved-prompt).
       const failed = entries.filter((_, i) => results[i]?.ok === false).map(([path]) => path);
-      // 'final' is quit's last pass after the person chose: take everything down, ask nothing.
-      const down = failed.length === 0 || reason === 'final';
-      if (down) suspendOfficeEditors();
-      void (down ? whenEditorFramesGone() : Promise.resolve()).then(() => {
-        office.flushDone?.(id, { failed: reason === 'final' ? 0 : failed.length, firstPath: failed[0] });
-      });
+      // WHY 'final' reports none (accepted, fix round 4 — M2): it is quit's last pass, after the
+      // person already chose Close anyway. A document that newly fails in this pass is not asked
+      // about again; asking would re-open a prompt during shutdown for a choice already made.
+      // The editors stay as they are: the add-on keeps them from vetoing the unload (v0.1.2).
+      office.flushDone?.(id, { failed: reason === 'final' ? 0 : failed.length, firstPath: failed[0] });
     });
   });
   office.onUnsavedPrompt?.((p) => setAlerts({ ...alerts, unsaved: { count: p.count, firstPath: p.firstPath } }));
 }
 
-/** "Close anyway": take the editors down, then let main go ahead with the close or quit. */
+/** "Close anyway": main goes ahead with the close or quit it held. WHY nothing is taken down
+ *  (fix round 4): the editors keep their edits and failed-save state, so if the window survives
+ *  (another veto, e.g. an unsaved text file) nothing was lost. The add-on (v0.1.2) keeps an
+ *  editor page from vetoing the unload itself. */
 export function closeAnyway(): void {
   setAlerts({ ...alerts, unsaved: null });
-  suspendOfficeEditors();
-  void whenEditorFramesGone().then(() => window.claude?.office?.proceedClose?.());
+  window.claude?.office?.proceedClose?.();
 }
 
 // ── Alerts shown outside the Office page (fix round 2) ──
@@ -253,12 +228,7 @@ export function cancelClose(path: string): void {
 /** "Save a copy…" landed (fix round 2): the tab now edits the copy — same place in the strip,
  *  in front if it was. The original's editor unmounts with nothing left to save. */
 export function replaceDoc(oldPath: string, file: OfficeFile): void {
-  // The copy already has a tab (fix round 3): bring that one forward, never a second tab.
-  if (oldPath !== file.path && state.docs.some((d) => d.file.path === file.path)) {
-    set({ ...state, docs: state.docs.filter((d) => d.file.path !== oldPath), active: file.path });
-    forgetSaveState(oldPath);
-    return;
-  }
+  // (A copy can never be a file already open in Office: main refuses that target — fix round 4.)
   set({
     ...state,
     docs: state.docs.map((d) => (d.file.path === oldPath ? { file, asleep: false } : d)),
@@ -360,8 +330,6 @@ export function resetOfficeStoreForTests(): void {
   aliasPaths.clear();
   inlineCopies.clear();
   inlineRevealers.clear();
-  suspended = false;
-  clearTimeout(resumeTimer);
   answering = false;
   alerts = { unsaved: null, closeFailed: null };
   listeners.forEach((l) => l());

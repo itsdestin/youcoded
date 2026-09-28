@@ -1,5 +1,5 @@
 import { existsSync, promises as fsNode } from 'node:fs';
-import { chmod, copyFile, mkdir, mkdtemp, open, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, open, readdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -754,6 +754,30 @@ describe.skipIf(!HAS_ADDON)('saving a copy when the file itself cannot be saved'
     await run(s.token, 'write_editor_bin', { data: (await readFile(path.join(warm, 'Editor.bin'))).toString('base64') });
     await expect(run.saveCopyAgain(s.token)).resolves.toEqual({ target, unchanged: false });
     expect(await textOf(target)).toBe(await textOf(MEMO));
+    await chmod(s.path, 0o644);
+  });
+
+  it('refuses a copy onto a file open in Office — in any session, however it is named', async () => {
+    const { s, run } = await failedSaveOfReadOnly();
+    const other = await sessionFor(NOTICE, 'elsewhere/notice.docx'); // open in another tab/window
+    await expect(run.saveCopy(s.token, other.path)).rejects.toThrow('That file is open in Office. Close it or choose another name.');
+    // The same file through a link is the same file.
+    const link = path.join(dir, 'link-to-notice.docx');
+    await symlink(other.path, link);
+    await expect(run.saveCopy(s.token, link)).rejects.toThrow('That file is open in Office. Close it or choose another name.');
+    await chmod(s.path, 0o644);
+  });
+
+  it('refuses to write the copy again when the last hand-over of the edits failed', async () => {
+    const { s, run } = await failedSaveOfReadOnly();
+    const target = path.join(dir, 'copies', 'memo (copy).docx');
+    await mkdir(path.dirname(target), { recursive: true });
+    await run.saveCopy(s.token, target);
+    const before = await readFile(target);
+    vi.spyOn(fsNode, 'writeFile').mockRejectedValueOnce(Object.assign(new Error('full'), { code: 'ENOSPC' }));
+    await expect(run(s.token, 'write_editor_bin', { data: Buffer.from('newer').toString('base64') })).rejects.toThrow();
+    await expect(run.saveCopyAgain(s.token)).rejects.toThrow('There are no changes to save a copy of yet.');
+    expect(await readFile(target)).toEqual(before);
     await chmod(s.path, 0o644);
   });
 

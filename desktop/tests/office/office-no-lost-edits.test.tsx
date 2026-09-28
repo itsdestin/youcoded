@@ -152,10 +152,21 @@ describe('when an Office save fails', () => {
 
   it('changes nothing when the copy dialog is cancelled', async () => {
     const saveCopy = vi.fn(async (_t: string, mode: string) => (mode === 'check' ? { ok: true as const, possible: true } : { ok: false as const, cancelled: true as const }));
-    await failedTab({ saveCopy });
+    const { posted, container } = await failedTab({
+      saveCopy,
+      invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("This file is on a read-only disk, so Office couldn't save it."); return null; }),
+    });
+    // The editor's side of the save that runs before the copy (bytes, then save_file).
+    const iframe = frameOf(container) as HTMLIFrameElement;
+    posted.mockImplementation((msg: unknown) => {
+      if ((msg as { type?: string }).type !== 'yc:office-save') return;
+      queueMicrotask(() => act(() => {
+        for (const cmd of ['write_editor_bin', 'save_file']) window.dispatchEvent(new MessageEvent('message', { data: { yc: 'rpc', id: Math.random(), cmd, args: {} }, origin: 'office://t1', source: iframe.contentWindow }));
+      }));
+    });
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
     await waitFor(() => expect(saveCopy).toHaveBeenCalledWith('t1', 'save'));
-    expect(screen.getByText("This file is on a read-only disk, so Office couldn't save it.")).toBeInTheDocument();
+    expect(await screen.findByText("This file is on a read-only disk, so Office couldn't save it.")).toBeInTheDocument();
     expect(officeDocFor(FILE.path)).not.toBeNull();
   });
 
@@ -254,15 +265,15 @@ describe('closing the window or quitting with a document whose save failed', () 
     expect(frameOf(container)).not.toBeNull();
   });
 
-  it('Close anyway takes the editors down, then lets main go ahead', async () => {
+  it('Close anyway lets main go ahead, and keeps the documents (edits and failed state) in case the window survives', async () => {
     const { proceedClose, container } = await askedToFlush(false);
-    let frameAtProceed: Element | null | undefined;
-    proceedClose.mockImplementation(() => { frameAtProceed = frameOf(container); });
+    const before = frameOf(container);
     fireEvent.click(await screen.findByRole('button', { name: 'Close anyway' }));
-    await waitFor(() => expect(proceedClose).toHaveBeenCalledTimes(1));
-    expect(frameAtProceed).toBeNull();
-    expect(frameOf(container)).toBeNull();
+    expect(proceedClose).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("1 Office document couldn't be saved.")).toBeNull();
+    // A text-file veto kept the window open: the Office document is exactly as it was.
+    expect(frameOf(container)).toBe(before);
+    expect(officeDocFor(FILE.path)).not.toBeNull();
   });
 
   it('Review opens the Office page on the tab that could not be saved, and does not close', async () => {
@@ -273,20 +284,23 @@ describe('closing the window or quitting with a document whose save failed', () 
     expect(proceedClose).not.toHaveBeenCalled();
   });
 
-  it('takes the editors down before answering when every document saved, so none can veto the unload', async () => {
+  it("answers main within its 5 s cap even when a document's save hangs (each is capped at 4 s)", async () => {
     let request!: (id: string, reason: string) => void;
     const flushDone = vi.fn();
     withOffice({ onFlushRequest: vi.fn((cb: (id: string, reason: string) => void) => { request = cb; return () => {}; }), flushDone } as Partial<OfficeBridge>);
     act(() => openDoc(FILE));
-    const r = render(host(true));
-    await waitFor(() => expect(frameOf(r.container)).not.toBeNull());
-    let frameAtAnswer: Element | null = null;
-    flushDone.mockImplementation(() => { frameAtAnswer = frameOf(r.container); });
-    await act(async () => { request('flush-2', 'close'); await new Promise((res) => setTimeout(res, 0)); });
-    await waitFor(() => expect(flushDone).toHaveBeenCalledWith('flush-2', { failed: 0, firstPath: undefined }));
-    // Gone already when main is told — so it is gone before main closes the window.
-    expect(frameAtAnswer).toBeNull();
-    expect(frameOf(r.container)).toBeNull();
+    render(host(true));
+    const { registerFlush } = await import('../../src/renderer/components/office/office-store');
+    const caps: Array<number | undefined> = [];
+    registerFlush('/hang-a.docx', (capMs) => { caps.push(capMs); return new Promise((r) => setTimeout(() => r({ ok: false, message: 'x' }), capMs)); });
+    registerFlush('/hang-b.docx', (capMs) => { caps.push(capMs); return new Promise((r) => setTimeout(() => r({ ok: false, message: 'x' }), capMs)); });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      act(() => request('f-cap', 'close'));
+      await act(async () => { vi.advanceTimersByTime(4_000); await Promise.resolve(); await Promise.resolve(); });
+      expect(caps.filter((c) => c === 4_000).length).toBeGreaterThanOrEqual(2);
+      expect(flushDone).toHaveBeenCalledWith('f-cap', expect.objectContaining({ failed: expect.any(Number) }));
+    } finally { vi.useRealTimers(); }
   });
 
   it('keeps a dirty text-file edit\'s own guard: nothing of Office overrides the window\'s unload veto', async () => {
@@ -302,21 +316,6 @@ describe('closing the window or quitting with a document whose save failed', () 
     window.removeEventListener('beforeunload', handler);
   });
 
-  it('brings the editors back if the window stays open after all', async () => {
-    const { container } = await askedToFlush(false);
-    const button = await screen.findByRole('button', { name: 'Close anyway' });
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    try {
-      fireEvent.click(button);
-      expect(frameOf(container)).toBeNull();
-      await act(async () => { vi.advanceTimersByTime(9_999); });
-      expect(frameOf(container)).toBeNull();
-      await act(async () => { vi.advanceTimersByTime(1); });
-      expect(frameOf(container)).not.toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });
 
 describe('the kept, hidden Office view', () => {
@@ -375,53 +374,55 @@ describe('the kept, hidden Office view', () => {
   });
 });
 
-describe('Save a copy while typing goes on (the copy catches up)', () => {
+describe('Save a copy while the editor could still change', () => {
   const COPY = '/home/you/Documents/plan (copy).docx';
-  async function failedWith(againAnswers: boolean[]) {
-    const answers = [...againAnswers];
+  async function failedWith(opts: { againUnchanged?: boolean; writeFails?: boolean } = {}) {
     const saveCopy = vi.fn(async (_t: string, mode: string) => {
       if (mode === 'check') return { ok: true as const, possible: true };
       if (mode === 'save') return { ok: true as const, folder: 'Documents', path: COPY };
-      return { ok: true as const, folder: 'Documents', path: COPY, unchanged: answers.shift() ?? true };
+      return { ok: true as const, folder: 'Documents', path: COPY, unchanged: opts.againUnchanged ?? true };
     });
     const office = withOffice({
       saveCopy,
-      // The original is read-only: every save the editor attempts is refused at save_file.
-      invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("Office doesn't have permission to save this file."); return null; }),
+      invoke: vi.fn(async (_t: string, cmd: string) => {
+        if (cmd === 'save_file') throw new Error("Office doesn't have permission to save this file.");
+        if (cmd === 'write_editor_bin' && opts.writeFails) throw new Error("The disk is full, so Office couldn't save this file.");
+        return null;
+      }),
     });
     act(() => openDoc(FILE));
     const r = render(<OfficeView />);
     const iframe = await waitFor(() => { const f = frameOf(r.container) as HTMLIFrameElement; expect(f?.getAttribute('src')).toBe('office://t1/index.html'); return f; });
-    // The editor's side: each save the host asks for sends its bytes, then save_file.
     const from = (data: unknown) => window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: iframe.contentWindow }));
+    let overlaySeen = false;
     vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation((msg: unknown) => {
       if ((msg as { type?: string }).type !== 'yc:office-save') return;
+      if (r.container.querySelector('[aria-busy="true"]')) overlaySeen = true;
       queueMicrotask(() => act(() => {
         from({ yc: 'rpc', id: Math.random(), cmd: 'write_editor_bin', args: { data: 'x' } });
         from({ yc: 'rpc', id: Math.random(), cmd: 'save_file', args: { data: '' } });
       }));
     });
     act(() => markFailed(FILE.path, "Office doesn't have permission to save this file."));
-    return { office, saveCopy, stop: () => {}, ...r };
+    return { office, saveCopy, overlay: () => overlaySeen, ...r };
   }
 
-  it('writes the copy again when the editor changed during the first write, then switches', async () => {
-    const { saveCopy, stop } = await failedWith([false, true]);
-    try {
-      fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
-      await waitFor(() => expect(officeDocFor(COPY)).not.toBeNull());
-      expect(saveCopy.mock.calls.map((c) => c[1]).filter((m) => m !== 'check')).toEqual(['save', 'again', 'again']);
-    } finally { stop(); }
+  it('blocks the editor with "Saving a copy…" while it runs, checks once more, then switches', async () => {
+    const { saveCopy, overlay, container } = await failedWith();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
+    await waitFor(() => expect(officeDocFor(COPY)).not.toBeNull());
+    expect(overlay()).toBe(true);
+    expect(saveCopy.mock.calls.map((c) => c[1]).filter((m) => m !== 'check')).toEqual(['save', 'again']);
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
-  it('keeps editing the original — nothing discarded — when the copy keeps falling behind', async () => {
-    const { stop } = await failedWith([false, false, false]);
-    try {
-      fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
-      expect(await screen.findByText("Changes made while copying weren't included. Save a copy again.")).toBeInTheDocument();
-      expect(officeDocFor(FILE.path)).not.toBeNull();
-      expect(officeDocFor(COPY)).toBeNull();
-    } finally { stop(); }
+  it('does not switch when handing the editor\'s bytes to main failed before the copy (I3)', async () => {
+    const { saveCopy } = await failedWith({ writeFails: true });
+    fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
+    expect(await screen.findByText("Office couldn't save a copy of this file.")).toBeInTheDocument();
+    expect(saveCopy.mock.calls.map((c) => c[1])).not.toContain('save');
+    expect(officeDocFor(COPY)).toBeNull();
+    expect(officeDocFor(FILE.path)).not.toBeNull();
   });
 });
 
@@ -476,12 +477,4 @@ describe('small follow-ups', () => {
     expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'PAGE_OPENED' }));
   });
 
-  it('a copy already open in another tab is brought forward, never opened twice', async () => {
-    const OTHER: OfficeFile = { ...FILE, path: '/home/you/Documents/plan (copy).docx', name: 'plan (copy).docx' };
-    const { replaceDoc, officeTabsNow } = await import('../../src/renderer/components/office/office-store');
-    act(() => { openDoc(OTHER); openDoc(FILE); });
-    act(() => replaceDoc(FILE.path, OTHER));
-    expect(officeTabsNow().docs.map((d) => d.file.path)).toEqual([OTHER.path]);
-    expect(officeTabsNow().active).toBe(OTHER.path);
-  });
 });

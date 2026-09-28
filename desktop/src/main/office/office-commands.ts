@@ -30,6 +30,7 @@ const MSG = {
   closing: 'Office is closing.',
   copyRefused: "Office can't save a copy there. Choose another folder.",
   copyNothing: 'There are no changes to save a copy of yet.',
+  copyOpen: 'That file is open in Office. Close it or choose another name.',
   refused: 'refused',
 } as const;
 
@@ -437,6 +438,9 @@ export function createOfficeCommands(deps: {
     // and a copy must never be a back door around that file's read-only state.
     const real = await fsp.realpath(s.path).catch(() => s.path);
     if (auth.realPath === real) throw userError(MSG.copyRefused);
+    // C2 (fix round 4): never write over a file open in Office — in any tab, in any window. Its
+    // own editor would later save over the copy (or the copy would pull the file from under it).
+    if (deps.sessions.byPath(auth.realPath)) throw userError(MSG.copyOpen);
     const dir = path.dirname(target);
     const base = path.basename(target);
     const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
@@ -451,6 +455,7 @@ export function createOfficeCommands(deps: {
       // and the folder may have become protected, or a link swapped in, meanwhile.
       const again = await authorizeArtifactWrite({ projectRoot: path.dirname(target), fullPath: target, mustStayInRoot: false });
       if (!again.ok || again.realPath === real) throw userError(MSG.copyRefused);
+      if (deps.sessions.byPath(again.realPath)) throw userError(MSG.copyOpen);
       noteOwnWrite(target);
       await renameReplacing(tmp, target, process.platform, () => isClosing(s));
     } finally {
@@ -483,6 +488,9 @@ export function createOfficeCommands(deps: {
       if (!s) throw new Error(MSG.refused);
       const last = copyStateOf(s).lastCopy;
       if (!last) return null;
+      // I3 (fix round 4): after a failed hand-over (or none at all) Editor.bin is stale — writing
+      // it into the copy again would present old content as current.
+      if (!copyStateOf(s).edited) throw userError(MSG.copyNothing);
       try {
         return await enqueueOther(s, async () => {
           if ((await hashFile(editorBin(s))) === last.hash) return { target: last.target, unchanged: true };
