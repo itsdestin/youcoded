@@ -163,39 +163,48 @@ describe('CommentsMargin — a comment resolveSelector could not anchor', () => 
 // scrolled to individually from its own highlight, so hiding rows below a
 // chunk boundary would silently break "click a highlight, see its card."
 describe('CommentsMargin — render cost at a realistic high comment count', () => {
-  it('renders 1,000 text comments in one pass within a generous CPU budget', () => {
-    const path = 'stress/1000-comments.md';
-    const COUNT = 1000;
-    // One <p> per quote — a rendered markdown document is many block
-    // elements, never one flat text blob, so this is the realistic DOM shape
-    // (a thousand one-line paragraphs, not a thousand-line single paragraph).
-    const content = document.createElement('div');
-    for (let i = 0; i < COUNT; i++) {
-      const p = document.createElement('p');
-      p.textContent = `filler filler Q${i}filler filler`;
-      content.appendChild(p);
-    }
-    document.body.appendChild(content);
-    for (let i = 0; i < COUNT; i++) {
-      addComment(path, `Q${i}filler`, 'label', { prefix: '', suffix: '', occurrence: 0 });
-    }
+  it('renders 1,000 text comments in one pass, with cost growing in line with the count', () => {
+    // WHY a ratio, not a fixed ceiling: the first version asserted 1,000
+    // comments stayed under 5s of CPU. It measured ~1.6s alone but 5.08s in a
+    // full-suite run on a loaded machine (2026-09-27) — CPU time inflates under
+    // contention too, so any fixed number is a flake waiting to happen. What
+    // this pin actually exists to catch is the per-comment cost blowing up
+    // (e.g. every mark re-walking the whole document: 5x the comments → ~25x
+    // the cost). Measuring 200 and 1,000 in the SAME run cancels out machine
+    // load: linear work is ~5x, and anything under 12x is still near-linear.
+    const mountWith = (path: string, count: number) => {
+      // One <p> per quote — a rendered markdown document is many block
+      // elements, never one flat text blob, so this is the realistic DOM shape
+      // (many one-line paragraphs, not one many-line paragraph).
+      const content = document.createElement('div');
+      for (let i = 0; i < count; i++) {
+        const p = document.createElement('p');
+        p.textContent = `filler filler Q${i}filler filler`;
+        content.appendChild(p);
+      }
+      document.body.appendChild(content);
+      for (let i = 0; i < count; i++) {
+        addComment(path, `Q${i}filler`, 'label', { prefix: '', suffix: '', occurrence: 0 });
+      }
+      const containerRef = { current: content };
+      const startedCpu = process.cpuUsage();
+      const { container, unmount } = render(<CommentsMargin containerRef={containerRef} path={path} narrow={false} />);
+      const usedCpu = process.cpuUsage(startedCpu);
+      // Every comment anchored (proves the pass actually did the full-count
+      // work being measured, not an early bail-out).
+      expect(content.querySelectorAll('mark')).toHaveLength(count);
+      expect(container.querySelectorAll('[data-comments-list] > div')).toHaveLength(count);
+      unmount();
+      content.remove();
+      return (usedCpu.user + usedCpu.system) / 1000;
+    };
 
-    const containerRef = { current: content };
-    const startedCpu = process.cpuUsage();
-    const { container } = render(<CommentsMargin containerRef={containerRef} path={path} narrow={false} />);
-    const usedCpu = process.cpuUsage(startedCpu);
-    const cpuMs = (usedCpu.user + usedCpu.system) / 1000;
-
-    // Every comment anchored (proves the pass actually did the full-count
-    // work being measured, not an early bail-out).
-    expect(content.querySelectorAll('mark')).toHaveLength(COUNT);
-    expect(container.querySelectorAll('[data-comments-list] > div')).toHaveLength(COUNT);
-    // Measured locally at well under 1s for 1,000 comments (jsdom, one-time
-    // mount cost — see this describe block's own header for what's included).
-    // Generous headroom over that measurement, matching this repo's other
-    // "did the bound hold" CPU pins (doc-comments-anchor.test.ts's F1 case),
-    // not a tight budget an unrelated machine hiccup should trip.
-    expect(cpuMs).toBeLessThan(5_000);
+    // Warm-up mount so one-time costs (module init, JIT) don't land on the
+    // small run and make the ratio look better than it is.
+    mountWith('stress/warmup.md', 50);
+    const small = mountWith('stress/200-comments.md', 200);
+    const large = mountWith('stress/1000-comments.md', 1000);
+    expect(large / Math.max(small, 1)).toBeLessThan(12);
   });
 
   it('renders the elden-ring fixture\'s busiest real sheet (315 cell comments) within budget', () => {
@@ -226,7 +235,9 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
     const cpuMs = (usedCpu.user + usedCpu.system) / 1000;
 
     expect(container.querySelectorAll('[data-comments-list] > div')).toHaveLength(cellComments.length);
-    // Same generous, measured-not-guessed budget as the synthetic case above.
+    // Measured ~0.5s CPU alone (2026-09-27); 5s is 10x headroom, so it
+    // survives the ~3x CPU inflation a fully loaded machine was seen to cause
+    // on the 1,000-comment case above while still catching a real blow-up.
     expect(cpuMs).toBeLessThan(5_000);
   });
 });
