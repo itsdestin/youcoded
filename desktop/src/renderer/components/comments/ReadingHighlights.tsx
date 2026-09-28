@@ -76,7 +76,10 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
   // buildContextMenu's "Add comment" entry (selection-release menu OR the
   // real right-click menu), which writes straight to the store itself — see
   // build-menu.ts's own WHY. This component only reads/positions the result.
-  const { comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment, clearFocus } = useDocComments(path, projectRoot);
+  const {
+    comments, focusId, showResolved, setCommentText, addReply, resolveComment, reopenComment, removeComment, clearFocus,
+    editComment, editReply, deleteComment, deleteReply,
+  } = useDocComments(path, projectRoot);
   const visible = useMemo(() => comments.filter((c) => showResolved || !c.resolved), [comments, showResolved]);
   const marks = useQuoteMarks(containerRef, visible);
 
@@ -338,6 +341,13 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
           // reply" hold here, or later hovers would stay blocked.
           onResolve={() => { resolveComment(activeComment.id, 'user'); onEngagedChange(false); setHoveredId(null); }}
           onReopen={() => reopenComment(activeComment.id)}
+          onEditText={(t) => editComment(activeComment.id, t)}
+          // Deleting unmounts this card the same way resolving does (the
+          // comment is gone from `visible`) — release the "typing a reply"
+          // hold the same way, or a later hover would stay blocked.
+          onDeleteComment={() => { deleteComment(activeComment.id); onEngagedChange(false); setHoveredId(null); }}
+          onEditReply={(replyId, t) => editReply(activeComment.id, replyId, t)}
+          onDeleteReply={(replyId) => deleteReply(activeComment.id, replyId)}
         />
       )}
       {draftComment && draftAnchor && (

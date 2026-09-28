@@ -145,7 +145,10 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
   // "Show resolved" toggle's UI and the header's count reads the same store,
   // so all of them share ONE boolean without threading it through
   // ActiveArtifactView.
-  const { comments, focusId, showResolved, setCommentText, commitDraft, addReply, resolveComment, reopenComment, removeComment } = useDocComments(path, projectRoot);
+  const {
+    comments, focusId, showResolved, setCommentText, commitDraft, addReply, resolveComment, reopenComment, removeComment,
+    editComment, editReply, deleteComment, deleteReply,
+  } = useDocComments(path, projectRoot);
   const visible = useMemo(
     () => comments.filter((c) => showResolved || !c.resolved).sort((a, b) => a.createdAt - b.createdAt),
     [comments, showResolved],
@@ -367,6 +370,10 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
                 onResolve={() => { resolveComment(openComment.id, 'user'); setOpenId(null); }}
                 onReopen={() => reopenComment(openComment.id)}
                 onDelete={() => { removeComment(openComment.id); setOpenId(null); }}
+                onEditText={(t) => editComment(openComment.id, t)}
+                onDeleteComment={() => { deleteComment(openComment.id); setOpenId(null); }}
+                onEditReply={(replyId, t) => editReply(openComment.id, replyId, t)}
+                onDeleteReply={(replyId) => deleteReply(openComment.id, replyId)}
               />
             </OverlayPanel>
           </>,
@@ -386,6 +393,10 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
                 onResolve={() => { resolveComment(openComment.id, 'user'); setOpenId(null); }}
                 onReopen={() => reopenComment(openComment.id)}
                 onDelete={() => { removeComment(openComment.id); setOpenId(null); }}
+                onEditText={(t) => editComment(openComment.id, t)}
+                onDeleteComment={() => { deleteComment(openComment.id); setOpenId(null); }}
+                onEditReply={(replyId, t) => editReply(openComment.id, replyId, t)}
+                onDeleteReply={(replyId) => deleteReply(openComment.id, replyId)}
               />
           </MarkerPopover>,
           document.body,
@@ -423,6 +434,10 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
             onResolve={() => resolveComment(c.id, 'user')}
             onReopen={() => reopenComment(c.id)}
             onDelete={() => removeComment(c.id)}
+            onEditText={(t) => editComment(c.id, t)}
+            onDeleteComment={() => deleteComment(c.id)}
+            onEditReply={(replyId, t) => editReply(c.id, replyId, t)}
+            onDeleteReply={(replyId) => deleteReply(c.id, replyId)}
           />
         </div>
       ))}

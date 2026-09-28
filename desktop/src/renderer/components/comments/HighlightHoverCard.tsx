@@ -21,6 +21,7 @@ import { ErrorState } from '../ui/states';
 import { placeBubble } from '../ui/anchor-position';
 import { Avatar, authorName } from './Avatar';
 import { ReplyField } from './ReplyField';
+import { EditDeleteButtons, InlineEditField, DeleteConfirmRow, deleteCommentLabel } from './CommentActions';
 import type { DocComment } from '../../state/doc-comments-store';
 
 const GAP = 8;
@@ -42,9 +43,29 @@ interface Props {
   onReply: (text: string) => void;
   onResolve: () => void;
   onReopen: () => void;
+  // Edit/delete build (E-1..E-6, docs/active/design/2026-09-24-doc-comments/
+  // doc-comments.edit-delete.questions.answers.json): "code/xlsx surfaces
+  // reuse the same card" — this preview gets the identical icons Comments
+  // mode's CommentCard does, not just resolve. Optional so a caller that
+  // hasn't wired the concurrent backend yet still renders (same convention
+  // as CommentCard's own onEditText/onDeleteComment/onEditReply/onDeleteReply).
+  onEditText?: (text: string) => void;
+  onDeleteComment?: () => void;
+  onEditReply?: (replyId: string, text: string) => void;
+  onDeleteReply?: (replyId: string) => void;
 }
 
-export function HighlightHoverCard({ comment, anchorRect, boundsEl, onPointerEnter, onPointerLeave, onEngagedChange, onReply, onResolve, onReopen }: Props) {
+export function HighlightHoverCard({
+  comment, anchorRect, boundsEl, onPointerEnter, onPointerLeave, onEngagedChange, onReply, onResolve, onReopen,
+  onEditText, onDeleteComment, onEditReply, onDeleteReply,
+}: Props) {
+  // Same explicitly-triggered-only local state CommentCard.tsx uses (see its
+  // own WHY) — never derived from `comment.text`/`replies`, so a
+  // `docComments:changed` refresh mid-edit can't unmount this card's textarea.
+  const [isEditingComment, setIsEditingComment] = useState(false);
+  const [confirmingDeleteComment, setConfirmingDeleteComment] = useState(false);
+  const [editingReplyId, setEditingReplyId] = useState<string | null>(null);
+  const [confirmingDeleteReplyId, setConfirmingDeleteReplyId] = useState<string | null>(null);
   // Engaged = the reply box is focused OR has text. Either one alone must
   // keep the card open: focus covers "clicked in, not typed yet", text covers
   // "typed, then clicked elsewhere on the card".
@@ -78,7 +99,8 @@ export function HighlightHoverCard({ comment, anchorRect, boundsEl, onPointerEnt
     // full comment view". So the card now takes the pointer: moving onto it
     // keeps it open (onPointerEnter/Leave feed ReadingHighlights' timers),
     // and it shows the thread's replies plus the same reply box Comments mode
-    // uses. Resolving, editing and deleting still live in Comments mode.
+    // uses. Edit/delete build (2026-09-28): resolving, editing and deleting
+    // now all work from this preview too, not just Comments mode.
     <div
       ref={panelRef}
       role="dialog"
@@ -91,20 +113,42 @@ export function HighlightHoverCard({ comment, anchorRect, boundsEl, onPointerEnt
     >
     <OverlayPanel layer={4} className="p-3 text-xs" style={{ zIndex: 'auto', borderRadius: 'var(--radius-lg)' }}>
       {/* Destin, 2026-09-24: resolve from the preview too — the same
-          circle-check, in the same top-right spot, as a Comments-mode card. */}
+          circle-check, in the same top-right spot, as a Comments-mode card.
+          Edit/delete build: Edit/Delete icons join it (E-1) — "code/xlsx
+          surfaces reuse the same card". */}
       <Entry
         author={comment.author}
         createdAt={comment.createdAt}
         text={comment.text}
-        clamp
-        trailing={
-          <CompleteToggle
-            done={comment.resolved}
-            name="this comment"
-            onToggle={(next) => (next ? onResolve() : onReopen())}
-            titles={{ set: 'Resolved. Click to reopen.', unset: 'Resolve this comment?' }}
-            className="shrink-0"
+        clamp={!isEditingComment}
+        editing={isEditingComment}
+        onSaveEdit={(text) => { onEditText?.(text); setIsEditingComment(false); }}
+        onCancelEdit={() => setIsEditingComment(false)}
+        below={confirmingDeleteComment && (
+          <DeleteConfirmRow
+            label={deleteCommentLabel(comment.replies.length)}
+            onConfirm={() => { onDeleteComment?.(); setConfirmingDeleteComment(false); }}
+            onCancel={() => setConfirmingDeleteComment(false)}
           />
+        )}
+        trailing={
+          <div className="flex items-center gap-0.5 shrink-0">
+            {onEditText && onDeleteComment && (
+              <EditDeleteButtons
+                onEdit={() => { setIsEditingComment(true); setConfirmingDeleteComment(false); }}
+                onDelete={() => { setConfirmingDeleteComment(true); setIsEditingComment(false); }}
+                editLabel="Edit comment"
+                deleteLabel="Delete comment"
+              />
+            )}
+            <CompleteToggle
+              done={comment.resolved}
+              name="this comment"
+              onToggle={(next) => (next ? onResolve() : onReopen())}
+              titles={{ set: 'Resolved. Click to reopen.', unset: 'Resolve this comment?' }}
+              className="shrink-0"
+            />
+          </div>
         }
       />
       {/* Replies scroll inside the card past a few, so a long thread never
@@ -113,7 +157,29 @@ export function HighlightHoverCard({ comment, anchorRect, boundsEl, onPointerEnt
         <div className="max-h-40 overflow-y-auto">
           {comment.replies.map((r) => (
             <div key={r.id} className="mt-2 pl-1">
-              <Entry author={r.author} createdAt={r.createdAt} text={r.text} />
+              <Entry
+                author={r.author}
+                createdAt={r.createdAt}
+                text={r.text}
+                editing={editingReplyId === r.id}
+                onSaveEdit={(text) => { onEditReply?.(r.id, text); setEditingReplyId(null); }}
+                onCancelEdit={() => setEditingReplyId(null)}
+                below={confirmingDeleteReplyId === r.id && (
+                  <DeleteConfirmRow
+                    label="Delete this reply?"
+                    onConfirm={() => { onDeleteReply?.(r.id); setConfirmingDeleteReplyId(null); }}
+                    onCancel={() => setConfirmingDeleteReplyId(null)}
+                  />
+                )}
+                trailing={onEditReply && onDeleteReply && editingReplyId !== r.id && confirmingDeleteReplyId !== r.id && (
+                  <EditDeleteButtons
+                    onEdit={() => { setEditingReplyId(r.id); setConfirmingDeleteReplyId(null); }}
+                    onDelete={() => { setConfirmingDeleteReplyId(r.id); setEditingReplyId(null); }}
+                    editLabel="Edit reply"
+                    deleteLabel="Delete reply"
+                  />
+                )}
+              />
             </div>
           ))}
         </div>
@@ -124,23 +190,35 @@ export function HighlightHoverCard({ comment, anchorRect, boundsEl, onPointerEnt
       {comment.error && (
         <ErrorState className="mt-2" message={comment.error.message} onRetry={comment.error.onRetry} />
       )}
-      <ReplyField onSend={onReply} onFocusChange={setFocused} onDraftChange={setHasText} />
+      {!confirmingDeleteComment && <ReplyField onSend={onReply} onFocusChange={setFocused} onDraftChange={setHasText} />}
     </OverlayPanel>
     </div>
   );
 }
 
-/** One author · time · text row — the same header shape CommentCard uses. */
-function Entry({ author, createdAt, text, clamp, trailing }: { author: DocComment['author']; createdAt: number; text: string; clamp?: boolean; trailing?: ReactNode }) {
+/** One author · time · text row — the same header shape CommentCard uses.
+ *  Edit/delete build: `editing` swaps the text paragraph for the shared
+ *  `InlineEditField`, and `below` renders CommentCard's own delete confirm
+ *  underneath — kept as props on the ALREADY-shared row rather than a second
+ *  near-duplicate component (Avatar.tsx's own "two copies drifted" WHY). */
+function Entry({ author, createdAt, text, clamp, trailing, editing, onSaveEdit, onCancelEdit, below }: {
+  author: DocComment['author']; createdAt: number; text: string; clamp?: boolean; trailing?: ReactNode;
+  editing?: boolean; onSaveEdit?: (text: string) => void; onCancelEdit?: () => void; below?: ReactNode;
+}) {
   return (
-    <div className="flex items-start gap-2">
+    <div className="flex items-start gap-2 group">
       <Avatar author={author} />
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1.5">
           <span className="font-medium text-fg">{authorName(author)}</span>
           <span className="text-2xs text-fg-muted">{formatRelativeTime(createdAt)}</span>
         </div>
-        <p className={`mt-0.5 text-fg-2 whitespace-pre-wrap${clamp ? ' line-clamp-4' : ''}`}>{text}</p>
+        {editing && onSaveEdit && onCancelEdit ? (
+          <InlineEditField text={text} onSave={onSaveEdit} onCancel={onCancelEdit} />
+        ) : (
+          <p className={`mt-0.5 text-fg-2 whitespace-pre-wrap${clamp ? ' line-clamp-4' : ''}`}>{text}</p>
+        )}
+        {below}
       </div>
       {trailing}
     </div>

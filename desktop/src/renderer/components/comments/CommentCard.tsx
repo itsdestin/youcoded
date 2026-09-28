@@ -10,6 +10,7 @@ import { formatRelativeTime } from '../../utils/format-time';
 import type { DocComment } from '../../state/doc-comments-store';
 import { Avatar, authorName, authorNameInline } from './Avatar';
 import { ReplyField } from './ReplyField';
+import { EditDeleteButtons, InlineEditField, DeleteConfirmRow, deleteCommentLabel } from './CommentActions';
 
 interface Props {
   comment: DocComment;
@@ -26,6 +27,17 @@ interface Props {
   onResolve: () => void;
   onReopen: () => void;
   onDelete: () => void;
+  // Edit/delete build (E-1..E-6, docs/active/design/2026-09-24-doc-comments/
+  // doc-comments.edit-delete.questions.answers.json). Distinct from the
+  // existing `onDelete` above, which only ever cancels a still-empty,
+  // never-persisted draft (no confirm) — these act on a REAL comment/reply
+  // and go through the store's edit/delete mutations, confirm-first for
+  // delete (E-4). Optional so fixture/test callers that don't exercise
+  // edit/delete (CommentCard.test.tsx's existing cases) need not wire them.
+  onEditText?: (text: string) => void;
+  onDeleteComment?: () => void;
+  onEditReply?: (replyId: string, text: string) => void;
+  onDeleteReply?: (replyId: string) => void;
 }
 
 // T6 (docs/active/specs/2026-09-26-doc-comments-build-design.md §2.3): once
@@ -75,8 +87,24 @@ function StatusNote({ comment }: { comment: DocComment }) {
   return null;
 }
 
-export function CommentCard({ comment, autoFocus, onTextChange, onCommit, onReply, onResolve, onReopen, onDelete }: Props) {
+export function CommentCard({
+  comment, autoFocus, onTextChange, onCommit, onReply, onResolve, onReopen, onDelete,
+  onEditText, onDeleteComment, onEditReply, onDeleteReply,
+}: Props) {
   const textRef = useRef<HTMLTextAreaElement>(null);
+
+  // Edit/delete build: purely local, explicitly-triggered UI state — never
+  // derived from `comment.text`/`comment.replies` (that derivation is exactly
+  // what caused the draft-focus bug this file's `editingDraft` comment
+  // describes: a flag that flips on a KEYSTROKE unmounts the textarea mid-
+  // typing). These flip only on an Edit/Delete/Save/Cancel/Escape click, so a
+  // `docComments:changed` refresh landing mid-edit re-renders this card with
+  // fresh `comment` props but never touches — and never unmounts — whichever
+  // of these is open.
+  const [isEditingComment, setIsEditingComment] = useState(false);
+  const [confirmingDeleteComment, setConfirmingDeleteComment] = useState(false);
+  const [editingReplyId, setEditingReplyId] = useState<string | null>(null);
+  const [confirmingDeleteReplyId, setConfirmingDeleteReplyId] = useState<string | null>(null);
 
   // A freshly added comment (from "Add comment" on a selection) opens with
   // its note box already focused — Docs-style, so typing starts immediately
@@ -127,6 +155,25 @@ export function CommentCard({ comment, autoFocus, onTextChange, onCommit, onRepl
       className="shrink-0"
     />
   );
+  // E-1: Edit/Delete icons sit NEXT TO the resolve toggle, in the same
+  // top-right cluster — not a ⋯ menu. A draft has neither (nothing persisted
+  // yet to edit or delete — its own Delete-the-draft button is at the bottom,
+  // unchanged). `onEditText`/`onDeleteComment` are optional (see Props' own
+  // WHY), so a caller that hasn't wired them yet (or a bare test) just gets
+  // the resolve toggle alone, same as before this build.
+  const topRightActions = !isDraft && (
+    <div className="flex items-center gap-0.5 shrink-0">
+      {onEditText && onDeleteComment && (
+        <EditDeleteButtons
+          onEdit={() => { setIsEditingComment(true); setConfirmingDeleteComment(false); }}
+          onDelete={() => { setConfirmingDeleteComment(true); setIsEditingComment(false); }}
+          editLabel="Edit comment"
+          deleteLabel="Delete comment"
+        />
+      )}
+      {resolveToggle}
+    </div>
+  );
   // Round 11 (Destin: "remove the quote section at the top of each
   // comment"): in Comments mode each card already sits beside its highlight
   // and lights it up on hover, so repeating the quoted words was noise. The
@@ -149,6 +196,48 @@ export function CommentCard({ comment, autoFocus, onTextChange, onCommit, onRepl
     </>
   );
 
+  // Shared by both the open and resolved branches below — a reply's own
+  // Edit/Delete icons (E-1) work identically either way, and E-4's confirm
+  // (delete on resolved is useful too — Destin's own decision) is the same
+  // inline block in both. `muted`: resolved-thread replies read as `fg-muted`
+  // text, same as the resolved branch's own comment text; open ones stay `fg-2`.
+  const replyRow = (r: DocComment['replies'][number], muted: boolean) => {
+    const isEditingThis = editingReplyId === r.id;
+    const isConfirmingThis = confirmingDeleteReplyId === r.id;
+    return (
+      <div key={r.id} className="flex items-start gap-2 mt-2 pl-1 group">
+        <Avatar author={r.author} />
+        <div className="flex-1 min-w-0">
+          {header(r)}
+          {isEditingThis ? (
+            <InlineEditField
+              text={r.text}
+              onSave={(text) => { onEditReply?.(r.id, text); setEditingReplyId(null); }}
+              onCancel={() => setEditingReplyId(null)}
+            />
+          ) : (
+            <p className={`mt-0.5 whitespace-pre-wrap ${muted ? 'text-fg-muted' : 'text-fg-2'}`}>{r.text}</p>
+          )}
+          {isConfirmingThis && (
+            <DeleteConfirmRow
+              label="Delete this reply?"
+              onConfirm={() => { onDeleteReply?.(r.id); setConfirmingDeleteReplyId(null); }}
+              onCancel={() => setConfirmingDeleteReplyId(null)}
+            />
+          )}
+        </div>
+        {onEditReply && onDeleteReply && !isEditingThis && !isConfirmingThis && (
+          <EditDeleteButtons
+            onEdit={() => { setEditingReplyId(r.id); setConfirmingDeleteReplyId(null); }}
+            onDelete={() => { setConfirmingDeleteReplyId(r.id); setEditingReplyId(null); }}
+            editLabel="Edit reply"
+            deleteLabel="Delete reply"
+          />
+        )}
+      </div>
+    );
+  };
+
   if (comment.resolved) {
     // Bug fix (Destin, testing the dev instance: "when a comment is resolved,
     // replies and such in the chain can't be seen in 'show resolved' view"):
@@ -165,26 +254,36 @@ export function CommentCard({ comment, autoFocus, onTextChange, onCommit, onRepl
       // recipe); muted text says "done" without fading the whole card below
       // the contrast floor.
       <div className="rounded-lg border border-edge-dim bg-inset p-3 text-xs">
-        <div className="flex items-start gap-2">
+        <div className="flex items-start gap-2 group">
           <Avatar author={comment.author} />
           <div className="flex-1 min-w-0">
             {header(comment, cellRef)}
-            <p className="mt-0.5 text-fg-muted whitespace-pre-wrap">{comment.text}</p>
+            {isEditingComment ? (
+              <InlineEditField
+                text={comment.text}
+                onSave={(text) => { onEditText?.(text); setIsEditingComment(false); }}
+                onCancel={() => setIsEditingComment(false)}
+              />
+            ) : (
+              <p className="mt-0.5 text-fg-muted whitespace-pre-wrap">{comment.text}</p>
+            )}
             <StatusNote comment={comment} />
           </div>
-          {resolveToggle}
+          {topRightActions}
         </div>
         <p className="mt-1.5 text-fg-muted">Resolved by {authorNameInline(comment.resolvedBy ?? 'user')}</p>
 
-        {comment.replies.map((r) => (
-          <div key={r.id} className="flex items-start gap-2 mt-2 pl-1">
-            <Avatar author={r.author} />
-            <div className="flex-1 min-w-0">
-              {header(r)}
-              <p className="mt-0.5 text-fg-muted whitespace-pre-wrap">{r.text}</p>
-            </div>
-          </div>
-        ))}
+        {/* delete on a resolved thread is useful too (Destin's own decision,
+            E-1..E-6 answers) — same confirm block as the open branch below. */}
+        {confirmingDeleteComment && (
+          <DeleteConfirmRow
+            label={deleteCommentLabel(comment.replies.length)}
+            onConfirm={() => { onDeleteComment?.(); setConfirmingDeleteComment(false); }}
+            onCancel={() => setConfirmingDeleteComment(false)}
+          />
+        )}
+
+        {comment.replies.map((r) => replyRow(r, true))}
 
         {/* F7 fix (T5 review): a failed reopen rolls back to `resolved: true`,
             so its error lands on THIS branch — one error per comment, shown
@@ -201,11 +300,17 @@ export function CommentCard({ comment, autoFocus, onTextChange, onCommit, onRepl
 
   return (
     <div className="rounded-lg border border-edge-dim bg-inset p-3 text-xs w-full">
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-2 group">
         <Avatar author={comment.author} />
         <div className="flex-1 min-w-0">
           {header(comment, cellRef)}
-          {isDraft ? (
+          {isEditingComment ? (
+            <InlineEditField
+              text={comment.text}
+              onSave={(text) => { onEditText?.(text); setIsEditingComment(false); }}
+              onCancel={() => setIsEditingComment(false)}
+            />
+          ) : isDraft ? (
             <Textarea
               ref={textRef}
               size="sm"
@@ -234,18 +339,21 @@ export function CommentCard({ comment, autoFocus, onTextChange, onCommit, onRepl
           )}
           {!isDraft && <StatusNote comment={comment} />}
         </div>
-        {resolveToggle}
+        {topRightActions}
       </div>
 
-      {comment.replies.map((r) => (
-        <div key={r.id} className="flex items-start gap-2 mt-2 pl-1">
-          <Avatar author={r.author} />
-          <div className="flex-1 min-w-0">
-            {header(r)}
-            <p className="mt-0.5 text-fg-2 whitespace-pre-wrap">{r.text}</p>
-          </div>
-        </div>
-      ))}
+      {/* E-4: delete asks first, inline, right where the reply box would
+          otherwise be — the reply box itself hides while it's up (replying to
+          something about to be deleted reads as a trap). */}
+      {confirmingDeleteComment && (
+        <DeleteConfirmRow
+          label={deleteCommentLabel(comment.replies.length)}
+          onConfirm={() => { onDeleteComment?.(); setConfirmingDeleteComment(false); }}
+          onCancel={() => setConfirmingDeleteComment(false)}
+        />
+      )}
+
+      {comment.replies.map((r) => replyRow(r, false))}
 
       {/* F7 fix (T5 review): a failed add (still a draft, `isDraft`) or a
           failed reply/resolve (rolled back to `resolved: false`, landing
@@ -256,7 +364,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onCommit, onRepl
       )}
 
       {/* The reply box is shared with the Reading-mode hover card (ReplyField.tsx). */}
-      {!isDraft && <ReplyField onSend={onReply} />}
+      {!isDraft && !confirmingDeleteComment && <ReplyField onSend={onReply} />}
       {isDraft && (
         <div className="mt-2 flex items-center justify-end gap-1.5">
           <Button variant="ghost" size="sm" onClick={onDelete}>Delete</Button>

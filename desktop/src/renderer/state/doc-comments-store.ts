@@ -224,6 +224,19 @@ interface DocCommentsIpc {
   resolve: (path: string, id: string, by: string, projectRoot?: string) => Promise<unknown>;
   reopen: (path: string, id: string, by: string, projectRoot?: string) => Promise<unknown>;
   move: (path: string, id: string, newSelector: unknown, projectRoot?: string) => Promise<unknown>;
+  // Edit/delete (2026-09-28, doc-comments edit/delete build): E-2 (Destin's
+  // decisions doc) — anyone's comment/reply, not just the author's, so no
+  // `by`/author argument is needed here the way resolve/reopen carry one.
+  // Channel payload shapes agreed with the concurrent main-process/Kotlin
+  // build: `docComments:edit` {path,id,text,projectRoot}, `docComments:edit-
+  // reply` {path,id,replyId,text,projectRoot}, `docComments:delete`
+  // {path,id,projectRoot}, `docComments:delete-reply`
+  // {path,id,replyId,projectRoot}. MOCK_ONLY in the workbench shim until that
+  // build lands on preload/remote-shim/ipc-handlers (see mock-only.ts).
+  edit: (path: string, id: string, text: string, projectRoot?: string) => Promise<unknown>;
+  editReply: (path: string, id: string, replyId: string, text: string, projectRoot?: string) => Promise<unknown>;
+  delete: (path: string, id: string, projectRoot?: string) => Promise<unknown>;
+  deleteReply: (path: string, id: string, replyId: string, projectRoot?: string) => Promise<unknown>;
   watch: (path: string, projectRoot?: string) => Promise<unknown>;
   unwatch: (path: string, projectRoot?: string) => Promise<unknown>;
   // F3 fix (T5 review): `projectRoot` identifies WHICH project's copy of a
@@ -558,6 +571,23 @@ function dropInFlightReply(parentId: string, localId: string): void {
   else inFlightRepliesByParent.delete(parentId);
 }
 
+/** Edit/delete build: a reply the user is editing/deleting may still be an
+ *  optimistic placeholder from `addReply` (its `localId`, not yet reconciled
+ *  with a persisted id) — there is nothing on the server yet for
+ *  `docComments:edit-reply`/`docComments:delete-reply` to act on. */
+function isReplyLocalOnly(parentId: string, replyId: string): boolean {
+  return (inFlightRepliesByParent.get(parentId) ?? []).some((r) => r.localId === replyId);
+}
+
+/** Keeps an in-flight reply's tracked text in step with a local edit, so
+ *  `reconcileInFlightRepliesForComment`'s later content match (author+text)
+ *  compares against what the user actually has on screen now, not what was
+ *  first typed. */
+function updateInFlightReplyText(parentId: string, localId: string, text: string): void {
+  const entry = (inFlightRepliesByParent.get(parentId) ?? []).find((r) => r.localId === localId);
+  if (entry) entry.text = text;
+}
+
 /** F2 fix (T5, design review round 3 — High): swaps a reply's real, persisted
  *  id/author/text/createdAt into the parent's `replies` array IN PLACE,
  *  mirroring `persistNewComment`'s own already-built id-reconciliation shape
@@ -784,6 +814,24 @@ function updateComment(id: string, updater: (c: DocComment) => DocComment): DocC
 
 function rollback(id: string, previous: DocComment): void {
   updateComment(id, () => previous);
+}
+
+/** Edit/delete build: the same one-key-array-replace shape `updateComment`
+ *  gives a top-level comment, applied to ONE reply inside a comment's
+ *  `replies` array — so editing/deleting a reply never touches an unrelated
+ *  comment's array reference (`publishKey`'s own WHY). Returns the PARENT
+ *  comment as it stood before the change (its full pre-edit `replies` array
+ *  included), which is exactly what `rollback(commentId, before)` needs to
+ *  undo it on a failed mutation. */
+function updateReply(commentId: string, replyId: string, updater: (r: CommentReply) => CommentReply): DocComment | undefined {
+  const key = commentKeyIndex.get(commentId);
+  if (!key) return undefined;
+  const arr = snap.commentsByKey[key];
+  if (!arr) return undefined;
+  const before = arr.find((c) => c.id === commentId);
+  if (!before || !before.replies.some((r) => r.id === replyId)) return undefined;
+  publishKey(key, arr.map((c) => (c.id === commentId ? { ...c, replies: c.replies.map((r) => (r.id === replyId ? updater(r) : r)) } : c)));
+  return before;
 }
 
 /** F7: attaches (or clears, passing `null`) a per-comment inline error —
@@ -1074,16 +1122,15 @@ function reopenComment(id: string): void {
   });
 }
 
-/** Mock/workbench-only (design §7): no contract row asks for permanent
- *  deletion (the closest is resolve, which is reversible), so the real store
- *  exposes no delete IPC channel — this only ever removes a NEVER-PERSISTED
- *  local draft (NewCommentPopover's Cancel / CommentCard's Delete, both of
- *  which only show while a draft's text is still empty, i.e. before
- *  `commitDraft` could have run — plus `subscribeKey`'s own unmount/
- *  off-screen cleanup, for a draft that closed with nothing typed into it).
- *  Dropping the id from `pendingLocalIds` here (never persisted, so there is
- *  nothing on the server to undo) is what makes Cancel/Escape/Delete send
- *  no IPC at all. */
+/** Local-only discard of a NEVER-PERSISTED draft (NewCommentPopover's Cancel /
+ *  CommentCard's Delete on an empty draft, both of which only show while a
+ *  draft's text is still empty, i.e. before `commitDraft` could have run —
+ *  plus `subscribeKey`'s own unmount/off-screen cleanup, for a draft that
+ *  closed with nothing typed into it). Dropping the id from `pendingLocalIds`
+ *  here (never persisted, so there is nothing on the server to undo) is what
+ *  makes Cancel/Escape/Delete-on-a-draft send no IPC at all. Edit/delete
+ *  build (2026-09-28): real, persisted deletion of a real comment is
+ *  `deleteComment` below — this function stays draft-only. */
 function removeComment(id: string): void {
   pendingLocalIds.delete(id);
   const key = commentKeyIndex.get(id);
@@ -1093,6 +1140,115 @@ function removeComment(id: string): void {
   if (!arr) return;
   publishKey(key, arr.filter((c) => c.id !== id));
   pruneKeyIfUnused(key); // F8: this may have been the key's last comment
+}
+
+/** Edit a comment's own note text. E-2 (Destin's decisions,
+ *  docs/active/design/2026-09-24-doc-comments/doc-comments.edit-delete.
+ *  questions.answers.json): anyone's comment can be edited, not only its
+ *  author's — no `by` argument, unlike resolve/reopen. Same optimistic-
+ *  update / rollback / inline-error shape as every other mutation here. */
+function editComment(id: string, text: string): void {
+  const trimmed = text.trim();
+  if (!trimmed) return; // nothing to save — the Save button is disabled on empty text anyway
+  const before = updateComment(id, (c) => ({ ...c, text: trimmed }));
+  if (!before) return;
+  const ipc = getIpc();
+  if (!ipc || pendingLocalIds.has(id)) return; // never-persisted draft — nothing server-side to edit
+  const key = commentKeyIndex.get(id)!;
+  const projectRoot = projectRootOfKey(key);
+  const gen = currentGeneration(key);
+  void callMutation(() => ipc.edit(before.path, id, trimmed, projectRoot)).then((res) => {
+    if (res.ok) return;
+    if (currentGeneration(key) !== gen) void hydrate(before.path, projectRoot); // F9
+    else rollback(id, before);
+    setCommentError(id, describeError(res), () => editComment(id, text));
+  });
+}
+
+/** Edit one reply's text — same shape as `editComment`, but through
+ *  `updateReply`/rolled back onto the PARENT comment (a reply has no
+ *  standalone entry of its own to roll back). A reply still in flight from
+ *  `addReply` (no persisted id yet) is edited locally only; there is nothing
+ *  on the server yet for `docComments:edit-reply` to act on, and
+ *  `updateInFlightReplyText` keeps the later reconciliation pass comparing
+ *  against the text actually on screen. */
+function editReply(commentId: string, replyId: string, text: string): void {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const before = updateReply(commentId, replyId, (r) => ({ ...r, text: trimmed }));
+  if (!before) return;
+  if (isReplyLocalOnly(commentId, replyId)) {
+    updateInFlightReplyText(commentId, replyId, trimmed);
+    return;
+  }
+  const ipc = getIpc();
+  if (!ipc || pendingLocalIds.has(commentId)) return;
+  const key = commentKeyIndex.get(commentId)!;
+  const projectRoot = projectRootOfKey(key);
+  const gen = currentGeneration(key);
+  void callMutation(() => ipc.editReply(before.path, commentId, replyId, trimmed, projectRoot)).then((res) => {
+    if (res.ok) return;
+    if (currentGeneration(key) !== gen) void hydrate(before.path, projectRoot); // F9
+    else rollback(commentId, before);
+    setCommentError(commentId, describeError(res), () => editReply(commentId, replyId, text));
+  });
+}
+
+/** Delete a whole comment thread. E-3 (Destin's decisions): deleting a
+ *  thread's first comment deletes the whole thread — true for free here,
+ *  since a thread IS one `DocComment` plus its nested `replies`, so removing
+ *  the comment object removes every reply with it; no separate cascade is
+ *  needed. E-2: anyone's comment. Rolls back to the FULL pre-delete array
+ *  (not a re-insert-by-index) so a failed delete restores the comment
+ *  exactly where it was, replies and all. */
+function deleteComment(id: string): void {
+  const key = commentKeyIndex.get(id);
+  if (!key) return;
+  const before = snap.commentsByKey[key];
+  if (!before) return;
+  const comment = before.find((c) => c.id === id);
+  if (!comment) return;
+  if (pendingLocalIds.has(id)) { removeComment(id); return; } // never persisted — nothing server-side to delete
+  commentKeyIndex.delete(id);
+  publishKey(key, before.filter((c) => c.id !== id));
+  const ipc = getIpc();
+  if (!ipc) return;
+  const projectRoot = projectRootOfKey(key);
+  const gen = currentGeneration(key);
+  void callMutation(() => ipc.delete(comment.path, id, projectRoot)).then((res) => {
+    if (res.ok) { pruneKeyIfUnused(key); return; }
+    if (currentGeneration(key) !== gen) { void hydrate(comment.path, projectRoot); return; } // F9
+    // Restore the index BEFORE republishing — setCommentError below (and any
+    // render this publish triggers) looks the id up through commentKeyIndex.
+    commentKeyIndex.set(id, key);
+    publishKey(key, before);
+    setCommentError(id, describeError(res), () => deleteComment(id));
+  });
+}
+
+/** Delete one reply. Same in-flight-reply special case as `editReply` — a
+ *  reply that never made it off this device yet is just dropped locally and
+ *  out of the reconciliation tracking, with no server call at all. */
+function deleteReply(commentId: string, replyId: string): void {
+  const key = commentKeyIndex.get(commentId);
+  if (!key) return;
+  const arr = snap.commentsByKey[key];
+  if (!arr) return;
+  const before = arr.find((c) => c.id === commentId);
+  if (!before || !before.replies.some((r) => r.id === replyId)) return;
+  const removingLocalOnly = isReplyLocalOnly(commentId, replyId);
+  publishKey(key, arr.map((c) => (c.id === commentId ? { ...c, replies: c.replies.filter((r) => r.id !== replyId) } : c)));
+  if (removingLocalOnly) { dropInFlightReply(commentId, replyId); return; }
+  const ipc = getIpc();
+  if (!ipc || pendingLocalIds.has(commentId)) return;
+  const projectRoot = projectRootOfKey(key);
+  const gen = currentGeneration(key);
+  void callMutation(() => ipc.deleteReply(before.path, commentId, replyId, projectRoot)).then((res) => {
+    if (res.ok) return;
+    if (currentGeneration(key) !== gen) { void hydrate(before.path, projectRoot); return; } // F9
+    rollback(commentId, before);
+    setCommentError(commentId, describeError(res), () => deleteReply(commentId, replyId));
+  });
 }
 
 function clearCommentFocus(): void {
@@ -1136,6 +1292,12 @@ export interface DocCommentsApi {
   resolveComment: typeof resolveComment;
   reopenComment: typeof reopenComment;
   removeComment: typeof removeComment;
+  /** Edit/delete build (E-1..E-6, docs/active/design/2026-09-24-doc-comments/
+   *  doc-comments.edit-delete.questions.answers.json). */
+  editComment: typeof editComment;
+  editReply: typeof editReply;
+  deleteComment: typeof deleteComment;
+  deleteReply: typeof deleteReply;
   clearFocus: typeof clearCommentFocus;
 }
 
@@ -1179,6 +1341,10 @@ export function useDocComments(path: string, projectRoot?: string): DocCommentsA
     resolveComment,
     reopenComment,
     removeComment,
+    editComment,
+    editReply,
+    deleteComment,
+    deleteReply,
     clearFocus: clearCommentFocus,
   };
 }

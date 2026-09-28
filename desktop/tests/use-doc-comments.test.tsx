@@ -46,6 +46,11 @@ function makeFakeIpc() {
     resolve: vi.fn(async (): Promise<MutationResult> => ({ ok: true })),
     reopen: vi.fn(async (): Promise<MutationResult> => ({ ok: true })),
     move: vi.fn(async (): Promise<MutationResult> => ({ ok: true })),
+    // Edit/delete build (2026-09-28).
+    edit: vi.fn(async (): Promise<MutationResult> => ({ ok: true })),
+    editReply: vi.fn(async (): Promise<MutationResult> => ({ ok: true })),
+    delete: vi.fn(async (): Promise<MutationResult> => ({ ok: true })),
+    deleteReply: vi.fn(async (): Promise<MutationResult> => ({ ok: true })),
     watch: vi.fn(async (): Promise<MutationResult> => ({ ok: true })),
     unwatch: vi.fn(async (): Promise<MutationResult> => ({ ok: true })),
     onChanged: vi.fn((cb: (evt: { path: string; projectRoot?: string }) => void) => {
@@ -715,6 +720,165 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
     act(() => { result.current.clearFocus(); });
     await waitFor(() => expect(ipc.add).toHaveBeenCalledTimes(1));
     expect(ipc.add).toHaveBeenCalledWith('flush.md', expect.anything(), 'typed fast', 'user', '/proj', id);
+  });
+});
+
+// Edit/delete build (E-1..E-6, docs/active/design/2026-09-24-doc-comments/
+// doc-comments.edit-delete.questions.answers.json): editComment/editReply/
+// deleteComment/deleteReply — same optimistic-update/rollback/inline-error
+// shape as resolveComment/addReply above, pinned separately here.
+describe('useDocComments — editComment/editReply/deleteComment/deleteReply', () => {
+  function seedThread(ipc: ReturnType<typeof makeFakeIpc>['ipc'], path: string, replies: any[] = []) {
+    ipc.list.mockResolvedValueOnce({
+      ok: true,
+      comments: [{
+        id: 'c-1', path,
+        selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'x', prefix: '', suffix: '', occurrence: 0 } },
+        text: 'original text', author: 'user', createdAt: 1, replies, resolved: false, history: [],
+      }],
+    });
+  }
+
+  it('editComment updates optimistically and calls docComments:edit with the trimmed text', async () => {
+    const { ipc } = installIpc();
+    seedThread(ipc, 'edit.md');
+    const { result } = renderHook(() => useDocComments('edit.md', '/proj'));
+    await waitFor(() => expect(result.current.comments).toHaveLength(1));
+    act(() => { result.current.editComment('c-1', '  a better note  '); });
+    expect(result.current.comments[0].text).toBe('a better note'); // optimistic, trimmed
+    await waitFor(() => expect(ipc.edit).toHaveBeenCalledWith('edit.md', 'c-1', 'a better note', '/proj'));
+  });
+
+  it('editComment does nothing for blank text — nothing to save', async () => {
+    const { ipc } = installIpc();
+    seedThread(ipc, 'edit-blank.md');
+    const { result } = renderHook(() => useDocComments('edit-blank.md', '/proj'));
+    await waitFor(() => expect(result.current.comments).toHaveLength(1));
+    act(() => { result.current.editComment('c-1', '   '); });
+    expect(result.current.comments[0].text).toBe('original text');
+    expect(ipc.edit).not.toHaveBeenCalled();
+  });
+
+  it('a failed editComment rolls back to the pre-edit text and attaches a retryable error', async () => {
+    const { ipc } = installIpc();
+    seedThread(ipc, 'edit-fail.md');
+    const { result } = renderHook(() => useDocComments('edit-fail.md', '/proj'));
+    await waitFor(() => expect(result.current.comments).toHaveLength(1));
+    ipc.edit.mockResolvedValueOnce({ ok: false, error: 'lock-timeout' });
+    act(() => { result.current.editComment('c-1', 'a doomed edit'); });
+    expect(result.current.comments[0].text).toBe('a doomed edit'); // optimistic
+    await waitFor(() => expect(result.current.comments[0].text).toBe('original text')); // rolled back
+    expect(result.current.comments[0].error?.onRetry).toBeTypeOf('function');
+    ipc.edit.mockResolvedValueOnce({ ok: true });
+    act(() => { result.current.comments[0].error!.onRetry(); });
+    await waitFor(() => expect(result.current.comments[0].text).toBe('a doomed edit'));
+    expect(ipc.edit).toHaveBeenCalledTimes(2);
+  });
+
+  it('deleteComment removes the WHOLE thread optimistically and calls docComments:delete (E-3: first comment = whole thread)', async () => {
+    const { ipc } = installIpc();
+    seedThread(ipc, 'delete.md', [{ id: 'c-1-r1', author: 'user', text: 'a reply', createdAt: 2 }]);
+    const { result } = renderHook(() => useDocComments('delete.md', '/proj'));
+    await waitFor(() => expect(result.current.comments).toHaveLength(1));
+    act(() => { result.current.deleteComment('c-1'); });
+    // The comment AND its reply are both gone in one optimistic update — a
+    // thread's replies live nested inside it, so nothing separate is needed
+    // to cascade the delete.
+    expect(result.current.comments).toHaveLength(0);
+    await waitFor(() => expect(ipc.delete).toHaveBeenCalledWith('delete.md', 'c-1', '/proj'));
+  });
+
+  it('a failed deleteComment restores the comment with its replies intact, and attaches a retryable error', async () => {
+    const { ipc } = installIpc();
+    seedThread(ipc, 'delete-fail.md', [{ id: 'c-1-r1', author: 'user', text: 'a reply', createdAt: 2 }]);
+    const { result } = renderHook(() => useDocComments('delete-fail.md', '/proj'));
+    await waitFor(() => expect(result.current.comments).toHaveLength(1));
+    ipc.delete.mockResolvedValueOnce({ ok: false, error: 'lock-timeout' });
+    act(() => { result.current.deleteComment('c-1'); });
+    expect(result.current.comments).toHaveLength(0); // optimistic
+    await waitFor(() => expect(result.current.comments).toHaveLength(1)); // restored
+    expect(result.current.comments[0].replies).toHaveLength(1); // WITH its reply
+    expect(result.current.comments[0].error?.onRetry).toBeTypeOf('function');
+    ipc.delete.mockResolvedValueOnce({ ok: true });
+    act(() => { result.current.comments[0].error!.onRetry(); });
+    await waitFor(() => expect(result.current.comments).toHaveLength(0));
+  });
+
+  it('editReply updates one reply\'s text and calls docComments:edit-reply, leaving the comment\'s own text untouched', async () => {
+    const { ipc } = installIpc();
+    seedThread(ipc, 'edit-reply.md', [
+      { id: 'c-1-r1', author: 'user', text: 'first reply', createdAt: 2 },
+      { id: 'c-1-r2', author: 'assistant', text: 'second reply', createdAt: 3 },
+    ]);
+    const { result } = renderHook(() => useDocComments('edit-reply.md', '/proj'));
+    await waitFor(() => expect(result.current.comments[0].replies).toHaveLength(2));
+    act(() => { result.current.editReply('c-1', 'c-1-r1', 'edited first reply'); });
+    expect(result.current.comments[0].replies[0].text).toBe('edited first reply');
+    expect(result.current.comments[0].replies[1].text).toBe('second reply'); // untouched
+    expect(result.current.comments[0].text).toBe('original text'); // untouched
+    await waitFor(() => expect(ipc.editReply).toHaveBeenCalledWith('edit-reply.md', 'c-1', 'c-1-r1', 'edited first reply', '/proj'));
+  });
+
+  it('deleteReply removes only that reply and calls docComments:delete-reply', async () => {
+    const { ipc } = installIpc();
+    seedThread(ipc, 'delete-reply.md', [
+      { id: 'c-1-r1', author: 'user', text: 'keep me', createdAt: 2 },
+      { id: 'c-1-r2', author: 'user', text: 'delete me', createdAt: 3 },
+    ]);
+    const { result } = renderHook(() => useDocComments('delete-reply.md', '/proj'));
+    await waitFor(() => expect(result.current.comments[0].replies).toHaveLength(2));
+    act(() => { result.current.deleteReply('c-1', 'c-1-r2'); });
+    expect(result.current.comments[0].replies.map((r: any) => r.id)).toEqual(['c-1-r1']);
+    await waitFor(() => expect(ipc.deleteReply).toHaveBeenCalledWith('delete-reply.md', 'c-1', 'c-1-r2', '/proj'));
+  });
+
+  it('a failed deleteReply restores just that reply, and Retry replays the same call', async () => {
+    const { ipc } = installIpc();
+    seedThread(ipc, 'delete-reply-fail.md', [{ id: 'c-1-r1', author: 'user', text: 'a reply', createdAt: 2 }]);
+    const { result } = renderHook(() => useDocComments('delete-reply-fail.md', '/proj'));
+    await waitFor(() => expect(result.current.comments[0].replies).toHaveLength(1));
+    ipc.deleteReply.mockResolvedValueOnce({ ok: false, error: 'lock-timeout' });
+    act(() => { result.current.deleteReply('c-1', 'c-1-r1'); });
+    expect(result.current.comments[0].replies).toHaveLength(0); // optimistic
+    await waitFor(() => expect(result.current.comments[0].replies).toHaveLength(1)); // rolled back
+    expect(result.current.comments[0].error?.onRetry).toBeTypeOf('function');
+    ipc.deleteReply.mockResolvedValueOnce({ ok: true });
+    act(() => { result.current.comments[0].error!.onRetry(); });
+    await waitFor(() => expect(result.current.comments[0].replies).toHaveLength(0));
+  });
+
+  // A reply still in flight from `addReply` (no persisted id yet) has
+  // nothing on the server for edit-reply/delete-reply to act on — both are
+  // handled purely locally, with no IPC call at all.
+  it('editing or deleting a reply that is still in flight from addReply never calls the server', async () => {
+    const { ipc } = installIpc();
+    seedThread(ipc, 'in-flight.md');
+    const { result } = renderHook(() => useDocComments('in-flight.md', '/proj'));
+    await waitFor(() => expect(result.current.comments).toHaveLength(1));
+    ipc.reply.mockReturnValueOnce(new Promise(() => {})); // never resolves during this test
+    act(() => { result.current.addReply('c-1', 'user', 'still in flight'); });
+    const localReplyId = result.current.comments[0].replies[0].id;
+    expect(localReplyId).toMatch(/^r-/);
+
+    act(() => { result.current.editReply('c-1', localReplyId, 'edited while in flight'); });
+    expect(result.current.comments[0].replies[0].text).toBe('edited while in flight');
+    expect(ipc.editReply).not.toHaveBeenCalled();
+
+    act(() => { result.current.deleteReply('c-1', localReplyId); });
+    expect(result.current.comments[0].replies).toHaveLength(0);
+    expect(ipc.deleteReply).not.toHaveBeenCalled();
+  });
+
+  it('deleteComment on a NEVER-PERSISTED draft removes it locally with no IPC round trip at all', async () => {
+    const { ipc } = installIpc();
+    const { result } = renderHook(() => useDocComments('draft-delete.md', '/proj'));
+    let id = '';
+    act(() => { id = result.current.addComment('the quote', 'draft-delete.md'); });
+    act(() => { result.current.setCommentText(id, 'never sent'); });
+    act(() => { result.current.deleteComment(id); });
+    expect(result.current.comments).toHaveLength(0);
+    expect(ipc.delete).not.toHaveBeenCalled();
+    expect(ipc.add).not.toHaveBeenCalled();
   });
 });
 
