@@ -328,3 +328,104 @@ describe('HighlightHoverCard — Edit/Delete icons (E-1, "code/xlsx surfaces reu
     expect(onDeleteReply).toHaveBeenCalledWith('r-1');
   });
 });
+
+// Cursor flicker fix (Destin, dev instance: "cursor seems to flicker/stutter
+// when hovering between/across the different buttons" — Resolve/Edit/Delete).
+// Root cause: a bare <button>'s UA stylesheet sets `cursor: default`, which
+// BREAKS inheritance rather than falling back to it — so it never picked up
+// the card background's `cursor-pointer`. The tiny gap-0.5 slivers between
+// the tightly-packed icons stayed on the inherited pointer, and every button/
+// gap crossing flipped the OS cursor glyph. jsdom applies neither Tailwind's
+// stylesheet nor the browser's UA defaults (see unselectable-chrome.test.ts's
+// own WHY), so this pins the CLASS NAME half of the fix — every button and
+// every gap-only <div> in the row carries an explicit `cursor-pointer`, which
+// cannot disagree with anything else regardless of what an ancestor does.
+describe('Resolve/Edit/Delete row — one cursor, no dead gaps (hover flicker fix)', () => {
+  it("CommentCard's top-right row: Edit, Delete, Resolve and both wrapping gaps are all cursor-pointer", () => {
+    render(
+      <CommentCard
+        comment={baseComment()}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={noop} onDeleteComment={noop}
+      />,
+    );
+    const editBtn = screen.getByLabelText(/edit comment/i);
+    const deleteBtn = screen.getByLabelText(/delete comment/i);
+    const resolveBtn = screen.getByTitle(/resolve this comment/i);
+    expect(editBtn.className).toContain('cursor-pointer');
+    expect(deleteBtn.className).toContain('cursor-pointer');
+    expect(resolveBtn.className).toContain('cursor-pointer');
+    // The <div> wrapping Edit+Delete (their own gap-0.5), and the <div>
+    // wrapping that pair with the resolve toggle (the gap between the two
+    // groups) — both are gap-only pixels no button's own class reaches.
+    expect(editBtn.parentElement?.className).toContain('cursor-pointer');
+    expect(editBtn.parentElement?.parentElement?.className).toContain('cursor-pointer');
+  });
+
+  it("a reply row's Edit/Delete icons and their gap are cursor-pointer too", () => {
+    render(
+      <CommentCard
+        comment={baseComment({ replies: [{ id: 'r-1', author: 'user', createdAt: Date.now(), text: 'a reply' }] })}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditReply={noop} onDeleteReply={noop}
+      />,
+    );
+    const editBtn = screen.getByLabelText(/edit reply/i);
+    const deleteBtn = screen.getByLabelText(/delete reply/i);
+    expect(editBtn.className).toContain('cursor-pointer');
+    expect(deleteBtn.className).toContain('cursor-pointer');
+    expect(editBtn.parentElement?.className).toContain('cursor-pointer');
+  });
+
+  it("HighlightHoverCard's trailing row (the code/xlsx hover preview) is the same fix", () => {
+    const bounds = document.createElement('div');
+    render(
+      <HighlightHoverCard
+        comment={baseComment()}
+        anchorRect={new DOMRect(0, 0, 10, 10)}
+        boundsEl={bounds}
+        onPointerEnter={noop}
+        onPointerLeave={noop}
+        onEngagedChange={noop}
+        onReply={noop}
+        onResolve={noop}
+        onReopen={noop}
+        onEditText={noop}
+        onDeleteComment={noop}
+      />,
+    );
+    const editBtn = screen.getByLabelText(/edit comment/i);
+    const resolveBtn = screen.getByTitle(/resolve this comment/i);
+    expect(editBtn.className).toContain('cursor-pointer');
+    expect(resolveBtn.className).toContain('cursor-pointer');
+    expect(editBtn.parentElement?.className).toContain('cursor-pointer');
+    expect(editBtn.parentElement?.parentElement?.className).toContain('cursor-pointer');
+  });
+
+  // Companion check, not the cursor fix itself: a docComments:changed push
+  // landing mid-hover (same id, fresh object — CommentCard.tsx's own
+  // `editingDraft` WHY describes exactly this shape) must not tear down and
+  // recreate the row's buttons, or a hover mid-sweep would re-trigger the
+  // opacity-reveal transition and read as another stutter.
+  it('a same-id comment refresh mid-hover keeps the same Edit/Delete/Resolve DOM nodes', () => {
+    const c1 = baseComment();
+    const { rerender } = render(
+      <CommentCard
+        comment={c1}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={noop} onDeleteComment={noop}
+      />,
+    );
+    const editBefore = screen.getByLabelText(/edit comment/i);
+    const resolveBefore = screen.getByTitle(/resolve this comment/i);
+    rerender(
+      <CommentCard
+        comment={{ ...c1 }}
+        onTextChange={noop} onReply={noop} onResolve={noop} onReopen={noop} onDelete={noop}
+        onEditText={noop} onDeleteComment={noop}
+      />,
+    );
+    expect(screen.getByLabelText(/edit comment/i)).toBe(editBefore);
+    expect(screen.getByTitle(/resolve this comment/i)).toBe(resolveBefore);
+  });
+});

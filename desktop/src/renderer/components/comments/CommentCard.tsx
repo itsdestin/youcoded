@@ -162,7 +162,11 @@ export function CommentCard({
   // WHY), so a caller that hasn't wired them yet (or a bare test) just gets
   // the resolve toggle alone, same as before this build.
   const topRightActions = !isDraft && (
-    <div className="flex items-center gap-0.5 shrink-0">
+    // cursor-pointer: the same fix as ICON_BUTTON/CompleteToggle
+    // (CommentActions.tsx WHY) — this row's own gap-0.5 sliver between the
+    // Edit/Delete group and the resolve toggle is otherwise a THIRD cursor
+    // value in the sweep.
+    <div className="flex items-center gap-0.5 shrink-0 cursor-pointer">
       {onEditText && onDeleteComment && (
         <EditDeleteButtons
           onEdit={() => { setIsEditingComment(true); setConfirmingDeleteComment(false); }}

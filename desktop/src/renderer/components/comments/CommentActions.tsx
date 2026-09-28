@@ -67,9 +67,23 @@ function DeleteGlyph() {
  *  (SessionCardDetails.tsx) — not the `<Button>` primitive: lint's
  *  `no-restyle` rule refuses overriding `<Button>`'s own opacity/transition
  *  from a caller's className (it "owns its effects"), which is exactly what
- *  a hover-reveal needs to do here. */
+ *  a hover-reveal needs to do here.
+ *
+ *  WHY `cursor-pointer` is explicit here (Destin, dev instance: "cursor
+ *  seems to flicker/stutter when hovering between/across the different
+ *  buttons"): browsers' own UA stylesheet sets a bare `<button>` to
+ *  `cursor: default`, which BREAKS inheritance — it doesn't fall back to
+ *  whatever an ancestor's `cursor-pointer` resolves to, it overrides it.
+ *  The card background these buttons sit on (CommentsMargin.tsx's per-card
+ *  wrapper, `.state-layer` rows, etc.) already says `cursor-pointer`, so the
+ *  ~2px `gap-0.5` between these tightly-packed icons showed POINTER
+ *  (inherited from that background) while the icons themselves showed
+ *  DEFAULT (the UA override) — the cursor glyph flipped every time the
+ *  pointer crossed a button edge while sweeping Resolve → Edit → Delete.
+ *  Same fix on the wrapping `<div>` below and on `CompleteToggle` closes
+ *  every gap in the row, so nothing in it can disagree with anything else. */
 const ICON_BUTTON =
-  'rounded-sm p-0.5 text-fg-faint hover:text-fg-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent coarse-hit ' +
+  'rounded-sm p-0.5 text-fg-faint hover:text-fg-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent coarse-hit cursor-pointer ' +
   'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 touch-reveal transition-opacity';
 
 export function EditDeleteButtons({ onEdit, onDelete, editLabel, deleteLabel, className = '' }: {
@@ -80,7 +94,11 @@ export function EditDeleteButtons({ onEdit, onDelete, editLabel, deleteLabel, cl
   className?: string;
 }) {
   return (
-    <div className={`flex items-center gap-0.5 shrink-0 ${className}`.trim()}>
+    // cursor-pointer on the row itself too — the gap-0.5 slivers between (and
+    // around) the two buttons are this <div>, not the buttons, so without it
+    // the same flicker this file's WHY describes reopens between Edit and
+    // Delete specifically.
+    <div className={`flex items-center gap-0.5 shrink-0 cursor-pointer ${className}`.trim()}>
       <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(); }} aria-label={editLabel} title={editLabel} className={ICON_BUTTON}>
         <EditGlyph />
       </button>

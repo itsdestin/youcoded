@@ -174,7 +174,13 @@ export function CompleteToggle({ done, name, onToggle, className = '', titles }:
         ? (done ? titles.set : titles.unset)
         : (done ? 'Marked complete — hidden unless Show Complete is on. Click to undo.' : 'Mark this session complete?')}
       aria-label={done ? `Mark ${name} not complete` : `Mark ${name} complete`}
-      className={`rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+      // cursor-pointer is explicit (Destin, dev instance: cursor
+      // flicker/stutter sweeping the doc-comments Resolve/Edit/Delete row) —
+      // a bare <button>'s UA default is `cursor: default`, not inherited
+      // pointer, so without this it disagreed with its neighbors (and with
+      // the card background around it) on every button/gap crossing. See
+      // CommentActions.tsx's ICON_BUTTON WHY for the full mechanism.
+      className={`rounded-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
         done ? 'text-accent' : 'text-fg-faint hover:text-fg-2'
       } ${className}`}
     >

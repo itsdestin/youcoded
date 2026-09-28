@@ -132,7 +132,9 @@ export function HighlightHoverCard({
           />
         )}
         trailing={
-          <div className="flex items-center gap-0.5 shrink-0">
+          // cursor-pointer: same fix as CommentCard's topRightActions
+          // (CommentActions.tsx WHY) — this preview reuses the identical row.
+          <div className="flex items-center gap-0.5 shrink-0 cursor-pointer">
             {onEditText && onDeleteComment && (
               <EditDeleteButtons
                 onEdit={() => { setIsEditingComment(true); setConfirmingDeleteComment(false); }}
