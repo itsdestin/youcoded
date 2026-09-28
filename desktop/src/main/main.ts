@@ -32,7 +32,7 @@ import { getFavorites as getGameFavorites, setFavorites as setGameFavorites, get
 import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
-import { shouldAutoApprove } from './permission-auto-approve';
+import { shouldAutoApprove, shouldAutoApproveDocComment } from './permission-auto-approve';
 import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionState, type AttentionSummary, type AttentionReport, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
 import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/handoff-draft';
@@ -1203,7 +1203,16 @@ function createWindow(firstRunManager?: FirstRunManager) {
       // own answer, and Claude Code ignores a hook "allow" for them — an
       // auto-allow there only removed the card while Claude Code's own menu
       // stayed live with the send gate open (review 2026-09-23).
-      if (requestId && shouldAutoApprove(toolName, toolInput, permissionOverrides)) {
+      //
+      // doc-comments build design §5.2a (decided option 1): a doc-comment
+      // mutation tool (claude-code-doc-comments-mcp.ts, T9a/T9b) targeting a
+      // plain-text/markdown/code file is auto-approved UNCONDITIONALLY — not
+      // gated behind `permissionOverrides` the way the categories below are,
+      // because that case is meant to never prompt in any mode. A Word/Excel
+      // target is deliberately excluded and falls through to the ordinary ask
+      // below (see permission-auto-approve.ts's own header for the mode gap
+      // this cannot close on this surface).
+      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput) || shouldAutoApprove(toolName, toolInput, permissionOverrides))) {
         hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
         return;
       }

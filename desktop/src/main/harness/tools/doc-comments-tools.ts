@@ -39,6 +39,21 @@ import {
 } from '../../doc-comments/doc-comments-dispatch';
 import { refuseUnknownProjectRoot } from '../../doc-comments/doc-comments-gate';
 import type { CommentSelector, PersistedComment } from '../../../shared/doc-comments-types';
+// WHY imported rather than inlined (T9a build, doc-comments build design §5.3):
+// the Claude Code MCP surface (claude-code-doc-comments-mcp.ts) has to show
+// the model IDENTICAL text for these six tools — a shared constants file is
+// the one place both surfaces (this one, by import; the dependency-free MCP
+// script, by hand-copy — it cannot import a TS module) draw from, so a future
+// edit to one text is a single diff instead of two independently-drifting
+// copies. See shared/doc-comments-tool-text.ts's own header.
+import {
+  READ_FILE_COMMENTS_DESCRIPTION,
+  REPLY_TO_COMMENT_DESCRIPTION,
+  RESOLVE_COMMENT_DESCRIPTION,
+  REOPEN_COMMENT_DESCRIPTION,
+  ADD_COMMENT_DESCRIPTION,
+  MOVE_COMMENT_DESCRIPTION,
+} from '../../../shared/doc-comments-tool-text';
 
 // ---------------------------------------------------------------------------
 // Shared input schema for a comment's anchor (design §1.1's pre-written
@@ -122,10 +137,7 @@ function formatComment(c: PersistedComment): string {
 // ---------------------------------------------------------------------------
 export const ReadFileCommentsTool = defineTool({
   name: 'ReadFileComments',
-  description:
-    'Every comment on a file, with status (anchored/detached), replies, and resolve history. '
-    + 'Read this before replying to, resolving, reopening, or moving any comment — the ids and '
-    + 'current state it returns are what those tools need.',
+  description: READ_FILE_COMMENTS_DESCRIPTION,
   shortDescription: 'List every comment on a file, with status, replies, and resolve history.',
   inputSchema: z.object({ path: PATH_FIELD }).strict(),
   // Ungated: a read never mutates the source file or its comment store, the
@@ -155,10 +167,7 @@ export const ReadFileCommentsTool = defineTool({
 // ---------------------------------------------------------------------------
 export const ReplyToCommentTool = defineTool({
   name: 'ReplyToComment',
-  description:
-    'Reply to a comment the user (or a previous turn) left on this file — for a plain-text/markdown/code '
-    + 'comment thread, or a real Word/Excel comment. Use it to answer a question they left, or to say what '
-    + 'you did about something they flagged.',
+  description: REPLY_TO_COMMENT_DESCRIPTION,
   shortDescription: 'Reply to a comment on a file.',
   inputSchema: z.object({ path: PATH_FIELD, commentId: COMMENT_ID_FIELD, text: z.string().describe('The reply text.') }).strict(),
   // §5.2a, DECIDED (Destin, "fine w A" — option 1): a Word/Excel target writes
@@ -192,9 +201,7 @@ export const ReplyToCommentTool = defineTool({
 // ---------------------------------------------------------------------------
 export const ResolveCommentTool = defineTool({
   name: 'ResolveComment',
-  description:
-    "Mark a comment resolved — recorded in its history as resolved by the assistant. Use this once you've "
-    + 'addressed what a comment asked for; R6 (nothing silently lost) is why the resolve/reopen history stays visible.',
+  description: RESOLVE_COMMENT_DESCRIPTION,
   shortDescription: 'Mark a comment on a file as resolved.',
   inputSchema: z.object({ path: PATH_FIELD, commentId: COMMENT_ID_FIELD }).strict(),
   // Same §5.2a split as ReplyToComment — see its own WHY above.
@@ -218,9 +225,7 @@ export const ResolveCommentTool = defineTool({
 // ---------------------------------------------------------------------------
 export const ReopenCommentTool = defineTool({
   name: 'ReopenComment',
-  description:
-    "Reopen a comment that was marked resolved — clears its resolved state so it shows as open again. Use this "
-    + "if a resolved comment's issue turns out not to be fully addressed.",
+  description: REOPEN_COMMENT_DESCRIPTION,
   shortDescription: 'Reopen a resolved comment on a file.',
   inputSchema: z.object({ path: PATH_FIELD, commentId: COMMENT_ID_FIELD }).strict(),
   // Same §5.2a split as ReplyToComment — see its own WHY above.
@@ -247,11 +252,7 @@ export const ReopenCommentTool = defineTool({
 // ---------------------------------------------------------------------------
 export const AddCommentTool = defineTool({
   name: 'AddComment',
-  description:
-    "Leave a comment on this file — sparingly. Use this only for something that clearly needs the user's "
-    + 'attention or a decision from them, never to narrate what you just did or are about to do. If you\'re '
-    + "explaining your own edit, say so in your reply to them instead; if nothing needs their decision, don't "
-    + 'add a comment at all.',
+  description: ADD_COMMENT_DESCRIPTION,
   shortDescription: "Leave a comment on this file — sparingly, only for something needing the user's decision.",
   inputSchema: z.object({ path: PATH_FIELD, selector: COMMENT_SELECTOR, text: z.string().describe('The comment text.') }).strict(),
   // Same §5.2a split as ReplyToComment — see its own WHY above.
@@ -277,11 +278,7 @@ export const AddCommentTool = defineTool({
 // ---------------------------------------------------------------------------
 export const MoveCommentTool = defineTool({
   name: 'MoveComment',
-  description:
-    "Repoint a comment to a new location in the file, after the text or cell it was attached to moved or "
-    + 'changed. This is the re-anchor half of R6 (nothing silently lost): after you fix what a comment asked '
-    + 'for, use this — together with ReplyToComment/ResolveComment as appropriate — so the comment keeps '
-    + 'pointing at something real instead of going quietly detached.',
+  description: MOVE_COMMENT_DESCRIPTION,
   shortDescription: "Repoint a comment's anchor after the text or cell it referenced changed.",
   inputSchema: z.object({ path: PATH_FIELD, commentId: COMMENT_ID_FIELD, newSelector: COMMENT_SELECTOR }).strict(),
   // Same §5.2a split as ReplyToComment — see its own WHY above.

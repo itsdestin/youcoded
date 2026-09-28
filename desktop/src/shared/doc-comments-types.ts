@@ -76,3 +76,71 @@ export interface CommentsSidecarFile {
   version: 1;
   comments: PersistedComment[];
 }
+
+// ---------------------------------------------------------------------------
+// §9.2 / T9a+T9b: the docx/xlsx pending-mutation queue. The Claude Code MCP
+// script (T9a) has neither JSZip nor an XML library on either platform (§9.1
+// point 2) and "never touches a .docx/.xlsx file directly" (§1.6) — for ANY
+// operation against one of those two formats, including a plain read, it
+// writes one of these request files under
+// `.youcoded/comments/.pending/<id>.json` and polls for the matching
+// `<id>.result.json` the main-process queue (T9b, pending-mutation-queue.ts)
+// writes once it has applied the request through the real
+// docx-comments.ts/xlsx-comments.ts code. Both the MCP script (hand-copies
+// this shape as plain JS — it cannot import this file, same constraint as
+// every other dependency-free-script type here) and pending-mutation-queue.ts
+// (imports this file directly) must agree on it byte-for-byte.
+// Not exported: only PendingMutationRequest.kind (below) uses this — every
+// caller compares against the literal strings directly rather than needing
+// the type name itself.
+type PendingMutationKind = 'list' | 'add' | 'reply' | 'resolve' | 'reopen' | 'move';
+
+export interface PendingMutationRequest {
+  /** Also the file's own basename (`<id>.json`) and the result's
+   *  (`<id>.result.json`) — minted fresh per request (`randomUUID()`), never
+   *  reused, so two requests never collide on the same file the way two
+   *  writers CAN collide on the same JSON sidecar (§9.1) — this is why the
+   *  request write itself needs no lock, only an atomic tmp-then-rename
+   *  (chatsearch.js's own outbox precedent, review 2 F12). */
+  id: string;
+  kind: PendingMutationKind;
+  format: 'docx' | 'xlsx';
+  /** Project-relative (or fallback-absolute) path, exactly as
+   *  `PersistedComment.path` carries it elsewhere (§1.1) — never the
+   *  resolved absolute path, so the main-process applier's own containment
+   *  check (doc-comments-dispatch.ts's `resolveDocxTarget`/`resolveXlsxTarget`)
+   *  runs on the SAME kind of input every other caller gives it. */
+  path: string;
+  /** The MCP script's own trusted, spawn-time project root
+   *  (`YOUCODED_PROJECT_ROOT` — never model-controlled input; see
+   *  shared/doc-comments-mcp.ts's own header) — passed through so the
+   *  applier resolves the identical target this request's own containment
+   *  check already verified against. */
+  projectRoot: string;
+  /** `reply`/`resolve`/`reopen`/`move` only. */
+  commentId?: string;
+  /** `add`/`reply` only. */
+  text?: string;
+  /** `add`/`reply` only. */
+  author?: CommentAuthor;
+  /** `add` only. */
+  selector?: CommentSelector;
+  /** `move` only (review 3, F2). */
+  newSelector?: CommentSelector;
+  createdAt: number;
+}
+
+/** The applier's own outcome, one field wider than `PersistedComment[]`
+ *  alone: `kind: 'list'` returns `comments`, `kind: 'add'` returns the new
+ *  `id`, and the remaining four kinds return a bare `{ok:true}` — the exact
+ *  same per-operation shape doc-comments-dispatch.ts's own functions already
+ *  return, just carried through a file instead of a return value. */
+export type PendingMutationResult =
+  // `reply` (design commit 6c612cb9, §1.5/§1.6/§7): a docx/xlsx `reply`'s
+  // persisted CommentReply, once docx-comments.ts's/xlsx-comments.ts's own
+  // reply function is enriched to return it (T3's own row owns that change —
+  // T9b only needs to be ready to forward whatever it gets, never invent the
+  // shape itself). Optional and additive: today those functions still return
+  // a bare `{ok:true}`, so this field is simply absent until that lands.
+  | { ok: true; comments?: PersistedComment[]; id?: string; reply?: CommentReply }
+  | { ok: false; error: string; features?: string[] };

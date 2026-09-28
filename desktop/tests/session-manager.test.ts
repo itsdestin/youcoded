@@ -5,6 +5,7 @@ import path from 'path';
 import { SessionManager, resolveShellCommand, shellDisplayName, prepareRunInTerminal } from '../src/main/session-manager';
 import { createTransferredExitGate } from '../src/main/conversations/handoff-exit';
 import { createResumeAdmission } from '../src/main/conversations/resume-admission';
+import { DOC_COMMENTS_MCP_SERVER_ID, YOUCODED_PROJECT_ROOT_ENV } from '../src/shared/doc-comments-mcp';
 
 const tmpDir = os.tmpdir();
 
@@ -324,6 +325,41 @@ describe('SessionManager', () => {
     // Pre-approved, so handing the user a link never raises a permission prompt.
     expect(args).toContain('--allowedTools');
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__youcoded__SendUserLink');
+  });
+
+  // T9a: the doc-comments MCP server rides the SAME two flags, combined into
+  // one occurrence each rather than a second `--mcp-config`/`--allowedTools`
+  // pair (claude --help documents both as variadic — see
+  // youcoded/docs/cc-dependencies.md's own entry for why repeating either
+  // flag was avoided). Only ReadFileComments is pre-approved; the five
+  // mutation tools are deliberately absent (§5.2a's own permission gate).
+  it('attaches the doc-comments MCP server to every Claude Code session, combined into the SAME flags as SendUserLink', () => {
+    manager.createSession({ name: 'doc-comments', cwd: tmpDir, skipPermissions: false });
+    const args: string[] = mockWorker.send.mock.calls[0][0].args;
+
+    const configIdx = args.indexOf('--mcp-config');
+    const docCommentsConfigPath = args[configIdx + 2]; // [0]=link config, [1]=doc-comments config
+    expect(docCommentsConfigPath.startsWith(path.join(tmpDir, 'claude-code-doc-comments-mcp'))).toBe(true);
+    const config = JSON.parse(fs.readFileSync(docCommentsConfigPath, 'utf8'));
+    expect(Object.keys(config.mcpServers)).toEqual([DOC_COMMENTS_MCP_SERVER_ID]);
+    expect(config.mcpServers[DOC_COMMENTS_MCP_SERVER_ID].env[YOUCODED_PROJECT_ROOT_ENV]).toBe(tmpDir);
+    expect(fs.existsSync(config.mcpServers[DOC_COMMENTS_MCP_SERVER_ID].args[0])).toBe(true);
+
+    // Only ONE occurrence of each flag exists in the whole args array — never
+    // a second `--mcp-config`/`--allowedTools` pair for the second server.
+    expect(args.filter((a) => a === '--mcp-config')).toHaveLength(1);
+    expect(args.filter((a) => a === '--allowedTools')).toHaveLength(1);
+
+    const allowedIdx = args.indexOf('--allowedTools');
+    const allowedTools = args.slice(allowedIdx + 1);
+    expect(allowedTools).toContain('mcp__youcoded__SendUserLink');
+    expect(allowedTools).toContain(`mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ReadFileComments`);
+    // The five mutation tools are never pre-approved (§5.2a) — a plain-text
+    // target is auto-approved elsewhere (permission-auto-approve.ts), a
+    // Word/Excel target gets an ordinary ask.
+    for (const bare of ['ReplyToComment', 'ResolveComment', 'ReopenComment', 'AddComment', 'MoveComment']) {
+      expect(allowedTools).not.toContain(`mcp__${DOC_COMMENTS_MCP_SERVER_ID}__${bare}`);
+    }
   });
 
   it('emits pty-output when worker sends data', () => {

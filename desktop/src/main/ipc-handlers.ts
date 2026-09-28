@@ -11,6 +11,7 @@ import type { ChatsearchReadRequest } from '../shared/chatsearch-refs';
 import https from 'https';
 import { execFile } from 'child_process';
 import { SessionManager, prepareRunInTerminal, shellDisplayName } from './session-manager';
+import { startPendingMutationQueue, stopPendingMutationQueue } from './doc-comments/pending-mutation-queue';
 import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-page-source';
 import { HookRelay } from './hook-relay';
 import { IPC, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
@@ -781,6 +782,39 @@ export function registerIpcHandlers(
   // the assignSession block itself; pinned by tests/ipc-handlers-create-ownership.test.ts.
   sessionManager.on('session-created', (info) => {
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
+  });
+
+  // The docx/xlsx pending-mutation queue's main-process half (T9b, design
+  // docs/active/specs/2026-09-26-doc-comments-build-design.md §9.2) — started
+  // for every Claude Code session (it's harmless, cheap idle-refcount overhead
+  // for a session whose assistant never touches a Word/Excel comment) and
+  // stopped when the session ends. WHY wired HERE rather than inside
+  // session-manager.ts's own createSession/destroySession (where the doc-
+  // comments MCP server's DEPLOYMENT itself lives, since that affects the
+  // spawned CLI args directly): session-manager.test.ts constructs a bare
+  // `SessionManager` with no listeners attached and reuses a single shared
+  // `os.tmpdir()` as `cwd` across dozens of tests — starting a real chokidar
+  // watcher on that shared directory from inside createSession would leak a
+  // live filesystem watch into every one of those tests. Registering it as a
+  // listener here instead means it only ever runs where a real (or
+  // sufficiently real) SessionManager actually emits these events — the built
+  // app, and any test that wires this same registerIpcHandlers path.
+  // `docCommentsQueueCwds` tracks each session's own cwd from creation through
+  // exit: `destroySession`'s multiple emit sites don't consistently leave
+  // `getSession(id)` answerable by the time 'session-exit' fires (some already
+  // delete the entry first), so this listener keeps its own record rather than
+  // depending on that.
+  const docCommentsQueueCwds = new Map<string, string>();
+  sessionManager.on('session-created', (info) => {
+    if (info.provider !== 'claude') return;
+    docCommentsQueueCwds.set(info.id, info.cwd);
+    void startPendingMutationQueue(info.id, info.cwd);
+  });
+  sessionManager.on('session-exit', (sessionId: string) => {
+    const cwd = docCommentsQueueCwds.get(sessionId);
+    if (cwd === undefined) return;
+    docCommentsQueueCwds.delete(sessionId);
+    void stopPendingMutationQueue(sessionId, cwd);
   });
 
   // window.claude.terminal.getScreenText — reads the visible xterm buffer

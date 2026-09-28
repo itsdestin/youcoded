@@ -20,6 +20,8 @@
     {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.unlinkSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"}
   ],
   "user-rare": [
+    {"file": "claude-code-doc-comments-mcp.ts", "fn": "deployClaudeCodeDocCommentsMcp", "call": "fs.mkdirSync", "count": 1, "reason": "once per Claude Code session create, same rarity/shape as the sibling deployClaudeCodeLinkMcp (session-manager.ts calls both inline, synchronously, from the same non-async createSession)"},
+    {"file": "claude-code-doc-comments-mcp.ts", "fn": "deployClaudeCodeDocCommentsMcp", "call": "fs.writeFileSync", "count": 2, "reason": "once per Claude Code session create, same rarity/shape as the sibling deployClaudeCodeLinkMcp (session-manager.ts calls both inline, synchronously, from the same non-async createSession)"},
     {"file": "conversations/conversation-store.ts", "fn": "createConversationStore.mutateRecord", "call": "fs.writeFileSync", "count": 1, "reason": "runs only when a record file is unreadable: keeps its bytes before the locked write replaces them; mutateFileUnderLock's callback is synchronous, so it cannot await"},
     {"file": "harness/eval/battery.ts", "fn": "loadRoster", "call": "fs.readFileSync", "count": 1, "reason": "developer evaluator only (test-engine/harness-eval), never runs inside the app"},
     {"file": "harness/eval/fixture-workspace.ts", "fn": "seedFixtureWorkspace.write", "call": "fs.mkdirSync", "count": 1, "reason": "developer evaluator only (test-engine/harness-eval), never runs inside the app"},

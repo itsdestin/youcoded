@@ -1,4 +1,6 @@
 import type { PermissionOverrides } from '../shared/types';
+import { DOC_COMMENTS_MCP_MUTATOR_TOOLS } from '../shared/doc-comments-mcp';
+import { nativeFormatFor } from './doc-comments/doc-comments-dispatch';
 
 // --- Permission override classification ---
 // In bypass mode, Claude Code still fires PermissionRequest for protected paths,
@@ -49,6 +51,34 @@ function classifyPermission(toolName: string, toolInput?: Record<string, unknown
  *  stayed up), so auto-allowing one only hides the card while the question is
  *  still waiting in the terminal. */
 const NEEDS_THE_USERS_OWN_ANSWER = new Set(['AskUserQuestion', 'ExitPlanMode']);
+
+const DOC_COMMENTS_MUTATOR_TOOL_SET = new Set(DOC_COMMENTS_MCP_MUTATOR_TOOLS);
+
+/**
+ * §5.2a of the doc-comments build design (decided option 1, Destin "fine w
+ * A"): a comment mutation aimed at a plain-text/markdown/code file only ever
+ * touches the inert `.youcoded/comments/<path>.json` sidecar (never the
+ * source file's own bytes) — internal app metadata, the same posture the
+ * native tool surface gives it (`permissionSubject: () => undefined`,
+ * doc-comments-tools.ts). It is auto-approved UNCONDITIONALLY here (unlike
+ * every other category in this file, which only fires under bypass mode and
+ * needs an explicit Advanced Settings override): the design's own intent is
+ * that this case never prompts in ANY mode, not just bypass.
+ *
+ * A Word/Excel target writes the file's own XML/note bytes directly — that
+ * is deliberately NOT auto-approved here; it falls through to Claude Code's
+ * ordinary ask. See claude-code-doc-comments-mcp.ts's own header for why this
+ * is the closest match this MCP surface can give to "the same tier as
+ * Edit/Write" (bypass mode already gets this for free from Claude Code's own
+ * engine; accept-edits mode does not, and this app has no live channel
+ * carrying a Claude Code CLI session's current permission mode into main to
+ * close that specific gap — reported, not silently patched).
+ */
+export function shouldAutoApproveDocComment(toolName: string, toolInput?: Record<string, unknown>): boolean {
+  if (!DOC_COMMENTS_MUTATOR_TOOL_SET.has(toolName)) return false;
+  const path = toolInput?.path;
+  return typeof path === 'string' && nativeFormatFor(path) === null;
+}
 
 /** Should main answer this PermissionRequest "allow" without showing a card? */
 export function shouldAutoApprove(
