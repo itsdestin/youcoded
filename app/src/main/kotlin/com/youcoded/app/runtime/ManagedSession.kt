@@ -227,19 +227,34 @@ class ManagedSession(
                 bridgeServer?.let { server ->
                     when (event) {
                         is HookEvent.PermissionRequest -> {
+                            // doc-comments build design §5.2a (decided option
+                            // 1, T20): a call to one of the six document-
+                            // comment MCP tools (com.youcoded.app.doccomments.
+                            // DocCommentsPermission, mirroring desktop's
+                            // permission-auto-approve.ts) is auto-approved
+                            // UNCONDITIONALLY for a plain-text/markdown/code
+                            // target, and only in an already-frictionless
+                            // permission mode for a Word/Excel target — this
+                            // runs BEFORE the category classifier below
+                            // because a doc-comments tool call is never
+                            // AskUserQuestion and never matches any of that
+                            // classifier's own Bash/file-path regexes.
+                            val docCommentsApprove = com.youcoded.app.doccomments.shouldAutoApproveDocComment(
+                                event.toolName, event.toolInput, event.permissionMode, bridge.docCommentsServerId,
+                            )
                             // Classify and auto-approve based on user's override settings.
                             // Title hooks always auto-approved; other categories per user config.
                             // AskUserQuestion is never auto-approved (needs real user input).
-                            if (event.toolName != "AskUserQuestion") {
+                            val categoryApprove = if (event.toolName != "AskUserQuestion") {
                                 val category = classifyPermission(event.toolName, event.toolInput)
                                 val overrides = permissionOverridesCache
-                                val shouldApprove = category == "titleHook" || shouldAutoApprove(category, overrides)
-                                if (shouldApprove) {
-                                    val decision = JSONObject().put("decision",
-                                        JSONObject().put("behavior", "allow"))
-                                    ptyBridge?.getEventBridge()?.respond(event.requestId, decision)
-                                    return@let
-                                }
+                                category == "titleHook" || shouldAutoApprove(category, overrides)
+                            } else false
+                            if (docCommentsApprove || categoryApprove) {
+                                val decision = JSONObject().put("decision",
+                                    JSONObject().put("behavior", "allow"))
+                                ptyBridge?.getEventBridge()?.respond(event.requestId, decision)
+                                return@let
                             }
                             val suggestions = event.permissionSuggestions?.let { arr ->
                                 (0 until arr.length()).map { arr.optString(it) }

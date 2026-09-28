@@ -535,3 +535,59 @@ describe('parity: mutator tools never include the read-only tool', () => {
     expect(docCommentsMcpMutatorTools(id)).not.toContain(docCommentsMcpReadTool(id));
   });
 });
+
+// Guard (T9c): the doc-comments MCP server exists in TWO places — embedded in
+// claude-code-doc-comments-mcp.ts (desktop writes it into userData per
+// session) and as an Android asset (ClaudeCodeDocCommentsMcp.kt writes it
+// into .claude-mobile per session). They must stay byte-identical, and the
+// server-prefix/tool-name vocabulary must agree across TypeScript and Kotlin.
+// Same shape as claude-code-mcp.test.ts's own SendUserLink parity test — drift
+// here is invisible until a phone silently loses the doc-comments tools.
+describe('desktop and Android copies', () => {
+  const ANDROID_ASSET = path.join(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'doc-comments-mcp.js');
+  const ANDROID_DEPLOY_KT = path.join(
+    __dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'ClaudeCodeDocCommentsMcp.kt',
+  );
+  const ANDROID_NAMES_KT = path.join(
+    __dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'doccomments', 'DocCommentsMcpNames.kt',
+  );
+
+  describe('doc-comments MCP server parity', () => {
+    it('the embedded desktop copy is byte-identical to the Android asset', () => {
+      // WHY: byte-identical comparison — DOC_COMMENTS_SERVER_JS is a TS
+      // string constant (already substituted with the real env var names and
+      // tool descriptions, same as what deployClaudeCodeDocCommentsMcp writes
+      // to disk), never a disk read, so it cannot be run through readSource.
+      expect(DOC_COMMENTS_SERVER_JS).toBe(fs.readFileSync(ANDROID_ASSET, 'utf8'));
+    });
+
+    it('the server source stays String.raw-safe', () => {
+      // A backtick would end the template early and a ${ would interpolate —
+      // either one corrupts the embedded copy silently at build time.
+      expect(DOC_COMMENTS_SERVER_JS.includes('`')).toBe(false);
+      expect(DOC_COMMENTS_SERVER_JS.includes('${')).toBe(false);
+    });
+
+    it('Kotlin declares the same asset filename and env var names', () => {
+      const kt = fs.readFileSync(ANDROID_DEPLOY_KT, 'utf8');
+      expect(kt).toContain(`const val SERVER_FILE = "doc-comments-mcp.js"`);
+      expect(kt).toContain(`const val PROJECT_ROOT_ENV = "${YOUCODED_PROJECT_ROOT_ENV}"`);
+      expect(kt).toContain(`const val TOKEN_ENV = "${YOUCODED_MCP_TOKEN_ENV}"`);
+    });
+
+    it('Kotlin composes the same server prefix and mutator tool names', () => {
+      const kt = fs.readFileSync(ANDROID_NAMES_KT, 'utf8');
+      expect(kt).toContain(`const val SERVER_PREFIX = "${DOC_COMMENTS_MCP_SERVER_PREFIX}"`);
+      const id = 'youcoded-doc-comments-deadbeef';
+      // Kotlin's own mutatorTools()/readTool() can't be called from a TS
+      // test — this asserts the bare tool-name LIST agrees literally, the
+      // same drift class the desktop-side docCommentsMcpMutatorTools test
+      // above guards on the TS side.
+      for (const bare of ['ReplyToComment', 'ResolveComment', 'ReopenComment', 'AddComment', 'MoveComment']) {
+        expect(docCommentsMcpMutatorTools(id)).toContain(`mcp__${id}__${bare}`);
+        expect(kt).toContain(`"${bare}"`);
+      }
+      expect(docCommentsMcpReadTool(id)).toBe(`mcp__${id}__ReadFileComments`);
+    });
+  });
+});
