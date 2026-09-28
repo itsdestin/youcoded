@@ -175,25 +175,21 @@ export async function addNativeXlsxComment(args: {
   return addXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, selector: args.selector, text: args.text, author: args.author });
 }
 
-/** T5 review scope note: unlike `replyToNativeDocxComment` above, this does
- *  NOT return an enriched `reply` yet. `xlsx-comments.ts`'s reply path is now
- *  the threaded-comments-only writer (design §4's 2026-09-27 rewrite,
- *  `xl/threadedComments/threadedCommentN.xml`) — it DOES mint a real, discrete
- *  per-reply GUID (`mintGuid()`) unlike the retired legacy-Notes design this
- *  comment used to describe, so enriching this response is now technically
- *  possible. It just hasn't been wired up here: `replyToXlsxComment` still
- *  returns a bare `{ok:true}`. The renderer's own reconciliation
- *  (doc-comments-store.ts's `addReply`) already guards on `res.reply` being
- *  present, so an xlsx reply keeps working exactly as it does today via the
- *  push-based reconcile path (§7 rule 2) rather than the response-based one
- *  (§7 rule 3) — an accepted, narrower gap than before, not a bug. */
+/** Review leftover (a): now enriched with the persisted `CommentReply`,
+ *  mirroring `replyToNativeDocxComment` above — `xlsx-comments.ts`'s own
+ *  `replyToXlsxComment` mints a real per-reply GUID and computes its
+ *  ordinal from the thread's current full transcript, so its id can't be
+ *  pre-computed by the renderer the way a brand-new comment's own id can.
+ *  The renderer's reconciliation (`doc-comments-store.ts`'s `addReply`)
+ *  already reads `res.reply` generically (format-agnostic) — this needed no
+ *  renderer-side change to take effect. */
 export async function replyToNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;
   id: string;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
   return replyToXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text, author: args.author });
@@ -225,12 +221,17 @@ export async function reopenNativeXlsxComment(args: {
   return reopenXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
 }
 
+/** Review F3 (Medium) partial fix: now returns the moved thread's FRESH id
+ *  (embedding its new cell) — `xlsx-comments.ts`'s own `moveXlsxComment` doc
+ *  comment has the full reasoning (a moved thread's OLD id's embedded-cell
+ *  hint goes stale the moment it moves, making the very next call pay for a
+ *  full-workbook fallback scan unless the caller has a fresh one). */
 export async function moveNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;
   id: string;
   newSelector: CommentSelector;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true; id: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
   return moveXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, newSelector: args.newSelector });

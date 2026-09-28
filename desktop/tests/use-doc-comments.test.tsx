@@ -478,6 +478,68 @@ describe('useDocComments — mutations, id minting, refusal + inline error (F4/F
       await act(async () => { resolveFirst({ ok: true, reply: { id: 'w-1-r1', author: 'user', text: 'thanks', createdAt: 100 } }); await Promise.resolve(); });
       expect(result.current.comments[0].replies.map((r: any) => r.id)).toEqual(['w-1-r1', 'w-1-r2']);
     });
+
+    // Live-refresh review (docs/active/reviews/2026-09-27-doc-comments-live-
+    // refresh-review.md, finding #2): the reconcile rule is format-agnostic —
+    // it only ever reads `res.reply`, never a format-specific id shape — but
+    // every existing test above only ever exercised a docx-shaped (`w-`) id.
+    // Now that xlsx's own reply path is enriched too (§4.3), this proves the
+    // SAME swap works for an xlsx-shaped (`xt-`) persisted id.
+    it('swaps the optimistic local reply id for the real persisted one on success, given an xlsx-shaped id', async () => {
+      const { ipc } = installIpc();
+      seedOneComment(ipc, 'sheet.xlsx');
+      const { result } = renderHook(() => useDocComments('sheet.xlsx', '/proj'));
+      await waitFor(() => expect(result.current.comments).toHaveLength(1));
+      let resolveReply!: (v: MutationResult) => void;
+      ipc.reply.mockReturnValueOnce(new Promise((resolve) => { resolveReply = resolve; }));
+      act(() => { result.current.addReply('c-1', 'user', 'a reply'); });
+      const localId = result.current.comments[0].replies[0].id;
+      expect(localId).toMatch(/^r-/);
+      await act(async () => {
+        resolveReply({ ok: true, reply: { id: 'xt-1-A1-04C1C54B-2744-A647-93D1-A99C27C7EFDC-r1', author: 'user', text: 'a reply', createdAt: 999 } });
+        await Promise.resolve();
+      });
+      expect(result.current.comments[0].replies).toHaveLength(1);
+      expect(result.current.comments[0].replies[0].id).toBe('xt-1-A1-04C1C54B-2744-A647-93D1-A99C27C7EFDC-r1');
+    });
+
+    // Live-refresh review, finding #2's own "untested combination worth
+    // closing": a reply response with NO enrichment at all (the plain
+    // `{ok:true}` shape the default fake IPC already returns, above) — a
+    // backwards-compatible fallback for any caller that never enriches
+    // (e.g. a future pending-mutation-queue applier). The reconcile rule
+    // must still land correctly once the NEXT push carries the real reply,
+    // with no duplicate and no stuck-forever placeholder.
+    it('a reply response with no persisted reply attached is still correctly reconciled once the next push lands', async () => {
+      const { ipc, emitChanged } = installIpc();
+      seedOneComment(ipc, 'unenriched.md');
+      const { result } = renderHook(() => useDocComments('unenriched.md', '/proj'));
+      await waitFor(() => expect(result.current.comments).toHaveLength(1));
+
+      // The default fake `ipc.reply` (installIpc's own `makeFakeIpc`) already
+      // resolves `{ ok: true }` with no `reply` field — used as-is here,
+      // never overridden, to prove this exact shape.
+      await act(async () => { result.current.addReply('c-1', 'user', 'hi'); await Promise.resolve(); });
+      expect(result.current.comments[0].replies).toHaveLength(1);
+      const localId = result.current.comments[0].replies[0].id;
+      expect(localId).toMatch(/^r-/);
+
+      // The write already committed to disk before the (unenriched) response
+      // resolved — the next push's own fresh `list()` read already contains
+      // the real, persisted reply.
+      ipc.list.mockResolvedValueOnce({
+        ok: true,
+        comments: [{
+          id: 'c-1', path: 'unenriched.md',
+          selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'x', prefix: '', suffix: '', occurrence: 0 } },
+          text: 'note', author: 'user', createdAt: 1, resolved: false, history: [],
+          replies: [{ id: 'w-1-r1', author: 'user', text: 'hi', createdAt: 500 }],
+        }],
+      });
+      await act(async () => { emitChanged('unenriched.md', '/proj'); await Promise.resolve(); await Promise.resolve(); });
+      expect(result.current.comments[0].replies).toHaveLength(1);
+      expect(result.current.comments[0].replies[0].id).toBe('w-1-r1');
+    });
   });
 
   it('resolveComment / reopenComment round-trip through the real channels and honor Retry, via the comment\'s own inline error', async () => {

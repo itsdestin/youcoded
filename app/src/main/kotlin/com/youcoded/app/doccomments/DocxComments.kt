@@ -664,7 +664,40 @@ enum class DocxWriteError(val wire: String) {
     // plain sibling-file check via Kotlin's own file APIs, refused BEFORE
     // step 1 (backup) even runs. See `isFileOpenElsewhere` below.
     FILE_OPEN_ELSEWHERE("file-open-elsewhere"),
+    // xlsx T12/T13 review F1 (High), same gap confirmed here: the text
+    // (comment or reply) contains an XML 1.0-illegal control character —
+    // see `hasIllegalXmlChars` below, the same character class as desktop's
+    // own xml-text-safety.ts, pinned by this file's own write tests
+    // (DocxCommentsWriteTest.kt).
+    INVALID_COMMENT_TEXT("invalid-comment-text"),
 }
+
+/** Kotlin port of desktop's `xml-text-safety.ts` — see that file's own
+ *  header for the full XML 1.0 well-formedness citation (control characters
+ *  U+0000-U+0008, U+000B-U+000C, U+000E-U+001F are illegal EVERYWHERE in a
+ *  well-formed document, even as a numeric character reference; tab/LF/CR
+ *  are the only C0 codepoints excluded).
+ *
+ *  Confirmed empirically (a standalone JDK 21 probe, `javax.xml.parsers`/
+ *  `javax.xml.transform` — the exact APIs this module uses) that Kotlin's
+ *  own failure mode here is DIFFERENT from, not identical to, the TS/
+ *  linkedom one this fix was ported from: `Document.createElement`/
+ *  `.setTextContent()` accept an illegal control character with no
+ *  complaint (confirmed: `getTextContent()` reads it back unchanged), but
+ *  `TransformerFactory.newTransformer().transform(...)` — the SAME call
+ *  `serializePart` below uses — THROWS `TransformerException` (wrapping a
+ *  SAXException naming the exact illegal codepoint) the moment it tries to
+ *  SERIALIZE that text, rather than silently writing invalid bytes the way
+ *  linkedom does. `writeDocxMutation`'s own `mutate(...)` call has no
+ *  try/catch around it, so an uncaught exception here would propagate out
+ *  of this suspend function entirely — a crash risk, not merely a data-
+ *  integrity one. Checking BEFORE ever constructing a text node turns that
+ *  crash into the same clean, typed `INVALID_COMMENT_TEXT` refusal desktop
+ *  now gives, rather than relying on the Transformer to fail safely (it
+ *  does fail LOUDLY, but uncaught, which is worse here, not better). */
+private val ILLEGAL_XML_CHAR_REGEX = Regex("[\u0000-\u0008\u000B\u000C\u000E-\u001F]")
+
+private fun hasIllegalXmlChars(text: String): Boolean = ILLEGAL_XML_CHAR_REGEX.containsMatchIn(text)
 
 sealed class DocxWriteResult<out T> {
     data class Ok<T>(val value: T) : DocxWriteResult<T>()
@@ -1279,6 +1312,11 @@ private fun serializeArchiveToFile(archive: LoadedArchive, outFile: File) {
 
 private fun mutateAddComment(archive: LoadedArchive, selector: CommentSelector, text: String, author: CommentAuthor): DocxWriteResult<String> {
     if (selector !is CommentSelector.Text) return DocxWriteResult.Err(DocxWriteError.INVALID_SELECTOR)
+    // xlsx T12/T13 review F1 (High): refuse BEFORE ever constructing a text
+    // node — see `hasIllegalXmlChars`'s own doc comment for why this can't
+    // be left to the Transformer to catch (it does, but by throwing
+    // uncaught out of `writeDocxMutation`, not by refusing cleanly).
+    if (hasIllegalXmlChars(text)) return DocxWriteResult.Err(DocxWriteError.INVALID_COMMENT_TEXT)
     val walked = walkDocument(archive.documentDoc, collectLeaves = true)
     val resolved = resolveSelector(walked.fullText, selector.selector) ?: return DocxWriteResult.Err(DocxWriteError.SELECTOR_NOT_FOUND)
 
@@ -1327,6 +1365,8 @@ private fun nextReplyOrdinal(archive: LoadedArchive, targetParaId: String): Int 
  *  can enrich its response the SAME way, keeping desktop/Android response
  *  shapes in parity. */
 private fun mutateReplyToComment(archive: LoadedArchive, id: String, text: String, author: CommentAuthor): DocxWriteResult<CommentReply> {
+    // xlsx T12/T13 review F1: same refusal as Add — see its own comment there.
+    if (hasIllegalXmlChars(text)) return DocxWriteResult.Err(DocxWriteError.INVALID_COMMENT_TEXT)
     val rawId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
     val targetParaId = findCommentParaId(archive.commentsDoc, rawId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
 

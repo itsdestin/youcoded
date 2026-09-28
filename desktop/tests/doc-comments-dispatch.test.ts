@@ -274,8 +274,10 @@ describe('addNativeXlsxComment / replyToNativeXlsxComment / etc. — gated the s
     if (!added.ok) return;
     const id = added.id;
 
+    // Review leftover (a): reply is now enriched with the persisted
+    // CommentReply, mirroring docx's own already-enriched reply response.
     const replied = await replyToNativeXlsxComment({ path: 'reports/q3-sales-by-rep.xlsx', projectRoot: root, id, text: 'Thanks!', author: 'user' });
-    expect(replied).toEqual({ ok: true });
+    expect(replied).toEqual({ ok: true, reply: { id: expect.stringMatching(/^xt-.*-r1$/), author: 'user', text: 'Thanks!', createdAt: expect.any(Number) } });
 
     const resolved = await resolveNativeXlsxComment({ path: 'reports/q3-sales-by-rep.xlsx', projectRoot: root, id, by: 'user' });
     expect(resolved).toEqual({ ok: true });
@@ -283,12 +285,14 @@ describe('addNativeXlsxComment / replyToNativeXlsxComment / etc. — gated the s
     const reopened = await reopenNativeXlsxComment({ path: 'reports/q3-sales-by-rep.xlsx', projectRoot: root, id, by: 'user' });
     expect(reopened).toEqual({ ok: true });
 
+    // Review F3 (Medium) partial fix: move now returns the FRESH, hint-
+    // accurate id (embedding the new cell) rather than a bare {ok:true}.
     const moved = await moveNativeXlsxComment({
       path: 'reports/q3-sales-by-rep.xlsx',
       projectRoot: root,
       id,
       newSelector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'C2', sheet: 'Q3' } },
     });
-    expect(moved).toEqual({ ok: true });
+    expect(moved).toEqual({ ok: true, id: expect.stringMatching(/^xt-\d+-C2-/) });
   });
 });

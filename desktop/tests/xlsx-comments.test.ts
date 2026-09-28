@@ -853,3 +853,252 @@ describe('xlsx-comments — verify-after-write, with automatic rollback on failu
     });
   });
 });
+
+// T12/T13 adversarial review (docs/active/reviews/2026-09-27-doc-comments-
+// xlsx-t12-t13-review.md), F1 (High): an XML 1.0-illegal control character
+// in comment/reply text used to be written straight into the archive
+// unescaped, producing invalid XML this app's own verify step couldn't
+// catch (it re-reads with the same lenient parser that wrote it).
+describe('xlsx-comments — refuses XML-illegal control characters in comment text', () => {
+  it('refuses add when the text contains an XML 1.0-illegal control character, without touching the file', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const before = await readFile(target);
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'd.xlsx',
+        selector: cellSelector('C3'),
+        text: 'before\x01\x02\x1Fafter',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'invalid-comment-text' });
+      expect(await readFile(target)).toEqual(before);
+    });
+  });
+
+  it('refuses reply for the same reason, without touching the file', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'd.xlsx');
+      const f7 = before.ok ? before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7') : undefined;
+      const beforeBytes = await readFile(target);
+      const result = await replyToXlsxComment({ absolutePath: target, path: 'd.xlsx', id: f7!.id, text: 'x\x00y', author: 'user' });
+      expect(result).toEqual({ ok: false, error: 'invalid-comment-text' });
+      expect(await readFile(target)).toEqual(beforeBytes);
+    });
+  });
+
+  it('still allows tab, newline and carriage return in comment text', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'd.xlsx',
+        selector: cellSelector('C3'),
+        text: 'line one\nline two\ttabbed\rcr',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+    });
+  });
+});
+
+// Review F2 (Medium-High): Move used to mint a BYTE-DUPLICATE `tc={GUID}`
+// author entry in commentsN.xml's own <authors> list every time, since it
+// never checked whether one already existed from before the move.
+describe('xlsx-comments — moving a thread repeatedly never duplicates its legacy author entry', () => {
+  async function countAuthors(bytes: Buffer): Promise<number> {
+    const zip = await JSZip.loadAsync(bytes);
+    const commentsXml = await zip.file('xl/comments1.xml')!.async('string');
+    return elByTag(parseXml(commentsXml), 'author').length;
+  }
+
+  it('reuses the same <author> entry across two moves within the same worksheet', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const added = await addXlsxComment({ absolutePath: target, path: 'd.xlsx', selector: cellSelector('C3'), text: 'x', author: 'user' });
+      expect(added.ok).toBe(true);
+      if (!added.ok) return;
+      const authorsAfterAdd = await countAuthors(await readFile(target));
+
+      const move1 = await moveXlsxComment({ absolutePath: target, path: 'd.xlsx', id: added.id, newSelector: cellSelector('D4') });
+      expect(move1.ok).toBe(true);
+      if (!move1.ok) return;
+      expect(await countAuthors(await readFile(target))).toBe(authorsAfterAdd);
+
+      const move2 = await moveXlsxComment({ absolutePath: target, path: 'd.xlsx', id: move1.id, newSelector: cellSelector('E5') });
+      expect(move2.ok).toBe(true);
+      expect(await countAuthors(await readFile(target))).toBe(authorsAfterAdd);
+    });
+  });
+});
+
+// Review F3 (Medium) partial fix: Move returns the moved thread's FRESH id
+// (embedding its new cell) so a caller holding it skips the full-workbook
+// fallback scan on its very next call — the scan is otherwise the ROUTINE
+// path after any move, since the id's own embedded-cell hint goes stale the
+// moment a thread moves.
+describe('xlsx-comments — move returns a fresh, hint-accurate id', () => {
+  it('the returned id resolves the moved thread via the FAST hinted path, not the fallback scan', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'd.xlsx');
+      const f7 = before.ok ? before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7') : undefined;
+      const moved = await moveXlsxComment({ absolutePath: target, path: 'd.xlsx', id: f7!.id, newSelector: cellSelector('H20') });
+      expect(moved.ok).toBe(true);
+      if (!moved.ok) return;
+      expect(moved.id).toMatch(/^xt-\d+-H20-/);
+
+      // The fresh id's own embedded cell (H20) matches where the thread
+      // ACTUALLY is now — a reply using it succeeds without needing the
+      // fallback scan to find it (both paths would succeed correctness-
+      // wise; this asserts the FRESH id is usable at all, which is the
+      // contract this fix adds).
+      const replied = await replyToXlsxComment({ absolutePath: target, path: 'd.xlsx', id: moved.id, text: 'thanks', author: 'user' });
+      expect(replied.ok).toBe(true);
+    });
+  });
+});
+
+// Review F4 (Medium): the record-count ceiling had zero test coverage
+// anywhere in the repo — this builds a minimal, hand-crafted archive (never
+// a real fixture; MAX_COMMENT_RECORDS+1 minimal elements) and asserts the
+// refusal actually fires.
+describe('xlsx-comments — the record-count ceiling', () => {
+  const MAX_COMMENT_RECORDS = 20000; // mirrors xlsx-comments.ts's own constant
+
+  async function buildWorkbookWithManyThreadedComments(count: number): Promise<Buffer> {
+    const zip = new JSZip();
+    zip.file(
+      '[Content_Types].xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+        '</Types>'
+    );
+    zip.file(
+      'xl/workbook.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    );
+    zip.file(
+      'xl/_rels/workbook.xml.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
+    );
+    zip.file(
+      'xl/worksheets/sheet1.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="1"><c r="A1"/></row></sheetData></worksheet>'
+    );
+    zip.file(
+      'xl/worksheets/_rels/sheet1.xml.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.microsoft.com/office/2017/10/relationships/threadedComment" Target="../threadedComments/threadedComment1.xml"/></Relationships>'
+    );
+    const elements = Array.from(
+      { length: count },
+      (_, i) =>
+        `<threadedComment ref="A1" dT="2026-01-01T00:00:00.00" personId="{00000000-0000-0000-0000-000000000000}" id="{${i
+          .toString(16)
+          .padStart(8, '0')}-0000-4000-8000-000000000000}"><text>x</text></threadedComment>`
+    ).join('');
+    zip.file(
+      'xl/threadedComments/threadedComment1.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments" xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${elements}</ThreadedComments>`
+    );
+    return zip.generateAsync({ type: 'nodebuffer' });
+  }
+
+  it('refuses a read past MAX_COMMENT_RECORDS with a distinct, typed error', async () => {
+    const bytes = await buildWorkbookWithManyThreadedComments(MAX_COMMENT_RECORDS + 1);
+    const result = await readXlsxComments(bytes, 'huge.xlsx');
+    expect(result).toEqual({ ok: false, error: 'too-many-comments' });
+  });
+
+  it('allows a read exactly AT the ceiling', async () => {
+    const bytes = await buildWorkbookWithManyThreadedComments(MAX_COMMENT_RECORDS);
+    const result = await readXlsxComments(bytes, 'at-limit.xlsx');
+    expect(result.ok).toBe(true);
+  });
+});
+
+// Review F5 (Low): a brand-new <legacyDrawing r:id="..."> was stamped onto
+// the worksheet root with no check that root already declares `xmlns:r` —
+// every real fixture this module is tested against happens to declare it
+// unconditionally, so this never failed in practice, but nothing guaranteed
+// it. This fixture is hand-built specifically WITHOUT `xmlns:r` (no real or
+// ExcelJS-generated file omits it, matching the review's own finding).
+describe('xlsx-comments — declares xmlns:r before stamping legacyDrawing on a worksheet that never had it', () => {
+  async function buildMinimalWorkbookWithoutXmlnsR(): Promise<Buffer> {
+    const zip = new JSZip();
+    zip.file(
+      '[Content_Types].xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+        '</Types>'
+    );
+    zip.file(
+      'xl/workbook.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    );
+    zip.file(
+      'xl/_rels/workbook.xml.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
+    );
+    // NO xmlns:r declared here — the exact shape this fixture exists to prove.
+    zip.file(
+      'xl/worksheets/sheet1.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"/></row></sheetData></worksheet>'
+    );
+    return zip.generateAsync({ type: 'nodebuffer' });
+  }
+
+  it('adds xmlns:r to the worksheet root before writing legacyDrawing r:id, producing well-formed XML', async () => {
+    const bytes = await buildMinimalWorkbookWithoutXmlnsR();
+    const dir = await mkdtemp(join(tmpdir(), 'ycd-xlsx-write-'));
+    const target = join(dir, 'minimal.xlsx');
+    await writeFile(target, bytes);
+    try {
+      const result = await addXlsxComment({ absolutePath: target, path: 'minimal.xlsx', selector: cellSelector('A1'), text: 'x', author: 'user' });
+      expect(result.ok).toBe(true);
+      const after = await readFile(target);
+      const zip = await JSZip.loadAsync(after);
+      const sheetXml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+      expect(sheetXml).toContain('xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"');
+      await assertStructurallyOpenable(after);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Review F6 (Low, static analysis in the review — exercised for real here):
+// the full-workbook fallback scan used to silently SKIP an ambiguously-wired
+// sheet, so a thread trapped behind it read back as 'comment-not-found'
+// ("this comment is gone") instead of 'ambiguous-comment-wiring' ("found,
+// but unsafe to touch") — the same distinction the hinted-sheet branch
+// already got right.
+describe('xlsx-comments — the fallback scan reports ambiguous wiring instead of pretending a comment is gone', () => {
+  it('returns ambiguous-comment-wiring when the scan must pass through a sheet with malformed comment wiring', async () => {
+    await withScratchCopy(ELDEN_FIXTURE, async (target) => {
+      const zip = await JSZip.loadAsync(await readFile(target));
+      // Corrupt sheet1's own <legacyDrawing r:id> to point at something other
+      // than its own vmlDrawing relationship — the same "partial or
+      // inconsistent" combination `getWorksheetContext` refuses to guess at
+      // for an ordinary read/write (never observed in either real fixture).
+      const sheet1Path = 'xl/worksheets/sheet1.xml';
+      const original = await zip.file(sheet1Path)!.async('string');
+      const corrupted = original.replace(/<legacyDrawing r:id="[^"]+"\/>/, '<legacyDrawing r:id="rId999"/>');
+      expect(corrupted).not.toBe(original);
+      zip.file(sheet1Path, corrupted);
+      await writeFile(target, await zip.generateAsync({ type: 'nodebuffer' }));
+
+      // A GUID that exists NOWHERE in the file, hinted at a DIFFERENT sheet
+      // than the corrupted one — forcing the fallback scan to visit (and
+      // skip) sheet1's own now-ambiguous wiring along the way.
+      const fakeId = 'xt-2-Z1-00000000-0000-0000-0000-000000000000';
+      const result = await resolveXlsxComment({ absolutePath: target, path: 'elden.xlsx', id: fakeId });
+      expect(result).toEqual({ ok: false, error: 'ambiguous-comment-wiring' });
+    });
+  });
+});

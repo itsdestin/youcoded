@@ -43,6 +43,7 @@ import { DOMParser } from 'linkedom';
 import type { CellSelector, CommentAuthor, CommentReply, CommentSelector, PersistedComment } from '../../shared/doc-comments-types';
 import { checkNamedEntriesWithinCeiling, decompressBounded } from './zip-size-guard';
 import { writeFileMutation } from './write-pipeline';
+import { hasIllegalXmlChars } from './xml-text-safety';
 
 // Not exported (same convention as docx-comments.ts's DocxReadError): nothing
 // outside this module needs the error union by name — knip flags an exported
@@ -68,10 +69,23 @@ export type XlsxReadResult = { ok: true; comments: PersistedComment[] } | { ok: 
 // this; lower it if a real-world report calls for it.
 const MAX_COMMENT_RECORDS = 20000;
 
+// Review F3 (Medium): the full-workbook fallback id-resolution scan — the
+// ROUTINE path after any Move, since a moved thread's own embedded-cell
+// hint goes stale the moment it moves — has no ceiling on the AGGREGATE
+// bytes it synchronously `linkedom`-parses across every sheet it visits
+// (each individual part is already bounded by zip-size-guard.ts, but that
+// bounds one part, not the sum across dozens of sheets in one call). A
+// task-time starting point, not benchmarked, matching this module's own
+// MAX_COMMENT_RECORDS precedent.
+const MAX_FALLBACK_SCAN_BYTES = 50 * 1024 * 1024;
+
 const SML_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const XR_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2014/revision';
 const THREADED_COMMENTS_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments';
+// Review F5: the namespace `r:id` (on `<legacyDrawing>`) itself belongs to —
+// declared defensively on a worksheet root that doesn't already have it.
+const OFFICE_DOCUMENT_R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 
 const COMMENTS_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml';
 // §4.2: NO `+xml` suffix, unlike every other XML part's content type in the
@@ -543,13 +557,33 @@ function ensureXrNamespaceDeclared(doc: Document): void {
   }
 }
 
-function appendTcAuthor(commentsDoc: Document, guidBraced: string): number {
+/** Review F2 (Medium-High): reuse an EXISTING `tc={GUID}` author entry
+ *  before minting a new one — the same "reused, never duplicated" rule
+ *  `resolveOrCreatePerson` already applies to `persons.xml`, applied here to
+ *  `commentsN.xml`'s own `<authors>` list. WHY this matters specifically for
+ *  Move: `removeThreadFromWorksheet` deletes a moved thread's `<comment>`
+ *  element but (deliberately — re-indexing every OTHER comment's `authorId`
+ *  to compact the list is a bigger, riskier change than this review asked
+ *  for) never touches its `<author>` entry, so a thread moved within the
+ *  SAME file finds its own still-there-but-orphaned entry here and reuses
+ *  it instead of minting a byte-duplicate — closing the "grows by one
+ *  leftover string per move, forever" defect the review reproduced directly
+ *  against a real fixture. A cross-file move (a snapshot reinserted into a
+ *  DIFFERENT worksheet's `commentsN.xml`) still mints fresh, correctly —
+ *  there is nothing to reuse in a file that never had this GUID before. */
+function resolveOrAppendTcAuthor(commentsDoc: Document, guidBraced: string): number {
   let authorsEl = elementsByTag(commentsDoc, 'authors')[0];
   if (!authorsEl) {
     authorsEl = commentsDoc.createElement('authors');
     commentsDoc.documentElement.insertBefore(authorsEl, commentsDoc.documentElement.firstChild);
   }
   const authorEls = elementsByTag(authorsEl, 'author');
+  const target = normalizeGuid(guidBraced);
+  const existingIdx = authorEls.findIndex((el) => {
+    const text = el.textContent ?? '';
+    return isTcAuthorText(text) && normalizeGuid(text.slice(3)) === target;
+  });
+  if (existingIdx !== -1) return existingIdx;
   const newAuthor = commentsDoc.createElement('author');
   newAuthor.textContent = `tc=${guidBraced}`;
   authorsEl.appendChild(newAuthor);
@@ -707,6 +741,12 @@ interface XlsxArchive {
   personsXmlOriginal: string | null;
   personsChanged: boolean;
   worksheetContexts: Map<string, WorksheetContext>;
+  /** Review F3 (Medium): running total of bytes freshly `linkedom`-parsed by
+   *  `getWorksheetContext` across THIS write call (a cache hit adds nothing)
+   *  — bounds the full-workbook fallback id-resolution scan's own aggregate
+   *  synchronous parse cost, which is otherwise unbounded per-sheet-ceiling
+   *  aside (`zip-size-guard.ts` only ever bounds ONE part at a time). */
+  parsedBytesTotal: number;
 }
 
 type PartReadResult = { ok: true; text: string | null } | { ok: false; error: 'archive-too-large' };
@@ -793,6 +833,7 @@ async function loadXlsxArchiveForWrite(bytes: Buffer): Promise<{ ok: true; archi
       personsXmlOriginal,
       personsChanged: false,
       worksheetContexts: new Map(),
+      parsedBytesTotal: 0,
     },
   };
 }
@@ -912,6 +953,15 @@ async function getWorksheetContext(
     threadedXmlOriginal,
     threadedChanged: false,
   };
+  // Review F3: charge this FRESH parse's own byte cost against the archive's
+  // running total — a cache hit above (`if (cached) return ...`) never
+  // reaches here, so this only ever counts real, new `linkedom` parse work.
+  archive.parsedBytesTotal +=
+    worksheetXmlOriginal.length +
+    relsXmlOriginal.length +
+    (commentsXmlOriginal?.length ?? 0) +
+    (vmlXmlOriginal?.length ?? 0) +
+    (threadedXmlOriginal?.length ?? 0);
   archive.worksheetContexts.set(sheetMeta.partPath, ctx);
   return { ok: true, ctx };
 }
@@ -1014,6 +1064,15 @@ function createLegacyPair(archive: XlsxArchive, ctx: WorksheetContext, n: number
   addXlsxRelationship(ctx.relsDoc, vmlRelId, VML_REL_TYPE, relativizeTarget(worksheetDir, ctx.vmlPartPath));
   ctx.relsChanged = true;
 
+  // Review F5 (Low): every real fixture this module is tested against
+  // (docling, elden, the synthetic extLst fixture) already declares
+  // `xmlns:r` on the worksheet root unconditionally, so this has never
+  // failed in practice — but nothing GUARANTEED it, and stamping an `r:id`
+  // attribute whose prefix isn't declared is invalid XML. Mirrors
+  // `ensureXrNamespaceDeclared`'s own defensive pattern for `xr:` above.
+  if (!ctx.worksheetDoc.documentElement.getAttribute('xmlns:r')) {
+    ctx.worksheetDoc.documentElement.setAttribute('xmlns:r', OFFICE_DOCUMENT_R_NS);
+  }
   const legacyDrawing = ctx.worksheetDoc.createElement('legacyDrawing');
   legacyDrawing.setAttribute('r:id', vmlRelId);
   ctx.worksheetDoc.documentElement.appendChild(legacyDrawing);
@@ -1154,7 +1213,13 @@ interface ThreadTarget {
 async function resolveXlsxThreadTarget(
   archive: XlsxArchive,
   id: string
-): Promise<{ ok: true; target: ThreadTarget } | { ok: false; error: 'comment-not-found' | 'ambiguous-comment-id' | 'ambiguous-comment-wiring' | 'archive-too-large' }> {
+): Promise<{
+  ok: true;
+  target: ThreadTarget;
+} | {
+  ok: false;
+  error: 'comment-not-found' | 'ambiguous-comment-id' | 'ambiguous-comment-wiring' | 'archive-too-large' | 'comment-scan-too-large';
+}> {
   const parsed = parseXlsxThreadId(id);
   if (!parsed) return { ok: false, error: 'comment-not-found' };
   const guidNorm = normalizeGuid(parsed.guid);
@@ -1178,20 +1243,45 @@ async function resolveXlsxThreadTarget(
   }
 
   const matches: ThreadTarget[] = [];
+  // Review F6 (Low): a sheet whose OWN wiring is ambiguous is skipped here —
+  // if the real target thread lives in exactly that sheet, silently
+  // returning 'comment-not-found' would misreport "this comment is gone" as
+  // if it were "found, but unsafe to touch" (the SAME distinction the
+  // hinted-sheet branch above already makes correctly). Tracked so the final
+  // fallthrough can report the more honest error.
+  let sawAmbiguousSheet = false;
+  // Review F3 (Medium): bound the AGGREGATE bytes this fallback scan itself
+  // parses fresh — an already-cached sheet (the hinted one, or one this
+  // same call already visited) costs nothing and is never skipped by this
+  // check; only NEW parsing stops once the running total is already over
+  // budget.
+  let scanBudgetExceeded = false;
   for (const sheetMeta of archive.sheets) {
     if (sheetMeta.isChartsheet) continue;
+    if (!archive.worksheetContexts.has(sheetMeta.partPath) && archive.parsedBytesTotal > MAX_FALLBACK_SCAN_BYTES) {
+      scanBudgetExceeded = true;
+      continue;
+    }
     const ctxResult = await getWorksheetContext(archive, sheetMeta);
     if (!ctxResult.ok) {
       if (ctxResult.error === 'archive-too-large') return { ok: false, error: 'archive-too-large' };
       continue;
     }
     const ctx = ctxResult.ctx;
-    if (ctx.ambiguous || !ctx.threadedDoc) continue;
+    if (ctx.ambiguous) {
+      sawAmbiguousSheet = true;
+      continue;
+    }
+    if (!ctx.threadedDoc) continue;
     for (const rootEl of findRootsByGuid(ctx.threadedDoc, guidNorm)) {
       matches.push({ ctx, cell: rootEl.getAttribute('ref') ?? '', rootEl });
     }
   }
-  if (matches.length === 0) return { ok: false, error: 'comment-not-found' };
+  if (matches.length === 0) {
+    if (sawAmbiguousSheet) return { ok: false, error: 'ambiguous-comment-wiring' };
+    if (scanBudgetExceeded) return { ok: false, error: 'comment-scan-too-large' };
+    return { ok: false, error: 'comment-not-found' };
+  }
   if (matches.length > 1) return { ok: false, error: 'ambiguous-comment-id' };
   return { ok: true, target: matches[0] };
 }
@@ -1342,7 +1432,7 @@ function insertThreadIntoWorksheet(archive: XlsxArchive, ctx: WorksheetContext, 
     appendThreadedElement(ctx.threadedDoc!, { ref: cell, dT: reply.dT, personId: reply.personId, id: reply.id, parentId: snapshot.id }, reply.text);
   }
 
-  const authorIdx = appendTcAuthor(ctx.commentsDoc!, snapshot.id);
+  const authorIdx = resolveOrAppendTcAuthor(ctx.commentsDoc!, snapshot.id);
   const body = buildPlaceholderBody(
     snapshot.text,
     snapshot.replies.map((r) => r.text)
@@ -1568,6 +1658,15 @@ export async function readXlsxComments(bytes: Uint8Array | Buffer, path: string)
 //   write-pipeline.ts): a real Word/Excel/LibreOffice owner/lock file sits
 //   beside the target — inherited for free via the shared pipeline entry
 //   point, no separate implementation needed here.
+// 'invalid-comment-text' (review F1 — High): the text (comment or reply)
+//   contains an XML 1.0-illegal control character (xml-text-safety.ts) —
+//   refused before ever touching the archive, never silently stripped or
+//   escaped (neither is possible for these specific codepoints).
+// 'comment-scan-too-large' (review F3 — Medium): the full-workbook fallback
+//   id-resolution scan's own aggregate byte budget (MAX_FALLBACK_SCAN_BYTES)
+//   was exhausted before a match was found — distinct from 'archive-too-
+//   large' (a single part's own declared/actual size), since this is about
+//   the SUM of many parts across one scan, not any one part being oversized.
 type XlsxWriteError =
   | XlsxReadError
   | 'comment-not-found'
@@ -1578,6 +1677,8 @@ type XlsxWriteError =
   | 'cell-already-has-comment'
   | 'destination-cell-occupied'
   | 'ambiguous-comment-wiring'
+  | 'invalid-comment-text'
+  | 'comment-scan-too-large'
   | 'read-failed'
   | 'backup-failed'
   | 'write-failed'
@@ -1596,6 +1697,11 @@ async function mutateAddXlsxComment(
   args: { selector: CommentSelector; text: string; author: CommentAuthor }
 ): Promise<XlsxMutateResult<{ bytes: Buffer; id: string }>> {
   if (args.selector.kind !== 'cell') return { ok: false, error: 'invalid-selector' };
+  // Review F1 (High): refuse BEFORE ever touching the archive — an XML
+  // 1.0-illegal control character can't be escaped into legality, and
+  // writing it unchecked produced invalid XML this app's own verify step
+  // couldn't catch (xml-text-safety.ts's own header has the full citation).
+  if (hasIllegalXmlChars(args.text)) return { ok: false, error: 'invalid-comment-text' };
   const loaded = await loadXlsxArchiveForWrite(currentBytes);
   if (!loaded.ok) return loaded;
   const { archive } = loaded;
@@ -1630,7 +1736,9 @@ async function mutateAddXlsxComment(
 async function mutateReplyToXlsxComment(
   currentBytes: Buffer,
   args: { id: string; text: string; author: CommentAuthor }
-): Promise<XlsxMutateResult<{ bytes: Buffer }>> {
+): Promise<XlsxMutateResult<{ bytes: Buffer; reply: CommentReply }>> {
+  // Review F1 (High): same refusal as Add — see its own comment there.
+  if (hasIllegalXmlChars(args.text)) return { ok: false, error: 'invalid-comment-text' };
   const loaded = await loadXlsxArchiveForWrite(currentBytes);
   if (!loaded.ok) return loaded;
   const { archive } = loaded;
@@ -1642,29 +1750,38 @@ async function mutateReplyToXlsxComment(
   const ref = rootEl.getAttribute('ref') ?? cell;
   const personId = resolveOrCreatePerson(archive, args.author);
   const replyId = mintGuid();
-  appendThreadedElement(
-    ctx.threadedDoc!,
-    { ref, dT: formatThreadedDate(new Date()), personId, id: replyId, parentId: rootId },
-    args.text
-  );
+  const createdAtIso = formatThreadedDate(new Date());
+  appendThreadedElement(ctx.threadedDoc!, { ref, dT: createdAtIso, personId, id: replyId, parentId: rootId }, args.text);
   ctx.threadedChanged = true;
 
   // §4.2: the placeholder is rebuilt WHOLE from the thread's current full
   // transcript — read the (now-updated) reply list straight back off
   // `threadedDoc` rather than tracking it separately, so this can never
-  // disagree with what was just appended above.
-  const replies = repliesOfRoot(ctx.threadedDoc!, rootId)
+  // disagree with what was just appended above. Also gives us the reply's
+  // own ORDINAL (§1.6/review leftover (a): the renderer can't pre-compute a
+  // reply's persisted id the way it can a brand-new comment's, so this
+  // enriches the response with the real `CommentReply`, mirroring
+  // docx-comments.ts's/the JSON sidecar's own already-built pattern).
+  const repliesSorted = repliesOfRoot(ctx.threadedDoc!, rootId)
     .slice()
-    .sort((a, b) => parseThreadedDate(a.getAttribute('dT') ?? '') - parseThreadedDate(b.getAttribute('dT') ?? ''))
-    .map((r) => textOfThreadedComment(r));
+    .sort((a, b) => parseThreadedDate(a.getAttribute('dT') ?? '') - parseThreadedDate(b.getAttribute('dT') ?? ''));
+  const ordinal = repliesSorted.findIndex((r) => normalizeGuid(r.getAttribute('id') ?? '') === normalizeGuid(replyId)) + 1;
+  const replyTexts = repliesSorted.map((r) => textOfThreadedComment(r));
+
   const commentEl = ctx.commentsDoc ? findTcComment(ctx.commentsDoc, rootId) : null;
   if (commentEl && ctx.commentsDoc) {
-    setXlsxCommentBody(ctx.commentsDoc, commentEl, buildPlaceholderBody(textOfThreadedComment(rootEl), replies));
+    setXlsxCommentBody(ctx.commentsDoc, commentEl, buildPlaceholderBody(textOfThreadedComment(rootEl), replyTexts));
     ctx.commentsChanged = true;
   }
 
   const bytes = await serializeXlsxArchive(archive);
-  return { ok: true, bytes };
+  const reply: CommentReply = {
+    id: `${buildXlsxThreadId(ctx.sheetId, ref, rootId)}-r${ordinal}`,
+    author: args.author,
+    text: args.text,
+    createdAt: parseThreadedDate(createdAtIso),
+  };
+  return { ok: true, bytes, reply };
 }
 
 async function mutateSetResolvedXlsx(
@@ -1693,7 +1810,7 @@ async function mutateSetResolvedXlsx(
 async function mutateMoveXlsxComment(
   currentBytes: Buffer,
   args: { id: string; newSelector: CommentSelector }
-): Promise<XlsxMutateResult<{ bytes: Buffer }>> {
+): Promise<XlsxMutateResult<{ bytes: Buffer; id: string }>> {
   if (args.newSelector.kind !== 'cell') return { ok: false, error: 'invalid-selector' };
   const loaded = await loadXlsxArchiveForWrite(currentBytes);
   if (!loaded.ok) return loaded;
@@ -1724,7 +1841,13 @@ async function mutateMoveXlsxComment(
   insertThreadIntoWorksheet(archive, newCtx, newCell, snapshot);
 
   const bytes = await serializeXlsxArchive(archive);
-  return { ok: true, bytes };
+  // Review F3 (Medium) partial fix: a Move never changes the thread's own
+  // GUID, but it DOES change the id's embedded cell hint — the very next
+  // call against the id the CALLER was holding before this move would miss
+  // its hint and pay for the full-workbook fallback scan. Returning the
+  // FRESH id here (embedding the new cell) lets a caller that uses this
+  // return value skip that scan entirely on its own next call.
+  return { ok: true, bytes, id: buildXlsxThreadId(newCtx.sheetId, newCell, snapshot.id) };
 }
 
 // -----------------------------------------------------------------------
@@ -1756,22 +1879,29 @@ export async function addXlsxComment(args: {
   );
 }
 
+/** Review leftover (a): enriches the response with the persisted
+ *  `CommentReply` — a reply's own id can't be pre-computed by the renderer
+ *  the way a brand-new comment's can (§1.6), the SAME reasoning
+ *  docx-comments.ts's own `replyToDocxComment` and the JSON sidecar's
+ *  `addReply` already act on; `doc-comments-store.ts`'s renderer reconcile
+ *  logic already reads `res.reply` generically (format-agnostic), so this
+ *  needs no renderer-side change to take effect. */
 export async function replyToXlsxComment(args: {
   absolutePath: string;
   path: string;
   id: string;
   text: string;
   author: CommentAuthor;
-}): Promise<XlsxWriteResult> {
-  return writeFileMutation<{}, XlsxErrorResult>(
+}): Promise<XlsxWriteResult<{ reply: CommentReply }>> {
+  return writeFileMutation<{ reply: CommentReply }, XlsxErrorResult>(
     args.absolutePath,
     XLSX_BACKUP_SUFFIX,
     (bytes) => mutateReplyToXlsxComment(bytes, args),
-    async (newBytes) => {
+    async (newBytes, extra) => {
       const result = await readXlsxComments(newBytes, args.path);
       if (!result.ok) return false;
       const target = findByThreadIdPrefix(result.comments, args.id);
-      return !!target && target.replies.some((r) => r.text === args.text);
+      return !!target && target.replies.some((r) => r.id === extra.reply.id && r.text === args.text);
     }
   );
 }
@@ -1809,21 +1939,25 @@ export async function reopenXlsxComment(args: { absolutePath: string; path: stri
   );
 }
 
+/** Review F3 (Medium) partial fix: returns the moved thread's FRESH id
+ *  (embedding the new cell) so a caller that keeps it avoids paying for the
+ *  full-workbook fallback scan on its very next call — see
+ *  `mutateMoveXlsxComment`'s own comment. */
 export async function moveXlsxComment(args: {
   absolutePath: string;
   path: string;
   id: string;
   newSelector: CommentSelector;
-}): Promise<XlsxWriteResult> {
-  return writeFileMutation<{}, XlsxErrorResult>(
+}): Promise<XlsxWriteResult<{ id: string }>> {
+  return writeFileMutation<{ id: string }, XlsxErrorResult>(
     args.absolutePath,
     XLSX_BACKUP_SUFFIX,
     (bytes) => mutateMoveXlsxComment(bytes, args),
-    async (newBytes) => {
+    async (newBytes, extra) => {
       if (args.newSelector.kind !== 'cell') return false;
       const result = await readXlsxComments(newBytes, args.path);
       if (!result.ok) return false;
-      const target = findByThreadIdPrefix(result.comments, args.id);
+      const target = result.comments.find((c) => c.id === extra.id) ?? findByThreadIdPrefix(result.comments, args.id);
       if (!target || target.selector.kind !== 'cell') return false;
       const wantSheet = args.newSelector.selector.sheet;
       const gotSheet = target.selector.selector.sheet;

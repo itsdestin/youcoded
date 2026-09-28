@@ -283,12 +283,24 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
     case 'invalid-docx': return "This Word file doesn't look valid.";
     case 'invalid-xlsx': return "This Excel file doesn't look valid.";
     case 'missing-document-part': return 'This Word document is missing a part comments need.';
+    // xlsx T12/T13 review F7 (Low): 'invalid-selector'/'selector-not-found'
+    // also fire for an Excel CellSelector (a malformed cell address, a
+    // missing `sheet` on a multi-tab workbook, a chartsheet named as if it
+    // were a real sheet) — none of which involve "text". Reworded to a
+    // format-neutral phrase (the review's own suggested fix) rather than
+    // branching per format for one word.
     case 'invalid-selector':
     case 'selector-not-found':
-      return 'That text is no longer in this document.';
+      return 'That location is no longer valid in this file.';
     case 'sheet-not-found': return 'That sheet no longer exists in this workbook.';
-    case 'cell-already-has-comment': return 'This cell already has a comment.';
-    case 'destination-cell-occupied': return 'The destination cell already has a comment.';
+    // §4.2's own one-thread-per-cell write policy — worded with a concrete
+    // next step (docs/error-message-standards.md: state only what's known;
+    // "reply instead" and "pick a different cell" are both always true here,
+    // never a guess about WHY the cell already has one).
+    case 'cell-already-has-comment':
+      return 'This cell already has a comment. Reply to it, or add your new comment to a different cell.';
+    case 'destination-cell-occupied':
+      return 'The destination cell already has a comment. Choose a different cell to move this one to.';
     // Excel rebuild (2026-09-27, threaded-comments-only, design §4.1): a
     // threaded comment can't be added on top of a genuine legacy Note — exact
     // wording from the design's own §4.1 ("this app refuses the combination
@@ -314,6 +326,19 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
     // comment) rather than risk guessing at it.
     case 'ambiguous-comment-wiring':
       return "This workbook's existing comments are set up in an unusual way YouCoded doesn't recognize, so it won't risk editing them.";
+    // xlsx T12/T13 review F1 (High), applied identically to docx: an XML
+    // 1.0-illegal control character can't be saved into either format's
+    // comment XML — refused rather than silently stripped, so the text
+    // shown here always matches what would be saved.
+    case 'invalid-comment-text':
+      return "That text has characters that can't be saved into this comment.";
+    // xlsx T12/T13 review F3 (Medium): the full-workbook fallback id-
+    // resolution scan's own aggregate byte budget was exhausted before this
+    // comment was found — distinct from the decompression/record-count
+    // guards above (this is about how much this ONE search had to look
+    // through, not the file's own size).
+    case 'comment-scan-too-large':
+      return "This workbook is too large for YouCoded to search for this comment right now.";
     case 'backup-failed': return "Couldn't make a safety copy before saving, so nothing was changed.";
     case 'write-failed': return "Couldn't save this change to the file.";
     case 'verify-failed': return "Saved, but the file didn't check out afterward, so the change was undone.";

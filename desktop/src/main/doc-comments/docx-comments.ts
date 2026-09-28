@@ -51,6 +51,7 @@ import { resolveSelector } from '../../shared/doc-comments-anchor';
 // T11 review (F1/F5): docx's own write pipeline is now a thin wrapper around
 // this shared one — see the doc comment on `writeDocxMutation` below.
 import { writeFileMutation } from './write-pipeline';
+import { hasIllegalXmlChars } from './xml-text-safety';
 
 // Not exported: nothing outside this module needs the error union by name
 // (knip flags an exported type nothing ever imports as dead code — same
@@ -519,6 +520,10 @@ const EMPTY_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><
 //   `.~lock.<name>#` lock file sits beside the target — refused before step 1
 //   (backup) even runs, in the SHARED write-pipeline.ts every caller goes
 //   through.
+// 'invalid-comment-text' (xlsx T12/T13 review F1 — High, same gap confirmed
+//   here): the text (comment or reply) contains an XML 1.0-illegal control
+//   character (xml-text-safety.ts) — refused before ever touching the
+//   archive, matching xlsx-comments.ts's own identical fix.
 type DocxWriteError =
   | DocxReadError
   | 'comment-not-found'
@@ -528,7 +533,8 @@ type DocxWriteError =
   | 'backup-failed'
   | 'write-failed'
   | 'verify-failed'
-  | 'file-open-elsewhere';
+  | 'file-open-elsewhere'
+  | 'invalid-comment-text';
 
 function parseXml(xml: string): Document {
   return new DOMParser().parseFromString(xml, 'text/xml') as unknown as Document;
@@ -1261,6 +1267,11 @@ async function mutateAddComment(
   args: { selector: CommentSelector; text: string; author: CommentAuthor }
 ): Promise<{ ok: true; bytes: Buffer; id: string } | { ok: false; error: DocxWriteError }> {
   if (args.selector.kind !== 'text') return { ok: false, error: 'invalid-selector' };
+  // xlsx T12/T13 review F1 (High): refuse an XML 1.0-illegal control
+  // character BEFORE ever touching the archive — see xml-text-safety.ts's
+  // own header for the full citation (confirmed here too: this write path
+  // previously wrote such a byte straight into `<w:t>` unescaped).
+  if (hasIllegalXmlChars(args.text)) return { ok: false, error: 'invalid-comment-text' };
   const loaded = await loadArchiveForWrite(currentBytes);
   if (!loaded.ok) return loaded;
   const { archive } = loaded;
@@ -1321,6 +1332,8 @@ async function mutateReplyToComment(
   currentBytes: Buffer,
   args: { id: string; text: string; author: CommentAuthor }
 ): Promise<{ ok: true; bytes: Buffer; reply: CommentReply } | { ok: false; error: DocxWriteError }> {
+  // xlsx T12/T13 review F1: same refusal as Add — see its own comment there.
+  if (hasIllegalXmlChars(args.text)) return { ok: false, error: 'invalid-comment-text' };
   const rawId = stripWPrefix(args.id);
   if (rawId === null) return { ok: false, error: 'comment-not-found' };
   const loaded = await loadArchiveForWrite(currentBytes);

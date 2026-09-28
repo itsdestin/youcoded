@@ -461,6 +461,53 @@ describe('docx-comments write — add', () => {
   });
 });
 
+// xlsx T12/T13 review F1 (High): the same unescaped-control-character gap
+// found in xlsx-comments.ts was confirmed here too (writing a raw control
+// byte into `<w:t>` produced invalid XML this app's own verify step
+// couldn't catch) — fixed with the same shared xml-text-safety.ts check.
+describe('docx-comments write — refuses XML-illegal control characters in comment text', () => {
+  it('refuses add when the text contains an XML 1.0-illegal control character, without touching the file', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const before = await readFile(target);
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        selector: textSelector('Marketing emails go out the same morning as the public launch.'),
+        text: 'before\x01\x02\x1Fafter',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'invalid-comment-text' });
+      expect(await readFile(target)).toEqual(before);
+    });
+  });
+
+  it('refuses reply for the same reason', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await replyToDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        id: 'w-0',
+        text: 'x\x00y',
+        author: 'user',
+      });
+      expect(result).toEqual({ ok: false, error: 'invalid-comment-text' });
+    });
+  });
+
+  it('still allows tab, newline and carriage return in comment text', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await addDocxComment({
+        absolutePath: target,
+        path: 'docs/launch-brief.docx',
+        selector: textSelector('Marketing emails go out the same morning as the public launch.'),
+        text: 'line one\nline two\ttabbed\rcr',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+    });
+  });
+});
+
 describe('docx-comments write — reply', () => {
   it('appends a reply, preserving the existing reply thread', async () => {
     await withScratchCopy('launch-brief.docx', async (target) => {
