@@ -117,8 +117,15 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
   );
 
   if (comment.resolved) {
-    // Collapsed (Docs-style): who wrote it, a one-line note, who resolved
-    // it; the filled toggle top-right is the way back.
+    // Bug fix (Destin, testing the dev instance: "when a comment is resolved,
+    // replies and such in the chain can't be seen in 'show resolved' view"):
+    // this branch used to truncate the note to one line and drop
+    // `comment.replies` entirely — a resolved thread with replies looked
+    // identical to one with none, and the replies were unreachable (no way
+    // back to them short of reopening). Docs-style resolved threads stay
+    // fully readable, just muted: full text, every reply, no reply box (a
+    // resolved thread doesn't invite new replies — reopen first). The filled
+    // toggle top-right is still the only way back.
     return (
       // Design-guide review (round 7): a card inside a side pane is `inset`
       // with an `edge-dim` border and no shadow (§2.1/§2.4 — the tool-card
@@ -129,12 +136,23 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
           <Avatar author={comment.author} />
           <div className="flex-1 min-w-0">
             {header(comment, cellRef)}
-            <p className="mt-0.5 text-fg-muted truncate">{comment.text}</p>
+            <p className="mt-0.5 text-fg-muted whitespace-pre-wrap">{comment.text}</p>
             <StatusNote comment={comment} />
           </div>
           {resolveToggle}
         </div>
         <p className="mt-1.5 text-fg-muted">Resolved by {authorNameInline(comment.resolvedBy ?? 'user')}</p>
+
+        {comment.replies.map((r) => (
+          <div key={r.id} className="flex items-start gap-2 mt-2 pl-1">
+            <Avatar author={r.author} />
+            <div className="flex-1 min-w-0">
+              {header(r)}
+              <p className="mt-0.5 text-fg-muted whitespace-pre-wrap">{r.text}</p>
+            </div>
+          </div>
+        ))}
+
         {/* F7 fix (T5 review): a failed reopen rolls back to `resolved: true`,
             so its error lands on THIS branch — one error per comment, shown
             where the comment actually is, never a global toast

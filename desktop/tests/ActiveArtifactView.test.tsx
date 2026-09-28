@@ -9,6 +9,7 @@ import { render, act, fireEvent, cleanup, renderHook, waitFor, within } from '@t
 import { ActiveArtifactView, type ActiveArtifactHandle } from '../src/renderer/components/artifact-views/ActiveArtifactView';
 import { setConnectionMode } from '../src/renderer/platform';
 import { useArtifactContent, contentPathFor } from '../src/renderer/components/artifact-views/useArtifactContent';
+import { addComment, __resetDocCommentsStoreForTest } from '../src/renderer/state/doc-comments-store';
 
 // Pins the D4-unlock safety behavior of ActiveArtifactView (plan step 4):
 // 1. THE §2.2 EMPTY-FILE GUARANTEE — while content is null (fetch transient /
@@ -791,5 +792,57 @@ describe('first save without a conflict token', () => {
       expect(save).not.toHaveBeenCalled();
       expect(utils.getByText(/couldn.t check/i)).toBeTruthy();
     });
+  });
+});
+
+/**
+ * Bug fix (Destin, testing the dev instance): selected `result += p` in a
+ * .py file, right-clicked "Add comment", typed a note — nothing appeared.
+ * Cause: CodeEditorView (unlike MarkdownView) never reads commentsMode/
+ * onOpenComments — a fresh code comment's own draft card only exists inside
+ * CodeCommentsRail, which ActiveArtifactView renders ONLY while
+ * `commentsMode === 'comments'`, and build-menu.ts's "Add comment" writes
+ * straight into the doc-comments store with no callback to flip that mode.
+ * ActiveArtifactView must switch to Comments mode itself whenever a fresh
+ * draft appears on a code file while still in Reading mode.
+ */
+describe('code files open Comments mode for a fresh draft (bug fix)', () => {
+  const get = vi.fn();
+  const PATH = 'total.py';
+
+  beforeEach(() => {
+    __resetDocCommentsStoreForTest();
+    get.mockReset().mockResolvedValue({ ok: true, content: 'result += price\n', orphan: false, mtimeMs: 1 });
+    (window as any).claude = {
+      artifacts: { save: vi.fn(), get, onChanged: () => () => {} },
+    };
+  });
+  afterEach(() => { __resetDocCommentsStoreForTest(); });
+
+  it('switches from Reading to Comments mode so the new draft has somewhere to type into', async () => {
+    // The same call build-menu.ts's "Add comment" makes from the right-click
+    // menu on a code file's selection.
+    addComment(PATH, 'result += p', 'line 3 · total.py', {
+      startLine: 3, endLine: 3, prefix: '', suffix: '', occurrence: 0, projectRoot: '/proj',
+    });
+    const onCommentsStateChange = vi.fn();
+    const { container } = render(
+      <ActiveArtifactView
+        artifact={{ id: 'py1', kind: 'internal', path: PATH } as any}
+        content="result += price\n"
+        projectRoot="/proj"
+        projectId="p1"
+        projectName="Proj"
+        sessionId="s1"
+        onContentChange={vi.fn()}
+        onCommentsStateChange={onCommentsStateChange}
+      />,
+    );
+    // Before the fix this never fires — commentsMode stays 'reading' forever
+    // and the draft is never reachable.
+    await waitFor(() => expect(onCommentsStateChange).toHaveBeenCalledWith(expect.objectContaining({ active: true })));
+    // CodeCommentsRail renders the draft's own auto-focused note box — the
+    // same "Add a comment…" textarea a text file's popover would have shown.
+    await waitFor(() => expect(container.querySelector('[placeholder="Add a comment…"]')).toBeTruthy());
   });
 });

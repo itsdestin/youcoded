@@ -113,6 +113,31 @@ describe('CommentCard — a comment whose saved text/cell can no longer be found
   });
 });
 
+// Bug fix (Destin, testing the dev instance): a resolved comment used to
+// collapse to one truncated line and drop every reply, so a resolved
+// thread's replies were unreachable in "show resolved" view. Docs-style:
+// full text + every reply stay visible (muted), and there's no reply box.
+describe('CommentCard — a resolved comment with replies (Docs-style resolved thread)', () => {
+  it('shows the full comment text and every reply, still reads "Resolved by …", and offers no reply box', () => {
+    renderCard(baseComment({
+      text: 'This whole paragraph needs a rewrite for clarity and tone.',
+      resolved: true,
+      resolvedBy: 'user',
+      resolvedAt: Date.now(),
+      replies: [
+        { id: 'r-1', author: 'assistant', createdAt: Date.now(), text: 'Agreed — I tightened the second sentence.' },
+        { id: 'r-2', author: 'user', createdAt: Date.now(), text: 'Looks good, thanks.' },
+      ],
+    }));
+    expect(screen.getByText(/this whole paragraph needs a rewrite for clarity and tone\./i)).toBeTruthy();
+    expect(screen.getByText(/agreed — i tightened the second sentence\./i)).toBeTruthy();
+    expect(screen.getByText(/looks good, thanks\./i)).toBeTruthy();
+    expect(screen.getByText(/resolved by/i)).toBeTruthy();
+    expect(screen.getByTitle(/reopen/i)).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/reply/i)).toBeNull();
+  });
+});
+
 // F3 (T14 review, performance.md rule 4): a comment in a file too large for
 // use-quote-marks.ts/use-code-comment-anchors.ts to check gets its OWN
 // status — 'unchecked' — rather than reusing 'detached', which would falsely
