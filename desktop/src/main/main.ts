@@ -442,8 +442,8 @@ protocol.registerSchemesAsPrivileged([
   // renderer. Inline mascot rigs need the scheme in Chromium's CORS allowlist.
   { scheme: 'theme-asset', privileges: { bypassCSP: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
   // Office (design §3): a standard secure origin per document (workers, fetch, storage); no bypassCSP or service workers.
-  // WHY no corsEnabled/stream (spike had both): a Task 6 dev run without them opened docx/xlsx/pptx and a pictured docx,
-  // loaded fonts and saved typing — the editor only fetches its own origin (no CORS) and reads whole responses (no streams).
+  // WHY no corsEnabled/stream (spike had both): a Task 6 dev run without them opened docx/xlsx/pptx and a pictured docx, loaded fonts,
+  // saved typing, and a pptx's video clip played and seeked from asc/docmedia — the editor only fetches its own origin (no CORS).
   { scheme: 'office', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 
