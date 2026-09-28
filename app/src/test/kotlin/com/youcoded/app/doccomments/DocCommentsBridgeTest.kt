@@ -156,7 +156,7 @@ class DocCommentsBridgeTest {
     }
 
     @Test
-    fun `reply resolve and reopen each answer with exactly ok true and no extra keys, and persist`() = runTest {
+    fun `reply carries the persisted CommentReply, resolve and reopen answer with exactly ok true, and all three persist`() = runTest {
         val root = tempRoot()
         val id = handleDocCommentsMessage(
             "docComments:add",
@@ -164,13 +164,20 @@ class DocCommentsBridgeTest {
             root, listOf(root.path),
         )!!.getString("id")
 
+        // T5 review parity (design §1.6, F2): `reply`'s response is enriched
+        // to carry the real persisted `CommentReply` — the SAME shape
+        // desktop's own `docComments:reply` response now returns.
         val replyResponse = handleDocCommentsMessage(
             "docComments:reply",
             JSONObject().put("path", "docs/plan.md").put("projectRoot", root.path).put("id", id).put("text", "reply text"),
             root, listOf(root.path),
         )!!
-        assertEquals(setOf("ok"), replyResponse.keys().asSequence().toSet())
+        assertEquals(setOf("ok", "reply"), replyResponse.keys().asSequence().toSet())
         assertEquals(true, replyResponse.getBoolean("ok"))
+        val replyJson = replyResponse.getJSONObject("reply")
+        assertEquals("reply text", replyJson.getString("text"))
+        assertEquals("user", replyJson.getString("author"))
+        assertEquals("$id-r1", replyJson.getString("id"))
 
         val resolveResponse = handleDocCommentsMessage(
             "docComments:resolve",

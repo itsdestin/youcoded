@@ -363,6 +363,11 @@ suspend fun addComment(
     }
 }
 
+/** T5 review parity (design §1.6, F2): returns the real persisted
+ *  `CommentReply` — the SAME enrichment desktop's own plain-sidecar
+ *  `replyToComment` (doc-comments-store.ts) now returns, uniformly across
+ *  every target type (§1.6's table entry is general, not gated to native
+ *  formats), keeping desktop/remote/Android response shapes in parity. */
 suspend fun replyToComment(
     path: String,
     projectRoot: String?,
@@ -370,15 +375,16 @@ suspend fun replyToComment(
     text: String,
     author: CommentAuthor,
     homeDir: File,
-): StoreResult<Unit> {
+): StoreResult<CommentReply> {
     val resolved = resolveSidecarPath(path, projectRoot, homeDir)
     if (resolved is StoreResult.Err) return resolved
     val sidecarPath = (resolved as StoreResult.Ok).value
     return mutateSidecar(sidecarPath) { file ->
         val comment = findComment(file, id) ?: return@mutateSidecar Apply.NotFound
         val replyId = "${comment.id}-r${comment.replies.size + 1}"
-        val next = comment.copy(replies = comment.replies + CommentReply(replyId, author, text, System.currentTimeMillis()))
-        Apply.Applied(replaceComment(file, id, next), Unit)
+        val reply = CommentReply(replyId, author, text, System.currentTimeMillis())
+        val next = comment.copy(replies = comment.replies + reply)
+        Apply.Applied(replaceComment(file, id, next), reply)
     }
 }
 

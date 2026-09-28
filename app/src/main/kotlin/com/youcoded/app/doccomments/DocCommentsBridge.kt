@@ -108,14 +108,18 @@ suspend fun handleDocCommentsMessage(
             val text = payload.optString("text", "")
             if (text.isEmpty()) return missingField("text")
             val author = payload.optString("author", "user")
+            // T5 review parity (design §1.6, F2): `reply`'s response carries
+            // the real persisted `CommentReply` — the SAME enrichment
+            // desktop's own `docComments:reply` IPC response now returns, for
+            // both the native-format and plain-sidecar branches.
             when (nativeFormatFor(filePath)) {
                 NativeFormat.DOCX -> when (val r = replyToNativeDocxComment(filePath, projectRoot, commentId, text, author, homeDir)) {
-                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
                 }
                 NativeFormat.XLSX -> notYetSupported()
                 null -> when (val r = replyToComment(filePath, projectRoot, commentId, text, author, homeDir)) {
-                    is StoreResult.Ok -> JSONObject().put("ok", true)
+                    is StoreResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
                     is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
                 }
             }

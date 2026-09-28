@@ -246,6 +246,10 @@ suspend fun addNativeDocxComment(
     }
 }
 
+/** T5 review parity (design §1.6, F2): returns the real persisted
+ *  `CommentReply` — the SAME enrichment desktop's own `docComments:reply`
+ *  IPC response carries, so `DocCommentsBridge.kt`'s wire JSON stays in
+ *  parity with desktop/remote. */
 suspend fun replyToNativeDocxComment(
     path: String,
     projectRoot: String?,
@@ -253,13 +257,13 @@ suspend fun replyToNativeDocxComment(
     text: String,
     author: CommentAuthor,
     homeDir: File,
-): NativeMutateResult<Unit> {
+): NativeMutateResult<CommentReply> {
     val resolved = resolveNativeWriteTarget(path, projectRoot, homeDir)
     if (resolved is NativeMutateResult.Err) return resolved
     val absolutePath = (resolved as NativeMutateResult.Ok).value
     return nativeMutateExceptionBoundary {
         when (val r = replyToDocxComment(absolutePath, path, id, text, author, homeDir)) {
-            is DocxWriteResult.Ok -> NativeMutateResult.Ok(Unit)
+            is DocxWriteResult.Ok -> NativeMutateResult.Ok(r.value)
             is DocxWriteResult.Err -> NativeMutateResult.Err(r.error.wire)
         }
     }

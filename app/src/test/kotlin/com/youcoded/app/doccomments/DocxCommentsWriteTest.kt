@@ -325,8 +325,15 @@ class DocxCommentsWriteTest {
     fun `appends a reply, preserving the existing reply thread`() = runTest {
         val target = scratchCopy("launch-brief.docx")
         val home = scratchHomeDir()
+        // T5 review parity (design §1.6, F2): `reply` returns the real
+        // persisted `CommentReply` — its own `author` is the CALLER's
+        // original value ('user'), not the round-tripped Word display name
+        // ('person:You') `readDocxComments` maps it to on the way back out,
+        // mirroring desktop's own docx-comments.test.ts assertion.
         val result = replyToDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-1", "Sounds good, thanks both.", "user", home)
-        assertEquals(DocxWriteResult.Ok(Unit), result)
+        assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
+        val reply = (result as DocxWriteResult.Ok).value
+        assertEquals(CommentReply("w-1-r2", "user", "Sounds good, thanks both.", reply.createdAt), reply)
 
         val read = readDocxComments(target, "docs/launch-brief.docx")
         assertTrue(read is DocxReadResult.Ok, "expected Ok, got $read")
@@ -336,6 +343,7 @@ class DocxCommentsWriteTest {
         assertEquals("person:Marcus Lee", comment1.replies[0].author) // the ORIGINAL reply, unmoved
         assertEquals("person:You", comment1.replies[1].author)
         assertEquals("Sounds good, thanks both.", comment1.replies[1].text)
+        assertEquals(reply.id, comment1.replies[1].id) // the enriched response's own id matches the read path's
 
         assertPartsWellFormed(target) // F5
     }
@@ -447,6 +455,50 @@ class DocxCommentsWriteTest {
         val home = scratchHomeDir()
         val result = moveDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-999", textSelector("Keep support tickets"), home)
         assertEquals(DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND), result)
+    }
+
+    // ── step 0: refuses a file open elsewhere, before backup (T17 follow-up,
+    // design §3.3's new step 0, design review round 3 F4) ───────────────────
+
+    @Test
+    fun `refuses file-open-elsewhere before touching the backup or the target when a Word owner file sits beside it`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val ownerFile = File(target.parentFile, "~\$${target.name}")
+        ownerFile.writeText("destin")
+        val before = target.readBytes()
+        val backupPath = docxBackupPathFor(home, target.absolutePath)
+
+        val result = replyToDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-1", "x", "user", home)
+        assertEquals(DocxWriteResult.Err(DocxWriteError.FILE_OPEN_ELSEWHERE), result)
+        assertTrue(target.readBytes().contentEquals(before)) // the target itself is untouched
+        assertFalse(backupPath.exists()) // never even reached step 1 (backup)
+    }
+
+    @Test
+    fun `refuses file-open-elsewhere when a LibreOffice lock file sits beside the target`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val lockFile = File(target.parentFile, ".~lock.${target.name}#")
+        lockFile.writeText(",destin,localhost,01-01-2026 00:00,file:///home/destin;")
+
+        val result = resolveDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-0", home)
+        assertEquals(DocxWriteResult.Err(DocxWriteError.FILE_OPEN_ELSEWHERE), result)
+    }
+
+    @Test
+    fun `proceeds normally once the owner file is gone`() = runTest {
+        val target = scratchCopy("launch-brief.docx")
+        val home = scratchHomeDir()
+        val ownerFile = File(target.parentFile, "~\$${target.name}")
+        ownerFile.writeText("destin")
+
+        val first = resolveDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-0", home)
+        assertEquals(DocxWriteResult.Err(DocxWriteError.FILE_OPEN_ELSEWHERE), first)
+
+        ownerFile.delete()
+        val retry = resolveDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-0", home)
+        assertEquals(DocxWriteResult.Ok(Unit), retry)
     }
 
     // ── verify-before-replace, and the backup's own lifecycle ───────────

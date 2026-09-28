@@ -659,6 +659,11 @@ enum class DocxWriteError(val wire: String) {
     BACKUP_FAILED("backup-failed"),
     WRITE_FAILED("write-failed"),
     VERIFY_FAILED("verify-failed"),
+    // T17 follow-up (design §3.3's new step 0, review round 3 F4): the SAME
+    // pre-write lock-file check desktop's write-pipeline.ts now does — a
+    // plain sibling-file check via Kotlin's own file APIs, refused BEFORE
+    // step 1 (backup) even runs. See `isFileOpenElsewhere` below.
+    FILE_OPEN_ELSEWHERE("file-open-elsewhere"),
 }
 
 sealed class DocxWriteResult<out T> {
@@ -1290,13 +1295,50 @@ private fun mutateAddComment(archive: LoadedArchive, selector: CommentSelector, 
     return DocxWriteResult.Ok("w-$newId")
 }
 
-private fun mutateReplyToComment(archive: LoadedArchive, id: String, text: String, author: CommentAuthor): DocxWriteResult<Unit> {
+/**
+ * Ordinal position (1-based) a NEW reply to `targetParaId` would get once
+ * written — mirrors `readDocxComments`'s own `w-${root.id}-r${list.size+1}`
+ * numbering (this file's read path, above) exactly, computed from the
+ * archive's CURRENT state (before this write's own `appendCommentEntry`/
+ * `upsertExtendedEntry` calls add the new entry). T5 review parity (design
+ * §1.6, F2): the SAME id `replyToDocxComment`'s desktop counterpart
+ * (docx-comments.ts) mints for its own enriched response.
+ */
+private fun nextReplyOrdinal(archive: LoadedArchive, targetParaId: String): Int {
+    val extended = HashMap<String, ExtendedInfo>()
+    for (el in elementsByTag(archive.extendedDoc, "w15:commentEx")) {
+        val paraId = el.getAttribute("w15:paraId")
+        if (paraId.isNotEmpty()) {
+            extended[paraId] = ExtendedInfo(el.getAttribute("w15:done") == "1", el.getAttribute("w15:paraIdParent").ifEmpty { null })
+        }
+    }
+    var count = 0
+    for (el in elementsByTag(archive.commentsDoc, "w:comment")) {
+        val paraId = elementsByTag(el, "w:p").firstOrNull()?.getAttribute("w14:paraId")
+        if (paraId.isNullOrEmpty() || paraId == targetParaId) continue
+        if (resolveRootParaId(paraId, extended) == targetParaId) count++
+    }
+    return count + 1
+}
+
+/** T5 review parity (design §1.6, F2): returns the real persisted
+ *  `CommentReply` alongside the mutated archive, mirroring desktop's own
+ *  `mutateReplyToComment` (docx-comments.ts) — so `replyToDocxComment` below
+ *  can enrich its response the SAME way, keeping desktop/Android response
+ *  shapes in parity. */
+private fun mutateReplyToComment(archive: LoadedArchive, id: String, text: String, author: CommentAuthor): DocxWriteResult<CommentReply> {
     val rawId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
     val targetParaId = findCommentParaId(archive.commentsDoc, rawId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
 
+    // Computed BEFORE this reply's own entry is appended below — the id
+    // depends on the file's CURRENT state at write time, not something the
+    // caller could have pre-minted.
+    val ordinal = nextReplyOrdinal(archive, targetParaId)
+    val createdAtIso = isoNow()
+
     val newId = maxExistingCommentId(archive.commentsDoc) + 1
     val paraId = generateParaId(collectAllParaIds(archive))
-    appendCommentEntry(archive.commentsDoc, newId, commentAuthorToDisplayName(author), isoNow(), paraId, text)
+    appendCommentEntry(archive.commentsDoc, newId, commentAuthorToDisplayName(author), createdAtIso, paraId, text)
     archive.commentsChanged = true
 
     if (archive.extendedIsNew) ensureExtendedPart(archive)
@@ -1304,7 +1346,7 @@ private fun mutateReplyToComment(archive: LoadedArchive, id: String, text: Strin
     archive.extendedChanged = true
     recordCommentExtensionParts(archive, paraId) // a reply is its own new comment
 
-    return DocxWriteResult.Ok(Unit)
+    return DocxWriteResult.Ok(CommentReply(id = "w-$rawId-r$ordinal", author = author, text = text, createdAt = parseDate(createdAtIso)))
 }
 
 private fun mutateSetResolved(archive: LoadedArchive, id: String, done: Boolean): DocxWriteResult<Unit> {
@@ -1469,6 +1511,24 @@ fun docxBackupPathFor(homeDir: File, absolutePath: String): File {
 }
 
 /**
+ * T17 follow-up (design §3.3's new step 0, design review round 3 F4 — the
+ * SAME check desktop's write-pipeline.ts now does, mirrored here): refuses a
+ * write when a real Word/Excel `~$<name>` owner file or a LibreOffice
+ * `.~lock.<name>#` lock file sits beside the target. `false` does NOT prove
+ * the file is currently held open — only that one of the two conventions'
+ * sibling file exists (a stale lock after a crash, or a program that holds
+ * the file open without either convention, are both accepted, named
+ * limitations, same as desktop's — §3.3's own residual-limitation text).
+ */
+internal fun isFileOpenElsewhere(target: File): Boolean {
+    val dir = target.parentFile ?: return false
+    val name = target.name
+    val ownerFile = File(dir, "~\$$name")
+    val lockFile = File(dir, ".~lock.$name#")
+    return ownerFile.exists() || lockFile.exists()
+}
+
+/**
  * The generic half of the pipeline: lock, scratch-copy, hand `workCopy`/
  * `outFile` to `mutate` (format-specific logic lives entirely in the
  * caller's closure — this function never parses OOXML itself), verify,
@@ -1500,6 +1560,9 @@ internal suspend fun <T> writeDocxMutation(
 ): DocxWriteResult<T> {
     return docxLockFor(absolutePath).withLock {
         val target = File(absolutePath)
+        // Step 0 (design §3.3, review round 3 F4) — the VERY FIRST thing this
+        // pipeline does, before backup (step 1) or even the read below.
+        if (isFileOpenElsewhere(target)) return@withLock DocxWriteResult.Err(DocxWriteError.FILE_OPEN_ELSEWHERE)
         if (!target.exists()) return@withLock DocxWriteResult.Err(DocxWriteError.READ_FAILED)
         val parentDir = target.parentFile ?: return@withLock DocxWriteResult.Err(DocxWriteError.READ_FAILED)
         // Sibling scratch paths (never the system temp dir) — maximizes the
@@ -1641,6 +1704,10 @@ suspend fun addDocxComment(
     },
 )
 
+/** T5 review parity (design §1.6, F2): returns the real persisted
+ *  `CommentReply` — the SAME enrichment desktop's own `replyToDocxComment`
+ *  (docx-comments.ts) now returns, keeping desktop/remote/Android response
+ *  shapes in parity. */
 suspend fun replyToDocxComment(
     absolutePath: String,
     path: String,
@@ -1648,15 +1715,15 @@ suspend fun replyToDocxComment(
     text: String,
     author: CommentAuthor,
     homeDir: File,
-): DocxWriteResult<Unit> = writeDocxMutation(
+): DocxWriteResult<CommentReply> = writeDocxMutation(
     absolutePath,
     homeDir,
     mutate = { workCopy, outFile -> loadMutateSerialize(workCopy, outFile) { archive -> mutateReplyToComment(archive, id, text, author) } },
-    verify = { outFile, _, originalFile ->
+    verify = { outFile, reply, originalFile ->
         verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile)) &&
             run {
                 val r = readDocxComments(outFile, path)
-                (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }?.replies?.any { it.text == text } == true
+                (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }?.replies?.any { it.id == reply.id && it.text == text } == true
             }
     },
 )

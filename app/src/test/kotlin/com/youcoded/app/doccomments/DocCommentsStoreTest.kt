@@ -69,8 +69,11 @@ class DocCommentsStoreTest {
         assertEquals(false, onDisk1.comments[0].resolved)
         assertTrue(onDisk1.comments[0].history.isEmpty())
 
+        // T5 review parity (design §1.6, F2): `reply` now returns the real
+        // persisted `CommentReply`, mirroring desktop's own enrichment.
         val replied = replyToComment("docs/plan.md", root.path, id, "Yes", "assistant", root)
-        assertEquals(StoreResult.Ok(Unit), replied)
+        assertTrue(replied is StoreResult.Ok, "expected Ok, got $replied")
+        assertEquals(CommentReply("$id-r1", "assistant", "Yes", (replied as StoreResult.Ok).value.createdAt), replied.value)
 
         val resolved = resolveComment("docs/plan.md", root.path, id, "assistant", root)
         assertEquals(StoreResult.Ok(Unit), resolved)
@@ -120,7 +123,11 @@ class DocCommentsStoreTest {
         // proves path-based resolution works cold, the exact case that most
         // concretely breaks without the required `path` field on these four
         // channels (design review 3, F1; T4's own pinning-test row).
-        assertEquals(StoreResult.Ok(Unit), replyToComment("docs/report.md", root.path, id, "cold reply", "assistant", root))
+        // T5 review parity (design §1.6, F2): `reply` returns the persisted
+        // `CommentReply` here too, cold-start included.
+        val cold = replyToComment("docs/report.md", root.path, id, "cold reply", "assistant", root)
+        assertTrue(cold is StoreResult.Ok, "expected Ok, got $cold")
+        assertEquals(CommentReply("$id-r1", "assistant", "cold reply", (cold as StoreResult.Ok).value.createdAt), cold.value)
         assertEquals(StoreResult.Ok(Unit), resolveComment("docs/report.md", root.path, id, "user", root))
         assertEquals(StoreResult.Ok(Unit), reopenComment("docs/report.md", root.path, id, "user", root))
         assertEquals(StoreResult.Ok(Unit), moveComment("docs/report.md", root.path, id, TEXT_SELECTOR, root))
@@ -270,8 +277,15 @@ class DocCommentsStoreTest {
         sidecar.parentFile?.mkdirs()
         sidecar.writeText(fixtureText("thread.json"))
 
+        // T5 review parity (design §1.6, F2): `reply` returns the real
+        // persisted `CommentReply` — the fixture already has one reply, so
+        // this new one lands as ordinal 2.
         val replied = replyToComment("docs/plan.md", root.path, "c-fixture-0001", "from android", "assistant", root)
-        assertEquals(StoreResult.Ok(Unit), replied)
+        assertTrue(replied is StoreResult.Ok, "expected Ok, got $replied")
+        assertEquals(
+            CommentReply("c-fixture-0001-r2", "assistant", "from android", (replied as StoreResult.Ok).value.createdAt),
+            replied.value,
+        )
 
         val onDiskRaw = JSONObject(sidecar.readText())
         assertEquals(1, onDiskRaw.getInt("version"))
@@ -335,9 +349,13 @@ class DocCommentsStoreTest {
             )
         sidecar.writeText(onDiskBefore.toString())
 
+        // T5 review parity (design §1.6, F2): `reply` returns the persisted
+        // `CommentReply` here too.
+        val repliedToUnknown = replyToComment("docs/plan.md", root.path, "c-unknown-0001", "from android", "assistant", root)
+        assertTrue(repliedToUnknown is StoreResult.Ok, "expected Ok, got $repliedToUnknown")
         assertEquals(
-            StoreResult.Ok(Unit),
-            replyToComment("docs/plan.md", root.path, "c-unknown-0001", "from android", "assistant", root),
+            CommentReply("c-unknown-0001-r2", "assistant", "from android", (repliedToUnknown as StoreResult.Ok).value.createdAt),
+            repliedToUnknown.value,
         )
         assertEquals(
             StoreResult.Ok(Unit),
