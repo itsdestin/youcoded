@@ -132,7 +132,7 @@ describe('a field that is a button answers with its border', () => {
   it('keeps the resting border and gains hover + press steps', async () => {
     const { fieldClasses, FIELD_TRIGGER_STATES } = await import('../src/renderer/components/ui/field');
     const cls = fieldClasses('sm', FIELD_TRIGGER_STATES);
-    expect(cls).toContain('border-edge-dim');
+    expect(cls).toContain('border-edge-card');
     expect(cls).toContain('hover:border-fg-muted');
     expect(cls).toContain('active:border-fg-dim');
   });

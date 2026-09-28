@@ -360,7 +360,7 @@ describe('InputGroup (change 77 — the action goes inside the field)', () => {
     );
     const wrapper = container.firstElementChild!;
     expect(wrapper.className).toContain('focus-within:border-accent');
-    expect(wrapper.className).toContain('border-edge-dim');
+    expect(wrapper.className).toContain('border-edge-card');
   });
 
   it('gives the wrapper the surface and the input none of it', () => {
