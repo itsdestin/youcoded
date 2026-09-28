@@ -190,6 +190,43 @@ describe('HarnessSession.send — attachments become image parts', () => {
     return seen.find((m: any) => m.role === 'user');
   }
 
+  it.each([true, false])('keeps a busy image message as a real human event (vision %s)', async (supportsVision) => {
+    const { HarnessSession } = await import('../src/main/harness/harness-session');
+    const { ASSISTANT_PRESET } = await import('../src/shared/harness-manifest');
+    const { EMPTY_SKILL_CATALOG } = await import('./helpers/harness-fakes');
+    const { MockLanguageModelV4, simulateReadableStream } = await import('ai/test');
+    const p = path.join(dir, 'shot.png');
+    fs.writeFileSync(p, PNG);
+    const prompts: any[] = [];
+    const model = new MockLanguageModelV4({ doStream: async (req: any) => {
+      prompts.push(req.prompt);
+      return { stream: simulateReadableStream({ chunks: [
+        { type: 'stream-start', warnings: [] },
+        { type: 'text-start', id: 'reply' }, { type: 'text-delta', id: 'reply', delta: 'ok' }, { type: 'text-end', id: 'reply' },
+        { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
+      ] }) };
+    } });
+    const events: any[] = [];
+    let queued = true;
+    const session = new HarnessSession({ sessionId: 'busy-img', cwd: dir, harness: ASSISTANT_PRESET,
+      binding: { providerId: 'openrouter', modelId: 'm' }, skillCatalog: EMPTY_SKILL_CATALOG,
+      profile: { ...CLOUD_DEFAULT, supportsVision },
+      takeReadyBusyMessage: () => {
+        if (!queued) return;
+        queued = false;
+        return { id: 'image', text: '', attachments: [p] };
+      },
+    }, async () => model as any);
+    session.on('transcript-event', event => events.push(event));
+    await session.send('first');
+    expect(prompts).toHaveLength(2);
+    const input = prompts[1].filter((m: any) => m.role === 'user').at(-1);
+    expect(input.content.some((part: any) => part.type === 'file')).toBe(supportsVision);
+    const event = events.find(e => e.type === 'user-message' && e.data.attachments?.[0] === p);
+    expect(event.data.text).toBe('');
+    expect(session.acceptedHistory().eventUuids).toContain(event.uuid);
+  });
+
   it('attaches the pixels for a vision-capable model', async () => {
     const p = path.join(dir, 'shot.png');
     fs.writeFileSync(p, PNG);

@@ -4,8 +4,9 @@
 //
 // WHY not reuse project-context.ts / context-discovery.ts: the former is a pure
 // mapper over pre-computed basenames and the latter only scans the exact project
-// dir + .claude (async, for the context UI). Neither does the session-start
-// walk-up-to-git-root that the assembled prompt needs, so this owns its own IO.
+// dir + .claude (async, for the context UI). Production now supplies the
+// asynchronously captured ancestor inventory; the sync reader remains for
+// legacy single-file callers and Claude Code context compatibility.
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFile, execFileSync } from 'child_process';
@@ -14,6 +15,7 @@ import type { PromptVariant } from './capability-profile';
 import { variantOverlay } from './prompts/variants';
 import { fitProjectInstructions } from './injection/injection-budget';
 import { sharedDoctrine } from './prompts/shared-doctrine';
+import { renderProjectInstructionFiles, type ProjectInstructionFile } from './injection/project-instructions';
 
 // promptVariant is the capability-profile steering overlay (see prompts/variants.ts).
 // Optional so pre-variant callers assemble byte-identically; only local-small adds text.
@@ -38,7 +40,7 @@ const DEFAULT_INSTRUCTION_BUDGET_TOKENS = 20_000;
 // gitSnapshot: the <env> git line, computed AHEAD by the caller with
 // gitSnapshotAsync (2026-09-16 C3). When absent the sync shell-out below runs,
 // which only the evaluator and tests should reach — see the WHY on gitSnapshotAsync.
-export interface PromptInputs { presetBody: string; cwd: string; appVersion: string; promptVariant?: PromptVariant; hasTools?: boolean; instructionBudgetTokens?: number; supportsParallelToolCalls?: boolean; audience?: 'user' | 'parent'; presetName?: string; gitSnapshot?: string }
+export interface PromptInputs { presetBody: string; cwd: string; appVersion: string; promptVariant?: PromptVariant; hasTools?: boolean; instructionBudgetTokens?: number; supportsParallelToolCalls?: boolean; audience?: 'user' | 'parent'; presetName?: string; gitSnapshot?: string; projectInstructionFiles?: readonly ProjectInstructionFile[] }
 
 const GIT_TIMEOUT_MS = 3000;
 
@@ -107,7 +109,10 @@ export function findProjectInstructions(cwd: string): { path: string; name: stri
   return null;
 }
 
-function projectInstructions(cwd: string, budgetTokens: number): string | null {
+function projectInstructions(cwd: string, budgetTokens: number, files?: readonly ProjectInstructionFile[]): string | null {
+  // WHY: the host supplies one captured startup snapshot; neither the prompt nor
+  // the panel may repeat discovery after disk contents have changed.
+  if (files) return renderProjectInstructionFiles(files);
   const found = findProjectInstructions(cwd);
   if (!found) return null;
   // The budget bounds the FILE BODY only — the wrapping tag is added after,
@@ -159,7 +164,7 @@ export function assembleSystemPromptParts(i: PromptInputs): PromptPart[] {
       text: 'You are the YouCoded assistant, an agentic AI running inside the YouCoded app. You may be running on any model the user chose, cloud or local — Claude, GPT, Grok, Gemini, Qwen, Gemma and others.',
     },
     { id: 'preset', label: i.presetName ? `Its preset — ${i.presetName}` : 'Its preset', text: i.presetBody },
-    partOrNull('project', 'Your project instructions', projectInstructions(i.cwd, i.instructionBudgetTokens ?? DEFAULT_INSTRUCTION_BUDGET_TOKENS)),
+    partOrNull('project', 'Your project instructions', projectInstructions(i.cwd, i.instructionBudgetTokens ?? DEFAULT_INSTRUCTION_BUDGET_TOKENS, i.projectInstructionFiles)),
     {
       id: 'doctrine',
       label: 'How it works',

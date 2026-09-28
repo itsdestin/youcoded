@@ -67,7 +67,21 @@ function windowLabel(tokens?: number | null): string {
   return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens);
 }
 
-const basename = (p: string) => p.split('/').slice(-1)[0];
+// Both separators: a native chat on Windows reports `C:\\Users\\…` paths.
+const basename = (p: string) => p.split(/[\\/]/).slice(-1)[0];
+/** WHY a folder name, not the full path: ancestor instruction files have long
+ *  absolute paths that overflow the card on a phone. The nearest file is "This
+ *  project"; each broader one is named by the folder it lives in. */
+function instructionLabel(filePath: string, isNearest: boolean): string {
+  if (isNearest) return 'This project';
+  const folder = filePath.split(/[\\/]/).slice(-2, -1)[0];
+  return folder && !/^[A-Za-z]:$/.test(folder) ? `From the “${folder}” folder` : 'From the top-level folder';
+}
+/** "Shortened · CLAUDE.md" for one file; "2 files shortened · AGENTS.md, CLAUDE.md" for more. */
+function shortenedSummary(files: ReadonlyArray<{ path: string; truncated: boolean }>): string {
+  const cut = files.filter(f => f.truncated).map(f => basename(f.path));
+  return cut.length === 1 ? `Shortened · ${cut[0]}` : `${cut.length} files shortened · ${cut.join(', ')}`;
+}
 const countLines = (s: string) => s.split('\n').filter((l) => l.trim() !== '').length;
 /** "1 lines" is the kind of small wrongness that makes a panel look unfinished. */
 const linesLabel = (n: number) => `${n} line${n === 1 ? '' : 's'}`;
@@ -215,16 +229,17 @@ function FileText({ sessionId, kind, id, what }: { sessionId?: string; kind: 'pr
  *  Claude Code chat it means only that WE did not cut it — Claude Code manages
  *  its own window and we cannot see what it did. Saying "read in full" there
  *  would be a claim about someone else's work. */
-function RulesCard({ file, kind, label, sessionId, openFile, assembledByClaudeCode }: {
-  file: { path: string; truncated: boolean };
+function RulesCard({ file, kind, label, sessionId, openFile, assembledByClaudeCode, id }: {
+  file: { path: string; truncated: boolean; note?: string | null; notUsed?: string | null };
   kind: 'project' | 'user';
+  id?: string;
   label: string;
   sessionId?: string;
   openFile: (p: string) => void | Promise<void>;
   assembledByClaudeCode: boolean;
 }) {
   const description = file.truncated
-    ? 'Shortened to headings only'
+    ? (file.note ?? 'Shortened to fit')
     : assembledByClaudeCode
       ? 'YouCoded didn’t shorten it'
       : 'Read in full';
@@ -236,12 +251,13 @@ function RulesCard({ file, kind, label, sessionId, openFile, assembledByClaudeCo
           className="rounded-none bg-transparent"
           icon={<Dot ok={!file.truncated} />}
           title={basename(file.path)}
-          description={`${label} · ${description}`}
+          // Only one file per folder is used; name the one that was not.
+          description={`${label} · ${description}${file.notUsed ? ` · ${file.notUsed} here not used` : ''}`}
           accessory={<Button variant="secondary" size="sm" onClick={() => { void openFile(file.path); }}>Open</Button>}
         />
       )}
     >
-      <FileText sessionId={sessionId} kind={kind} what={label} />
+      <FileText sessionId={sessionId} kind={kind} id={id} what={label} />
     </DetailCard>
   );
 }
@@ -352,7 +368,10 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
   const [tab, setTab] = useState('overview');
   const openFile = useOpenFilepath(sessionId);
 
-  const rules = context.projectInstructions ?? null;
+  // WHY: older native/Claude Code records still have one file; captured native
+  // sessions list the actual broad-to-narrow chain without a second selection.
+  const projectFiles = context.projectInstructionFiles ?? (context.projectInstructions ? [context.projectInstructions] : []);
+  const rules = projectFiles[projectFiles.length - 1] ?? null;
   const skills = context.skills ?? [];
   const tools = context.tools ?? [];
   const dropped = context.droppedMcpServers ?? [];
@@ -435,12 +454,12 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
               <section>
                 <h3 className={EYEBROW}>What was left out</h3>
                 <div className="space-y-1.5">
-                  {rules?.truncated && (
+                  {projectFiles.some(f => f.truncated) && (
                     <SettingRow
                       variant="item"
                       icon={<Dot ok={false} />}
                       title="This project’s rules"
-                      description={`Shortened to headings only · ${basename(rules.path)}`}
+                      description={shortenedSummary(projectFiles)}
                       onClick={() => setTab('project')}
                     />
                   )}
@@ -480,7 +499,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
                 <SettingRow
                   variant="item"
                   title="Given"
-                  value={[rules ? '1 rules file' : null, skillsWord, tools.length > 0 ? toolsWord : null].filter(Boolean).join(' · ')}
+                  value={[projectFiles.length ? `${projectFiles.length} rules file${projectFiles.length === 1 ? '' : 's'}` : null, skillsWord, tools.length > 0 ? toolsWord : null].filter(Boolean).join(' · ')}
                 />
               </div>
             </section>
@@ -534,16 +553,18 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
               <p className="text-2xs text-fg-muted">There is no rules file for this project, and none of your own.</p>
             ) : (
               <div className="space-y-2">
-                {rules && (
+                {projectFiles.map((file, i) => (
                   <RulesCard
-                    file={rules}
+                    key={file.path}
+                    file={file}
                     kind="project"
-                    label="This project"
+                    id={context.projectInstructionFiles ? file.path : undefined}
+                    label={instructionLabel(file.path, i === projectFiles.length - 1)}
                     sessionId={sessionId}
                     openFile={openFile}
                     assembledByClaudeCode={cc}
                   />
-                )}
+                ))}
                 {/* Your own rules, the ones that apply everywhere. Claude Code
                     reads this file; the native harness does not, so this card
                     appears on a Claude Code chat and not on a native one — the

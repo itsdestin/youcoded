@@ -48,15 +48,25 @@ export function formatAnswers(args: AskUserQuestionInput, updatedInput: Record<s
   // rules as `answers` — anything that isn't a non-empty string is no note.
   const rawNotes = updatedInput?.notes;
   const notes = (rawNotes && typeof rawNotes === 'object' && !Array.isArray(rawNotes) ? rawNotes : {}) as Record<string, unknown>;
-  const lines = args.questions.map((qq) => {
-    const answer = renderAnswer(answers[qq.question]);
+  // WHY: the legacy text-keyed map cannot distinguish identical wording. Only
+  // accept a COMPLETE, well-typed ordered response; malformed remote clients
+  // fall back to the old map without ever creating a dangling tool result.
+  const rawOrdered = updatedInput?.orderedAnswers;
+  const ordered = Array.isArray(rawOrdered) && rawOrdered.length === args.questions.length
+    && rawOrdered.every((item) => item && typeof item === 'object' && !Array.isArray(item)
+      && (typeof item.answer === 'string' || (Array.isArray(item.answer) && item.answer.every((v: unknown) => typeof v === 'string')))
+      && (item.note === undefined || typeof item.note === 'string'))
+    ? rawOrdered as Array<{ answer: string | string[]; note?: string }> : null;
+  const lines = args.questions.map((qq, index) => {
+    const answer = renderAnswer(ordered ? ordered[index].answer : answers[qq.question]);
     // A typed "Other" answer arrives as plain text in the answer slot. Tell the
     // model when what came back was NOT one of its options, so it reads the
     // text as the user's own answer instead of hunting for a matching label.
     const labels = new Set(qq.options.map((o) => o.label));
     const parts = answer === NO_SELECTION ? [] : answer.split(', ');
     const ownAnswer = parts.length > 0 && parts.some((p) => !labels.has(p));
-    const note = typeof notes[qq.question] === 'string' ? (notes[qq.question] as string).trim() : '';
+    const note = ordered ? (ordered[index].note ?? '').trim()
+      : typeof notes[qq.question] === 'string' ? (notes[qq.question] as string).trim() : '';
     let out = `Q: ${qq.question}\nA${ownAnswer ? ' (the user typed their own answer)' : ''}: ${answer}`;
     if (note) out += `\nNote from the user: ${note}`;
     return out;

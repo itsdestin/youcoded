@@ -23,6 +23,7 @@ import type { SessionContext, SessionContextText } from '../state/chat-types';
 export function wasTrimmed(ctx: SessionContext): boolean {
   return !!(
     ctx.projectInstructions?.truncated
+    || ctx.projectInstructionFiles?.some(f => f.truncated)
     || ctx.skillsOffered === false
     || (ctx.droppedMcpServers && ctx.droppedMcpServers.length > 0)
   );

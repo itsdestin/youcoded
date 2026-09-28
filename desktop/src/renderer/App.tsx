@@ -851,6 +851,20 @@ function AppInner() {
     inputBarRef.current?.fillDraft(text);
   }, [dispatch]);
 
+  // "Send now": the row stays until the drain sends it (TRANSCRIPT_USER_MESSAGE
+  // removes it); false = already on its way, handled like Cancel's too-late.
+  const handleSendQueuedNow = useCallback(async (sid: string, queueId: string) => {
+    // WHY catch (PR #585 review): over remote access the request can fail (e.g. the
+    // connection drops) and a click that silently does nothing reads as broken.
+    // The cause is unknown here, so the words stay general and the row stays put.
+    const moved = await window.claude.native.queueSendNow(sid, queueId).catch(() => null);
+    if (moved === null) { setToast("Send now didn't go through — try again."); return; }
+    if (!moved) {
+      setToast('Already sending.');
+      dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
+    }
+  }, [dispatch]);
+
   // Compaction watchdog: activity-aware — resets on any reducer update for a
   // session with compactionPending set. Any transcript event bumps the timer
   // forward, so long compactions (large sessions) don't trigger a false "may
@@ -3887,6 +3901,7 @@ function AppInner() {
                       onAddCredit={chatViewHandlers.addCredit}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
+                      onSendQueuedNow={handleSendQueuedNow}
                       conversationStatus={conversationStatus}
                       onRefreshConversation={handleRefreshConversation}
                       modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}

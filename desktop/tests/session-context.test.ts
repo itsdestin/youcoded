@@ -111,6 +111,21 @@ describe('what the assistant was given', () => {
     expect(res.truncated).toBe(false);
   });
 
+  it('reports captured ancestors and serves only captured bodies after disk changes', async () => {
+    const child = path.join(root, 'child'); fs.mkdirSync(child);
+    fs.writeFileSync(path.join(root, 'AGENTS.md'), 'PARENT_SNAPSHOT');
+    fs.writeFileSync(path.join(child, 'CLAUDE.md'), 'CHILD_SNAPSHOT');
+    const ctx = await contextFor(host, 's-chain', child);
+    const files = ctx.projectInstructionFiles.filter((f: any) => f.path.startsWith(root));
+    expect(files.map((f: any) => f.path)).toEqual([path.join(root, 'AGENTS.md'), path.join(child, 'CLAUDE.md')]);
+    expect(Object.keys(files[0]).sort()).toEqual(['note', 'path', 'truncated']);
+    fs.writeFileSync(path.join(root, 'AGENTS.md'), 'CHANGED');
+    const selected: any = host.sessionContextText('s-chain', 'project', files[0].path);
+    expect(selected.full).toBe('PARENT_SNAPSHOT');
+    expect(ctx.systemPrompt).toContain('PARENT_SNAPSHOT');
+    expect(host.sessionContextText('s-chain', 'project', path.join(root, 'other.md'))).toEqual({ error: 'not-found' });
+  });
+
   it('refuses honestly rather than inventing a file', async () => {
     await contextFor(host, 's-none', root);
     expect(host.sessionContextText('s-none', 'project')).toEqual({ error: 'not-found' });

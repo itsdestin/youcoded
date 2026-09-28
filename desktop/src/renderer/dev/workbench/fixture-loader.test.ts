@@ -2,6 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { loadFixture } from './fixture-loader';
 
 describe('loadFixture', () => {
+  it('keeps ancestor panel data opt-in and confined to native practice sessions', () => {
+    const raw = JSON.stringify({ type: 'session_context', context: { projectInstructions: { path: '/old', truncated: false } } });
+    const original = loadFixture('native', raw).actions.find(a => a.type === 'SESSION_CONTEXT');
+    const chain = loadFixture('native', raw, 'sandbox', { includeContextChain: true }).actions.find(a => a.type === 'SESSION_CONTEXT');
+    const other = loadFixture('claude-code', raw, 'sandbox', { includeContextChain: true }).actions.find(a => a.type === 'SESSION_CONTEXT');
+    expect(original).toMatchObject({ context: { projectInstructions: { path: '/old' } } });
+    expect(original?.type === 'SESSION_CONTEXT' && original.context?.projectInstructionFiles).toBeUndefined();
+    expect(chain?.type === 'SESSION_CONTEXT' && chain.context?.projectInstructionFiles?.map(f => f.path)).toEqual(['/workspace/AGENTS.md', '/workspace/repo/CLAUDE.md']);
+    expect(other?.type === 'SESSION_CONTEXT' && other.context?.projectInstructionFiles).toBeUndefined();
+  });
   it('parses a Skill tool_use + tool_result pair into a single tool block', () => {
     const raw = [
       '{"type":"tool_use","id":"toolu_01ABC","name":"Skill","input":{"skill":"superpowers:brainstorming"}}',
