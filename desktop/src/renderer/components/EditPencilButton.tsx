@@ -17,15 +17,19 @@ export function PencilIcon({ size = 10 }: { size?: number }) {
  *  message strip's Edit and the quick chips' edit cannot drift apart.
  *  `className` adds hooks only (QuickChips passes `quick-chip-edit`, which float
  *  chrome uses to give it the chips' own surface); the look lives here. */
-export function EditPencilButton({ label, onClick, className = '' }: { label: string; onClick: () => void; className?: string }) {
+export function EditPencilButton({ label, onClick, className = '', plain = false }: { label: string; onClick: () => void; className?: string; plain?: boolean }) {
   const android = isAndroid();
+  // `plain` (Destin, 2026-09-28: "no background on the edit button" in the
+  // waiting-message strip): the same pencil and size with no box, so it sits
+  // like the plain trash icon beside it. The quick chips keep their box.
+  const surface = plain ? 'rounded-md text-fg-dim hover:text-fg' : 'rounded-md bg-well border border-edge-dim text-fg-muted hover:bg-inset hover:text-fg';
   return (
     <Tooltip text={label}>
       <button
         type="button"
         aria-label={label}
         onClick={onClick}
-        className={`${className} shrink-0 ${android ? 'w-8 h-8' : 'w-6 h-6'} rounded-md bg-well border border-edge-dim text-fg-muted hover:bg-inset hover:text-fg transition-colors flex items-center justify-center`}
+        className={`${className} shrink-0 ${android ? 'w-8 h-8' : 'w-6 h-6'} ${surface} transition-colors flex items-center justify-center`}
       >
         <PencilIcon size={android ? 12 : 10} />
       </button>

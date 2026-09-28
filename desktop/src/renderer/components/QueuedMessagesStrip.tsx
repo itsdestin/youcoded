@@ -133,7 +133,7 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
           {(onEdit || onCancel || onSendNow) && (
             <div className="flex items-center gap-0.5 shrink-0">
               {/* The quick chips' own edit button (Destin, 2026-09-28). */}
-              {onEdit && <EditPencilButton label="Edit queued message" onClick={() => onEdit(q.queueId, q.content)} />}
+              {onEdit && <EditPencilButton plain label="Edit queued message" onClick={() => onEdit(q.queueId, q.content)} />}
               {onCancel && (
                 <Button
                   variant="ghost"
