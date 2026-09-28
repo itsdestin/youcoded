@@ -1,0 +1,10 @@
+{
+  "fixture": "launch-brief.docx",
+  "path": "docs/launch-brief.docx",
+  "replyText": "Kotlin reply.",
+  "replyAuthor": "assistant",
+  "addExact": "Marketing emails go out the same morning as the public launch.",
+  "newExact": "Keep support tickets about the update below 200 per week.",
+  "addText": "From Kotlin: confirm the send time.",
+  "addAuthor": "user"
+}

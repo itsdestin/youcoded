@@ -1,0 +1,45 @@
+{
+  "comments": [
+    {
+      "id": "xt-1-F7-04C1C54B-2744-A647-93D1-A99C27C7EFDC",
+      "path": "reports/docling-xlsx-comments.xlsx",
+      "selector": {
+        "kind": "cell",
+        "selector": {
+          "type": "CellSelector",
+          "cell": "F7"
+        }
+      },
+      "text": "Minimum number of saltwater ducks",
+      "author": "person:Jane Smith (JS)",
+      "createdAt": 1781827957410,
+      "replies": [
+        {
+          "id": "xt-1-F7-04C1C54B-2744-A647-93D1-A99C27C7EFDC-r1",
+          "author": "person:Marcus Sterling (MS)",
+          "text": "I never thought it would be so low",
+          "createdAt": 1781828152310
+        }
+      ],
+      "resolved": false,
+      "history": []
+    },
+    {
+      "id": "xt-1-G12-3A26E9AE-8B38-864D-BAF4-BA5D9C6E1DA4",
+      "path": "reports/docling-xlsx-comments.xlsx",
+      "selector": {
+        "kind": "cell",
+        "selector": {
+          "type": "CellSelector",
+          "cell": "G12"
+        }
+      },
+      "text": "Maximum number of ducks",
+      "author": "person:Jane Smith (JS)",
+      "createdAt": 1781827977350,
+      "replies": [],
+      "resolved": false,
+      "history": []
+    }
+  ]
+}
