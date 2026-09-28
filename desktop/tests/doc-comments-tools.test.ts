@@ -257,6 +257,60 @@ describe('permission gate: a Word/Excel-targeted mutation is subject-matched by 
         .toBe(trailingDotPath);
     });
   });
+
+  // Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
+  // review.md): permissionSubject and execute() both used to decide format
+  // from the caller's OWN path string, so a `.txt`-named symlink pointing at
+  // a real `.docx` was consistently (both sides agreed) treated as plain
+  // text — never a bypass, but a silently mis-routed comment. Fixed for an
+  // ABSOLUTE path (the only case permissionSubject's cwd-less, synchronous
+  // signature — types.ts's own doc comment — can resolve at all): both sides
+  // now follow the symlink before deciding.
+  describe('a .txt symlink pointing at a real .docx (absolute path)', () => {
+    it('permissionSubject returns the REAL resolved path, and execute() writes into the real document, not the sidecar', async () => {
+      await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
+      const realDocx = path.join(root, 'docs', 'launch-brief.docx');
+      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), realDocx);
+      const link = path.join(root, 'docs', 'notes.txt');
+      try {
+        await fs.promises.symlink(realDocx, link);
+      } catch {
+        return; // no symlink rights on this platform — skip, same precedent as above
+      }
+      const ctx = makeCtx(root);
+      const textSelector: CommentSelector = {
+        kind: 'text',
+        selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 },
+      };
+
+      // The subject is the file's REAL path (so a `*.docx` permission-rule
+      // pattern, shared/permission-types.ts, still matches it) — never the
+      // disguised name the caller used, and never `undefined`.
+      const subject = AddCommentTool.permissionSubject({ path: link, selector: textSelector, text: 'x' } as any);
+      expect(subject).toBe(await fs.promises.realpath(realDocx));
+
+      // execute() dispatches the SAME way — a docx-shaped id (w-N) proves it
+      // landed in the native writer, not the sidecar (which would mint a
+      // c-<uuid> instead).
+      const added = await AddCommentTool.execute({ path: link, selector: textSelector, text: 'via disguised symlink' }, ctx);
+      expect(added.isError).toBeFalsy();
+      expect(added.text).toMatch(/id: w-/);
+
+      // Reading back through the disguised name still finds it (both sides
+      // of this dispatch agree), proving it's the real document, not a
+      // same-named coincidence.
+      const listed = await ReadFileCommentsTool.execute({ path: link }, ctx);
+      expect(listed.text).toContain('via disguised symlink');
+    });
+
+    // Not a passing behavior to celebrate — a documented, pre-existing
+    // limitation this fix does NOT close: permissionSubject(args) takes no
+    // ctx/cwd (types.ts), so a WORKSPACE-RELATIVE path can't be resolved
+    // here at all and is judged on its own string, exactly as before.
+    it('a workspace-relative path is judged on its own string — permissionSubject has no cwd to resolve it against', () => {
+      expect(AddCommentTool.permissionSubject({ path: 'docs/notes.txt', selector: CELL_SELECTOR, text: 'x' } as any)).toBeUndefined();
+    });
+  });
 });
 
 describe('a comment never list()-ed in THIS process is still reachable by {path, commentId, ...} alone', () => {

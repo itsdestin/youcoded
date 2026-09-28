@@ -13,6 +13,8 @@
 // send-user-file.ts/send-user-link.ts stay separate only because they share
 // NOTHING but a name pattern).
 import { z } from 'zod';
+import { realpathSync } from 'fs';
+import { isAbsolute } from 'path';
 import { defineTool } from './registry';
 import type { ToolContext, ToolResultPayload } from './types';
 import {
@@ -104,13 +106,62 @@ function describeError(result: { ok: false; error?: unknown }): string {
   return typeof result.error === 'string' ? result.error : 'unknown error';
 }
 
-/** §1.1/§3/§4: Word/Excel comments live inside the file itself; every other
- *  extension uses the one-sidecar-per-file JSON store. This is the SAME
- *  by-extension decision doc-comments-dispatch.ts's own header says both
- *  desktop IPC and the remote WS surface must never fork — a native tool is
- *  a third caller of that one decision, not a fourth reimplementation. */
+/**
+ * §1.1/§3/§4: Word/Excel comments live inside the file itself; every other
+ * extension uses the one-sidecar-per-file JSON store. This is the SAME
+ * by-extension decision doc-comments-dispatch.ts's own header says both
+ * desktop IPC and the remote WS surface must never fork — a native tool is
+ * a third caller of that one decision, not a fourth reimplementation.
+ *
+ * Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
+ * review.md): unlike the IPC/remote/MCP dispatch paths, this function is
+ * ALSO the input to `permissionSubject` below, which the harness's
+ * synchronous, cwd-less `Tool.permissionSubject(args): string | undefined`
+ * contract (types.ts) forbids from resolving a workspace-RELATIVE path at
+ * all (no cwd is ever passed to it — the same structural limit Edit/Write's
+ * own `permissionSubject: (a) => a.file_path` already lives with, not
+ * something new introduced here) or doing ASYNC I/O (it's called synchronously
+ * from the tool-call driver, same constraint the auto-approve hook is under —
+ * see permission-auto-approve.ts's own header). For an ABSOLUTE path, neither
+ * limit applies — `realpathSync` is a single bounded syscall on a path this
+ * tool call touches at most a few times per assistant turn (the same
+ * "tiny and rare" class as skill-scanner.ts's/conversations/symlink-sweep.ts's
+ * own allowlisted `fs.lstatSync` calls), so it's resolved here, following any
+ * symlink, before the format decision — a `.txt`-named symlink pointing at a
+ * real `.docx` is judged (and, via `permissionSubject` returning the
+ * RESOLVED path below, gated) as the `.docx` it actually is.
+ *
+ * A RELATIVE path (the common case for an assistant-authored call) can't be
+ * resolved here and is judged on its own string, unchanged from before —
+ * an accepted, documented residual gap identical in shape to every other
+ * relative-subject limitation this permission engine already has, not a
+ * regression this fix introduces.
+ */
 function targetFormat(path: string) {
-  return nativeFormatFor(path);
+  return nativeFormatFor(resolvedPathForFormatDecision(path));
+}
+
+function resolvedPathForFormatDecision(path: string): string {
+  if (!isAbsolute(path)) return path;
+  try {
+    return realpathSync(path);
+  } catch {
+    return path; // doesn't exist yet (a brand-new file) or unreadable — judge the raw string
+  }
+}
+
+/** `permissionSubject` for the five mutation tools below (§5.2a's Word/Excel
+ *  split — see ReplyToComment's own WHY). Returns the RESOLVED path, not the
+ *  caller's original string, when native: a downstream `*.docx`/`*.xlsx`
+ *  permission-rule pattern (shared/permission-types.ts) matches against
+ *  WHATEVER string this returns, so returning the disguised name back would
+ *  make that pattern silently never match a symlinked target even after
+ *  `targetFormat` above correctly identifies it as native — the ask card
+ *  showing the file's real path (not the name the model called it) is also
+ *  the more honest thing to show the user here, not a side effect to avoid. */
+function nativeSubjectFor(path: string): string | undefined {
+  const resolved = resolvedPathForFormatDecision(path);
+  return nativeFormatFor(resolved) ? resolved : undefined;
 }
 
 function formatComment(c: PersistedComment): string {
@@ -181,7 +232,7 @@ export const ReplyToCommentTool = defineTool({
   // bytes — so it stays tool-name-only matched (`undefined`), exactly
   // `SendUserFile`'s one existing `permissionSubject: () => undefined`
   // precedent (types.ts's own doc comment on that field).
-  permissionSubject: (a) => (targetFormat(a.path) ? a.path : undefined),
+  permissionSubject: (a) => nativeSubjectFor(a.path),
   async execute(args, ctx): Promise<ToolResultPayload> {
     const gateErr = await gateProjectRoot(ctx);
     if (gateErr) return { text: `ReplyToComment failed: ${gateErr}`, isError: true };
@@ -205,7 +256,7 @@ export const ResolveCommentTool = defineTool({
   shortDescription: 'Mark a comment on a file as resolved.',
   inputSchema: z.object({ path: PATH_FIELD, commentId: COMMENT_ID_FIELD }).strict(),
   // Same §5.2a split as ReplyToComment — see its own WHY above.
-  permissionSubject: (a) => (targetFormat(a.path) ? a.path : undefined),
+  permissionSubject: (a) => nativeSubjectFor(a.path),
   async execute(args, ctx): Promise<ToolResultPayload> {
     const gateErr = await gateProjectRoot(ctx);
     if (gateErr) return { text: `ResolveComment failed: ${gateErr}`, isError: true };
@@ -229,7 +280,7 @@ export const ReopenCommentTool = defineTool({
   shortDescription: 'Reopen a resolved comment on a file.',
   inputSchema: z.object({ path: PATH_FIELD, commentId: COMMENT_ID_FIELD }).strict(),
   // Same §5.2a split as ReplyToComment — see its own WHY above.
-  permissionSubject: (a) => (targetFormat(a.path) ? a.path : undefined),
+  permissionSubject: (a) => nativeSubjectFor(a.path),
   async execute(args, ctx): Promise<ToolResultPayload> {
     const gateErr = await gateProjectRoot(ctx);
     if (gateErr) return { text: `ReopenComment failed: ${gateErr}`, isError: true };
@@ -256,7 +307,7 @@ export const AddCommentTool = defineTool({
   shortDescription: "Leave a comment on this file — sparingly, only for something needing the user's decision.",
   inputSchema: z.object({ path: PATH_FIELD, selector: COMMENT_SELECTOR, text: z.string().describe('The comment text.') }).strict(),
   // Same §5.2a split as ReplyToComment — see its own WHY above.
-  permissionSubject: (a) => (targetFormat(a.path) ? a.path : undefined),
+  permissionSubject: (a) => nativeSubjectFor(a.path),
   async execute(args, ctx): Promise<ToolResultPayload> {
     const gateErr = await gateProjectRoot(ctx);
     if (gateErr) return { text: `AddComment failed: ${gateErr}`, isError: true };
@@ -282,7 +333,7 @@ export const MoveCommentTool = defineTool({
   shortDescription: "Repoint a comment's anchor after the text or cell it referenced changed.",
   inputSchema: z.object({ path: PATH_FIELD, commentId: COMMENT_ID_FIELD, newSelector: COMMENT_SELECTOR }).strict(),
   // Same §5.2a split as ReplyToComment — see its own WHY above.
-  permissionSubject: (a) => (targetFormat(a.path) ? a.path : undefined),
+  permissionSubject: (a) => nativeSubjectFor(a.path),
   async execute(args, ctx): Promise<ToolResultPayload> {
     const gateErr = await gateProjectRoot(ctx);
     if (gateErr) return { text: `MoveComment failed: ${gateErr}`, isError: true };

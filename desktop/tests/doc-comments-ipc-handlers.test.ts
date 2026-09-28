@@ -111,7 +111,7 @@ describe('registerDocCommentsHandlers', () => {
     const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
       path: 'reports/q3.xlsx', projectRoot: root, selector: cellSelector, text: 'x', author: 'user',
     });
-    expect(added).toEqual({ ok: true, id: expect.stringMatching(/^xt-/) });
+    expect(added).toEqual({ ok: true, id: expect.stringMatching(/^xt-/), text: 'x' });
 
     const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
     expect(listed.comments.length).toBeGreaterThan(0);
@@ -165,7 +165,7 @@ describe('registerDocCommentsHandlers', () => {
     const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
       path: 'docs/launch-brief.docx', projectRoot: root, selector: textSelector, text: 'x', author: 'user',
     });
-    expect(added).toEqual({ ok: true, id: expect.stringMatching(/^w-/) });
+    expect(added).toEqual({ ok: true, id: expect.stringMatching(/^w-/), text: 'x' });
 
     const replied = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, {
       path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', text: 'thanks', author: 'user',
@@ -204,6 +204,50 @@ describe('registerDocCommentsHandlers', () => {
       path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-999', text: 'x', author: 'user',
     });
     expect(missing).toEqual({ ok: false, error: 'comment-not-found' });
+  });
+
+  // Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
+  // review.md): the format decision used to run on the caller's OWN path
+  // string (nativeFormatFor(filePath)) before it was ever resolved, so a
+  // `.txt`-named symlink pointing at a real `.docx` extension-matched as
+  // plain text and its comment silently landed in the inert JSON sidecar
+  // instead of the real document. Fixed by deciding format from
+  // `resolveNativeFormat` (the SAME realpath `resolveSourceFilePath` already
+  // computes for containment) — this pins that a project-RELATIVE symlinked
+  // path (the common shape for an assistant/renderer call, since `projectRoot`
+  // is known here) now dispatches to the real document.
+  it('a .txt symlink pointing at a real .docx is dispatched as the Word document it actually is, not the sidecar', async () => {
+    await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
+    const realDocx = path.join(root, 'docs', 'launch-brief.docx');
+    await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), realDocx);
+    const link = path.join(root, 'docs', 'notes.txt');
+    try {
+      await fs.promises.symlink(realDocx, link);
+    } catch {
+      return; // no symlink rights on this platform — skip, same precedent as doc-comments-store.test.ts
+    }
+    const ipcMain = fakeIpcMain();
+    registerDocCommentsHandlers(ipcMain as any, deps);
+    const textSelector: CommentSelector = {
+      kind: 'text',
+      selector: { type: 'TextQuoteSelector', exact: 'Marketing emails go out', prefix: '', suffix: '', occurrence: 0 },
+    };
+    const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+      path: 'docs/notes.txt', projectRoot: root, selector: textSelector, text: 'via disguised symlink', author: 'user',
+    });
+    // A docx-shaped id (w-N) proves this dispatched to the NATIVE writer, not
+    // the sidecar store (which would have minted a c-<uuid> instead).
+    expect(added).toEqual({ ok: true, id: expect.stringMatching(/^w-/), text: 'via disguised symlink' });
+
+    // The comment actually landed in the REAL document...
+    const listedViaRealName = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/launch-brief.docx', projectRoot: root });
+    expect(listedViaRealName.ok).toBe(true);
+    expect(listedViaRealName.comments.some((c: any) => c.text === 'via disguised symlink')).toBe(true);
+
+    // ...and no inert JSON sidecar was ever created for the disguised name —
+    // the exact silent mis-routing this finding warned about.
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'notes.txt.json');
+    await expect(fs.promises.access(sidecarPath)).rejects.toThrow();
   });
 
   it('refuses a ../../etc/passwd-shaped path on EVERY one of the six channels', async () => {

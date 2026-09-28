@@ -43,7 +43,7 @@ import { DOMParser } from 'linkedom';
 import type { CellSelector, CommentAuthor, CommentReply, CommentSelector, PersistedComment } from '../../shared/doc-comments-types';
 import { checkNamedEntriesWithinCeiling, decompressBounded } from './zip-size-guard';
 import { writeFileMutation } from './write-pipeline';
-import { hasIllegalXmlChars } from './xml-text-safety';
+import { stripIllegalXmlChars } from './xml-text-safety';
 
 // Not exported (same convention as docx-comments.ts's DocxReadError): nothing
 // outside this module needs the error union by name — knip flags an exported
@@ -1658,10 +1658,6 @@ export async function readXlsxComments(bytes: Uint8Array | Buffer, path: string)
 //   write-pipeline.ts): a real Word/Excel/LibreOffice owner/lock file sits
 //   beside the target — inherited for free via the shared pipeline entry
 //   point, no separate implementation needed here.
-// 'invalid-comment-text' (review F1 — High): the text (comment or reply)
-//   contains an XML 1.0-illegal control character (xml-text-safety.ts) —
-//   refused before ever touching the archive, never silently stripped or
-//   escaped (neither is possible for these specific codepoints).
 // 'comment-scan-too-large' (review F3 — Medium): the full-workbook fallback
 //   id-resolution scan's own aggregate byte budget (MAX_FALLBACK_SCAN_BYTES)
 //   was exhausted before a match was found — distinct from 'archive-too-
@@ -1677,7 +1673,6 @@ type XlsxWriteError =
   | 'cell-already-has-comment'
   | 'destination-cell-occupied'
   | 'ambiguous-comment-wiring'
-  | 'invalid-comment-text'
   | 'comment-scan-too-large'
   | 'read-failed'
   | 'backup-failed'
@@ -1695,13 +1690,17 @@ const XLSX_BACKUP_SUFFIX = '.xlsx.bak';
 async function mutateAddXlsxComment(
   currentBytes: Buffer,
   args: { selector: CommentSelector; text: string; author: CommentAuthor }
-): Promise<XlsxMutateResult<{ bytes: Buffer; id: string }>> {
+): Promise<XlsxMutateResult<{ bytes: Buffer; id: string; text: string }>> {
   if (args.selector.kind !== 'cell') return { ok: false, error: 'invalid-selector' };
-  // Review F1 (High): refuse BEFORE ever touching the archive — an XML
-  // 1.0-illegal control character can't be escaped into legality, and
-  // writing it unchecked produced invalid XML this app's own verify step
-  // couldn't catch (xml-text-safety.ts's own header has the full citation).
-  if (hasIllegalXmlChars(args.text)) return { ok: false, error: 'invalid-comment-text' };
+  // WHY strip rather than refuse (changed 2026-09-27, xml-text-safety.ts's
+  // own header has the full reasoning): an XML 1.0-illegal control
+  // character can't be escaped into legality, but a user has no way to see
+  // or remove one themselves (it arrives via paste) — a refusal they can't
+  // act on is worse than silently dropping a handful of invisible bytes.
+  // The stripped `text` (never `args.text`) is what actually gets written
+  // AND what's returned below, so the caller's response always matches what
+  // landed on disk.
+  const text = stripIllegalXmlChars(args.text);
   const loaded = await loadXlsxArchiveForWrite(currentBytes);
   if (!loaded.ok) return loaded;
   const { archive } = loaded;
@@ -1724,21 +1723,21 @@ async function mutateAddXlsxComment(
     personId,
     dT: formatThreadedDate(new Date()),
     done: false,
-    text: args.text,
+    text,
     replies: [],
   };
   insertThreadIntoWorksheet(archive, ctx, cellAddr, snapshot);
 
   const bytes = await serializeXlsxArchive(archive);
-  return { ok: true, bytes, id: buildXlsxThreadId(ctx.sheetId, cellAddr, snapshot.id) };
+  return { ok: true, bytes, id: buildXlsxThreadId(ctx.sheetId, cellAddr, snapshot.id), text };
 }
 
 async function mutateReplyToXlsxComment(
   currentBytes: Buffer,
   args: { id: string; text: string; author: CommentAuthor }
 ): Promise<XlsxMutateResult<{ bytes: Buffer; reply: CommentReply }>> {
-  // Review F1 (High): same refusal as Add — see its own comment there.
-  if (hasIllegalXmlChars(args.text)) return { ok: false, error: 'invalid-comment-text' };
+  // WHY strip rather than refuse: same as Add — see its own comment there.
+  const text = stripIllegalXmlChars(args.text);
   const loaded = await loadXlsxArchiveForWrite(currentBytes);
   if (!loaded.ok) return loaded;
   const { archive } = loaded;
@@ -1751,7 +1750,7 @@ async function mutateReplyToXlsxComment(
   const personId = resolveOrCreatePerson(archive, args.author);
   const replyId = mintGuid();
   const createdAtIso = formatThreadedDate(new Date());
-  appendThreadedElement(ctx.threadedDoc!, { ref, dT: createdAtIso, personId, id: replyId, parentId: rootId }, args.text);
+  appendThreadedElement(ctx.threadedDoc!, { ref, dT: createdAtIso, personId, id: replyId, parentId: rootId }, text);
   ctx.threadedChanged = true;
 
   // §4.2: the placeholder is rebuilt WHOLE from the thread's current full
@@ -1778,7 +1777,7 @@ async function mutateReplyToXlsxComment(
   const reply: CommentReply = {
     id: `${buildXlsxThreadId(ctx.sheetId, ref, rootId)}-r${ordinal}`,
     author: args.author,
-    text: args.text,
+    text,
     createdAt: parseThreadedDate(createdAtIso),
   };
   return { ok: true, bytes, reply };
@@ -1865,8 +1864,8 @@ export async function addXlsxComment(args: {
   selector: CommentSelector;
   text: string;
   author: CommentAuthor;
-}): Promise<XlsxWriteResult<{ id: string }>> {
-  return writeFileMutation<{ id: string }, XlsxErrorResult>(
+}): Promise<XlsxWriteResult<{ id: string; text: string }>> {
+  return writeFileMutation<{ id: string; text: string }, XlsxErrorResult>(
     args.absolutePath,
     XLSX_BACKUP_SUFFIX,
     (bytes) => mutateAddXlsxComment(bytes, args),
@@ -1874,7 +1873,9 @@ export async function addXlsxComment(args: {
       const result = await readXlsxComments(newBytes, args.path);
       if (!result.ok) return false;
       const added = result.comments.find((c) => c.id === extra.id);
-      return !!added && added.text === args.text && added.replies.length === 0;
+      // WHY `extra.text` (the STRIPPED, persisted value), not `args.text` —
+      // see docx-comments.ts's `addDocxComment` for the same reasoning.
+      return !!added && added.text === extra.text && added.replies.length === 0;
     }
   );
 }
@@ -1901,7 +1902,10 @@ export async function replyToXlsxComment(args: {
       const result = await readXlsxComments(newBytes, args.path);
       if (!result.ok) return false;
       const target = findByThreadIdPrefix(result.comments, args.id);
-      return !!target && target.replies.some((r) => r.id === extra.reply.id && r.text === args.text);
+      // WHY `extra.reply.text` (the STRIPPED, persisted value), not
+      // `args.text` — see docx-comments.ts's `addDocxComment` for the same
+      // reasoning.
+      return !!target && target.replies.some((r) => r.id === extra.reply.id && r.text === extra.reply.text);
     }
   );
 }

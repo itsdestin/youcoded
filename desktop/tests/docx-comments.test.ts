@@ -461,14 +461,15 @@ describe('docx-comments write — add', () => {
   });
 });
 
-// xlsx T12/T13 review F1 (High): the same unescaped-control-character gap
-// found in xlsx-comments.ts was confirmed here too (writing a raw control
-// byte into `<w:t>` produced invalid XML this app's own verify step
-// couldn't catch) — fixed with the same shared xml-text-safety.ts check.
-describe('docx-comments write — refuses XML-illegal control characters in comment text', () => {
-  it('refuses add when the text contains an XML 1.0-illegal control character, without touching the file', async () => {
+// Originally (commit ffda4b654, xlsx T12/T13 review F1) this REFUSED text
+// containing an XML 1.0-illegal control character, since writing one raw
+// into `<w:t>` produced invalid XML this app's own verify step couldn't
+// catch. Changed 2026-09-27 to STRIP those characters instead — a user has
+// no way to see or remove one (it arrives via paste), so a refusal they
+// can't act on is worse than silently dropping an invisible byte.
+describe('docx-comments write — strips XML-illegal control characters from comment text', () => {
+  it('strips illegal control characters from an added comment and returns the persisted text', async () => {
     await withScratchCopy('launch-brief.docx', async (target) => {
-      const before = await readFile(target);
       const result = await addDocxComment({
         absolutePath: target,
         path: 'docs/launch-brief.docx',
@@ -476,12 +477,17 @@ describe('docx-comments write — refuses XML-illegal control characters in comm
         text: 'before\x01\x02\x1Fafter',
         author: 'user',
       });
-      expect(result).toEqual({ ok: false, error: 'invalid-comment-text' });
-      expect(await readFile(target)).toEqual(before);
+      expect(result).toEqual({ ok: true, id: expect.any(String), text: 'beforeafter' });
+
+      const read = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const added = read.comments.find((c) => result.ok && c.id === result.id);
+      expect(added?.text).toBe('beforeafter');
     });
   });
 
-  it('refuses reply for the same reason', async () => {
+  it('strips illegal control characters from a reply for the same reason', async () => {
     await withScratchCopy('launch-brief.docx', async (target) => {
       const result = await replyToDocxComment({
         absolutePath: target,
@@ -490,7 +496,7 @@ describe('docx-comments write — refuses XML-illegal control characters in comm
         text: 'x\x00y',
         author: 'user',
       });
-      expect(result).toEqual({ ok: false, error: 'invalid-comment-text' });
+      expect(result).toEqual({ ok: true, reply: { id: expect.any(String), author: 'user', text: 'xy', createdAt: expect.any(Number) } });
     });
   });
 
@@ -504,6 +510,7 @@ describe('docx-comments write — refuses XML-illegal control characters in comm
         author: 'user',
       });
       expect(result.ok).toBe(true);
+      if (result.ok) expect(result.text).toBe('line one\nline two\ttabbed\rcr');
     });
   });
 });

@@ -476,7 +476,11 @@ function submitPendingMutation(kind, located, fields) {
 function readFileComments(args) {
   return locate(args.path).then(function (located) {
     if (located.error) return { ok: false, error: located.error };
-    var format = nativeFormatFor(args.path);
+    // Review finding #5: decided on located.sourceAbsolutePath (the
+    // REALPATH'd, containment-verified target locate() already computed
+    // above), never the caller's raw args.path -- a .txt-named symlink
+    // pointing at a real .docx is judged as the .docx it actually is.
+    var format = nativeFormatFor(located.sourceAbsolutePath);
     if (format) {
       return submitPendingMutation('list', located, { format: format, path: args.path });
     }
@@ -494,7 +498,11 @@ function readFileComments(args) {
 function replyToComment(args) {
   return locate(args.path).then(function (located) {
     if (located.error) return { ok: false, error: located.error };
-    var format = nativeFormatFor(args.path);
+    // Review finding #5: decided on located.sourceAbsolutePath (the
+    // REALPATH'd, containment-verified target locate() already computed
+    // above), never the caller's raw args.path -- a .txt-named symlink
+    // pointing at a real .docx is judged as the .docx it actually is.
+    var format = nativeFormatFor(located.sourceAbsolutePath);
     if (format) {
       return submitPendingMutation('reply', located, {
         format: format, path: args.path, commentId: args.commentId, text: args.text, author: 'assistant',
@@ -515,7 +523,11 @@ function replyToComment(args) {
 function resolveComment(args) {
   return locate(args.path).then(function (located) {
     if (located.error) return { ok: false, error: located.error };
-    var format = nativeFormatFor(args.path);
+    // Review finding #5: decided on located.sourceAbsolutePath (the
+    // REALPATH'd, containment-verified target locate() already computed
+    // above), never the caller's raw args.path -- a .txt-named symlink
+    // pointing at a real .docx is judged as the .docx it actually is.
+    var format = nativeFormatFor(located.sourceAbsolutePath);
     if (format) {
       return submitPendingMutation('resolve', located, { format: format, path: args.path, commentId: args.commentId, author: 'assistant' });
     }
@@ -534,7 +546,11 @@ function resolveComment(args) {
 function reopenComment(args) {
   return locate(args.path).then(function (located) {
     if (located.error) return { ok: false, error: located.error };
-    var format = nativeFormatFor(args.path);
+    // Review finding #5: decided on located.sourceAbsolutePath (the
+    // REALPATH'd, containment-verified target locate() already computed
+    // above), never the caller's raw args.path -- a .txt-named symlink
+    // pointing at a real .docx is judged as the .docx it actually is.
+    var format = nativeFormatFor(located.sourceAbsolutePath);
     if (format) {
       return submitPendingMutation('reopen', located, { format: format, path: args.path, commentId: args.commentId, author: 'assistant' });
     }
@@ -553,7 +569,11 @@ function reopenComment(args) {
 function addComment(args) {
   return locate(args.path).then(function (located) {
     if (located.error) return { ok: false, error: located.error };
-    var format = nativeFormatFor(args.path);
+    // Review finding #5: decided on located.sourceAbsolutePath (the
+    // REALPATH'd, containment-verified target locate() already computed
+    // above), never the caller's raw args.path -- a .txt-named symlink
+    // pointing at a real .docx is judged as the .docx it actually is.
+    var format = nativeFormatFor(located.sourceAbsolutePath);
     if (format) {
       return submitPendingMutation('add', located, {
         format: format, path: args.path, selector: args.selector, text: args.text, author: 'assistant',
@@ -573,7 +593,11 @@ function addComment(args) {
 function moveComment(args) {
   return locate(args.path).then(function (located) {
     if (located.error) return { ok: false, error: located.error };
-    var format = nativeFormatFor(args.path);
+    // Review finding #5: decided on located.sourceAbsolutePath (the
+    // REALPATH'd, containment-verified target locate() already computed
+    // above), never the caller's raw args.path -- a .txt-named symlink
+    // pointing at a real .docx is judged as the .docx it actually is.
+    var format = nativeFormatFor(located.sourceAbsolutePath);
     if (format) {
       return submitPendingMutation('move', located, { format: format, path: args.path, commentId: args.commentId, newSelector: args.newSelector });
     }

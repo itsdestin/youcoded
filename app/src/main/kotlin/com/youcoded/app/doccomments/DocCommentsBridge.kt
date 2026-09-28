@@ -54,7 +54,7 @@ suspend fun handleDocCommentsMessage(
             if (filePath.isEmpty()) return missingField("path")
             val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
             if (gateRefused(projectRoot)) return unknownRoot()
-            val format = nativeFormatFor(filePath)
+            val format = resolveNativeFormat(filePath, projectRoot, homeDir)
             if (format != null) {
                 when (val r = listNativeComments(format, filePath, projectRoot, homeDir)) {
                     is NativeListResult.Ok -> JSONObject().put("ok", true).put("comments", JSONArray(r.comments.map { it.toJson() }))
@@ -80,7 +80,7 @@ suspend fun handleDocCommentsMessage(
             // T17: a `.docx` target now writes for real, dispatched through
             // DocCommentsDispatch.kt's own containment/allowlist gate — never
             // the sidecar store, which has no row for a native comment (§1.1).
-            when (nativeFormatFor(filePath)) {
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
                 NativeFormat.DOCX -> when (val r = addNativeDocxComment(filePath, projectRoot, selector, text, author, homeDir)) {
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("id", r.value)
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
@@ -118,7 +118,7 @@ suspend fun handleDocCommentsMessage(
             // the real persisted `CommentReply` — the SAME enrichment
             // desktop's own `docComments:reply` IPC response now returns, for
             // both the native-format and plain-sidecar branches.
-            when (nativeFormatFor(filePath)) {
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
                 NativeFormat.DOCX -> when (val r = replyToNativeDocxComment(filePath, projectRoot, commentId, text, author, homeDir)) {
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
@@ -142,7 +142,7 @@ suspend fun handleDocCommentsMessage(
             val commentId = payload.optString("id", "")
             if (commentId.isEmpty()) return missingField("id")
             val by = payload.optString("by", "user")
-            when (nativeFormatFor(filePath)) {
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
                 NativeFormat.DOCX -> when (val r = resolveNativeDocxComment(filePath, projectRoot, commentId, homeDir)) {
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true)
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
@@ -166,7 +166,7 @@ suspend fun handleDocCommentsMessage(
             val commentId = payload.optString("id", "")
             if (commentId.isEmpty()) return missingField("id")
             val by = payload.optString("by", "user")
-            when (nativeFormatFor(filePath)) {
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
                 NativeFormat.DOCX -> when (val r = reopenNativeDocxComment(filePath, projectRoot, commentId, homeDir)) {
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true)
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
@@ -190,7 +190,7 @@ suspend fun handleDocCommentsMessage(
             val commentId = payload.optString("id", "")
             if (commentId.isEmpty()) return missingField("id")
             val newSelector = CommentSelector.fromJson(payload.optJSONObject("newSelector")) ?: return missingField("newSelector")
-            when (nativeFormatFor(filePath)) {
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
                 NativeFormat.DOCX -> when (val r = moveNativeDocxComment(filePath, projectRoot, commentId, newSelector, homeDir)) {
                     is NativeMutateResult.Ok -> JSONObject().put("ok", true)
                     is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)

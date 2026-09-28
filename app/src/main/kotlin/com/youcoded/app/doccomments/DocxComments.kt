@@ -664,12 +664,6 @@ enum class DocxWriteError(val wire: String) {
     // plain sibling-file check via Kotlin's own file APIs, refused BEFORE
     // step 1 (backup) even runs. See `isFileOpenElsewhere` below.
     FILE_OPEN_ELSEWHERE("file-open-elsewhere"),
-    // xlsx T12/T13 review F1 (High), same gap confirmed here: the text
-    // (comment or reply) contains an XML 1.0-illegal control character —
-    // see `hasIllegalXmlChars` below, the same character class as desktop's
-    // own xml-text-safety.ts, pinned by this file's own write tests
-    // (DocxCommentsWriteTest.kt).
-    INVALID_COMMENT_TEXT("invalid-comment-text"),
 }
 
 /** Kotlin port of desktop's `xml-text-safety.ts` — see that file's own
@@ -678,26 +672,27 @@ enum class DocxWriteError(val wire: String) {
  *  well-formed document, even as a numeric character reference; tab/LF/CR
  *  are the only C0 codepoints excluded).
  *
- *  Confirmed empirically (a standalone JDK 21 probe, `javax.xml.parsers`/
- *  `javax.xml.transform` — the exact APIs this module uses) that Kotlin's
- *  own failure mode here is DIFFERENT from, not identical to, the TS/
- *  linkedom one this fix was ported from: `Document.createElement`/
- *  `.setTextContent()` accept an illegal control character with no
- *  complaint (confirmed: `getTextContent()` reads it back unchanged), but
+ *  Originally (commit ffda4b654) this REFUSED text containing one of these
+ *  characters — a standalone JDK 21 probe (`javax.xml.parsers`/
+ *  `javax.xml.transform`, the exact APIs this module uses) confirmed
+ *  Kotlin's failure mode without the check is a crash, not silent
+ *  corruption: `Document.createElement`/`.setTextContent()` accept an
+ *  illegal control character with no complaint, but
  *  `TransformerFactory.newTransformer().transform(...)` — the SAME call
- *  `serializePart` below uses — THROWS `TransformerException` (wrapping a
- *  SAXException naming the exact illegal codepoint) the moment it tries to
- *  SERIALIZE that text, rather than silently writing invalid bytes the way
- *  linkedom does. `writeDocxMutation`'s own `mutate(...)` call has no
- *  try/catch around it, so an uncaught exception here would propagate out
- *  of this suspend function entirely — a crash risk, not merely a data-
- *  integrity one. Checking BEFORE ever constructing a text node turns that
- *  crash into the same clean, typed `INVALID_COMMENT_TEXT` refusal desktop
- *  now gives, rather than relying on the Transformer to fail safely (it
- *  does fail LOUDLY, but uncaught, which is worse here, not better). */
+ *  `serializePart` below uses — THROWS `TransformerException` the moment it
+ *  tries to SERIALIZE that text, uncaught, out of a suspend function with no
+ *  try/catch around it.
+ *
+ *  Changed 2026-09-27 to STRIP those characters instead (matching desktop's
+ *  own xml-text-safety.ts change, same reasoning): a user has no way to see
+ *  or remove one of these characters themselves (they arrive via paste), so
+ *  a refusal they can't act on is worse than silently dropping a handful of
+ *  invisible bytes — the visible text is unaffected either way. Stripping
+ *  BEFORE ever constructing a text node still avoids the crash above; it
+ *  just no longer needs a typed refusal to do it. */
 private val ILLEGAL_XML_CHAR_REGEX = Regex("[\u0000-\u0008\u000B\u000C\u000E-\u001F]")
 
-private fun hasIllegalXmlChars(text: String): Boolean = ILLEGAL_XML_CHAR_REGEX.containsMatchIn(text)
+private fun stripIllegalXmlChars(text: String): String = text.replace(ILLEGAL_XML_CHAR_REGEX, "")
 
 sealed class DocxWriteResult<out T> {
     data class Ok<T>(val value: T) : DocxWriteResult<T>()
@@ -1310,13 +1305,13 @@ private fun serializeArchiveToFile(archive: LoadedArchive, outFile: File) {
 // Pure, in-memory mutations against an already-loaded archive.
 // -----------------------------------------------------------------------
 
-private fun mutateAddComment(archive: LoadedArchive, selector: CommentSelector, text: String, author: CommentAuthor): DocxWriteResult<String> {
+private fun mutateAddComment(archive: LoadedArchive, selector: CommentSelector, rawText: String, author: CommentAuthor): DocxWriteResult<String> {
     if (selector !is CommentSelector.Text) return DocxWriteResult.Err(DocxWriteError.INVALID_SELECTOR)
-    // xlsx T12/T13 review F1 (High): refuse BEFORE ever constructing a text
-    // node — see `hasIllegalXmlChars`'s own doc comment for why this can't
-    // be left to the Transformer to catch (it does, but by throwing
-    // uncaught out of `writeDocxMutation`, not by refusing cleanly).
-    if (hasIllegalXmlChars(text)) return DocxWriteResult.Err(DocxWriteError.INVALID_COMMENT_TEXT)
+    // WHY strip rather than refuse — see `stripIllegalXmlChars`'s own doc
+    // comment. Still done BEFORE ever constructing a text node (the
+    // Transformer would otherwise throw uncaught when this archive is
+    // serialized), just no longer a refusal.
+    val text = stripIllegalXmlChars(rawText)
     val walked = walkDocument(archive.documentDoc, collectLeaves = true)
     val resolved = resolveSelector(walked.fullText, selector.selector) ?: return DocxWriteResult.Err(DocxWriteError.SELECTOR_NOT_FOUND)
 
@@ -1364,9 +1359,9 @@ private fun nextReplyOrdinal(archive: LoadedArchive, targetParaId: String): Int 
  *  `mutateReplyToComment` (docx-comments.ts) — so `replyToDocxComment` below
  *  can enrich its response the SAME way, keeping desktop/Android response
  *  shapes in parity. */
-private fun mutateReplyToComment(archive: LoadedArchive, id: String, text: String, author: CommentAuthor): DocxWriteResult<CommentReply> {
-    // xlsx T12/T13 review F1: same refusal as Add — see its own comment there.
-    if (hasIllegalXmlChars(text)) return DocxWriteResult.Err(DocxWriteError.INVALID_COMMENT_TEXT)
+private fun mutateReplyToComment(archive: LoadedArchive, id: String, rawText: String, author: CommentAuthor): DocxWriteResult<CommentReply> {
+    // WHY strip rather than refuse: same as Add — see its own comment there.
+    val text = stripIllegalXmlChars(rawText)
     val rawId = stripWPrefix(id) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
     val targetParaId = findCommentParaId(archive.commentsDoc, rawId) ?: return DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND)
 
@@ -1739,7 +1734,12 @@ suspend fun addDocxComment(
         verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile)) &&
             run {
                 val r = readDocxComments(outFile, path)
-                r is DocxReadResult.Ok && r.comments.any { it.id == newId && it.text == text }
+                // WHY `stripIllegalXmlChars(text)`, not the raw `text`
+                // argument: `mutateAddComment` strips before writing, so
+                // comparing against the raw value would fail this check (and
+                // roll back a perfectly good write) for any text that
+                // legitimately had something stripped from it.
+                r is DocxReadResult.Ok && r.comments.any { it.id == newId && it.text == stripIllegalXmlChars(text) }
             }
     },
 )
@@ -1763,7 +1763,9 @@ suspend fun replyToDocxComment(
         verifyOoxmlWiring(outFile, collectDanglingRIds(originalFile)) &&
             run {
                 val r = readDocxComments(outFile, path)
-                (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }?.replies?.any { it.id == reply.id && it.text == text } == true
+                // WHY `stripIllegalXmlChars(text)` — see `addDocxComment`'s
+                // own comment on the same swap.
+                (r as? DocxReadResult.Ok)?.comments?.find { it.id == id }?.replies?.any { it.id == reply.id && it.text == stripIllegalXmlChars(text) } == true
             }
     },
 )

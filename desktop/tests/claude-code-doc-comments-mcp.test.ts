@@ -450,6 +450,48 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
     expect(res.result.isError).toBe(true);
   }, 15000);
 
+  // Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
+  // review.md): `format` used to be decided from the caller's raw `path`
+  // string, so a `.txt`-named symlink pointing at a real `.docx` submitted a
+  // request with `format: null` — dispatched as a plain-text sidecar edit
+  // instead of a Word mutation. Fixed by deciding from `located.
+  // sourceAbsolutePath` (the already-realpath'd target `locate()` computes)
+  // instead.
+  it('a .txt symlink pointing at a real .docx submits a request with format "docx", not null', async () => {
+    const realDocx = path.join(root, 'report.docx');
+    await fs.promises.writeFile(realDocx, 'not a real docx — nothing applies this in this test');
+    const link = path.join(root, 'notes.txt');
+    try {
+      await fs.promises.symlink(realDocx, link);
+    } catch {
+      return; // no symlink rights on this platform — skip
+    }
+    const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '5000' });
+    const callPromise = client.callTool('AddComment', { path: 'notes.txt', selector: SELECTOR, text: 'via disguised symlink' }, 8000);
+
+    const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
+    let requestFile: string | null = null;
+    for (let i = 0; i < 40 && !requestFile; i++) {
+      if (fs.existsSync(pendingDir)) {
+        const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
+        if (files.length) requestFile = path.join(pendingDir, files[0]);
+      }
+      if (!requestFile) await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(requestFile).not.toBeNull();
+    const request = JSON.parse(fs.readFileSync(requestFile!, 'utf8'));
+    expect(request.format).toBe('docx');
+    // The wire `path` still carries the caller's ORIGINAL name — the main
+    // process's own resolution (doc-comments-dispatch.ts) is what actually
+    // writes into the real file; this script only had to pick the right
+    // dispatch BRANCH, not rewrite the argument.
+    expect(request.path).toBe('notes.txt');
+
+    // Let the (very short) poll time out rather than hang the test.
+    const res = await callPromise;
+    expect(res.result.isError).toBe(true);
+  }, 15000);
+
   it('relays a queue result\'s persisted reply id into the success text, when the queue provides one', async () => {
     const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '5000' });
     const docPath = 'report.docx';

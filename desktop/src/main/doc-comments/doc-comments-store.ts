@@ -20,7 +20,7 @@ import * as path from 'path';
 import { randomUUID, createHash } from 'crypto';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
 import { authorizeBytesRead } from '../artifacts/read-service';
-import { nativeFormatFor } from './native-format';
+import { nativeFormatFor, type NativeFormat } from './native-format';
 import type {
   CommentAuthor,
   CommentReply,
@@ -587,13 +587,15 @@ export async function resolveWatchTarget(args: {
 }): Promise<{ ok: true; target: CommentsWatchTarget } | Refusal> {
   // Checked FIRST, before either sidecar scheme below: a `.docx`/`.xlsx`
   // target's comments live inside the file itself (section 1.1), so it never
-  // has a `.youcoded/comments/` sidecar to watch — the SAME `nativeFormatFor`
+  // has a `.youcoded/comments/` sidecar to watch — the SAME `resolveNativeFormat`
   // decision `doc-comments-dispatch.ts`'s LIST/ADD/etc. already make on the
-  // SAME string, so this can never disagree with them about which files are
+  // SAME string (review finding #5: on the RESOLVED real path, not the raw
+  // one, so a `.txt` symlink to a real `.docx` is watched as the document it
+  // actually is), so this can never disagree with them about which files are
   // native-format. `resolveSourceFilePath` (below) reuses the identical
   // containment logic (project-contained realpath, or the fallback's
   // absolute-path rule) every other native-format entry point already uses.
-  if (nativeFormatFor(args.path)) {
+  if (await resolveNativeFormat(args.path, args.projectRoot)) {
     const resolved = await resolveSourceFilePath(args);
     if (!resolved.ok) return resolved;
     // Live-refresh review (2026-09-27, finding 1 — high): every OTHER
@@ -655,4 +657,31 @@ export async function resolveSourceFilePath(args: {
   const abs = path.resolve(args.path);
   const resolved = (await realpathWithNonexistentTail(abs)) ?? abs;
   return { ok: true, absolutePath: resolved };
+}
+
+/**
+ * Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
+ * review.md, "Low/info"): `nativeFormatFor` alone decides "is this a Word/
+ * Excel file" purely from the CALLER-SUPPLIED path string — a `.txt` symlink
+ * pointing at a real `.docx` extension-matches as plain text, so its comment
+ * silently landed in the inert JSON sidecar instead of the real document
+ * (never a bypass — both the permission check and the dispatch agreed — but a
+ * silent product surprise). Fixed 2026-09-27 by deciding format from the
+ * SAME resolved path `resolveSourceFilePath` already computes (realpath,
+ * following any symlink, inside a known project or as an absolute fallback),
+ * never the caller's unresolved string.
+ *
+ * Deliberately forgiving on failure: if resolution refuses for any reason
+ * (outside the project, doesn't exist, not absolute with no project root),
+ * this returns `null` (never "native") rather than surfacing that refusal
+ * itself — every caller below still runs its OWN resolve step right
+ * afterward (inside `addComment`/`addNativeDocxComment`/etc.) and produces
+ * the exact same typed refusal it always did. This function's only job is
+ * picking the RIGHT dispatch branch; it authorizes nothing on its own, and
+ * path containment is still checked exactly where it already was.
+ */
+export async function resolveNativeFormat(filePath: string, projectRoot?: string): Promise<NativeFormat | null> {
+  const resolved = await resolveSourceFilePath({ path: filePath, projectRoot });
+  if (!resolved.ok) return null;
+  return nativeFormatFor(resolved.absolutePath);
 }

@@ -24,7 +24,7 @@ import {
 } from './doc-comments/doc-comments-store';
 import { watchComments, unwatchComments, dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
 import {
-  nativeFormatFor,
+  resolveNativeFormat,
   refuseNativeMutation,
   listNativeComments,
   addNativeDocxComment,
@@ -2248,7 +2248,9 @@ export class RemoteServer {
         // Word/Excel comments live INSIDE the file (§1.1) — dispatch to
         // T10/T12's own readers instead of the sidecar store, the SAME
         // by-extension decision ipc-handlers.ts's desktop surface makes.
-        const format = nativeFormatFor(filePath);
+        // Review finding #5: decided on the RESOLVED real path (follows a
+        // symlink), never the caller's raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
         this.respond(client.ws, type, id, format
           ? await listNativeComments(format, { path: filePath, projectRoot })
           : await listComments({ path: filePath, projectRoot }));
@@ -2261,7 +2263,9 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
-        if (nativeFormatFor(filePath) === 'docx') {
+        // Review finding #5: resolved real path, not the raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
           this.respond(client.ws, type, id, await addNativeDocxComment({
             path: filePath,
             projectRoot,
@@ -2271,7 +2275,7 @@ export class RemoteServer {
           }));
           break;
         }
-        if (nativeFormatFor(filePath) === 'xlsx') {
+        if (format === 'xlsx') {
           this.respond(client.ws, type, id, await addNativeXlsxComment({
             path: filePath,
             projectRoot,
@@ -2299,7 +2303,9 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
-        if (nativeFormatFor(filePath) === 'docx') {
+        // Review finding #5: resolved real path, not the raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
           this.respond(client.ws, type, id, await replyToNativeDocxComment({
             path: filePath,
             projectRoot,
@@ -2309,7 +2315,7 @@ export class RemoteServer {
           }));
           break;
         }
-        if (nativeFormatFor(filePath) === 'xlsx') {
+        if (format === 'xlsx') {
           this.respond(client.ws, type, id, await replyToNativeXlsxComment({
             path: filePath,
             projectRoot,
@@ -2335,7 +2341,9 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
-        if (nativeFormatFor(filePath) === 'docx') {
+        // Review finding #5: resolved real path, not the raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
           this.respond(client.ws, type, id, await resolveNativeDocxComment({
             path: filePath,
             projectRoot,
@@ -2344,7 +2352,7 @@ export class RemoteServer {
           }));
           break;
         }
-        if (nativeFormatFor(filePath) === 'xlsx') {
+        if (format === 'xlsx') {
           this.respond(client.ws, type, id, await resolveNativeXlsxComment({
             path: filePath,
             projectRoot,
@@ -2368,7 +2376,9 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
-        if (nativeFormatFor(filePath) === 'docx') {
+        // Review finding #5: resolved real path, not the raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
           this.respond(client.ws, type, id, await reopenNativeDocxComment({
             path: filePath,
             projectRoot,
@@ -2377,7 +2387,7 @@ export class RemoteServer {
           }));
           break;
         }
-        if (nativeFormatFor(filePath) === 'xlsx') {
+        if (format === 'xlsx') {
           this.respond(client.ws, type, id, await reopenNativeXlsxComment({
             path: filePath,
             projectRoot,
@@ -2401,7 +2411,9 @@ export class RemoteServer {
         if (gated) { this.respond(client.ws, type, id, gated); break; }
         const refused = refuseNativeMutation(filePath);
         if (refused) { this.respond(client.ws, type, id, refused); break; }
-        if (nativeFormatFor(filePath) === 'docx') {
+        // Review finding #5: resolved real path, not the raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
           this.respond(client.ws, type, id, await moveNativeDocxComment({
             path: filePath,
             projectRoot,
@@ -2410,7 +2422,7 @@ export class RemoteServer {
           }));
           break;
         }
-        if (nativeFormatFor(filePath) === 'xlsx') {
+        if (format === 'xlsx') {
           this.respond(client.ws, type, id, await moveNativeXlsxComment({
             path: filePath,
             projectRoot,

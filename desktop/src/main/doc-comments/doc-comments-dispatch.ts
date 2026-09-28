@@ -37,16 +37,24 @@ import {
   reopenXlsxComment,
   moveXlsxComment,
 } from './xlsx-comments';
-import { resolveSourceFilePath, type Refusal } from './doc-comments-store';
+import { resolveSourceFilePath, resolveNativeFormat, type Refusal } from './doc-comments-store';
 import { authorizeBytesRead } from '../artifacts/read-service';
 import type { CommentAuthor, CommentReply, CommentSelector } from '../../shared/doc-comments-types';
-// T3 follow-up (design §1.5's per-document watcher): `nativeFormatFor` moved
-// to its own module so `doc-comments-store.ts` can reuse it without a
+// T3 follow-up (design §1.5's new per-document watcher): `nativeFormatFor`
+// moved to its own module so `doc-comments-store.ts` can reuse it without a
 // circular import (this file already imports FROM doc-comments-store.ts).
 // Re-exported here so every existing caller (`ipc-handlers.ts`,
 // `remote-server.ts`) keeps importing it from this module, unchanged.
+//
+// `resolveNativeFormat` (review finding #5, 2026-09-27): the SAME decision,
+// but on the caller's path AFTER it's been resolved to its real target
+// (following any symlink) — re-exported so every dispatch-decision call site
+// can switch to it without a second import. `nativeFormatFor` itself stays
+// exported too: `doc-comments-store.ts`'s own containment/locate logic still
+// needs the plain, synchronous, no-I/O version internally.
 import type { NativeFormat } from './native-format';
 export { nativeFormatFor, type NativeFormat } from './native-format';
+export { resolveNativeFormat };
 
 /** F1 fix (post-T3 build review, blocker): the no-`projectRoot` fallback in
  *  `resolveSourceFilePath` resolves and returns ANY absolute path the caller
@@ -93,7 +101,7 @@ export async function addNativeDocxComment(args: {
   selector: CommentSelector;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true; id: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true; id: string; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
   return addDocxComment({ absolutePath: resolved.absolutePath, path: args.path, selector: args.selector, text: args.text, author: args.author });
@@ -169,7 +177,7 @@ export async function addNativeXlsxComment(args: {
   selector: CommentSelector;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true; id: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true; id: string; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
   return addXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, selector: args.selector, text: args.text, author: args.author });

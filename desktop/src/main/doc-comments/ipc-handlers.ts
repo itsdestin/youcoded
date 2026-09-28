@@ -28,7 +28,7 @@ import {
 } from './doc-comments-watcher';
 import { DOC_COMMENTS_IPC } from './ipc-channels';
 import {
-  nativeFormatFor,
+  resolveNativeFormat,
   refuseNativeMutation,
   listNativeComments,
   addNativeDocxComment,
@@ -119,7 +119,10 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     const projectRoot = optStr(payload?.projectRoot);
     const gated = await gateProjectRoot(projectRoot);
     if (gated) return gated;
-    const format = nativeFormatFor(filePath);
+    // Review finding #5: decided on the RESOLVED real path (follows a
+    // symlink), never the caller's raw string — see `resolveNativeFormat`'s
+    // own doc comment.
+    const format = await resolveNativeFormat(filePath, projectRoot);
     if (format) return listNativeComments(format, { path: filePath, projectRoot });
     return listComments({ path: filePath, projectRoot });
   });
@@ -134,7 +137,10 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     if (refused) return refused;
     const text = reqStr(payload?.text);
     if (text === null) return missingField('text');
-    if (nativeFormatFor(filePath) === 'docx') {
+    // Review finding #5: resolved real path, not the raw string — see
+    // `resolveNativeFormat`'s own doc comment.
+    const format = await resolveNativeFormat(filePath, projectRoot);
+    if (format === 'docx') {
       return addNativeDocxComment({
         path: filePath,
         projectRoot,
@@ -143,7 +149,7 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
         author: payload?.author as CommentAuthor,
       });
     }
-    if (nativeFormatFor(filePath) === 'xlsx') {
+    if (format === 'xlsx') {
       return addNativeXlsxComment({
         path: filePath,
         projectRoot,
@@ -183,10 +189,12 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     if (id === null) return missingField('id');
     const text = reqStr(payload?.text);
     if (text === null) return missingField('text');
-    if (nativeFormatFor(filePath) === 'docx') {
+    // Review finding #5: resolved real path, not the raw string.
+    const format = await resolveNativeFormat(filePath, projectRoot);
+    if (format === 'docx') {
       return replyToNativeDocxComment({ path: filePath, projectRoot, id, text, author: payload?.author as CommentAuthor });
     }
-    if (nativeFormatFor(filePath) === 'xlsx') {
+    if (format === 'xlsx') {
       return replyToNativeXlsxComment({ path: filePath, projectRoot, id, text, author: payload?.author as CommentAuthor });
     }
     return replyToComment({
@@ -208,10 +216,12 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     if (refused) return refused;
     const id = reqStr(payload?.id);
     if (id === null) return missingField('id');
-    if (nativeFormatFor(filePath) === 'docx') {
+    // Review finding #5: resolved real path, not the raw string.
+    const format = await resolveNativeFormat(filePath, projectRoot);
+    if (format === 'docx') {
       return resolveNativeDocxComment({ path: filePath, projectRoot, id, by: payload?.by as CommentAuthor });
     }
-    if (nativeFormatFor(filePath) === 'xlsx') {
+    if (format === 'xlsx') {
       return resolveNativeXlsxComment({ path: filePath, projectRoot, id, by: payload?.by as CommentAuthor });
     }
     return resolveComment({
@@ -232,10 +242,12 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     if (refused) return refused;
     const id = reqStr(payload?.id);
     if (id === null) return missingField('id');
-    if (nativeFormatFor(filePath) === 'docx') {
+    // Review finding #5: resolved real path, not the raw string.
+    const format = await resolveNativeFormat(filePath, projectRoot);
+    if (format === 'docx') {
       return reopenNativeDocxComment({ path: filePath, projectRoot, id, by: payload?.by as CommentAuthor });
     }
-    if (nativeFormatFor(filePath) === 'xlsx') {
+    if (format === 'xlsx') {
       return reopenNativeXlsxComment({ path: filePath, projectRoot, id, by: payload?.by as CommentAuthor });
     }
     return reopenComment({
@@ -256,10 +268,12 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
     if (refused) return refused;
     const id = reqStr(payload?.id);
     if (id === null) return missingField('id');
-    if (nativeFormatFor(filePath) === 'docx') {
+    // Review finding #5: resolved real path, not the raw string.
+    const format = await resolveNativeFormat(filePath, projectRoot);
+    if (format === 'docx') {
       return moveNativeDocxComment({ path: filePath, projectRoot, id, newSelector: payload?.newSelector as CommentSelector });
     }
-    if (nativeFormatFor(filePath) === 'xlsx') {
+    if (format === 'xlsx') {
       return moveNativeXlsxComment({ path: filePath, projectRoot, id, newSelector: payload?.newSelector as CommentSelector });
     }
     return moveComment({

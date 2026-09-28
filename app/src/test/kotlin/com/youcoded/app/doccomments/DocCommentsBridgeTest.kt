@@ -164,6 +164,40 @@ class DocCommentsBridgeTest {
         assertTrue(!File(root, ".youcoded/comments/reports/q3.xlsx.json").exists())
     }
 
+    // Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
+    // review.md): `nativeFormatFor(filePath)` used to decide format from the
+    // caller's RAW path string, so a `.txt`-named symlink pointing at a real
+    // `.docx` was dispatched as plain text — its comment would have landed in
+    // the inert JSON sidecar instead of the real document. Fixed by deciding
+    // from `resolveNativeFormat` (the resolved, realpath'd target). A
+    // sidecar-backed add always succeeds regardless of the target's actual
+    // bytes; dispatching to the REAL docx write pipeline instead means this
+    // fails on the file's genuinely invalid (not a real zip/docx) content —
+    // `ok: false` plus no sidecar file is what proves it took the native
+    // path, not the sidecar one.
+    @Test
+    fun `a txt symlink pointing at a real docx dispatches to the native write pipeline, not the sidecar store`() = runTest {
+        val root = tempRoot()
+        val docsDir = File(root, "docs").apply { mkdirs() }
+        val realDocx = File(docsDir, "report.docx")
+        realDocx.writeText("not a real docx, just bytes for this test")
+        val link = File(docsDir, "notes.txt")
+        try {
+            Files.createSymbolicLink(link.toPath(), realDocx.toPath())
+        } catch (_: Exception) {
+            return@runTest // no symlink rights on this platform — skip, same precedent as DocCommentsStoreTest.kt
+        }
+        val payload = JSONObject()
+            .put("path", "docs/notes.txt")
+            .put("projectRoot", root.path)
+            .put("text", "x")
+            .put("selector", TEXT_SELECTOR_JSON)
+        val response = handleDocCommentsMessage("docComments:add", payload, root, listOf(root.path))!!
+        assertEquals(false, response.getBoolean("ok"))
+        assertEquals("invalid-docx", response.getString("error"))
+        assertTrue(!File(root, ".youcoded/comments/docs/notes.txt.json").exists())
+    }
+
     @Test
     fun `reply carries the persisted CommentReply, resolve and reopen answer with exactly ok true, and all three persist`() = runTest {
         val root = tempRoot()

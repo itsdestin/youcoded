@@ -55,6 +55,33 @@ fun nativeFormatFor(filePath: String): NativeFormat? = when (File(filePath).exte
     else -> null
 }
 
+/**
+ * Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
+ * review.md): `nativeFormatFor` alone decides "is this a Word/Excel file"
+ * purely from the caller-supplied path string — a `.txt` symlink pointing at
+ * a real `.docx` extension-matches as plain text, so its comment would
+ * silently land in the inert JSON sidecar instead of the real document.
+ * Mirrors desktop's own `resolveNativeFormat` (doc-comments-dispatch.ts):
+ * decides from the SAME resolved path `resolveSourceFilePath` already
+ * computes (realpath, following any symlink, inside a known project or as
+ * an allowlisted untracked file), never the caller's unresolved string.
+ *
+ * Deliberately forgiving on failure: if resolution refuses for any reason
+ * (outside the project, doesn't exist, not tracked/allowlisted), this
+ * returns `null` (never "native") rather than surfacing that refusal
+ * itself — `DocCommentsBridge.kt`'s own subsequent `listNativeComments`/
+ * `addNativeDocxComment`/etc. call still runs its OWN resolve step right
+ * afterward and produces the exact same typed refusal it always did. This
+ * function's only job is picking the RIGHT dispatch branch; it authorizes
+ * nothing on its own, and path containment is still checked exactly where
+ * it already was.
+ */
+fun resolveNativeFormat(path: String, projectRoot: String?, homeDir: File): NativeFormat? {
+    val resolved = resolveSourceFilePath(path, projectRoot, homeDir)
+    if (resolved !is StoreResult.Ok) return null
+    return nativeFormatFor(resolved.value)
+}
+
 sealed class NativeListResult {
     data class Ok(val comments: List<PersistedComment>) : NativeListResult()
     data class Err(val error: String) : NativeListResult()

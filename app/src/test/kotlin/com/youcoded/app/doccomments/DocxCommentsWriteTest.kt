@@ -356,33 +356,35 @@ class DocxCommentsWriteTest {
         assertEquals(DocxWriteResult.Err(DocxWriteError.COMMENT_NOT_FOUND), result)
     }
 
-    // ── xlsx T12/T13 review F1: refuses XML-illegal control characters ─────
-    // (same gap confirmed here as desktop's docx-comments.ts/xlsx-comments.ts
-    // — see xml-text-safety.ts's own header and this file's own
-    // `hasIllegalXmlChars` doc comment for the Kotlin-specific failure mode:
-    // an uncaught `TransformerException` at serialize time, not silent
-    // corruption.)
+    // ── strips XML-illegal control characters (2026-09-27) ─────────────────
+    // Originally (commit ffda4b654) this REFUSED text containing one of
+    // these characters — see `stripIllegalXmlChars`'s own doc comment for
+    // why that changed to a silent strip (a user can't see or remove one
+    // themselves; it arrives via paste).
 
     @Test
-    fun `add refuses text containing an XML 1_0-illegal control character, without touching the file`() = runTest {
+    fun `add strips illegal control characters and persists the stripped text`() = runTest {
         val target = scratchCopy("launch-brief.docx")
         val home = scratchHomeDir()
-        val before = target.readBytes()
         val result = addDocxComment(
             target.absolutePath, "docs/launch-brief.docx",
             textSelector("Marketing emails go out the same morning as the public launch."),
             "before\u0001\u0002\u001Fafter", "user", home,
         )
-        assertEquals(DocxWriteResult.Err(DocxWriteError.INVALID_COMMENT_TEXT), result)
-        assertTrue(before.contentEquals(target.readBytes()))
+        assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
+        val newId = (result as DocxWriteResult.Ok).value
+        val read = readDocxComments(target, "docs/launch-brief.docx")
+        val added = (read as DocxReadResult.Ok).comments.find { it.id == newId }
+        assertEquals("beforeafter", added?.text)
     }
 
     @Test
-    fun `reply refuses text containing an XML 1_0-illegal control character`() = runTest {
+    fun `reply strips illegal control characters and persists the stripped text`() = runTest {
         val target = scratchCopy("launch-brief.docx")
         val home = scratchHomeDir()
         val result = replyToDocxComment(target.absolutePath, "docs/launch-brief.docx", "w-1", "x\u0000y", "user", home)
-        assertEquals(DocxWriteResult.Err(DocxWriteError.INVALID_COMMENT_TEXT), result)
+        assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
+        assertEquals("xy", (result as DocxWriteResult.Ok).value.text)
     }
 
     @Test

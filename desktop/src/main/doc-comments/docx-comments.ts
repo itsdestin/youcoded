@@ -51,7 +51,7 @@ import { resolveSelector } from '../../shared/doc-comments-anchor';
 // T11 review (F1/F5): docx's own write pipeline is now a thin wrapper around
 // this shared one — see the doc comment on `writeDocxMutation` below.
 import { writeFileMutation } from './write-pipeline';
-import { hasIllegalXmlChars } from './xml-text-safety';
+import { stripIllegalXmlChars } from './xml-text-safety';
 
 // Not exported: nothing outside this module needs the error union by name
 // (knip flags an exported type nothing ever imports as dead code — same
@@ -520,10 +520,6 @@ const EMPTY_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><
 //   `.~lock.<name>#` lock file sits beside the target — refused before step 1
 //   (backup) even runs, in the SHARED write-pipeline.ts every caller goes
 //   through.
-// 'invalid-comment-text' (xlsx T12/T13 review F1 — High, same gap confirmed
-//   here): the text (comment or reply) contains an XML 1.0-illegal control
-//   character (xml-text-safety.ts) — refused before ever touching the
-//   archive, matching xlsx-comments.ts's own identical fix.
 type DocxWriteError =
   | DocxReadError
   | 'comment-not-found'
@@ -533,8 +529,7 @@ type DocxWriteError =
   | 'backup-failed'
   | 'write-failed'
   | 'verify-failed'
-  | 'file-open-elsewhere'
-  | 'invalid-comment-text';
+  | 'file-open-elsewhere';
 
 function parseXml(xml: string): Document {
   return new DOMParser().parseFromString(xml, 'text/xml') as unknown as Document;
@@ -1265,13 +1260,17 @@ async function serializeArchive(archive: LoadedArchive): Promise<Buffer> {
 async function mutateAddComment(
   currentBytes: Buffer,
   args: { selector: CommentSelector; text: string; author: CommentAuthor }
-): Promise<{ ok: true; bytes: Buffer; id: string } | { ok: false; error: DocxWriteError }> {
+): Promise<{ ok: true; bytes: Buffer; id: string; text: string } | { ok: false; error: DocxWriteError }> {
   if (args.selector.kind !== 'text') return { ok: false, error: 'invalid-selector' };
-  // xlsx T12/T13 review F1 (High): refuse an XML 1.0-illegal control
-  // character BEFORE ever touching the archive — see xml-text-safety.ts's
-  // own header for the full citation (confirmed here too: this write path
-  // previously wrote such a byte straight into `<w:t>` unescaped).
-  if (hasIllegalXmlChars(args.text)) return { ok: false, error: 'invalid-comment-text' };
+  // WHY strip rather than refuse (changed 2026-09-27, xml-text-safety.ts's
+  // own header has the full reasoning): an XML 1.0-illegal control
+  // character can't be escaped into legality, but a user has no way to see
+  // or remove one themselves (it arrives via paste) — a refusal they can't
+  // act on is worse than silently dropping a handful of invisible bytes.
+  // The stripped `text` (never `args.text`) is what actually gets written
+  // AND what's returned below, so the caller's response always matches what
+  // landed on disk.
+  const text = stripIllegalXmlChars(args.text);
   const loaded = await loadArchiveForWrite(currentBytes);
   if (!loaded.ok) return loaded;
   const { archive } = loaded;
@@ -1291,13 +1290,13 @@ async function mutateAddComment(
     author: commentAuthorToDisplayName(args.author),
     date: new Date().toISOString(),
     paraId,
-    text: args.text,
+    text,
   });
   archive.commentsChanged = true; // F2: this operation touched comments.xml
   recordCommentExtensionParts(archive, paraId); // F4
 
   const bytes = await serializeArchive(archive);
-  return { ok: true, bytes, id: `w-${newId}` };
+  return { ok: true, bytes, id: `w-${newId}`, text };
 }
 
 /**
@@ -1332,8 +1331,8 @@ async function mutateReplyToComment(
   currentBytes: Buffer,
   args: { id: string; text: string; author: CommentAuthor }
 ): Promise<{ ok: true; bytes: Buffer; reply: CommentReply } | { ok: false; error: DocxWriteError }> {
-  // xlsx T12/T13 review F1: same refusal as Add — see its own comment there.
-  if (hasIllegalXmlChars(args.text)) return { ok: false, error: 'invalid-comment-text' };
+  // WHY strip rather than refuse: same as Add — see its own comment there.
+  const text = stripIllegalXmlChars(args.text);
   const rawId = stripWPrefix(args.id);
   if (rawId === null) return { ok: false, error: 'comment-not-found' };
   const loaded = await loadArchiveForWrite(currentBytes);
@@ -1356,7 +1355,7 @@ async function mutateReplyToComment(
     author: commentAuthorToDisplayName(args.author),
     date: createdAtIso,
     paraId,
-    text: args.text,
+    text,
   });
   archive.commentsChanged = true; // F2: this operation touched comments.xml
 
@@ -1369,7 +1368,7 @@ async function mutateReplyToComment(
   const reply: CommentReply = {
     id: `w-${rawId}-r${ordinal}`,
     author: args.author,
-    text: args.text,
+    text,
     createdAt: parseDate(createdAtIso),
   };
   return { ok: true, bytes, reply };
@@ -1580,7 +1579,7 @@ export async function addDocxComment(args: {
   selector: CommentSelector;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true; id: string } | { ok: false; error: DocxWriteError }> {
+}): Promise<{ ok: true; id: string; text: string } | { ok: false; error: DocxWriteError }> {
   return writeDocxMutation(
     args.absolutePath,
     (bytes) => mutateAddComment(bytes, args),
@@ -1589,7 +1588,12 @@ export async function addDocxComment(args: {
       const result = await readDocxComments(newBytes, args.path);
       if (!result.ok) return false;
       const added = result.comments.find((c) => c.id === extra.id);
-      return !!added && added.text === args.text;
+      // WHY `extra.text` (the STRIPPED value `mutateAddComment` actually
+      // wrote), never `args.text` (the caller's raw, pre-strip draft) — after
+      // the strip fix these can legitimately differ, and comparing against
+      // the raw value would make this verify step fail every write that
+      // stripped anything, rolling back a perfectly good save.
+      return !!added && added.text === extra.text;
     }
   );
 }
@@ -1615,7 +1619,9 @@ export async function replyToDocxComment(args: {
       const result = await readDocxComments(newBytes, args.path);
       if (!result.ok) return false;
       const target = result.comments.find((c) => c.id === args.id);
-      return !!target && target.replies.some((r) => r.id === extra.reply.id && r.text === args.text);
+      // WHY `extra.reply.text` (the STRIPPED, persisted value), not
+      // `args.text` — see `addDocxComment`'s own comment on the same swap.
+      return !!target && target.replies.some((r) => r.id === extra.reply.id && r.text === extra.reply.text);
     }
   );
 }

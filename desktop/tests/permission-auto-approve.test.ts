@@ -1,5 +1,8 @@
 // Which Claude Code permission asks main answers "allow" without showing a card.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { shouldAutoApprove, shouldAutoApproveDocComment } from '../src/main/permission-auto-approve';
 import { PERMISSION_OVERRIDES_DEFAULT } from '../src/shared/types';
 import { docCommentsMcpToolName } from '../src/shared/doc-comments-mcp';
@@ -86,6 +89,53 @@ describe('shouldAutoApproveDocComment', () => {
 
     it('fails closed when no server id is known for this session at all (serverId undefined)', () => {
       expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.md' }, undefined, undefined)).toBe(false);
+    });
+  });
+
+  // Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
+  // review.md): `nativeFormatFor` decided purely from the path string, so a
+  // `.txt`-named symlink pointing at a real `.docx` hit the UNCONDITIONAL
+  // plain-text auto-approve below no matter the permission mode. Fixed with
+  // a fail-safe (`isPathItselfASymlink`, permission-auto-approve.ts's own
+  // WHY): this function can't resolve a symlink's real target here (it would
+  // have to become async/filesystem-touching on a hot, synchronous,
+  // pre-response hook path, and still couldn't follow a workspace-relative
+  // path with no cwd to resolve against), so an ABSOLUTE path that is itself
+  // a symlink is refused a free ride through EITHER branch instead.
+  describe('a .txt symlink pointing at a real .docx never auto-approves (finding #5)', () => {
+    let root: string;
+    beforeEach(async () => { root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-auto-approve-symlink-')); });
+    afterEach(async () => { await fs.promises.rm(root, { recursive: true, force: true }); });
+
+    it('an absolute .txt path that is a symlink to a real file is never auto-approved, even for acceptEdits', async () => {
+      const realDocx = path.join(root, 'report.docx');
+      await fs.promises.writeFile(realDocx, 'not a real docx, just bytes for this test');
+      const link = path.join(root, 'notes.txt');
+      try {
+        await fs.promises.symlink(realDocx, link);
+      } catch {
+        return; // no symlink rights on this platform — skip, same precedent elsewhere in this suite
+      }
+      // Would have been the UNCONDITIONAL plain-text allow before this fix
+      // (nativeFormatFor('notes.txt') === null) — now refused regardless of
+      // mode, exactly like a genuine .docx target would be without acceptEdits.
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: link }, undefined, SERVER_ID)).toBe(false);
+      expect(shouldAutoApproveDocComment(ADD_TOOL, { path: link }, 'acceptEdits', SERVER_ID)).toBe(false);
+      expect(shouldAutoApproveDocComment(MOVE_TOOL, { path: link }, 'bypassPermissions', SERVER_ID)).toBe(false);
+    });
+
+    it('an ordinary absolute plain-text path (not a symlink) is unaffected — still auto-approved unconditionally', async () => {
+      const realFile = path.join(root, 'notes.md');
+      await fs.promises.writeFile(realFile, 'just a real file, no symlink involved');
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: realFile }, undefined, SERVER_ID)).toBe(true);
+    });
+
+    it('a relative .txt symlink path cannot be checked here (no cwd) — documented, pre-existing limitation, unchanged by this fix', () => {
+      // Not exercised against a real symlink: `isPathItselfASymlink` bails
+      // out on any non-absolute path before ever touching the filesystem —
+      // this pins that a relative path keeps its EXISTING (pre-fix)
+      // behavior, whatever the actual file on disk turns out to be.
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.txt' }, undefined, SERVER_ID)).toBe(true);
     });
   });
 

@@ -243,8 +243,12 @@ function getIpc(): DocCommentsIpc | null {
 // F2 fix (T5, design review round 3 — High): `reply` carries the persisted
 // `CommentReply` once `docComments:reply`'s response is enriched (§1.6) — see
 // `addReply`'s own reconciliation below, which mirrors `persistNewComment`'s
-// already-built `id` handling for `add`.
-type MutationResult = { ok: true; id?: string; reply?: CommentReply } | { ok: false; error?: string; field?: string; features?: string[] };
+// already-built `id` handling for `add`. `text` (2026-09-27): a docx/xlsx
+// `add` may have STRIPPED XML-illegal control characters from the draft
+// before persisting it (xml-text-safety.ts) — carries the actual persisted
+// text back so `persistNewComment` can show what's really on disk instead of
+// the pre-strip draft.
+type MutationResult = { ok: true; id?: string; text?: string; reply?: CommentReply } | { ok: false; error?: string; field?: string; features?: string[] };
 
 /** A mutation IPC call can REJECT (remote's REJECT_ON_NOT_OK path — the
  *  Electron preload path resolves `{ok:false,...}` instead, see doc-comments/
@@ -326,12 +330,6 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
     // comment) rather than risk guessing at it.
     case 'ambiguous-comment-wiring':
       return "This workbook's existing comments are set up in an unusual way YouCoded doesn't recognize, so it won't risk editing them.";
-    // xlsx T12/T13 review F1 (High), applied identically to docx: an XML
-    // 1.0-illegal control character can't be saved into either format's
-    // comment XML — refused rather than silently stripped, so the text
-    // shown here always matches what would be saved.
-    case 'invalid-comment-text':
-      return "That text has characters that can't be saved into this comment.";
     // xlsx T12/T13 review F3 (Medium): the full-workbook fallback id-
     // resolution scan's own aggregate byte budget was exhausted before this
     // comment was found — distinct from the decompression/record-count
@@ -849,9 +847,17 @@ function persistNewComment(id: string): void {
     startLine: comment.startLine, endLine: comment.endLine, cell: comment.cell, sheet: comment.sheet,
     prefix: comment.selectorPrefix, suffix: comment.selectorSuffix, occurrence: comment.selectorOccurrence,
   });
+  const sentText = comment.text;
   void callMutation(() => ipc.add(path, selector, comment.text, comment.author, projectRoot, id)).then((res) => {
     if (res.ok) {
       pendingLocalIds.delete(id);
+      // 2026-09-27: a docx/xlsx target may have STRIPPED XML-illegal control
+      // characters from `sentText` before persisting it (xml-text-safety.ts)
+      // — `res.text` is what actually landed on disk. Only apply it if the
+      // draft still matches what was sent: a fast follow-up edit (or this
+      // callback losing a race with a newer `persistNewComment` call for the
+      // same id) means the CURRENT text is already newer than this response.
+      const textChanged = res.text !== undefined && res.text !== sentText;
       // F4: for a plain sidecar-backed file, `res.id === id` now (main used
       // OUR id) and this whole branch is a no-op. It stays as a safety net
       // for `.docx`/`.xlsx` targets, whose comment ids are the FILE's own
@@ -873,11 +879,15 @@ function persistNewComment(id: string): void {
         // same belt-and-suspenders the reverse ordering gets in
         // `mergeServerComments`.
         const alreadyLanded = arr.some((c) => c.id === res.id);
-        const nextArr = alreadyLanded ? arr.filter((c) => c.id !== id) : arr.map((c) => (c.id === id ? { ...c, id: res.id! } : c));
+        const nextArr = alreadyLanded
+          ? arr.filter((c) => c.id !== id)
+          : arr.map((c) => (c.id === id ? { ...c, id: res.id!, ...(textChanged && c.text === sentText ? { text: res.text! } : {}) } : c));
         publish({
           commentsByKey: { ...snap.commentsByKey, [key]: dedupeById(nextArr) },
           focusId: snap.focusId === id ? res.id! : snap.focusId,
         });
+      } else if (textChanged && findComment(id)?.text === sentText) {
+        updateComment(id, (c) => ({ ...c, text: res.text! }));
       }
       return;
     }

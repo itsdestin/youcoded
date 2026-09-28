@@ -1448,7 +1448,13 @@ describe('docComments:* IPC parity', () => {
       'docComments:move': 'moveComment(',
     };
     for (const [ch, realCall] of Object.entries(realCallByChannel)) {
-      const branch = bridge.match(new RegExp(`"${ch}"\\s*->\\s*\\{[\\s\\S]{0,2000}?\\n        \\}\\n`));
+      // WHY 3000, not 2000: T17/T19 grew every mutation case with its own
+      // native-format `when` branch (DOCX/XLSX dispatch alongside the sidecar
+      // fallback) — `docComments:add`'s case body is now ~2177 chars and
+      // `docComments:reply`'s ~2008, both already past the old 2000 budget
+      // (measured 2026-09-27), which made this test fail to find EITHER
+      // branch at all, not fail on its content.
+      const branch = bridge.match(new RegExp(`"${ch}"\\s*->\\s*\\{[\\s\\S]{0,3000}?\\n        \\}\\n`));
       expect(branch, `${ch} branch not found in DocCommentsBridge.kt`).toBeTruthy();
       expect(branch![0]).toContain(realCall);
       expect(branch![0]).not.toContain('"not-implemented-on-mobile"');

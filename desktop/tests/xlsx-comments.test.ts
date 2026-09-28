@@ -854,15 +854,16 @@ describe('xlsx-comments — verify-after-write, with automatic rollback on failu
   });
 });
 
-// T12/T13 adversarial review (docs/active/reviews/2026-09-27-doc-comments-
-// xlsx-t12-t13-review.md), F1 (High): an XML 1.0-illegal control character
-// in comment/reply text used to be written straight into the archive
-// unescaped, producing invalid XML this app's own verify step couldn't
-// catch (it re-reads with the same lenient parser that wrote it).
-describe('xlsx-comments — refuses XML-illegal control characters in comment text', () => {
-  it('refuses add when the text contains an XML 1.0-illegal control character, without touching the file', async () => {
+// Originally (commit ffda4b654, T12/T13 adversarial review F1) this REFUSED
+// an XML 1.0-illegal control character in comment/reply text, since writing
+// one raw into the archive produced invalid XML this app's own verify step
+// couldn't catch (it re-reads with the same lenient parser that wrote it).
+// Changed 2026-09-27 to STRIP those characters instead — a user has no way
+// to see or remove one (it arrives via paste), so a refusal they can't act
+// on is worse than silently dropping an invisible byte.
+describe('xlsx-comments — strips XML-illegal control characters from comment text', () => {
+  it('strips illegal control characters from an added comment and returns the persisted text', async () => {
     await withScratchCopy(DOCLING_FIXTURE, async (target) => {
-      const before = await readFile(target);
       const result = await addXlsxComment({
         absolutePath: target,
         path: 'd.xlsx',
@@ -870,19 +871,22 @@ describe('xlsx-comments — refuses XML-illegal control characters in comment te
         text: 'before\x01\x02\x1Fafter',
         author: 'user',
       });
-      expect(result).toEqual({ ok: false, error: 'invalid-comment-text' });
-      expect(await readFile(target)).toEqual(before);
+      expect(result).toEqual({ ok: true, id: expect.any(String), text: 'beforeafter' });
+
+      const read = await readXlsxComments(await readFile(target), 'd.xlsx');
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const added = read.comments.find((c) => result.ok && c.id === result.id);
+      expect(added?.text).toBe('beforeafter');
     });
   });
 
-  it('refuses reply for the same reason, without touching the file', async () => {
+  it('strips illegal control characters from a reply for the same reason', async () => {
     await withScratchCopy(DOCLING_FIXTURE, async (target) => {
       const before = await readXlsxComments(await readFile(target), 'd.xlsx');
       const f7 = before.ok ? before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7') : undefined;
-      const beforeBytes = await readFile(target);
       const result = await replyToXlsxComment({ absolutePath: target, path: 'd.xlsx', id: f7!.id, text: 'x\x00y', author: 'user' });
-      expect(result).toEqual({ ok: false, error: 'invalid-comment-text' });
-      expect(await readFile(target)).toEqual(beforeBytes);
+      expect(result).toEqual({ ok: true, reply: { id: expect.any(String), author: 'user', text: 'xy', createdAt: expect.any(Number) } });
     });
   });
 
@@ -896,6 +900,7 @@ describe('xlsx-comments — refuses XML-illegal control characters in comment te
         author: 'user',
       });
       expect(result.ok).toBe(true);
+      if (result.ok) expect(result.text).toBe('line one\nline two\ttabbed\rcr');
     });
   });
 });

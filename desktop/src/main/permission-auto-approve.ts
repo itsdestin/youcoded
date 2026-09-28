@@ -1,3 +1,5 @@
+import { lstatSync } from 'fs';
+import { isAbsolute } from 'path';
 import type { PermissionOverrides } from '../shared/types';
 import { docCommentsMcpMutatorTools } from '../shared/doc-comments-mcp';
 import { nativeFormatFor } from './doc-comments/doc-comments-dispatch';
@@ -115,6 +117,36 @@ const FRICTIONLESS_DOC_COMMENT_MODES = new Set(['acceptEdits', 'bypassPermission
  * call falls through to the ordinary ask, same as any other unrecognized
  * tool.
  */
+/**
+ * Review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-
+ * review.md): `nativeFormatFor(path)` decides purely from the caller's own
+ * path string — a `.txt`-named symlink pointing at a real `.docx` extension-
+ * matches as plain text, which used to hit the UNCONDITIONAL auto-approve
+ * branch below no matter the permission mode. Resolving the symlink properly
+ * would need this function to become async and filesystem-touching for the
+ * first time on a hot, synchronous, pre-response hook path (`main.ts` calls
+ * it inline, before answering a blocking hook) — a bigger change than this
+ * finding's own LOW/informational severity justifies — and it still
+ * couldn't follow a workspace-RELATIVE path, since this function has no cwd
+ * to resolve one against (the hook payload's own `cwd` field could supply
+ * one, but wiring that through is the same bigger change). The fail-safe
+ * instead: an ABSOLUTE path that is ITSELF a symlink never gets a free ride
+ * through EITHER branch below — it falls through to the ordinary ask rather
+ * than guessing what it disguises. `lstatSync` (not `realpathSync`) is the
+ * right call here: it inspects ONLY `path` itself, never follows anything,
+ * so it can't itself hang on a broken or deeply-nested link chain — a single
+ * bounded stat, fired at most once per PermissionRequest for one of these
+ * six tools (not a hot loop).
+ */
+function isPathItselfASymlink(path: string): boolean {
+  if (!isAbsolute(path)) return false; // no cwd here to resolve a relative one against
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false; // doesn't exist (a brand-new file) or unreadable — nothing to disguise
+  }
+}
+
 export function shouldAutoApproveDocComment(
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
@@ -125,6 +157,7 @@ export function shouldAutoApproveDocComment(
   if (!docCommentsMcpMutatorTools(serverId).includes(toolName)) return false;
   const path = toolInput?.path;
   if (typeof path !== 'string') return false;
+  if (isPathItselfASymlink(path)) return false;
   if (nativeFormatFor(path) === null) return true;
   return permissionMode !== undefined && FRICTIONLESS_DOC_COMMENT_MODES.has(permissionMode);
 }

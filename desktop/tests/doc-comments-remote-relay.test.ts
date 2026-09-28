@@ -145,7 +145,7 @@ describe('docComments over remote access', () => {
         text: 'x', author: 'user',
       },
     }));
-    expect(sent[1].payload).toEqual({ ok: true, id: expect.stringMatching(/^xt-/) });
+    expect(sent[1].payload).toEqual({ ok: true, id: expect.stringMatching(/^xt-/), text: 'x' });
     await server.handleMessage(client, JSON.stringify({
       type: 'docComments:list', id: 'req-3', payload: { path: 'reports/q3.xlsx', projectRoot: root },
     }));
@@ -178,7 +178,7 @@ describe('docComments over remote access', () => {
         text: 'x', author: 'user',
       },
     }));
-    expect(sent[1].payload).toEqual({ ok: true, id: expect.stringMatching(/^w-/) });
+    expect(sent[1].payload).toEqual({ ok: true, id: expect.stringMatching(/^w-/), text: 'x' });
   });
 
   it('refuses a ../../etc/passwd-shaped path over the WS surface, same as desktop (F3/F1)', async () => {
