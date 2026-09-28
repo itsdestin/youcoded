@@ -36,43 +36,38 @@ function TrashGlyph() {
   );
 }
 
-/** "Send now" (Destin, 2026-09-28 review deck S-1): a dark round button with an
- *  up arrow, rightmost in the row. On hover (or keyboard focus) the words
- *  "Interrupt and Send Now" roll out to the LEFT of the arrow inside the same
- *  button, and the trash button beside it slides left with it at a fixed gap —
- *  it is simply the next item in the row, so the flex layout carries it.
- *
- *  WHY a bare <button>, not the <Button> primitive: the primitive owns its
- *  colours and effects (design lint `no-restyle`), and this needs an inverted
- *  fill plus a label reveal — the same reason CommentActions.tsx gives.
- *  WHY max-width with the motion tokens: this is the app's one sanctioned
- *  width reveal, the session pills' (pill-label-style.ts; ast-grep
- *  `pill-label-reveals-with-motion-tokens`) — a plain ease, never overshoot,
- *  and a one-row hover, not a per-frame or per-keystroke path.
- *  WHY inverted (bg-fg / text-canvas) rather than a fixed dark colour: it is
- *  the darkest fill in light themes and stays high-contrast in dark ones.
- *  Touch has no hover, so on a phone it stays the arrow alone; its full
- *  meaning is in the accessible name for screen readers. */
+/** "Send now" (Destin, 2026-09-28 review decks): rightmost in the row, styled
+ *  like the message box's own send button — the same primary <Button> (theme
+ *  accent fill, the same arrow glyph) rather than a hand-styled look, so it
+ *  reads as "send" wherever the theme puts its accent. On hover or keyboard
+ *  focus the words "Interrupt and Send Now" roll out to the left of the
+ *  arrow inside the button; the trash beside it is the next item in the row,
+ *  so it slides left with a fixed gap.
+ *  WHY the reveal is on an inner span: the primitive owns the button's own
+ *  colours, size and effects (design lint `no-restyle`); only the label's
+ *  max-width animates, with the session pills' sanctioned motion tokens
+ *  (pill-label-style.ts, ast-grep `pill-label-reveals-with-motion-tokens`).
+ *  WHY one inner wrapper: the Button's own gap would otherwise leave a space
+ *  beside the arrow while the label is hidden.
+ *  Touch has no hover, so on a phone it stays the arrow alone; its meaning is
+ *  in the accessible name for screen readers. */
 function SendNowButton({ onClick }: { onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label="Interrupt and send now"
-      className="group coarse-hit ml-1 flex h-7 items-center rounded-full bg-fg pl-2 pr-1.5 text-canvas cursor-pointer select-none hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-    >
-      <span
-        aria-hidden
-        className="max-w-0 overflow-hidden whitespace-nowrap text-xs font-medium opacity-0 group-hover:max-w-48 group-hover:opacity-100 group-hover:pr-1.5 group-focus-visible:max-w-48 group-focus-visible:opacity-100 group-focus-visible:pr-1.5"
-        style={{ transition: 'max-width var(--dur-reveal) var(--ease-reveal), opacity var(--dur-reveal) var(--ease-reveal), padding var(--dur-reveal) var(--ease-reveal)' }}
-      >
-        Interrupt and Send Now
+    <Button variant="primary" size="sm" aria-label="Interrupt and send now" onClick={onClick} className="group">
+      <span className="flex items-center">
+        <span
+          aria-hidden
+          className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 group-hover:max-w-48 group-hover:opacity-100 group-hover:pr-1.5 group-focus-visible:max-w-48 group-focus-visible:opacity-100 group-focus-visible:pr-1.5"
+          style={{ transition: 'max-width var(--dur-reveal) var(--ease-reveal), opacity var(--dur-reveal) var(--ease-reveal), padding var(--dur-reveal) var(--ease-reveal)' }}
+        >
+          Interrupt and Send Now
+        </span>
+        {/* The message box's send arrow (InputBar.tsx "Send message"), same path. */}
+        <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+        </svg>
       </span>
-      <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d="M12 19V5" />
-        <path d="M5 12l7-7 7 7" />
-      </svg>
-    </button>
+    </Button>
   );
 }
 
