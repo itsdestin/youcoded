@@ -12,7 +12,7 @@ import { getOfficeSessions, quitOfficeSessions } from './office-session-registry
 
 export const OFFICE_FLUSH_REQUEST = 'office:flush-request';
 export const OFFICE_FLUSH_DONE = 'office:flush-done';
-export const OFFICE_FLUSH_CAP_MS = 5_000;
+const OFFICE_FLUSH_CAP_MS = 5_000;
 
 interface FlushTarget { send(channel: string, id: string): void; isDestroyed(): boolean }
 interface FlushIpc {

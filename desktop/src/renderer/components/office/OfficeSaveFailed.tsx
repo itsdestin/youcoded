@@ -4,9 +4,7 @@
 // never save (a read-only file, a disk that is gone) never leaves an editor that cannot close
 // and never loses its changes without the person choosing that.
 import React, { useEffect, useState, type RefObject } from 'react';
-import { Button, ErrorState } from '../ui';
-import { OverlayPanel, Scrim } from '../overlays/Overlay';
-import { useEscClose } from '../../hooks/use-esc-close';
+import { Button, Dialog, ErrorState } from '../ui';
 import type { EditorFrameHandle } from './EditorFrame';
 
 export function OfficeSaveFailed({ message, frame, onCloseWithoutSaving, className = '' }: {
@@ -52,26 +50,22 @@ export function OfficeSaveFailed({ message, frame, onCloseWithoutSaving, classNa
 }
 
 function CloseWithoutSavingConfirm({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
-  // Esc = Cancel, through the app's shared Esc stack (same pattern as DiscardConfirmDialog).
-  useEscClose(true, onCancel);
+  // The app's confirm shell (<Dialog>: scrim, Esc = Cancel through the shared Esc stack).
   return (
-    <Scrim layer={3} onClick={onCancel} className="flex items-center justify-center">
-      <OverlayPanel
-        layer={3}
-        destructive
-        role="alertdialog"
-        aria-modal
-        aria-label="Close without saving"
-        className="p-4 max-w-sm w-full mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="text-sm font-medium text-fg mb-1">Close without saving?</div>
-        <div className="text-sm text-fg-2 mb-4">Your changes since the last save will be lost.</div>
-        <div className="flex gap-2 justify-end">
-          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-          <Button variant="danger" onClick={onConfirm}>Close</Button>
-        </div>
-      </OverlayPanel>
-    </Scrim>
+    <Dialog
+      open
+      onClose={onCancel}
+      title="Close without saving?"
+      size="prompt"
+      layer={3}
+      destructive
+      noScreen="opens only after a real save has failed, which the photo build's fake host never produces"
+    >
+      <p className="text-sm text-fg-2 pb-4">Your changes since the last save will be lost.</p>
+      <div className="flex gap-2 justify-end">
+        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
+        <Button variant="danger" onClick={onConfirm}>Close</Button>
+      </div>
+    </Dialog>
   );
 }
