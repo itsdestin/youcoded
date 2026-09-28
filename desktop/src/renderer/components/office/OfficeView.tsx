@@ -35,7 +35,8 @@ type StatusLoad = { state: 'loading' } | { state: 'ready'; status: OfficeStatus 
 
 /** projectRoot: the focused conversation's folder (PageHost passes it), for "In <project>". */
 /** visible: false while the page view is closed or shows another page — the view stays mounted
- *  then (PageHost) so no open editor is torn down with unsaved changes (C2, fix round 1). */
+ *  then, invisible but laid out (PageHost), so no open editor is torn down with unsaved changes
+ *  (C2, fix round 1) and none is laid out at zero size. */
 export function OfficeView({ projectRoot = null, visible = true }: { projectRoot?: string | null; visible?: boolean }) {
   const { docs, active, versionsFor } = useOfficeTabs();
   const [load, setLoad] = useState<StatusLoad>({ state: 'loading' });
@@ -111,8 +112,9 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
             key={d.file.path}
             ref={(h) => { if (h) frames.current.set(d.file.path, h); else frames.current.delete(d.file.path); }}
             file={d.file}
-            hidden={!visible || d.closing || d.file.path !== active}
-            screen={`office/${d.file.kind}`}
+            hidden={d.closing || d.file.path !== active}
+            // Kept but not shown (PageHost): no photo mark — the screen is not on view.
+            screen={visible ? `office/${d.file.kind}` : undefined}
             closing={d.closing}
             onClosed={() => finishClose(d.file.path)}
             onCloseFailed={() => cancelClose(d.file.path)}

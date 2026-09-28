@@ -323,7 +323,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     // .screen-view / .screen-pane: floating-chrome themes restyle them (see
     // globals.css → "Screens in floating chrome"); data-screen-frame is the
     // workbench's variant switch for that design round, 'cards' in the app.
-    <div className="screen-view fixed inset-0 bg-panel z-40 flex flex-col" data-screen-frame={workbenchScreenFrame()} hidden={!open}>
+    // Closed but kept for Office: invisible, not display:none — an editor laid out at zero size
+    // (opened, or shown again, while hidden) came back blank or mis-scrolled (dev window, fix
+    // round 1). visibility:hidden keeps its size, takes no clicks and is not painted.
+    <div className={`screen-view fixed inset-0 bg-panel z-40 flex flex-col ${open ? '' : 'invisible pointer-events-none'}`} aria-hidden={open ? undefined : true} data-screen-frame={workbenchScreenFrame()}>
       {open && <ScreenBand
         settingsOpen={settingsOpen}
         onToggleSettings={onToggleSettings}
@@ -392,7 +395,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
           {/* First, so its place in the tree never changes whatever else shows (see officeKept). */}
           {(isOffice || officeKept) && (
-            <div className="absolute inset-0" hidden={!(open && isOffice)}>
+            <div className={`absolute inset-0 ${open && isOffice ? '' : 'invisible pointer-events-none'}`} aria-hidden={open && isOffice ? undefined : true}>
               <OfficeView projectRoot={projectRoot} visible={open && isOffice} />
             </div>
           )}

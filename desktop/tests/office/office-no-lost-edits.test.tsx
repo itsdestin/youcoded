@@ -62,7 +62,11 @@ describe('an Office editor is not torn down with unsaved work', () => {
     rerender(host(false));
     expect(frameOf(container)).toBe(before);
     expect(office.close).not.toHaveBeenCalled();
+    // Invisible, not display:none: an editor laid out at zero size came back blank.
+    expect(before!.closest('[hidden]')).toBeNull();
+    expect(before!.closest('.invisible')).not.toBeNull();
     rerender(host(true));
+    expect(before!.closest('.invisible')).toBeNull();
     expect(frameOf(container)).toBe(before);
   });
 
