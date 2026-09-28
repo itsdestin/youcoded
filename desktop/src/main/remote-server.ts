@@ -21,6 +21,7 @@ import { getPagesService } from './pages/pages-service';
 import type { PageFetchRequest } from '../shared/pages-types';
 import {
   listComments, addComment, replyToComment, resolveComment, reopenComment, moveComment, resolveWatchTarget,
+  editComment, editReply, deleteComment, deleteReply,
 } from './doc-comments/doc-comments-store';
 import { watchComments, unwatchComments, dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
 import {
@@ -32,11 +33,19 @@ import {
   resolveNativeDocxComment,
   reopenNativeDocxComment,
   moveNativeDocxComment,
+  editNativeDocxComment,
+  editNativeDocxReply,
+  deleteNativeDocxComment,
+  deleteNativeDocxReply,
   addNativeXlsxComment,
   replyToNativeXlsxComment,
   resolveNativeXlsxComment,
   reopenNativeXlsxComment,
   moveNativeXlsxComment,
+  editNativeXlsxComment,
+  editNativeXlsxReply,
+  deleteNativeXlsxComment,
+  deleteNativeXlsxReply,
 } from './doc-comments/doc-comments-dispatch';
 import { refuseUnknownProjectRoot, isValidCommentSelectorShape, missingSelectorField } from './doc-comments/doc-comments-gate';
 // Shared cap so a local folder's description (set via a remote browser client)
@@ -2503,6 +2512,102 @@ export class RemoteServer {
           projectRoot,
           id: String(payload?.id ?? ''),
           newSelector: payload?.newSelector,
+        }));
+        break;
+      }
+      // Edit/delete build (2026-09-28, design doc §"Edit and delete") —
+      // same containment/format-dispatch shape as every mutation above.
+      case 'docComments:edit': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await editNativeDocxComment({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), text: String(payload?.text ?? ''),
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await editNativeXlsxComment({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), text: String(payload?.text ?? ''),
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await editComment({
+          path: filePath, projectRoot, id: String(payload?.id ?? ''), text: String(payload?.text ?? ''),
+        }));
+        break;
+      }
+      case 'docComments:edit-reply': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await editNativeDocxReply({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''), text: String(payload?.text ?? ''),
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await editNativeXlsxReply({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''), text: String(payload?.text ?? ''),
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await editReply({
+          path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''), text: String(payload?.text ?? ''),
+        }));
+        break;
+      }
+      case 'docComments:delete': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await deleteNativeDocxComment({ path: filePath, projectRoot, id: String(payload?.id ?? '') }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await deleteNativeXlsxComment({ path: filePath, projectRoot, id: String(payload?.id ?? '') }));
+          break;
+        }
+        this.respond(client.ws, type, id, await deleteComment({ path: filePath, projectRoot, id: String(payload?.id ?? '') }));
+        break;
+      }
+      case 'docComments:delete-reply': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await deleteNativeDocxReply({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''),
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await deleteNativeXlsxReply({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''),
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await deleteReply({
+          path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''),
         }));
         break;
       }

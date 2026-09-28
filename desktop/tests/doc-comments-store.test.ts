@@ -23,6 +23,10 @@ import {
   reopenComment,
   moveComment,
   resolveWatchTarget,
+  editComment,
+  editReply,
+  deleteComment,
+  deleteReply,
 } from '../src/main/doc-comments/doc-comments-store';
 import type {
   CellSelector,
@@ -124,6 +128,84 @@ describe('read-modify-write', () => {
     expect(result).toEqual({ ok: false, error: 'comment-not-found' });
     const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'none.md.json');
     await expect(fs.promises.access(sidecarPath)).rejects.toThrow();
+  });
+});
+
+// Edit/delete build (2026-09-28, design doc §"Edit and delete") — anyone's
+// comment/reply can be edited or deleted (decisions.json), no "edited"
+// marker is stored, and deleting a thread's first comment deletes the whole
+// thread (replies included).
+describe('edit / delete', () => {
+  it('editComment overwrites text in place, with no edited marker anywhere in the record', async () => {
+    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'original', author: 'user' });
+    if (!added.ok) throw new Error('setup');
+    const edited = await editComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'rewritten' });
+    expect(edited).toEqual({ ok: true });
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    const onDisk = await readSidecar(sidecarPath);
+    expect(onDisk.comments[0].text).toBe('rewritten');
+    expect(Object.keys(onDisk.comments[0])).not.toContain('edited');
+    expect(Object.keys(onDisk.comments[0])).not.toContain('editedAt');
+  });
+
+  it('editComment against an unknown id refuses cleanly', async () => {
+    const result = await editComment({ path: 'docs/plan.md', projectRoot: root, id: 'c-missing', text: 'x' });
+    expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+  });
+
+  it('editReply overwrites one reply and returns the persisted CommentReply, leaving the parent and other replies untouched', async () => {
+    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'original', author: 'user' });
+    if (!added.ok) throw new Error('setup');
+    await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'reply one', author: 'assistant' });
+    const second = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'reply two', author: 'user' });
+    if (!second.ok) throw new Error('setup');
+    const edited = await editReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: second.reply.id, text: 'reply two, edited' });
+    expect(edited).toEqual({ ok: true, reply: { id: second.reply.id, author: 'user', text: 'reply two, edited', createdAt: expect.any(Number) } });
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    const onDisk = await readSidecar(sidecarPath);
+    expect(onDisk.comments[0].text).toBe('original'); // parent untouched
+    expect(onDisk.comments[0].replies.map((r) => r.text)).toEqual(['reply one', 'reply two, edited']);
+  });
+
+  it('deleteComment removes a thread\'s FIRST comment and every reply with it (decisions.json)', async () => {
+    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'root', author: 'user' });
+    if (!added.ok) throw new Error('setup');
+    await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'a reply', author: 'assistant' });
+    const other = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: { kind: 'text', selector: { ...TEXT_QUOTE, exact: 'other' } }, text: 'unrelated thread', author: 'user' });
+    if (!other.ok) throw new Error('setup');
+
+    const deleted = await deleteComment({ path: 'docs/plan.md', projectRoot: root, id: added.id });
+    expect(deleted).toEqual({ ok: true });
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    const onDisk = await readSidecar(sidecarPath);
+    expect(onDisk.comments.map((c) => c.id)).toEqual([other.id]); // the OTHER thread survives, replies-and-all gone with the deleted one
+  });
+
+  it('deleteComment against an unknown id refuses cleanly', async () => {
+    const result = await deleteComment({ path: 'docs/plan.md', projectRoot: root, id: 'c-missing' });
+    expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+  });
+
+  it('deleteReply removes ONE reply, leaving the parent comment and its other replies intact', async () => {
+    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'root', author: 'user' });
+    if (!added.ok) throw new Error('setup');
+    const first = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'reply one', author: 'assistant' });
+    const second = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'reply two', author: 'user' });
+    if (!first.ok || !second.ok) throw new Error('setup');
+
+    const deleted = await deleteReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: first.reply.id });
+    expect(deleted).toEqual({ ok: true });
+    const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json');
+    const onDisk = await readSidecar(sidecarPath);
+    expect(onDisk.comments[0].id).toBe(added.id); // the thread itself survives
+    expect(onDisk.comments[0].replies).toEqual([expect.objectContaining({ id: second.reply.id, text: 'reply two' })]);
+  });
+
+  it('deleteReply against an unknown reply id refuses cleanly, leaving the comment untouched', async () => {
+    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'root', author: 'user' });
+    if (!added.ok) throw new Error('setup');
+    const result = await deleteReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: `${added.id}-r9` });
+    expect(result).toEqual({ ok: false, error: 'comment-not-found' });
   });
 });
 

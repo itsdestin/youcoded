@@ -2595,6 +2595,16 @@ export function installShim(): void {
         invoke('docComments:reopen', { path: filePath, id, by, projectRoot }),
       move: (filePath: string, id: string, newSelector: unknown, projectRoot?: string) =>
         invoke('docComments:move', { path: filePath, id, newSelector, projectRoot }),
+      // Edit/delete build (2026-09-28, design doc §"Edit and delete") —
+      // mirrors preload.ts exactly.
+      edit: (filePath: string, id: string, text: string, projectRoot?: string) =>
+        invoke('docComments:edit', { path: filePath, id, text, projectRoot }),
+      editReply: (filePath: string, id: string, replyId: string, text: string, projectRoot?: string) =>
+        invoke('docComments:edit-reply', { path: filePath, id, replyId, text, projectRoot }),
+      delete: (filePath: string, id: string, projectRoot?: string) =>
+        invoke('docComments:delete', { path: filePath, id, projectRoot }),
+      deleteReply: (filePath: string, id: string, replyId: string, projectRoot?: string) =>
+        invoke('docComments:delete-reply', { path: filePath, id, replyId, projectRoot }),
       // REJECT_ON_NOT_OK below (new channels, no existing caller tolerates
       // {ok:false} itself — review 1, F10): a failed watch must reach the
       // caller's catch, never resolve as a value a comments pane could

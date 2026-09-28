@@ -40,6 +40,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import JSZip from 'jszip';
 import { DOMParser } from 'linkedom';
+import ExcelJS from 'exceljs';
 import {
   readXlsxComments,
   addXlsxComment,
@@ -47,6 +48,10 @@ import {
   resolveXlsxComment,
   reopenXlsxComment,
   moveXlsxComment,
+  editXlsxComment,
+  editXlsxReply,
+  deleteXlsxComment,
+  deleteXlsxReply,
 } from '../src/main/doc-comments/xlsx-comments';
 import { backupPathFor } from '../src/main/doc-comments/write-pipeline';
 import { buildDeclaredOversizeZip, corruptLocalFileData } from './fixtures/doc-comments/oversized-zip';
@@ -190,6 +195,17 @@ async function assertOpensInLibreOffice(bytes: Buffer): Promise<void> {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/** A brand-new, single-sheet workbook with NO comments of any kind — used by
+ *  the delete-cleanup tests (§"the sheet's last comment") so "add the ONLY
+ *  comment, then delete it" has a real zero-comments starting point to prove
+ *  the parts really are gone afterward, rather than merely unchanged. */
+async function writeMinimalXlsxTo(target: string): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  const sheet = wb.addWorksheet('Sheet1');
+  sheet.getCell('A1').value = 'hello';
+  await wb.xlsx.writeFile(target);
 }
 
 // ===========================================================================
@@ -746,6 +762,224 @@ describe('xlsx-comments — move (repoint)', () => {
       expect(moved?.resolved).toBe(withReplies.resolved);
       expect(moved?.text).toBe(withReplies.text);
       expect(moved?.replies.map((r) => r.text)).toEqual(withReplies.replies.map((r) => r.text));
+    });
+  });
+});
+
+// Edit/delete build (2026-09-28, design doc §"Edit and delete"): anyone's
+// comment/reply can be edited or deleted (decisions.json), no "edited"
+// marker is stored, and deleting a thread's first comment deletes the whole
+// thread. F7 (docling fixture) starts with a root + one reply — used below
+// the same way the reply/move suites above already do.
+describe('xlsx-comments — edit', () => {
+  it('overwrites the ROOT thread\'s text and rebuilds the legacy placeholder, leaving ref/dT/personId/id untouched', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'd.xlsx');
+      const f7 = before.ok ? before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7') : undefined;
+      expect(f7).toBeDefined();
+
+      const result = await editXlsxComment({ absolutePath: target, path: 'd.xlsx', id: f7!.id, text: 'Rewritten root.' });
+      expect(result).toEqual({ ok: true, text: 'Rewritten root.' });
+
+      const bytes = await readFile(target);
+      const after = await readXlsxComments(bytes, 'd.xlsx');
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      const edited = after.comments.find((c) => c.id === f7!.id);
+      expect(edited?.text).toBe('Rewritten root.');
+      expect(edited?.author).toBe(f7?.author); // person/date untouched
+      expect(edited?.createdAt).toBe(f7?.createdAt);
+      expect(edited?.selector).toEqual(f7?.selector);
+      expect(edited?.replies.map((r) => r.text)).toEqual(f7?.replies.map((r) => r.text));
+
+      // §4.2: the placeholder is rebuilt whole from the CURRENT transcript.
+      const zip = await JSZip.loadAsync(bytes);
+      const commentsXml = await zip.file('xl/comments1.xml')!.async('string');
+      expect(commentsXml).toContain('Comment:\n    Rewritten root.');
+    });
+  });
+
+  it('refuses `comment-not-found` for an id with a well-formed shape but no matching thread', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const result = await editXlsxComment({ absolutePath: target, path: 'd.xlsx', id: 'xt-1-Z99-00000000-0000-0000-0000-000000000000', text: 'x' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+
+  it('editXlsxReply overwrites one reply and returns the persisted CommentReply, leaving the root untouched', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'd.xlsx');
+      const f7 = before.ok ? before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7') : undefined;
+      const reply = f7?.replies[0];
+      expect(reply).toBeDefined();
+
+      const result = await editXlsxReply({ absolutePath: target, path: 'd.xlsx', id: f7!.id, replyId: reply!.id, text: 'Edited reply.' });
+      expect(result).toEqual({ ok: true, reply: { id: reply!.id, author: reply!.author, text: 'Edited reply.', createdAt: reply!.createdAt } });
+
+      const after = await readXlsxComments(await readFile(target), 'd.xlsx');
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      const parent = after.comments.find((c) => c.id === f7!.id);
+      expect(parent?.text).toBe(f7?.text); // root untouched
+      expect(parent?.replies).toEqual([{ ...reply, text: 'Edited reply.' }]);
+    });
+  });
+
+  it('refuses an unknown replyId', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'd.xlsx');
+      const f7 = before.ok ? before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7') : undefined;
+      const result = await editXlsxReply({ absolutePath: target, path: 'd.xlsx', id: f7!.id, replyId: `${f7!.id}-r9`, text: 'x' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+});
+
+describe('xlsx-comments — delete (whole thread)', () => {
+  it('removes the root + its reply and the ONE legacy placeholder, leaving G12 and the genuine Notes untouched', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'd.xlsx');
+      const f7 = before.ok ? before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7') : undefined;
+      expect(f7).toBeDefined();
+
+      const result = await deleteXlsxComment({ absolutePath: target, path: 'd.xlsx', id: f7!.id });
+      expect(result).toEqual({ ok: true });
+
+      const bytes = await readFile(target);
+      const after = await readXlsxComments(bytes, 'd.xlsx');
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      expect(after.comments.some((c) => c.id === f7!.id)).toBe(false);
+      // G12's own independent thread survives untouched.
+      expect(after.comments.some((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'G12')).toBe(true);
+
+      // §4.1: a genuine Note is never touched by this module — the workbook
+      // still carries other comments (G12's thread), so cleanup must NOT
+      // fire; structural checks a real Excel open would notice.
+      await assertStructurallyOpenable(bytes);
+      const zip = await JSZip.loadAsync(bytes);
+      const commentsXml = await zip.file('xl/comments1.xml')!.async('string');
+      expect(commentsXml).not.toContain('F7'); // the deleted thread's own placeholder is gone
+    });
+  });
+
+  it("if that was the sheet's LAST comment, removes the now-empty parts, their rels, content-type overrides and <legacyDrawing> — leaving the workbook exactly as if it never had comments", async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ycd-xlsx-write-'));
+    const target = join(dir, 'fresh.xlsx');
+    try {
+      await writeMinimalXlsxTo(target);
+      const beforeAdd = await readFile(target);
+      const beforeNames = new Set(await zipEntryNames(beforeAdd));
+      expect(beforeNames.has('xl/comments1.xml')).toBe(false);
+
+      const added = await addXlsxComment({ absolutePath: target, path: 'fresh.xlsx', selector: cellSelector('A1'), text: 'only comment', author: 'user' });
+      expect(added.ok).toBe(true);
+      if (!added.ok) return;
+      const afterAddNames = new Set(await zipEntryNames(await readFile(target)));
+      expect(afterAddNames.has('xl/comments1.xml')).toBe(true);
+      expect(afterAddNames.has('xl/drawings/vmlDrawing1.vml')).toBe(true);
+      expect(afterAddNames.has('xl/threadedComments/threadedComment1.xml')).toBe(true);
+
+      const deleted = await deleteXlsxComment({ absolutePath: target, path: 'fresh.xlsx', id: added.id });
+      expect(deleted).toEqual({ ok: true });
+
+      const finalBytes = await readFile(target);
+      const finalNames = new Set(await zipEntryNames(finalBytes));
+      expect(finalNames.has('xl/comments1.xml')).toBe(false);
+      expect(finalNames.has('xl/drawings/vmlDrawing1.vml')).toBe(false);
+      expect(finalNames.has('xl/threadedComments/threadedComment1.xml')).toBe(false);
+
+      // No dangling rels/content-types/legacyDrawing pointing at the parts
+      // just removed — "exactly as if it never had comments on that sheet".
+      const zip = await JSZip.loadAsync(finalBytes);
+      const worksheetXml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+      expect(worksheetXml).not.toContain('legacyDrawing');
+      const relsXml = await zip.file('xl/worksheets/_rels/sheet1.xml.rels')!.async('string');
+      expect(relsXml).not.toContain('comments1.xml');
+      expect(relsXml).not.toContain('vmlDrawing1.vml');
+      expect(relsXml).not.toContain('threadedComment1.xml');
+      const contentTypesXml = await zip.file('[Content_Types].xml')!.async('string');
+      expect(contentTypesXml).not.toContain('/xl/comments1.xml');
+      expect(contentTypesXml).not.toContain('/xl/threadedComments/threadedComment1.xml');
+
+      await assertStructurallyOpenable(finalBytes);
+      await assertOpensInLibreOffice(finalBytes);
+
+      // A re-read confirms this is not just an empty ceremony — the file is
+      // genuinely back to "no comments" as `readXlsxComments` itself sees it.
+      const reread = await readXlsxComments(finalBytes, 'fresh.xlsx');
+      expect(reread).toEqual({ ok: true, comments: [] });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('deleting one of FIVE independent threads on the same cell never disturbs its siblings', async () => {
+    await withScratchCopy(ELDEN_FIXTURE, async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'elden.xlsx');
+      expect(before.ok).toBe(true);
+      if (!before.ok) return;
+      const atB19 = before.comments.filter((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'B19');
+      expect(atB19).toHaveLength(5);
+      const [victim, ...others] = atB19;
+
+      const result = await deleteXlsxComment({ absolutePath: target, path: 'elden.xlsx', id: victim.id });
+      expect(result).toEqual({ ok: true });
+
+      const after = await readXlsxComments(await readFile(target), 'elden.xlsx');
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      expect(after.comments.some((c) => c.id === victim.id)).toBe(false);
+      for (const o of others) {
+        const stillThere = after.comments.find((c) => c.id === o.id);
+        expect(stillThere?.text).toBe(o.text);
+        expect(stillThere?.replies.map((r) => r.text)).toEqual(o.replies.map((r) => r.text));
+      }
+    });
+  });
+
+  it('refuses `comment-not-found` for an id with a well-formed shape but no matching thread, leaving the file byte-identical', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const before = await readFile(target);
+      const result = await deleteXlsxComment({ absolutePath: target, path: 'd.xlsx', id: 'xt-1-Z99-00000000-0000-0000-0000-000000000000' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+      expect(await readFile(target)).toEqual(before);
+    });
+  });
+});
+
+describe('xlsx-comments — delete-reply', () => {
+  it('removes ONE reply and rebuilds the placeholder, leaving the root (and its resolve state) intact', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'd.xlsx');
+      const f7 = before.ok ? before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7') : undefined;
+      const reply = f7?.replies[0];
+      expect(reply).toBeDefined();
+
+      const result = await deleteXlsxReply({ absolutePath: target, path: 'd.xlsx', id: f7!.id, replyId: reply!.id });
+      expect(result).toEqual({ ok: true });
+
+      const bytes = await readFile(target);
+      const after = await readXlsxComments(bytes, 'd.xlsx');
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      const root = after.comments.find((c) => c.id === f7!.id);
+      expect(root).toBeDefined(); // the thread itself survives
+      expect(root?.replies).toHaveLength(0);
+      expect(root?.text).toBe(f7?.text);
+
+      const zip = await JSZip.loadAsync(bytes);
+      const commentsXml = await zip.file('xl/comments1.xml')!.async('string');
+      expect(commentsXml).not.toContain('Reply:'); // the placeholder was rebuilt with no reply block left
+    });
+  });
+
+  it('refuses an unknown replyId', async () => {
+    await withScratchCopy(DOCLING_FIXTURE, async (target) => {
+      const before = await readXlsxComments(await readFile(target), 'd.xlsx');
+      const f7 = before.ok ? before.comments.find((c) => c.selector.kind === 'cell' && c.selector.selector.cell === 'F7') : undefined;
+      const result = await deleteXlsxReply({ absolutePath: target, path: 'd.xlsx', id: f7!.id, replyId: `${f7!.id}-r9` });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
     });
   });
 });

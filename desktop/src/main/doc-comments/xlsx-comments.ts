@@ -1366,6 +1366,129 @@ function removeThreadFromWorksheet(ctx: WorksheetContext, cell: string, rootEl: 
   }
 }
 
+// -----------------------------------------------------------------------
+// Edit/delete build (2026-09-28, design doc §"Edit and delete"): anyone's
+// comment/reply can be edited or deleted, no "edited" marker is ever stored
+// or shown, and deleting a THREAD's first comment deletes the whole thread
+// — decisions.json (doc-comments.edit-delete.questions.answers.json).
+// -----------------------------------------------------------------------
+
+/** Shared across every reply-id convention this feature mints — see
+ *  docx-comments.ts's own copy of this helper for the full reasoning (kept
+ *  as a small per-module duplicate rather than a shared import: neither
+ *  module otherwise depends on the other, and the shape is one line). */
+function replyOrdinalFromId(replyId: string): number | null {
+  const m = /-r(\d+)$/.exec(replyId);
+  return m ? Number.parseInt(m[1], 10) : null;
+}
+
+/** Overwrites a `<threadedComment>` element's OWN `<text>` child in place —
+ *  `ref`/`dT`/`personId`/`id`/`parentId`/`done` all stay untouched, so
+ *  "keep author/date" (the task brief's own docx wording, equally true
+ *  here: `personId`+`dT` are this format's author/date) holds simply by
+ *  never touching them. */
+function setThreadedCommentText(doc: Document, el: Element, text: string): void {
+  const existing = elementsByLocalName(el, 'text')[0];
+  if (existing) {
+    existing.textContent = text;
+    return;
+  }
+  const prefix = detectPrefix(doc);
+  const textEl = doc.createElement(tcTag(prefix, 'text'));
+  textEl.textContent = text;
+  el.appendChild(textEl);
+}
+
+/** §4.2: the legacy placeholder is REBUILT WHOLE from the thread's current
+ *  full transcript after ANY edit or delete, never patched — the same rule
+ *  `mutateReplyToXlsxComment` already follows for a new reply, reused here
+ *  so edit/delete can never leave root/reply text out of sync with the
+ *  placeholder a legacy Excel reader still shows. */
+function rebuildPlaceholderForRoot(ctx: WorksheetContext, rootEl: Element): void {
+  if (!ctx.commentsDoc || !ctx.threadedDoc) return;
+  const rootId = rootEl.getAttribute('id') ?? '';
+  const commentEl = findTcComment(ctx.commentsDoc, rootId);
+  if (!commentEl) return;
+  const repliesSorted = repliesOfRoot(ctx.threadedDoc, rootId)
+    .slice()
+    .sort((a, b) => parseThreadedDate(a.getAttribute('dT') ?? '') - parseThreadedDate(b.getAttribute('dT') ?? ''));
+  const body = buildPlaceholderBody(
+    textOfThreadedComment(rootEl),
+    repliesSorted.map((r) => textOfThreadedComment(r))
+  );
+  setXlsxCommentBody(ctx.commentsDoc, commentEl, body);
+  ctx.commentsChanged = true;
+}
+
+/** §4.2's own `providerId="YouCoded"`/`displayName`-reuse person entries are
+ *  looked up the same way `readXlsxComments` builds its own `personMap` —
+ *  duplicated narrowly here (rather than threading a shared map through
+ *  every write call) since edit-reply is the only write path that needs a
+ *  reply's AUTHOR back out (every other write already knows the author it's
+ *  writing; this one only ever changes text). */
+function personDisplayName(archive: XlsxArchive, personIdBraced: string): string {
+  if (!archive.personsDoc) return 'Unknown';
+  const target = normalizeGuid(personIdBraced);
+  for (const el of elementsByLocalName(archive.personsDoc, 'person')) {
+    if (normalizeGuid(el.getAttribute('id') ?? '') === target) {
+      return decodeXmlEntities(el.getAttribute('displayName') ?? 'Unknown');
+    }
+  }
+  return 'Unknown';
+}
+
+/** Task brief: "if that was the sheet's last comment, remove the now-empty
+ *  parts, their rels, content-type overrides and the `<legacyDrawing>`,
+ *  leaving the workbook exactly as if it never had comments on that sheet."
+ *  Never built for Move (which always re-inserts the thread elsewhere, so a
+ *  worksheet it vacates is never checked for this) — genuinely new for
+ *  Delete. "No comments left" means neither a threaded comment NOR a
+ *  legacy `<comment>` of ANY kind remains — a genuine Note on this same
+ *  worksheet (§4.1, never touched by this module) keeps the parts alive. */
+function cleanupEmptyCommentPartsIfNeeded(archive: XlsxArchive, ctx: WorksheetContext): void {
+  if (!ctx.threadedDoc || !ctx.commentsDoc || !ctx.vmlDoc) return;
+  const anyThreaded = elementsByLocalName(ctx.threadedDoc, 'threadedComment').length > 0;
+  const anyLegacyComment = elementsByTag(ctx.commentsDoc, 'comment').length > 0;
+  if (anyThreaded || anyLegacyComment) return;
+
+  if (ctx.commentsPartPath) archive.zip.remove(ctx.commentsPartPath);
+  if (ctx.vmlPartPath) archive.zip.remove(ctx.vmlPartPath);
+  if (ctx.threadedPartPath) archive.zip.remove(ctx.threadedPartPath);
+
+  for (const el of elementsByTag(ctx.relsDoc, 'Relationship')) {
+    const type = el.getAttribute('Type');
+    if (type === COMMENTS_REL_TYPE || type === VML_REL_TYPE || type === THREADED_COMMENT_REL_TYPE) {
+      el.parentNode?.removeChild(el as unknown as Node);
+    }
+  }
+  ctx.relsChanged = true;
+
+  // The shared `vml` Default extension entry in [Content_Types].xml is left
+  // alone — it may still be needed by another worksheet's own vmlDrawing
+  // part; only the two per-worksheet Overrides this sheet minted are removed.
+  for (const el of elementsByTag(archive.contentTypesDoc, 'Override')) {
+    const name = el.getAttribute('PartName');
+    if (name === `/${ctx.commentsPartPath}` || name === `/${ctx.threadedPartPath}`) {
+      el.parentNode?.removeChild(el as unknown as Node);
+    }
+  }
+  archive.contentTypesChanged = true;
+
+  const legacyDrawingEl = elementsByTag(ctx.worksheetDoc, 'legacyDrawing')[0];
+  legacyDrawingEl?.parentNode?.removeChild(legacyDrawingEl as unknown as Node);
+  ctx.worksheetChanged = true;
+
+  // Nulled so `serializeXlsxArchive`'s own `ctx.commentsDoc && ctx.commentsPartPath`-
+  // shaped gates never try to write a part this function just removed from
+  // the zip outright.
+  ctx.commentsPartPath = null;
+  ctx.vmlPartPath = null;
+  ctx.threadedPartPath = null;
+  ctx.commentsDoc = null;
+  ctx.vmlDoc = null;
+  ctx.threadedDoc = null;
+}
+
 interface ThreadSnapshotReply {
   id: string;
   personId: string;
@@ -1866,6 +1989,112 @@ async function mutateMoveXlsxComment(
   return { ok: true, bytes, id: buildXlsxThreadId(newCtx.sheetId, newCell, snapshot.id) };
 }
 
+/** Edit build (2026-09-28): overwrites the ROOT thread's own `<text>`, then
+ *  rebuilds the legacy placeholder from the thread's current transcript
+ *  (§4.2 — the placeholder is always rebuilt whole, never patched). */
+async function mutateEditXlsxComment(
+  currentBytes: Buffer,
+  args: { id: string; text: string }
+): Promise<XlsxMutateResult<{ bytes: Buffer; text: string }>> {
+  const text = stripIllegalXmlChars(args.text);
+  const loaded = await loadXlsxArchiveForWrite(currentBytes);
+  if (!loaded.ok) return loaded;
+  const { archive } = loaded;
+  const found = await resolveXlsxThreadTarget(archive, args.id);
+  if (!found.ok) return found;
+  const { ctx, rootEl } = found.target;
+  setThreadedCommentText(ctx.threadedDoc!, rootEl, text);
+  ctx.threadedChanged = true;
+  rebuildPlaceholderForRoot(ctx, rootEl);
+  const bytes = await serializeXlsxArchive(archive);
+  return { ok: true, bytes, text };
+}
+
+/** Edit build: `id` names the thread's root (matches every other
+ *  reply/resolve/reopen/move call shape); `replyId`'s trailing `-r{n}`
+ *  (`replyOrdinalFromId`) selects which reply within it, sorted by `dT` the
+ *  SAME way the read path assigns ordinals. */
+async function mutateEditXlsxReply(
+  currentBytes: Buffer,
+  args: { id: string; replyId: string; text: string }
+): Promise<XlsxMutateResult<{ bytes: Buffer; reply: CommentReply }>> {
+  const text = stripIllegalXmlChars(args.text);
+  const ordinal = replyOrdinalFromId(args.replyId);
+  if (ordinal === null) return { ok: false, error: 'comment-not-found' };
+  const loaded = await loadXlsxArchiveForWrite(currentBytes);
+  if (!loaded.ok) return loaded;
+  const { archive } = loaded;
+  const found = await resolveXlsxThreadTarget(archive, args.id);
+  if (!found.ok) return found;
+  const { ctx, rootEl } = found.target;
+  const rootId = rootEl.getAttribute('id') ?? '';
+  const repliesSorted = repliesOfRoot(ctx.threadedDoc!, rootId)
+    .slice()
+    .sort((a, b) => parseThreadedDate(a.getAttribute('dT') ?? '') - parseThreadedDate(b.getAttribute('dT') ?? ''));
+  const target = repliesSorted[ordinal - 1];
+  if (!target) return { ok: false, error: 'comment-not-found' };
+  setThreadedCommentText(ctx.threadedDoc!, target, text);
+  ctx.threadedChanged = true;
+  rebuildPlaceholderForRoot(ctx, rootEl);
+  const personId = target.getAttribute('personId') ?? '';
+  const bytes = await serializeXlsxArchive(archive);
+  const reply: CommentReply = {
+    id: args.replyId,
+    author: toCommentAuthor(personDisplayName(archive, personId)),
+    text,
+    createdAt: parseThreadedDate(target.getAttribute('dT') ?? ''),
+  };
+  return { ok: true, bytes, reply };
+}
+
+/** Delete build: removes the root + every reply, its legacy placeholder and
+ *  VML shape (`removeThreadFromWorksheet`, already built for Move), then —
+ *  new here — cleans up the worksheet's own now-empty comment parts if this
+ *  was its last comment of any kind. */
+async function mutateDeleteXlsxComment(
+  currentBytes: Buffer,
+  args: { id: string }
+): Promise<XlsxMutateResult<{ bytes: Buffer }>> {
+  const loaded = await loadXlsxArchiveForWrite(currentBytes);
+  if (!loaded.ok) return loaded;
+  const { archive } = loaded;
+  const found = await resolveXlsxThreadTarget(archive, args.id);
+  if (!found.ok) return found;
+  const { ctx, cell, rootEl } = found.target;
+  removeThreadFromWorksheet(ctx, cell, rootEl);
+  cleanupEmptyCommentPartsIfNeeded(archive, ctx);
+  const bytes = await serializeXlsxArchive(archive);
+  return { ok: true, bytes };
+}
+
+/** Delete build: removes ONE reply and rebuilds the placeholder from what's
+ *  left — never touches the root, other replies, or the VML shape/legacy
+ *  `<comment>`'s own existence (the thread itself still has its root). */
+async function mutateDeleteXlsxReply(
+  currentBytes: Buffer,
+  args: { id: string; replyId: string }
+): Promise<XlsxMutateResult<{ bytes: Buffer }>> {
+  const ordinal = replyOrdinalFromId(args.replyId);
+  if (ordinal === null) return { ok: false, error: 'comment-not-found' };
+  const loaded = await loadXlsxArchiveForWrite(currentBytes);
+  if (!loaded.ok) return loaded;
+  const { archive } = loaded;
+  const found = await resolveXlsxThreadTarget(archive, args.id);
+  if (!found.ok) return found;
+  const { ctx, rootEl } = found.target;
+  const rootId = rootEl.getAttribute('id') ?? '';
+  const repliesSorted = repliesOfRoot(ctx.threadedDoc!, rootId)
+    .slice()
+    .sort((a, b) => parseThreadedDate(a.getAttribute('dT') ?? '') - parseThreadedDate(b.getAttribute('dT') ?? ''));
+  const target = repliesSorted[ordinal - 1];
+  if (!target) return { ok: false, error: 'comment-not-found' };
+  target.parentNode?.removeChild(target as unknown as Node);
+  ctx.threadedChanged = true;
+  rebuildPlaceholderForRoot(ctx, rootEl);
+  const bytes = await serializeXlsxArchive(archive);
+  return { ok: true, bytes };
+}
+
 // -----------------------------------------------------------------------
 // Public orchestration — one per operation, each wiring its own mutate +
 // verify into `writeFileMutation`. `absolutePath` is the already-
@@ -2002,4 +2231,80 @@ function findByThreadIdPrefix(comments: readonly PersistedComment[], id: string)
     const p = parseXlsxThreadId(c.id);
     return !!p && normalizeGuid(p.guid) === guidNorm;
   });
+}
+
+// -----------------------------------------------------------------------
+// Edit/delete build (2026-09-28, design doc §"Edit and delete"). Same
+// write-pipeline/verify shape as every mutation above.
+// -----------------------------------------------------------------------
+
+export async function editXlsxComment(args: {
+  absolutePath: string;
+  path: string;
+  id: string;
+  text: string;
+}): Promise<XlsxWriteResult<{ text: string }>> {
+  return writeFileMutation<{ text: string }, XlsxErrorResult>(
+    args.absolutePath,
+    XLSX_BACKUP_SUFFIX,
+    (bytes) => mutateEditXlsxComment(bytes, args),
+    async (newBytes, extra) => {
+      const result = await readXlsxComments(newBytes, args.path);
+      if (!result.ok) return false;
+      const target = findByThreadIdPrefix(result.comments, args.id);
+      return !!target && target.text === extra.text;
+    }
+  );
+}
+
+export async function editXlsxReply(args: {
+  absolutePath: string;
+  path: string;
+  id: string;
+  replyId: string;
+  text: string;
+}): Promise<XlsxWriteResult<{ reply: CommentReply }>> {
+  return writeFileMutation<{ reply: CommentReply }, XlsxErrorResult>(
+    args.absolutePath,
+    XLSX_BACKUP_SUFFIX,
+    (bytes) => mutateEditXlsxReply(bytes, args),
+    async (newBytes, extra) => {
+      const result = await readXlsxComments(newBytes, args.path);
+      if (!result.ok) return false;
+      const target = findByThreadIdPrefix(result.comments, args.id);
+      return !!target && target.replies.some((r) => r.id === extra.reply.id && r.text === extra.reply.text);
+    }
+  );
+}
+
+export async function deleteXlsxComment(args: { absolutePath: string; path: string; id: string }): Promise<XlsxWriteResult> {
+  return writeFileMutation<{}, XlsxErrorResult>(
+    args.absolutePath,
+    XLSX_BACKUP_SUFFIX,
+    (bytes) => mutateDeleteXlsxComment(bytes, args),
+    async (newBytes) => {
+      const result = await readXlsxComments(newBytes, args.path);
+      if (!result.ok) return false;
+      return !findByThreadIdPrefix(result.comments, args.id);
+    }
+  );
+}
+
+export async function deleteXlsxReply(args: {
+  absolutePath: string;
+  path: string;
+  id: string;
+  replyId: string;
+}): Promise<XlsxWriteResult> {
+  return writeFileMutation<{}, XlsxErrorResult>(
+    args.absolutePath,
+    XLSX_BACKUP_SUFFIX,
+    (bytes) => mutateDeleteXlsxReply(bytes, args),
+    async (newBytes) => {
+      const result = await readXlsxComments(newBytes, args.path);
+      if (!result.ok) return false;
+      const target = findByThreadIdPrefix(result.comments, args.id);
+      return !!target && !target.replies.some((r) => r.id === args.replyId);
+    }
+  );
 }

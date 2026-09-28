@@ -1089,6 +1089,109 @@ function removeCommentRangeAndReference(doc: Document, id: string): boolean {
   return true;
 }
 
+// -----------------------------------------------------------------------
+// Edit/delete build (2026-09-28, design doc §"Edit and delete"): anyone's
+// comment/reply can be edited or deleted, no "edited" marker is ever stored
+// or shown, and deleting a THREAD's first comment deletes the whole thread
+// — decisions.json (doc-comments.edit-delete.questions.answers.json).
+// -----------------------------------------------------------------------
+
+/** Shared across every reply-id convention this feature mints (the plain
+ *  JSON sidecar's `${commentId}-r${n}`, docx's `w-{id}-r{n}`, xlsx's
+ *  `xt-...-r{n}`) — the ordinal is always the trailing `-r<N>`, so one tiny
+ *  regex serves all three runtimes' edit-reply/delete-reply lookups. */
+function replyOrdinalFromId(replyId: string): number | null {
+  const m = /-r(\d+)$/.exec(replyId);
+  return m ? Number.parseInt(m[1], 10) : null;
+}
+
+/** Removes every `w:p` child from `commentEl` and rewrites it with ONE
+ *  paragraph carrying `text` — mirrors `appendCommentEntry`'s own shape
+ *  exactly, so an edited comment/reply round-trips through the read path
+ *  identically to a freshly-added one. Only CHILDREN are touched: `w:id`/
+ *  `w:author`/`w:date` (and any `w:initials` a real Word file carries) stay
+ *  on the element's own attributes, untouched — "keep author/date/initials"
+ *  per the task brief, satisfied by never looking at attributes at all. The
+ *  original `w14:paraId` is preserved (never re-minted) since every OTHER
+ *  part (commentsExtended.xml, commentsIds.xml, commentsExtensible.xml) is
+ *  keyed off it. */
+function replaceCommentParagraphText(commentsDoc: Document, commentEl: Element, text: string): void {
+  const paras = elementsByTag(commentEl as unknown as Document, 'w:p');
+  const paraId = paras[0]?.getAttribute('w14:paraId') ?? null;
+  for (const p of paras) {
+    (p.parentNode as unknown as Element)?.removeChild(p as unknown as Node);
+  }
+  const pEl = commentsDoc.createElement('w:p');
+  if (paraId) pEl.setAttribute('w14:paraId', paraId);
+  const rEl = commentsDoc.createElement('w:r');
+  const tEl = commentsDoc.createElement('w:t');
+  tEl.setAttribute('xml:space', 'preserve');
+  tEl.textContent = text;
+  rEl.appendChild(tEl);
+  pEl.appendChild(rEl);
+  commentEl.appendChild(pEl);
+}
+
+function buildExtendedMap(extendedDoc: Document): Map<string, ExtendedInfo> {
+  const map = new Map<string, ExtendedInfo>();
+  for (const el of elementsByTag(extendedDoc, 'w15:commentEx')) {
+    const paraId = el.getAttribute('w15:paraId');
+    if (paraId) map.set(paraId, { done: el.getAttribute('w15:done') === '1', paraIdParent: el.getAttribute('w15:paraIdParent') });
+  }
+  return map;
+}
+
+/** Ordered list of a root's reply `<w:comment>` elements, in the SAME file
+ *  order `readDocxComments`/`nextReplyOrdinal` assign ordinals in — shared
+ *  by `nextReplyOrdinal` (count), edit-reply/delete-reply (index by
+ *  ordinal), and delete-thread (collect all, order irrelevant there). */
+function collectReplyEntries(archive: LoadedArchive, rootParaId: string): Element[] {
+  const extended = buildExtendedMap(archive.extendedDoc);
+  const out: Element[] = [];
+  for (const el of elementsByTag(archive.commentsDoc, 'w:comment')) {
+    const p = elementsByTag(el as unknown as Document, 'w:p')[0];
+    const paraId = p ? p.getAttribute('w14:paraId') : null;
+    if (!paraId || paraId === rootParaId) continue;
+    if (resolveRootParaId(paraId, extended) === rootParaId) out.push(el);
+  }
+  return out;
+}
+
+function removeElement(el: Element): void {
+  (el.parentNode as unknown as Element)?.removeChild(el as unknown as Node);
+}
+
+function removeExtendedEntry(extendedDoc: Document, paraId: string): void {
+  const el = findByAttr(extendedDoc, 'w15:commentEx', 'w15:paraId', paraId);
+  if (el) removeElement(el);
+}
+
+/** Mirrors `recordCommentExtensionParts`' own pairing (F4): `commentsIds.xml`
+ *  keys an entry by `w14:paraId` directly, and `commentsExtensible.xml` keys
+ *  its OWN entry by the durable id that `commentsIds.xml`'s entry paired
+ *  with that same paraId — so the extensible entry can only be found by
+ *  reading the durable id back off the ids entry first. Both parts are only
+ *  ever edited when already present (this module never creates either —
+ *  same F4 rule as everywhere else). */
+function removeCommentExtensionEntries(archive: LoadedArchive, paraId: string): void {
+  let durableId: string | null = null;
+  if (archive.commentsIdsDoc) {
+    const el = findByAttr(archive.commentsIdsDoc, 'w16cid:commentId', 'w16cid:paraId', paraId);
+    if (el) {
+      durableId = el.getAttribute('w16cid:durableId');
+      removeElement(el);
+      archive.commentsIdsChanged = true;
+    }
+  }
+  if (durableId && archive.commentsExtensibleDoc) {
+    const el = findByAttr(archive.commentsExtensibleDoc, 'w16cex:commentExtensible', 'w16cex:durableId', durableId);
+    if (el) {
+      removeElement(el);
+      archive.commentsExtensibleChanged = true;
+    }
+  }
+}
+
 function countAttrOccurrences(xml: string, tag: string, attr: string, value: string): number {
   const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`<${tag}\\b[^>]*\\b${attr}="${escaped}"`, 'g');
@@ -1322,19 +1425,12 @@ async function mutateAddComment(
  * walk) rather than a second copy of it.
  */
 function nextReplyOrdinal(archive: LoadedArchive, targetParaId: string): number {
-  const extended = new Map<string, ExtendedInfo>();
-  for (const el of elementsByTag(archive.extendedDoc, 'w15:commentEx')) {
-    const paraId = el.getAttribute('w15:paraId');
-    if (paraId) extended.set(paraId, { done: el.getAttribute('w15:done') === '1', paraIdParent: el.getAttribute('w15:paraIdParent') });
-  }
-  let count = 0;
-  for (const el of elementsByTag(archive.commentsDoc, 'w:comment')) {
-    const p = elementsByTag(el as unknown as Document, 'w:p')[0];
-    const paraId = p ? p.getAttribute('w14:paraId') : null;
-    if (!paraId || paraId === targetParaId) continue;
-    if (resolveRootParaId(paraId, extended) === targetParaId) count++;
-  }
-  return count + 1;
+  // Edit/delete build (2026-09-28): reuses `collectReplyEntries` (added for
+  // edit-reply/delete-reply/delete-thread below) instead of a second copy of
+  // the same paraIdParent-chain walk — this function ran BEFORE that helper
+  // existed, so it duplicated the walk inline; nothing about its own
+  // computation changes.
+  return collectReplyEntries(archive, targetParaId).length + 1;
 }
 
 async function mutateReplyToComment(
@@ -1433,6 +1529,133 @@ async function mutateMoveComment(
 
   insertCommentRangeMarkers(archive.documentDoc, leaves!, fullText, resolved.start, resolved.end, rawId);
 
+  const bytes = await serializeArchive(archive);
+  return { ok: true, bytes };
+}
+
+/** Edit build (2026-09-28): replaces the ROOT `<w:comment>`'s own paragraph
+ *  text in place — author/date/w:id/paraId untouched, no "edited" marker
+ *  (decisions.json). Never touches document.xml: the anchor range doesn't
+ *  move just because the words changed. */
+async function mutateEditComment(
+  currentBytes: Buffer,
+  args: { id: string; text: string }
+): Promise<{ ok: true; bytes: Buffer; text: string } | { ok: false; error: DocxWriteError }> {
+  const text = stripIllegalXmlChars(args.text);
+  const rawId = stripWPrefix(args.id);
+  if (rawId === null) return { ok: false, error: 'comment-not-found' };
+  const loaded = await loadArchiveForWrite(currentBytes);
+  if (!loaded.ok) return loaded;
+  const { archive } = loaded;
+  const commentEl = findByAttr(archive.commentsDoc, 'w:comment', 'w:id', rawId);
+  if (!commentEl) return { ok: false, error: 'comment-not-found' };
+  replaceCommentParagraphText(archive.commentsDoc, commentEl, text);
+  archive.commentsChanged = true;
+  const bytes = await serializeArchive(archive);
+  return { ok: true, bytes, text };
+}
+
+/** Edit build: `id` names the THREAD's root (matches every other
+ *  reply/resolve/reopen/move call shape); `replyId` (`w-{id}-r{n}`, its
+ *  ordinal read via `replyOrdinalFromId`) selects which reply within it. */
+async function mutateEditReply(
+  currentBytes: Buffer,
+  args: { id: string; replyId: string; text: string }
+): Promise<{ ok: true; bytes: Buffer; reply: CommentReply } | { ok: false; error: DocxWriteError }> {
+  const text = stripIllegalXmlChars(args.text);
+  const rawRootId = stripWPrefix(args.id);
+  const ordinal = replyOrdinalFromId(args.replyId);
+  if (rawRootId === null || ordinal === null) return { ok: false, error: 'comment-not-found' };
+  const loaded = await loadArchiveForWrite(currentBytes);
+  if (!loaded.ok) return loaded;
+  const { archive } = loaded;
+  const rootParaId = findCommentParaId(archive.commentsDoc, rawRootId);
+  if (rootParaId === null) return { ok: false, error: 'comment-not-found' };
+  const target = collectReplyEntries(archive, rootParaId)[ordinal - 1];
+  if (!target) return { ok: false, error: 'comment-not-found' };
+  const author = target.getAttribute('w:author') ?? '';
+  const date = target.getAttribute('w:date') ?? '';
+  replaceCommentParagraphText(archive.commentsDoc, target, text);
+  archive.commentsChanged = true;
+  const bytes = await serializeArchive(archive);
+  return { ok: true, bytes, reply: { id: args.replyId, author: toCommentAuthor(author), text, createdAt: parseDate(date) } };
+}
+
+/** Delete build: removes the ROOT `<w:comment>` AND every reply chained to
+ *  it (`w15:paraIdParent`), their `commentsExtended.xml`/`commentsIds.xml`/
+ *  `commentsExtensible.xml` entries, and the root's OWN
+ *  `w:commentRangeStart`/`End` + `w:commentReference` run from
+ *  document.xml — a reply never has its own range (§3.2: only the root
+ *  gets one), so there is nothing to remove from document.xml for any
+ *  reply. Decisions.json: "deleting a thread's first comment deletes the
+ *  whole thread." */
+async function mutateDeleteThread(
+  currentBytes: Buffer,
+  args: { id: string }
+): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: DocxWriteError }> {
+  const rawId = stripWPrefix(args.id);
+  if (rawId === null) return { ok: false, error: 'comment-not-found' };
+  const loaded = await loadArchiveForWrite(currentBytes);
+  if (!loaded.ok) return loaded;
+  const { archive } = loaded;
+  const rootEl = findByAttr(archive.commentsDoc, 'w:comment', 'w:id', rawId);
+  if (!rootEl) return { ok: false, error: 'comment-not-found' };
+  const rootP = elementsByTag(rootEl as unknown as Document, 'w:p')[0];
+  const rootParaId = rootP ? rootP.getAttribute('w14:paraId') : null;
+  if (!rootParaId) return { ok: false, error: 'comment-not-found' };
+
+  // Only the root has a document.xml anchor — removed here, mirroring
+  // mutateMoveComment's own ordering. A comment whose range was already
+  // dropped by a prior edit (e.g. mammoth-dropped run — §2.3 "detached")
+  // simply has nothing to remove here; the delete still proceeds.
+  removeCommentRangeAndReference(archive.documentDoc, rawId);
+  archive.documentChanged = true;
+
+  for (const replyEl of collectReplyEntries(archive, rootParaId)) {
+    const p = elementsByTag(replyEl as unknown as Document, 'w:p')[0];
+    const paraId = p ? p.getAttribute('w14:paraId') : null;
+    removeElement(replyEl);
+    if (paraId) {
+      removeExtendedEntry(archive.extendedDoc, paraId);
+      removeCommentExtensionEntries(archive, paraId);
+    }
+  }
+  removeElement(rootEl);
+  removeExtendedEntry(archive.extendedDoc, rootParaId);
+  removeCommentExtensionEntries(archive, rootParaId);
+  archive.commentsChanged = true;
+  archive.extendedChanged = true;
+
+  const bytes = await serializeArchive(archive);
+  return { ok: true, bytes };
+}
+
+/** Delete build: removes ONE reply — its `<w:comment>` and its own
+ *  extended/ids/extensible entries — never touching document.xml (a reply
+ *  has no range of its own) or the root/other replies. */
+async function mutateDeleteReply(
+  currentBytes: Buffer,
+  args: { id: string; replyId: string }
+): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: DocxWriteError }> {
+  const rawRootId = stripWPrefix(args.id);
+  const ordinal = replyOrdinalFromId(args.replyId);
+  if (rawRootId === null || ordinal === null) return { ok: false, error: 'comment-not-found' };
+  const loaded = await loadArchiveForWrite(currentBytes);
+  if (!loaded.ok) return loaded;
+  const { archive } = loaded;
+  const rootParaId = findCommentParaId(archive.commentsDoc, rawRootId);
+  if (rootParaId === null) return { ok: false, error: 'comment-not-found' };
+  const target = collectReplyEntries(archive, rootParaId)[ordinal - 1];
+  if (!target) return { ok: false, error: 'comment-not-found' };
+  const p = elementsByTag(target as unknown as Document, 'w:p')[0];
+  const paraId = p ? p.getAttribute('w14:paraId') : null;
+  removeElement(target);
+  archive.commentsChanged = true;
+  if (paraId) {
+    removeExtendedEntry(archive.extendedDoc, paraId);
+    archive.extendedChanged = true;
+    removeCommentExtensionEntries(archive, paraId);
+  }
   const bytes = await serializeArchive(archive);
   return { ok: true, bytes };
 }
@@ -1714,6 +1937,101 @@ export async function moveDocxComment(args: {
       const target = result.comments.find((c) => c.id === args.id);
       if (!target || target.selector.kind !== 'text') return false;
       return target.selector.selector.exact === args.newSelector.selector.exact;
+    }
+  );
+}
+
+// -----------------------------------------------------------------------
+// Edit/delete build (2026-09-28, design doc §"Edit and delete"). Same
+// write-pipeline/verify/rollback shape as every mutation above.
+// -----------------------------------------------------------------------
+
+export async function editDocxComment(args: {
+  absolutePath: string;
+  path: string;
+  id: string;
+  text: string;
+}): Promise<{ ok: true; text: string } | { ok: false; error: DocxWriteError }> {
+  return writeDocxMutation(
+    args.absolutePath,
+    (bytes) => mutateEditComment(bytes, args),
+    async (newBytes, extra, originalBytes) => {
+      if (!(await verifyOoxmlWiring(newBytes, originalBytes))) return false;
+      const result = await readDocxComments(newBytes, args.path);
+      if (!result.ok) return false;
+      const target = result.comments.find((c) => c.id === args.id);
+      return !!target && target.text === extra.text;
+    }
+  );
+}
+
+export async function editDocxReply(args: {
+  absolutePath: string;
+  path: string;
+  id: string;
+  replyId: string;
+  text: string;
+}): Promise<{ ok: true; reply: CommentReply } | { ok: false; error: DocxWriteError }> {
+  return writeDocxMutation<{ reply: CommentReply }>(
+    args.absolutePath,
+    (bytes) => mutateEditReply(bytes, args),
+    async (newBytes, extra, originalBytes) => {
+      if (!(await verifyOoxmlWiring(newBytes, originalBytes))) return false;
+      const result = await readDocxComments(newBytes, args.path);
+      if (!result.ok) return false;
+      const target = result.comments.find((c) => c.id === args.id);
+      return !!target && target.replies.some((r) => r.id === extra.reply.id && r.text === extra.reply.text);
+    }
+  );
+}
+
+export async function deleteDocxComment(args: {
+  absolutePath: string;
+  path: string;
+  id: string;
+}): Promise<{ ok: true } | { ok: false; error: DocxWriteError }> {
+  return writeDocxMutation(
+    args.absolutePath,
+    (bytes) => mutateDeleteThread(bytes, args),
+    async (newBytes, _extra, originalBytes) => {
+      if (!(await verifyOoxmlWiring(newBytes, originalBytes))) return false;
+      const rawId = stripWPrefix(args.id);
+      if (rawId === null) return false;
+      let zip: JSZip;
+      try {
+        zip = await JSZip.loadAsync(newBytes);
+      } catch {
+        return false;
+      }
+      const documentFile = zip.file('word/document.xml');
+      if (documentFile) {
+        const documentXml = await documentFile.async('string');
+        if (countAttrOccurrences(documentXml, 'w:commentRangeStart', 'w:id', rawId) !== 0) return false;
+        if (countAttrOccurrences(documentXml, 'w:commentRangeEnd', 'w:id', rawId) !== 0) return false;
+        if (countAttrOccurrences(documentXml, 'w:commentReference', 'w:id', rawId) !== 0) return false;
+      }
+      const result = await readDocxComments(newBytes, args.path);
+      if (!result.ok) return false;
+      return !result.comments.some((c) => c.id === args.id);
+    }
+  );
+}
+
+export async function deleteDocxReply(args: {
+  absolutePath: string;
+  path: string;
+  id: string;
+  replyId: string;
+}): Promise<{ ok: true } | { ok: false; error: DocxWriteError }> {
+  return writeDocxMutation(
+    args.absolutePath,
+    (bytes) => mutateDeleteReply(bytes, args),
+    async (newBytes, _extra, originalBytes) => {
+      if (!(await verifyOoxmlWiring(newBytes, originalBytes))) return false;
+      const result = await readDocxComments(newBytes, args.path);
+      if (!result.ok) return false;
+      const target = result.comments.find((c) => c.id === args.id);
+      return !!target && !target.replies.some((r) => r.id === args.replyId);
     }
   );
 }

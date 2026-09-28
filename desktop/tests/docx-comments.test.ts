@@ -22,6 +22,10 @@ import {
   resolveDocxComment,
   reopenDocxComment,
   moveDocxComment,
+  editDocxComment,
+  editDocxReply,
+  deleteDocxComment,
+  deleteDocxReply,
   writeDocxMutation,
   DOCX_BACKUP_SUFFIX,
 } from '../src/main/doc-comments/docx-comments';
@@ -678,6 +682,165 @@ describe('docx-comments write — move', () => {
         id: 'w-999',
         newSelector: textSelector('Keep support tickets'),
       });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+});
+
+// Edit/delete build (2026-09-28, design doc §"Edit and delete"): anyone's
+// comment/reply can be edited or deleted (decisions.json), no "edited"
+// marker is stored, and deleting a thread's first comment deletes the whole
+// thread. `launch-brief.docx`'s comment id 1 ("w-1") starts with exactly one
+// reply from Marcus Lee — used below the same way the reply/move suites
+// above already do.
+describe('docx-comments write — edit', () => {
+  it('replaces the comment paragraph text, keeping author/date and the document anchor untouched', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const before = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      const beforeComment = before.ok ? before.comments.find((c) => c.id === 'w-1') : undefined;
+      expect(beforeComment).toBeDefined();
+
+      const result = await editDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-1', text: 'Rewritten note.' });
+      expect(result).toEqual({ ok: true, text: 'Rewritten note.' });
+
+      const after = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      const edited = after.comments.find((c) => c.id === 'w-1');
+      expect(edited?.text).toBe('Rewritten note.');
+      // Author/date (and the anchor selector/replies/resolve state) survive
+      // an edit unchanged — only the text itself changed.
+      expect(edited?.author).toBe(beforeComment?.author);
+      expect(edited?.createdAt).toBe(beforeComment?.createdAt);
+      expect(edited?.selector).toEqual(beforeComment?.selector);
+      expect(edited?.replies).toEqual(beforeComment?.replies);
+
+      // Structural check: exactly one range/reference for id 1, unmoved.
+      const documentXml = await (await JSZip.loadAsync(await readFile(target))).file('word/document.xml')!.async('string');
+      expect((documentXml.match(/w:commentRangeStart w:id="1"/g) ?? []).length).toBe(1);
+      expect((documentXml.match(/w:commentReference w:id="1"/g) ?? []).length).toBe(1);
+    });
+  });
+
+  it('refuses an id this file does not have', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await editDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-999', text: 'x' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+
+  it('editDocxReply replaces one reply\'s text, leaving the parent and its own author/date untouched', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const before = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      const beforeReply = before.ok ? before.comments.find((c) => c.id === 'w-1')?.replies[0] : undefined;
+      expect(beforeReply).toBeDefined();
+
+      const result = await editDocxReply({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-1', replyId: beforeReply!.id, text: 'Edited reply.' });
+      expect(result).toEqual({ ok: true, reply: { id: beforeReply!.id, author: beforeReply!.author, text: 'Edited reply.', createdAt: beforeReply!.createdAt } });
+
+      const after = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      const parent = after.comments.find((c) => c.id === 'w-1');
+      expect(parent?.text).toBe(before.ok ? before.comments.find((c) => c.id === 'w-1')?.text : undefined); // parent untouched
+      expect(parent?.replies).toEqual([{ ...beforeReply, text: 'Edited reply.' }]);
+    });
+  });
+
+  it('refuses an unknown replyId', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await editDocxReply({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-1', replyId: 'w-1-r9', text: 'x' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+    });
+  });
+});
+
+describe('docx-comments write — delete (whole thread) leaves a document Word opens', () => {
+  it('removes the root comment, its reply, and BOTH document.xml anchors, with no dangling relationships/content-types', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const before = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      expect(before.ok && before.comments.some((c) => c.id === 'w-1')).toBe(true);
+
+      const result = await deleteDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-1' });
+      expect(result).toEqual({ ok: true });
+
+      const bytes = await readFile(target);
+      const after = await readDocxComments(bytes, 'docs/launch-brief.docx');
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      expect(after.comments.some((c) => c.id === 'w-1')).toBe(false); // thread gone
+      // Every OTHER comment (id 0, and whatever else the fixture carries)
+      // survives untouched — this was a surgical removal, not a rebuild.
+      expect(after.comments.some((c) => c.id === 'w-0')).toBe(true);
+
+      // Structural checks a real Word/LibreOffice open would notice:
+      // no dangling range/reference markers for the deleted id...
+      const zip = await JSZip.loadAsync(bytes);
+      const documentXml = await zip.file('word/document.xml')!.async('string');
+      expect(documentXml).not.toMatch(/w:id="1"/);
+      // ...and every r:id document.xml still references resolves in rels,
+      // with a matching [Content_Types].xml Override for every comments
+      // part left standing — the SAME sanity check `deleteDocxComment`'s own
+      // verify step already ran before reporting success, re-run here
+      // directly against the written file as an independent structural pin.
+      const relsXml = await zip.file('word/_rels/document.xml.rels')!.async('string');
+      const relIds = new Set(Array.from(relsXml.matchAll(/Id="([^"]+)"/g)).map((m) => m[1]));
+      for (const m of documentXml.matchAll(/r:id="([^"]+)"/g)) {
+        expect(relIds.has(m[1])).toBe(true);
+      }
+      const contentTypesXml = await zip.file('[Content_Types].xml')!.async('string');
+      expect(contentTypesXml).toContain('/word/comments.xml');
+    });
+  });
+
+  it('deleting a comment with no replies removes only its own range/reference, leaving siblings untouched', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await deleteDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-0' });
+      expect(result).toEqual({ ok: true });
+      const after = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      expect(after.comments.some((c) => c.id === 'w-0')).toBe(false);
+      expect(after.comments.some((c) => c.id === 'w-1')).toBe(true); // untouched sibling, replies and all
+    });
+  });
+
+  it('refuses an id this file does not have, leaving the file byte-identical', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const before = await readFile(target);
+      const result = await deleteDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-999' });
+      expect(result).toEqual({ ok: false, error: 'comment-not-found' });
+      expect(await readFile(target)).toEqual(before);
+    });
+  });
+});
+
+describe('docx-comments write — delete-reply', () => {
+  it('removes ONE reply, leaving the root comment (and its document anchor) intact', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const before = await readDocxComments(await readFile(target), 'docs/launch-brief.docx');
+      const replyId = before.ok ? before.comments.find((c) => c.id === 'w-1')?.replies[0]?.id : undefined;
+      expect(replyId).toBeDefined();
+
+      const result = await deleteDocxReply({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-1', replyId: replyId! });
+      expect(result).toEqual({ ok: true });
+
+      const bytes = await readFile(target);
+      const after = await readDocxComments(bytes, 'docs/launch-brief.docx');
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      const root = after.comments.find((c) => c.id === 'w-1');
+      expect(root).toBeDefined(); // the thread itself survives
+      expect(root?.replies).toHaveLength(0);
+      // The root's own document.xml anchor is untouched — a reply never had one.
+      const documentXml = await (await JSZip.loadAsync(bytes)).file('word/document.xml')!.async('string');
+      expect((documentXml.match(/w:commentRangeStart w:id="1"/g) ?? []).length).toBe(1);
+    });
+  });
+
+  it('refuses an unknown replyId', async () => {
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const result = await deleteDocxReply({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-1', replyId: 'w-1-r9' });
       expect(result).toEqual({ ok: false, error: 'comment-not-found' });
     });
   });

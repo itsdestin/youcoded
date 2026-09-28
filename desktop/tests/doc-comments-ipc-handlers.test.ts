@@ -301,7 +301,7 @@ describe('registerDocCommentsHandlers', () => {
     await expect(fs.promises.access(sidecarPath)).rejects.toThrow();
   });
 
-  it('refuses a ../../etc/passwd-shaped path on EVERY one of the six channels', async () => {
+  it('refuses a ../../etc/passwd-shaped path on EVERY one of the ten channels', async () => {
     const ipcMain = fakeIpcMain();
     registerDocCommentsHandlers(ipcMain as any, deps);
     const evil = '../../../../../../etc/passwd';
@@ -312,6 +312,12 @@ describe('registerDocCommentsHandlers', () => {
       [DOC_COMMENTS_IPC.RESOLVE, { path: evil, projectRoot: root, id: 'c-x', by: 'user' }],
       [DOC_COMMENTS_IPC.REOPEN, { path: evil, projectRoot: root, id: 'c-x', by: 'user' }],
       [DOC_COMMENTS_IPC.MOVE, { path: evil, projectRoot: root, id: 'c-x', newSelector: CELL_SELECTOR }],
+      // Edit/delete build (2026-09-28, design doc §"Edit and delete") — the
+      // same containment check every other id-carrying mutation already has.
+      [DOC_COMMENTS_IPC.EDIT, { path: evil, projectRoot: root, id: 'c-x', text: 'x' }],
+      [DOC_COMMENTS_IPC.EDIT_REPLY, { path: evil, projectRoot: root, id: 'c-x', replyId: 'c-x-r1', text: 'x' }],
+      [DOC_COMMENTS_IPC.DELETE, { path: evil, projectRoot: root, id: 'c-x' }],
+      [DOC_COMMENTS_IPC.DELETE_REPLY, { path: evil, projectRoot: root, id: 'c-x', replyId: 'c-x-r1' }],
     ];
     for (const [channel, payload] of calls) {
       const result = await ipcMain.call(channel, payload);
@@ -319,7 +325,7 @@ describe('registerDocCommentsHandlers', () => {
     }
   });
 
-  it('refuses a symlink-outside-the-project path on all four id-based mutations (review 3, F1)', async () => {
+  it('refuses a symlink-outside-the-project path on all eight id-based mutations (review 3, F1)', async () => {
     const secret = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-doc-comments-secret-'));
     const secretFile = path.join(secret, 'x.md');
     await fs.promises.writeFile(secretFile, 'do not comment on me');
@@ -337,6 +343,10 @@ describe('registerDocCommentsHandlers', () => {
         [DOC_COMMENTS_IPC.RESOLVE, { path: 'escape.md', projectRoot: root, id: 'c-x', by: 'user' }],
         [DOC_COMMENTS_IPC.REOPEN, { path: 'escape.md', projectRoot: root, id: 'c-x', by: 'user' }],
         [DOC_COMMENTS_IPC.MOVE, { path: 'escape.md', projectRoot: root, id: 'c-x', newSelector: CELL_SELECTOR }],
+        [DOC_COMMENTS_IPC.EDIT, { path: 'escape.md', projectRoot: root, id: 'c-x', text: 'x' }],
+        [DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'escape.md', projectRoot: root, id: 'c-x', replyId: 'c-x-r1', text: 'x' }],
+        [DOC_COMMENTS_IPC.DELETE, { path: 'escape.md', projectRoot: root, id: 'c-x' }],
+        [DOC_COMMENTS_IPC.DELETE_REPLY, { path: 'escape.md', projectRoot: root, id: 'c-x', replyId: 'c-x-r1' }],
       ];
       for (const [channel, payload] of calls) {
         const result = await ipcMain.call(channel, payload);
@@ -365,6 +375,99 @@ describe('registerDocCommentsHandlers', () => {
     await expect(ipcMain.call(DOC_COMMENTS_IPC.RESOLVE, { ...args, by: 'assistant' })).resolves.toEqual({ ok: true });
     await expect(ipcMain.call(DOC_COMMENTS_IPC.REOPEN, { ...args, by: 'user' })).resolves.toEqual({ ok: true });
     await expect(ipcMain.call(DOC_COMMENTS_IPC.MOVE, { ...args, newSelector: CELL_SELECTOR })).resolves.toEqual({ ok: true });
+    // Edit/delete build (2026-09-28): same cold-process guarantee.
+    await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT, { ...args, text: 'edited cold' })).resolves.toEqual({ ok: true });
+    const relisted = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/cold.md', projectRoot: root });
+    const replyId = relisted.comments[0].replies[0].id;
+    await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/cold.md', projectRoot: root, id: added.id, replyId, text: 'edited reply cold' }))
+      .resolves.toEqual({ ok: true, reply: expect.objectContaining({ text: 'edited reply cold' }) });
+    await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE_REPLY, { path: 'docs/cold.md', projectRoot: root, id: added.id, replyId })).resolves.toEqual({ ok: true });
+    await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/cold.md', projectRoot: root, id: added.id })).resolves.toEqual({ ok: true });
+  });
+
+  // Edit/delete build (2026-09-28, design doc §"Edit and delete"): the SAME
+  // format dispatch (resolveNativeFormat -> native docx/xlsx vs. the plain
+  // sidecar) every other mutation above already proved, exercised here for
+  // the four new channels on all three target shapes.
+  describe('docComments:edit / :edit-reply / :delete / :delete-reply — format dispatch', () => {
+    it('a plain markdown target round-trips edit/edit-reply/delete-reply/delete through the sidecar', async () => {
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, {
+        path: 'docs/plan.md', projectRoot: root, selector: CELL_SELECTOR, text: 'original', author: 'user',
+      });
+      expect(added.ok).toBe(true);
+      const replied = await ipcMain.call(DOC_COMMENTS_IPC.REPLY, { path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'a reply', author: 'user' });
+      const replyId = replied.reply.id;
+
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT, { path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'rewritten' }))
+        .resolves.toEqual({ ok: true });
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/plan.md', projectRoot: root, id: added.id, replyId, text: 'reply rewritten' }))
+        .resolves.toEqual({ ok: true, reply: expect.objectContaining({ text: 'reply rewritten' }) });
+      const afterEdit = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
+      expect(afterEdit.comments[0]).toMatchObject({ text: 'rewritten' });
+      expect(afterEdit.comments[0].replies[0]).toMatchObject({ text: 'reply rewritten' });
+
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE_REPLY, { path: 'docs/plan.md', projectRoot: root, id: added.id, replyId })).resolves.toEqual({ ok: true });
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/plan.md', projectRoot: root, id: added.id })).resolves.toEqual({ ok: true });
+      const afterDelete = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/plan.md', projectRoot: root });
+      expect(afterDelete.comments).toEqual([]);
+    });
+
+    it('a .docx target dispatches edit/delete to the real Word writer, not the sidecar', async () => {
+      await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
+      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+
+      const edited = await ipcMain.call(DOC_COMMENTS_IPC.EDIT, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', text: 'edited via IPC' });
+      expect(edited).toEqual({ ok: true, text: 'edited via IPC' });
+      const listed = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/launch-brief.docx', projectRoot: root });
+      expect(listed.comments.find((c: any) => c.id === 'w-1')?.text).toBe('edited via IPC');
+      const replyId = listed.comments.find((c: any) => c.id === 'w-1')?.replies[0]?.id;
+
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1', replyId, text: 'reply via IPC' }))
+        .resolves.toEqual({ ok: true, reply: expect.objectContaining({ text: 'reply via IPC' }) });
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-1' })).resolves.toEqual({ ok: true });
+      const afterDelete = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'docs/launch-brief.docx', projectRoot: root });
+      expect(afterDelete.comments.some((c: any) => c.id === 'w-1')).toBe(false);
+
+      // No inert JSON sidecar was ever created for this native-format target.
+      const sidecarPath = path.join(root, '.youcoded', 'comments', 'docs', 'launch-brief.docx.json');
+      await expect(fs.promises.access(sidecarPath)).rejects.toThrow();
+    });
+
+    it('a .xlsx target dispatches edit/delete to the real Excel writer, not the sidecar', async () => {
+      await fs.promises.mkdir(path.join(root, 'reports'), { recursive: true });
+      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'q3-sales-by-rep.xlsx'), path.join(root, 'reports', 'q3.xlsx'));
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      const cellSelector: CommentSelector = { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1', sheet: 'Q3' } as CellSelector };
+      const added = await ipcMain.call(DOC_COMMENTS_IPC.ADD, { path: 'reports/q3.xlsx', projectRoot: root, selector: cellSelector, text: 'x', author: 'user' });
+      expect(added.ok).toBe(true);
+      const id = added.id;
+
+      const edited = await ipcMain.call(DOC_COMMENTS_IPC.EDIT, { path: 'reports/q3.xlsx', projectRoot: root, id, text: 'edited via IPC' });
+      expect(edited).toEqual({ ok: true, text: 'edited via IPC' });
+
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE, { path: 'reports/q3.xlsx', projectRoot: root, id })).resolves.toEqual({ ok: true });
+      const afterDelete = await ipcMain.call(DOC_COMMENTS_IPC.LIST, { path: 'reports/q3.xlsx', projectRoot: root });
+      expect(afterDelete.comments.some((c: any) => c.id === id)).toBe(false);
+
+      const sidecarPath = path.join(root, '.youcoded', 'comments', 'reports', 'q3.xlsx.json');
+      await expect(fs.promises.access(sidecarPath)).rejects.toThrow();
+    });
+
+    it('an id this file does not have refuses honestly, on both channels and every format', async () => {
+      await fs.promises.mkdir(path.join(root, 'docs'), { recursive: true });
+      await fs.promises.copyFile(path.join(FIXTURES_DIR, 'launch-brief.docx'), path.join(root, 'docs', 'launch-brief.docx'));
+      const ipcMain = fakeIpcMain();
+      registerDocCommentsHandlers(ipcMain as any, deps);
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.EDIT, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-999', text: 'x' }))
+        .resolves.toEqual({ ok: false, error: 'comment-not-found' });
+      await expect(ipcMain.call(DOC_COMMENTS_IPC.DELETE, { path: 'docs/launch-brief.docx', projectRoot: root, id: 'w-999' }))
+        .resolves.toEqual({ ok: false, error: 'comment-not-found' });
+    });
   });
 
   it('a caller that omits path gets a distinct missing-field refusal, never a throw or a coerced "undefined" string (F2)', async () => {
@@ -391,7 +494,7 @@ describe('registerDocCommentsHandlers', () => {
     // root) instead of refusing — the store's own containment check only
     // proves `path` resolves inside WHATEVER root it is given, so it never
     // caught a forged root at all.
-    it('refuses "/" as projectRoot on every one of the six mutation/list channels', async () => {
+    it('refuses "/" as projectRoot on every one of the ten mutation/list channels', async () => {
       const ipcMain = fakeIpcMain();
       registerDocCommentsHandlers(ipcMain as any, deps);
       const calls: Array<[string, any]> = [
@@ -401,6 +504,10 @@ describe('registerDocCommentsHandlers', () => {
         [DOC_COMMENTS_IPC.RESOLVE, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', by: 'user' }],
         [DOC_COMMENTS_IPC.REOPEN, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', by: 'user' }],
         [DOC_COMMENTS_IPC.MOVE, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', newSelector: CELL_SELECTOR }],
+        [DOC_COMMENTS_IPC.EDIT, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', text: 'x' }],
+        [DOC_COMMENTS_IPC.EDIT_REPLY, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', replyId: 'c-x-r1', text: 'x' }],
+        [DOC_COMMENTS_IPC.DELETE, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x' }],
+        [DOC_COMMENTS_IPC.DELETE_REPLY, { path: 'docs/plan.md', projectRoot: '/', id: 'c-x', replyId: 'c-x-r1' }],
       ];
       for (const [channel, payload] of calls) {
         const result = await ipcMain.call(channel, payload);

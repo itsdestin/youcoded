@@ -1507,6 +1507,11 @@ describe('docComments:* IPC parity', () => {
     ['docComments:resolve', 'DOC_COMMENTS_IPC.RESOLVE'],
     ['docComments:reopen', 'DOC_COMMENTS_IPC.REOPEN'],
     ['docComments:move', 'DOC_COMMENTS_IPC.MOVE'],
+    // Edit/delete build (2026-09-28, design doc §"Edit and delete").
+    ['docComments:edit', 'DOC_COMMENTS_IPC.EDIT'],
+    ['docComments:edit-reply', 'DOC_COMMENTS_IPC.EDIT_REPLY'],
+    ['docComments:delete', 'DOC_COMMENTS_IPC.DELETE'],
+    ['docComments:delete-reply', 'DOC_COMMENTS_IPC.DELETE_REPLY'],
     ['docComments:watch', 'DOC_COMMENTS_IPC.WATCH'],
     ['docComments:unwatch', 'DOC_COMMENTS_IPC.UNWATCH'],
   ];
@@ -1570,11 +1575,11 @@ describe('docComments:* IPC parity', () => {
     expect(watchBranch![0]).not.toContain('unsupported');
   });
 
-  it('docComments:list/add/reply/resolve/reopen/move are real Kotlin implementations on Android, not stubbed not-implemented-on-mobile', () => {
+  it('docComments:list/add/reply/resolve/reopen/move/edit/delete are real Kotlin implementations on Android, not stubbed not-implemented-on-mobile', () => {
     if (!kotlin || !bridge) return;
-    // SessionService.kt's own combined arm hands every one of these eight
-    // labels to the real dispatch function (F6) — a stub would instead
-    // answer inline with nothing calling out to doccomments/.
+    // SessionService.kt's own combined arm hands every one of these labels
+    // to the real dispatch function (F6) — a stub would instead answer
+    // inline with nothing calling out to doccomments/.
     expect(kotlin).toContain('com.youcoded.app.doccomments.handleDocCommentsMessage');
     // The real per-type logic lives in DocCommentsBridge.kt now — each
     // channel below must call its own real store/dispatch function, never
@@ -1586,6 +1591,11 @@ describe('docComments:* IPC parity', () => {
       'docComments:resolve': 'resolveComment(',
       'docComments:reopen': 'reopenComment(',
       'docComments:move': 'moveComment(',
+      // Edit/delete build (2026-09-28, design doc §"Edit and delete").
+      'docComments:edit': 'editComment(',
+      'docComments:edit-reply': 'editReply(',
+      'docComments:delete': 'deleteComment(',
+      'docComments:delete-reply': 'deleteReply(',
     };
     for (const [ch, realCall] of Object.entries(realCallByChannel)) {
       // WHY 3000, not 2000: T17/T19 grew every mutation case with its own

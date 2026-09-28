@@ -257,6 +257,10 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'docComments.list', 'docComments.add', 'docComments.reply', 'docComments.resolve',
   'docComments.reopen', 'docComments.move', 'docComments.watch', 'docComments.unwatch',
   'docComments.onChanged',
+  // Edit/delete (2026-09-28) — real on every surface (main-process/Kotlin
+  // build, same session); no longer MOCK_ONLY (see mock-only.ts's changelog
+  // for these four rows' own removal).
+  'docComments.edit', 'docComments.editReply', 'docComments.delete', 'docComments.deleteReply',
 ];
 
 const warned = new Set<string>();
@@ -3563,6 +3567,46 @@ function createDocCommentsMock(empty: boolean) {
       const idx = findIndex(id);
       if (idx === -1) return { ok: false, error: 'comment-not-found' };
       comments = comments.map((x, i) => (i === idx ? { ...x, selector: newSelector } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    // Edit/delete (2026-09-28, real on every surface): E-2 (anyone's
+    // comment/reply) means no author/`by` check here, mirroring resolve/
+    // reopen's own shape above but with no such argument at all.
+    edit: async (path: string, id: string, text: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      if (!text) return { ok: false, error: 'missing-field', field: 'text' };
+      comments = comments.map((x, i) => (i === idx ? { ...x, text } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    editReply: async (path: string, id: string, replyId: string, text: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      if (!text) return { ok: false, error: 'missing-field', field: 'text' };
+      const c = comments[idx];
+      if (!c.replies.some((r) => r.id === replyId)) return { ok: false, error: 'comment-not-found' };
+      comments = comments.map((x, i) => (i === idx ? { ...c, replies: c.replies.map((r) => (r.id === replyId ? { ...r, text } : r)) } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    // E-3: deleting a thread's first comment deletes the whole thread — true
+    // for free here too, since a thread IS one PersistedComment plus its
+    // nested `replies`; removing the record removes every reply with it.
+    delete: async (path: string, id: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      comments = comments.filter((_, i) => i !== idx);
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    deleteReply: async (path: string, id: string, replyId: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      const c = comments[idx];
+      if (!c.replies.some((r) => r.id === replyId)) return { ok: false, error: 'comment-not-found' };
+      comments = comments.map((x, i) => (i === idx ? { ...c, replies: c.replies.filter((r) => r.id !== replyId) } : x));
       publish(path, projectRoot);
       return { ok: true };
     },

@@ -27,6 +27,10 @@ import {
   resolveDocxComment,
   reopenDocxComment,
   moveDocxComment,
+  editDocxComment,
+  editDocxReply,
+  deleteDocxComment,
+  deleteDocxReply,
 } from './docx-comments';
 import {
   readXlsxComments,
@@ -36,6 +40,10 @@ import {
   resolveXlsxComment,
   reopenXlsxComment,
   moveXlsxComment,
+  editXlsxComment,
+  editXlsxReply,
+  deleteXlsxComment,
+  deleteXlsxReply,
 } from './xlsx-comments';
 import { resolveSourceFilePath, resolveNativeFormat, type Refusal } from './doc-comments-store';
 import { authorizeBytesRead } from '../artifacts/read-service';
@@ -156,6 +164,52 @@ export async function moveNativeDocxComment(args: {
   return moveDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, newSelector: args.newSelector });
 }
 
+// Edit/delete build (2026-09-28, design doc §"Edit and delete") — same
+// resolveDocxTarget gate every other native docx mutation already uses.
+export async function editNativeDocxComment(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  text: string;
+}): Promise<{ ok: true; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+  const resolved = await resolveDocxTarget(args);
+  if (!resolved.ok) return resolved;
+  return editDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text });
+}
+
+export async function editNativeDocxReply(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  replyId: string;
+  text: string;
+}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+  const resolved = await resolveDocxTarget(args);
+  if (!resolved.ok) return resolved;
+  return editDocxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId, text: args.text });
+}
+
+export async function deleteNativeDocxComment(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+  const resolved = await resolveDocxTarget(args);
+  if (!resolved.ok) return resolved;
+  return deleteDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+}
+
+export async function deleteNativeDocxReply(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  replyId: string;
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+  const resolved = await resolveDocxTarget(args);
+  if (!resolved.ok) return resolved;
+  return deleteDocxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId });
+}
+
 /** T13's own `.xlsx` equivalent of `resolveDocxTarget` — same containment/
  *  untracked-source gate, never a looser one, since a write is at least as
  *  sensitive as a read. */
@@ -243,6 +297,52 @@ export async function moveNativeXlsxComment(args: {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
   return moveXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, newSelector: args.newSelector });
+}
+
+// Edit/delete build (2026-09-28, design doc §"Edit and delete") — same
+// resolveXlsxTarget gate every other native xlsx mutation already uses.
+export async function editNativeXlsxComment(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  text: string;
+}): Promise<{ ok: true; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+  const resolved = await resolveXlsxTarget(args);
+  if (!resolved.ok) return resolved;
+  return editXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text });
+}
+
+export async function editNativeXlsxReply(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  replyId: string;
+  text: string;
+}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+  const resolved = await resolveXlsxTarget(args);
+  if (!resolved.ok) return resolved;
+  return editXlsxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId, text: args.text });
+}
+
+export async function deleteNativeXlsxComment(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+  const resolved = await resolveXlsxTarget(args);
+  if (!resolved.ok) return resolved;
+  return deleteXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+}
+
+export async function deleteNativeXlsxReply(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  replyId: string;
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+  const resolved = await resolveXlsxTarget(args);
+  if (!resolved.ok) return resolved;
+  return deleteXlsxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId });
 }
 
 /** `docComments:list` for a `.docx`/`.xlsx` target: resolve the SOURCE file's

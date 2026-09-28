@@ -138,6 +138,56 @@ describe('docComments over remote access', () => {
     expect(sent[0].payload).toEqual({ ok: true, id: callerId });
   });
 
+  // Edit/delete build (2026-09-28, design doc §"Edit and delete"): the four
+  // new channels reach the SAME main-process store/dispatch over the WS
+  // surface, mirroring desktop IPC exactly (T3's own dispatch module is
+  // shared by both surfaces, so they can never disagree about this).
+  it('docComments:edit/:edit-reply/:delete/:delete-reply round-trip over the WS surface', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager([root]), mockHookRelay(), mockRemoteConfig());
+    const sent: any[] = [];
+    const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    const client = { id: 'phone-a', ws };
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:add', id: 'req-1',
+      payload: { path: 'docs/plan.md', projectRoot: root, selector: { kind: 'cell', selector: { type: 'CellSelector', cell: 'A1' } }, text: 'original', author: 'user' },
+    }));
+    const id = sent[0].payload.id;
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:reply', id: 'req-2', payload: { path: 'docs/plan.md', projectRoot: root, id, text: 'a reply', author: 'user' },
+    }));
+    const replyId = sent[1].payload.reply.id;
+
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:edit', id: 'req-3', payload: { path: 'docs/plan.md', projectRoot: root, id, text: 'rewritten' },
+    }));
+    expect(sent[2].payload).toEqual({ ok: true });
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:edit-reply', id: 'req-4', payload: { path: 'docs/plan.md', projectRoot: root, id, replyId, text: 'reply rewritten' },
+    }));
+    expect(sent[3].payload).toEqual({ ok: true, reply: expect.objectContaining({ text: 'reply rewritten' }) });
+
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:list', id: 'req-5', payload: { path: 'docs/plan.md', projectRoot: root },
+    }));
+    expect(sent[4].payload.comments[0]).toMatchObject({ text: 'rewritten' });
+    expect(sent[4].payload.comments[0].replies[0]).toMatchObject({ text: 'reply rewritten' });
+
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:delete-reply', id: 'req-6', payload: { path: 'docs/plan.md', projectRoot: root, id, replyId },
+    }));
+    expect(sent[5].payload).toEqual({ ok: true });
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:delete', id: 'req-7', payload: { path: 'docs/plan.md', projectRoot: root, id },
+    }));
+    expect(sent[6].payload).toEqual({ ok: true });
+
+    await server.handleMessage(client, JSON.stringify({
+      type: 'docComments:list', id: 'req-8', payload: { path: 'docs/plan.md', projectRoot: root },
+    }));
+    expect(sent[7].payload.comments).toEqual([]);
+  });
+
   // T13 (redesigned 2026-09-27, threaded-comments-only, §4): a .xlsx target's
   // mutations are real over the remote WS surface too (T3 built BOTH desktop
   // IPC and this WS surface off the same dispatch module — they must never

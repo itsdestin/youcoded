@@ -1935,6 +1935,18 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('docComments:reopen', { path: filePath, id, by, projectRoot }),
     move: (filePath: string, id: string, newSelector: unknown, projectRoot?: string) =>
       ipcRenderer.invoke('docComments:move', { path: filePath, id, newSelector, projectRoot }),
+    // Edit/delete build (2026-09-28, design doc §"Edit and delete"): anyone's
+    // comment/reply can be edited or deleted; deleting a thread's first
+    // comment deletes the whole thread (docComments:delete); a single reply
+    // is removed with docComments:delete-reply instead.
+    edit: (filePath: string, id: string, text: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:edit', { path: filePath, id, text, projectRoot }),
+    editReply: (filePath: string, id: string, replyId: string, text: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:edit-reply', { path: filePath, id, replyId, text, projectRoot }),
+    delete: (filePath: string, id: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:delete', { path: filePath, id, projectRoot }),
+    deleteReply: (filePath: string, id: string, replyId: string, projectRoot?: string) =>
+      ipcRenderer.invoke('docComments:delete-reply', { path: filePath, id, replyId, projectRoot }),
     // Subscribe/unsubscribe this renderer to comment changes for a file's
     // project (chokidar in main, refcounted — doc-comments/doc-comments-watcher.ts).
     // Events arrive on onChanged with the SOURCE file's path; a window not

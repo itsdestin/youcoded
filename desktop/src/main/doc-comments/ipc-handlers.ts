@@ -19,6 +19,10 @@ import {
   reopenComment,
   moveComment,
   resolveWatchTarget,
+  editComment,
+  editReply,
+  deleteComment,
+  deleteReply,
 } from './doc-comments-store';
 import {
   initDocCommentsWatcher,
@@ -36,11 +40,19 @@ import {
   resolveNativeDocxComment,
   reopenNativeDocxComment,
   moveNativeDocxComment,
+  editNativeDocxComment,
+  editNativeDocxReply,
+  deleteNativeDocxComment,
+  deleteNativeDocxReply,
   addNativeXlsxComment,
   replyToNativeXlsxComment,
   resolveNativeXlsxComment,
   reopenNativeXlsxComment,
   moveNativeXlsxComment,
+  editNativeXlsxComment,
+  editNativeXlsxReply,
+  deleteNativeXlsxComment,
+  deleteNativeXlsxReply,
 } from './doc-comments-dispatch';
 import { refuseUnknownProjectRoot, isValidCommentSelectorShape } from './doc-comments-gate';
 import type { CommentAuthor, CommentSelector } from '../../shared/doc-comments-types';
@@ -288,6 +300,99 @@ export function registerDocCommentsHandlers(ipcMain: Pick<IpcMain, 'handle'>, de
       id,
       newSelector: payload?.newSelector as CommentSelector,
     });
+  });
+
+  // Edit/delete build (2026-09-28, design doc §"Edit and delete") — same
+  // containment/format-dispatch shape as reply/resolve/reopen/move above.
+  // Decisions.json: anyone's comment/reply can be edited or deleted; no
+  // "edited" marker is stored or shown; deleting a thread's first comment
+  // deletes the whole thread.
+  ipcMain.handle(DOC_COMMENTS_IPC.EDIT, async (_e: IpcMainInvokeEvent, payload: any) => {
+    const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
+    const refused = refuseNativeMutation(filePath);
+    if (refused) return refused;
+    const id = reqStr(payload?.id);
+    if (id === null) return missingField('id');
+    const text = reqStr(payload?.text);
+    if (text === null) return missingField('text');
+    const format = await resolveNativeFormat(filePath, projectRoot);
+    if (format === 'docx') {
+      return editNativeDocxComment({ path: filePath, projectRoot, id, text });
+    }
+    if (format === 'xlsx') {
+      return editNativeXlsxComment({ path: filePath, projectRoot, id, text });
+    }
+    return editComment({ path: filePath, projectRoot, id, text });
+  });
+
+  ipcMain.handle(DOC_COMMENTS_IPC.EDIT_REPLY, async (_e: IpcMainInvokeEvent, payload: any) => {
+    const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
+    const refused = refuseNativeMutation(filePath);
+    if (refused) return refused;
+    const id = reqStr(payload?.id);
+    if (id === null) return missingField('id');
+    const replyId = reqStr(payload?.replyId);
+    if (replyId === null) return missingField('replyId');
+    const text = reqStr(payload?.text);
+    if (text === null) return missingField('text');
+    const format = await resolveNativeFormat(filePath, projectRoot);
+    if (format === 'docx') {
+      return editNativeDocxReply({ path: filePath, projectRoot, id, replyId, text });
+    }
+    if (format === 'xlsx') {
+      return editNativeXlsxReply({ path: filePath, projectRoot, id, replyId, text });
+    }
+    return editReply({ path: filePath, projectRoot, id, replyId, text });
+  });
+
+  ipcMain.handle(DOC_COMMENTS_IPC.DELETE, async (_e: IpcMainInvokeEvent, payload: any) => {
+    const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
+    const refused = refuseNativeMutation(filePath);
+    if (refused) return refused;
+    const id = reqStr(payload?.id);
+    if (id === null) return missingField('id');
+    const format = await resolveNativeFormat(filePath, projectRoot);
+    if (format === 'docx') {
+      return deleteNativeDocxComment({ path: filePath, projectRoot, id });
+    }
+    if (format === 'xlsx') {
+      return deleteNativeXlsxComment({ path: filePath, projectRoot, id });
+    }
+    return deleteComment({ path: filePath, projectRoot, id });
+  });
+
+  ipcMain.handle(DOC_COMMENTS_IPC.DELETE_REPLY, async (_e: IpcMainInvokeEvent, payload: any) => {
+    const filePath = reqStr(payload?.path);
+    if (filePath === null) return missingField('path');
+    const projectRoot = optStr(payload?.projectRoot);
+    const gated = await gateProjectRoot(projectRoot);
+    if (gated) return gated;
+    const refused = refuseNativeMutation(filePath);
+    if (refused) return refused;
+    const id = reqStr(payload?.id);
+    if (id === null) return missingField('id');
+    const replyId = reqStr(payload?.replyId);
+    if (replyId === null) return missingField('replyId');
+    const format = await resolveNativeFormat(filePath, projectRoot);
+    if (format === 'docx') {
+      return deleteNativeDocxReply({ path: filePath, projectRoot, id, replyId });
+    }
+    if (format === 'xlsx') {
+      return deleteNativeXlsxReply({ path: filePath, projectRoot, id, replyId });
+    }
+    return deleteReply({ path: filePath, projectRoot, id, replyId });
   });
 
   // ── Watch/unwatch: chokidar relay, refcounted per webContents id ──

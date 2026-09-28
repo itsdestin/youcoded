@@ -12,6 +12,11 @@ export const DOC_COMMENTS_IPC = {
   RESOLVE: 'docComments:resolve',
   REOPEN: 'docComments:reopen',
   MOVE: 'docComments:move',
+  // Edit/delete build (2026-09-28, design doc §"Edit and delete").
+  EDIT: 'docComments:edit',
+  EDIT_REPLY: 'docComments:edit-reply',
+  DELETE: 'docComments:delete',
+  DELETE_REPLY: 'docComments:delete-reply',
   WATCH: 'docComments:watch',
   UNWATCH: 'docComments:unwatch',
   CHANGED: 'docComments:changed', // push event

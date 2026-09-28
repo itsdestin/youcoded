@@ -523,6 +523,89 @@ export async function reopenComment(args: {
   });
 }
 
+/** Edit/delete build (2026-09-28, §"Edit and delete" in the design doc):
+ *  anyone's comment/reply can be edited or deleted (no author check — the
+ *  decision doc, `doc-comments.edit-delete.questions.answers.json`, is
+ *  explicit: "anyone's comment/reply can be edited or deleted"). No "edited"
+ *  marker is stored or shown, so this is a plain text overwrite — never a
+ *  history-append the way resolve/reopen's audit trail works. */
+export async function editComment(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  text: string;
+}): Promise<{ ok: true } | Refusal> {
+  const resolved = await resolveSidecarPath(args);
+  if (!resolved.ok) return resolved;
+  return mutateSidecar(resolved.sidecarPath, (file) => {
+    const comment = findComment(file, args.id);
+    if (!comment) return 'not-found';
+    const next: PersistedComment = { ...comment, text: args.text };
+    return { file: replaceComment(file, args.id, next), extra: {} };
+  });
+}
+
+/** Deleting a THREAD's first comment deletes the whole thread (decision doc:
+ *  "deleting a thread's first comment deletes the whole thread") — this
+ *  channel always removes the whole `PersistedComment` row, replies
+ *  included; a single reply is removed by `deleteReply` below instead. */
+export async function deleteComment(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+}): Promise<{ ok: true } | Refusal> {
+  const resolved = await resolveSidecarPath(args);
+  if (!resolved.ok) return resolved;
+  return mutateSidecar(resolved.sidecarPath, (file) => {
+    const comment = findComment(file, args.id);
+    if (!comment) return 'not-found';
+    return { file: { ...file, comments: file.comments.filter((c) => c.id !== args.id) }, extra: {} };
+  });
+}
+
+/** Mirrors `replyToComment`'s own enrichment (§1.6, T5 review F2): returns
+ *  the edited reply so a renderer's optimistic edit can be confirmed/
+ *  corrected in place, the same wire shape every reply-shaped mutation here
+ *  already uses. */
+export async function editReply(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  replyId: string;
+  text: string;
+}): Promise<{ ok: true; reply: CommentReply } | Refusal> {
+  const resolved = await resolveSidecarPath(args);
+  if (!resolved.ok) return resolved;
+  return mutateSidecar<{ reply: CommentReply }>(resolved.sidecarPath, (file) => {
+    const comment = findComment(file, args.id);
+    if (!comment) return 'not-found';
+    const idx = comment.replies.findIndex((r) => r.id === args.replyId);
+    if (idx === -1) return 'not-found';
+    const reply: CommentReply = { ...comment.replies[idx], text: args.text };
+    const replies = comment.replies.slice();
+    replies[idx] = reply;
+    const next: PersistedComment = { ...comment, replies };
+    return { file: replaceComment(file, args.id, next), extra: { reply } };
+  });
+}
+
+export async function deleteReply(args: {
+  path: string;
+  projectRoot?: string;
+  id: string;
+  replyId: string;
+}): Promise<{ ok: true } | Refusal> {
+  const resolved = await resolveSidecarPath(args);
+  if (!resolved.ok) return resolved;
+  return mutateSidecar(resolved.sidecarPath, (file) => {
+    const comment = findComment(file, args.id);
+    if (!comment) return 'not-found';
+    if (!comment.replies.some((r) => r.id === args.replyId)) return 'not-found';
+    const next: PersistedComment = { ...comment, replies: comment.replies.filter((r) => r.id !== args.replyId) };
+    return { file: replaceComment(file, args.id, next), extra: {} };
+  });
+}
+
 /** §2/§5's re-anchor tool target: replace a comment's selector wholesale
  *  (e.g. after MoveComment recomputes where it should point). T1 stores
  *  whatever selector it's given — deciding whether/where a selector resolves

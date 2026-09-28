@@ -10,10 +10,10 @@
     "main/ipc-handlers.ts": 5751,
     "main/harness/native-session-host.ts": 5296,
     "renderer/App.tsx": 4985,
-    "main/remote-server.ts": 4504,
+    "main/remote-server.ts": 4609,
     "main/harness/harness-session.ts": 4229,
     "renderer/components/SettingsPanel.tsx": 3256,
-    "renderer/remote-shim.ts": 3219,
+    "renderer/remote-shim.ts": 3229,
     "renderer/state/chat-reducer.ts": 3397,
     "renderer/styles/globals.css": 2994,
     "renderer/components/SessionStrip.tsx": 2784,
@@ -23,10 +23,10 @@
     "main/engine/engine-manager.ts": 2035,
     "renderer/components/ResumeBrowser.tsx": 2069,
     "renderer/components/SessionDrawer.tsx": 1599,
-    "main/preload.ts": 2004,
+    "main/preload.ts": 2016,
     "renderer/components/StatusBar.tsx": 1809,
     "renderer/components/ToolCard.tsx": 1636,
-    "main/doc-comments/docx-comments.ts": 1719,
-    "main/doc-comments/xlsx-comments.ts": 2005
+    "main/doc-comments/docx-comments.ts": 2037,
+    "main/doc-comments/xlsx-comments.ts": 2310
   }
 }

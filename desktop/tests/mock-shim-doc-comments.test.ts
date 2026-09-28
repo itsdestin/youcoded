@@ -89,6 +89,39 @@ describe('mock-shim docComments', () => {
     expect(after.comments.find((x: any) => x.id === id).selector).toEqual(newSelector);
   });
 
+  it('edit/edit-reply/delete/delete-reply mutate the SAME comment list() reads back, and refuse an unknown id', async () => {
+    const c = shim();
+    const before = await c.docComments.list(PLAN_PATH);
+    const id = before.comments[0].id;
+    expect((await c.docComments.reply(PLAN_PATH, id, 'a reply', 'assistant')).ok).toBe(true);
+    const withReply = await c.docComments.list(PLAN_PATH);
+    const replyId = withReply.comments.find((x: any) => x.id === id).replies[0].id;
+
+    expect((await c.docComments.edit('irrelevant-path', 'no-such-id', 'x')).ok).toBe(false);
+    expect((await c.docComments.edit(PLAN_PATH, id, 'edited text')).ok).toBe(true);
+    expect((await c.docComments.editReply(PLAN_PATH, id, replyId, 'edited reply')).ok).toBe(true);
+    const afterEdit = await c.docComments.list(PLAN_PATH);
+    const edited = afterEdit.comments.find((x: any) => x.id === id);
+    expect(edited.text).toBe('edited text');
+    expect(edited.replies.find((r: any) => r.id === replyId).text).toBe('edited reply');
+
+    expect((await c.docComments.deleteReply(PLAN_PATH, id, replyId)).ok).toBe(true);
+    const afterDeleteReply = await c.docComments.list(PLAN_PATH);
+    expect(afterDeleteReply.comments.find((x: any) => x.id === id).replies).toEqual([]);
+
+    expect((await c.docComments.delete(PLAN_PATH, id)).ok).toBe(true);
+    const afterDelete = await c.docComments.list(PLAN_PATH);
+    expect(afterDelete.comments.some((x: any) => x.id === id)).toBe(false);
+    expect((await c.docComments.delete(PLAN_PATH, id)).ok).toBe(false); // already gone
+  });
+
+  it('edit/editReply refuse empty text the same way add does', async () => {
+    const c = shim();
+    const before = await c.docComments.list(PLAN_PATH);
+    const id = before.comments[0].id;
+    expect((await c.docComments.edit(PLAN_PATH, id, '')).ok).toBe(false);
+  });
+
   it('onChanged fires on every mutation, and watch/unwatch never throw', async () => {
     const c = shim();
     const events: Array<{ path: string }> = [];
