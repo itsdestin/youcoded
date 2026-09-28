@@ -142,28 +142,30 @@ describe('pre-write guidance boundary', () => {
     expect(noticeOnly.every(s => s.omitted.includes(rule.id))).toBe(true);
   });
 
-  it.each(['Write', 'Edit'])('refuses %s when many rules cannot fit, without approving a retry or looping', async (name) => {
+  it.each(['Write', 'Edit'])('shows rules that cannot fit once, shortened, then lets the reissued %s run', async (name) => {
+    // A small model in a rule-heavy project must still be able to edit: it is
+    // told which rules apply (and where to read them) once, then decides again.
     const tool = fakeTool(name, { permissionSubject: (a: any) => a.file_path });
     const seen: any[] = []; const events: TranscriptEvent[] = [];
-    const scripts = [stream(toolCallChunk('first', name, { file_path: 'a.ts' }), finishChunk('tool-calls')),
-      stream(toolCallChunk('retry', name, { file_path: 'a.ts' }), finishChunk('tool-calls'))];
+    const file = path.join(process.cwd(), 'a.ts');
+    const scripts = [stream(toolCallChunk('first', name, { file_path: file }), finishChunk('tool-calls')),
+      stream(toolCallChunk('retry', name, { file_path: file }), finishChunk('tool-calls')),
+      stream(...textChunks('end', 'done'), finishChunk('stop'))];
     const model = scriptedModel(scripts, seen);
     const rules = Array.from({ length: 12 }, (_, i) => ({ id: `r${i}`, source: `rules/long-source-${i}.md`, body: `RULE_BODY_${i} ` + 'x'.repeat(1000) }));
-    const session = new HarnessSession(makeOpts({ tools: [tool], triggers: always(...rules), decide: async () => ALLOW,
+    const session = new HarnessSession(makeOpts({ cwd: process.cwd(), tools: [tool], triggers: always(...rules), decide: async () => ALLOW,
       profile: { ...CLOUD_DEFAULT, injectionBudgetTokens: 20 } }), async () => model as any);
     session.on('transcript-event', (e: TranscriptEvent) => events.push(e));
     await session.send('first');
-    expect((tool as any).calls).toHaveLength(0);
-    expect(seen).toHaveLength(1); // A blocked group does not automatically retry indefinitely.
-    expect(JSON.stringify(events.filter(e => e.type === 'tool-result'))).toMatch(/Not run|rejected|cannot fit/i);
-    await session.send('try again');
-    expect((tool as any).calls).toHaveLength(0);
-    expect(seen).toHaveLength(2);
-    expect(JSON.stringify((session as any).history.filter((m: any) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('project-rule')))).not.toContain('RULE_BODY_');
-    expect(events.filter(e => e.type === 'tool-result')).toHaveLength(2);
+    expect((tool as any).calls).toHaveLength(1);
+    expect(seen).toHaveLength(3);
+    const results = events.filter(e => e.type === 'tool-result');
+    expect(results[0].data.toolResult).toMatch(/Not run: newly applicable project instructions/);
+    expect(JSON.stringify(seen[1])).toMatch(/omitted|shortened|truncated/i);
+    expect(events.find(e => e.type === 'turn-complete')!.data.stopReason).toBe('end_turn');
   });
 
-  it('scopes an omitted-rule refusal to the blocked change after an earlier Write succeeded', async () => {
+  it('a rule stop inside a batch keeps the earlier Write and pauses the rest for one replan', async () => {
     const write = fakeTool('Write', { permissionSubject: (a: any) => a.file_path });
     const seen: any[] = []; const events: TranscriptEvent[] = [];
     const first = path.join(process.cwd(), 'first.ts');
@@ -172,7 +174,8 @@ describe('pre-write guidance boundary', () => {
     const scripts = [stream(
       toolCallChunk('first', 'Write', { file_path: first }),
       toolCallChunk('blocked', 'Write', { file_path: blocked }),
-      toolCallChunk('later', 'Write', { file_path: later }), finishChunk('tool-calls'))];
+      toolCallChunk('later', 'Write', { file_path: later }), finishChunk('tool-calls')),
+      stream(...textChunks('end', 'replanned'), finishChunk('stop'))];
     const model = scriptedModel(scripts, seen);
     const rules = Array.from({ length: 12 }, (_, i) => ({ id: `r${i}`, source: `rules/long-source-${i}.md`, body: 'x'.repeat(1000) }));
     const session = new HarnessSession(makeOpts({ cwd: process.cwd(), tools: [write], decide: async () => ALLOW,
@@ -184,11 +187,10 @@ describe('pre-write guidance boundary', () => {
     const results = events.filter(e => e.type === 'tool-result');
     expect(results).toHaveLength(3);
     expect(results[0].data.toolResult).toContain('Write ran');
-    expect(results[1].data.toolResult).toMatch(/This file change was not run/);
-    expect(results[1].data.toolResult).not.toContain('No file was changed');
+    expect(results[1].data.toolResult).toMatch(/Not run: newly applicable project instructions/);
     expect(results[2].data.toolResult).toMatch(/Not run/);
     expect((session as any).history.filter((m: any) => m.role === 'tool')).toHaveLength(1);
-    expect(seen).toHaveLength(1);
+    expect(seen).toHaveLength(2);
   });
 
   it('a post-Read notice without any body does not unlock a following Write', async () => {
@@ -206,9 +208,11 @@ describe('pre-write guidance boundary', () => {
     session.on('transcript-event', (e: TranscriptEvent) => events.push(e));
     await session.send('go');
     expect(JSON.stringify(seen[1])).toContain('truncated');
+    // The Read's notice alone does not skip the pre-write stop: the Write is
+    // paused once for a replan, and the scripted model then ends the turn.
     expect((write as any).calls).toHaveLength(0);
-    expect(JSON.stringify(events.filter(e => e.type === 'tool-result'))).toMatch(/could not fit/);
-    expect(seen).toHaveLength(2);
+    expect(JSON.stringify(events.filter(e => e.type === 'tool-result'))).toMatch(/Not run: newly applicable project instructions/);
+    expect(seen).toHaveLength(3);
   });
 
   it('fits multiple new rules as one source-labelled group and does not replan a partial twice', async () => {

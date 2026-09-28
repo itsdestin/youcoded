@@ -32,17 +32,7 @@ export function fitRuleGroupDelivery(rules: readonly PathTrigger[], budgetTokens
   return { contents, omitted };
 }
 
-/** No rule body may authorize an edit through an omission-only notice. */
-export function ruleFitRefusal(rules: readonly PathTrigger[], budgetTokens: number): string | null {
-  const missing = fitRuleGroupDelivery(rules, budgetTokens).omitted;
-  if (!missing.length) return null;
-  const sources = rules.filter(t => missing.includes(t.id));
-  const detail = sources.slice(0, 3).map(t => t.source).join(', ');
-  return `Not run: project rules could not fit this model's context (${detail}${sources.length > 3 ? ` and ${sources.length - 3} more` : ''}). This file change was not run. Use a model with a larger context window before retrying this change.`;
-}
-
-/** Keep the original formatter interface for callers that display fitted text;
- * execution authorization uses fitRuleGroupDelivery's explicit omission IDs. */
+/** The fitted text alone, for callers that only display it. */
 export function fitRuleGroup(rules: readonly PathTrigger[], budgetTokens: number): string[] {
   return fitRuleGroupDelivery(rules, budgetTokens).contents;
 }

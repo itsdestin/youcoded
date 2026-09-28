@@ -49,16 +49,20 @@ export function pendingRules(calls: readonly PathCall[], index: TriggerIndex | u
 }
 
 /** Once a complete paired tool result has been committed, publish guidance as
- * app-generated history. A partial rule counts as delivered; do not replan it forever. */
+ * app-generated history. A partial rule counts as delivered; do not replan it forever.
+ * WHY the pre-write (bounded) group always counts as delivered, even when a
+ * rule only fit as a "Read <file>" notice (Destin, 2026-09-28, Q-5): the model
+ * has been told the rule exists and where it is, and gets exactly one replan.
+ * Holding it back would re-trigger the pre-write stop on every retry. */
 export function deliverRules(rules: readonly PathTrigger[], budget: number, bounded: boolean,
   injected: Set<string>, retained: Set<string>, append: (text: string) => void): void {
   const fitted = bounded ? fitRuleGroupDelivery(rules, budget) : null;
   const contents = fitted?.contents ?? rules.map(r => fullContent(r, budget));
   rules.forEach((rule, i) => {
     const content = contents[bounded && contents.length === 1 && rules.length > 1 ? 0 : i];
-    if (fitted?.omitted.includes(rule.id) || (!bounded && noticeOnly(content))) {
+    if (!bounded && noticeOnly(content)) {
       if (content && !retained.has(content)) { retained.add(content); append(content); }
-      return; // a notice-only Read cannot authorize a later Write
+      return; // a notice-only Read leaves the one pre-write replan to happen
     }
     injected.add(rule.id);
     if (!content || retained.has(content)) return;

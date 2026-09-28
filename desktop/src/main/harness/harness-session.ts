@@ -191,7 +191,6 @@ import type { AdminPasswordServiceLike } from './admin-password-service';
 import { createSkillCatalog, type SkillCatalog } from './skills/skill-catalog';
 import { fitInjection } from './injection/injection-budget';
 import { pendingRules, deliverRules } from './injection/rule-delivery';
-import { ruleFitRefusal } from './injection/fit-rule-group';
 import type { PathTrigger } from './injection/path-triggers';
 import type { TriggerIndex } from './injection/path-triggers';
 import { retainedRuleMessages } from './injection/retained-rule-visibility';
@@ -3017,25 +3016,28 @@ export class HarnessSession extends EventEmitter {
               !this.interrupted && !this.abort.signal.aborted) {
             const newlyRelevant = this.pendingPathTriggers([call]);
             if (newlyRelevant.length) {
-              // WHY: an omission notice is not guidance. A blocked group ends
-              // this turn rather than automatically retrying unseen instructions.
-              const refusal = ruleFitRefusal(newlyRelevant, this.profile.injectionBudgetTokens);
+              // WHY (Destin, 2026-09-28 PR-review deck Q-5): show the new rules
+              // ONCE, then let the model decide again — even on a small model
+              // whose window only fits a shortened version. A shortened rule
+              // ends with "Read <file> for the rest", so the model can fetch the
+              // remainder itself. The earlier design refused the change outright
+              // when rules could not fit, which silently ended the turn and left
+              // small models unable to edit files in rule-heavy projects.
               supersedeToolGroup(step.toolCalls, i, resultParts, resultOrigins,
                 data => this.emitEvent('tool-result', data), (rem, text) => this.toolResultPart(rem, text),
                 uuid => this.capture.recordEvent(uuid), (parts, origins) => {
                   this.history.push({ role: 'tool', content: parts });
                   this.historyOrigins.push(origins);
                 }, calls => this.injectPathTriggers(calls),
-                refusal ?? 'Not run: newly applicable project instructions need review before changing this file.',
+                'Not run: newly applicable project instructions need review before changing this file.',
                 () => {
-                  if (!refusal && !this.interrupted && !this.abort?.signal.aborted)
+                  if (!this.interrupted && !this.abort?.signal.aborted)
                     this.appendPathTriggers(newlyRelevant.filter(t => !this.injectedTriggerIds.has(t.id)), true);
                 });
               if (this.interrupted || this.abort.signal.aborted) {
                 this.emitEvent('user-interrupt', abandonedTurnUsage());
                 return;
               }
-              if (refusal) { stopReason = 'end_turn'; break turnLoop; }
               absorbReadyMessage(); // ready human correction precedes replan
               continue turnLoop;
             }
