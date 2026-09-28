@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ModelPicker from '../model/ModelPicker';
-import { AnchorTip, Button, ErrorState, LoadingState, SegmentedTabs } from '../ui';
+import { AnchorTip, Button, CARD_LEVEL_1, ErrorState, LoadingState, SegmentedTabs } from '../ui';
 import { namingApi, type NamingPreferences } from './naming-api';
 
 export default function SessionNaming() {
@@ -58,8 +58,8 @@ export default function SessionNaming() {
     pendingRef.current = { ...value, ...patch };
     void drainWrites();
   };
-  // WHY: naming is a General option, so it uses the same card as FieldRow.
-  return <section className="bg-inset/50 rounded-lg px-3 py-2.5 space-y-1.5" aria-label="Session naming">
+  // WHY: naming is a General option, so it uses the same level-1 card as FieldRow.
+  return <section className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-1.5`} aria-label="Session naming">
     <div className="flex items-center gap-1"><h3 className="text-xs font-medium text-fg">Session naming</h3>
       <AnchorTip label="About session naming" title="Session naming"><div className="space-y-2 text-xs">
         <p>Basic is the default: it uses the opening request without AI calls and keeps that name.</p>
@@ -71,7 +71,7 @@ export default function SessionNaming() {
       if (retryValue) { pendingRef.current = retryValue; void drainWrites(); } else load();
     }} variant="inline" />}
     <div className="space-y-3">
-    <SegmentedTabs aria-label="Automatic session naming" variant="contained" value={value.mode}
+    <SegmentedTabs aria-label="Automatic session naming" variant="nested" value={value.mode}
       tabs={[{ id: 'off', label: 'Off' }, { id: 'basic', label: 'Basic' }, { id: 'ai', label: 'AI' }]}
       onChange={(mode) => update({ mode: mode as NamingPreferences['mode'] })} />
     <p className="text-xs text-fg-2 leading-relaxed">{value.mode === 'off'
@@ -96,6 +96,9 @@ function ModelSelection({ value, update }: { value: NamingPreferences; update: (
     <p className="text-xs font-medium text-fg">Naming model</p>
     <ModelPicker value={value.model} includeClaude={false}
       emptyLabel="Same as Conversation (default)"
+      // Card-levels trial: nested inside this section's own level-1 card, so
+      // the trigger matches the page's other nested controls (level-2).
+      triggerClassName=""
       onSelect={(model) => update({ model })} />
     {value.model && <Button size="sm" variant="ghost" onClick={() => update({ model: null })}>Use conversation model instead</Button>}
   </div>;

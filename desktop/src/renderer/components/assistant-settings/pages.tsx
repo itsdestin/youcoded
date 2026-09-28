@@ -269,6 +269,11 @@ function GeneralPage(ctx: PageContext) {
         >
           <ModelPicker
             value={startChoice(defaults)}
+            // Card-levels trial: this trigger sits on the level-1 `bg-inset/50`
+            // FieldRow card, not an opaque `bg-inset` one — opt out of the
+            // picker's usual bg-well deepening so it matches every other
+            // nested control on this page (level-2, the shared FIELD default).
+            triggerClassName=""
             onSelect={(choice, label) => onDefaultsChange({
               startModel: choice,
               startModelLabel: choice.runtime === 'native' ? label : undefined,

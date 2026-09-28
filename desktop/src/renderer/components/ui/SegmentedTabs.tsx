@@ -1,5 +1,6 @@
 import React from 'react';
 import { FOCUS_RING } from './Button';
+import { CARD_LEVEL_2 } from './cardLevels';
 
 /**
  * Tab rows (change 45, §1.8).
@@ -27,8 +28,15 @@ export type SegmentedTabsProps = {
    *  width evenly (BugReportPopup). pill = one rounded-full layer-surface pill
    *  holding rounded-full segments — the Projects header switcher, adopted by
    *  the Library (UI review P-2 #2) so the two top-level browsing screens share
-   *  one switcher shape. */
-  variant?: 'bare' | 'contained' | 'pill';
+   *  one switcher shape. nested = card-levels trial (2026-09-27): the SAME
+   *  trough, but on the app's LEVEL-2 nested-box recipe (`CARD_LEVEL_2` — an
+   *  opaque fill + a visible border) instead of `contained`'s translucent
+   *  `bg-inset/50` — which is also LEVEL-1's own card background, so a
+   *  `contained` strip sitting inside a level-1 card was quietly reusing the
+   *  card's own look for the thing nested inside it. Scoped to the two
+   *  screens this trial touches (General's Context/Session-naming strips)
+   *  rather than changing `contained` everywhere it's already shipped. */
+  variant?: 'bare' | 'contained' | 'pill' | 'nested';
   'aria-label'?: string;
   className?: string;
 };
@@ -79,7 +87,9 @@ export function SegmentedTabs({
           ? PILL_CONTAINER
           : variant === 'contained'
             ? 'flex gap-1 p-1 bg-inset/50 rounded-lg'
-            : 'flex gap-2',
+            : variant === 'nested'
+              ? `flex gap-1 p-1 ${CARD_LEVEL_2}`
+              : 'flex gap-2',
         className,
       ]
         .filter(Boolean)
@@ -102,7 +112,7 @@ export function SegmentedTabs({
             className={[
               pill ? PILL_TAB_BASE : TAB_BASE,
               active ? TAB_ACTIVE : pill ? PILL_TAB_INACTIVE : TAB_INACTIVE,
-              variant === 'contained' ? 'flex-1' : '',
+              variant === 'contained' || variant === 'nested' ? 'flex-1' : '',
             ]
               .filter(Boolean)
               .join(' ')}

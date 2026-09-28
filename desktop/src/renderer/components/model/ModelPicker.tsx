@@ -275,6 +275,7 @@ export default function ModelPicker({
   layout = 'floating',
   pinSelectedToTop = false,
   emptyLabel = 'Choose a model…',
+  triggerClassName,
 }: {
   value: ModelChoice | null;
   /** What the CLOSED button reads when nothing is picked. Defaults to the
@@ -330,6 +331,14 @@ export default function ModelPicker({
    *  favourites and leaving the current pick to `search` for. No effect while
    *  searching (the whole catalogue is already the result, unordered). */
   pinSelectedToTop?: boolean;
+  /** Card-levels trial (2026-09-27): overrides the trigger's `bg-well
+   *  border-edge` deepening (see the WHY below, at the className). Pass ''
+   *  to fall back to the shared FIELD default (`bg-inset border-edge-dim`) —
+   *  the level-2 nested-box look — on a host whose OWN card is already the
+   *  translucent level-1 `bg-inset/50` (General page), where the deepening
+   *  isn't needed. Omitted everywhere else so the ~20 other call sites,
+   *  including the ones the deepening was written for, don't move. */
+  triggerClassName?: string;
 }) {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
@@ -887,8 +896,11 @@ export default function ModelPicker({
         // on a `bg-inset` card, so the trigger was the same fill as the surface
         // behind it and read as a label rather than a control (reported
         // 2026-07-31 with a screenshot). One step deeper on the surface ladder
-        // fixes it without disturbing the other ~25 fields.
-        className={fieldClasses('sm', `w-full text-left truncate flex items-center gap-1.5 justify-between bg-well border-edge ${FIELD_TRIGGER_STATES}`)}
+        // fixes it without disturbing the other ~25 fields. `triggerClassName`
+        // (card-levels trial, 2026-09-27) lets a caller on a TRANSLUCENT
+        // level-1 card (`bg-inset/50`, not this opaque `bg-inset` case) opt
+        // back into the shared default instead — see its own doc comment.
+        className={fieldClasses('sm', `w-full text-left truncate flex items-center gap-1.5 justify-between ${triggerClassName ?? 'bg-well border-edge'} ${FIELD_TRIGGER_STATES}`)}
       >
         {/* The current model's company mark, in its brand colour — the same
             pairing the status-bar chip shows, so the control you set it from and

@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Badge, Button, Callout, Dialog, ErrorState, FieldError, FoldRow, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
+import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, FoldRow, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
@@ -1224,9 +1224,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 });
 
               return (
-                <div className="rounded-lg border border-edge bg-well overflow-hidden">
-                  {/* Unified header: dot · title/sub · toggle. Identical anatomy every state. */}
-                  <div className="px-3 py-3">
+                // Card-levels trial: the old "well card" is now LEVEL-1 like every
+                // other top-level box here; `p-3 space-y-2.5` replaces `border-t` dividers.
+                <div className={`${CARD_LEVEL_1} overflow-hidden`}>
+                  <div className="p-3 space-y-2.5">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex items-start gap-2.5">
                         <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${dot}`} />
@@ -1253,7 +1254,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     </div>
                     {/* Action tucked under the reason — same box, no divider. */}
                     {cta && (
-                      <div className="mt-2 flex items-center justify-end gap-2">{cta}</div>
+                      <div className="flex items-center justify-end gap-2">{cta}</div>
                     )}
                     {/* WHY a danger Callout SUB-BOX here (fix batch 2, 2026-09-26 —
                         decisions.md P-2): the problem is the same tinted box as every
@@ -1268,120 +1269,121 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         (error-message-standards.md); it opens under the sentence, so
                         the buttons never move. */}
                     {problem && (
-                      <Callout tone="danger" className="mt-2.5" actions={errorActions}>
+                      <Callout tone="danger" actions={errorActions}>
                         {problem}
                         {showSyncDetails && errorMsg && (
                           <pre className="mt-1.5 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{errorMsg as string}</pre>
                         )}
                       </Callout>
                     )}
-                  </div>
-
-                  {/* Count tabs + switchable list (only when enabled & healthy). */}
-                  {showTabs && (
-                    <>
-                      <div
-                        role="tablist"
-                        aria-label="Synced content"
-                        className="flex gap-2 px-3 pb-3"
-                        onKeyDown={(e) => {
-                          // Left/Right arrow roving between the three pills.
-                          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-                          e.preventDefault();
-                          const order = ['dev', 'proj', 'conv'] as const;
-                          const i = order.indexOf(countTab);
-                          const ni = e.key === 'ArrowRight' ? (i + 1) % 3 : (i + 2) % 3;
-                          setCountTab(order[ni]);
-                          (e.currentTarget.children[ni] as HTMLElement)?.focus();
-                        }}
-                      >
-                        {tabDefs.map(t => {
-                          const active = countTab === t.key;
-                          return (
-                            <button
-                              key={t.key}
-                              role="tab"
-                              aria-selected={active}
-                              tabIndex={active ? 0 : -1}
-                              onClick={() => setCountTab(t.key)}
-                              className={`inline-flex items-baseline gap-1.5 rounded-full px-3 py-1 text-2xs transition-colors ${active ? 'bg-accent text-on-accent border border-accent' : 'bg-inset border border-edge-dim text-fg-dim hover:text-fg-2'}`}
-                            >
-                              <span className="font-bold text-xs">{t.count}</span> {t.word}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <div role="tabpanel" className="border-t border-edge-dim px-3 py-2.5">
-                        {countTab === 'dev' && <DevicesTab devices={devices} onRename={handleRenameDevice} onRemove={handleRemoveDevice} syncInProgress={status?.syncInProgress ?? false} lastSyncByDevice={status?.lastSyncByDevice} lastSyncEpoch={status?.lastSyncEpoch ?? null} />}
-                        {countTab === 'proj' && (() => {
-                          const projects = ((spacesStatus?.spaces ?? []) as any[]).filter(s => s.kind === 'project');
-                          if (projects.length === 0) return <p className="text-2xs text-fg-muted">Turn on sync for a project folder to add it here.</p>;
-                          return (
-                            <ul className="space-y-1">
-                              {projects.map((s: any) => (
-                                <li key={s.id} className="flex items-center justify-between gap-2">
-                                  <span className="text-xs text-fg-2 truncate">{s.displayName || s.id.replace('project:', '')}</span>
-                                  <span className="text-3xs text-fg-muted shrink-0">{s.remote ? 'connected' : 'local only'}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          );
-                        })()}
-                        {countTab === 'conv' && (() => {
-                          // Most-recent first; show up to 4 with a "+ N more" muted tail.
-                          const sorted = [...(conversations ?? [])].sort((a, b) => b.lastModified - a.lastModified);
-                          if (sorted.length === 0) return <p className="text-2xs text-fg-muted">No conversations yet.</p>;
-                          const shown = sorted.slice(0, 4);
-                          return (
-                            <>
+                    {/* Count tabs + list (enabled & healthy only). No `border-t` —
+                        the wrapper's own `space-y-2.5` separates sections. */}
+                    {showTabs && (
+                      <div className="space-y-2">
+                        <div
+                          role="tablist"
+                          aria-label="Synced content"
+                          className="flex gap-2"
+                          onKeyDown={(e) => {
+                            // Left/Right arrow roving between the three pills.
+                            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+                            e.preventDefault();
+                            const order = ['dev', 'proj', 'conv'] as const;
+                            const i = order.indexOf(countTab);
+                            const ni = e.key === 'ArrowRight' ? (i + 1) % 3 : (i + 2) % 3;
+                            setCountTab(order[ni]);
+                            (e.currentTarget.children[ni] as HTMLElement)?.focus();
+                          }}
+                        >
+                          {tabDefs.map(t => {
+                            const active = countTab === t.key;
+                            return (
+                              <button
+                                key={t.key}
+                                role="tab"
+                                aria-selected={active}
+                                tabIndex={active ? 0 : -1}
+                                onClick={() => setCountTab(t.key)}
+                                className={`inline-flex items-baseline gap-1.5 rounded-full px-3 py-1 text-2xs transition-colors ${active ? 'bg-accent text-on-accent border border-accent' : 'bg-inset border border-edge-dim text-fg-dim hover:text-fg-2'}`}
+                              >
+                                <span className="font-bold text-xs">{t.count}</span> {t.word}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div role="tabpanel">
+                          {countTab === 'dev' && <DevicesTab devices={devices} onRename={handleRenameDevice} onRemove={handleRemoveDevice} syncInProgress={status?.syncInProgress ?? false} lastSyncByDevice={status?.lastSyncByDevice} lastSyncEpoch={status?.lastSyncEpoch ?? null} />}
+                          {countTab === 'proj' && (() => {
+                            const projects = ((spacesStatus?.spaces ?? []) as any[]).filter(s => s.kind === 'project');
+                            if (projects.length === 0) return <p className="text-2xs text-fg-muted">Turn on sync for a project folder to add it here.</p>;
+                            // LEVEL-2 row (card-levels trial): nested inside the level-1 status card.
+                            return (
                               <ul className="space-y-1">
-                                {shown.map(c => (
-                                  <li key={c.sessionId} className="flex items-center justify-between gap-2">
-                                    <span className="text-xs text-fg-2 truncate">{c.name}</span>
-                                    <span className="text-3xs text-fg-muted shrink-0">{relativeMs(c.lastModified)}</span>
+                                {projects.map((s: any) => (
+                                  <li key={s.id} className={`${CARD_LEVEL_2} flex items-center justify-between gap-2 px-2.5 py-1.5`}>
+                                    <span className="text-xs text-fg-2 truncate">{s.displayName || s.id.replace('project:', '')}</span>
+                                    <span className="text-3xs text-fg-muted shrink-0">{s.remote ? 'connected' : 'local only'}</span>
                                   </li>
                                 ))}
                               </ul>
-                              {sorted.length > shown.length && (
-                                <p className="text-3xs text-fg-muted mt-1.5">+ {sorted.length - shown.length} more, all backed up</p>
-                              )}
-                            </>
-                          );
-                        })()}
+                            );
+                          })()}
+                          {countTab === 'conv' && (() => {
+                            // Most-recent first; show up to 4 with a "+ N more" muted tail.
+                            const sorted = [...(conversations ?? [])].sort((a, b) => b.lastModified - a.lastModified);
+                            if (sorted.length === 0) return <p className="text-2xs text-fg-muted">No conversations yet.</p>;
+                            const shown = sorted.slice(0, 4);
+                            return (
+                              <>
+                                <ul className="space-y-1">
+                                  {shown.map(c => (
+                                    <li key={c.sessionId} className={`${CARD_LEVEL_2} flex items-center justify-between gap-2 px-2.5 py-1.5`}>
+                                      <span className="text-xs text-fg-2 truncate">{c.name}</span>
+                                      <span className="text-3xs text-fg-muted shrink-0">{relativeMs(c.lastModified)}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                                {sorted.length > shown.length && (
+                                  <p className="text-3xs text-fg-muted mt-1.5">+ {sorted.length - shown.length} more, all backed up</p>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
                       </div>
-                    </>
-                  )}
-
-                  {/* Conflict / large-history notice / Sync now — only when enabled & not errored. */}
-                  {enabled && !errorMsg && (
-                    <div className="border-t border-edge-dim px-3 py-2.5 space-y-2">
-                      {/* WHY a warning Callout, not amber text (fix batch 2 — design
-                          guide "Status and notices": never coloured body text; every
-                          warning is the one tinted box). Same words. */}
-                      {conflict && (
-                        <Callout tone="warning">
-                          Some files had conflicting edits — the other device's copy was kept alongside yours
-                          (look for "(from …)" files).
-                        </Callout>
-                      )}
-                      {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
-                      {/* The app's warning card, collapsed to one informative line
-                          (review, 2026-09-16); it opens to the reason and the names. */}
-                      {oversizeLine && (
-                        <Callout tone="warning" collapsible title={oversizeLine.header}>
-                          {oversizeLine.body}
-                          <ul className="mt-1.5 list-disc pl-4 space-y-0.5">
-                            {oversizeNames.map((n, i) => <li key={i} className="break-words">{n}</li>)}
-                          </ul>
-                        </Callout>
-                      )}
-                      {/* .catch (inside runSpacesSyncNow) routes a failed invoke into the error box.
-                          WHY a full-width outlined Button (fix batch 2 — decisions.md
-                          "Follow-up actions", settings-pieces#P-3): an action under a
-                          group is never underlined text. */}
-                      <Button variant="secondary" onClick={runSpacesSyncNow} className="w-full">Sync now</Button>
-                    </div>
-                  )}
+                    )}
+                    {/* Conflict / oversize notice / Sync now — enabled & not errored only. */}
+                    {enabled && !errorMsg && (
+                      <div className="space-y-2">
+                        {/* WHY a warning Callout, not amber text (fix batch 2 — design
+                            guide "Status and notices": never coloured body text; every
+                            warning is the one tinted box). Same words. */}
+                        {conflict && (
+                          <Callout tone="warning">
+                            Some files had conflicting edits — the other device's copy was kept alongside yours
+                            (look for "(from …)" files).
+                          </Callout>
+                        )}
+                        {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
+                        {/* The app's warning card, collapsed to one informative line
+                            (review, 2026-09-16); it opens to the reason and the names —
+                            each a LEVEL-2 row now, same recipe as the tabs above. */}
+                        {oversizeLine && (
+                          <Callout tone="warning" collapsible title={oversizeLine.header}>
+                            {oversizeLine.body}
+                            <div className="mt-1.5 space-y-1">
+                              {oversizeNames.map((n, i) => <div key={i} className={`${CARD_LEVEL_2} px-2.5 py-1 text-xs truncate`}>{n}</div>)}
+                            </div>
+                          </Callout>
+                        )}
+                        {/* .catch (inside runSpacesSyncNow) routes a failed invoke into the error box.
+                            WHY a full-width outlined Button (fix batch 2 — decisions.md
+                            "Follow-up actions", settings-pieces#P-3): an action under a
+                            group is never underlined text. */}
+                        <Button variant="secondary" onClick={runSpacesSyncNow} className="w-full">Sync now</Button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })()}
@@ -1405,21 +1407,17 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 list.length > 0 ? `${pausedCount} destination${pausedCount === 1 ? '' : 's'} paused` :
                 'A second copy on top of GitHub — Drive or iCloud';
 
-              // WHY flat, no wrapping card (fix batch 1, 2026-09-24 — design
-              // guide "Groups are flat", decisions.md SA-3: a small label, the
-              // rows directly under it, a normal button, no box inside a box).
-              // This used to be a `border-dashed` card wrapping a title, an
-              // "optional" eyebrow pill, a master toggle, per-backend bordered
-              // rows AND a dashed "+ Add a backup" button — box inside box,
-              // named directly in settings-screens.md's audit. The title/hint/
-              // toggle row is exactly a SettingRow; "Optional" moves to a plain
-              // Badge (rule: status pills are for status, not attributes); the
-              // per-backend rows and the Add-a-backup button are now siblings
-              // at the same flat level, not nested inside another card.
+              // Card-levels trial: fix batch 1 went flat here to kill a box-
+              // inside-box bug, leaving no first-level card at all, unlike every
+              // sibling here. Now ONE level-1 card; destinations are level-2.
               return (
-                <div className="space-y-1.5">
+                <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
+                  {/* `!bg-transparent !px-0 !py-1` (ContextSettings' own precedent)
+                      strips SettingRow's own box — this row IS the card's header,
+                      not a nested thing inside it. */}
                   <SettingRow
                     variant="item"
+                    className="!bg-transparent !px-0 !py-1"
                     title={<span className="flex items-center gap-2">Additional backups<Badge>Optional</Badge></span>}
                     description={sub}
                     control={
@@ -1435,9 +1433,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     }
                   />
 
-                  {/* Backend rows — shown whenever any exist (kept visible even when paused,
-                      so turning the master off doesn't hide/lose destinations). */}
-                  {/* space-y-1.5: the guide's 6px between rows (fix batch 2; was 8px). */}
+                  {/* Backend rows — shown whenever any exist (paused ones kept visible).
+                      Each is a LEVEL-2 box; red/green is a status TINT on that shape,
+                      not a fourth card. space-y-1.5: the guide's 6px between rows. */}
                   {list.length > 0 && (
                     <div className="space-y-1.5">
                       {list.map(b => {
@@ -1456,7 +1454,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                             className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 ${
                               b.lastError ? 'border-red-500/20 bg-red-500/5' :
                               b.syncEnabled && b.connected ? 'border-green-400/20 bg-green-400/5' :
-                              'border-edge bg-inset/30'
+                              CARD_LEVEL_2
                             }`}
                           >
                             {/* Type icon */}
@@ -1529,24 +1527,26 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     </div>
                   )}
 
-                  {/* Inline picker — master on but nothing connected yet. Opens the wizard
-                      straight into per-type config (initialType skips the type picker). */}
+                  {/* Inline picker — master on but nothing connected yet (initialType
+                      skips the type picker). Real Button now (card-levels trial). */}
                   {masterOn && list.length === 0 && (
                     <div className="flex gap-2">
-                      <button
+                      <Button
+                        variant="secondary"
                         onClick={() => { setAddType('drive'); setView('add-config'); }}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-edge bg-well hover:bg-inset text-xs text-fg-2 transition-colors"
+                        className="flex-1"
                       >
                         <span className="w-5 h-5 rounded-full flex items-center justify-center text-2xs bg-blue-500/10 text-blue-400">{'☁'}</span>
                         Google Drive
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        variant="secondary"
                         onClick={() => { setAddType('icloud'); setView('add-config'); }}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-edge bg-well hover:bg-inset text-xs text-fg-2 transition-colors"
+                        className="flex-1"
                       >
                         <span className="w-5 h-5 rounded-full flex items-center justify-center text-2xs bg-sky-500/10 text-sky-400">{'⬡'}</span>
                         iCloud
-                      </button>
+                      </Button>
                     </div>
                   )}
 
@@ -1909,7 +1909,7 @@ function DevicesTab({ devices, onRename, onRemove, syncInProgress, lastSyncByDev
         const right = plat ? `${plat} · ${activity}` : activity;
         return (
           <li key={d.id}>
-            <div className="flex items-center justify-between gap-2">
+            <div className={`${CARD_LEVEL_2} flex items-center justify-between gap-2 px-2.5 py-1.5`}> {/* LEVEL-2 row (card-levels trial) */}
               <div className="min-w-0 flex items-center gap-1.5">
                 {editingId === d.id ? (
                   /* Shared FIELD surface (spec change 20) — `sm` because this is an

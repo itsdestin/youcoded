@@ -1,5 +1,5 @@
 import React from 'react';
-import { AnchorTip, SegmentedTabs, SettingRow } from '../ui';
+import { AnchorTip, CARD_LEVEL_1, SegmentedTabs, SettingRow } from '../ui';
 
 import type { ContextPreferences } from '../../../shared/context-preferences';
 export type { ContextMode, ContextPreferences } from '../../../shared/context-preferences';
@@ -15,7 +15,7 @@ const PROVIDERS = [{ id: 'openrouter', label: 'OpenRouter' }, { id: 'chatgpt', l
 export default function ContextSettings({ value, onChange }: ContextSettingsProps) {
   // WHY: this preview is controlled and provider-specific; choosing a larger window
   // must not silently opt the other provider into higher cost or plan usage.
-  return <section className="bg-inset/50 rounded-lg px-3 py-2.5 space-y-1.5" aria-label="Context">
+  return <section className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-1.5`} aria-label="Context">
     <div className="flex items-center gap-1">
       <h3 className="text-xs font-medium text-fg">Context</h3>
       <AnchorTip label="About context" title="Context" className="coarse-hit">
@@ -33,7 +33,7 @@ export default function ContextSettings({ value, onChange }: ContextSettingsProp
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
     {PROVIDERS.map((provider) => <SettingRow key={provider.id} title={provider.label} variant="item"
       className="!bg-transparent !px-0 !py-1" control={
-        <SegmentedTabs aria-label={`${provider.label} context`} variant="contained"
+        <SegmentedTabs aria-label={`${provider.label} context`} variant="nested"
           tabs={CONTEXT_OPTIONS} value={value[provider.id]}
           onChange={(mode) => {
             if (mode === 'standard' || mode === 'long') onChange({ ...value, [provider.id]: mode });

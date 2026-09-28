@@ -1,4 +1,5 @@
 import React from 'react';
+import { CARD_LEVEL_1 } from './cardLevels';
 
 /**
  * A wide control's label: title + hint above, the control full width below.
@@ -18,7 +19,7 @@ import React from 'react';
  */
 export function FieldRow({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
   return (
-    <div className="bg-inset/50 rounded-lg px-3 py-2.5 space-y-1.5">
+    <div className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-1.5`}>
       <div>
         <p className="text-xs font-medium text-fg">{title}</p>
         <p className="text-3xs text-fg-muted">{hint}</p>

@@ -7,7 +7,7 @@ import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealt
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
-import { AnchorTip, Button, Dialog, InputGroup, SectionLabel, TextInput } from './ui';
+import { AnchorTip, Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, InputGroup, SectionLabel, TextInput } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
@@ -910,7 +910,7 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
   // inside it and the two backend rows one surface deeper. Everywhere else the
   // block keeps the bare-section shape the Model Providers popup gave it.
   return (
-    <section className={card ? 'bg-inset/50 rounded-lg px-3 py-2.5' : undefined}>
+    <section className={card ? `${CARD_LEVEL_1} px-3 py-2.5` : undefined}>
       {card ? (
         <div className="flex items-center gap-1.5">
           <p className="text-xs text-fg font-medium">Web search</p>
@@ -928,7 +928,7 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
           const isEditing = editing === row.id;
           const note = testMsg[row.id];
           return (
-            <div key={row.id} className={card ? 'bg-well rounded-md px-2.5 py-2' : 'bg-inset/50 rounded-lg px-3 py-2.5'}>
+            <div key={row.id} className={card ? `${CARD_LEVEL_2} px-2.5 py-2` : `${CARD_LEVEL_1} px-3 py-2.5`}>
               <div className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-xs text-fg font-medium">{row.label}</p>

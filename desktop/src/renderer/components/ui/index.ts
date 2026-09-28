@@ -25,6 +25,9 @@ export type { ToggleProps, ToggleTone } from './Toggle';
 export { FIELD, FIELD_SURFACE, FIELD_TEXT, FIELD_SIZE, fieldClasses } from './field';
 export type { FieldSize } from './field';
 
+// Card-levels trial (2026-09-27) — see cardLevels.ts for the WHY.
+export { CARD_LEVEL_1, CARD_LEVEL_2 } from './cardLevels';
+
 export { InputGroup } from './InputGroup';
 export type { InputGroupProps, InputGroupFieldProps } from './InputGroup';
 
