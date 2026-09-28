@@ -2,23 +2,21 @@
 // Project View (office-questions#Q-open-mode: the quick preview first, the
 // editor on Edit; #Q-slim: "YouCoded's own bar").
 //
-//   ┌ [↶][↷] | [B][I][U] | [•][1.] | [≡][≡][≡]            [ Open in Office ] ┐
+//   ┌ [↶][↷] | [B][I][U] | [•][1.] | [≡][≡][≡]                              ┐
 //   │  the Euro-Office editor, its own toolbar and side rails hidden          │
 //
 // The bar is drawn with the app's own Button, so it matches every theme; each
 // press is forwarded to the editor, which does exactly what its own toolbar
-// button would. Anything beyond the basics is one press away in Office.
+// button would. Anything beyond the basics is one press away in Office — the
+// briefcase in the panel header (office-review#B-inline), not a button in this bar.
 import React, { useEffect, useRef, useState } from 'react';
 import { Button, LoadingState, Tooltip } from '../ui';
 import type { ArtifactViewProps } from '../artifact-views/types';
 import type { OfficeBridge } from '../../../shared/office-types';
 import { officeFileFor } from './office-files';
-import { OFFICE_PAGE_ID } from '../../../shared/pages-types';
-import { useArtifactDispatch } from '../../state/ArtifactContext';
 import { EditorFrame } from './EditorFrame';
 import type { EditorFrameHandle, OfficeCommand, OfficeCommandState } from './EditorFrame';
 import { CommandGlyph } from './office-icons';
-import { openDoc } from './office-store';
 
 const GROUPS: { cmd: OfficeCommand; label: string }[][] = [
   [{ cmd: 'undo', label: 'Undo' }, { cmd: 'redo', label: 'Redo' }],
@@ -27,8 +25,7 @@ const GROUPS: { cmd: OfficeCommand; label: string }[][] = [
   [{ cmd: 'align-left', label: 'Align left' }, { cmd: 'align-center', label: 'Center' }, { cmd: 'align-right', label: 'Align right' }],
 ];
 
-export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: ArtifactViewProps) {
-  const dispatch = useArtifactDispatch();
+export function OfficeInlineEditor({ absolutePath, artifactId }: ArtifactViewProps) {
   const frame = useRef<EditorFrameHandle>(null);
   const [origin, setOrigin] = useState<string | null>(null);
   const [state, setState] = useState<OfficeCommandState>({});
@@ -46,12 +43,6 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
     return true;
   });
 
-  const openInOffice = () => {
-    // The file moves to Office: one editor per file, so this one closes.
-    onCancelEdit?.();
-    openDoc(file);
-    dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID });
-  };
 
   return (
     <div className="h-full flex flex-col">
@@ -78,8 +69,6 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
             })}
           </React.Fragment>
         ))}
-        <div className="flex-1" />
-        <Button variant="secondary" size="sm" onClick={openInOffice} className="shrink-0">Open in Office</Button>
       </div>
       <div className="relative flex-1 min-h-0">
         {origin === null

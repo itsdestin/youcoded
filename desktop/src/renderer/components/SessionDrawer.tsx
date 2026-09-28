@@ -49,7 +49,7 @@ import type { PastSession } from '../../shared/types';
 import { triggerTip } from './guide/tips';
 import { TagNoteEditor } from './tags/TagNoteEditor';
 import { ScreenMark, useScreenOpen } from '../shoot-mode';
-import { useOfficeEditScreen } from './office/use-office-edit-screen';
+import { officeHeaderAction, useOfficeEditScreen } from './office/use-office-edit-screen';
 
 // 'type' removed 2026-07-23 — the Type FILTER supersedes sorting by type.
 type SortKey = 'recent' | 'name';
@@ -1119,7 +1119,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         )}
         {/* Edit/Save moved to the floating button at the bottom-right of the
             doc pane (Destin, 2026-07-22) — see the cluster below the content div. */}
-        {active && isElectron && <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />}
+        {active && isElectron && ((o) => o ? <IconBtn title={o.title} glyph={o.glyph} onClick={o.onClick} /> : <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />)(officeHeaderAction(absolutePath, dispatch, () => editRef.current?.cancelEdit()))}
         {active && isRemoteMode() && <IconBtn name="download" title="Download" onClick={handleDownload} />}
         {active && <IconBtn name={copiedPath ? 'check' : 'copypath'} title={copiedPath ? 'Copied' : 'Copy path'} onClick={handleCopyPath} />}
         {active && isElectron && <IconBtn title="Reveal in folder" glyph={<RevealFolderIc />} onClick={handleReveal} />}
