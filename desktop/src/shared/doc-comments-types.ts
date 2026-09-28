@@ -113,10 +113,28 @@ export interface PendingMutationRequest {
   path: string;
   /** The MCP script's own trusted, spawn-time project root
    *  (`YOUCODED_PROJECT_ROOT` — never model-controlled input; see
-   *  shared/doc-comments-mcp.ts's own header) — passed through so the
-   *  applier resolves the identical target this request's own containment
-   *  check already verified against. */
+   *  shared/doc-comments-mcp.ts's own header). **Advisory only, as of
+   *  adversarial review 2026-09-27 finding #1 — the applier (pending-
+   *  mutation-queue.ts) NEVER uses this field for authorization.** A
+   *  self-reported field inside an otherwise-unauthenticated file drop-box is
+   *  exactly as trustworthy as whatever wrote the file — which, absent the
+   *  `token` field below, could be anything with ordinary filesystem write
+   *  access to the project, not only this session's own MCP script. The
+   *  applier resolves every request against the WATCHER's own verified root
+   *  instead (the `realRoot` its `Entry` was created with); this field is
+   *  kept only because the request shape still needs to carry SOME value
+   *  here for shape-compat with earlier drafts of this design, and a future
+   *  reader diffing a captured request against the applied result can use it
+   *  to spot a mismatch. */
   projectRoot: string;
+  /** This session's own per-deployment secret (`YOUCODED_MCP_TOKEN` env var —
+   *  shared/doc-comments-mcp.ts's own header), included on EVERY request.
+   *  The applier refuses (typed `invalid-request-token`) any request whose
+   *  token doesn't match, in constant time, the token of one of the Claude
+   *  Code sessions currently sharing this project's queue — the actual
+   *  authorization boundary this field-drop-box design needs, since nothing
+   *  else here proves a request came from this app's own deployed script. */
+  token: string;
   /** `reply`/`resolve`/`reopen`/`move` only. */
   commentId?: string;
   /** `add`/`reply` only. */

@@ -78,13 +78,39 @@
 // not send it) ALL fall through to the ordinary ask, never guessed into an
 // approval. See cc-dependencies.md's own "hook payload permission_mode
 // field" entry for the full evidence trail.
+//
+// --- The composed tool-name match is unambiguous per session, not a fixed
+//     public string (adversarial review 2026-09-27, finding #2) ---
+//
+// `shouldAutoApproveDocComment` (permission-auto-approve.ts) decides purely
+// from the hook payload's `tool_name` STRING. Using a single, fixed,
+// module-level server id (`'youcoded-doc-comments'`, public in this
+// open-source repo) would make that string guessable by anything else that
+// could get an MCP server declared under the SAME name for the same
+// project — e.g. a project-level `.mcp.json` checked into an untrusted repo
+// the user opens, exposing its own `AddComment`/`ReplyToComment`/etc. tools
+// with an arbitrary implementation. This session could not verify Claude
+// Code's exact config-merge precedence for a same-named collision without a
+// paid live CLI run (see youcoded/docs/cc-dependencies.md's own entry). What
+// IS verifiable and fixable without one: `deployClaudeCodeDocCommentsMcp`
+// below generates a FRESH random server id per deployment
+// (`randomDocCommentsMcpServerId()`) — nothing checked into a repo AHEAD OF
+// this session starting can predict it, closing the "static collision"
+// version of this risk structurally. The script's own `SERVER_ID` constant
+// below is purely cosmetic (shown in `/mcp`; Claude Code composes the actual
+// `mcp__{server}__{tool}` prefix from the `--mcp-config` file's OWN
+// `mcpServers` key, never from this script's self-reported name) — only the
+// config's key needs to be the random value, so the embedded script itself
+// stays a single, unparameterized `String.raw` constant.
 import fs from 'fs';
 import path from 'path';
+import { randomBytes } from 'crypto';
 import {
-  DOC_COMMENTS_MCP_SERVER_ID,
+  DOC_COMMENTS_MCP_SERVER_PREFIX,
   YOUCODED_PROJECT_ROOT_ENV,
   DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV,
-  DOC_COMMENTS_MCP_READ_TOOL,
+  YOUCODED_MCP_TOKEN_ENV,
+  docCommentsMcpReadTool,
 } from '../shared/doc-comments-mcp';
 import {
   READ_FILE_COMMENTS_DESCRIPTION,
@@ -121,8 +147,16 @@ var path = require('path');
 var crypto = require('crypto');
 
 var PROTOCOL_FALLBACK = '2025-06-18';
-var SERVER_ID = '__SERVER_ID__';
+// Cosmetic only (shown in /mcp) — the actual mcp__{server}__{tool} prefix
+// Claude Code composes comes from the --mcp-config file's OWN mcpServers
+// key (a fresh random value per deployment, deployClaudeCodeDocCommentsMcp),
+// never from this string. See this file's TS header, finding #2.
+var SERVER_ID = 'youcoded-doc-comments';
 var PROJECT_ROOT = process.env.__PROJECT_ROOT_ENV__ || '';
+// This session's own per-deployment secret (finding #1) — included on every
+// pending-mutation request so the main-process queue can refuse anything it
+// didn't hand out to THIS session's own script.
+var REQUEST_TOKEN = process.env.__TOKEN_ENV__ || '';
 
 // ---------------------------------------------------------------------------
 // Path containment (design §1.5, review 2 F1's corrected algorithm: realpath
@@ -378,6 +412,11 @@ function submitPendingMutation(kind, located, fields) {
     format: fields.format,
     path: fields.path,
     projectRoot: located.realProjectRoot,
+    // The applier NEVER trusts this field for authorization (design note on
+    // PendingMutationRequest.projectRoot, shared/doc-comments-types.ts) — the
+    // token below is the real boundary. Sent anyway for shape-compat/
+    // diagnostics only.
+    token: REQUEST_TOKEN,
     createdAt: Date.now(),
   };
   if (fields.commentId !== undefined) request.commentId = fields.commentId;
@@ -408,10 +447,15 @@ function submitPendingMutation(kind, located, fields) {
       }, function (e) {
         if (e.code !== 'ENOENT') throw e;
         if (Date.now() >= deadline) {
+          // Adversarial review 2026-09-27, finding #4: state only what is
+          // actually known. The most common real cause of an 8s timeout in
+          // practice is the app being closed, which "try again" cannot fix —
+          // this wording names that possibility instead of promising a
+          // remedy that may not apply.
           return {
             ok: false,
-            error: 'timed-out — YouCoded did not finish applying this within '
-              + (POLL_TIMEOUT_MS / 1000) + 's. It may still complete; try ReadFileComments again in a moment.',
+            error: 'timed-out — YouCoded did not respond within '
+              + (POLL_TIMEOUT_MS / 1000) + 's. It may still be running a slow operation, or YouCoded may not be open.',
           };
         }
         return sleep(POLL_INTERVAL_MS).then(poll);
@@ -773,8 +817,8 @@ process.stdin.on('data', function (chunk) {
 process.stdin.on('end', function () { process.exit(0); });
 process.stdout.on('error', function () { process.exit(0); });
 `
-  .replace(/__SERVER_ID__/g, DOC_COMMENTS_MCP_SERVER_ID)
   .replace(/__PROJECT_ROOT_ENV__/g, YOUCODED_PROJECT_ROOT_ENV)
+  .replace(/__TOKEN_ENV__/g, YOUCODED_MCP_TOKEN_ENV)
   .replace(/__POLL_TIMEOUT_ENV__/g, DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV)
   .replace('__READ_FILE_COMMENTS_DESCRIPTION__', jsStringEscape(READ_FILE_COMMENTS_DESCRIPTION))
   .replace('__REPLY_TO_COMMENT_DESCRIPTION__', jsStringEscape(REPLY_TO_COMMENT_DESCRIPTION))
@@ -799,11 +843,30 @@ export interface DocCommentsMcpDeployment {
    *  `ReadFileComments`; the five mutation tools are deliberately absent (see
    *  this file's own header). */
   allowedTools: string[];
+  /** The fresh, per-deployment `mcpServers` config key (finding #2) — the
+   *  caller (session-manager.ts) must hand this to main.ts's permission
+   *  matching (via the `doc-comments-mcp-attached` event) so
+   *  `shouldAutoApproveDocComment` recomposes the CORRECT tool names for
+   *  THIS session, rather than matching a fixed, guessable string. */
+  serverId: string;
+  /** This session's own random secret (finding #1) — the caller must hand
+   *  this to the pending-mutation queue (via the SAME event) so it can
+   *  refuse any request that doesn't carry it. Never logged, never sent to
+   *  the renderer/IPC — see session-manager.ts's own emit-site comment. */
+  token: string;
 }
 
 /** Own subdirectory, mirroring claude-code-mcp.ts's CLAUDE_CODE_MCP_DIR — its
  *  own folder so both deployments can be wiped/inspected independently. */
 export const DOC_COMMENTS_MCP_DIR = 'claude-code-doc-comments-mcp';
+
+/** A fresh, unpredictable `mcpServers` config key for one deployment
+ *  (finding #2 — see this file's own header). 4 random bytes (8 hex chars)
+ *  keeps the composed tool name reasonably short while being astronomically
+ *  harder to guess or pre-declare than the old fixed constant. */
+function randomDocCommentsMcpServerId(): string {
+  return `${DOC_COMMENTS_MCP_SERVER_PREFIX}-${randomBytes(4).toString('hex')}`;
+}
 
 /**
  * Write the server + its config under `baseDir` and return what
@@ -823,7 +886,28 @@ export function deployClaudeCodeDocCommentsMcp(
   nodePath: string,
   projectRoot: string
 ): DocCommentsMcpDeployment {
-  const dir = path.join(baseDir, DOC_COMMENTS_MCP_DIR);
+  const serverId = randomDocCommentsMcpServerId();
+  // 16 random bytes (32 hex chars), fixed-length so the applier's
+  // constant-time comparison never has to handle a variable-length input
+  // from a legitimate caller (finding #1).
+  const token = randomBytes(16).toString('hex');
+
+  // WHY a PER-SESSION subdirectory, unlike claude-code-mcp.ts's SendUserLink
+  // deploy (one fixed path, overwritten every launch): that shape is fine
+  // for a single, app-wide, stateless tool with no per-session secret, but
+  // two Claude Code sessions created close together would otherwise
+  // overwrite the SAME `mcp-config.json` before either one's spawned CLI
+  // process has necessarily read it yet — session A's process could end up
+  // reading session B's token/server id, silently defeating finding #2's
+  // whole "unambiguous per session" point (caught by this file's own
+  // deployment test: two sessions on the same host produced the SAME
+  // observed server id because they raced onto the same file). Keying the
+  // directory on the very serverId just minted makes every deployment its
+  // own path, so no two sessions can ever collide on the same file — the
+  // accepted tradeoff is that these small per-session directories are never
+  // individually cleaned up (the same "no eviction policy" limitation this
+  // codebase already accepts for `~/.claude/youcoded-doc-backups/`).
+  const dir = path.join(baseDir, DOC_COMMENTS_MCP_DIR, serverId);
   fs.mkdirSync(dir, { recursive: true });
 
   const serverPath = path.join(dir, 'doc-comments-mcp.js');
@@ -832,15 +916,15 @@ export function deployClaudeCodeDocCommentsMcp(
   const configPath = path.join(dir, 'mcp-config.json');
   const config = {
     mcpServers: {
-      [DOC_COMMENTS_MCP_SERVER_ID]: {
+      [serverId]: {
         type: 'stdio',
         command: nodePath,
         args: [serverPath],
-        env: { [YOUCODED_PROJECT_ROOT_ENV]: projectRoot },
+        env: { [YOUCODED_PROJECT_ROOT_ENV]: projectRoot, [YOUCODED_MCP_TOKEN_ENV]: token },
       },
     },
   };
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
 
-  return { serverPath, configPath, allowedTools: [DOC_COMMENTS_MCP_READ_TOOL] };
+  return { serverPath, configPath, allowedTools: [docCommentsMcpReadTool(serverId)], serverId, token };
 }

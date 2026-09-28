@@ -1181,6 +1181,24 @@ function createWindow(firstRunManager?: FirstRunManager) {
     });
   }
 
+  // Adversarial review 2026-09-27, finding #2: `shouldAutoApproveDocComment`
+  // must recognize THIS session's own doc-comments MCP server by an
+  // unpredictable, per-session id, never a fixed, guessable, checked-into-a-
+  // repo-able string. `session-manager.ts`'s `doc-comments-mcp-attached`
+  // event (a PRIVATE event, never forwarded to the renderer — see its own
+  // emit-site comment) carries the id generated at deploy time; this map
+  // answers "which id is legitimate for this session" when a PermissionRequest
+  // for it arrives below. Cleared on session-exit so a reused session id
+  // (there is none today, but nothing here should assume it) can't inherit a
+  // stale entry.
+  const docCommentsServerIdsBySession = new Map<string, string>();
+  sessionManager.on('doc-comments-mcp-attached', (sessionId: string, _cwd: string, _token: string, serverId: string) => {
+    docCommentsServerIdsBySession.set(sessionId, serverId);
+  });
+  sessionManager.on('session-exit', (sessionId: string) => {
+    docCommentsServerIdsBySession.delete(sessionId);
+  });
+
   // Forward hook events to renderer
   hookRelay.on('hook-event', (event) => {
     // In bypass mode (--dangerously-skip-permissions), Claude Code handles most
@@ -1205,6 +1223,11 @@ function createWindow(firstRunManager?: FirstRunManager) {
       // by the CLI's own schema — absent reads as `undefined`, which
       // shouldAutoApproveDocComment treats as "don't know, don't approve."
       const permissionMode = event.payload?.permission_mode as string | undefined;
+      // This session's own doc-comments MCP server id (finding #2) —
+      // `undefined` for a session that never got one (a non-Claude-Code
+      // provider, or a failed deploy), which `shouldAutoApproveDocComment`
+      // treats as "can't verify, never approve."
+      const docCommentsServerId = docCommentsServerIdsBySession.get(event.sessionId);
 
       // The whole decision lives in permission-auto-approve.ts (pure, tested).
       // It NEVER allows AskUserQuestion or ExitPlanMode: both need the user's
@@ -1222,7 +1245,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
       // bypassPermissions); `plan`, `default`, an unrecognized mode, or a
       // missing `permissionMode` all fall through to the ordinary ask below
       // (see permission-auto-approve.ts's own header for the full reasoning).
-      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, permissionMode) || shouldAutoApprove(toolName, toolInput, permissionOverrides))) {
+      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, permissionMode, docCommentsServerId) || shouldAutoApprove(toolName, toolInput, permissionOverrides))) {
         hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
         return;
       }

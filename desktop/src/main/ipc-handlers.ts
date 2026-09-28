@@ -804,11 +804,21 @@ export function registerIpcHandlers(
   // `getSession(id)` answerable by the time 'session-exit' fires (some already
   // delete the entry first), so this listener keeps its own record rather than
   // depending on that.
+  //
+  // WHY `doc-comments-mcp-attached`, not `session-created` (adversarial
+  // review 2026-09-27, finding #1): the queue now needs this session's own
+  // request-authentication token, minted only on a SUCCESSFUL doc-comments
+  // MCP deploy — `session-created` fires for every session regardless of
+  // whether that deploy succeeded, and carries no token at all (it is a
+  // PRIVATE event specifically so the token/server id never reach the
+  // renderer-facing `SESSION_CREATED` broadcast above — see session-
+  // manager.ts's own emit-site comment). A session whose deploy failed
+  // simply never gets a queue, which is correct: nothing legitimate could
+  // ever submit a request for it anyway.
   const docCommentsQueueCwds = new Map<string, string>();
-  sessionManager.on('session-created', (info) => {
-    if (info.provider !== 'claude') return;
-    docCommentsQueueCwds.set(info.id, info.cwd);
-    void startPendingMutationQueue(info.id, info.cwd);
+  sessionManager.on('doc-comments-mcp-attached', (sessionId: string, cwd: string, token: string) => {
+    docCommentsQueueCwds.set(sessionId, cwd);
+    void startPendingMutationQueue(sessionId, cwd, token);
   });
   sessionManager.on('session-exit', (sessionId: string) => {
     const cwd = docCommentsQueueCwds.get(sessionId);

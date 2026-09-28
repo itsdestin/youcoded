@@ -20,11 +20,12 @@ import {
   DOC_COMMENTS_MCP_DIR,
 } from '../src/main/claude-code-doc-comments-mcp';
 import {
-  DOC_COMMENTS_MCP_SERVER_ID,
+  DOC_COMMENTS_MCP_SERVER_PREFIX,
   YOUCODED_PROJECT_ROOT_ENV,
+  YOUCODED_MCP_TOKEN_ENV,
   DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV,
-  DOC_COMMENTS_MCP_READ_TOOL,
-  DOC_COMMENTS_MCP_MUTATOR_TOOLS,
+  docCommentsMcpReadTool,
+  docCommentsMcpMutatorTools,
 } from '../src/shared/doc-comments-mcp';
 import {
   READ_FILE_COMMENTS_DESCRIPTION,
@@ -38,6 +39,11 @@ import { addComment, listComments } from '../src/main/doc-comments/doc-comments-
 import type { CommentSelector } from '../src/shared/doc-comments-types';
 
 const SERVER_SOURCE = path.join(os.tmpdir(), `yc-doc-comments-mcp-server-${process.pid}.js`);
+/** A fixed stand-in for the per-deployment random secret
+ *  (`deployClaudeCodeDocCommentsMcp` mints a real one) — this test file
+ *  exercises the SCRIPT's own behaviour (T9a), never the queue's
+ *  verification of it (T9b, pending-mutation-queue.test.ts owns that). */
+const TEST_TOKEN = 'test-token-0123456789abcdef0123456789abcdef';
 
 /** A thin JSON-RPC client over one spawned server process's stdio — same
  *  shape as claude-code-mcp.test.ts's own helper. */
@@ -80,7 +86,7 @@ function makeClient(child: ChildProcessWithoutNullStreams) {
 function spawnServer(projectRoot: string, extraEnv: Record<string, string> = {}): { child: ChildProcessWithoutNullStreams; client: ReturnType<typeof makeClient> } {
   const child = spawn(process.execPath, [SERVER_SOURCE], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, [YOUCODED_PROJECT_ROOT_ENV]: projectRoot, ...extraEnv },
+    env: { ...process.env, [YOUCODED_PROJECT_ROOT_ENV]: projectRoot, [YOUCODED_MCP_TOKEN_ENV]: TEST_TOKEN, ...extraEnv },
   });
   return { child, client: makeClient(child) };
 }
@@ -121,30 +127,59 @@ describe('server source', () => {
 });
 
 describe('deployment', () => {
-  it('writes the server and a config naming it, with the project root baked into env', () => {
+  it('writes the server and a config naming it, with the project root and a token baked into env', () => {
     const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
     try {
       const deployment = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
       expect(deployment.serverPath.startsWith(path.join(baseDir, DOC_COMMENTS_MCP_DIR))).toBe(true);
       expect(fs.existsSync(deployment.serverPath)).toBe(true);
+      // Adversarial review 2026-09-27, finding #2: a fresh, unpredictable
+      // config key per deployment, never a fixed public constant.
+      expect(deployment.serverId.startsWith(`${DOC_COMMENTS_MCP_SERVER_PREFIX}-`)).toBe(true);
       const config = JSON.parse(fs.readFileSync(deployment.configPath, 'utf8'));
-      expect(Object.keys(config.mcpServers)).toEqual([DOC_COMMENTS_MCP_SERVER_ID]);
-      expect(config.mcpServers[DOC_COMMENTS_MCP_SERVER_ID].env[YOUCODED_PROJECT_ROOT_ENV]).toBe(root);
+      expect(Object.keys(config.mcpServers)).toEqual([deployment.serverId]);
+      expect(config.mcpServers[deployment.serverId].env[YOUCODED_PROJECT_ROOT_ENV]).toBe(root);
+      // Adversarial review 2026-09-27, finding #1: a real, per-deployment
+      // secret, returned to the caller and also baked into the spawned
+      // process's own env — the two must be the SAME value.
+      expect(deployment.token.length).toBeGreaterThan(16);
+      expect(config.mcpServers[deployment.serverId].env[YOUCODED_MCP_TOKEN_ENV]).toBe(deployment.token);
       // Only ReadFileComments is safe to pre-approve (§5.2a) — the five
       // mutation tools are deliberately absent from this list.
-      expect(deployment.allowedTools).toEqual([DOC_COMMENTS_MCP_READ_TOOL]);
+      expect(deployment.allowedTools).toEqual([docCommentsMcpReadTool(deployment.serverId)]);
     } finally {
       fs.rmSync(baseDir, { recursive: true, force: true });
     }
   });
 
-  it('re-deploying is idempotent', () => {
+  it('two deployments to the same baseDir never collide — different server ids, different directories, different tokens', () => {
     const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
     try {
       const first = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
       const second = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
-      expect(second.serverPath).toBe(first.serverPath);
-      expect(fs.readFileSync(second.serverPath, 'utf8')).toBe(fs.readFileSync(first.serverPath, 'utf8'));
+      expect(second.serverId).not.toBe(first.serverId);
+      expect(second.token).not.toBe(first.token);
+      expect(second.serverPath).not.toBe(first.serverPath);
+      expect(second.configPath).not.toBe(first.configPath);
+      // The FIRST deployment's own files must still be intact — a shared
+      // fixed path would have let the second overwrite them (this is
+      // exactly the collision session-manager.test.ts's own "two sessions"
+      // case caught before this fix).
+      expect(fs.existsSync(first.configPath)).toBe(true);
+      const firstConfig = JSON.parse(fs.readFileSync(first.configPath, 'utf8'));
+      expect(Object.keys(firstConfig.mcpServers)).toEqual([first.serverId]);
+    } finally {
+      fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-deploying with the SAME inputs still produces a working, self-consistent server file each time', () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-doc-comments-mcp-deploy-'));
+    try {
+      const first = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
+      const second = deployClaudeCodeDocCommentsMcp(baseDir, process.execPath, root);
+      expect(fs.readFileSync(second.serverPath, 'utf8')).toBe(DOC_COMMENTS_SERVER_JS);
+      expect(fs.readFileSync(first.serverPath, 'utf8')).toBe(DOC_COMMENTS_SERVER_JS);
     } finally {
       fs.rmSync(baseDir, { recursive: true, force: true });
     }
@@ -406,6 +441,9 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
     expect(request.selector).toEqual(SELECTOR);
     expect(request.text).toBe('a comment');
     expect(request.author).toBe('assistant');
+    // Finding #1: every request carries this session's own token — the
+    // applier is what actually VERIFIES it (pending-mutation-queue.test.ts).
+    expect(request.token).toBe(TEST_TOKEN);
 
     // Let the (very short) poll time out rather than hang the test.
     const res = await callPromise;
@@ -442,15 +480,16 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
   }, 15000);
 });
 
-describe('parity: MUTATOR_TOOLS never includes the read-only tool', () => {
-  it('DOC_COMMENTS_MCP_MUTATOR_TOOLS is exactly the five mutation tools', () => {
-    expect(DOC_COMMENTS_MCP_MUTATOR_TOOLS).toEqual([
-      `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ReplyToComment`,
-      `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ResolveComment`,
-      `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ReopenComment`,
-      `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__AddComment`,
-      `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__MoveComment`,
+describe('parity: mutator tools never include the read-only tool', () => {
+  it('docCommentsMcpMutatorTools is exactly the five mutation tools, for any server id', () => {
+    const id = 'youcoded-doc-comments-deadbeef';
+    expect(docCommentsMcpMutatorTools(id)).toEqual([
+      `mcp__${id}__ReplyToComment`,
+      `mcp__${id}__ResolveComment`,
+      `mcp__${id}__ReopenComment`,
+      `mcp__${id}__AddComment`,
+      `mcp__${id}__MoveComment`,
     ]);
-    expect(DOC_COMMENTS_MCP_MUTATOR_TOOLS).not.toContain(DOC_COMMENTS_MCP_READ_TOOL);
+    expect(docCommentsMcpMutatorTools(id)).not.toContain(docCommentsMcpReadTool(id));
   });
 });

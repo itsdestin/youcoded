@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { shouldAutoApprove, shouldAutoApproveDocComment } from '../src/main/permission-auto-approve';
 import { PERMISSION_OVERRIDES_DEFAULT } from '../src/shared/types';
-import { DOC_COMMENTS_MCP_SERVER_ID } from '../src/shared/doc-comments-mcp';
+import { docCommentsMcpToolName } from '../src/shared/doc-comments-mcp';
 
 const ALL_ON = { ...PERMISSION_OVERRIDES_DEFAULT, approveAll: true };
 
@@ -31,39 +31,62 @@ describe('shouldAutoApprove', () => {
 
 // §5.2a of the doc-comments build design (decided option 1): a doc-comment
 // mutation tool targeting a plain-text file is auto-approved unconditionally;
-// a Word/Excel target is deliberately left to the ordinary ask.
+// a Word/Excel target is deliberately left to the ordinary ask. `serverId`
+// (adversarial review 2026-09-27, finding #2) is a stand-in for the random,
+// per-session id `deployClaudeCodeDocCommentsMcp` mints for real — these
+// tests exercise the MATCHING logic against a fixed id so results are
+// deterministic; `claude-code-doc-comments-mcp.test.ts` covers the id itself
+// actually being random per deployment.
 describe('shouldAutoApproveDocComment', () => {
-  const REPLY_TOOL = `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ReplyToComment`;
-  const ADD_TOOL = `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__AddComment`;
-  const RESOLVE_TOOL = `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ResolveComment`;
-  const REOPEN_TOOL = `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ReopenComment`;
-  const MOVE_TOOL = `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__MoveComment`;
-  const READ_TOOL = `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ReadFileComments`;
+  const SERVER_ID = 'youcoded-doc-comments-deadbeef';
+  const OTHER_SERVER_ID = 'youcoded-doc-comments-c0ffee00';
+  const REPLY_TOOL = docCommentsMcpToolName(SERVER_ID, 'ReplyToComment');
+  const ADD_TOOL = docCommentsMcpToolName(SERVER_ID, 'AddComment');
+  const RESOLVE_TOOL = docCommentsMcpToolName(SERVER_ID, 'ResolveComment');
+  const REOPEN_TOOL = docCommentsMcpToolName(SERVER_ID, 'ReopenComment');
+  const MOVE_TOOL = docCommentsMcpToolName(SERVER_ID, 'MoveComment');
+  const READ_TOOL = docCommentsMcpToolName(SERVER_ID, 'ReadFileComments');
 
   it('auto-approves a plain-text/markdown/code target, unconditionally — no override needed', () => {
-    expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.md' })).toBe(true);
-    expect(shouldAutoApproveDocComment(ADD_TOOL, { path: 'src/app.ts' })).toBe(true);
-    expect(shouldAutoApproveDocComment(RESOLVE_TOOL, { path: 'README' })).toBe(true);
-    expect(shouldAutoApproveDocComment(REOPEN_TOOL, { path: 'docs/plan.md' })).toBe(true);
-    expect(shouldAutoApproveDocComment(MOVE_TOOL, { path: 'notes.md' })).toBe(true);
+    expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.md' }, undefined, SERVER_ID)).toBe(true);
+    expect(shouldAutoApproveDocComment(ADD_TOOL, { path: 'src/app.ts' }, undefined, SERVER_ID)).toBe(true);
+    expect(shouldAutoApproveDocComment(RESOLVE_TOOL, { path: 'README' }, undefined, SERVER_ID)).toBe(true);
+    expect(shouldAutoApproveDocComment(REOPEN_TOOL, { path: 'docs/plan.md' }, undefined, SERVER_ID)).toBe(true);
+    expect(shouldAutoApproveDocComment(MOVE_TOOL, { path: 'notes.md' }, undefined, SERVER_ID)).toBe(true);
   });
 
   it('never auto-approves a Word/Excel target — it falls through to the ordinary ask', () => {
-    expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' })).toBe(false);
-    expect(shouldAutoApproveDocComment(ADD_TOOL, { path: 'reports/q3.XLSX' })).toBe(false);
-    expect(shouldAutoApproveDocComment(MOVE_TOOL, { path: 'docs/report.DOCX' })).toBe(false);
+    expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, undefined, SERVER_ID)).toBe(false);
+    expect(shouldAutoApproveDocComment(ADD_TOOL, { path: 'reports/q3.XLSX' }, undefined, SERVER_ID)).toBe(false);
+    expect(shouldAutoApproveDocComment(MOVE_TOOL, { path: 'docs/report.DOCX' }, undefined, SERVER_ID)).toBe(false);
   });
 
   it('ignores any tool it does not recognize, including the read-only tool (never allow-listed alongside it)', () => {
-    expect(shouldAutoApproveDocComment(READ_TOOL, { path: 'notes.md' })).toBe(false);
-    expect(shouldAutoApproveDocComment('Write', { path: 'notes.md' })).toBe(false);
-    expect(shouldAutoApproveDocComment('mcp__some-other-server__AddComment', { path: 'notes.md' })).toBe(false);
+    expect(shouldAutoApproveDocComment(READ_TOOL, { path: 'notes.md' }, undefined, SERVER_ID)).toBe(false);
+    expect(shouldAutoApproveDocComment('Write', { path: 'notes.md' }, undefined, SERVER_ID)).toBe(false);
+    expect(shouldAutoApproveDocComment('mcp__some-other-server__AddComment', { path: 'notes.md' }, undefined, SERVER_ID)).toBe(false);
   });
 
   it('never approves when `path` is missing or not a string — a malformed hook payload refuses closed', () => {
-    expect(shouldAutoApproveDocComment(REPLY_TOOL, {})).toBe(false);
-    expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 42 as unknown as string })).toBe(false);
-    expect(shouldAutoApproveDocComment(REPLY_TOOL, undefined)).toBe(false);
+    expect(shouldAutoApproveDocComment(REPLY_TOOL, {}, undefined, SERVER_ID)).toBe(false);
+    expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 42 as unknown as string }, undefined, SERVER_ID)).toBe(false);
+    expect(shouldAutoApproveDocComment(REPLY_TOOL, undefined, undefined, SERVER_ID)).toBe(false);
+  });
+
+  // Adversarial review 2026-09-27, finding #2: a tool name composed under a
+  // DIFFERENT session's server id (or one this session has no record of at
+  // all) must never match, even for a plain-text target — this is what
+  // makes the auto-approve unambiguous per session rather than a fixed,
+  // guessable string.
+  describe('server-id matching (finding #2)', () => {
+    it('a tool name composed under a DIFFERENT session\'s server id never matches, even for a plain-text target', () => {
+      const otherSessionsReplyTool = docCommentsMcpToolName(OTHER_SERVER_ID, 'ReplyToComment');
+      expect(shouldAutoApproveDocComment(otherSessionsReplyTool, { path: 'notes.md' }, undefined, SERVER_ID)).toBe(false);
+    });
+
+    it('fails closed when no server id is known for this session at all (serverId undefined)', () => {
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.md' }, undefined, undefined)).toBe(false);
+    });
   });
 
   // Claude Code's own live `permission_mode` (verified against the installed
@@ -75,36 +98,36 @@ describe('shouldAutoApproveDocComment', () => {
   // still doesn't matter there either).
   describe('with Claude Code\'s live permission_mode', () => {
     it('auto-approves a Word/Excel target in acceptEdits mode — matches Edit/Write\'s own auto-accept', () => {
-      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'acceptEdits')).toBe(true);
-      expect(shouldAutoApproveDocComment(ADD_TOOL, { path: 'reports/q3.xlsx' }, 'acceptEdits')).toBe(true);
-      expect(shouldAutoApproveDocComment(MOVE_TOOL, { path: 'docs/report.DOCX' }, 'acceptEdits')).toBe(true);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'acceptEdits', SERVER_ID)).toBe(true);
+      expect(shouldAutoApproveDocComment(ADD_TOOL, { path: 'reports/q3.xlsx' }, 'acceptEdits', SERVER_ID)).toBe(true);
+      expect(shouldAutoApproveDocComment(MOVE_TOOL, { path: 'docs/report.DOCX' }, 'acceptEdits', SERVER_ID)).toBe(true);
     });
 
     it('auto-approves a Word/Excel target in bypassPermissions mode too (defensive — Claude Code normally never fires this hook under bypass at all)', () => {
-      expect(shouldAutoApproveDocComment(RESOLVE_TOOL, { path: 'docs/report.docx' }, 'bypassPermissions')).toBe(true);
+      expect(shouldAutoApproveDocComment(RESOLVE_TOOL, { path: 'docs/report.docx' }, 'bypassPermissions', SERVER_ID)).toBe(true);
     });
 
     it('never auto-approves a Word/Excel target in plan mode — no execution happens there', () => {
-      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'plan')).toBe(false);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'plan', SERVER_ID)).toBe(false);
     });
 
     it('never auto-approves a Word/Excel target in default mode — that is the ordinary "always ask" mode', () => {
-      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'default')).toBe(false);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'default', SERVER_ID)).toBe(false);
     });
 
     it('never auto-approves a Word/Excel target for dontAsk or auto — neither is a documented unconditional file-edit accept', () => {
-      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'dontAsk')).toBe(false);
-      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'auto')).toBe(false);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'dontAsk', SERVER_ID)).toBe(false);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'auto', SERVER_ID)).toBe(false);
     });
 
     it('never auto-approves a Word/Excel target for an unrecognized mode string or a missing field — never guessed', () => {
-      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'some-future-mode')).toBe(false);
-      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, undefined)).toBe(false);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, 'some-future-mode', SERVER_ID)).toBe(false);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'docs/report.docx' }, undefined, SERVER_ID)).toBe(false);
     });
 
     it('a plain-text target stays auto-approved regardless of mode, including plan', () => {
-      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.md' }, 'plan')).toBe(true);
-      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.md' }, 'default')).toBe(true);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.md' }, 'plan', SERVER_ID)).toBe(true);
+      expect(shouldAutoApproveDocComment(REPLY_TOOL, { path: 'notes.md' }, 'default', SERVER_ID)).toBe(true);
     });
 
     // A real-shaped PermissionRequest hook payload (per the CLI's own
@@ -119,13 +142,13 @@ describe('shouldAutoApproveDocComment', () => {
         cwd: '/home/user/project',
         permission_mode: 'acceptEdits',
         hook_event_name: 'PermissionRequest',
-        tool_name: `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ReplyToComment`,
+        tool_name: REPLY_TOOL,
         tool_input: { path: 'docs/quarterly-report.docx', commentId: 'w-3', text: 'Addressed in the latest revision.' },
       };
       const toolName = realShapedPayload.tool_name;
       const toolInput = realShapedPayload.tool_input as Record<string, unknown>;
       const permissionMode = realShapedPayload.permission_mode as string | undefined;
-      expect(shouldAutoApproveDocComment(toolName, toolInput, permissionMode)).toBe(true);
+      expect(shouldAutoApproveDocComment(toolName, toolInput, permissionMode, SERVER_ID)).toBe(true);
     });
 
     it('the same realistic payload in plan mode falls through to the ordinary ask', () => {
@@ -135,10 +158,10 @@ describe('shouldAutoApproveDocComment', () => {
         cwd: '/home/user/project',
         permission_mode: 'plan',
         hook_event_name: 'PermissionRequest',
-        tool_name: `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__AddComment`,
+        tool_name: ADD_TOOL,
         tool_input: { path: 'docs/quarterly-report.docx', selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'Q3 revenue', prefix: '', suffix: '', occurrence: 0 } }, text: 'Double-check this figure.' },
       };
-      expect(shouldAutoApproveDocComment(realShapedPayload.tool_name, realShapedPayload.tool_input as Record<string, unknown>, realShapedPayload.permission_mode)).toBe(false);
+      expect(shouldAutoApproveDocComment(realShapedPayload.tool_name, realShapedPayload.tool_input as Record<string, unknown>, realShapedPayload.permission_mode, SERVER_ID)).toBe(false);
     });
 
     // A payload with `permission_mode` absent entirely (the CLI's own schema
@@ -149,11 +172,11 @@ describe('shouldAutoApproveDocComment', () => {
         transcript_path: '/home/user/.claude/projects/-home-user-project/a1b2c3d4.jsonl',
         cwd: '/home/user/project',
         hook_event_name: 'PermissionRequest',
-        tool_name: `mcp__${DOC_COMMENTS_MCP_SERVER_ID}__ResolveComment`,
+        tool_name: RESOLVE_TOOL,
         tool_input: { path: 'docs/quarterly-report.docx', commentId: 'w-3' },
       } as Record<string, unknown>;
       const permissionMode = (payloadWithoutMode as { permission_mode?: string }).permission_mode;
-      expect(shouldAutoApproveDocComment(payloadWithoutMode.tool_name as string, payloadWithoutMode.tool_input as Record<string, unknown>, permissionMode)).toBe(false);
+      expect(shouldAutoApproveDocComment(payloadWithoutMode.tool_name as string, payloadWithoutMode.tool_input as Record<string, unknown>, permissionMode, SERVER_ID)).toBe(false);
     });
   });
 });

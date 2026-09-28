@@ -299,17 +299,31 @@ export class SessionManager extends EventEmitter {
         const docComments = deployClaudeCodeDocCommentsMcp(app.getPath('userData'), nodePath, resolvedCwd);
         mcpConfigPaths.push(docComments.configPath);
         allowedToolNames.push(...docComments.allowedTools);
+        // A PRIVATE event, never forwarded to the renderer/IPC (unlike
+        // 'session-created', which ipc-handlers.ts sends verbatim to the
+        // owning window) — `token` is this session's own request-
+        // authentication secret (adversarial review 2026-09-27, finding #1)
+        // and must never reach anywhere a renderer-side script (a malicious
+        // skill's injected UI, or just ordinary DevTools) could read it back
+        // and forge a pending-mutation request with it. `serverId` (finding
+        // #2) is likewise session-private: it is the exact string
+        // `shouldAutoApproveDocComment` needs to recognize THIS session's
+        // own MCP tool calls, and leaking it would only help something try
+        // to impersonate this session's server, never help the user. Both
+        // listeners live in ipc-handlers.ts (the queue) and main.ts (the
+        // permission check) — see each file's own comment at its listener.
+        this.emit('doc-comments-mcp-attached', id, resolvedCwd, docComments.token, docComments.serverId);
       } catch (err) {
         log('WARN', 'SessionManager', 'doc-comments MCP deploy failed — this session starts without comment tools', { error: String(err) });
       }
       if (mcpConfigPaths.length) args.push('--mcp-config', ...mcpConfigPaths);
       if (allowedToolNames.length) args.push('--allowedTools', ...allowedToolNames);
       // The docx/xlsx pending-mutation queue's main-process half (T9b) is
-      // started/stopped from ipc-handlers.ts's own `session-created`/
-      // `session-exit` listeners, not here — see that file's own comment for
-      // why (a real chokidar watcher on `resolvedCwd` would otherwise leak
-      // into every session-manager.test.ts case, which shares one `cwd`
-      // across dozens of tests with no listeners attached).
+      // started/stopped from ipc-handlers.ts's own `doc-comments-mcp-
+      // attached`/`session-exit` listeners, not here — see that file's own
+      // comment for why (a real chokidar watcher on `resolvedCwd` would
+      // otherwise leak into every session-manager.test.ts case, which shares
+      // one `cwd` across dozens of tests with no listeners attached).
     }
 
     // Spawn a separate Node.js process for node-pty so it uses Node's

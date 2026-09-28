@@ -1,5 +1,5 @@
 import type { PermissionOverrides } from '../shared/types';
-import { DOC_COMMENTS_MCP_MUTATOR_TOOLS } from '../shared/doc-comments-mcp';
+import { docCommentsMcpMutatorTools } from '../shared/doc-comments-mcp';
 import { nativeFormatFor } from './doc-comments/doc-comments-dispatch';
 
 // --- Permission override classification ---
@@ -51,8 +51,6 @@ function classifyPermission(toolName: string, toolInput?: Record<string, unknown
  *  stayed up), so auto-allowing one only hides the card while the question is
  *  still waiting in the terminal. */
 const NEEDS_THE_USERS_OWN_ANSWER = new Set(['AskUserQuestion', 'ExitPlanMode']);
-
-const DOC_COMMENTS_MUTATOR_TOOL_SET = new Set(DOC_COMMENTS_MCP_MUTATOR_TOOLS);
 
 /**
  * The Claude Code CLI's own live permission mode, as it names its values
@@ -107,13 +105,24 @@ const FRICTIONLESS_DOC_COMMENT_MODES = new Set(['acceptEdits', 'bypassPermission
  * relay-blocking.js already forwards the CLI's whole hook JSON verbatim, and
  * hook-relay.ts's `parseHookPayload` already keeps the whole parsed object
  * as `event.payload`, so this field was already flowing through unused.
+ *
+ * `serverId` (adversarial review 2026-09-27, finding #2) is THIS session's
+ * own randomly-generated `mcpServers` config key
+ * (`deployClaudeCodeDocCommentsMcp`), looked up by `event.sessionId` in
+ * main.ts — never a fixed, module-level, publicly-guessable string. Passing
+ * `undefined` (a session main.ts has no record of yet, e.g. a hook arriving
+ * before the attach event landed) fails CLOSED: nothing is matched, and the
+ * call falls through to the ordinary ask, same as any other unrecognized
+ * tool.
  */
 export function shouldAutoApproveDocComment(
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
-  permissionMode?: string,
+  permissionMode: string | undefined,
+  serverId: string | undefined,
 ): boolean {
-  if (!DOC_COMMENTS_MUTATOR_TOOL_SET.has(toolName)) return false;
+  if (!serverId) return false;
+  if (!docCommentsMcpMutatorTools(serverId).includes(toolName)) return false;
   const path = toolInput?.path;
   if (typeof path !== 'string') return false;
   if (nativeFormatFor(path) === null) return true;
