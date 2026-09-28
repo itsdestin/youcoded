@@ -4,14 +4,16 @@
 //     person chooses Review (the Office page, on the first such tab, where Retry / Save a copy… /
 //     Close without saving show) or Close anyway (main goes ahead: office:proceed);
 //   · a tab closed while the page was hidden could not save, so it came back: a toast says so.
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Button, Dialog, Toast } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
-import { clearCloseFailed, clearUnsavedPrompt, closeAnyway, previewUnsavedPrompt, useOfficeAlerts } from './office-store';
+import { clearCloseFailed, clearUnsavedPrompt, closeAnyway, previewUnsavedPrompt, useOfficeAlerts, watchLostSaves } from './office-store';
 
 export function OfficeAlerts({ onReview }: { onReview: (path: string) => void }) {
   const { unsaved, closeFailed } = useOfficeAlerts();
   useScreenOpen('office/unsaved-on-close', () => previewUnsavedPrompt());
+  // A save the last page let go of (a reload) that then failed in main is said here (M4).
+  useEffect(() => watchLostSaves(), []);
   const review = () => {
     if (!unsaved) return;
     clearUnsavedPrompt();

@@ -66,6 +66,8 @@ interface OfficeSender {
   id: number;
   once(event: 'destroyed', listener: () => void): unknown;
   isDestroyed?(): boolean;
+  on?(event: 'did-start-navigation', listener: (details: { isMainFrame?: boolean; isSameDocument?: boolean }) => void): unknown;
+  send?(channel: string): void;
 }
 
 export interface OfficeIpcDeps {
@@ -91,6 +93,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // WHY: ipcMain.handle throws on re-registration. Clearing first keeps hot-reload dev
   // sessions (scripts/run-dev.sh) from crashing on reload.
   for (const ch of CHANNELS) ipcMain.removeHandler(ch);
+  ipcMain.removeHandler('office:lost-saves'); // desktop only, so not in CHANNELS (see below)
 
   // WHY one commands instance per registry, not one per request: the command runner keeps
   // each document's queue (one save at a time), which only works if every request for that
@@ -114,13 +117,25 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // tab, and an Edit in a file panel), and each place is handed the same token. Only the
   // last one's close may tear the session down. Keyed by window, then token.
   const opens = new Map<number, Map<string, number>>();
+  // ── Saves lost to a reload (fix round 6, M4) ──
+  // WHY: a reload lets go of a save still with main (the renderer's 4 s cap); if that save then
+  // fails, the page that asked is gone and its failure would vanish. So main counts each
+  // window's page loads, remembers a save that failed after its page changed, and the new page
+  // takes the list (office:lost-saves) and shows "An Office document couldn't be saved.".
+  const pageLoads = new Map<number, number>();
+  const lost = new Map<number, string[]>();
   function watch(sender: OfficeSender): void {
     const id = sender.id;
     if (watched.has(id)) return;
     watched.add(id);
+    sender.on?.('did-start-navigation', (details) => {
+      if (details?.isMainFrame && !details.isSameDocument) pageLoads.set(id, (pageLoads.get(id) ?? 0) + 1);
+    });
     sender.once('destroyed', () => {
       watched.delete(id);
       opens.delete(id);
+      pageLoads.delete(id);
+      lost.delete(id);
       void deps.getSessions()?.closeAllFor(id).catch((e) => log('WARN', 'Office', 'closing a gone window\'s documents failed', { error: String(e) }));
     });
   }
@@ -203,7 +218,17 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     // WHY a plain object only: the commands read named fields from it; anything else (an
     // array, null) is treated as no arguments rather than reaching them.
     const a = args && typeof args === 'object' && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
-    return commandsFor(reg)(token, cmd, a);
+    const page = pageLoads.get(sender.id) ?? 0;
+    try {
+      return await commandsFor(reg)(token, cmd, a);
+    } catch (e) {
+      // The page that asked was reloaded meanwhile: keep the failure for the new one (M4).
+      if (cmd === 'save_file' && (pageLoads.get(sender.id) ?? 0) !== page && !sender.isDestroyed?.()) {
+        lost.set(sender.id, [...(lost.get(sender.id) ?? []), s.path]);
+        try { sender.send?.('office:saves-lost'); } catch { /* the window is going */ }
+      }
+      throw e;
+    }
   }
 
   async function close(sender: OfficeSender, token: unknown): Promise<void> {
@@ -254,6 +279,13 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   ipcMain.handle('office:save-copy', (e, token, mode) => saveCopy(e.sender, token, mode));
   ipcMain.handle('office:invoke', (e, token, cmd, args) => invoke(e.sender, token, cmd, args));
   ipcMain.handle('office:close', (e, token) => close(e.sender, token));
+  // Desktop only, like the close/quit handshake: the remote client and the phone have no editors.
+  ipcMain.handle('office:lost-saves', (e): string[] => {
+    const id = (e.sender as OfficeSender).id;
+    const list = lost.get(id) ?? [];
+    lost.delete(id);
+    return list;
+  });
 
   // ── Pending: placeholders until the start screen's backend lands ──
   // Task 7 (versions, restore) and Task 8 (the start screen's lists, new files, the picker)

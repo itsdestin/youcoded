@@ -232,6 +232,18 @@ export function previewUnsavedPrompt(): void {
 export function noteCloseFailedWhileHidden(path: string): void { setAlerts({ ...alerts, closeFailed: path }); }
 export function clearCloseFailed(): void { setAlerts({ ...alerts, closeFailed: null }); }
 
+/** Saves that failed after the page that asked for them was reloaded (fix round 6, M4): main
+ *  keeps them; this page takes them on load, and again whenever main says there are more, and
+ *  says so with the same toast a hidden close uses. Returns the unsubscribe. */
+export function watchLostSaves(): () => void {
+  const office = typeof window === 'undefined' ? undefined : window.claude?.office;
+  if (!office?.lostSaves) return () => {};
+  const take = () => void office.lostSaves?.().then((paths) => { if (paths?.length) noteCloseFailedWhileHidden(paths[0]); }, () => {});
+  const stop = office.onSavesLost?.(take) ?? (() => {});
+  take();
+  return stop;
+}
+
 /** The file's Office tab, if it has one (a closing tab still counts: its editor is mounted). */
 export function officeDocFor(path: string): OpenDoc | null {
   return state.docs.find((d) => d.file.path === path) ?? null;

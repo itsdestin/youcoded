@@ -78,6 +78,11 @@ export interface OfficeBridge {
   flushDone?(id: string, result: { failed: number; firstPath?: string }): void;
   /** "Close anyway" on that prompt: main goes ahead with the close or quit it held. */
   proceedClose?(): void;
+  /** Files whose save failed after the page that asked for it was reloaded (fix round 6, M4):
+   *  main keeps them until this page takes them. Desktop only. */
+  lostSaves?(): Promise<string[]>;
+  /** Main recorded such a failure while this page is up: take them (lostSaves). */
+  onSavesLost?(cb: () => void): () => void;
 }
 
 export type OfficeSaveCopyResult =

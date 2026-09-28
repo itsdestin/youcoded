@@ -660,6 +660,23 @@ describe('the window unload guard', () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  it('after a reload, a save the last page let go of that then failed is told on the new page', async () => {
+    let nudge!: () => void;
+    const lists = [['/home/you/plan.docx'], [], ['/home/you/notes.docx']];
+    (window as unknown as { claude: unknown }).claude = { office: { lostSaves: vi.fn(async () => lists.shift() ?? []), onSavesLost: vi.fn((cb: () => void) => { nudge = cb; return () => {}; }) } };
+    const store = await import('../../src/renderer/components/office/office-store');
+    const { result } = renderHook(() => store.useOfficeAlerts());
+    const { OfficeAlerts } = await import('../../src/renderer/components/office/OfficeAlerts');
+    render(<OfficeAlerts onReview={() => {}} />);
+    expect(await screen.findByText("An Office document couldn't be saved.")).toBeInTheDocument();
+    expect(result.current.closeFailed).toBe('/home/you/plan.docx');
+    act(() => store.clearCloseFailed());
+    await act(async () => { nudge(); await Promise.resolve(); await Promise.resolve(); }); // nothing new
+    expect(result.current.closeFailed).toBeNull();
+    await act(async () => { nudge(); await Promise.resolve(); await Promise.resolve(); }); // failed while this page is up
+    expect(result.current.closeFailed).toBe('/home/you/notes.docx');
+  });
+
   it('an open editor with a change blocks the unload', async () => {
     withOffice();
     act(() => openDoc(FILE));

@@ -75,8 +75,9 @@ async function aDocx(name = 'memo.docx'): Promise<string> {
 describe('office IPC channels', () => {
   it('registers all nine channels, clearing each one first so a reload can register again', () => {
     const all = ['office:status', 'office:create', 'office:pick', 'office:open', 'office:invoke', 'office:close', 'office:versions', 'office:restore', 'office:save-copy'];
-    expect([...ipc.handlers.keys()].sort()).toEqual([...all].sort());
-    expect([...ipc.removed].sort()).toEqual([...all].sort());
+    // office:lost-saves is desktop only (not in the four-surface list) but cleared the same way.
+    expect([...ipc.handlers.keys()].sort()).toEqual([...all, 'office:lost-saves'].sort());
+    expect([...ipc.removed].sort()).toEqual([...all, 'office:lost-saves'].sort());
     expect(() => registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: dir })).not.toThrow();
   });
 
@@ -258,5 +259,37 @@ describe('office:save-copy', () => {
     withDialog(null);
     const r = (await call('office:open', win1, await aDocx())) as { token: string };
     await expect(call('office:save-copy', win1, r.token, 'check')).resolves.toEqual({ ok: true, possible: false });
+  });
+});
+
+// A reload lets go of a save still with main; if that save then fails, the new page is told.
+describe('a save that fails after its page was reloaded', () => {
+  async function opened(sender: ReturnType<typeof fakeSender>) {
+    const file = await aDocx();
+    const r = (await call('office:open', sender, file)) as { ok: true; token: string };
+    return { file, token: r.token };
+  }
+  const reload = (sender: ReturnType<typeof fakeSender>) => sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+
+  it('is kept for the new page, which takes it once, and nudges it', async () => {
+    const w = Object.assign(fakeSender(5), { send: vi.fn() });
+    const { file, token } = await opened(w);
+    const saving = call('office:invoke', w, token, 'save_file', {});
+    reload(w); // the page that asked goes before the save's answer
+    await expect(saving).rejects.toThrow();
+    expect(w.send).toHaveBeenCalledWith('office:saves-lost');
+    await expect(call('office:lost-saves', w)).resolves.toEqual([file]);
+    await expect(call('office:lost-saves', w)).resolves.toEqual([]);
+    w.removeAllListeners();
+  });
+
+  it('is not kept when the page that asked is still there (it shows the failure itself)', async () => {
+    const w = Object.assign(fakeSender(6), { send: vi.fn() });
+    const { token } = await opened(w);
+    w.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false }); // an embedded frame
+    await expect(call('office:invoke', w, token, 'save_file', {})).rejects.toThrow();
+    expect(w.send).not.toHaveBeenCalled();
+    await expect(call('office:lost-saves', w)).resolves.toEqual([]);
+    w.removeAllListeners();
   });
 });

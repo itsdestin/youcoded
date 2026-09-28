@@ -996,9 +996,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     if (details?.isMainFrame && !details.isSameDocument) closeRequests.dropFor(wid);
   });
   win.webContents.on('render-process-gone', () => closeRequests.dropFor(wid));
-  // The close itself: Office saves first, then the sessions prompt (window-close-gate.ts —
-  // Task 6 fix round 6 I-A moved it there so it can be tested, and so a vetoed unload re-arms
-  // the Office hold and the prompt instead of leaving the X a silent no-op).
+  // The close: Office saves first, then the sessions prompt (window-close-gate.ts, fix round 6 I-A).
   const closeGate = createCloseGate({
     buddy: !!opts?.buddy,
     // Whole-app quit wins over a pending prompt (design §4 step 5):
@@ -1028,8 +1026,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     isDestroyed: () => win.isDestroyed(),
     close: () => win.close(),
   });
-  // A page's beforeunload veto (the Office unload guard, an unsaved text file) cancelled the
-  // close. Observed only — never preventDefault'ed, which would override the veto.
+  // A page's beforeunload veto cancelled the close. Observed only: preventDefault would override it.
   win.webContents.on('will-prevent-unload', () => closeGate.onUnloadPrevented());
   win.on('close', (ev) => { void closeGate.onClose(ev); });
 
@@ -2613,8 +2610,7 @@ app.on('before-quit', (e) => {
   // quit below — let it proceed rather than cancelling forever.
   if (shuttingDown) return;
   e.preventDefault(); // Office first: an unsaved document asks the person before any teardown (office-flush.ts).
-  // gatedQuit (app-restart.ts) also carries a pending restart through the gate (fix round 6, I-B).
-  void gatedQuit({
+  void gatedQuit({ // app-restart.ts: also carries a pending restart through the gate (fix round 6, I-B)
     gate: (onProceed) => officeQuitGate(undefined, undefined, onProceed),
     relaunch: () => app.relaunch(),
     shutdown: () => shutdownApp(),

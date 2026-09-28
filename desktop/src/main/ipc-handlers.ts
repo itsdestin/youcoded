@@ -742,10 +742,8 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(IPC.APP_RESTART, () => {
-    // Generic restart channel — reused by any future setting that needs a
-    // restart to apply. WHY quit, not exit (Task 6 fix round 6, I-B): exit() skipped
-    // before-quit, so open Office documents were never saved and the person was never asked.
-    // The quit path saves first (or asks), then relaunches — see app-restart.ts.
+    // Generic restart channel. WHY quit, not exit (fix round 6, I-B): exit() skipped before-quit, so
+    // open Office documents were never saved or asked about. See app-restart.ts.
     requestRestart(() => app.quit());
   });
 

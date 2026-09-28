@@ -1518,6 +1518,15 @@ describe('office:* channel parity', () => {
       if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
     }
   });
+
+  it('saves lost to a reload are told by preload and main, and by no other host', () => {
+    for (const ch of ['office:lost-saves', 'office:saves-lost']) {
+      expect(preload).toContain(`'${ch}'`);
+      expect(handlers).toContain(`'${ch}'`);
+      expect(shim).not.toContain(`'${ch}'`);
+      if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
+    }
+  });
 });
 
 // Four-surface parity for the native:* channels.
