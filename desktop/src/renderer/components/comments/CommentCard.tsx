@@ -78,7 +78,33 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
     if (autoFocus) textRef.current?.focus();
   }, [autoFocus]);
 
-  const isDraft = comment.text.trim() === '' && comment.replies.length === 0 && !comment.resolved;
+  // Bug fix (Destin, testing the dev instance: "the chat input sometimes
+  // steals focus in the middle of me typing a comment"). Cause: `isDraft`
+  // used to be `comment.text.trim() === '' && …`, recomputed from the LIVE
+  // `comment.text` on every render — so the very first keystroke (which
+  // makes `comment.text` non-empty) flipped it to `false`, and the JSX below
+  // swaps element types on that flip (`<Textarea>` → a plain `<p>`). React
+  // unmounts the old subtree on a type change, which drops DOM focus onto
+  // `document.body` with no focused field left — the NEXT keystroke then
+  // has nothing to skip in InputBar's global auto-focus listener
+  // (`isTypingTarget`/`isInteractiveTarget` both read `document.body` as
+  // "not typing anywhere"), so it grabs focus into the chat composer and
+  // that character lands there instead. A `docComments:changed` push or a
+  // re-anchor pass replacing this comment with a fresh object (same id, same
+  // content) never re-triggered `useState`'s initializer either, so both
+  // causes are closed by the same fix: whether the box is still being
+  // composed is now LOCAL state, captured once when this comment id first
+  // mounts, and only ever cleared on blur (see the Textarea's `onBlur`
+  // below) — never by a keystroke or an unrelated store update.
+  const [editingDraft, setEditingDraft] = useState(
+    () => comment.text.trim() === '' && comment.replies.length === 0 && !comment.resolved,
+  );
+  // A reply landing (or a resolve) while this card was still "composing" —
+  // e.g. the assistant replied before the debounced persist even fired —
+  // must still fall through to the normal display+reply layout; those two
+  // states already assume no comment showing a reply/resolved treatment is
+  // also mid-compose.
+  const isDraft = editingDraft && comment.replies.length === 0 && !comment.resolved;
 
   // Round 10 (Destin: "the 'resolved' button should be an icon, like the
   // complete button for resume browser, at the top right of each comment
@@ -179,6 +205,11 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
               rows={2}
               value={comment.text}
               onChange={(e) => onTextChange(e.target.value)}
+              // WHY: the one place `editingDraft` ever turns off — a real
+              // blur (click/tab away), never a keystroke. Empty text stays a
+              // draft either way (nothing to "post" yet — matches the old
+              // behaviour when this card is reopened with real content).
+              onBlur={() => { if (comment.text.trim()) setEditingDraft(false); }}
               placeholder="Add a comment…"
               // data-edit-menu (was the artifact-edit-textarea class, which design lint rejects on <Textarea>): reuses the artifact editor's right-click
               // routing (build-menu.ts) — Electron ships no default context menu,

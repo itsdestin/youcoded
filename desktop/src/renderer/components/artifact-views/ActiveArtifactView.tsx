@@ -20,6 +20,7 @@ import { isRemoteMode } from '../../platform';
 // beside Edit) and calls toggleComments().
 import { CommentsActionsInPaneContext, CommentsCloseContext } from '../comments/CommentsPaneFrame';
 import { CodeCommentsRail } from '../comments/CodeCommentsRail';
+import { CodeCommentPopover } from '../comments/CodeCommentPopover';
 import { requestThreadAgain } from '../comments/CommentsMargin';
 import { useDocComments } from '../../state/doc-comments-store';
 import { useNarrowByRef } from '../../hooks/use-container-narrow';
@@ -607,7 +608,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // it independently): "Open in comments" on a RESOLVED thread must reveal
   // it — Comments mode hides resolved by default, and jumping to a thread
   // nobody can see would look like the link did nothing.
-  const { comments: pathComments, focusId: pathFocusId, setShowResolved: setPathShowResolved } = useDocComments(artifact.path, projectRoot);
+  const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(artifact.path, projectRoot);
   // The Comments button's number counts OPEN comments only — "Comments 4"
   // with two already resolved read as four things still waiting on you.
   const openCount = pathComments.filter((c) => !c.resolved).length;
@@ -676,26 +677,18 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     setCommentsMode('comments');
   }, [pathComments, setPathShowResolved, artifact.path]);
 
-  // Bug fix (Destin, testing the dev instance: selected `result += p` in a
-  // .py file, right-clicked "Add comment", typed a note — nothing appeared).
-  // Cause: CodeEditorView never wires up commentsMode/onOpenComments at all
-  // (types.ts's own WHY: "CodeEditorView's simpler treatment ... lives
-  // entirely in ActiveArtifactView instead") — a text/prose file stays in
-  // Reading mode and shows the fresh draft in ReadingHighlights' own
-  // NewCommentPopover right over the selection, but a code file's Reading
-  // mode is just the plain CM6 editor with NO such popover, and the draft
-  // card only exists inside CodeCommentsRail, which is gated on
-  // `commentsMode === 'comments'`. build-menu.ts's "Add comment" writes the
-  // draft straight into the store with no callback of its own (it has no
-  // React props to call one with), so nothing ever flipped the mode — the
-  // draft sat in the store, invisible, until the user found the Comments
-  // button themselves. Switch FOR them, the same way clicking that button
-  // would, whenever a fresh draft (`focusId`) appears on a code file while
-  // still in Reading mode.
-  useEffect(() => {
-    if (!showCodeRail || !pathFocusId || commentsMode === 'comments') return;
-    openComments(pathFocusId);
-  }, [showCodeRail, pathFocusId, commentsMode, openComments]);
+  // CHANGE (Destin, testing the dev instance): code files used to force-
+  // switch into the WHOLE Comments panel the instant a fresh draft appeared
+  // (this used to be a `useEffect` calling `openComments(pathFocusId)` here,
+  // added because CodeEditorView never wired up commentsMode/onOpenComments
+  // at all — types.ts's own WHY: "CodeEditorView's simpler treatment ...
+  // lives entirely in ActiveArtifactView instead" — and build-menu.ts's "Add
+  // comment" writes straight into the store with no callback of its own, so
+  // nothing flipped the mode without this). Code now matches markdown/text:
+  // Reading mode renders `<CodeCommentPopover>` below (the same small
+  // floating box ReadingHighlights shows, anchored through CM6's own
+  // `coordsAtPos` instead of a DOM Range — CM6 virtualizes, so there's no
+  // <mark> to measure), and the mode never has to change just to type a note.
 
   // Round 3 (item 6): Comments mode needs the margin's card width; the
   // drawer's DEFAULT ~480px pane (SessionDrawer's --right-pane-width) has
@@ -883,6 +876,12 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
             is the plain editor, full width, same as markdown. */}
         {showCodeRail && commentsMode === 'comments' && (
           <CodeCommentsRail path={artifact.path} projectRoot={projectRoot} />
+        )}
+        {/* CHANGE: Reading mode's own small floating box (see the import's
+            WHY) — the code-file equivalent of ReadingHighlights' popover,
+            replacing the old force-switch-to-panel effect. */}
+        {showCodeRail && commentsMode === 'reading' && (
+          <CodeCommentPopover path={artifact.path} projectRoot={projectRoot} />
         )}
       </div>
       {/* Partial-view notice — floats over the BOTTOM of the doc pane, in the

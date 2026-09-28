@@ -4,8 +4,9 @@
 // useArtifactContent, and the conflict check that guards every save. Each section
 // keeps its own window.claude bridge fake and hooks, so they stay inside it.
 import React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { render, act, fireEvent, cleanup, renderHook, waitFor, within } from '@testing-library/react';
+import { EditorView } from '@codemirror/view';
 import { ActiveArtifactView, type ActiveArtifactHandle } from '../src/renderer/components/artifact-views/ActiveArtifactView';
 import { setConnectionMode } from '../src/renderer/platform';
 import { useArtifactContent, contentPathFor } from '../src/renderer/components/artifact-views/useArtifactContent';
@@ -796,19 +797,28 @@ describe('first save without a conflict token', () => {
 });
 
 /**
- * Bug fix (Destin, testing the dev instance): selected `result += p` in a
- * .py file, right-clicked "Add comment", typed a note — nothing appeared.
- * Cause: CodeEditorView (unlike MarkdownView) never reads commentsMode/
- * onOpenComments — a fresh code comment's own draft card only exists inside
- * CodeCommentsRail, which ActiveArtifactView renders ONLY while
- * `commentsMode === 'comments'`, and build-menu.ts's "Add comment" writes
- * straight into the doc-comments store with no callback to flip that mode.
- * ActiveArtifactView must switch to Comments mode itself whenever a fresh
- * draft appears on a code file while still in Reading mode.
+ * CHANGE (Destin, testing the dev instance): a fresh code-file comment used
+ * to force a switch into the whole Comments panel (the old bug fix this
+ * block used to pin — selecting text, right-clicking "Add comment", typing
+ * a note only worked once ActiveArtifactView auto-flipped commentsMode).
+ * Code now matches markdown/text files exactly: the draft gets the SAME
+ * small floating box (CodeCommentPopover, anchored through CM6's own
+ * `coordsAtPos`) right over the selection, in Reading mode, with no mode
+ * switch at all — see CodeCommentPopover.tsx and ActiveArtifactView.tsx's
+ * own WHY at the old effect's former call site.
  */
-describe('code files open Comments mode for a fresh draft (bug fix)', () => {
+describe('code files show the small popover for a fresh draft, not the panel', () => {
   const get = vi.fn();
   const PATH = 'total.py';
+
+  beforeAll(() => {
+    // jsdom never lays out real geometry — CodeCommentPopover's own
+    // `visibleEditorFor` needs `getClientRects().length > 0` (same
+    // precedent as use-code-comment-anchors.test.tsx), and CM6's
+    // `coordsAtPos` needs real layout to answer at all.
+    Element.prototype.getClientRects = () => [{}] as unknown as DOMRectList;
+    vi.spyOn(EditorView.prototype, 'coordsAtPos').mockReturnValue({ left: 10, right: 10, top: 20, bottom: 30 } as any);
+  });
 
   beforeEach(() => {
     __resetDocCommentsStoreForTest();
@@ -819,7 +829,7 @@ describe('code files open Comments mode for a fresh draft (bug fix)', () => {
   });
   afterEach(() => { __resetDocCommentsStoreForTest(); });
 
-  it('switches from Reading to Comments mode so the new draft has somewhere to type into', async () => {
+  it('renders the popover in place, and commentsMode never switches to comments', async () => {
     // The same call build-menu.ts's "Add comment" makes from the right-click
     // menu on a code file's selection.
     addComment(PATH, 'result += p', 'line 3 · total.py', {
@@ -838,11 +848,12 @@ describe('code files open Comments mode for a fresh draft (bug fix)', () => {
         onCommentsStateChange={onCommentsStateChange}
       />,
     );
-    // Before the fix this never fires — commentsMode stays 'reading' forever
-    // and the draft is never reachable.
-    await waitFor(() => expect(onCommentsStateChange).toHaveBeenCalledWith(expect.objectContaining({ active: true })));
-    // CodeCommentsRail renders the draft's own auto-focused note box — the
-    // same "Add a comment…" textarea a text file's popover would have shown.
+    // CodeCommentPopover renders the draft's own auto-focused note box — the
+    // same "Add a comment…" textarea a text file's popover shows.
     await waitFor(() => expect(container.querySelector('[placeholder="Add a comment…"]')).toBeTruthy());
+    // Never switched into the full panel — no auto-open-panel effect exists
+    // anymore, and the panel's own chrome (Show Resolved) is absent.
+    expect(onCommentsStateChange).not.toHaveBeenCalledWith(expect.objectContaining({ active: true }));
+    expect(container.querySelector('[data-comments-list]')).toBeNull();
   });
 });

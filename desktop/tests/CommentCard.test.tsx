@@ -6,9 +6,9 @@
 // contract for what the card does with it, independent of how status gets
 // set (use-quote-marks.test.tsx / use-code-comment-anchors.test.tsx already
 // pin that part).
-import React from 'react';
+import React, { useState } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { CommentCard } from '../src/renderer/components/comments/CommentCard';
 import type { DocComment } from '../src/renderer/state/doc-comments-store';
 
@@ -165,5 +165,97 @@ describe('CommentCard — a comment in a file too large to check (status "unchec
   it('a still-empty draft never shows the unchecked note either', () => {
     renderCard(baseComment({ status: 'unchecked', text: '', replies: [] }));
     expect(screen.queryByText(/too large/i)).toBeNull();
+  });
+});
+
+// Bug fix (Destin, testing the dev instance: "the chat input sometimes
+// steals focus in the middle of me typing a comment"). Root cause: `isDraft`
+// used to be recomputed from the LIVE `comment.text` on every render, so the
+// first keystroke (making `comment.text` non-empty) flipped the JSX from
+// <Textarea> to a plain <p>, unmounting the focused box mid-sentence — see
+// CommentCard.tsx's own WHY on `editingDraft`. Both harnesses below wire
+// `onTextChange` exactly the way CommentsMargin/CodeCommentsRail do (a
+// parent that re-renders CommentCard with a freshly updated `comment`
+// object on every keystroke), so a regression here reproduces the same way
+// it did in the real store.
+describe('CommentCard — typing into a fresh draft never loses the box (focus-steal regression)', () => {
+  // A stand-in for CommentsMargin/CodeCommentsRail: owns `comment` in state
+  // and republishes a NEW object on every keystroke, the same shape
+  // doc-comments-store.ts's `updateComment` produces.
+  type Push = (updater: (c: DocComment) => DocComment) => void;
+  function DraftHarness({ onExternalPush }: { onExternalPush?: (push: Push) => void }) {
+    const [comment, setComment] = useState<DocComment>(baseComment({ id: 'c-draft', text: '', replies: [] }));
+    onExternalPush?.((updater) => setComment((c) => updater(c)));
+    return (
+      <CommentCard
+        comment={comment}
+        autoFocus
+        onTextChange={(t) => setComment((c) => ({ ...c, text: t }))}
+        onReply={noop}
+        onResolve={noop}
+        onReopen={noop}
+        onDelete={noop}
+      />
+    );
+  }
+
+  it('typing several characters keeps the SAME textarea mounted and focused, with every character kept', () => {
+    render(<DraftHarness />);
+    const box = screen.getByPlaceholderText(/add a comment…/i) as HTMLTextAreaElement;
+    box.focus();
+    expect(document.activeElement).toBe(box);
+
+    // Type one character at a time — a naive re-render that swaps element
+    // types on the first non-empty value would unmount `box` right here.
+    for (const ch of 'hello') {
+      fireEvent.change(box, { target: { value: box.value + ch } });
+    }
+
+    // Still the exact same box, in the document, still focused, with the
+    // full word intact — none of that survives the old unmount-on-first-char
+    // bug (queryByPlaceholderText would return null after the first change).
+    expect(screen.getByPlaceholderText(/add a comment…/i)).toBe(box);
+    expect(document.body.contains(box)).toBe(true);
+    expect(document.activeElement).toBe(box);
+    expect(box.value).toBe('hello');
+  });
+
+  it('a store push mid-typing (same id, fresh object reference — a docComments:changed echo or re-anchor pass) does not steal focus either', () => {
+    let push!: Push;
+    render(<DraftHarness onExternalPush={(p) => { push = p; }} />);
+    const box = screen.getByPlaceholderText(/add a comment…/i) as HTMLTextAreaElement;
+    box.focus();
+
+    fireEvent.change(box, { target: { value: 'wo' } });
+    // Simulate mergeServerComments()'s fromPersisted(): a BRAND NEW DocComment
+    // object, same id and content, as a `docComments:changed` refresh or an
+    // anchoring pass would hand this card.
+    push((c) => ({ ...c, text: c.text }));
+
+    expect(screen.getByPlaceholderText(/add a comment…/i)).toBe(box);
+    expect(document.activeElement).toBe(box);
+
+    fireEvent.change(box, { target: { value: 'world' } });
+    expect(box.value).toBe('world');
+    expect(document.activeElement).toBe(box);
+  });
+
+  it('blurring with real text hands off to the normal display + reply layout', () => {
+    render(<DraftHarness />);
+    const box = screen.getByPlaceholderText(/add a comment…/i) as HTMLTextAreaElement;
+    box.focus();
+    fireEvent.change(box, { target: { value: 'done' } });
+    fireEvent.blur(box);
+    expect(screen.queryByPlaceholderText(/add a comment…/i)).toBeNull();
+    expect(screen.getByText('done')).toBeTruthy();
+    expect(screen.getByPlaceholderText(/reply/i)).toBeTruthy();
+  });
+
+  it('blurring while still empty stays a draft (nothing to post yet)', () => {
+    render(<DraftHarness />);
+    const box = screen.getByPlaceholderText(/add a comment…/i) as HTMLTextAreaElement;
+    box.focus();
+    fireEvent.blur(box);
+    expect(screen.getByPlaceholderText(/add a comment…/i)).toBe(box);
   });
 });
