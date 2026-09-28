@@ -288,7 +288,8 @@ export function Dialog({
             // Titleless caller-owned surfaces retain their original painted
             // scroll edges until their separate visual review.
             <div ref={scrollRef} className={`scroll-fade${title ? ' dialog-scroll' : ''} flex-1`}>
-              <div className="px-4 py-4 space-y-5">{children}</div>
+              {/* WHY space-y-4 (trial): the guide spaces groups 16px; the body used 20px. */}
+              <div className="px-4 py-4 space-y-4">{children}</div>
             </div>
           ) : (
             children
