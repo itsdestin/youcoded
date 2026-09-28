@@ -18,6 +18,10 @@
       }
     },
     {
+      "do": "expect",
+      "screen": "chat/sessions"
+    },
+    {
       "do": "click",
       "target": {
         "role": "button",
