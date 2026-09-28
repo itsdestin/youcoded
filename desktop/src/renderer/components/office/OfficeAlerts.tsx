@@ -21,7 +21,9 @@ export function OfficeAlerts({ onReview }: { onReview: (path: string) => void })
     <>
       <Dialog
         open={unsaved !== null}
-        onClose={review}
+        // Escape / ✕: dismiss only — the window stays open (main held its close) and the failed
+        // tabs keep their actions; nothing else opens. Review is the explicit way there.
+        onClose={clearUnsavedPrompt}
         title={unsaved && unsaved.count === 1 ? "1 Office document couldn't be saved." : `${unsaved?.count ?? 0} Office documents couldn't be saved.`}
         size="prompt"
         layer={3}
