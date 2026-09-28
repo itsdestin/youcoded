@@ -566,4 +566,15 @@ describe('redactSecrets', () => {
     expect(redactSecrets(text, server)).toBe('spawn node ENOENT; key [redacted] rejected; token [redacted] expired; DEBUG=1');
     expect(redactSecrets(null, server)).toBeNull();
   });
+
+  it('also blanks credentials written into the launch command or the server address', () => {
+    const stdio = { env: {}, headers: {}, transport: { type: 'stdio' as const, command: 'npx',
+      args: ['-y', 'some-server', '--api-key', 'sk-cmd-9876', '--token=tok-inline-5432', '--root', '/home/me/notes'] } };
+    expect(redactSecrets('spawn failed: npx -y some-server --api-key sk-cmd-9876 --token=tok-inline-5432 --root /home/me/notes', stdio))
+      .toBe('spawn failed: npx -y some-server --api-key [redacted] --token=[redacted] --root /home/me/notes');
+
+    const http = { env: {}, headers: {}, transport: { type: 'http' as const, url: 'https://bobby:hunter22@mcp.example.com/sse?api_key=live%2Fabc123&region=eu-west' } };
+    expect(redactSecrets('GET https://bobby:hunter22@mcp.example.com/sse?api_key=live%2Fabc123&region=eu-west -> 401 for live/abc123', http))
+      .toBe('GET https://[redacted]:[redacted]@mcp.example.com/sse?api_key=[redacted]&region=[redacted] -> 401 for [redacted]');
+  });
 });

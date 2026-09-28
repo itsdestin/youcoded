@@ -110,12 +110,44 @@ function effectiveConfig(server: ResolvedMcpServer): string {
     missing: [...server.missingSecrets].sort(), credentialError: server.credentialError ?? null });
 }
 
-/** The error text with every env/header value this server was given replaced
- *  by [redacted]. Values under 4 characters are left alone: blanking "1" or
- *  "true" everywhere would mangle the message while protecting nothing. */
-export function redactSecrets(text: string | null, server: Pick<ResolvedMcpServer, 'env' | 'headers'>): string | null {
+/** WHY (PR #585 review, 2026-09-28): env/header values are not the only place a
+ *  credential lives. Users paste keys straight into a launch command
+ *  (`--api-key sk-…`, `--token=…`) or a server address (`…?api_key=…`,
+ *  `https://user:pass@host`), and a failing server's error often echoes its
+ *  own command line or URL. Those values are collected here so the log line
+ *  blanks them too. Only values tied to a secret-sounding name are taken from
+ *  the command, so ordinary arguments like a file path stay readable. */
+const SECRET_NAME = /(key|token|secret|pass(word)?|auth|bearer|credential|session|cookie|sig(nature)?)/i;
+function transportSecrets(transport: ResolvedMcpServer['transport'] | undefined): string[] {
+  if (!transport) return [];
+  const out: string[] = [];
+  if (transport.type === 'http') {
+    try {
+      const url = new URL(transport.url);
+      if (url.password) out.push(url.password, decodeURIComponent(url.password));
+      if (url.username) out.push(url.username, decodeURIComponent(url.username));
+      // Every query value, not just secret-named ones: a URL's query is where
+      // hosted servers put their access key, under names we cannot predict.
+      for (const value of url.searchParams.values()) out.push(value, encodeURIComponent(value));
+    } catch { /* an unparseable URL fails to connect before it can echo anything */ }
+    return out;
+  }
+  const args = transport.args ?? [];
+  args.forEach((arg, i) => {
+    const eq = arg.match(/^-{1,2}([^=]+)=(.+)$/);
+    if (eq) { if (SECRET_NAME.test(eq[1])) out.push(eq[2]); return; }
+    if (/^-{1,2}\S/.test(arg) && SECRET_NAME.test(arg) && i + 1 < args.length && !args[i + 1].startsWith('-')) out.push(args[i + 1]);
+  });
+  return out;
+}
+
+/** The error text with every env/header value this server was given — plus
+ *  credentials in its launch arguments or address (see transportSecrets) —
+ *  replaced by [redacted]. Values under 4 characters are left alone: blanking
+ *  "1" or "true" everywhere would mangle the message while protecting nothing. */
+export function redactSecrets(text: string | null, server: Pick<ResolvedMcpServer, 'env' | 'headers'> & { transport?: ResolvedMcpServer['transport'] }): string | null {
   if (!text) return text;
-  const values = [...Object.values(server.env ?? {}), ...Object.values(server.headers ?? {})]
+  const values = [...Object.values(server.env ?? {}), ...Object.values(server.headers ?? {}), ...transportSecrets(server.transport)]
     .filter(v => typeof v === 'string' && v.length >= 4)
     // "Bearer abc…" headers: an error may quote only the token part.
     .flatMap(v => [v, ...v.split(/\s+/).filter(part => part.length >= 8 && part !== v)])

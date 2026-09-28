@@ -854,7 +854,11 @@ function AppInner() {
   // "Send now": the row stays until the drain sends it (TRANSCRIPT_USER_MESSAGE
   // removes it); false = already on its way, handled like Cancel's too-late.
   const handleSendQueuedNow = useCallback(async (sid: string, queueId: string) => {
-    const moved = await window.claude.native.queueSendNow(sid, queueId);
+    // WHY catch (PR #585 review): over remote access the request can fail (e.g. the
+    // connection drops) and a click that silently does nothing reads as broken.
+    // The cause is unknown here, so the words stay general and the row stays put.
+    const moved = await window.claude.native.queueSendNow(sid, queueId).catch(() => null);
+    if (moved === null) { setToast("Send now didn't go through — try again."); return; }
     if (!moved) {
       setToast('Already sending.');
       dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
