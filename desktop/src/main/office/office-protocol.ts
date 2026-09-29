@@ -5,9 +5,8 @@ import type { createSessions } from './office-sessions';
 import { createThemeFonts, currentThemeFontLinks, type ThemeFonts } from './theme-fonts';
 
 // WHY not exported: nothing outside this file needs the literal today — main.ts's scheme
-// registration and the pin test that checks it both spell 'office' themselves, deliberately,
-// so a change here can't silently drift the two apart. Task 5 exports it if/when its IPC
-// allow-list needs to name the scheme.
+// registration, the frame guard (office-frame-guard.ts) and the pin test that checks them all
+// spell 'office' themselves, deliberately, so a change here can't silently drift them apart.
 const OFFICE_SCHEME = 'office';
 // WHY no network at all: a compromised or confused editor must not be able to send a document
 // anywhere (design §3, R2-6). Everything the editor needs is served from its own origin, and
@@ -16,8 +15,8 @@ const OFFICE_SCHEME = 'office';
 // different origins under the same scheme). data:/blob: stay allowed because the editor loads
 // generated blobs and inline data URIs for its own content; 'unsafe-inline'/'unsafe-eval' stay
 // because sdkjs needs them. CSP cannot stop a script from navigating the frame itself
-// (`location = 'https://...'`) — that needs its own guard on the editor frame's navigation,
-// which is a later task's job, not this header's.
+// (`location = 'https://...'`) — office-frame-guard.ts cancels that from main, on every app
+// window's will-frame-navigate.
 export const OFFICE_CSP =
   "default-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'; connect-src 'self' data: blob:; img-src 'self' data: blob:; font-src 'self' data:; form-action 'none'; base-uri 'none'";
 

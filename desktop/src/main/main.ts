@@ -42,6 +42,7 @@ import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
 import { officeThemeFonts, registerOfficeProtocol } from './office/office-protocol';
+import { sealOfficeFrames } from './office/office-frame-guard';
 import { registerOfficeIpc } from './office/office-ipc';
 import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
@@ -876,15 +877,14 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     });
   }
 
-  // Security: allow navigation only to the app's own page (prevents preload API
-  // exposure). Any file:// used to pass — see isAppPageUrl for why that was not enough.
+  // Security: only the app's own page may load here (preload exposure) — isAppPageUrl says why.
   win.webContents.on('will-navigate', (event, url) => {
     if (!isAppPageUrl(url, path.join(__dirname, '../renderer/index.html'), DEV_SERVER_URL)) event.preventDefault();
   });
+  sealOfficeFrames(win.webContents); // WHY: subframes skip will-navigate; Office frames never leave office: (office-frame-guard.ts)
   // Security: deny window.open() but route safe http(s)/mailto to the OS browser
   win.webContents.setWindowOpenHandler(({ url }) => {
-    // Rejects when the OS has no handler for the scheme — nothing to recover,
-    // but it must not escape as an unhandled rejection.
+    // Rejects when the OS has no handler for the scheme — must not escape as an unhandled rejection.
     if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url).catch(() => {});
     return { action: 'deny' as const };
   });
