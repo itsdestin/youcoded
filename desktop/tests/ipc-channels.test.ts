@@ -5,13 +5,13 @@ import path from 'path';
 // local `readSource` name below is this file's own long-standing wrapper.
 import { readSource as readSourceFile } from './helpers/guard-scope';
 
-// This test verifies that IPC channel constants in preload.ts match shared/types.ts.
+// This test verifies that IPC channel constants in preload.ts match shared/backend-contract.ts.
 // Preload can't import from shared/types due to Electron sandbox restrictions,
 // so channel names are duplicated. This test catches drift.
 
 // The two IPC constant maps and how they are compared.
 //
-// preload.ts cannot import shared/types.ts (Electron's sandbox), so the channel
+// preload.ts cannot import shared/backend-contract.ts (Electron's sandbox), so the channel
 // map is written out TWICE and the two copies are kept identical by this file.
 //
 // Fixed 2026-09-04 (linux-buddy-helper design §11): this test used to
@@ -45,35 +45,13 @@ function ipcConstants(source: string, decl: RegExp): Map<string, string> {
   return out;
 }
 
-// The drift that already existed on 2026-09-04, measured, not guessed. Every
-// name here is a constant one map carries and the other does not. Most are
-// namespaces preload owns end-to-end (account:, social:, marketplace:) or that
-// main owns end-to-end (specialists:, permissions:, search:).
-const PRELOAD_ONLY_ON_2026_09_04 = [
-  'ACCOUNT_DELETE', 'ACCOUNT_EXPORT', 'ACCOUNT_POLL', 'ACCOUNT_REFRESH', 'ACCOUNT_SET_HANDLE',
-  'ACCOUNT_SIGNED_IN', 'ACCOUNT_SIGN_OUT', 'ACCOUNT_START', 'ACCOUNT_UPDATE_PROFILE',
-  'ACCOUNT_USER', 'ANALYTICS_GET_OPT_IN', 'ANALYTICS_SET_OPT_IN', 'APPEARANCE_GET',
-  'APPEARANCE_SET', 'CHAT_EXPORT_SNAPSHOT', 'CHAT_SNAPSHOT_RESPONSE', 'DEFAULTS_GET',
-  'DEFAULTS_SET', 'MARKETPLACE_COMMENT', 'MARKETPLACE_INSTALL', 'MARKETPLACE_RATE',
-  'MARKETPLACE_RATE_DELETE', 'MARKETPLACE_REPORT', 'MARKETPLACE_THEME_LIKE',
-  'MARKETPLACE_THUMB', 'MARKETPLACE_THUMB_GET', 'MODEL_GET_PREFERENCE', 'MODEL_READ_LAST',
-  'MODEL_SET_PREFERENCE', 'MODES_GET', 'MODES_SET', 'PTY_RAW_BYTES',
-  'REMOTE_ATTENTION_CHANGED', 'SETTINGS_GET', 'SETTINGS_SET', 'SOCIAL_ACCEPT_REQUEST',
-  'SOCIAL_BLOCK', 'SOCIAL_CANCEL_REQUEST', 'SOCIAL_DECLINE_REQUEST', 'SOCIAL_LIST_BLOCKS',
-  'SOCIAL_LIST_FRIENDS', 'SOCIAL_LIST_REQUESTS', 'SOCIAL_LOOKUP_HANDLE',
-  'SOCIAL_PRESENCE_CONNECT', 'SOCIAL_PRESENCE_DISCONNECT', 'SOCIAL_PRESENCE_EVENT',
-  'SOCIAL_PRESENCE_SEND', 'SOCIAL_SEND_REQUEST', 'SOCIAL_UNBLOCK', 'SOCIAL_UNFRIEND',
-];
-const TYPES_ONLY_ON_2026_09_04 = [
-  'FS_READ_HEAD', 'NATIVE_SUPPORTED', 'PERMISSIONS_LIST', 'PERMISSIONS_REMOVE',
-  'PERMISSIONS_REMOVE_PROJECT', 'SEARCH_LIST', 'SEARCH_REMOVE_KEY', 'SEARCH_SET_KEY',
-  'SEARCH_TEST', 'SPECIALISTS_DELEGATED_GET', 'SPECIALISTS_DELEGATED_SET',
-  'SPECIALISTS_EVENT', 'SPECIALISTS_INTERRUPT', 'SPECIALISTS_LIST', 'SPECIALISTS_STEER',
-];
-
+// WHY (2026-09-29 one-core R2): this file used to carry two baselines of measured drift
+// (52 names only preload had, 15 only the shared list had). preload's list is now GENERATED from
+// shared/backend-contract.ts (scripts/generate-preload-channels.mjs), so both maps are equal by
+// construction and the baselines are gone — any difference at all is a failure.
 describe('IPC channel consistency', () => {
   const preloadSource = readSource('src', 'main', 'preload.ts');
-  const typesSource = readSource('src', 'shared', 'types.ts');
+  const typesSource = readSource('src', 'shared', 'backend-contract.ts');
   const preloadIpc = ipcConstants(preloadSource, /const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
   const typesIpc = ipcConstants(typesSource, /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
 
@@ -115,20 +93,8 @@ describe('IPC channel consistency', () => {
     const preloadOnly = [...preloadIpc.keys()].filter((n) => !typesIpc.has(n)).sort();
     const typesOnly = [...typesIpc.keys()].filter((n) => !preloadIpc.has(n)).sort();
     // Compared as ARRAYS so a failure names the exact constant that drifted.
-    // SUBSET-PLUS-CAP, not equality (B4 review, F4). Equality pins BOTH
-    // directions: fixing a legitimate piece of drift — adding one of the
-    // types-only constants to preload — would turn this red until someone
-    // hand-edited the baseline, and the failure would be a raw array diff that
-    // does not say which direction is the good one. This way a fix passes
-    // silently, a NEW one-sided constant fails and names itself, and quietly
-    // appending to the baseline no longer works: the count is a hard number that
-    // has to be edited too, which is a visible change in review.
-    const strays = preloadOnly.filter((n) => !PRELOAD_ONLY_ON_2026_09_04.includes(n));
-    expect(strays, 'new preload-only channel constant(s); add them to shared/types.ts too').toEqual([]);
-    expect(preloadOnly.length).toBeLessThanOrEqual(PRELOAD_ONLY_ON_2026_09_04.length);
-    const typesStrays = typesOnly.filter((n) => !TYPES_ONLY_ON_2026_09_04.includes(n));
-    expect(typesStrays, 'new types-only channel constant(s); add them to preload.ts too').toEqual([]);
-    expect(typesOnly.length).toBeLessThanOrEqual(TYPES_ONLY_ON_2026_09_04.length);
+    expect(preloadOnly, 'preload-only constant(s): add them to shared/backend-contract.ts and regenerate').toEqual([]);
+    expect(typesOnly, 'contract-only constant(s): run node scripts/generate-preload-channels.mjs').toEqual([]);
   });
 
   // Channel strings preload passes to ipcRenderer directly, without going
@@ -157,10 +123,10 @@ describe('dev:* channel parity', () => {
   // WHY derived, not hand-listed (2026-09-10): this was a fixed array, so the two
   // channels added for managed workspace setup escaped every assertion below
   // silently — the suite stayed green while the new channels were on no platform
-  // but desktop. The list now comes from shared/types.ts, so a dev:* channel
+  // but desktop. The list now comes from shared/backend-contract.ts, so a dev:* channel
   // cannot be added without this test having an opinion about it.
   const ALL_DEV_TYPES = [...ipcConstants(
-    readSource('src', 'shared', 'types.ts'),
+    readSource('src', 'shared', 'backend-contract.ts'),
     /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/,
   ).values()].filter(v => v.startsWith('dev:'));
 
@@ -378,8 +344,8 @@ describe('native:retry channel parity', () => {
   const CHANNEL = 'native:retry';
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
-  it('is declared in shared/types.ts', () => {
-    expect(read('src', 'shared', 'types.ts')).toContain(`'${CHANNEL}'`);
+  it('is declared in shared/backend-contract.ts', () => {
+    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`'${CHANNEL}'`);
   });
   it('is declared in preload.ts', () => {
     expect(read('src', 'main', 'preload.ts')).toContain(`'${CHANNEL}'`);
@@ -405,7 +371,7 @@ describe('native:retry channel parity', () => {
 // session:menu-lock — the one-device-at-a-time lease for answering a Claude Code
 // menu by verified navigation (main/menu-answer-lock.ts). WHY every surface is
 // pinned here (2026-09-24): the constant check above only compares preload with
-// shared/types.ts. If remote-server or Kotlin dropped the case, a phone's lock ask
+// shared/backend-contract.ts. If remote-server or Kotlin dropped the case, a phone's lock ask
 // would get `unsupported` — and a desktop window and a phone could then both type
 // arrows and Enter into one startup dialog, combining into an answer neither
 // person chose (e.g. trusting a folder). The desktop IPC handler and the remote
@@ -414,8 +380,8 @@ describe('session:menu-lock channel parity', () => {
   const CHANNEL = 'session:menu-lock';
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
-  it('is declared in shared/types.ts and preload.ts under the same constant', () => {
-    expect(read('src', 'shared', 'types.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
+  it('is declared in shared/backend-contract.ts and preload.ts under the same constant', () => {
+    expect(read('src', 'shared', 'backend-contract.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
     expect(read('src', 'main', 'preload.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
   });
   it('is invoked by preload.ts', () => {
@@ -543,7 +509,7 @@ describe('system:back and system:notify-stack-state parity', () => {
   test('system:notify-stack-state appears in preload.ts, types.ts, remote-shim.ts, SessionService.kt', () => {
     const stackStateSites = {
       'preload.ts': readSourceFile(path.join(__dirname, '../src/main/preload.ts')),
-      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/types.ts')),
+      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/backend-contract.ts')),
       'remote-shim.ts': readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts')),
       'SessionService.kt': readSourceFile(
         path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt')),
@@ -558,7 +524,7 @@ describe('system:back and system:notify-stack-state parity', () => {
   test('system:back appears in preload.ts, types.ts, remote-shim.ts, MainActivity.kt', () => {
     const backSites = {
       'preload.ts': readSourceFile(path.join(__dirname, '../src/main/preload.ts')),
-      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/types.ts')),
+      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/backend-contract.ts')),
       'remote-shim.ts': readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts')),
       'MainActivity.kt': readSourceFile(
         path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/MainActivity.kt')),
@@ -1119,7 +1085,7 @@ describe('custom tags + notes channel parity', () => {
 
 // Welcome back (design 2026-09-24 §3, plan T2): the per-install "sessions open
 // at last shutdown" list. HAND-WRITTEN parity block (design §6) — the
-// automatic check only diffs preload.ts against shared/types.ts (review 2 D7),
+// automatic check only diffs preload.ts against shared/backend-contract.ts (review 2 D7),
 // so it can't see remote-shim.ts, remote-server.ts or SessionService.kt drift.
 // Desktop-only (S-phone): remote-server.ts and SessionService.kt must always
 // answer as if nothing is offered, never carry the real store.
@@ -1170,7 +1136,7 @@ describe('session:reopen-list / session:forget-reopen channel parity (Welcome ba
 
 // Welcome back (design 2026-09-24 §4, plan T3): the in-app quit warning.
 // HAND-WRITTEN parity block (design §6, same reason as the reopen-list block
-// above) — the automatic check only diffs preload.ts against shared/types.ts.
+// above) — the automatic check only diffs preload.ts against shared/backend-contract.ts.
 // Electron-only (design §3: "window.claude.window is the documented
 // Electron-only namespace... so the close pair lives there and needs no
 // shim/Android twin") — unlike session:reopen-list, this trio must be ABSENT
@@ -1178,13 +1144,13 @@ describe('session:reopen-list / session:forget-reopen channel parity (Welcome ba
 describe('window:close-request / window:answer-close / window:close-request-cancelled parity (Welcome back)', () => {
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   const preload = read('src', 'main', 'preload.ts');
-  const sharedTypes = read('src', 'shared', 'types.ts');
+  const sharedTypes = read('src', 'shared', 'backend-contract.ts');
   const remoteShim = read('src', 'renderer', 'remote-shim.ts');
   const ipcHandlers = read('src', 'main', 'ipc-handlers.ts');
   const main = read('src', 'main', 'main.ts');
   const kotlin = read('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
 
-  it('preload.ts and shared/types.ts carry byte-identical channel strings', () => {
+  it('preload.ts and shared/backend-contract.ts carry byte-identical channel strings', () => {
     for (const [name, channel] of [
       ['WINDOW_CLOSE_REQUEST', 'window:close-request'],
       ['WINDOW_ANSWER_CLOSE', 'window:answer-close'],
@@ -1963,9 +1929,9 @@ describe('buddy:* helper channel parity', () => {
   const TYPES = ['buddy:helper-status', 'buddy:install-helper', 'buddy:remove-helper'];
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
-  it('declared in the shared/types.ts channel map', () => {
-    const src = read('src', 'shared', 'types.ts');
-    for (const t of TYPES) expect(src, `${t} missing from shared/types.ts`).toContain(`'${t}'`);
+  it('declared in the shared/backend-contract.ts channel map', () => {
+    const src = read('src', 'shared', 'backend-contract.ts');
+    for (const t of TYPES) expect(src, `${t} missing from shared/backend-contract.ts`).toContain(`'${t}'`);
   });
 
   it("declared in preload.ts's duplicate of that map", () => {
@@ -2176,7 +2142,7 @@ describe('openrouter:* sign-in channel parity', () => {
   });
 
   it('registered in ipc-handlers.ts through the shared constants', () => {
-    const types = read('src', 'shared', 'types.ts');
+    const types = read('src', 'shared', 'backend-contract.ts');
     const handlers = read('src', 'main', 'ipc-handlers.ts');
     for (const t of TYPES) {
       expect(types).toContain(`${CONSTS[t]}: '${t}'`);
@@ -2241,8 +2207,8 @@ describe('chatgpt:* channel parity', () => {
 
   it('registered in ipc-handlers.ts (through the IPC constants)', () => {
     // The handlers use IPC.CHATGPT_* rather than string literals, so assert
-    // the constant exists in shared/types.ts AND the handler references it.
-    const types = read('src', 'shared', 'types.ts');
+    // the constant exists in shared/backend-contract.ts AND the handler references it.
+    const types = read('src', 'shared', 'backend-contract.ts');
     const handlers = read('src', 'main', 'ipc-handlers.ts');
     const constants: Record<string, string> = {
       'chatgpt:status': 'CHATGPT_STATUS',
@@ -2251,7 +2217,7 @@ describe('chatgpt:* channel parity', () => {
       'chatgpt:sign-out': 'CHATGPT_SIGN_OUT',
     };
     for (const t of TYPES) {
-      expect(types, `${t} missing from shared/types.ts IPC`).toContain(`${constants[t]}: '${t}'`);
+      expect(types, `${t} missing from shared/backend-contract.ts IPC`).toContain(`${constants[t]}: '${t}'`);
       expect(handlers, `IPC.${constants[t]} has no ipcMain.handle in ipc-handlers.ts`).toContain(`ipcMain.handle(IPC.${constants[t]}`);
     }
   });
@@ -2316,7 +2282,7 @@ describe('claude-code:status channel parity', () => {
   });
 
   it('registered in ipc-handlers.ts (through the IPC constant)', () => {
-    expect(read('src', 'shared', 'types.ts')).toContain(`CLAUDE_CODE_STATUS: '${T}'`);
+    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`CLAUDE_CODE_STATUS: '${T}'`);
     expect(read('src', 'main', 'ipc-handlers.ts')).toContain('ipcMain.handle(IPC.CLAUDE_CODE_STATUS');
   });
 
@@ -2382,7 +2348,7 @@ describe('claude-code:install channel parity', () => {
   });
 
   it('registered in ipc-handlers.ts and remote-server.ts', () => {
-    expect(read('src', 'shared', 'types.ts')).toContain(`CLAUDE_CODE_INSTALL: '${T}'`);
+    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`CLAUDE_CODE_INSTALL: '${T}'`);
     expect(read('src', 'main', 'ipc-handlers.ts')).toContain('ipcMain.handle(IPC.CLAUDE_CODE_INSTALL');
     expect(read('src', 'main', 'remote-server.ts')).toContain(`case '${T}'`);
   });
@@ -2484,8 +2450,8 @@ describe('pages:* Phase 2 channel parity', () => {
   ];
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
-  it('every type is declared in shared/types.ts and preload.ts, which cannot import it', () => {
-    const shared = read('src', 'shared', 'types.ts');
+  it('every type is declared in shared/backend-contract.ts and preload.ts, which cannot import it', () => {
+    const shared = read('src', 'shared', 'backend-contract.ts');
     const preload = read('src', 'main', 'preload.ts');
     for (const t of PHASE_2) {
       expect(shared, t).toContain(`'${t}'`);

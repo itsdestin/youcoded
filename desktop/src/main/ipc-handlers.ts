@@ -32,6 +32,7 @@ import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 // registry that owns HarnessSessions and their persistence.
 import { NativeHome } from './native-home';
 import type { NativeRuntime } from './create-runtime';
+import { registerDesktopChannels } from './ipc/channel-table';
 import type { OutboxBroadcast } from './chatsearch-index/outbox-drain';
 import { ProviderRegistry } from './providers/provider-registry';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
@@ -5191,6 +5192,11 @@ export function registerIpcHandlers(
     engine: { installed: () => engineManager.registryHook().installed(), install: () => engineManager.install() },
     models: modelManager,
   };
+  // WHY (2026-09-29 one-core R2): the channel table's desktop half. Empty today, so this registers
+  // nothing; R3 moves one family per run into the table and deletes its hand-written
+  // ipcMain.handle blocks above. Kept last so a table entry can never shadow a hand-written one
+  // (Electron refuses a second handler for the same name, which surfaces as a startup throw).
+  registerDesktopChannels(ipcMain, () => runtime);
   return {
     cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn, handoffAttempts,
     outboxBroadcast: { sessionMeta: broadcastSessionMeta, tagsChanged: broadcastTagsChanged } satisfies OutboxBroadcast,

@@ -8,7 +8,7 @@ import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, Sess
 import type { FirstRunState } from '../shared/first-run-types';
 import type { ChatGptAccountStatus } from '../shared/chatgpt-types';
 import type { ClaudeAccountStatus } from '../shared/claude-account-types';
-import type { PreloadBridge } from '../shared/bridge-types';
+import type { PreloadBridge } from '../shared/backend-contract';
 
 // WHY: buddy geometry and pointer offsets are native DIPs, so its CSS pixels
 // must stay at 100% even when a same-origin main window is zoomed. In Electron
@@ -29,7 +29,11 @@ interface ChangelogIpcResult {
 }
 
 // IPC channel names inlined here because Electron's sandboxed preload
-// cannot resolve relative imports to other modules
+// cannot resolve relative imports to other modules. The list below is GENERATED from
+// shared/backend-contract.ts (WHY one-core R2, Destin 2026-09-29: generated, still statically
+// enumerated): every channel is a literal in this file, no Proxy, no runtime lookup.
+// Edit the contract, then `node scripts/generate-preload-channels.mjs` (build/dev do it for you).
+// >>> GENERATED-CHANNELS — written by scripts/generate-preload-channels.mjs from shared/backend-contract.ts. Do not edit by hand.
 const IPC = {
   SESSION_CREATE: 'session:create',
   HANDOFF_BEGIN: 'handoff:begin',
@@ -44,24 +48,8 @@ const IPC = {
   SESSION_INPUT: 'session:input',
   SESSION_RESIZE: 'session:resize',
   SESSION_LIST: 'session:list',
-  SESSION_CREATED: 'session:created',
-  SESSION_DESTROYED: 'session:destroyed',
-  // Welcome back (design 2026-09-24 §3): the per-install "open at last
-  // shutdown" list.
-  SESSION_REOPEN_LIST: 'session:reopen-list',
-  SESSION_FORGET_REOPEN: 'session:forget-reopen',
-  PTY_OUTPUT: 'pty:output',
-  PTY_RAW_BYTES: 'pty:raw-bytes',
-  HOOK_EVENT: 'hook:event',
-  SESSION_RENAMED: 'session:renamed',
-  // Plan 2b Task 10 — pushed when another device takes over a session's lease.
-  SESSION_MOVED: 'session:moved',
-  DIALOG_OPEN_FILE: 'dialog:open-file',
-  DIALOG_OPEN_FOLDER: 'dialog:open-folder',
-  DIALOG_OPEN_SOUND: 'dialog:open-sound',
-  CLIPBOARD_SAVE_IMAGE: 'clipboard:save-image',
-  STATUS_DATA: 'status:data',
-  READ_TRANSCRIPT_META: 'transcript:read-meta',
+  SESSION_SWITCH: 'session:switch',
+  SESSION_SELECTED: 'session:selected',
   SKILLS_LIST: 'skills:list',
   COMMANDS_LIST: 'commands:list',
   SKILLS_LIST_MARKETPLACE: 'skills:list-marketplace',
@@ -82,7 +70,6 @@ const IPC = {
   SKILLS_IMPORT_FROM_LINK: 'skills:import-from-link',
   SKILLS_GET_CURATED_DEFAULTS: 'skills:get-curated-defaults',
   SKILLS_GET_FEATURED: 'skills:get-featured',
-  // Marketplace redesign Phase 3 — integrations namespace.
   INTEGRATIONS_LIST: 'integrations:list',
   INTEGRATIONS_INSTALL: 'integrations:install',
   INTEGRATIONS_UNINSTALL: 'integrations:uninstall',
@@ -90,11 +77,22 @@ const IPC = {
   INTEGRATIONS_CONFIGURE: 'integrations:configure',
   INTEGRATIONS_CONNECT: 'integrations:connect',
   PLATFORM_GET: 'platform:get',
-  // Phase 4 — skip 24h cache after /feature curation.
-  MARKETPLACE_INVALIDATE_CACHE: 'marketplace:invalidate-cache',
   SKILLS_GET_INTEGRATION_INFO: 'skills:get-integration-info',
   SKILLS_INSTALL_MANY: 'skills:install-many',
   SKILLS_APPLY_OUTPUT_STYLE: 'skills:apply-output-style',
+  TERMINAL_READY: 'session:terminal-ready',
+  SESSION_CREATED: 'session:created',
+  SESSION_DESTROYED: 'session:destroyed',
+  SESSION_MOVED: 'session:moved',
+  PTY_OUTPUT: 'pty:output',
+  HOOK_EVENT: 'hook:event',
+  SESSION_RENAMED: 'session:renamed',
+  DIALOG_OPEN_FILE: 'dialog:open-file',
+  DIALOG_OPEN_FOLDER: 'dialog:open-folder',
+  DIALOG_OPEN_SOUND: 'dialog:open-sound',
+  CLIPBOARD_SAVE_IMAGE: 'clipboard:save-image',
+  STATUS_DATA: 'status:data',
+  READ_TRANSCRIPT_META: 'transcript:read-meta',
   OPEN_CHANGELOG: 'shell:open-changelog',
   UPDATE_CHANGELOG: 'update:changelog',
   UPDATE_DOWNLOAD: 'update:download',
@@ -102,12 +100,11 @@ const IPC = {
   UPDATE_LAUNCH: 'update:launch',
   UPDATE_PROGRESS: 'update:progress',
   UPDATE_GET_CACHED_DOWNLOAD: 'update:get-cached-download',
-  UPDATE_GET_BETA_CHANNEL: 'update:get-beta-channel',   // () -> { betaChannel, effective }
-  UPDATE_SET_BETA_CHANNEL: 'update:set-beta-channel',   // (enabled: boolean)
+  UPDATE_GET_BETA_CHANNEL: 'update:get-beta-channel',
+  UPDATE_SET_BETA_CHANNEL: 'update:set-beta-channel',
   OPEN_EXTERNAL: 'shell:open-external',
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
   OPEN_PATH: 'shell:open-path',
-  TERMINAL_READY: 'session:terminal-ready',
   PERMISSION_RESPOND: 'permission:respond',
   REMOTE_GET_CONFIG: 'remote:get-config',
   REMOTE_SET_PASSWORD: 'remote:set-password',
@@ -121,64 +118,44 @@ const IPC = {
   REMOTE_DEVICES_UNPAIR: 'remote:devices:unpair',
   REMOTE_INSTALL_TAILSCALE: 'remote:install-tailscale',
   REMOTE_AUTH_TAILSCALE: 'remote:auth-tailscale',
-  // Remote access batch 2 (§6): Refresh on a phone. The desktop answers not-remote.
   REMOTE_REHYDRATE: 'remote:rehydrate',
   UI_ACTION_BROADCAST: 'ui:action:broadcast',
   UI_ACTION_RECEIVED: 'ui:action:received',
   TRANSCRIPT_EVENT: 'transcript:event',
-  // Fired when the JSONL file shrinks (/.clear truncation or /compact rewrite).
-  // App.tsx listens to finalize compaction state machines.
   TRANSCRIPT_SHRINK: 'transcript:shrink',
   SESSION_BROWSE: 'session:browse',
   SESSION_HISTORY: 'session:history',
-  // Mark/unmark a session flag (complete, priority, helpful, …)
   SESSION_SET_FLAG: 'session:set-flag',
   SESSION_MENU_LOCK: 'session:menu-lock',
-  // Pushed when session metadata (a flag value) changes so open browsers refresh
   SESSION_META_CHANGED: 'session:meta-changed',
-  // Session tags + note (custom user tags, freeform note)
   SESSION_SET_TAG: 'session:set-tag',
   SESSION_SET_NOTE: 'session:set-note',
-  // Session naming (2026-09-09). get/set are the Assistant-settings preference;
-  // title/rename are per-conversation name ownership.
-  SESSION_NAMING_GET: 'session-naming:get',       // () -> { mode, model }
-  SESSION_NAMING_SET: 'session-naming:set',       // ({ mode, model })
-  SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
-  SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
+  SESSION_NAMING_GET: 'session-naming:get',
+  SESSION_NAMING_SET: 'session-naming:set',
+  SESSION_NAMING_TITLE: 'session-naming:title',
+  SESSION_NAMING_RENAME: 'session-naming:rename',
   SESSION_GET_META: 'session:get-meta',
-  // Tag registry CRUD + change push
+  SESSION_REOPEN_LIST: 'session:reopen-list',
+  SESSION_FORGET_REOPEN: 'session:forget-reopen',
   TAGS_LIST: 'tags:list',
   TAGS_CREATE: 'tags:create',
   TAGS_UPDATE: 'tags:update',
   TAGS_DELETE: 'tags:delete',
   TAGS_CHANGED: 'tags:changed',
-  // Folder switcher
   FOLDERS_LIST: 'folders:list',
   FOLDERS_ADD: 'folders:add',
   FOLDERS_REMOVE: 'folders:remove',
   FOLDERS_RENAME: 'folders:rename',
-  // Local-only description on a saved folder — sibling of FOLDERS_RENAME. Preload
-  // can't import shared/types.ts (sandboxed, no relative imports), so this literal
-  // must stay byte-identical to the one in shared/types.ts — the parity test only
-  // checks the CONSTANT NAME against ipc-handlers, not this literal against the
-  // shared one, so a typo here would pass tests silently.
   FOLDERS_SET_DESCRIPTION: 'folders:set-description',
-  // Theme system
-  THEME_RELOAD: 'theme:reload',   // Main -> Renderer: a theme file changed
-  THEME_LIST: 'theme:list',       // Renderer -> Main: get list of user theme slugs
-  THEME_READ_FILE: 'theme:read-file', // Renderer -> Main: read a user theme JSON by slug
+  THEME_RELOAD: 'theme:reload',
+  THEME_LIST: 'theme:list',
+  THEME_READ_FILE: 'theme:read-file',
   THEME_WRITE_FILE: 'theme:write-file',
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_MAXIMIZE: 'window:maximize',
   WINDOW_CLOSE: 'window:close',
   WINDOW_SET_ICON: 'window:set-icon',
-  // Repositions macOS traffic lights — needed because the OS positions them at
-  // fixed window coords, so the floating-chrome header (margin + radius) leaves
-  // them stranded in empty space. Caller passes a {x,y} offset or null to reset.
   WINDOW_SET_TRAFFIC_LIGHT_POS: 'window:set-traffic-light-pos',
-  // Welcome back's in-app quit warning (design §4, plan T3) — must stay
-  // byte-identical to shared/types.ts (ipc-channels.test.ts's hand-written
-  // parity block for this trio; preload can't import that file directly).
   WINDOW_CLOSE_REQUEST: 'window:close-request',
   WINDOW_ANSWER_CLOSE: 'window:answer-close',
   WINDOW_CLOSE_REQUEST_CANCELLED: 'window:close-request-cancelled',
@@ -186,7 +163,6 @@ const IPC = {
   ZOOM_OUT: 'zoom:out',
   ZOOM_RESET: 'zoom:reset',
   ZOOM_GET: 'zoom:get',
-  // Theme marketplace
   THEME_MARKETPLACE_LIST: 'theme-marketplace:list',
   THEME_MARKETPLACE_DETAIL: 'theme-marketplace:detail',
   THEME_MARKETPLACE_INSTALL: 'theme-marketplace:install',
@@ -196,11 +172,11 @@ const IPC = {
   THEME_MARKETPLACE_GENERATE_PREVIEW: 'theme-marketplace:generate-preview',
   THEME_MARKETPLACE_RESOLVE_PUBLISH_STATE: 'theme-marketplace:resolve-publish-state',
   THEME_MARKETPLACE_REFRESH_REGISTRY: 'theme-marketplace:refresh-registry',
-  // Unified marketplace (Phase 3)
   MARKETPLACE_GET_PACKAGES: 'marketplace:get-packages',
   SKILLS_UPDATE: 'skills:update',
   MARKETPLACE_GET_CONFIG: 'marketplace:get-config',
   MARKETPLACE_SET_CONFIG: 'marketplace:set-config',
+  MARKETPLACE_INVALIDATE_CACHE: 'marketplace:invalidate-cache',
   MARKETPLACE_READ_COMPONENT: 'marketplace:read-component',
   FIRST_RUN_STATE: 'first-run:state',
   FIRST_RUN_RETRY: 'first-run:retry',
@@ -208,62 +184,37 @@ const IPC = {
   FIRST_RUN_SUBMIT_API_KEY: 'first-run:submit-api-key',
   FIRST_RUN_DEV_MODE_DONE: 'first-run:dev-mode-done',
   FIRST_RUN_SKIP: 'first-run:skip',
-  // First-run local models (2026-09-14) — mirrors shared/types.ts.
   FIRST_RUN_LOCAL_SETUP: 'first-run:local-setup',
   FIRST_RUN_CONNECT_LOCAL_APP: 'first-run:connect-local-app',
   FIRST_RUN_LOCAL_DOWNLOAD: 'first-run:local-download',
   FIRST_RUN_RESUME_LOCAL_DOWNLOAD: 'first-run:resume-local-download',
-  MODEL_GET_PREFERENCE: 'model:get-preference',
-  MODEL_SET_PREFERENCE: 'model:set-preference',
-  APPEARANCE_GET: 'appearance:get',
-  APPEARANCE_SET: 'appearance:set',
-  MODEL_READ_LAST: 'model:read-last',
-  DEFAULTS_GET: 'defaults:get',
-  DEFAULTS_SET: 'defaults:set',
-  // Claude Code settings.json bridge — used by Preferences panel (/config intercept)
-  SETTINGS_GET: 'settings:get',
-  SETTINGS_SET: 'settings:set',
-  // Fast mode + effort level — YouCoded-local state (Claude Code doesn't transcribe these)
-  MODES_GET: 'modes:get',
-  MODES_SET: 'modes:set',
-  SESSION_SWITCH: 'session:switch',
-  // Remote access batch 2 (§2): a window tells main which session it shows.
-  SESSION_SELECTED: 'session:selected',
-  // Sync management
   SYNC_GET_STATUS: 'sync:get-status',
   SYNC_GET_CONFIG: 'sync:get-config',
   SYNC_SET_CONFIG: 'sync:set-config',
   SYNC_FORCE: 'sync:force',
   SYNC_GET_LOG: 'sync:get-log',
   SYNC_DISMISS_WARNING: 'sync:dismiss-warning',
-  // Cross-device sync spaces (spec 2026-07-03) — distinct from the legacy sync:* above
   SYNC_SPACES_STATUS: 'syncspaces:status',
   SYNC_SPACES_ENABLE: 'syncspaces:enable',
   SYNC_SPACES_SYNC_NOW: 'syncspaces:sync-now',
   SYNC_SPACES_CREATE_PROJECT: 'syncspaces:create-project',
   SYNC_SPACES_IMPORT_PROJECT: 'syncspaces:import-project',
   SYNC_SPACES_RENAME_PROJECT: 'syncspaces:rename-project',
-  // Synced project description (Task 3) — preload inlines its own IPC constants
-  // because the sandboxed preload can't resolve relative imports.
   SYNC_SPACES_SET_PROJECT_DESCRIPTION: 'syncspaces:set-project-description',
   SYNC_SPACES_STOP_PROJECT: 'syncspaces:stop-project',
-  // Conversation-lease takeover (Plan 2b Task 9) — inlined literals (preload can't import).
   SYNC_SPACES_LEASE_QUERY: 'syncspaces:lease-query',
   SYNC_SPACES_LEASE_TAKEOVER: 'syncspaces:lease-takeover',
   SYNC_SPACES_LEASE_FORCE: 'syncspaces:lease-force',
-  // Device registry (Plan 2b spec §10a) — inlined literals (preload can't import).
   SYNC_SPACES_LIST_DEVICES: 'syncspaces:list-devices',
   SYNC_SPACES_RENAME_DEVICE: 'syncspaces:rename-device',
   SYNC_SPACES_REMOVE_DEVICE: 'syncspaces:remove-device',
   SYNC_SPACES_EVENT: 'syncspaces:event',
-  // Connect-GitHub modal (device-flow auth) — inlined literals (preload can't import).
   GITHUB_STATUS: 'github:status',
   GITHUB_CONNECT_START: 'github:connect-start',
   GITHUB_CONNECT_CANCEL: 'github:connect-cancel',
   GITHUB_INSTALL_GH: 'github:install-gh',
   GITHUB_DISCONNECT: 'github:disconnect',
   GITHUB_CONNECT_DONE: 'github:connect-done',
-  // Window detach / multi-window ownership (feature: drag session to new window)
   WINDOW_GET_ID: 'window:get-id',
   WINDOW_DIRECTORY_UPDATED: 'window:directory-updated',
   WINDOW_GET_DIRECTORY: 'window:get-directory',
@@ -289,50 +240,6 @@ const IPC = {
   APPEARANCE_SYNC: 'appearance:sync',
   APPEARANCE_GET_FAVORITE_THEMES: 'appearance:get-favorite-themes',
   APPEARANCE_FAVORITE_THEME: 'appearance:favorite-theme',
-  // Account (formerly marketplace auth) — byte-identical to marketplace-api-handlers.ts CHANNELS
-  ACCOUNT_START: 'account:start',
-  ACCOUNT_POLL: 'account:poll',
-  ACCOUNT_SIGNED_IN: 'account:signed-in',
-  ACCOUNT_USER: 'account:user',
-  ACCOUNT_REFRESH: 'account:refresh',
-  ACCOUNT_SIGN_OUT: 'account:sign-out',
-  ACCOUNT_UPDATE_PROFILE: 'account:update-profile',
-  ACCOUNT_SET_HANDLE: 'account:set-handle',
-  ACCOUNT_DELETE: 'account:delete',
-  ACCOUNT_EXPORT: 'account:export',
-  // Social graph (accounts Phase 2) — byte-identical to social-handlers.ts CHANNELS
-  SOCIAL_LOOKUP_HANDLE: 'social:lookup-handle',
-  SOCIAL_SEND_REQUEST: 'social:send-request',
-  SOCIAL_LIST_REQUESTS: 'social:list-requests',
-  SOCIAL_ACCEPT_REQUEST: 'social:accept-request',
-  SOCIAL_DECLINE_REQUEST: 'social:decline-request',
-  SOCIAL_CANCEL_REQUEST: 'social:cancel-request',
-  SOCIAL_LIST_FRIENDS: 'social:list-friends',
-  SOCIAL_UNFRIEND: 'social:unfriend',
-  SOCIAL_BLOCK: 'social:block',
-  SOCIAL_UNBLOCK: 'social:unblock',
-  SOCIAL_LIST_BLOCKS: 'social:list-blocks',
-  // Presence socket (Task 6) — connect/disconnect express desired state, send
-  // pushes one protocol message, and the main process relays every event back
-  // on SOCIAL_PRESENCE_EVENT (a push channel, not a request-response handler).
-  SOCIAL_PRESENCE_CONNECT: 'social:presence-connect',
-  SOCIAL_PRESENCE_DISCONNECT: 'social:presence-disconnect',
-  SOCIAL_PRESENCE_SEND: 'social:presence-send',
-  SOCIAL_PRESENCE_EVENT: 'social:presence-event',
-  // Marketplace write APIs — byte-identical to marketplace-api-handlers.ts CHANNELS
-  MARKETPLACE_INSTALL: 'marketplace:install',
-  MARKETPLACE_RATE: 'marketplace:rate',
-  MARKETPLACE_RATE_DELETE: 'marketplace:rate:delete',
-  MARKETPLACE_THUMB: 'marketplace:thumb',
-  MARKETPLACE_THUMB_GET: 'marketplace:thumb:get',
-  MARKETPLACE_COMMENT: 'marketplace:comment',
-  MARKETPLACE_THEME_LIKE: 'marketplace:theme:like',
-  MARKETPLACE_REPORT: 'marketplace:report',
-  // Remote-access state sync — chat snapshot export and attention state relay
-  CHAT_EXPORT_SNAPSHOT: 'chat:export-snapshot',
-  CHAT_SNAPSHOT_RESPONSE: 'chat:snapshot-response',
-  REMOTE_ATTENTION_CHANGED: 'remote:attention-changed',
-  // Buddy floater (desktop-only MVP)
   BUDDY_SHOW: 'buddy:show',
   BUDDY_HIDE: 'buddy:hide',
   BUDDY_TOGGLE_CHAT: 'buddy:toggle-chat',
@@ -343,7 +250,6 @@ const IPC = {
   BUDDY_MOVE_MASCOT: 'buddy:move-mascot',
   BUDDY_CAPTURE_DESKTOP: 'buddy:capture-desktop',
   BUDDY_ATTACH_FILE: 'buddy:attach-file',
-  // ── Buddy upgrades (action bar, dismiss, dock/peek) ──
   BUDDY_DRAG_ENDED: 'buddy:drag-ended',
   BUDDY_OPEN_MAIN: 'buddy:open-main',
   BUDDY_DISMISS: 'buddy:dismiss',
@@ -352,9 +258,6 @@ const IPC = {
   BUDDY_BAR_STATE: 'buddy:bar-state',
   BUDDY_MASCOT_STATE: 'buddy:mascot-state',
   BUDDY_CHAT_STATE: 'buddy:chat-state',
-  // The Linux/KDE buddy helper. Kept byte-identical to shared/types.ts's copy —
-  // preload cannot import that file (Electron sandbox), so the two maps are
-  // duplicated on purpose and ipc-channels.test.ts is what stops them drifting.
   BUDDY_HELPER_STATUS: 'buddy:helper-status',
   BUDDY_INSTALL_HELPER: 'buddy:install-helper',
   BUDDY_REMOVE_HELPER: 'buddy:remove-helper',
@@ -362,7 +265,6 @@ const IPC = {
   SESSION_ATTENTION_SUMMARY: 'session:attention-summary',
   ATTENTION_REPORT: 'attention:report',
   ATTENTION_GET_SUMMARY: 'attention:get-summary',
-  // Settings → Development feature (bug report, contribute, known issues)
   DEV_LOG_TAIL: 'dev:log-tail',
   DEV_DIAGNOSTICS: 'dev:diagnostics',
   DEV_SUMMARIZE_ISSUE: 'dev:summarize-issue',
@@ -373,28 +275,16 @@ const IPC = {
   DEV_SETUP_CLEAR: 'dev:setup-clear',
   DEV_INSTALL_PROGRESS: 'dev:install-progress',
   DEV_OPEN_SESSION_IN: 'dev:open-session-in',
-  // Anonymous analytics opt-out — read/write the boolean gate that
-  // analytics-service consults on launch (Phase 6).
-  ANALYTICS_GET_OPT_IN: 'analytics:get-opt-in',
-  ANALYTICS_SET_OPT_IN: 'analytics:set-opt-in',
-  // Performance / GPU settings. APP_RESTART is intentionally generic — not
-  // 'performance:restart' — so future restart-required settings can reuse it.
   PERFORMANCE_GET_CONFIG: 'performance:get-config',
   PERFORMANCE_SET_CONFIG: 'performance:set-config',
+  APP_RESTART: 'app:restart',
   SYSTEM_NOTIFY_STACK_STATE: 'system:notify-stack-state',
   SYSTEM_BACK: 'system:back',
-  APP_RESTART: 'app:restart',
-  // ---- Native runtime Plan A (Phase 1): session I/O + provider management ----
-  // Mirrors src/shared/types.ts — the sandboxed preload can't import it.
-  // tests/ipc-channels.test.ts extracts BOTH full IPC blocks (anchored to the
-  // `} as const;` terminator) and asserts value equality for every key the two
-  // blocks share, so drift on these constants fails the test.
+  NATIVE_SUPPORTED: 'native:supported',
   NATIVE_SEND: 'native:send',
-  // Task 11: cancel/edit a queued-but-not-yet-sent message.
   NATIVE_QUEUE_REMOVE: 'native:queue-remove',
   NATIVE_QUEUE_SEND_NOW: 'native:queue-send-now',
   NATIVE_INTERRUPT: 'native:interrupt',
-  // Stalled-turn Retry — fire-and-forget, same shape as interrupt above.
   NATIVE_RETRY: 'native:retry',
   NATIVE_COMPACT: 'native:compact',
   NATIVE_CLEAR: 'native:clear',
@@ -410,12 +300,7 @@ const IPC = {
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',
-  // admin-password design §2.5 — mirrors shared/types.ts.
   NATIVE_SUBMIT_ADMIN_PASSWORD: 'native:submit-admin-password',
-  // "What the assistant was given" (2026-09-10): the session-start push carrying
-  // the inventory, and the on-demand read of ONE file's text. Two channels
-  // because file bodies do not belong in a push — see shared/types.ts's
-  // SessionContext header for the measurement.
   NATIVE_SESSION_CONTEXT: 'native:session-context',
   NATIVE_SESSION_CONTEXT_TEXT: 'native:session-context-text',
   PROVIDER_LIST: 'provider:list',
@@ -424,69 +309,69 @@ const IPC = {
   PROVIDER_TEST: 'provider:test',
   PROVIDER_SET_KEY: 'provider:set-key',
   PROVIDER_CATALOG: 'provider:catalog',
-  // Sign in with ChatGPT (backend design 2026-09-05 §5) — mirrors shared/types.ts.
   CHATGPT_STATUS: 'chatgpt:status',
   CHATGPT_SIGN_IN: 'chatgpt:sign-in',
   CHATGPT_CANCEL_SIGN_IN: 'chatgpt:cancel-sign-in',
   CHATGPT_SIGN_OUT: 'chatgpt:sign-out',
-  // Sign in with OpenRouter — mirrors shared/types.ts.
   OPENROUTER_SIGN_IN_STATUS: 'openrouter:sign-in-status',
   OPENROUTER_SIGN_IN: 'openrouter:sign-in',
   OPENROUTER_CANCEL_SIGN_IN: 'openrouter:cancel-sign-in',
-  // YouCoded Pages (Phase 1) — mirrors shared/types.ts; pinned equal by ipc-channels.test.ts.
+  CLAUDE_CODE_STATUS: 'claude-code:status',
+  CLAUDE_CODE_INSTALL: 'claude-code:install',
+  SEARCH_LIST: 'search:list',
+  SEARCH_SET_KEY: 'search:set-key',
+  SEARCH_REMOVE_KEY: 'search:remove-key',
+  SEARCH_TEST: 'search:test',
   PAGES_LIST: 'pages:list',
   PAGES_GET: 'pages:get',
   PAGES_SET_PINNED: 'pages:set-pinned',
   PAGES_SET_DATA: 'pages:set-data',
   PAGES_CHANGED: 'pages:changed',
-  // Pages Phase 2 — connections, keys and the one door out of a page.
   PAGES_APPROVE: 'pages:approve',
   PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
   PAGES_REFRESH: 'pages:refresh',
   PAGES_SAVED_KEYS: 'pages:saved-keys',
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
   PAGES_FETCH: 'pages:fetch',
-  // Claude Code's own sign-in, read live (2026-09-09) — mirrors shared/types.ts.
-  CLAUDE_CODE_STATUS: 'claude-code:status',
-  CLAUDE_CODE_INSTALL: 'claude-code:install',
-  // ---- Native runtime Plan B (Phase 1): local llama.cpp engine ----
+  FS_READ_HEAD: 'fs:read-head',
+  PERMISSIONS_LIST: 'permissions:list',
+  PERMISSIONS_REMOVE: 'permissions:remove',
+  PERMISSIONS_REMOVE_PROJECT: 'permissions:remove-project',
+  SPECIALISTS_LIST: 'specialists:list',
+  SPECIALISTS_DELEGATED_GET: 'specialists:delegated-get',
+  SPECIALISTS_DELEGATED_SET: 'specialists:delegated-set',
+  SPECIALISTS_STEER: 'specialists:steer',
+  SPECIALISTS_INTERRUPT: 'specialists:interrupt',
+  SPECIALISTS_EVENT: 'specialists:event',
   ENGINE_STATUS: 'engine:status',
   ENGINE_INSTALL: 'engine:install',
   ENGINE_RESTART: 'engine:restart',
-  // Push events (no id): install progress + run-state transitions.
   ENGINE_INSTALL_PROGRESS: 'engine:install-progress',
   ENGINE_STATUS_CHANGED: 'engine:status-changed',
-  // ---- Native runtime Plan C (Phase 1): model manager ----
   ENGINE_SET_BACKEND: 'engine:set-backend',
-  ENGINE_SET_CONTEXT: 'engine:set-context',   // context-length knob (Task 9)
-  ENGINE_SET_CONFIG: 'engine:set-config',     // one write for every engine-wide setting (2026-09-05)
-  ENGINE_RUN_IN_TERMINAL: 'engine:run-in-terminal',  // plain-shell session + typed command
-  ENGINE_PREREQS: 'engine:prereqs',           // faster-engine prerequisites (2026-09-05)
+  ENGINE_SET_CONTEXT: 'engine:set-context',
+  ENGINE_SET_CONFIG: 'engine:set-config',
+  ENGINE_RUN_IN_TERMINAL: 'engine:run-in-terminal',
+  ENGINE_PREREQS: 'engine:prereqs',
   MODELS_CURATED: 'models:curated',
   MODELS_SEARCH: 'models:search',
   MODELS_QUANTS: 'models:quants',
   MODELS_DOWNLOAD: 'models:download',
   MODELS_DOWNLOAD_CANCEL: 'models:download-cancel',
-  MODELS_DOWNLOAD_PROGRESS: 'models:download-progress',  // push
+  MODELS_DOWNLOAD_PROGRESS: 'models:download-progress',
   MODELS_DELETE: 'models:delete',
   MODELS_INSTALLED: 'models:installed',
   MODELS_RESUME: 'models:resume',
-  // Per-model settings + vision (2026-09-05) — keep in sync with shared/types.ts.
   MODELS_SETTINGS: 'models:settings',
   MODELS_SET_SETTINGS: 'models:set-settings',
   MODELS_ADD_VISION: 'models:add-vision',
   ENDPOINTS_DETECT: 'endpoints:detect',
-  // Model memory lifecycle (2026-07-14) — keep in sync with shared/types.ts.
   ENGINE_MODELS: 'engine:models',
   ENGINE_MODELS_CHANGED: 'engine:models-changed',
   NATIVE_MODEL_STATE: 'native:model-state',
   NATIVE_SHELL_EVENT: 'native:shell-event',
   MODELS_MEMORY_CHECK: 'models:memory-check',
   MODELS_LOAD: 'models:load',
-  // ---- Voice prompting (design 2026-09-05) ----
-  // Six things the composer can ask, one fire-and-forget audio stream, and one
-  // push. VOICE_AUDIO is `send`, not `invoke`: ten slices a second, and a reply
-  // per slice would cost more than the audio does.
   VOICE_STATUS: 'voice:status',
   VOICE_DOWNLOAD: 'voice:download',
   VOICE_START: 'voice:start',
@@ -494,8 +379,133 @@ const IPC = {
   VOICE_CANCEL: 'voice:cancel',
   VOICE_MIC_ACCESS: 'voice:mic-access',
   VOICE_AUDIO: 'voice:audio',
-  VOICE_EVENT: 'voice:event',   // push
+  VOICE_EVENT: 'voice:event',
+  PTY_RAW_BYTES: 'pty:raw-bytes',
+  MODEL_GET_PREFERENCE: 'model:get-preference',
+  MODEL_SET_PREFERENCE: 'model:set-preference',
+  APPEARANCE_GET: 'appearance:get',
+  APPEARANCE_SET: 'appearance:set',
+  MODEL_READ_LAST: 'model:read-last',
+  DEFAULTS_GET: 'defaults:get',
+  DEFAULTS_SET: 'defaults:set',
+  SETTINGS_GET: 'settings:get',
+  SETTINGS_SET: 'settings:set',
+  MODES_GET: 'modes:get',
+  MODES_SET: 'modes:set',
+  ACCOUNT_START: 'account:start',
+  ACCOUNT_POLL: 'account:poll',
+  ACCOUNT_SIGNED_IN: 'account:signed-in',
+  ACCOUNT_USER: 'account:user',
+  ACCOUNT_REFRESH: 'account:refresh',
+  ACCOUNT_SIGN_OUT: 'account:sign-out',
+  ACCOUNT_UPDATE_PROFILE: 'account:update-profile',
+  ACCOUNT_SET_HANDLE: 'account:set-handle',
+  ACCOUNT_DELETE: 'account:delete',
+  ACCOUNT_EXPORT: 'account:export',
+  SOCIAL_LOOKUP_HANDLE: 'social:lookup-handle',
+  SOCIAL_SEND_REQUEST: 'social:send-request',
+  SOCIAL_LIST_REQUESTS: 'social:list-requests',
+  SOCIAL_ACCEPT_REQUEST: 'social:accept-request',
+  SOCIAL_DECLINE_REQUEST: 'social:decline-request',
+  SOCIAL_CANCEL_REQUEST: 'social:cancel-request',
+  SOCIAL_LIST_FRIENDS: 'social:list-friends',
+  SOCIAL_UNFRIEND: 'social:unfriend',
+  SOCIAL_BLOCK: 'social:block',
+  SOCIAL_UNBLOCK: 'social:unblock',
+  SOCIAL_LIST_BLOCKS: 'social:list-blocks',
+  SOCIAL_PRESENCE_CONNECT: 'social:presence-connect',
+  SOCIAL_PRESENCE_DISCONNECT: 'social:presence-disconnect',
+  SOCIAL_PRESENCE_SEND: 'social:presence-send',
+  SOCIAL_PRESENCE_EVENT: 'social:presence-event',
+  MARKETPLACE_INSTALL: 'marketplace:install',
+  MARKETPLACE_RATE: 'marketplace:rate',
+  MARKETPLACE_RATE_DELETE: 'marketplace:rate:delete',
+  MARKETPLACE_THUMB: 'marketplace:thumb',
+  MARKETPLACE_THUMB_GET: 'marketplace:thumb:get',
+  MARKETPLACE_COMMENT: 'marketplace:comment',
+  MARKETPLACE_THEME_LIKE: 'marketplace:theme:like',
+  MARKETPLACE_REPORT: 'marketplace:report',
+  CHAT_EXPORT_SNAPSHOT: 'chat:export-snapshot',
+  CHAT_SNAPSHOT_RESPONSE: 'chat:snapshot-response',
+  REMOTE_ATTENTION_CHANGED: 'remote:attention-changed',
+  ANALYTICS_GET_OPT_IN: 'analytics:get-opt-in',
+  ANALYTICS_SET_OPT_IN: 'analytics:set-opt-in',
+  ARCADE_LEADERBOARD: 'arcade:leaderboard',
+  ARCADE_RECORDS: 'arcade:records',
+  ARCADE_STATUS: 'arcade:status',
+  ARCADE_SUBMIT_SCORE: 'arcade:submit-score',
+  ARTIFACTS_APPEND_VERSION: 'artifacts:append-version',
+  ARTIFACTS_CHANGED: 'artifacts:changed',
+  ARTIFACTS_CHECK_EXISTENCE: 'artifacts:check-existence',
+  ARTIFACTS_DELETE_PROJECT: 'artifacts:delete-project',
+  ARTIFACTS_DOWNLOAD: 'artifacts:download',
+  ARTIFACTS_EXCLUDE: 'artifacts:exclude',
+  ARTIFACTS_GET: 'artifacts:get',
+  ARTIFACTS_IMPORT_FILE: 'artifacts:import-file',
+  ARTIFACTS_INCLUDE_EXTERNAL: 'artifacts:include-external',
+  ARTIFACTS_LIST_ALL_FILES: 'artifacts:list-all-files',
+  ARTIFACTS_LIST_FOLDER: 'artifacts:list-folder',
+  ARTIFACTS_LIST_PROJECT: 'artifacts:list-project',
+  ARTIFACTS_LIST_PROJECTS_INDEX: 'artifacts:list-projects-index',
+  ARTIFACTS_LIST_SESSION: 'artifacts:list-session',
+  ARTIFACTS_READ_BINARY: 'artifacts:read-binary',
+  ARTIFACTS_REMOVE_RECORD: 'artifacts:remove-record',
+  ARTIFACTS_RENAME: 'artifacts:rename',
+  ARTIFACTS_RESOLVE_PATH: 'artifacts:resolve-path',
+  ARTIFACTS_SAVE: 'artifacts:save',
+  ARTIFACTS_SEARCH_CONTENT: 'artifacts:search-content',
+  ARTIFACTS_UNWATCH_PROJECT: 'artifacts:unwatch-project',
+  ARTIFACTS_WATCH_PROJECT: 'artifacts:watch-project',
+  CHATSEARCH_READ: 'chatsearch:read',
+  CHATSEARCH_RESOLVE: 'chatsearch:resolve',
+  DOC_COMMENTS_ADD: 'docComments:add',
+  DOC_COMMENTS_CHANGED: 'docComments:changed',
+  DOC_COMMENTS_DELETE: 'docComments:delete',
+  DOC_COMMENTS_DELETE_REPLY: 'docComments:delete-reply',
+  DOC_COMMENTS_EDIT: 'docComments:edit',
+  DOC_COMMENTS_EDIT_REPLY: 'docComments:edit-reply',
+  DOC_COMMENTS_LIST: 'docComments:list',
+  DOC_COMMENTS_MOVE: 'docComments:move',
+  DOC_COMMENTS_REOPEN: 'docComments:reopen',
+  DOC_COMMENTS_REPLY: 'docComments:reply',
+  DOC_COMMENTS_RESOLVE: 'docComments:resolve',
+  DOC_COMMENTS_UNWATCH: 'docComments:unwatch',
+  DOC_COMMENTS_WATCH: 'docComments:watch',
+  FAVORITES_GET: 'favorites:get',
+  FAVORITES_SET: 'favorites:set',
+  GAME_GET_INCOGNITO: 'game:getIncognito',
+  GAME_SET_INCOGNITO: 'game:setIncognito',
+  GET_HOME_PATH: 'get-home-path',
+  GIT_CHANGED: 'git:changed',
+  GIT_COMMIT: 'git:commit',
+  GIT_COMMIT_FILE_DIFF: 'git:commit-file-diff',
+  GIT_DISCARD: 'git:discard',
+  GIT_FILE_REVIEW: 'git:file-review',
+  GIT_FILE_STATUS: 'git:file-status',
+  GIT_STAGE: 'git:stage',
+  GIT_UNSTAGE: 'git:unstage',
+  GIT_UNWATCH: 'git:unwatch',
+  GIT_WATCH: 'git:watch',
+  PROJECT_LIST_CONTEXT: 'project:list-context',
+  PROJECT_LIST_CONVERSATIONS: 'project:list-conversations',
+  PROJECT_READ_CONTEXT_FILE: 'project:read-context-file',
+  PROJECT_REPO_INFO: 'project:repo-info',
+  PROJECT_WRITE_CONTEXT_FILE: 'project:write-context-file',
+  SYNC_ADD_BACKEND: 'sync:add-backend',
+  SYNC_OPEN_FOLDER: 'sync:open-folder',
+  SYNC_PUSH_BACKEND: 'sync:push-backend',
+  SYNC_REMOVE_BACKEND: 'sync:remove-backend',
+  SYNC_SETUP_AUTH_GDRIVE: 'sync:setup:auth-gdrive',
+  SYNC_SETUP_AUTH_GITHUB: 'sync:setup:auth-github',
+  SYNC_SETUP_CHECK_GDRIVE: 'sync:setup:check-gdrive',
+  SYNC_SETUP_CHECK_PREREQS: 'sync:setup:check-prereqs',
+  SYNC_SETUP_CREATE_REPO: 'sync:setup:create-repo',
+  SYNC_SETUP_INSTALL_RCLONE: 'sync:setup:install-rclone',
+  SYNC_UPDATE_BACKEND: 'sync:update-backend',
+  TERMINAL_GET_SCREEN_TEXT: 'terminal:get-screen-text',
+  WINDOW_FULLSCREEN_CHANGED: 'window:fullscreen-changed',
 } as const;
+// <<< GENERATED-CHANNELS
 
 // Strip the transport prefix Electron puts on a rejected invoke (see the
 // `chatgpt` namespace for why), keeping the handler's own sentence. Anything
@@ -2014,5 +2024,5 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('chatsearch:read', req),
   },
   // WHY `satisfies`: compile-time only (erased from the built preload, so the sandbox sees no
-  // import); keeps `session`, `on` and favorites in step with remote-shim.ts (shared/bridge-types.ts).
+  // import); keeps `session`, `on` and favorites in step with remote-shim.ts (shared/backend-contract.ts).
 } satisfies PreloadBridge);

@@ -14,7 +14,7 @@ describe('session:selected, renderer → main', () => {
     const constant = /SESSION_SELECTED:\s*'session:selected'/;
     assertPatternMatches(constant, "SESSION_SELECTED: 'session:selected',", 'the IPC map entry');
     expect(src('main', 'preload.ts')).toMatch(constant);
-    expect(src('shared', 'types.ts')).toMatch(constant);
+    expect(src('shared', 'backend-contract.ts')).toMatch(constant);
   });
 
   it('App reports every selection change', () => {

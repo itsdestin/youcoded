@@ -153,7 +153,7 @@ describe('remote channels — device list channels', () => {
 
   describe('the device list exists on every platform', () => {
     it('each channel is registered in preload, the desktop handlers and the shim', () => {
-      // WHY a parity test and not a type: a bridge type (SharedBridge in shared/bridge-types.ts)
+      // WHY a parity test and not a type: a bridge type (SharedBridge in shared/backend-contract.ts)
       // compares SHAPES, so a channel missing from one side of the bridge type-checks and
       // then does nothing at runtime.
       for (const c of CHANNELS) {
@@ -166,7 +166,7 @@ describe('remote channels — device list channels', () => {
     });
 
     it('Android answers all three rather than falling through to unsupported', () => {
-      // The bridge types in shared/types.ts cannot see Kotlin, so a missing case here is invisible until a
+      // The bridge types in shared/backend-contract.ts cannot see Kotlin, so a missing case here is invisible until a
       // phone hits it. Every channel must appear in the when-block.
       for (const c of CHANNELS) expect(kotlin).toContain(`"${c}"`);
     });
@@ -204,7 +204,7 @@ describe('remote channels — rehydrate channels', () => {
       const constant = /REMOTE_REHYDRATE:\s*'remote:rehydrate'/;
       assertPatternMatches(constant, "REMOTE_REHYDRATE: 'remote:rehydrate',", 'the IPC map entry');
       expect(src('main', 'preload.ts')).toMatch(constant);
-      expect(src('shared', 'types.ts')).toMatch(constant);
+      expect(src('shared', 'backend-contract.ts')).toMatch(constant);
     });
 
     it('preload declares rehydrate, reportHydrate and the status push', () => {

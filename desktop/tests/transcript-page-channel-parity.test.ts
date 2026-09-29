@@ -21,8 +21,8 @@ const read = (rel: string) => fs.readFileSync(path.join(__dirname, '..', rel), '
 describe('transcript:page channel parity (desktop + remote; Android is a later cycle)', () => {
   const CHANNEL = 'transcript:page';
 
-  it('declared in shared/types.ts and preload.ts with the same value', () => {
-    expect(read('src/shared/types.ts')).toContain(`TRANSCRIPT_PAGE: '${CHANNEL}'`);
+  it('declared in shared/backend-contract.ts and preload.ts with the same value', () => {
+    expect(read('src/shared/backend-contract.ts')).toContain(`TRANSCRIPT_PAGE: '${CHANNEL}'`);
     expect(read('src/main/preload.ts')).toContain(`TRANSCRIPT_PAGE: '${CHANNEL}'`);
   });
 

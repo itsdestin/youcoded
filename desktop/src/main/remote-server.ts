@@ -92,6 +92,7 @@ import type { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { OpenRouterSignIn } from './providers/openrouter-oauth';
 import type { RemoteNativeRuntime } from './create-runtime';
+import { findChannel, serveRemoteChannel } from './ipc/channel-table';
 import { installClaude } from './prerequisite-installer';
 import { toListResult } from './harness/specialists/catalog';
 import { detectEndpoints } from './models/endpoint-detectors';
@@ -1771,6 +1772,21 @@ export class RemoteServer {
     this.lastClientActivityMs = Date.now();
 
     const { type, id, payload } = msg;
+
+    // WHY (2026-09-29 one-core R2): the channel table is consulted BEFORE the switch below. It is
+    // EMPTY today, so findChannel always answers undefined and nothing here changes; R3 moves a
+    // family's `case` bodies into the table one run at a time. The table entry — not a case — then
+    // carries that channel's phone policy (desktop-only, refused, session-scoped), so a phone
+    // cannot reach a handler the desktop's own table entry says it must not.
+    const tableDef = findChannel(type);
+    if (tableDef) {
+      const outcome = await serveRemoteChannel(tableDef, payload, {
+        door: 'remote', runtime: this.nativeRuntime, deviceId: client.deviceId,
+      });
+      // Only an awaited request (it has an id) gets an answer; a fire-and-forget push never does.
+      if (outcome.reply && id) this.respond(client.ws, type, id, outcome.payload);
+      return;
+    }
 
     switch (type) {
       // --- Readiness (design §1 A) ---

@@ -885,7 +885,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // channels the UI actually re-fetches on — see the WHY on the emits below.
   const subs = {
     created: new Set<(s: any) => void>(),
-    destroyed: new Set<(id: string) => void>(),
+    destroyed: new Set<(id: string, exitCode: number, focusSessionId?: string | null) => void>(),
     renamed: new Set<(id: string, name: string) => void>(),
     meta: new Set<(id: string, meta: any) => void>(),
     // Scripted replies: transcript/hook subscribers a played reply emits into.
@@ -1086,7 +1086,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     destroy: async (sessionId: string) => {
       if (store.refuseWrites) return false;
       store.setState((s) => ({ ...s, sessions: s.sessions.filter((x) => x.id !== sessionId) }));
-      subs.destroyed.forEach((f) => f(sessionId));
+      // WHY (2026-09-29 one-core R2): the contract's sessionDestroyed callback takes (id, exitCode, focus?);
+      // 0 is what App.tsx defaults a missing exitCode to, so listeners see exactly what they did before.
+      subs.destroyed.forEach((f) => f(sessionId, 0));
       return true;
     },
 
