@@ -21,7 +21,7 @@ import { formatFor } from './x2t';
 import * as versions from './versions';
 import { createPruneScheduler, type PruneScheduler } from './prune-schedule';
 import * as recent from './recent';
-import { blankName, createBlank, describeFile, isOfficeKind, kindFor, projectFiles } from './office-home';
+import { answerBy, blankName, createBlank, describeFile, isOfficeKind, kindFor, startWalk, type ProjectWalk, type WalkOptions } from './office-home';
 
 type Sessions = ReturnType<typeof createSessions>;
 
@@ -67,6 +67,10 @@ const MSG = {
   stillSaving: 'This file is still being saved. Try again in a moment.',
   couldNotRestore: "Office couldn't restore this version.",
 } as const;
+
+/** WHY a cap across folders (fix round 2): a walk on a hung network folder never ends. Past this
+ *  many running at once, a further project gets no list (logged) rather than one more stuck walk. */
+const MAX_WALKS = 2;
 
 /** WHY 10 minutes (design section 3): while a file keeps changing, one extra kept version per
  *  10 minutes of work — autosave itself writes every few seconds, far too often to keep each. */
@@ -118,6 +122,9 @@ export interface OfficeIpcDeps {
    *  cancelled. Tests pass a fake. WHY optional: as with pickCopyTarget, the real one is loaded
    *  only when used, so this file never imports electron. */
   pickFile?(sender: unknown): Promise<OfficeFile | null>;
+  /** Test seams for the project walk: its file-system calls, and how long a request waits for it. */
+  walkFs?: WalkOptions['fs'];
+  walkDeadlineMs?: number;
   /** Test seam: the translator (a fake that copies). Production uses x2t. */
   convert?: Parameters<typeof createOfficeCommands>[0]['convert'];
 }
@@ -448,19 +455,40 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     }
   }
 
-  // WHY shared (fix round 1): the page asks again each time it is shown, and two windows can show
-  // the same project; a walk already running for a folder answers every asker instead of a
-  // second walk starting beside it.
-  const walks = new Map<string, Promise<OfficeFile[]>>();
-  function walkOnce(folder: string): Promise<OfficeFile[]> {
-    let w = walks.get(folder);
-    if (!w) {
-      w = projectFiles(folder);
-      walks.set(folder, w);
-      const clear = () => void walks.delete(folder);
-      w.then(clear, clear);
+  // ── The project walk: at most one real walk per folder, and at most MAX_WALKS at once ──
+  // WHY (fix rounds 1–2): the page asks each time it is shown, and two windows can show the same
+  // project. A walk still running for a folder answers every asker — each at its own deadline,
+  // with what it has found so far — and is kept until the walk itself ends, not just until the
+  // first answer: on a hung network folder the walk may never end, and starting another each
+  // showing would stack them. A create in the folder marks the running walk stale (it may have
+  // read past the new file already), so the next request starts one fresh walk.
+  interface RunningWalk { walk: ProjectWalk; stale: boolean }
+  const walks = new Map<string, RunningWalk>();
+  let realWalks = 0;
+  function walkFor(folder: string): ProjectWalk | null {
+    const cur = walks.get(folder);
+    if (cur && !cur.stale) return cur.walk;
+    if (realWalks >= MAX_WALKS) {
+      log('WARN', 'Office', 'project list skipped: other project folders are still being read', { running: realWalks });
+      return null;
     }
-    return w;
+    const entry: RunningWalk = { walk: startWalk(folder, { fs: deps.walkFs }), stale: false };
+    walks.set(folder, entry);
+    realWalks++;
+    void entry.walk.done.then(() => {
+      realWalks--;
+      // A fresher walk may have replaced this one (after a create); leave that one in place.
+      if (walks.get(folder) === entry) walks.delete(folder);
+    });
+    return entry.walk;
+  }
+  async function projectListFor(folder: string): Promise<OfficeFile[]> {
+    const walk = walkFor(folder);
+    return walk ? answerBy(walk, deps.walkDeadlineMs) : [];
+  }
+  /** A new file in `dir`: a walk of it that is running now may miss it. */
+  function folderChanged(...dirs: string[]): void {
+    for (const d of dirs) { const w = walks.get(d); if (w) w.stale = true; }
   }
 
   // WHY the renderer asks twice — status(null) for Recent, then status(folder) for the project
@@ -473,7 +501,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     const folder = await folderOf(projectRoot);
     // WHY a Recent read failure rejects (only a real read error does — an unreadable file starts
     // over): the start screen then shows its Retry, never an empty Recent that isn't true.
-    const [list, files] = await Promise.all([recent.list(deps.userData), folder ? walkOnce(folder) : null]);
+    const [list, files] = await Promise.all([recent.list(deps.userData), folder ? projectListFor(folder) : null]);
     return { available: true, recent: list, project: folder && files ? { name: path.basename(folder), files } : null };
   }
 
@@ -512,7 +540,10 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     }
     try {
       // Not opened here: the renderer opens it through office:open, which adds it to Recent.
-      return { ok: true, file: await createBlank(deps.root, kind, realDir) };
+      const file = await createBlank(deps.root, kind, realDir);
+      // Both spellings of the folder: the page asks by the conversation's own path.
+      folderChanged(dir, realDir);
+      return { ok: true, file };
     } catch (e) {
       const code = (e as NodeJS.ErrnoException)?.code;
       if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return { ok: false, message: MSG.createNoPermission };

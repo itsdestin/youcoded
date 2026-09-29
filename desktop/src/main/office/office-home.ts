@@ -69,19 +69,40 @@ export interface WalkOptions {
   onReadDir?: (dir: string) => void;
 }
 
+/** A walk under way: `done` settles when the walk itself ends (never rejects), and `found()`
+ *  is what it has found so far, newest changed first, at most 50. */
+export interface ProjectWalk {
+  done: Promise<void>;
+  found(): OfficeFile[];
+}
+
 /** Office files under `root`, up to 3 folders deep, newest changed first, at most 50. Skips
  *  node_modules and every hidden folder (.git among them). Never throws: an unreadable folder is
  *  skipped, and a root that is gone answers an empty list. Answers within `deadlineMs` with what
  *  it has found by then, even when a folder or file never answers. */
 export async function projectFiles(root: string, opts: WalkOptions = {}): Promise<OfficeFile[]> {
+  return answerBy(startWalk(root, opts), opts.deadlineMs);
+}
+
+/** What a walk has found once it ends, or at the deadline, whichever comes first. WHY separate
+ *  from the walk (fix round 2): the walk may go on past the deadline (a hung network folder), and
+ *  main keeps that one walk for later requests instead of starting another beside it. */
+export async function answerBy(walk: ProjectWalk, deadlineMs = WALK_DEADLINE_MS): Promise<OfficeFile[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((r) => { timer = setTimeout(r, deadlineMs); });
+  await Promise.race([walk.done, deadline]);
+  clearTimeout(timer);
+  return walk.found();
+}
+
+/** Start walking `root` in the background (see projectFiles for what it finds). Bounded by the
+ *  folder and file caps, not by time. */
+export function startWalk(root: string, opts: WalkOptions = {}): ProjectWalk {
   const maxDirs = opts.maxDirs ?? MAX_DIRS;
   const maxFound = opts.maxFound ?? MAX_FOUND;
   const fs = opts.fs ?? realFs;
   const dated: Array<{ path: string; kind: OfficeKind; mtime: Date }> = [];
   let found = 0;
-  // Set at the deadline: work still running then (a slow folder) stops at its next step, and
-  // anything it finds afterwards is not added to an answer already given.
-  let stopped = false;
 
   const walk = async () => {
     // Breadth first: the shallow files — the ones most likely to be the project's own — are met
@@ -91,7 +112,7 @@ export async function projectFiles(root: string, opts: WalkOptions = {}): Promis
     for (let depth = 0; depth <= MAX_DEPTH && level.length; depth++) {
       const next: string[] = [];
       for (const dir of level) {
-        if (stopped || dirsRead >= maxDirs || found >= maxFound) return;
+        if (dirsRead >= maxDirs || found >= maxFound) return;
         dirsRead++;
         opts.onReadDir?.(dir);
         const files: Array<{ path: string; kind: OfficeKind }> = [];
@@ -99,7 +120,7 @@ export async function projectFiles(root: string, opts: WalkOptions = {}): Promis
           // WHY opendir, not readdir: a folder with 100,000 entries is read only until the cap
           // is reached — breaking out of the loop closes it.
           for await (const e of await fs.opendir(dir)) {
-            if (stopped || found >= maxFound) break;
+            if (found >= maxFound) break;
             if (isLockOrHidden(e.name)) continue;
             // WHY isDirectory/isFile on the entry, not a stat: a link is neither, so the walk
             // never follows one — a link back up the tree cannot make it loop.
@@ -116,7 +137,7 @@ export async function projectFiles(root: string, opts: WalkOptions = {}): Promis
         await Promise.all(files.map(async (f) => {
           try {
             const { mtime } = await fs.stat(f.path);
-            if (!stopped) dated.push({ ...f, mtime });
+            dated.push({ ...f, mtime });
           } catch { /* removed while the walk ran */ }
         }));
       }
@@ -124,15 +145,13 @@ export async function projectFiles(root: string, opts: WalkOptions = {}): Promis
     }
   };
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<void>((r) => { timer = setTimeout(r, opts.deadlineMs ?? WALK_DEADLINE_MS); });
-  await Promise.race([walk().catch(() => {}), deadline]);
-  clearTimeout(timer);
-  stopped = true;
-  return [...dated]
-    .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
-    .slice(0, MAX_LISTED)
-    .map((f) => describeFile(f.path, f.kind, f.mtime));
+  return {
+    done: walk().catch(() => {}),
+    found: () => [...dated]
+      .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
+      .slice(0, MAX_LISTED)
+      .map((f) => describeFile(f.path, f.kind, f.mtime)),
+  };
 }
 
 // ── New blank file ──

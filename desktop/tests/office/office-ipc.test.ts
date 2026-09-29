@@ -13,12 +13,12 @@ vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn
 // WHY wrapped, not replaced: the real walk still runs; the tests count how often it starts.
 vi.mock('../../src/main/office/office-home', async (orig) => {
   const real = await orig<typeof import('../../src/main/office/office-home')>();
-  return { ...real, projectFiles: vi.fn(real.projectFiles) };
+  return { ...real, startWalk: vi.fn(real.startWalk) };
 });
 
 import type { OfficeFile } from '../../src/shared/office-types';
 import { registerOfficeIpc } from '../../src/main/office/office-ipc';
-import { projectFiles } from '../../src/main/office/office-home';
+import { startWalk } from '../../src/main/office/office-home';
 import { idle as recentIdle } from '../../src/main/office/recent';
 import { createSessions } from '../../src/main/office/office-sessions';
 import { snapshot, versionsDir } from '../../src/main/office/versions';
@@ -298,16 +298,60 @@ describe('the start screen: Recent, the project list, New and Open', () => {
     const project = path.join(dir, 'garden');
     await mkdir(project);
     await copyFile(MEMO, path.join(project, 'Plan.docx'));
-    vi.mocked(projectFiles).mockClear();
+    vi.mocked(startWalk).mockClear();
     await call('office:status', win1, null);
-    expect(projectFiles).not.toHaveBeenCalled();
+    expect(startWalk).not.toHaveBeenCalled();
     const [a, b] = await Promise.all([call('office:status', win1, project), call('office:status', win2, project)]) as Array<{ project: { files: unknown[] } }>;
-    expect(projectFiles).toHaveBeenCalledTimes(1);
+    expect(startWalk).toHaveBeenCalledTimes(1);
     expect(a.project.files).toHaveLength(1);
     expect(b.project.files).toHaveLength(1);
     // Once it has answered, the next showing walks again (files may have changed).
     await call('office:status', win1, project);
-    expect(projectFiles).toHaveBeenCalledTimes(2);
+    expect(startWalk).toHaveBeenCalledTimes(2);
+  });
+
+  it('lists a file created while a walk of its folder was still running', async () => {
+    const project = path.join(dir, 'garden');
+    await mkdir(project);
+    await copyFile(MEMO, path.join(project, 'Plan.docx'));
+    // The first walk's first folder read is held until the test lets it go.
+    let hold = true;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const walkFs = {
+      opendir: async (d: string) => { if (hold) { hold = false; await gate; } return fsp.opendir(d); },
+      stat: (p: string) => fsp.stat(p),
+    };
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), documents, walkFs });
+    const first = call('office:status', win1, project);
+    await vi.waitFor(() => expect(hold).toBe(false));
+    const made = await call('office:create', win1, 'document', project) as { ok: true; file: { name: string } };
+    expect(made.ok).toBe(true);
+    const after = await call('office:status', win1, project) as { project: { files: Array<{ name: string }> } };
+    expect(after.project.files.map((f) => f.name).sort()).toEqual(['Plan.docx', 'Untitled document.docx']);
+    release();
+    await first;
+  });
+
+  it('starts only one walk of a folder that never answers, and at most two walks at once', async () => {
+    const hung = { opendir: () => new Promise<never>(() => {}), stat: (p: string) => fsp.stat(p) };
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), walkFs: hung, walkDeadlineMs: 20 });
+    const [a, b, c] = ['a', 'b', 'c'].map((n) => path.join(dir, n));
+    for (const f of [a, b, c]) await mkdir(f);
+    vi.mocked(startWalk).mockClear();
+    for (let i = 0; i < 3; i++) {
+      const s = await call('office:status', win1, a) as { project: { files: unknown[] } };
+      expect(s.project.files).toEqual([]); // answered at the deadline with nothing found
+    }
+    expect(startWalk).toHaveBeenCalledTimes(1);
+    await call('office:status', win1, b);
+    expect(startWalk).toHaveBeenCalledTimes(2);
+    // Two walks are stuck: a third folder gets an empty list, and no third walk starts.
+    const third = await call('office:status', win1, c) as { project: { name: string; files: unknown[] } };
+    expect(third.project).toEqual({ name: 'c', files: [] });
+    expect(startWalk).toHaveBeenCalledTimes(2);
   });
 
   it('has no project list for no conversation, a folder that is gone, or a path that is not absolute', async () => {
