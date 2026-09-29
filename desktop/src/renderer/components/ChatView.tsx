@@ -23,7 +23,7 @@ import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactConte
 import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
 import { assistantName } from '../utils/assistant-name';
-import { ContentFindBar } from './ContentFindBar';
+import { ChatFindBar } from './ChatFindBar';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
 import { OnScreenContext } from '../state/on-screen-context';
@@ -282,11 +282,17 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
 
   // Scroll to bottom on tab switch / mount. The follow-up ResizeObserver below
   // handles the chrome-height race (input bar can differ per session).
+  const wasVisibleRef = useRef(visible);
   useEffect(() => {
+    const returned = visible && !wasVisibleRef.current;
+    wasVisibleRef.current = visible;
     if (!visible) return;
-    const raf = requestAnimationFrame(stickToBottom);
+    if (returned) stickToBottom();
+    // WHY: a mount/switch RAF can outlive the Find selection that released
+    // bottom-stick. Re-arm on an actual tab return, not from that stale RAF.
+    const raf = requestAnimationFrame(() => { if (stickRef.current) scrollToBottom(); });
     return () => cancelAnimationFrame(raf);
-  }, [visible, stickToBottom]);
+  }, [visible, stickToBottom, scrollToBottom, stickRef]);
 
   // Fix: input bar height can differ between sessions (drafts, multi-line),
   // so --bottom-chrome-height changes right after tab switch. App's ResizeObserver
@@ -527,9 +533,12 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     let lastHeight = node.scrollHeight;
     const observer = new ResizeObserver(() => {
       const next = node.scrollHeight;
-      if (next > lastHeight && stickRef.current) {
-        scrollToBottom();
-      }
+      // WHY: private long-history tool arrival showed a transient +516px
+      // content resize followed by a shrink. Scroll anchoring moved scrollTop
+      // 289px up on the shrink, but growth-only pinning left stickRef=true and
+      // hid Jump while the new tool card sat below the viewport. RO runs after
+      // layout; re-pin on BOTH directions, never on unchanged streaming deltas.
+      if (next !== lastHeight && stickRef.current) scrollToBottom();
       lastHeight = next;
     });
     observer.observe(node);
@@ -572,15 +581,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // height they last occupied, instead of their full body. Nothing leaves the
   // reducer — see use-entry-folding.ts for why eviction was rejected on review.
   //
-  // Suspended while the find bar is open: ContentFindBar finds text by walking
-  // the DOM, so a folded entry would be unfindable and the user would be told
-  // "0 results" for text that is in their conversation.
+  // WHY: source-backed Find keeps the ordinary fold budget; only the selected
+  // row is revealed and pinned while its message-body Range is in use.
   //
   // `sessionActive` (2026-09-18): a background pane is content-visibility:hidden,
   // which reads to the folding observer as "everything scrolled away". Telling
   // it the pane is merely in the background is what stops a tab you left a
   // moment ago from being blank when you come back — see INACTIVE_FOLD_MS.
-  const folding = useEntryFolding(!findOpen, scrollContainerRef, sessionActive);
+  const folding = useEntryFolding(true, scrollContainerRef, sessionActive);
 
   // Scroll, unfold and re-frost BEFORE the first painted frame of a switch —
   // the three reasons messages popped in. WHY per step: the hook's header.
@@ -869,6 +877,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // stable across toggles — no reflow, no flash, and focus/IME survive.
       // `inert` removes hidden subtree from tab order + a11y tree.
       ref={chatRootRef}
+      // WHY: strip pills can overflow/reorder independently of App's mounted panes;
+      // a stable DOM identity lets private diagnostics confirm the actual visible chat.
+      data-chat-session-id={sessionId}
       inert={!visible}
       aria-hidden={visible ? undefined : true}
       style={{
@@ -944,13 +955,15 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               down while the bar is open and back when it closes. `.find-row`'s
               top margin clears the overlaid header (globals.css). */}
           {findOpen && (
-            <ContentFindBar
-              layout="row"
-              containerRef={contentRef}
+            <ChatFindBar
+              state={state}
+              sessionId={sessionId}
+              contentRef={contentRef}
               scrollRef={scrollContainerRef}
-              highlightName="chat-find"
-              placeholder="Find in chat"
-              resetKey={sessionId}
+              getEntryEl={getEntryEl}
+              revealAndPin={folding.revealAndPin}
+              unfoldNearViewport={folding.unfoldNearViewport}
+              releaseStick={releaseStick}
               onClose={() => setFindOpen(false)}
             />
           )}

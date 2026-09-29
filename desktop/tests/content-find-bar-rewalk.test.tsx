@@ -3,7 +3,8 @@
 // user steps to the next match (2026-09-16 audit W22). On a fully read
 // conversation the walk is ~1.4M nodes, so a next-match that re-walked cost as
 // much as retyping the search.
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
+import { resolveBodyRanges } from '../src/renderer/components/chat-message-find';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, cleanup, screen, act } from '@testing-library/react';
 import { ContentFindBar } from '../src/renderer/components/ContentFindBar';
@@ -43,6 +44,170 @@ describe('ContentFindBar and the text-node walk', () => {
     vi.restoreAllMocks();
     delete (globalThis as any).CSS;
     delete (window as any).Highlight;
+  });
+
+  it('recentres a jumped-to match after neighboring rows change its geometry', async () => {
+    const ref = React.createRef<HTMLDivElement>();
+    let top = 2000;
+    const scroll = vi.fn(() => { top = 400; });
+    Range.prototype.getBoundingClientRect = () => ({ top, bottom: top + 20, left: 0, right: 100, width: 100, height: 20 } as DOMRect);
+    render(<><div ref={ref}><span data-message-find-body="0">needle</span></div>
+      <ContentFindBar containerRef={ref} onClose={() => {}} resetKey="chat" chatFind={{
+        search: () => ({ hits: [{ id: 'a', body: 0, ordinal: 0 }], pending: false }),
+        pin: () => () => {},
+        resolve: async (_hit, query) => resolveBodyRanges(ref.current!.firstElementChild as HTMLElement, query)[0],
+        afterScroll: () => { top = 950; },
+      }} /></>);
+    ref.current!.getBoundingClientRect = () => ({ top: 100, bottom: 1000 } as DOMRect);
+    ref.current!.firstElementChild!.scrollIntoView = scroll;
+    fireEvent.change(screen.getByLabelText('Find in document'), { target: { value: 'needle' } });
+    await vi.waitFor(() => expect(scroll).toHaveBeenCalledTimes(2));
+    expect(top).toBe(400);
+  });
+
+  it('re-centres after a later content resize shifts the selected Range beneath the input chrome', async () => {
+    const original = globalThis.ResizeObserver;
+    const callbacks: Array<() => void> = [];
+    (globalThis as any).ResizeObserver = class {
+      constructor(cb: () => void) { callbacks.push(cb); }
+      observe() {} disconnect() {} unobserve() {}
+    };
+    const ref = React.createRef<HTMLDivElement>();
+    let top = 2000;
+    const scroll = vi.fn(() => { top = 450; });
+    Range.prototype.getBoundingClientRect = () => ({ top, bottom: top + 20, left: 0, right: 100, width: 100, height: 20 } as DOMRect);
+    const view = render(<><div ref={ref}><span data-message-find-body="0">needle</span></div>
+      <ContentFindBar containerRef={ref} onClose={() => {}} resetKey="chat" chatFind={{
+        search: () => ({ hits: [{ id: 'a', body: 0, ordinal: 0 }], pending: false }),
+        pin: () => () => {},
+        resolve: async (_hit, query) => resolveBodyRanges(ref.current!.firstElementChild as HTMLElement, query)[0],
+      }} /></>);
+    ref.current!.getBoundingClientRect = () => ({ top: 100, bottom: 1000 } as DOMRect);
+    ref.current!.firstElementChild!.scrollIntoView = scroll;
+    fireEvent.change(screen.getByLabelText('Find in document'), { target: { value: 'needle' } });
+    await vi.waitFor(() => expect(scroll).toHaveBeenCalledTimes(2));
+    top = 950; // browser scroll anchoring AFTER both synchronous recenter calls
+    await act(async () => { callbacks.forEach((cb) => cb()); await Promise.resolve(); });
+    await vi.waitFor(() => expect(scroll).toHaveBeenCalledTimes(3));
+    expect(top).toBe(450);
+    view.unmount(); globalThis.ResizeObserver = original;
+  });
+
+  it('chat adapter leaves other folded rows alone, pins only the chosen row and releases on close', async () => {
+    const releases = vi.fn();
+    const revealNearby = vi.fn();
+    function ChatHarness() {
+      const ref = useRef<HTMLDivElement>(null);
+      const [folded, setFolded] = useState(true);
+      return <div>
+        <div ref={ref}><div data-entry-key="other" data-testid="other" />
+          <div data-entry-key="target" data-testid="target">{!folded && <span data-message-find-body="0">hello <b>world</b></span>}</div></div>
+        <ContentFindBar containerRef={ref} onClose={() => setFolded(true)} resetKey="chat" highlightName="chat-find" chatFind={{
+          search: () => ({ hits: [{ id: 'target', body: 0, ordinal: 0 }], pending: false }),
+          pin: () => { setFolded(false); return releases; },
+          afterScroll: revealNearby,
+          resolve: async (_hit, query) => {
+            await vi.waitFor(() => expect(ref.current?.querySelector('[data-message-find-body]')).toBeTruthy());
+            return resolveBodyRanges(ref.current!.querySelector('[data-message-find-body]')!, query)[0] ?? null;
+          },
+        }} />
+      </div>;
+    }
+    render(<ChatHarness />);
+    fireEvent.change(screen.getByLabelText('Find in document'), { target: { value: 'hello world' } });
+    await vi.waitFor(() => expect(highlights.get('chat-find-current')?.ranges[0].toString()).toBe('hello world'));
+    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(revealNearby).toHaveBeenCalled(); // no 100ms intersection debounce after search scroll
+    expect(screen.getByTestId('other').querySelector('[data-message-find-body]')).toBeNull();
+    cleanup();
+    expect(releases).toHaveBeenCalled();
+  });
+
+  it('highlights a newly revealed neighboring message without restarting source search', async () => {
+    const ref = React.createRef<HTMLDivElement>();
+    const sourceSearch = vi.fn(() => ({ hits: [{ id: 'a', body: 0, ordinal: 0 }, { id: 'b', body: 0, ordinal: 0 }], pending: false }));
+    function Box() {
+      const [near, setNear] = useState(false);
+      return <><div ref={ref}><div data-entry-key="a"><span data-message-find-body="0">hello</span></div>
+        <div data-entry-key="b">{near && <span data-message-find-body="0">hello</span>}</div></div>
+        <ContentFindBar containerRef={ref} onClose={() => {}} resetKey="chat" highlightName="chat-find" chatFind={{
+          search: sourceSearch, pin: () => () => {},
+          resolve: async (_hit, query) => resolveBodyRanges(ref.current!.querySelector('[data-entry-key="a"] [data-message-find-body]')!, query)[0],
+          afterScroll: () => setNear(true),
+        }} />
+      </>;
+    }
+    render(<Box />);
+    fireEvent.change(screen.getByLabelText('Find in document'), { target: { value: 'hello' } });
+    await vi.waitFor(() => expect(highlights.get('chat-find')?.ranges).toHaveLength(2));
+    expect(sourceSearch).toHaveBeenCalledTimes(2); // initial empty query and active query only
+    expect(highlights.get('chat-find-current')?.ranges).toHaveLength(1);
+  });
+
+  it('a selected hit resolving after the first commit retries once without a keypress', async () => {
+    const ref = React.createRef<HTMLDivElement>();
+    let calls = 0;
+    render(<><div ref={ref}><div data-entry-key="a"><span data-message-find-body="0">hello</span></div></div>
+      <ContentFindBar containerRef={ref} onClose={() => {}} resetKey="chat" highlightName="chat-find" chatFind={{
+        search: () => ({ hits: [{ id: 'a', body: 0, ordinal: 0 }], pending: false }),
+        pin: () => () => {},
+        resolve: async (_hit, query) => ++calls === 1 ? null : resolveBodyRanges(ref.current!.querySelector('[data-message-find-body]')!, query)[0],
+      }} /></>);
+    fireEvent.change(screen.getByLabelText('Find in document'), { target: { value: 'hello' } });
+    await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(2));
+    await vi.waitFor(() => expect(highlights.get('chat-find-current')?.ranges[0].toString()).toBe('hello'));
+    expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
+  it('keeps counter blank through async search and discards an older query after close', async () => {
+    const ref = React.createRef<HTMLDivElement>();
+    const pendingSearch: Array<{ query: string; signal: AbortSignal; done: (hits: { hits: { id: string; body: number; ordinal: number }[]; pending: boolean }) => void }> = [];
+    const adapter = {
+      search: (query: string, signal: AbortSignal) => query ? new Promise<{ hits: { id: string; body: number; ordinal: number }[]; pending: boolean }>((done) => pendingSearch.push({ query, signal, done })) : { hits: [], pending: false },
+      pin: vi.fn(() => () => {}), resolve: async () => null,
+    };
+    function Box() { const [open, setOpen] = useState(true); return <><div ref={ref} />{open && <ContentFindBar containerRef={ref} onClose={() => setOpen(false)} resetKey="chat" chatFind={adapter} />}</>; }
+    render(<Box />);
+    const input = screen.getByLabelText('Find in document');
+    fireEvent.change(input, { target: { value: 'old' } });
+    expect(screen.queryByText('0/0')).toBeNull();
+    fireEvent.change(input, { target: { value: 'new' } });
+    expect(pendingSearch[0].signal.aborted).toBe(true);
+    await act(async () => { pendingSearch[0].done({ hits: [{ id: 'a', body: 0, ordinal: 0 }], pending: false }); });
+    expect(screen.queryByText('1/1')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Close (Esc)'));
+    expect(pendingSearch[1].signal.aborted).toBe(true);
+    await act(async () => { pendingSearch[1].done({ hits: [{ id: 'b', body: 0, ordinal: 0 }], pending: false }); });
+    expect(adapter.pin).not.toHaveBeenCalled();
+  });
+
+  it('chat navigation wraps across message bodies and refreshes after streaming/removal', async () => {
+    const ref = React.createRef<HTMLDivElement>();
+    const source = { hits: [{ id: 'first', body: 0, ordinal: 0 }, { id: 'second', body: 0, ordinal: 0 }] };
+    const adapter = {
+      search: vi.fn(() => ({ hits: source.hits, pending: false })),
+      pin: vi.fn(() => () => {}),
+      resolve: async (hit: { id: string }, query: string) => resolveBodyRanges(ref.current!.querySelector(`[data-entry-key="${hit.id}"] [data-message-find-body]`)!, query)[0] ?? null,
+    };
+    render(<><div ref={ref}>
+      <div data-entry-key="first"><span data-message-find-body="0">beta</span></div>
+      <div data-entry-key="second"><span data-message-find-body="0">beta</span></div>
+    </div><ContentFindBar containerRef={ref} onClose={() => {}} resetKey="chat" highlightName="chat-find" chatFind={adapter} /></>);
+    fireEvent.change(screen.getByLabelText('Find in document'), { target: { value: 'beta' } });
+    await vi.waitFor(() => expect(screen.getByText('1/2')).toBeTruthy());
+    await vi.waitFor(() => expect(highlights.get('chat-find')?.ranges).toHaveLength(2));
+    expect(highlights.get('chat-find-current')?.ranges).toHaveLength(1);
+    const searchesBeforeNext = adapter.search.mock.calls.length;
+    fireEvent.click(screen.getByLabelText('Next (Enter)'));
+    await vi.waitFor(() => expect(screen.getByText('2/2')).toBeTruthy());
+    expect(adapter.search).toHaveBeenCalledTimes(searchesBeforeNext);
+    fireEvent.click(screen.getByLabelText('Next (Enter)'));
+    await vi.waitFor(() => expect(screen.getByText('1/2')).toBeTruthy());
+    source.hits = [{ id: 'second', body: 0, ordinal: 0 }];
+    await act(async () => { ref.current!.querySelector('[data-entry-key="first"]')!.remove(); await Promise.resolve(); });
+    fireEvent.click(screen.getByLabelText('Next (Enter)'));
+    await vi.waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
+    expect(adapter.search).toHaveBeenCalled();
   });
 
   it('walks once per query and not at all when stepping to the next match', async () => {

@@ -18,6 +18,13 @@ import { render, cleanup, act } from '@testing-library/react';
 // the memoized ConversationRow: when the memo bails out, React never
 // reconciles children, so this child's render count is a faithful proxy for
 // "did the card itself re-render".
+// WHY: the real stats provider fetches over HTTP (outside window.claude) and
+// publishes another context value whenever it settles. This test measures a
+// memo boundary, not network/cache initialization; keep that input fixed.
+vi.mock('../src/renderer/state/marketplace-stats-context', () => {
+  const stats = { loading: false, plugins: {}, themes: {}, refresh: vi.fn(), applyThumbs: vi.fn(), ensureLoaded: vi.fn() };
+  return { MarketplaceStatsProvider: ({ children }: { children: React.ReactNode }) => children, useMarketplaceStats: () => stats };
+});
 const renders = vi.hoisted(() => ({ corner: 0 }));
 vi.mock('../src/renderer/components/marketplace/InstallFavoriteCorner', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/renderer/components/marketplace/InstallFavoriteCorner')>();
