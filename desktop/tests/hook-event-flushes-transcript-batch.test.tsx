@@ -79,28 +79,31 @@ describe('applyHookEvent flushes the transcript batch before a hook action lands
   it('a same-partId text stream stays ONE segment, before the tool group, even when a hook action lands mid-stream', () => {
     const store = mount();
     const batcher: TranscriptBatcher = installTranscriptBatcher(store.dispatchMany);
+    // WHY try/finally: a failed expectation must still remove the batcher, or its
+    // installed hooks leak into the next test in this file.
+    try {
+      // Two chunks of the SAME streamed message queue up — the frame that would
+      // apply them has not fired (mirrors a stalled rAF under CPU load). This is
+      // the real production shape: a script (or the native harness) dispatches
+      // every chunk of one message before moving on to the next thing, so by
+      // the time a permission ask for the NEXT step fires, every chunk of THIS
+      // message is already queued, just not yet applied.
+      batcher.push(textDelta('u1', 'Draft is in for your review. Now'));
+      batcher.push(textDelta('u2', ' the invites.'));
+      expect(textSegments(store)).toEqual([]);
 
-    // Two chunks of the SAME streamed message queue up — the frame that would
-    // apply them has not fired (mirrors a stalled rAF under CPU load). This is
-    // the real production shape: a script (or the native harness) dispatches
-    // every chunk of one message before moving on to the next thing, so by
-    // the time a permission ask for the NEXT step fires, every chunk of THIS
-    // message is already queued, just not yet applied.
-    batcher.push(textDelta('u1', 'Draft is in for your review. Now'));
-    batcher.push(textDelta('u2', ' the invites.'));
-    expect(textSegments(store)).toEqual([]);
+      // A permission ask for a tool with no card yet lands NOW — the synchronous
+      // dispatch that used to jump ahead of the still-queued text above.
+      act(() => { applyHookEvent(permissionRequest, store.dispatch); });
 
-    // A permission ask for a tool with no card yet lands NOW — the synchronous
-    // dispatch that used to jump ahead of the still-queued text above.
-    act(() => { applyHookEvent(permissionRequest, store.dispatch); });
-
-    // Exactly one text segment carrying the FULL merged text, and it comes
-    // BEFORE the tool group the permission ask opened.
-    const segments = textSegments(store);
-    expect(segments.map((s) => s.type)).toEqual(['text', 'tool-group']);
-    expect((segments[0] as { content: string }).content).toBe('Draft is in for your review. Now the invites.');
-
-    batcher.dispose();
+      // Exactly one text segment carrying the FULL merged text, and it comes
+      // BEFORE the tool group the permission ask opened.
+      const segments = textSegments(store);
+      expect(segments.map((s) => s.type)).toEqual(['text', 'tool-group']);
+      expect((segments[0] as { content: string }).content).toBe('Draft is in for your review. Now the invites.');
+    } finally {
+      batcher.dispose();
+    }
   });
 });
 
