@@ -3,15 +3,12 @@ import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { FastIcon } from './Icons';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
 import { OverlayPanel } from './overlays/Overlay';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
 import type { NativeSwitchResult } from '../../shared/types';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
-
-// The popups' short tapered divider (ui/Dialog.css), drawn inline here.
-const TAPER = 'linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent)';
 
 // Model + effort + fast picker. Replaces the cycle-only status bar chip with
 // a full picker. Invoked by:
@@ -503,13 +500,16 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
               {nativeSwapping && <p className="text-xs text-fg-muted mt-2">Switching…</p>}
             </div>
 
-            {/* Effort and Fast: Claude Code only (see above). Plain menu rows, no
-                cards — a menu's rows sit straight on it, like the sessions menu. */}
+            {/* Effort and Fast: Claude Code only (see above). WHY cards, not
+                plain rows (ui-model-picker-2#MP2-1: "style fast mode/effort better.
+                fast mode doesn't match existing ui elements"): the same two shapes
+                Settings uses — Effort as Remote Access's "Keep awake" card (title,
+                the segmented bar, its hint inside), Fast mode as the standard
+                switch row — 8px apart, under the model list. */}
             {!isNative && (
-              <div className="relative px-3 pt-2.5 pb-3 space-y-2">
-                <div aria-hidden className="absolute inset-x-4 top-0 h-px" style={{ background: TAPER }} />
-                <div className="space-y-1.5">
-                  <span className="block text-xs text-fg-2" title="How hard Claude thinks before responding. Higher is slower but smarter.">Effort</span>
+              <div className="px-3 pt-1 pb-3 space-y-2">
+                <section className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2`}>
+                  <span className="block text-xs text-fg-2">Effort</span>
                   <SegmentedTabs
                     variant="nested"
                     aria-label="Effort"
@@ -522,11 +522,10 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                       title: level === 'max' && !maxAllowed ? 'Max effort requires Opus or Fable' : undefined,
                     }))}
                   />
-                </div>
-                {/* SettingRow's plain `header` form: the shared switch row, without
-                    a card, since a menu's rows sit straight on it. */}
+                  <p className="text-2xs text-fg-muted">How hard Claude thinks before responding. Higher is slower but smarter.</p>
+                </section>
                 <SettingRow
-                  header
+                  variant="item"
                   icon={<FastIcon className="w-3.5 h-3.5 text-amber-700" />}
                   title="Fast mode"
                   description="Same model, faster output"
