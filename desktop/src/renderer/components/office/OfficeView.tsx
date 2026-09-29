@@ -26,6 +26,8 @@ import { OfficeSaveFailed } from './OfficeSaveFailed';
 import { EditorFrame, stripExt } from './EditorFrame';
 import type { EditorFrameHandle } from './EditorFrame';
 import { ScreenMark } from '../../shoot-mode';
+import { BugReportPopup } from '../development/BugReportPopup';
+import type { ReportContext } from '../development/ReportDesign';
 
 function officeBridge(): OfficeBridge | undefined {
   return window.claude?.office;
@@ -41,16 +43,39 @@ type StatusLoad = { state: 'loading' } | { state: 'ready'; status: OfficeStatus 
 export function OfficeView({ projectRoot = null, visible = true }: { projectRoot?: string | null; visible?: boolean }) {
   const { docs, active, versionsFor } = useOfficeTabs();
   const [load, setLoad] = useState<StatusLoad>({ state: 'loading' });
+  // The project list, with the folder it belongs to — shown only while that is still the
+  // focused conversation's folder, so another project's files never appear under this one.
+  const [project, setProject] = useState<{ root: string; value: OfficeStatus['project'] } | null>(null);
+  // WHY a counter (fix round 1): answers can arrive out of order — a slow drive's answer for the
+  // previous project, or an earlier showing, landing after a newer one. Only the newest request's
+  // answers are applied.
+  const request = useRef(0);
   const reloadStatus = () => {
     const b = officeBridge();
     if (!b) { setLoad({ state: 'unavailable' }); return; }
-    b.status(projectRoot).then(
-      (status) => setLoad(status.available ? { state: 'ready', status } : { state: 'unavailable' }),
+    const n = ++request.current;
+    // WHY two requests (fix round 1): status(null) is Recent alone and answers at once; the
+    // project list may sit on a slow drive (main gives it up to ~1.5 s), and must never hold
+    // back Recent or the rest of Home.
+    b.status(null).then(
+      (status) => { if (n === request.current) setLoad(status.available ? { state: 'ready', status } : { state: 'unavailable' }); },
       // WHY (Task 5 carry-over): the remote client and the phone refuse office:* outright, and
       // their shim stays quiet for it, so this screen must say so itself — as the same fact,
       // with nothing to retry. Any other rejection is a real failure and keeps Retry.
-      (e: unknown) => setLoad(/^remote-unsupported:/.test(String((e as Error)?.message ?? '')) ? { state: 'unavailable' } : { state: 'failed' }),
+      (e: unknown) => {
+        if (n !== request.current) return;
+        setLoad(/^remote-unsupported:/.test(String((e as Error)?.message ?? '')) ? { state: 'unavailable' } : { state: 'failed' });
+      },
     );
+    if (projectRoot) {
+      const root = projectRoot;
+      b.status(root).then(
+        (status) => { if (n === request.current) setProject({ root, value: status.available ? status.project : null }); },
+        // The Recent request above reports a failure; a project list that could not be read is
+        // simply not shown.
+        () => {},
+      );
+    }
   };
   // WHY on each showing, not only on mount: the page stays mounted while hidden (see `visible`),
   // so a file opened meanwhile — from the page itself or from a file panel's Edit — would
@@ -84,14 +109,34 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
       closeNote: copying && d.file.path === front?.file.path ? 'Saving a copy…' : undefined })),
   ];
 
+  // What New or Open last failed with, shown on Home (fix round 1). `general`: the cause is not
+  // known (the request itself failed), so the message guesses nothing and offers a report.
+  const [actionError, setActionError] = useState<{ message: string; general: boolean; retry: () => void } | null>(null);
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   const create = async (kind: OfficeKind) => {
-    const r = await officeBridge()?.create(kind, projectRoot);
-    if (r?.ok) openDoc(r.file);
+    setActionError(null);
+    try {
+      const r = await officeBridge()?.create(kind, projectRoot);
+      if (!r) return;
+      // Main's own reason (a protected folder, a folder that is gone) — specific, so Retry only.
+      if (!r.ok) { setActionError({ message: r.message, general: false, retry: () => void create(kind) }); return; }
+      openDoc(r.file);
+    } catch (e) {
+      console.error('[Office] creating a new file failed', e);
+      setActionError({ message: "Office couldn't create a new file.", general: true, retry: () => void create(kind) });
+    }
   };
   const pick = async () => {
-    const f = await officeBridge()?.pick();
-    if (f) openDoc(f);
+    setActionError(null);
+    try {
+      const f = await officeBridge()?.pick();
+      if (f) openDoc(f);
+    } catch (e) {
+      console.error('[Office] the file picker failed', e);
+      setActionError({ message: "Office couldn't open the file picker.", general: true, retry: () => void pick() });
+    }
   };
+  const shownProject = project && project.root === projectRoot ? project.value : null;
 
   return (
     <div ref={rootRef} className="absolute inset-0 flex flex-col">
@@ -124,7 +169,25 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
 
       <div className="relative flex-1 min-h-0">
         {active === HOME_TAB && (
-          <OfficeHome load={load} onRetry={reloadStatus} onCreate={create} onPick={pick} onOpen={openDoc} />
+          <OfficeHome
+            load={load}
+            project={shownProject}
+            onRetry={reloadStatus}
+            onCreate={create}
+            onPick={pick}
+            onOpen={openDoc}
+            actionError={actionError && (
+              actionError.general
+                ? <ErrorState
+                    variant="inline"
+                    message={actionError.message}
+                    onRetry={actionError.retry}
+                    onReportBug={() => setReportContext({ surface: 'Office', error: actionError.message })}
+                    onDiagnose={() => setReportContext({ surface: 'Office', error: actionError.message, diagnose: true })}
+                  />
+                : <ErrorState variant="inline" message={actionError.message} onRetry={actionError.retry} />
+            )}
+          />
         )}
         {/* Awake documents stay mounted so switching tabs is instant; the
             others are hidden (performance rule 2 — a hidden editor sits idle).
@@ -159,6 +222,8 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
       {/* Kept mounted while hidden (not shown, holding no Escape): a restore under way keeps its
           state and finishes; showing the page again shows the window as it is. */}
       <VersionsDialog file={versionsFor} shown={visible} onClose={() => showVersions(null)} />
+      {/* Report bug / Diagnose for a New or Open that failed for an unknown reason. */}
+      <BugReportPopup open={visible && !!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
     </div>
   );
 }
@@ -169,20 +234,23 @@ function saveLabel(s: OfficeSaveState): string {
   return s.copiedTo ? `Saved a copy to ${s.copiedTo} — now editing the copy.` : 'Saved';
 }
 
-function OfficeHome({ load, onRetry, onCreate, onPick, onOpen }: {
-  load: StatusLoad; onRetry: () => void; onCreate: (k: OfficeKind) => void; onPick: () => void; onOpen: (f: OfficeFile) => void;
+function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onOpen }: {
+  load: StatusLoad; project: OfficeStatus['project']; actionError: React.ReactNode;
+  onRetry: () => void; onCreate: (k: OfficeKind) => void; onPick: () => void; onOpen: (f: OfficeFile) => void;
 }) {
-  if (load.state === 'loading') return <LoadingState what="Office" />;
   if (load.state === 'failed') return <div className="p-6 max-w-xl mx-auto"><ErrorState message="Office could not be started." onRetry={onRetry} /></div>;
   // Specific and certain, and no Retry: nothing the person can do here changes it.
   if (load.state === 'unavailable') return <div className="p-6 max-w-xl mx-auto"><EmptyState message="Office isn't included in this build." /></div>;
-  const { recent, project } = load.status;
-  const projectFiles = (project?.files ?? []).filter((f) => !recent.some((r) => r.path === f.path));
+  // WHY Home is drawn while Recent loads (fix round 1): New and "Open a file…" need no list, and
+  // must never wait on a slow drive; only the Recent list itself shows it is loading.
+  const recent = load.state === 'ready' ? load.status.recent : null;
+  const projectFiles = (project?.files ?? []).filter((f) => !recent?.some((r) => r.path === f.path));
   return (
     <div className="absolute inset-0 overflow-y-auto">
       {/* Photo-only: a first run (nothing recent) is its own screen, named without '#' so a deck can link its picture. */}
-      <ScreenMark name={recent.length === 0 ? 'office/first-run' : 'office/home'} />
+      {recent && <ScreenMark name={recent.length === 0 ? 'office/first-run' : 'office/home'} />}
       <div className="w-full max-w-4xl mx-auto px-4 py-6 flex flex-col gap-7">
+        {actionError}
         <section className="flex flex-col gap-3">
           <Eyebrow>New</Eyebrow>
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
@@ -198,7 +266,9 @@ function OfficeHome({ load, onRetry, onCreate, onPick, onOpen }: {
             <div className="flex-1" />
             <Button variant="secondary" size="sm" onClick={onPick}>Open a file…</Button>
           </div>
-          {recent.length === 0
+          {recent === null
+            ? <LoadingState what="Recent" variant="inline" />
+            : recent.length === 0
             ? <EmptyState message="Files you open in Office will show up here." />
             : <FileList files={recent} verb="Opened" onOpen={onOpen} />}
         </section>

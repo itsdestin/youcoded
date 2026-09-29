@@ -82,6 +82,53 @@ describe('projectFiles (the "In <project>" list)', () => {
     expect(files.length).toBeLessThan(30);
   });
 
+  describe('with a slow drive', () => {
+    /** A folder entry, as opendir gives it. */
+    const entry = (name: string, dir = false) => ({ name, isDirectory: () => dir, isFile: () => !dir });
+    async function* listing(entries: ReturnType<typeof entry>[], onYield?: () => void) {
+      for (const e of entries) { onYield?.(); yield e; }
+    }
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('answers at the deadline with what it found, while a folder never answers', async () => {
+      vi.useFakeTimers();
+      const fs = {
+        opendir: async (d: string) => {
+          if (d === '/p') return listing([entry('Plan.docx'), entry('slow', true), entry('fast', true)]);
+          if (d === '/p/fast') return listing([entry('Budget.xlsx')]);
+          return new Promise<never>(() => {}); // /p/slow: a sleeping network drive
+        },
+        stat: async () => ({ mtime: new Date(1_800_000_000_000) }),
+      };
+      let answer: string[] | null = null;
+      void projectFiles('/p', { fs }).then((f) => { answer = f.map((x) => x.name); });
+      await vi.advanceTimersByTimeAsync(1400);
+      expect(answer).toBeNull();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(answer).toEqual(['Plan.docx']);
+    });
+
+    it('answers at the deadline when a file never answers its stat, listing the ones that did', async () => {
+      vi.useFakeTimers();
+      const fs = {
+        opendir: async () => listing([entry('a.docx'), entry('b.docx')]),
+        stat: (p: string) => (p.endsWith('b.docx') ? new Promise<never>(() => {}) : Promise.resolve({ mtime: new Date(0) })),
+      };
+      const got = projectFiles('/p', { fs, deadlineMs: 50 });
+      await vi.advanceTimersByTimeAsync(50);
+      expect((await got).map((f) => f.name)).toEqual(['a.docx']);
+    });
+
+    it('stops reading a folder once enough files are found', async () => {
+      let read = 0;
+      const many = Array.from({ length: 1000 }, (_, i) => entry(`f${i}.docx`));
+      const fs = { opendir: async () => listing(many, () => read++), stat: async () => ({ mtime: new Date(0) }) };
+      const files = await projectFiles('/p', { fs, maxFound: 5 });
+      expect(files).toHaveLength(5);
+      expect(read).toBeLessThanOrEqual(6);
+    });
+  });
+
   it('answers an empty list for a folder that does not exist', async () => {
     await expect(projectFiles(path.join(dir, 'gone'))).resolves.toEqual([]);
   });

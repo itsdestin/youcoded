@@ -10,9 +10,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // WHY mocked: office-commands imports the project watcher (chokidar and the artifact store);
 // these tests only drive the IPC layer in front of it.
 vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn() }));
+// WHY wrapped, not replaced: the real walk still runs; the tests count how often it starts.
+vi.mock('../../src/main/office/office-home', async (orig) => {
+  const real = await orig<typeof import('../../src/main/office/office-home')>();
+  return { ...real, projectFiles: vi.fn(real.projectFiles) };
+});
 
 import type { OfficeFile } from '../../src/shared/office-types';
 import { registerOfficeIpc } from '../../src/main/office/office-ipc';
+import { projectFiles } from '../../src/main/office/office-home';
+import { idle as recentIdle } from '../../src/main/office/recent';
 import { createSessions } from '../../src/main/office/office-sessions';
 import { snapshot, versionsDir } from '../../src/main/office/versions';
 
@@ -72,6 +79,7 @@ beforeEach(async () => {
 afterEach(async () => {
   win1.removeAllListeners();
   win2.removeAllListeners();
+  await recentIdle();
   await rm(dir, { recursive: true, force: true, maxRetries: 3 });
 });
 
@@ -267,8 +275,12 @@ describe('the start screen: Recent, the project list, New and Open', () => {
     await call('office:open', win1, path.join(dir, 'gone.docx'));
     expect((await call('office:status', win1, null) as { recent: unknown[] }).recent).toEqual([]);
     expect(await call('office:open', win1, file)).toMatchObject({ ok: true });
-    const { recent } = await call('office:status', win1, null) as { recent: Array<Record<string, string>> };
-    expect(recent).toHaveLength(1);
+    // Added without holding up the open, so it lands just after.
+    const recent = await vi.waitFor(async () => {
+      const r = (await call('office:status', win1, null) as { recent: Array<Record<string, string>> }).recent;
+      expect(r).toHaveLength(1);
+      return r;
+    });
     expect(recent[0]).toMatchObject({ path: file, name: 'memo.docx', kind: 'document', folder: path.basename(dir) });
   });
 
@@ -280,6 +292,22 @@ describe('the start screen: Recent, the project list, New and Open', () => {
     const s = await call('office:status', win1, project) as { project: { name: string; files: Array<{ name: string }> } };
     expect(s.project.name).toBe('garden');
     expect(s.project.files.map((f) => f.name)).toEqual(['Plan.docx']);
+  });
+
+  it('shares one project walk between requests for the same folder that overlap, and walks nothing for Recent alone', async () => {
+    const project = path.join(dir, 'garden');
+    await mkdir(project);
+    await copyFile(MEMO, path.join(project, 'Plan.docx'));
+    vi.mocked(projectFiles).mockClear();
+    await call('office:status', win1, null);
+    expect(projectFiles).not.toHaveBeenCalled();
+    const [a, b] = await Promise.all([call('office:status', win1, project), call('office:status', win2, project)]) as Array<{ project: { files: unknown[] } }>;
+    expect(projectFiles).toHaveBeenCalledTimes(1);
+    expect(a.project.files).toHaveLength(1);
+    expect(b.project.files).toHaveLength(1);
+    // Once it has answered, the next showing walks again (files may have changed).
+    await call('office:status', win1, project);
+    expect(projectFiles).toHaveBeenCalledTimes(2);
   });
 
   it('has no project list for no conversation, a folder that is gone, or a path that is not absolute', async () => {
@@ -310,6 +338,13 @@ describe('the start screen: Recent, the project list, New and Open', () => {
     expect(await readFile(r.file.path, 'utf8')).toBe('xlsx template');
   });
 
+  it('makes the Documents folder when it is missing, then creates the new file in it', async () => {
+    await rm(documents, { recursive: true });
+    const r = await call('office:create', win1, 'document', null) as { ok: true; file: { path: string } };
+    expect(r.file.path).toBe(path.join(documents, 'Untitled document.docx'));
+    expect(await readdir(documents)).toEqual(['Untitled document.docx']);
+  });
+
   it('refuses an unknown kind, and a project folder that is gone, creating nothing', async () => {
     await expect(call('office:create', win1, 'drawing', null)).resolves.toMatchObject({ ok: false });
     await expect(call('office:create', win1, 'document', path.join(dir, 'gone'))).resolves.toEqual({ ok: false, message: 'This folder no longer exists.' });
@@ -333,6 +368,12 @@ describe('the start screen: Recent, the project list, New and Open', () => {
   it("opens the system picker for the asking window, and answers null when it's cancelled", async () => {
     await expect(call('office:pick', win1)).resolves.toBeNull();
     expect(pickedBy).toEqual([win1]);
+  });
+
+  it('does not show the picker when Office is unavailable', async () => {
+    available = false;
+    await expect(call('office:pick', win1)).resolves.toBeNull();
+    expect(pickedBy).toEqual([]);
   });
 
   it('answers the picked file', async () => {

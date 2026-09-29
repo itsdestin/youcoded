@@ -271,9 +271,10 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     mine.set(session.token, (mine.get(session.token) ?? 0) + 1);
     // WHY here, on success only (R5): Recent means "opened in Office" — a refused open (gone,
     // too large, protected) never lists the file. WHY the real path: the same file reached
-    // through a link is one entry. A failure is only logged: Recent must never fail an open.
+    // through a link is one entry. WHY not awaited (fix round 1): Recent must never delay or
+    // fail an open; a failure is only logged.
     const kind = kindFor(realPath);
-    if (kind) await recent.add(deps.userData, describeFile(realPath, kind, new Date())).catch((e) => log('WARN', 'Office', 'adding to Recent failed', { error: String(e) }));
+    if (kind) void recent.add(deps.userData, describeFile(realPath, kind, new Date())).catch((e) => log('WARN', 'Office', 'adding to Recent failed', { error: String(e) }));
     return { ok: true, token: session.token, origin: `${SCHEME}://${session.token}` };
   }
 
@@ -447,6 +448,24 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     }
   }
 
+  // WHY shared (fix round 1): the page asks again each time it is shown, and two windows can show
+  // the same project; a walk already running for a folder answers every asker instead of a
+  // second walk starting beside it.
+  const walks = new Map<string, Promise<OfficeFile[]>>();
+  function walkOnce(folder: string): Promise<OfficeFile[]> {
+    let w = walks.get(folder);
+    if (!w) {
+      w = projectFiles(folder);
+      walks.set(folder, w);
+      const clear = () => void walks.delete(folder);
+      w.then(clear, clear);
+    }
+    return w;
+  }
+
+  // WHY the renderer asks twice — status(null) for Recent, then status(folder) for the project
+  // list (fix round 1): a project on a slow drive must never hold back Recent or the New buttons.
+  // status(null) walks nothing; Recent's own stats are time-limited (recent.ts).
   async function status(projectRoot: unknown): Promise<OfficeStatus> {
     // WHY nothing is read when unavailable: the app hides Office then (Task 6), so walking a
     // project folder for it would be wasted work.
@@ -454,7 +473,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     const folder = await folderOf(projectRoot);
     // WHY a Recent read failure rejects (only a real read error does — an unreadable file starts
     // over): the start screen then shows its Retry, never an empty Recent that isn't true.
-    const [list, files] = await Promise.all([recent.list(deps.userData), folder ? projectFiles(folder) : null]);
+    const [list, files] = await Promise.all([recent.list(deps.userData), folder ? walkOnce(folder) : null]);
     return { available: true, recent: list, project: folder && files ? { name: path.basename(folder), files } : null };
   }
 
@@ -462,7 +481,14 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     if (!(await isReady())) return { ok: false, message: MSG.unavailable };
     if (!isOfficeKind(kind)) return { ok: false, message: MSG.couldNotCreate };
     // The focused project, or Documents (design: "the focused project or Documents").
-    const wanted = projectRoot === null || projectRoot === undefined ? deps.documents : projectRoot;
+    const toDocuments = projectRoot === null || projectRoot === undefined;
+    const wanted = toDocuments ? deps.documents : projectRoot;
+    // WHY make Documents (fix round 1): a new account or a cleaned-up home can lack it, and New
+    // with no conversation should still work. A project folder that is gone is NOT recreated:
+    // that is a folder the person removed, and saying so is the truthful answer.
+    if (toDocuments && typeof wanted === 'string' && path.isAbsolute(wanted)) {
+      await fsp.mkdir(wanted, { recursive: true }).catch((e) => log('WARN', 'Office', 'could not create the Documents folder', { error: String(e) }));
+    }
     const dir = await folderOf(wanted);
     if (!dir) {
       if (typeof wanted === 'string' && path.isAbsolute(wanted)) return { ok: false, message: MSG.createFolderGone };
@@ -498,6 +524,8 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   }
 
   async function pick(sender: OfficeSender): Promise<OfficeFile | null> {
+    // Nothing picked can be opened when Office can't run, so the picker isn't shown.
+    if (!(await isReady())) return null;
     const choose = deps.pickFile ?? (await import('./office-dialogs')).pickOfficeFile;
     return choose(sender);
   }

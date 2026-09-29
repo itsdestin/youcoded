@@ -3,7 +3,7 @@
 //
 // WHY no electron import at the top: office-ipc.ts imports this file, and its tests drive the
 // handlers with fakes. The picker loads electron's dialog only when it is used.
-import { promises as fsp, type Dirent } from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import type { OfficeFile, OfficeKind } from '../../shared/office-types';
 
@@ -34,9 +34,9 @@ export function describeFile(filePath: string, kind: OfficeKind, at: Date): Offi
 /** Folders below the project root that are searched (a file 3 folders down is found). */
 const MAX_DEPTH = 3;
 const MAX_LISTED = 50;
-/** WHY stop early (a count, never a clock): a conversation's folder can be the home folder,
- *  with hundreds of thousands of files. The walk ends after this many Office files are found,
- *  or this many folders are read, whichever comes first — so opening the start screen stays
+/** WHY stop early: a conversation's folder can be the home folder, with hundreds of thousands
+ *  of files. The walk ends after this many Office files are found, or this many folders are
+ *  read, whichever comes first (and at the deadline below) — so opening the start screen stays
  *  quick. The found cap is above MAX_LISTED so "newest first" is judged over more than the
  *  first 50 the walk happens to meet. */
 const MAX_FOUND = 200;
@@ -46,57 +46,90 @@ const MAX_DIRS = 2000;
  *  (Word's "~$name.docx", LibreOffice's ".~lock.name#"). */
 const isLockOrHidden = (name: string) => name.startsWith('.') || name.startsWith('~$');
 
+/** WHY a deadline too (fix round 1): the caps bound the work, but not a slow drive — one folder
+ *  on a sleeping network mount can take many seconds to answer. The start screen asks for the
+ *  project list separately from Recent, and the walk gives back whatever it found by then. */
+const WALK_DEADLINE_MS = 1500;
+
+/** The folder entries the walk reads: a name and what kind of entry it is. */
+interface WalkEntry { name: string; isDirectory(): boolean; isFile(): boolean }
+/** The file-system calls the walk makes. Test seam: tests pass slow or counting ones. */
+interface WalkFs {
+  opendir(dir: string): Promise<AsyncIterable<WalkEntry>>;
+  stat(p: string): Promise<{ mtime: Date }>;
+}
+const realFs: WalkFs = { opendir: (d) => fsp.opendir(d), stat: (p) => fsp.stat(p) };
+
 export interface WalkOptions {
   maxDirs?: number;
+  maxFound?: number;
+  deadlineMs?: number;
+  fs?: WalkFs;
   /** Test seam: called for each folder read. */
   onReadDir?: (dir: string) => void;
 }
 
 /** Office files under `root`, up to 3 folders deep, newest changed first, at most 50. Skips
  *  node_modules and every hidden folder (.git among them). Never throws: an unreadable folder is
- *  skipped, and a root that is gone answers an empty list. */
+ *  skipped, and a root that is gone answers an empty list. Answers within `deadlineMs` with what
+ *  it has found by then, even when a folder or file never answers. */
 export async function projectFiles(root: string, opts: WalkOptions = {}): Promise<OfficeFile[]> {
   const maxDirs = opts.maxDirs ?? MAX_DIRS;
-  const found: Array<{ path: string; kind: OfficeKind }> = [];
-  // Breadth first: the shallow files — the ones most likely to be the project's own — are met
-  // before any cap is reached.
-  let level: string[] = [root];
-  let dirsRead = 0;
-  walk: for (let depth = 0; depth <= MAX_DEPTH && level.length; depth++) {
-    const next: string[] = [];
-    for (const dir of level) {
-      if (dirsRead >= maxDirs || found.length >= MAX_FOUND) break walk;
-      dirsRead++;
-      opts.onReadDir?.(dir);
-      let entries: Dirent[];
-      try {
-        entries = await fsp.readdir(dir, { withFileTypes: true });
-      } catch {
-        continue; // gone, or not ours to read
-      }
-      for (const e of entries) {
-        if (isLockOrHidden(e.name)) continue;
-        // WHY isDirectory/isFile on the entry, not a stat: a link is neither, so the walk never
-        // follows one — a link back up the tree cannot make it loop.
-        if (e.isDirectory()) {
-          if (e.name !== 'node_modules') next.push(path.join(dir, e.name));
-        } else if (e.isFile()) {
-          const kind = kindFor(e.name);
-          if (kind) found.push({ path: path.join(dir, e.name), kind });
+  const maxFound = opts.maxFound ?? MAX_FOUND;
+  const fs = opts.fs ?? realFs;
+  const dated: Array<{ path: string; kind: OfficeKind; mtime: Date }> = [];
+  let found = 0;
+  // Set at the deadline: work still running then (a slow folder) stops at its next step, and
+  // anything it finds afterwards is not added to an answer already given.
+  let stopped = false;
+
+  const walk = async () => {
+    // Breadth first: the shallow files — the ones most likely to be the project's own — are met
+    // before any cap is reached.
+    let level: string[] = [root];
+    let dirsRead = 0;
+    for (let depth = 0; depth <= MAX_DEPTH && level.length; depth++) {
+      const next: string[] = [];
+      for (const dir of level) {
+        if (stopped || dirsRead >= maxDirs || found >= maxFound) return;
+        dirsRead++;
+        opts.onReadDir?.(dir);
+        const files: Array<{ path: string; kind: OfficeKind }> = [];
+        try {
+          // WHY opendir, not readdir: a folder with 100,000 entries is read only until the cap
+          // is reached — breaking out of the loop closes it.
+          for await (const e of await fs.opendir(dir)) {
+            if (stopped || found >= maxFound) break;
+            if (isLockOrHidden(e.name)) continue;
+            // WHY isDirectory/isFile on the entry, not a stat: a link is neither, so the walk
+            // never follows one — a link back up the tree cannot make it loop.
+            if (e.isDirectory()) {
+              if (e.name !== 'node_modules') next.push(path.join(dir, e.name));
+            } else if (e.isFile()) {
+              const kind = kindFor(e.name);
+              if (kind) { files.push({ path: path.join(dir, e.name), kind }); found++; }
+            }
+          }
+        } catch {
+          // gone, or not ours to read: whatever it listed before failing still counts
         }
+        await Promise.all(files.map(async (f) => {
+          try {
+            const { mtime } = await fs.stat(f.path);
+            if (!stopped) dated.push({ ...f, mtime });
+          } catch { /* removed while the walk ran */ }
+        }));
       }
+      level = next;
     }
-    level = next;
-  }
-  const dated = await Promise.all(found.slice(0, MAX_FOUND).map(async (f) => {
-    try {
-      return { ...f, mtime: (await fsp.stat(f.path)).mtime };
-    } catch {
-      return null; // removed while the walk ran
-    }
-  }));
-  return dated
-    .filter((f): f is NonNullable<typeof f> => f !== null)
+  };
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((r) => { timer = setTimeout(r, opts.deadlineMs ?? WALK_DEADLINE_MS); });
+  await Promise.race([walk().catch(() => {}), deadline]);
+  clearTimeout(timer);
+  stopped = true;
+  return [...dated]
     .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
     .slice(0, MAX_LISTED)
     .map((f) => describeFile(f.path, f.kind, f.mtime));

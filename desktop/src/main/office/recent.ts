@@ -21,6 +21,30 @@ const FILE = 'office-recent.json';
  *  Past this the entry is dropped (logged) — Recent is a convenience, never worth failing an open. */
 const MAX_TRIES = 5;
 
+/** WHY a short limit per file (fix round 1): a Recent file on a sleeping network drive can take
+ *  many seconds to answer, and Recent must show at once. A file that doesn't answer in time is
+ *  listed anyway — it may well be there, just slow; opening it says so if it is not. */
+const STAT_TIMEOUT_MS = 300;
+
+export interface RecentOptions {
+  statTimeoutMs?: number;
+  /** Test seam: a slow or failing stat. */
+  stat?: (p: string) => Promise<{ isFile(): boolean }>;
+}
+
+/** Which of `files` still exist. A stat that doesn't answer in time counts as "still there". */
+async function stillThere(files: OfficeFile[], opts: RecentOptions): Promise<OfficeFile[]> {
+  const stat = opts.stat ?? ((p: string) => fsp.stat(p));
+  const ms = opts.statTimeoutMs ?? STAT_TIMEOUT_MS;
+  const here = await Promise.all(files.map((f) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const slow = new Promise<boolean>((r) => { timer = setTimeout(() => r(true), ms); });
+    const answer = stat(f.path).then((s) => s.isFile(), () => false);
+    return Promise.race([answer, slow]).finally(() => clearTimeout(timer));
+  }));
+  return files.filter((_, i) => here[i]);
+}
+
 const KINDS: ReadonlySet<OfficeKind> = new Set(['document', 'spreadsheet', 'presentation']);
 
 interface Stored { updatedAt: string; files: OfficeFile[] }
@@ -70,19 +94,29 @@ const extractUpdatedAt = (json: string): string | undefined => {
 let queue: Promise<unknown> = Promise.resolve();
 
 /** Put a file at the top of Recent (one entry per path; at most RECENT_MAX). */
-export function add(userData: string, file: OfficeFile): Promise<void> {
-  const run = queue.then(() => addNow(userData, file));
+export function add(userData: string, file: OfficeFile, opts: RecentOptions = {}): Promise<void> {
+  const run = queue.then(() => addNow(userData, file, opts));
   queue = run.catch(() => {});
   return run;
 }
 
-async function addNow(userData: string, file: OfficeFile): Promise<void> {
+/** Resolves once every add asked for so far has finished. WHY: office:open does not wait for
+ *  its add, so whatever removes the userData folder (a test's teardown) waits here first —
+ *  otherwise a late write would recreate the folder it just removed. */
+export function idle(): Promise<void> {
+  return queue.then(() => {});
+}
+
+async function addNow(userData: string, file: OfficeFile, opts: RecentOptions): Promise<void> {
   for (let i = 0; i < MAX_TRIES; i++) {
-    const { files, expect } = await read(userData);
+    const { files: onDisk, expect } = await read(userData);
+    // WHY pruned here (fix round 1): list() only hides deleted files; without this they would
+    // stay in the file and keep taking places among the 12.
+    const files = await stillThere(onDisk.filter((f) => f.path !== file.path), opts);
     const next: Stored = {
       // WHY unique beyond the millisecond: two writes in the same ms must still differ as tokens.
       updatedAt: `${new Date().toISOString()}#${process.pid}.${Math.random().toString(36).slice(2, 10)}`,
-      files: [file, ...files.filter((f) => f.path !== file.path)].slice(0, RECENT_MAX),
+      files: [file, ...files].slice(0, RECENT_MAX),
     };
     const r = await casWrite(target(userData), expect, JSON.stringify(next, null, 2), extractUpdatedAt);
     if (r.committed) return;
@@ -91,8 +125,6 @@ async function addNow(userData: string, file: OfficeFile): Promise<void> {
 }
 
 /** Recent, newest first, leaving out files that no longer exist. */
-export async function list(userData: string): Promise<OfficeFile[]> {
-  const { files } = await read(userData);
-  const here = await Promise.all(files.map((f) => fsp.stat(f.path).then((s) => s.isFile(), () => false)));
-  return files.filter((_, i) => here[i]);
+export async function list(userData: string, opts: RecentOptions = {}): Promise<OfficeFile[]> {
+  return stillThere((await read(userData)).files, opts);
 }

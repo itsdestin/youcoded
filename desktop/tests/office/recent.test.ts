@@ -74,6 +74,43 @@ describe('Recent (files opened in Office)', () => {
     expect((await recent.list(userData)).map((f) => f.name)).toEqual(['b.docx']);
   });
 
+  it('drops a deleted file from its file at the next add, not only from the list', async () => {
+    const a = await aFile('a.docx');
+    await recent.add(userData, a);
+    await unlink(a.path);
+    await recent.add(userData, await aFile('b.docx'));
+    const saved = JSON.parse(await readFile(path.join(userData, 'office-recent.json'), 'utf8'));
+    expect(saved.files.map((f: OfficeFile) => f.name)).toEqual(['b.docx']);
+  });
+
+  it('lists a file whose drive does not answer in time, without waiting for it', async () => {
+    const a = await aFile('a.docx');
+    const slow = await aFile('slow.docx');
+    await recent.add(userData, a);
+    await recent.add(userData, slow);
+    vi.useFakeTimers();
+    try {
+      // The Recent file itself is read from disk first (real I/O): wait until both stats are asked
+      // — a plain promise, since vi.waitFor would move the fake clock itself.
+      let asked = 0;
+      let bothAsked!: () => void;
+      const asking = new Promise<void>((r) => (bothAsked = r));
+      const stat = (p: string) => {
+        if (++asked === 2) bothAsked();
+        return p === slow.path ? new Promise<never>(() => {}) : Promise.resolve({ isFile: () => true });
+      };
+      let answer: string[] | null = null;
+      void recent.list(userData, { stat, statTimeoutMs: 300 }).then((l) => { answer = l.map((f) => f.name); });
+      await asking;
+      await vi.advanceTimersByTimeAsync(299);
+      expect(answer).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(answer).toEqual(['slow.docx', 'a.docx']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('writes its file through the guarded compare-and-swap writer, with an updatedAt token', async () => {
     await recent.add(userData, await aFile('a.docx'));
     await recent.add(userData, await aFile('b.docx'));

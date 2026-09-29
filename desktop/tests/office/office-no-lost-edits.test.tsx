@@ -98,7 +98,9 @@ describe('an Office editor is not torn down with unsaved work', () => {
     const before = frameOf(container);
     fail = true;
     rerender(<OfficeView projectRoot="/b" />);
-    await waitFor(() => expect(office.status).toHaveBeenCalledTimes(2));
+    // Each showing asks twice — Recent, then the project list — so the re-fetch is calls 3 and 4.
+    await waitFor(() => expect(office.status).toHaveBeenCalledTimes(4));
+    expect(office.status).toHaveBeenLastCalledWith('/b');
     await act(async () => { await Promise.resolve(); });
     expect(frameOf(container)).toBe(before);
     expect(office.close).not.toHaveBeenCalled();
