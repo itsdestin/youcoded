@@ -35,6 +35,11 @@ import { ChevronDown } from './ChevronDown';
 
 export type CalloutTone = 'info' | 'warning' | 'danger';
 
+/** The danger tone's box (tint + border). WHY exported (fix-batch3#FB-1): the
+ *  one-line field error (FieldError, states.tsx) is this box in miniature, so it
+ *  reads the SAME recipe rather than a copy that could drift. */
+export const CALLOUT_DANGER_SURFACE = 'bg-destructive/10 border-destructive/50';
+
 const TONE: Record<CalloutTone, { surface: string; body: string; title: string }> = {
   info: { surface: 'bg-accent/10 border-accent/25', body: 'text-fg-2', title: 'text-fg' },
   // Status colors stay hardcoded per the standing rule (desktop/CLAUDE.md), so
@@ -48,7 +53,7 @@ const TONE: Record<CalloutTone, { surface: string; body: string; title: string }
   // app's reds onto it so theme packs can restyle their own danger.
   // WHY body text-fg-2 (2026-09-25, decisions.md P-2): "text is normal
   // grey/black, never red" — only the box and its title carry the red.
-  danger: { surface: 'bg-destructive/10 border-destructive/50', body: 'text-fg-2', title: 'text-destructive-fg' },
+  danger: { surface: CALLOUT_DANGER_SURFACE, body: 'text-fg-2', title: 'text-destructive-fg' },
 };
 
 export type CalloutProps = {

@@ -1,4 +1,5 @@
 import React from 'react';
+import { CALLOUT_DANGER_SURFACE } from './Callout';
 import BrailleSpinner from '../BrailleSpinner';
 import { Button } from './Button';
 import { triggerTip } from '../guide/tips';
@@ -234,13 +235,17 @@ export type FieldErrorProps = {
   as?: 'span' | 'p' | 'div';
 };
 
-/** Field-level errors stay short lines under the input — not cards. */
+/** Field-level errors: one short line under the input, in a small tinted box.
+ *  WHY the box (fix-batch3#FB-1, 2026-09-29; Destin picked it over red text and
+ *  over grey text with a red icon): the guide says "never red or coloured body
+ *  text" — the colour lives in the box, the words stay the normal grey. It is
+ *  the notice box (Callout, danger tone) in miniature: same tint and border. */
 export function FieldError({ children, className = '', size = '3xs', as: Tag = 'span' }: FieldErrorProps) {
   // Literal class strings, not `text-${size}` — Tailwind scans source text for
   // whole class names and never sees an interpolated one.
   const sizeClass = size === '2xs' ? 'text-2xs' : 'text-3xs';
   return (
-    <Tag className={`${sizeClass} text-destructive-fg ${className}`.trim()} role="alert">
+    <Tag className={`block ${sizeClass} text-fg-2 border ${CALLOUT_DANGER_SURFACE} rounded-md px-2 py-1 ${className}`.trim()} role="alert">
       {children}
     </Tag>
   );

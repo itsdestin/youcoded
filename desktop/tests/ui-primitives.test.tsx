@@ -659,12 +659,16 @@ describe('state family', () => {
     expect(onDiagnose).toHaveBeenCalled();
   });
 
-  it('field errors use the destructive token at the named size', () => {
-    // Change 34 (text-red-500 -> text-destructive) and rule 14 (§9.H fixed the
-    // spec's own text-[10px] here).
+  it('field errors are the danger notice box in miniature, at the named size', () => {
+    // fix-batch3#FB-1 (2026-09-29): the red now lives in the box (the danger
+    // Callout's tint + border), the words stay grey — never red body text.
+    // Rule 14 (§9.H fixed the spec's own text-[10px] here) still holds.
     render(<FieldError>Required</FieldError>);
     const el = screen.getByText('Required');
-    expect(el.className).toContain('text-destructive');
+    expect(el.className).toContain('bg-destructive/10');
+    expect(el.className).toContain('border-destructive/50');
+    expect(el.className).toContain('text-fg-2');
+    expect(el.className).not.toContain('text-destructive-fg');
     expect(el.className).toContain('text-3xs');
     expect(el.className).not.toContain('text-red-500');
     expect(el.tagName).toBe('SPAN');

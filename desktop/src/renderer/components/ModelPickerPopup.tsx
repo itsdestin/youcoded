@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
-import { FastIcon } from './Icons';
 import { useEscClose } from '../hooks/use-esc-close';
 import { Button, Callout, Dialog, FieldError, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
 import { OverlayPanel } from './overlays/Overlay';
@@ -564,14 +563,12 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
             screen="chat/model-picker/fast-mode"
           >
             <div className="p-5 space-y-4">
-              <div className="flex items-start gap-3">
-                <div className="shrink-0 w-9 h-9 rounded-full bg-amber-700/15 border border-amber-700/40 flex items-center justify-center text-amber-700">
-                  <FastIcon className="w-5 h-5" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-fg">Enable Fast mode?</h3>
-                  <p className="text-xs text-fg-muted mt-0.5">This costs extra money on top of your plan.</p>
-                </div>
+              {/* WHY no lightning-bolt badge (fix-batch3#FB-4: "remove the
+                  lighting bolt icon thing"): the title and the warning box
+                  below already say what this is. */}
+              <div>
+                <h3 className="text-sm font-semibold text-fg">Enable Fast mode?</h3>
+                <p className="text-xs text-fg-muted mt-0.5">This costs extra money on top of your plan.</p>
               </div>
 
               {/* WHY the shared Callout, not a hand-rolled amber box (guide:
