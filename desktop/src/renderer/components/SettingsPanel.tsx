@@ -2078,7 +2078,7 @@ function RemoteButton(props: RemoteButtonProps) {
                           {/* NOT a K6 action — this dismisses the whole
                               sub-panel, so it is a CloseButton, which already
                               carries a label and a focus ring. */}
-                          <CloseButton onClick={() => onSetShowAddDevice(false)} label="Close Add device" />
+                          <CloseButton onClick={() => onSetShowAddDevice(false)} label="Close add device" />
                         </div>
                         {/* Remind users that Tailscale must be installed + running on the receiving device too */}
                         <Callout tone="warning" title="Before scanning:" className="mb-2">
@@ -2090,7 +2090,7 @@ function RemoteButton(props: RemoteButtonProps) {
                         </div>
                         <p className="text-3xs text-fg-muted mt-2 text-center font-mono">{tailscale.url}</p>
                         <Button variant="secondary" onClick={onCopyLink} className="w-full mt-2">
-                          {copied ? 'Copied!' : 'Copy Link'}
+                          {copied ? 'Copied!' : 'Copy link'}
                         </Button>
                       </section>
                     )}

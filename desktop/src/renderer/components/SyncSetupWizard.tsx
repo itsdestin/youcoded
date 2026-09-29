@@ -563,7 +563,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
             ) : null;
           })()}
 
-          {/* Start Backup button */}
+          {/* Start backup button */}
           {/* Was a hardcoded bg-blue-600 family (spec change 55 — the last survivors of a
               blue that ignored the user's theme). `primary` paints it in the theme accent.
               The three-way saving/empty/ready className is gone: both the saving and the
@@ -582,7 +582,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
             {saving && (
               <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
             )}
-            {saving ? 'Setting up...' : 'Start Backup'}
+            {saving ? 'Setting up...' : 'Start backup'}
           </Button>
           </div>
         </div>
@@ -761,7 +761,7 @@ function PrereqCheckStep({
               {installing && (
                 <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
               )}
-              {installing ? 'Installing...' : 'Install Now'}
+              {installing ? 'Installing...' : 'Install now'}
             </Button>
             <div className="text-3xs text-fg-muted">This usually takes about a minute.</div>
           </div>
@@ -907,7 +907,7 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
             {installing && (
               <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
             )}
-            {installing ? 'Installing...' : 'Install Now'}
+            {installing ? 'Installing...' : 'Install now'}
           </Button>
           <div className="text-3xs text-fg-muted">This usually takes about a minute.</div>
         </div>

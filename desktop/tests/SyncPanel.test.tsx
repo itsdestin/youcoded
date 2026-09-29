@@ -39,7 +39,7 @@ const RETRY_WARNING = {
   dismissible: false, createdEpoch: 0,
 };
 // iCloud has no sign-in step, so "Fix it" lands on the prerequisite check and then
-// straight on the settings step with its Start Backup button.
+// straight on the settings step with its Start backup button.
 const SETUP_WARNING = {
   code: 'ICLOUD_MISSING', level: 'warn', backendId: 'icloud-1',
   title: 'iCloud needs attention', body: 'Set it up again.',
@@ -77,7 +77,7 @@ function stub(sync: Record<string, unknown>, warnings: unknown[]) {
 async function openSetup(): Promise<HTMLElement> {
   render(<SyncSection autoOpen />);
   fireEvent.click(await screen.findByRole('button', { name: 'Fix it' }));
-  return screen.findByRole('button', { name: 'Start Backup' });
+  return screen.findByRole('button', { name: 'Start backup' });
 }
 
 describe('Backup & sync reports only what the backend confirmed', () => {
@@ -164,7 +164,7 @@ describe('Backup & sync reports only what the backend confirmed', () => {
     // The transport wrapper is machinery, not part of the reason.
     expect(screen.queryByText(/Error invoking remote method/)).toBeNull();
     expect(screen.queryByText("You're all set!")).toBeNull();
-    expect(screen.getByRole('button', { name: 'Start Backup' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start backup' })).toBeInTheDocument();
   });
 
   it('a first backup that failed is reported as failed, for the new destination only', async () => {

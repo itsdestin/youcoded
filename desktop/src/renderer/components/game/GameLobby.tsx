@@ -384,7 +384,7 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
             onClick={onToggleIncognito}
             title={incognito ? 'Go online — appear to friends' : 'Go incognito — hide from friends'}
           >
-            {incognito ? 'Go Online' : 'Go Incognito'}
+            {incognito ? 'Go online' : 'Go incognito'}
           </Button>
         )}
       </div>
