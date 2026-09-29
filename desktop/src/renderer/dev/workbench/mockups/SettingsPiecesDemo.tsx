@@ -95,7 +95,7 @@ export function FoldDemo({ style }: { style: FoldStyle }) {
 export type ErrorStyle = 'today' | 'box-under' | 'whole-card';
 
 export function SettingErrorDemo({ style }: { style: ErrorStyle }) {
-  const msg = 'Sync hit an unexpected problem. It will keep retrying; if it keeps failing, report it from Settings → Development.';
+  const msg = 'Sync hit an unexpected problem. It will keep retrying; if it keeps failing, report it from Settings → Help & feedback.';
   let block: React.ReactNode;
   if (style === 'today') {
     block = (

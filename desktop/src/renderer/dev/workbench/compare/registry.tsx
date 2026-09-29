@@ -7228,8 +7228,8 @@ export const COMPARE_SURFACES: CompareSurface[] = [
       n: 2,
       basis: 'Check a shorter row-menu popup using the same real Dialog shell; scroll fade activates only when there is scroll room.',
       candidates: [
-        { id: 'today', label: 'Today', note: 'Unchanged Development popup.', render: () => <PopupTaperDemo variant="today" kind="development" /> },
-        { id: 'selected', label: 'Settings treatment', note: 'Tapered header and title; content fade only if it scrolls.', render: () => <PopupTaperDemo variant="selected" kind="development" /> },
+        { id: 'today', label: 'Today', note: 'Unchanged Help & feedback popup (was Development until it was folded in, 2026-09-28).', render: () => <PopupTaperDemo variant="today" kind="help" /> },
+        { id: 'selected', label: 'Settings treatment', note: 'Tapered header and title; content fade only if it scrolls.', render: () => <PopupTaperDemo variant="selected" kind="help" /> },
       ],
     }],
   },

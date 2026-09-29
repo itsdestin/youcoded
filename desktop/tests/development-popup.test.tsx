@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
-import { DevelopmentPopup } from '../src/renderer/components/development/DevelopmentPopup';
+import { HelpPopup } from '../src/renderer/components/HelpPopup';
 import { BugReportPopup } from '../src/renderer/components/development/BugReportPopup';
 import { ContributePopup } from '../src/renderer/components/development/ContributePopup';
 
@@ -11,41 +11,46 @@ import { ContributePopup } from '../src/renderer/components/development/Contribu
 // DOM accumulation that causes "multiple elements found" errors in subsequent tests.
 afterEach(cleanup);
 
-describe('DevelopmentPopup', () => {
-  it('renders all four rows', () => {
-    render(<DevelopmentPopup open={true} onClose={() => undefined} onOpenBug={() => undefined} onOpenContribute={() => undefined} />);
-    expect(screen.getByText(/Report a Bug or Request a Feature/i)).toBeInTheDocument();
+// Development's rows moved into Help & feedback (2026-09-28, help-merge#HM-1..3); the
+// promises the old DevelopmentPopup suite kept are kept here against their new home.
+describe('Help & feedback carries the development rows', () => {
+  const renderHelp = (over: Partial<Parameters<typeof HelpPopup>[0]> = {}) =>
+    render(<HelpPopup open={true} onClose={() => undefined} onOpenBug={() => undefined} onOpenContribute={() => undefined} {...over} />);
+
+  it('renders every row Development had', () => {
+    renderHelp();
+    expect(screen.getByText(/Report a bug or request a feature/i)).toBeInTheDocument();
     expect(screen.getByText(/Contribute to YouCoded/i)).toBeInTheDocument();
-    expect(screen.getByText(/Known issues/i)).toBeInTheDocument();
-    // Roadmap was designed and approved, then shipped invisible: this list kept two
-    // copies of itself and users only ever saw the older one (grader, 2026-09-10).
+    expect(screen.getByText(/^Known issues$/)).toBeInTheDocument();
+    // Roadmap was designed and approved, then shipped invisible once already
+    // (grader, 2026-09-10) — keep it pinned.
     expect(screen.getByText(/^Roadmap$/)).toBeInTheDocument();
-    expect(screen.getByText(/Share a problem, suggest an idea/i)).toBeInTheDocument();
   });
 
-  it('opens the GitHub issues URL when Known Issues is clicked', () => {
+  it('opens the GitHub issues URL when Known issues is clicked', () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     const onClose = vi.fn();
-    render(<DevelopmentPopup open={true} onClose={onClose} onOpenBug={() => undefined} onOpenContribute={() => undefined} />);
-    fireEvent.click(screen.getByText(/Known issues/i));
+    renderHelp({ onClose });
+    fireEvent.click(screen.getByText(/^Known issues$/));
     expect(openSpy).toHaveBeenCalledWith('https://github.com/itsdestin/youcoded/issues', '_blank');
     expect(onClose).toHaveBeenCalled();
     openSpy.mockRestore();
   });
 
-  // P-15 (2026-08-25 UI audit): the popup used to hand-roll an uppercase
-  // <h3> and had no close button at all — Escape was the only exit.
   it('carries the shared dialog header: a title and a ✕', () => {
-    render(<DevelopmentPopup open={true} onClose={() => undefined} onOpenBug={() => undefined} onOpenContribute={() => undefined} />);
-    expect(screen.getByRole('heading', { name: 'Development' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Close Development' })).toBeInTheDocument();
+    renderHelp();
+    expect(screen.getByRole('heading', { name: 'Help & feedback' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close Help & feedback' })).toBeInTheDocument();
   });
 
-  it('calls onOpenBug when Report row is clicked', () => {
+  it('opens the report and contribute screens from their rows', () => {
     const onOpenBug = vi.fn();
-    render(<DevelopmentPopup open={true} onClose={() => undefined} onOpenBug={onOpenBug} onOpenContribute={() => undefined} />);
-    fireEvent.click(screen.getByText(/Report a Bug or Request a Feature/i));
+    const onOpenContribute = vi.fn();
+    renderHelp({ onOpenBug, onOpenContribute });
+    fireEvent.click(screen.getByText(/Report a bug or request a feature/i));
+    fireEvent.click(screen.getByText(/Contribute to YouCoded/i));
     expect(onOpenBug).toHaveBeenCalled();
+    expect(onOpenContribute).toHaveBeenCalled();
   });
 });
 

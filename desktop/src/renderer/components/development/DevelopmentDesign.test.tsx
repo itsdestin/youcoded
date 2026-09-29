@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BugReportPopup } from './BugReportPopup';
 import { ContributePopup } from './ContributePopup';
-import { DevelopmentPopup } from './DevelopmentPopup';
+import { HelpPopup } from '../HelpPopup';
 
 beforeEach(() => window.history.replaceState({}, '', '/?mode=workbench'));
 afterEach(() => { cleanup(); window.history.replaceState({}, '', '/'); });
@@ -13,9 +13,10 @@ afterEach(() => { cleanup(); window.history.replaceState({}, '', '/'); });
 const idle = () => Promise.resolve({ state: 'idle' as const });
 
 describe('development design safety', () => {
+  // Development's rows live in Help & feedback since 2026-09-28 (help-merge#HM-1..3).
   it('keeps the walkthrough inside Contribute and public navigation usable', () => {
     const openExternal = vi.spyOn(window, 'open').mockImplementation(() => null);
-    render(<DevelopmentPopup open onClose={() => {}} onOpenBug={() => {}} onOpenContribute={() => {}} />);
+    render(<HelpPopup open onClose={() => {}} onOpenBug={() => {}} onOpenContribute={() => {}} />);
     expect(screen.queryByRole('button', { name: 'How contributing works' })).toBeNull();
     fireEvent.click(screen.getByText('Roadmap'));
     expect(openExternal).toHaveBeenCalledWith('https://github.com/itsdestin/youcoded-dev/blob/master/ROADMAP.md', '_blank', 'noopener,noreferrer');

@@ -1,6 +1,6 @@
 // desktop/src/renderer/components/HelpPopup.tsx
-// Settings → Help & feedback (first-run guide design 2026-09-10, §1.6). Same
-// shape as DevelopmentPopup: the shared <Dialog> shell with <SettingRow> rows,
+// Settings → Help & feedback (first-run guide design 2026-09-10, §1.6; absorbed
+// the Development popup 2026-09-28). The shared <Dialog> shell with <SettingRow> rows,
 // so it picks up every theme's tokens and needs no colours of its own.
 import { useEffect, useState } from 'react';
 import { Dialog, SectionLabel, SettingRow, Toggle } from './ui';

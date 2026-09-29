@@ -26,7 +26,7 @@ describe('summarizeSpaceSyncError', () => {
     const s = summarizeSpaceSyncError('fatal: some transport explosion we have never seen');
     expect(s.interrupted).toBe(false);
     // General but non-committal — no guessed cause, and it surfaces where to report.
-    expect(s.summary.toLowerCase()).toContain('development');
+    expect(s.summary.toLowerCase()).toContain('help & feedback');
     expect(s.summary).not.toContain('transport explosion');
   });
 
@@ -78,7 +78,7 @@ describe('summarizeSpaceSyncError corruption-family codes', () => {
     // Accurate remedy (restart re-arms the once-per-launch repair) + the
     // standard report path — never "will keep retrying automatically".
     expect(s.summary.toLowerCase()).toContain('restart');
-    expect(s.summary.toLowerCase()).toContain('development');
+    expect(s.summary.toLowerCase()).toContain('help & feedback');
     expect(s.summary.toLowerCase()).not.toContain('keep retrying');
     expect(s.summary).not.toContain('no network for tier 2');
   });

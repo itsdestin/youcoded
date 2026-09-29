@@ -9,7 +9,8 @@
 // step). This maps the one cause we can identify with certainty (an interrupted
 // write that left a git lock, now auto-healed by GitTransport.reapStaleLocks) to
 // a specific+accurate message, and everything else to a general, non-committal
-// message that points at the existing Settings → Development report path. It
+// message that points at the existing report path (Settings → Help & feedback since
+// Development was folded in, 2026-09-28). It
 // never INVENTS a cause: unknown stays unknown. The raw text is still shown by
 // the card behind a "Show details" toggle, so nothing is lost for debugging.
 //
@@ -71,7 +72,7 @@ export function summarizeSpaceSyncError(raw: string | null | undefined, errorCod
       summary:
         'Sync’s internal records got damaged, and the automatic repair couldn’t finish. ' +
         'Your files are safe. Restarting the app will try the repair again; if it keeps ' +
-        'failing, report it from Settings → Development.',
+        'failing, report it from Settings → Help & feedback.',
     };
   }
   const text = (raw ?? '').toLowerCase();
@@ -93,6 +94,6 @@ export function summarizeSpaceSyncError(raw: string | null | undefined, errorCod
     interrupted: false,
     summary:
       'Sync hit an unexpected problem. It will keep retrying automatically; if it ' +
-      'keeps failing, report it from Settings → Development.',
+      'keeps failing, report it from Settings → Help & feedback.',
   };
 }

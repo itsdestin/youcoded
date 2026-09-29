@@ -11,7 +11,7 @@
 // decides — `effective` is what the next check will use; this only renders it.
 //
 // WHY it lives in its own file (Destin's deck answer, S-1, 2026-09-13): it is
-// shown in TWO places — Settings → Development, and the version pill's update
+// shown in TWO places — Settings → Help & feedback (was Development until 2026-09-28), and the version pill's update
 // popup beside the changelog — and a second copy is how the Development list
 // ended up with two versions of itself, only one of which users ever saw.
 import React, { useEffect, useState } from 'react';
