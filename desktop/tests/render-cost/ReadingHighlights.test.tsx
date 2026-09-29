@@ -69,12 +69,12 @@ describe('ReadingHighlights — render cost at a realistic high comment count', 
     mountWith('stress/warmup.md', 50);
     const small = bestOf((t) => mountWith(`stress/small-${t}.md`, 100));
     const large = bestOf((t) => mountWith(`stress/large-${t}.md`, 1000));
-    // WHY 12, down from 17 (2026-09-29): 17 was set for the parallel suite,
-    // where normal cost reached 13-14x with nothing wrong. Isolated in the
-    // render-cost project, normal measured 7.5-8.0x alone, 6.7-7.6x in three
-    // full verify.sh --full runs and 6.3-8.9x across 24 runs of six full
-    // suites at once (~50% headroom); a planted per-pair DOM change (every
-    // new mark touching every earlier one) reads 19.7-21.1x.
-    expect(large / Math.max(small, 1)).toBeLessThan(12);
+    // WHY 15 (was 17 for the parallel suite, where normal reached 13-14x
+    // with nothing wrong): isolated in the render-cost project, normal
+    // measured 7.3-8.0x alone, 6.7-7.6x in full verify.sh --full runs and at
+    // worst 10.22x across 48 runs of six full suites at once — 15 is 47% over
+    // that worst reading. A planted per-pair DOM change (every new mark
+    // touching every earlier one) reads 19.7-22.5x, at least 1.31x the bound.
+    expect(large / Math.max(small, 1)).toBeLessThan(15);
   }, RENDER_COST_BUDGET_MS);
 });

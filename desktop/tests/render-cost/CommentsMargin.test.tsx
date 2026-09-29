@@ -90,23 +90,28 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
     // Warm-up mount so one-time costs (module init, JIT) don't land on a
     // measured trial and make the ratio look better than it is.
     mountWith('stress/warmup.md', 50);
-    // WHY 100 vs 1,000 (10x), not the old 200 vs 1,000 (5x): a per-pair cost
+    // WHY 50 vs 1,000 (20x), not the old 200 vs 1,000 (5x): a per-pair cost
     // grows with the SQUARE of the step, so a wider step separates it from
     // normal. Measured 2026-09-29 against a planted per-pair DOM change (every
-    // new mark touching every earlier one): at 200 vs 1,000 it read 8.0x
-    // against a normal 4.9x — no bound with room for noise sits between; at
-    // 100 vs 1,000 it reads 15.0-16.0x against a normal 7.7-8.1x.
-    const small = bestOf((t) => mountWith(`stress/small-${t}.md`, 100));
+    // new text mark touching every earlier one), normal / planted:
+    //   200 vs 1,000:  4.9x /  8.0x  — no bound fits between
+    //   100 vs 1,000:  7.7-8.1x / 15.0-16.0x
+    //    50 vs 1,000: 11.7-12.0x / 24.5-28.6x
+    const small = bestOf((t) => mountWith(`stress/small-${t}.md`, 50));
     const large = bestOf((t) => mountWith(`stress/large-${t}.md`, 1000));
-    // WHY 12: normal measured 7.7-8.1x alone, 6.9-8.3x in three full
-    // verify.sh --full runs and 7.4-8.5x across 24 runs of six full suites at
-    // once (~50% headroom); the planted per-pair change reads 15.0-16.0x.
-    expect(large / Math.max(small, 1)).toBeLessThan(12);
+    // WHY 19.5: the planted change must clear the bound by 25% (its lowest
+    // reading, 24.5x, is 1.25x of 19.5), and that is the priority. Headroom
+    // over normal: 63% over the 12.0x measured alone; 27% over the WORST
+    // loaded reading, 15.35x, from 24 runs of six full suites at once (normal
+    // spread there 9.0-15.35x) — a load far past verify.sh or CI, which run
+    // this project with nothing else in the suite running.
+    expect(large / Math.max(small, 1)).toBeLessThan(19.5);
   }, RENDER_COST_BUDGET_MS);
 
   it('renders the elden-ring fixture\'s busiest real sheet (315 cell comments), with cost growing in line with the count', () => {
     // Same ratio design as the synthetic case above, on a real user's file:
-    // the first 60 of its 315 cell comments against the full sheet.
+    // the first 60 of its 315 cell comments against the full sheet. (Tried
+    // 30 and 20 vs 315: the same no-separation result as below.)
     const allCellComments = eldenBossListCellComments();
     expect(allCellComments.length).toBeGreaterThan(300); // the real number this test exists to cover
     const SMALL_COUNT = 60;
@@ -143,9 +148,18 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
     mountWith('warmup', allCellComments.slice(0, 20));
     const small = bestOf((t) => mountWith(`small-${t}`, allCellComments.slice(0, SMALL_COUNT)));
     const large = bestOf((t) => mountWith(`large-${t}`, allCellComments));
-    // WHY 12 (unchanged): 315 / 60 is 5.25x the comments; normal measured
-    // 8.1-9.1x alone, 6.5-7.5x in three full verify.sh --full runs and
-    // 7.2-9.2x across 24 runs of six full suites at once.
-    expect(large / Math.max(small, 1)).toBeLessThan(12);
+    // WHY 14: 52% over the worst loaded reading, 9.23x (24 runs of six full
+    // suites at once, twice; 8.0-9.1x alone).
+    //
+    // WHAT THIS PIN CANNOT CATCH (measured 2026-09-29): an added per-pair
+    // cost on the CELL path. The cell path is already per-pair today —
+    // cellStatus() (use-quote-marks.ts) re-reads every [data-cell] on the
+    // sheet for EACH comment — so a planted change making each cell mark
+    // touch every earlier one doubled both mounts' CPU time and left the
+    // ratio unchanged (8.0-8.2x). Widening the step cannot help: both terms
+    // grow with the square of the count. It still catches anything growing
+    // faster than per-pair; making cellStatus build its set once per pass
+    // would make the cell path linear and let this pin catch per-pair too.
+    expect(large / Math.max(small, 1)).toBeLessThan(14);
   }, RENDER_COST_BUDGET_MS);
 });
