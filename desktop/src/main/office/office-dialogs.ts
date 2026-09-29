@@ -3,6 +3,8 @@
 import { BrowserWindow, app, dialog, type WebContents } from 'electron';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import type { OfficeFile } from '../../shared/office-types';
+import { pickFile } from './office-home';
 
 /** The dialog's answer, made safe (fix round 2). The system dialog confirms overwriting the name
  *  the person typed; a name WE extend with the extension was never shown to them, so replacing
@@ -31,4 +33,10 @@ export async function pickCopyTarget(sender: unknown, filePath: string): Promise
   // WHY force the extension: the copy is translated into this kind of file, so a name typed
   // without it (or with another) would hold content its extension misdescribes.
   return resolveCopyTarget(r.filePath, ext, existsSync);
+}
+
+/** The system file picker behind the start screen's Open, parented to the asking window and
+ *  filtered to Office files (office-home.ts pickFile). null when cancelled. */
+export async function pickOfficeFile(sender: unknown): Promise<OfficeFile | null> {
+  return pickFile(BrowserWindow.fromWebContents(sender as WebContents));
 }

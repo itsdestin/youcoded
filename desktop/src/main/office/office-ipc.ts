@@ -20,6 +20,8 @@ import type { createSessions, OfficeSession } from './office-sessions';
 import { formatFor } from './x2t';
 import * as versions from './versions';
 import { createPruneScheduler, type PruneScheduler } from './prune-schedule';
+import * as recent from './recent';
+import { blankName, createBlank, describeFile, isOfficeKind, kindFor, projectFiles } from './office-home';
 
 type Sessions = ReturnType<typeof createSessions>;
 
@@ -54,7 +56,11 @@ const MSG = {
   couldNotOpen: "Office couldn't open this file.",
   couldNotCopy: "Office couldn't save a copy of this file.",
   refused: 'refused',
-  notYet: 'Not available yet.',
+  createProtected: "Office can't create files in this protected folder.",
+  createNeedsConfirm: "Office can't create files in this folder yet.",
+  createFolderGone: 'This folder no longer exists.',
+  couldNotCreate: "Office couldn't create a new file.",
+  createNoPermission: "Office doesn't have permission to create files in this folder.",
   changeProtected: "Office can't change files in this protected folder.",
   changeNeedsConfirm: "Office can't change settings files like this one yet.",
   folderGone: "This file's folder no longer exists.",
@@ -105,6 +111,13 @@ export interface OfficeIpcDeps {
    *  work that must never compete with the first window opening or with a save. Tests leave it
    *  out, so nothing is scheduled. */
   pruneVersionsAfterMs?: number;
+  /** Where a new file goes when no conversation is focused (app.getPath('documents')).
+   *  Optional so tests that never create can leave it out; without it such a create fails. */
+  documents?: string;
+  /** The system file picker for the asking window (office-dialogs.ts pickOfficeFile); null when
+   *  cancelled. Tests pass a fake. WHY optional: as with pickCopyTarget, the real one is loaded
+   *  only when used, so this file never imports electron. */
+  pickFile?(sender: unknown): Promise<OfficeFile | null>;
   /** Test seam: the translator (a fake that copies). Production uses x2t. */
   convert?: Parameters<typeof createOfficeCommands>[0]['convert'];
 }
@@ -256,6 +269,11 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     const mine = opens.get(sender.id) ?? new Map<string, number>();
     opens.set(sender.id, mine);
     mine.set(session.token, (mine.get(session.token) ?? 0) + 1);
+    // WHY here, on success only (R5): Recent means "opened in Office" — a refused open (gone,
+    // too large, protected) never lists the file. WHY the real path: the same file reached
+    // through a link is one entry. A failure is only logged: Recent must never fail an open.
+    const kind = kindFor(realPath);
+    if (kind) await recent.add(deps.userData, describeFile(realPath, kind, new Date())).catch((e) => log('WARN', 'Office', 'adding to Recent failed', { error: String(e) }));
     return { ok: true, token: session.token, origin: `${SCHEME}://${session.token}` };
   }
 
@@ -417,10 +435,74 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     return list;
   });
 
-  // ── Pending: placeholders until the start screen's backend lands ──
-  // Task 8 (the start screen's lists, new files, the picker) replaces each of these. Until then
-  // they answer the empty shape, never a pretend success.
-  ipcMain.handle('office:status', async (): Promise<OfficeStatus> => ({ available: (await isReady()) !== null, recent: [], project: null }));
-  ipcMain.handle('office:create', async (): Promise<{ ok: false; message: string }> => ({ ok: false, message: MSG.notYet }));
-  ipcMain.handle('office:pick', async (): Promise<OfficeFile | null> => null);
+  // ── The start screen (Task 8): Recent, the focused project's files, New, Open ──
+
+  /** The focused conversation's folder, when it is one: an absolute path to a folder that exists. */
+  async function folderOf(projectRoot: unknown): Promise<string | null> {
+    if (typeof projectRoot !== 'string' || !path.isAbsolute(projectRoot)) return null;
+    try {
+      return (await fsp.stat(projectRoot)).isDirectory() ? projectRoot : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function status(projectRoot: unknown): Promise<OfficeStatus> {
+    // WHY nothing is read when unavailable: the app hides Office then (Task 6), so walking a
+    // project folder for it would be wasted work.
+    if (!(await isReady())) return { available: false, recent: [], project: null };
+    const folder = await folderOf(projectRoot);
+    // WHY a Recent read failure rejects (only a real read error does — an unreadable file starts
+    // over): the start screen then shows its Retry, never an empty Recent that isn't true.
+    const [list, files] = await Promise.all([recent.list(deps.userData), folder ? projectFiles(folder) : null]);
+    return { available: true, recent: list, project: folder && files ? { name: path.basename(folder), files } : null };
+  }
+
+  async function create(kind: unknown, projectRoot: unknown): Promise<{ ok: true; file: OfficeFile } | { ok: false; message: string }> {
+    if (!(await isReady())) return { ok: false, message: MSG.unavailable };
+    if (!isOfficeKind(kind)) return { ok: false, message: MSG.couldNotCreate };
+    // The focused project, or Documents (design: "the focused project or Documents").
+    const wanted = projectRoot === null || projectRoot === undefined ? deps.documents : projectRoot;
+    const dir = await folderOf(wanted);
+    if (!dir) {
+      if (typeof wanted === 'string' && path.isAbsolute(wanted)) return { ok: false, message: MSG.createFolderGone };
+      return { ok: false, message: MSG.couldNotCreate };
+    }
+    let realDir: string;
+    try {
+      // WHY authorized like a save target (the same check "Save a copy" and office:open use): a
+      // conversation's folder can be anywhere, and Office must not put files in a protected one.
+      // Its name decides nothing here, so the kind's first name stands for every numbered one.
+      const auth = await authorizeArtifactWrite({ projectRoot: dir, fullPath: path.join(dir, blankName(kind, 1)), mustStayInRoot: false });
+      if (!auth.ok) {
+        if (auth.error === 'protected-path') return { ok: false, message: MSG.createProtected };
+        if (auth.error === 'needs-confirm') return { ok: false, message: MSG.createNeedsConfirm };
+        return { ok: false, message: MSG.createFolderGone };
+      }
+      realDir = path.dirname(auth.realPath);
+    } catch (e) {
+      log('ERROR', 'Office', 'office:create could not check the folder', { error: String(e) });
+      return { ok: false, message: MSG.couldNotCreate };
+    }
+    try {
+      // Not opened here: the renderer opens it through office:open, which adds it to Recent.
+      return { ok: true, file: await createBlank(deps.root, kind, realDir) };
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException)?.code;
+      if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return { ok: false, message: MSG.createNoPermission };
+      // WHY general: the cause is not known for certain (a missing template among them); the
+      // detail goes to the log (docs/error-message-standards.md).
+      log('ERROR', 'Office', 'office:create failed', { error: String(e), code: code ?? null });
+      return { ok: false, message: MSG.couldNotCreate };
+    }
+  }
+
+  async function pick(sender: OfficeSender): Promise<OfficeFile | null> {
+    const choose = deps.pickFile ?? (await import('./office-dialogs')).pickOfficeFile;
+    return choose(sender);
+  }
+
+  ipcMain.handle('office:status', (_e, projectRoot) => status(projectRoot));
+  ipcMain.handle('office:create', (_e, kind, projectRoot) => create(kind, projectRoot));
+  ipcMain.handle('office:pick', (e) => pick(e.sender));
 }

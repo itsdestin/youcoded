@@ -1932,7 +1932,7 @@ void app.whenReady().then(async () => {
   if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions });
   // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
   // handler. WHY the getter: the registry goes away at quit, and each request must see that.
-  registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData'), pruneVersionsAfterMs: 30_000 });
+  registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData'), documents: app.getPath('documents'), pruneVersionsAfterMs: 30_000 });
   perfMark('main:chore:office-protocol:done');
 
   // Marketplace auth store — instantiated once at startup, passed to IPC handlers.

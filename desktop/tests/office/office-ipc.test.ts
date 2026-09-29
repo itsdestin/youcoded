@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // these tests only drive the IPC layer in front of it.
 vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn() }));
 
+import type { OfficeFile } from '../../src/shared/office-types';
 import { registerOfficeIpc } from '../../src/main/office/office-ipc';
 import { createSessions } from '../../src/main/office/office-sessions';
 import { snapshot, versionsDir } from '../../src/main/office/versions';
@@ -230,10 +231,114 @@ describe('office IPC channels', () => {
     await expect(call('office:status', win1, null)).resolves.toMatchObject({ available: false });
   });
 
-  it('answers the start-screen channels with their placeholders until the start screen lands', async () => {
+});
+
+describe('the start screen: Recent, the project list, New and Open', () => {
+  let templates: string;
+  let documents: string;
+  let picked: OfficeFile | null;
+  let pickedBy: unknown[];
+  beforeEach(async () => {
+    // Generated stand-in templates (a real .docx for the document, so opening one works).
+    templates = path.join(dir, 'addon', 'templates');
+    await mkdir(templates, { recursive: true });
+    await copyFile(MEMO, path.join(templates, 'blank.docx'));
+    await writeFile(path.join(templates, 'blank.xlsx'), 'xlsx template');
+    await writeFile(path.join(templates, 'blank.pptx'), 'pptx template');
+    documents = path.join(dir, 'Documents');
+    await mkdir(documents);
+    picked = null;
+    pickedBy = [];
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, {
+      getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), documents,
+      pickFile: async (sender) => { pickedBy.push(sender); return picked; },
+    });
+  });
+
+  it('lists nothing in Recent before any file was opened', async () => {
     await expect(call('office:status', win1, null)).resolves.toEqual({ available: true, recent: [], project: null });
-    await expect(call('office:create', win1, 'document', null)).resolves.toEqual({ ok: false, message: 'Not available yet.' });
+  });
+
+  it('adds a file to Recent when it opens in Office, and not when the open is refused', async () => {
+    const file = await aDocx();
+    await writeFile(path.join(dir, 'notes.txt'), 'x');
+    await call('office:open', win1, path.join(dir, 'notes.txt'));
+    await call('office:open', win1, path.join(dir, 'gone.docx'));
+    expect((await call('office:status', win1, null) as { recent: unknown[] }).recent).toEqual([]);
+    expect(await call('office:open', win1, file)).toMatchObject({ ok: true });
+    const { recent } = await call('office:status', win1, null) as { recent: Array<Record<string, string>> };
+    expect(recent).toHaveLength(1);
+    expect(recent[0]).toMatchObject({ path: file, name: 'memo.docx', kind: 'document', folder: path.basename(dir) });
+  });
+
+  it("lists the focused conversation's project files, named after its folder", async () => {
+    const project = path.join(dir, 'garden');
+    await mkdir(path.join(project, 'plans'), { recursive: true });
+    await copyFile(MEMO, path.join(project, 'plans', 'Plan.docx'));
+    await writeFile(path.join(project, 'readme.txt'), 'x');
+    const s = await call('office:status', win1, project) as { project: { name: string; files: Array<{ name: string }> } };
+    expect(s.project.name).toBe('garden');
+    expect(s.project.files.map((f) => f.name)).toEqual(['Plan.docx']);
+  });
+
+  it('has no project list for no conversation, a folder that is gone, or a path that is not absolute', async () => {
+    for (const root of [null, path.join(dir, 'gone'), 'relative/folder', 42]) {
+      expect((await call('office:status', win1, root) as { project: unknown }).project).toBeNull();
+    }
+  });
+
+  it('says Office is unavailable without reading Recent or the project', async () => {
+    available = false;
+    await expect(call('office:status', win1, dir)).resolves.toEqual({ available: false, recent: [], project: null });
+  });
+
+  it('creates a new document in the focused project, which then opens', async () => {
+    const project = path.join(dir, 'garden');
+    await mkdir(project);
+    const r = await call('office:create', win1, 'document', project) as { ok: true; file: { path: string; name: string } };
+    expect(r).toMatchObject({ ok: true, file: { name: 'Untitled document.docx', kind: 'document', folder: 'garden' } });
+    expect(r.file.path).toBe(path.join(project, 'Untitled document.docx'));
+    expect(await call('office:open', win1, r.file.path)).toMatchObject({ ok: true });
+    const again = await call('office:create', win1, 'document', project) as { file: { name: string } };
+    expect(again.file.name).toBe('Untitled document 2.docx');
+  });
+
+  it('creates in Documents when no conversation is focused', async () => {
+    const r = await call('office:create', win1, 'spreadsheet', null) as { ok: true; file: { path: string } };
+    expect(r.file.path).toBe(path.join(documents, 'Untitled spreadsheet.xlsx'));
+    expect(await readFile(r.file.path, 'utf8')).toBe('xlsx template');
+  });
+
+  it('refuses an unknown kind, and a project folder that is gone, creating nothing', async () => {
+    await expect(call('office:create', win1, 'drawing', null)).resolves.toMatchObject({ ok: false });
+    await expect(call('office:create', win1, 'document', path.join(dir, 'gone'))).resolves.toEqual({ ok: false, message: 'This folder no longer exists.' });
+    expect(await readdir(documents)).toEqual([]);
+  });
+
+  it('refuses to create a file in a protected folder', async () => {
+    // Any folder named .ssh is protected (editable-path-policy) — a temp one, never the real one.
+    const ssh = path.join(dir, '.ssh');
+    await mkdir(ssh);
+    await expect(call('office:create', win1, 'document', ssh)).resolves.toEqual({ ok: false, message: "Office can't create files in this protected folder." });
+    expect(await readdir(ssh)).toEqual([]);
+  });
+
+  it('says Office is unavailable instead of creating a file', async () => {
+    available = false;
+    await expect(call('office:create', win1, 'document', null)).resolves.toEqual({ ok: false, message: "Office isn't included in this build." });
+    expect(await readdir(documents)).toEqual([]);
+  });
+
+  it("opens the system picker for the asking window, and answers null when it's cancelled", async () => {
     await expect(call('office:pick', win1)).resolves.toBeNull();
+    expect(pickedBy).toEqual([win1]);
+  });
+
+  it('answers the picked file', async () => {
+    const f: OfficeFile = { path: await aDocx(), name: 'memo.docx', kind: 'document', folder: path.basename(dir), at: 'now' };
+    picked = f;
+    await expect(call('office:pick', win1)).resolves.toEqual(f);
   });
 });
 
