@@ -32,7 +32,7 @@ import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
 import type { ChatAction } from './state/chat-types';
-import { installTranscriptBatcher, applyChatHydrate } from './state/transcript-batch';
+import { installTranscriptBatcher, applyChatHydrate, flushTranscriptActions } from './state/transcript-batch';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
@@ -1390,6 +1390,13 @@ function AppInner() {
       // whenever a phone's answer broadcast was lost. Clear the card quietly instead.
       if (action?.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode()) action.silent = true;
       if (action) {
+        // WHY (bubble-split, 2026-09-28): hook events dispatch straight to the
+        // store, but TRANSCRIPT_* deltas wait for the batcher's next frame. An
+        // ask landing while the reply's tail is still queued let its synthetic
+        // tool-group (chat-reducer PERMISSION_REQUEST) jump ahead, so the
+        // queued delta then split into a second bubble. Flush first to keep
+        // true arrival order. tests/hook-event-transcript-ordering.test.tsx.
+        flushTranscriptActions();
         dispatch(action);
       }
       // First hook event for a session = Claude is initialized

@@ -33,6 +33,11 @@ export const FRAME_MS = 16;
 export interface Reply {
   /** `n` text deltas, one per animation frame (native shape: one partId). */
   words(n: number): Promise<void>;
+  /** Pushes one more delta of the SAME partId into the transcript batcher
+   *  WITHOUT waiting for its animation frame — the delta stays queued so a
+   *  test can land something else (e.g. a hook event) while it is pending.
+   *  See tests/hook-event-transcript-ordering.test.tsx. */
+  pushWord(text?: string): void;
   /** A tool call and its result. */
   tool(): Promise<void>;
   end(): Promise<void>;
@@ -63,6 +68,12 @@ export interface BusyApp {
   beginReply(id: string): Promise<Reply>;
   /** PTY bytes for one session. */
   ptyOutput(id: string, data: string): void;
+  /** Fires a PermissionRequest hook event immediately — no frame wait — the
+   *  same way a real ask reaches the reducer (App.tsx's hookHandler dispatches
+   *  hook actions straight to the store; transcript actions wait a frame). Lets
+   *  a test land an ask while a streamed delta is still queued in the batcher.
+   *  See tests/hook-event-transcript-ordering.test.tsx. */
+  permissionRequest(id: string, requestId: string, toolName: string, input?: Record<string, unknown>): void;
   /** A Write tool call on a file inside the session's folder (what drives its file list). */
   writeFile(id: string, name: string): Promise<void>;
   /** Types into the visible session's composer, the whole value at once. */
@@ -351,6 +362,10 @@ export async function mountBusyApp(
             await wait(FRAME_MS);
           }
         },
+        pushWord(text = 'word ') {
+          w++;
+          act(() => { event({ type: 'assistant-text', uuid: `t-${n}-${w}`, data: { text, partId: part } }); });
+        },
         async tool() {
           await act(async () => {
             event({ type: 'tool-use', uuid: `tu-${n}-${w}`, data: { toolUseId: `tool-${n}-${w}`, toolName: 'Bash', toolInput: { command: 'ls' } } });
@@ -363,6 +378,15 @@ export async function mountBusyApp(
           await wait(FRAME_MS);
         },
       };
+    },
+
+    permissionRequest(id, requestId, toolName, input = {}) {
+      act(() => {
+        fire('hookEvent', () => true, {
+          type: 'PermissionRequest', sessionId: id,
+          payload: { tool_name: toolName, tool_input: input, _requestId: requestId, permissionMode: 'ask' },
+        });
+      });
     },
 
     ptyOutput(id, data) {
