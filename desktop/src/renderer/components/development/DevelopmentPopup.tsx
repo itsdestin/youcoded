@@ -36,7 +36,7 @@ export function DevelopmentPopup({ open, onClose, onOpenBug, onOpenContribute }:
   // hand-rolled uppercase <h3> gave this popup a label but no close button.
   // Dialog already portals itself, so the createPortal wrapper is gone too.
   return (
-    <Dialog screen="settings/development" open onClose={onClose} size="panel" title="Development" scrollBody>
+    <Dialog noScreen="retired from Settings (trial 2026-09-28: folded into Help & feedback); kept only for a workbench review mockup" open onClose={onClose} size="panel" title="Development" scrollBody>
       {/* WHY no extra wrapper div (round 4, 2026-09-28 — Destin: "its margins
           ... still differ from other Settings popups"): `scrollBody` already
           gives every Dialog body `px-4 py-4` (the standard 16px edge) — the

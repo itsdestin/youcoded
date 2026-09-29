@@ -3,10 +3,10 @@
 // shape as DevelopmentPopup: the shared <Dialog> shell with <SettingRow> rows,
 // so it picks up every theme's tokens and needs no colours of its own.
 import { useEffect, useState } from 'react';
-import { Dialog, SettingRow, Toggle } from './ui';
+import { Dialog, SectionLabel, SettingRow, Toggle } from './ui';
+import { BetaChannelRow } from './BetaChannelToggle';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useGuideReset } from './guide/guide-events';
-import { formatVersionLine } from '../../shared/version-line';
 
 interface Props {
   open: boolean;
@@ -15,15 +15,13 @@ interface Props {
   onShowMeAround?: () => void;
   /** Opens the app's existing bug-report surface (BugReportPopup). */
   onOpenBug: () => void;
-  /** Same fields AboutPopup takes: the desktop passes a build-time constant,
-   *  Android an async lookup — an empty version renders no line at all. */
-  version?: string;
-  build?: string;
-  channel?: string;
+  /** Opens the contribution walkthrough (ContributePopup). */
+  onOpenContribute: () => void;
 }
 
 const COMMUNITY_URL = 'https://www.reddit.com/r/youcoded/';
 const KNOWN_ISSUES_URL = 'https://github.com/itsdestin/youcoded/issues';
+const ROADMAP_URL = 'https://github.com/itsdestin/youcoded-dev/blob/master/ROADMAP.md';
 
 // The switch that arms the new-user tips (design §4). '1' is on; anything else,
 // or no key, is off. The wizard hand-off writes it; this row sets and clears it.
@@ -49,7 +47,7 @@ function writeTipsArmed(on: boolean): void {
   }
 }
 
-export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, version, build, channel }: Props) {
+export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, onOpenContribute }: Props) {
   useEscClose(open, onClose);
   // The first-run tour moving on closes this popup (guide-events.ts).
   useGuideReset(onClose);
@@ -63,60 +61,87 @@ export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, version, b
 
   if (!open) return null;
   // WHY the default scrolling body (unlike Development's scrollBody={false}):
-  // this popup has twice the rows plus a version line, which sits near the
+  // this popup has many rows in three groups, which sits near the
   // `prompt` height cap on a short window. G-11: a dialog must never switch
   // the body off and then overflow — the shared body scrolls and fades instead.
   return (
-    <Dialog screen="settings/help" open onClose={onClose} size="prompt" title="Help & feedback">
+    // WHY one popup in three labelled groups (trial, 2026-09-28 — Destin,
+    // popup-spacing#SP-4: "consolidate/sort the overlap between this and the help
+    // and feedback tab"). Development repeated three of these rows (report a bug,
+    // known issues, the roadmap); it is folded in here and leaves the Settings list.
+    // The version line went: About carries it, and a bare line broke "nothing bare".
+    <Dialog screen="settings/help" open onClose={onClose} size="panel" title="Help & feedback">
       {/* data-guide-anchor: the tour's last stop rings this page. */}
-      <div className="space-y-2" data-guide-anchor="help-popup">
-        {/* Only where a tour exists (desktop): a row that visibly does nothing
-            on the phone is worse than no row. */}
-        {onShowMeAround && (
-          <SettingRow
-            icon={<CompassIcon />}
-            title="Show me around"
-            description="The buddy's tour, again"
-            onClick={() => { onShowMeAround(); onClose(); }}
-          />
-        )}
-        <SettingRow
-          icon={<LightbulbIcon />}
-          title="Tips for new users"
-          description="Hints as things come up"
-          control={
-            <Toggle
-              checked={tipsArmed}
-              onChange={(next) => { writeTipsArmed(next); setTipsArmed(next); }}
-              aria-label="Tips for new users"
+      <div className="space-y-4" data-guide-anchor="help-popup">
+        <section>
+          <SectionLabel className="mb-2">Getting started</SectionLabel>
+          <div className="space-y-2">
+            {/* Only where a tour exists (desktop): a row that visibly does nothing
+                on the phone is worse than no row. */}
+            {onShowMeAround && (
+              <SettingRow
+                icon={<CompassIcon />}
+                title="Show me around"
+                description="The buddy's tour, again"
+                onClick={() => { onShowMeAround(); onClose(); }}
+              />
+            )}
+            <SettingRow
+              icon={<LightbulbIcon />}
+              title="Tips for new users"
+              description="Hints as things come up"
+              control={
+                <Toggle
+                  checked={tipsArmed}
+                  onChange={(next) => { writeTipsArmed(next); setTipsArmed(next); }}
+                  aria-label="Tips for new users"
+                />
+              }
             />
-          }
-        />
-        <SettingRow
-          icon={<PeopleIcon />}
-          title="Community on Reddit"
-          description="Questions, ideas, other users"
-          onClick={() => { window.open(COMMUNITY_URL, '_blank'); onClose(); }}
-        />
-        <SettingRow
-          icon={<BugIcon />}
-          title="Report a bug or request a feature"
-          description="Send it to the team"
-          onClick={() => { onOpenBug(); onClose(); }}
-        />
-        <SettingRow
-          icon={<ClipboardListIcon />}
-          title="Known issues and planned features"
-          description="What is known, what is coming"
-          onClick={() => { window.open(KNOWN_ISSUES_URL, '_blank'); onClose(); }}
-        />
-        {/* The version, so a bug report or a Reddit post can quote it without
-            a trip to About. Not a row: nothing happens when it is pressed. */}
-        {version && (
-          <p className="text-2xs text-fg-muted text-center pt-2">
-            {formatVersionLine({ version, build, channel })}
-          </p>
-        )}
+          </div>
+        </section>
+        <section>
+          <SectionLabel className="mb-2">Questions and feedback</SectionLabel>
+          <div className="space-y-2">
+            <SettingRow
+              icon={<PeopleIcon />}
+              title="Community on Reddit"
+              description="Questions, ideas, other users"
+              onClick={() => { window.open(COMMUNITY_URL, '_blank'); onClose(); }}
+            />
+            <SettingRow
+              icon={<BugIcon />}
+              title="Report a bug or request a feature"
+              description="Send it to the YouCoded team"
+              onClick={() => { onOpenBug(); onClose(); }}
+            />
+            <SettingRow
+              icon={<ClipboardListIcon />}
+              title="Known issues"
+              description="Browse open issues on GitHub"
+              onClick={() => { window.open(KNOWN_ISSUES_URL, '_blank'); onClose(); }}
+            />
+            {/* WHY noopener: a public page, opened the way Development opened it. */}
+            <SettingRow
+              icon={<ClipboardListIcon />}
+              title="Roadmap"
+              description="See what's planned on GitHub"
+              onClick={() => { window.open(ROADMAP_URL, '_blank', 'noopener,noreferrer'); onClose(); }}
+            />
+          </div>
+        </section>
+        <section>
+          <SectionLabel className="mb-2">Help build YouCoded</SectionLabel>
+          <div className="space-y-2">
+            <SettingRow
+              icon={<CodeBracketsIcon />}
+              title="Contribute to YouCoded"
+              description="Start with a conversation, not code"
+              onClick={() => { onOpenContribute(); onClose(); }}
+            />
+            <BetaChannelRow variant="nav" icon={<FlaskIcon />} />
+          </div>
+        </section>
       </div>
     </Dialog>
   );
@@ -184,6 +209,32 @@ function ClipboardListIcon() {
       <path d="M9 12 H15" />
       <path d="M9 15 H15" />
       <path d="M9 18 H13" />
+    </svg>
+  );
+}
+
+function CodeBracketsIcon() {
+  // </> — the iconic developer "code" symbol. Ties to "contribute to a codebase".
+  return (
+    <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 7 L4 12 L9 17" />
+      <path d="M15 7 L20 12 L15 17" />
+      <path d="M14 5 L10 19" />
+    </svg>
+  );
+}
+
+function FlaskIcon() {
+  // Lab flask — "a build that is still being tested". Same stroke weight and
+  // 24×24 box as the three above so the icon column stays even.
+  return (
+    <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      {/* Neck */}
+      <path d="M10 3 V9 L5 18 a2 2 0 0 0 1.8 3 h10.4 a2 2 0 0 0 1.8 -3 L14 9 V3" />
+      {/* Lip */}
+      <path d="M9 3 H15" />
+      {/* Liquid line */}
+      <path d="M7.2 14 H16.8" />
     </svg>
   );
 }

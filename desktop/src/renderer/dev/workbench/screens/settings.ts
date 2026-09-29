@@ -34,7 +34,6 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),
   settings('settings/help', 'dialog'),
-  settings('settings/development', 'dialog'),
   settings('settings/development/bug-report', 'dialog'),
   settings('settings/development/contribute', 'dialog'),
   settings('settings/shortcuts', 'dialog'),

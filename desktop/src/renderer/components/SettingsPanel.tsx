@@ -18,7 +18,6 @@ import { Scrim } from './overlays/Overlay';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import AboutPopup from './AboutPopup';
-import { DevelopmentPopup } from './development/DevelopmentPopup';
 import { HelpPopup } from './HelpPopup';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
@@ -2651,7 +2650,6 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
-  const [showDevMenu, setShowDevMenu] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   // WHY the context object doubles as the open flag: two states that must agree
   // (is it open / what is it about) drift; one cannot.
@@ -2756,7 +2754,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
             </svg>
           }
           title="Help & feedback"
-          description="Tour, tips, community, bug reports"
+          description="Tour, tips, feedback, contributing"
           onClick={() => setShowHelp(true)}
           // data-guide-anchor (on the wrapper below): the tour's last stop
           // presses this row to open the page it talks about. SettingRow
@@ -2767,30 +2765,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
           open={showHelp}
           onClose={() => setShowHelp(false)}
           onOpenBug={() => { setShowHelp(false); setReportContext({}); }}
-          version={aboutInfo?.version}
-          build={aboutInfo?.build}
-        />
-
-        {/* Development — bug reports, contributions, known issues */}
-        <SettingRow
-          icon={
-            // {YC} — curly braces with YC monogram in Cascadia Mono (matches
-            // the "Development" label's font size).
-            <svg className="w-6 h-4 text-fg-muted" viewBox="0 0 32 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M5 4 C 3 4 3 7 3 9 C 3 11 2 12 1 12 C 2 12 3 13 3 15 C 3 17 3 20 5 20" />
-              <path d="M27 4 C 29 4 29 7 29 9 C 29 11 30 12 31 12 C 30 12 29 13 29 15 C 29 17 29 20 27 20" />
-              <text x="16" y="17" textAnchor="middle" fontFamily="'Cascadia Code', 'Cascadia Mono', Consolas, monospace" fontSize="16" fontWeight="500" fill="currentColor" stroke="none">YC</text>
-            </svg>
-          }
-          title="Development"
-          description="Report a bug or help improve the app"
-          onClick={() => setShowDevMenu(true)}
-        />
-        <DevelopmentPopup
-          open={showDevMenu}
-          onClose={() => setShowDevMenu(false)}
-          onOpenBug={() => { setShowDevMenu(false); setReportContext({}); }}
-          onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
+          onOpenContribute={() => { setShowHelp(false); setShowContribute(true); }}
         />
         <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
@@ -2882,7 +2857,6 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
-  const [showDevMenu, setShowDevMenu] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   // WHY the context object doubles as the open flag: two states that must agree
   // (is it open / what is it about) drift; one cannot.
@@ -2892,9 +2866,8 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   // development sub-screens open the way their menu rows do — the menu closes
   // and the popup takes its place.
   useScreenOpen('settings/help', () => setShowHelp(true));
-  useScreenOpen('settings/development', () => setShowDevMenu(true));
-  useScreenOpen('settings/development/bug-report', () => { setShowDevMenu(false); setReportContext({}); });
-  useScreenOpen('settings/development/contribute', () => { setShowDevMenu(false); setShowContribute(true); });
+  useScreenOpen('settings/development/bug-report', () => setReportContext({}));
+  useScreenOpen('settings/development/contribute', () => setShowContribute(true));
   useScreenOpen('settings/shortcuts', () => setShowShortcuts(true));
   useScreenOpen('settings/donate', () => setShowDonateConfirm(true));
   useScreenOpen('settings/about', () => setShowAbout(true));
@@ -3186,7 +3159,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
             </svg>
           }
           title="Help & feedback"
-          description="Tour, tips, community, bug reports"
+          description="Tour, tips, feedback, contributing"
           onClick={() => setShowHelp(true)}
           // data-guide-anchor (on the wrapper below): the tour's last stop
           // presses this row to open the page it talks about. SettingRow
@@ -3198,30 +3171,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onClose={() => setShowHelp(false)}
           onShowMeAround={onShowMeAround}
           onOpenBug={() => { setShowHelp(false); setReportContext({}); }}
-          version={desktopVersion}
-          channel={desktopChannel}
-        />
-
-        {/* Development — bug reports, contributions, known issues */}
-        <SettingRow
-          icon={
-            // {YC} — curly braces with YC monogram in Cascadia Mono (matches
-            // the "Development" label's font size).
-            <svg className="w-6 h-4 text-fg-muted" viewBox="0 0 32 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M5 4 C 3 4 3 7 3 9 C 3 11 2 12 1 12 C 2 12 3 13 3 15 C 3 17 3 20 5 20" />
-              <path d="M27 4 C 29 4 29 7 29 9 C 29 11 30 12 31 12 C 30 12 29 13 29 15 C 29 17 29 20 27 20" />
-              <text x="16" y="17" textAnchor="middle" fontFamily="'Cascadia Code', 'Cascadia Mono', Consolas, monospace" fontSize="16" fontWeight="500" fill="currentColor" stroke="none">YC</text>
-            </svg>
-          }
-          title="Development"
-          description="Report a bug or help improve the app"
-          onClick={() => setShowDevMenu(true)}
-        />
-        <DevelopmentPopup
-          open={showDevMenu}
-          onClose={() => setShowDevMenu(false)}
-          onOpenBug={() => { setShowDevMenu(false); setReportContext({}); }}
-          onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
+          onOpenContribute={() => { setShowHelp(false); setShowContribute(true); }}
         />
         <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
