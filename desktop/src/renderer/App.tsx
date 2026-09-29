@@ -3811,6 +3811,7 @@ function AppInner() {
                 wallpaper directly, so the whole chrome reads as one
                 continuous tone. */}
             <div className={`chrome-glass${(activeDrawerOpen || gameState.panelOpen) ? ' chrome-glass--drawer-open' : ''}`} />
+            <div aria-hidden className={`chrome-outline${(activeDrawerOpen || gameState.panelOpen) ? ' chrome-outline--drawer-open' : ''}`} />
             <div ref={headerRef} className="chrome-wrapper bg-canvas">
               <HeaderBar
                 sessions={sessions}
@@ -4046,6 +4047,7 @@ function AppInner() {
                 5rem fallback reserved for an input bar that isn't here — as
                 wide as the header, so the frame closes evenly top and bottom. */}
             <div className="chrome-glass chrome-glass--bare" />
+            <div aria-hidden className="chrome-outline chrome-outline--bare" />
             <div ref={headerRef} className="chrome-wrapper bg-canvas">
               <BareHeaderBar
                 settingsOpen={settingsOpen}

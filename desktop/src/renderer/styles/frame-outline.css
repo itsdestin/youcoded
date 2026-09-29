@@ -1,0 +1,50 @@
+/* The frame outline (2026-09-29, Destin: "i think we should consider an outline
+   all the way around the edge of the frame in framed themes"). In framed themes
+   the chat pane is a hole cut out of one frame layer (.chrome-glass, a clip-path
+   donut), and on dark or low-contrast themes that hole's edge barely reads. This
+   draws the cards' outline colour (--edge-card) as a 1px ring just outside the
+   hole, on the frame side, so the pane has a crisp edge all the way round.
+
+   WHY a separate element, not a border on .chrome-glass: the glass is clipped to
+   the donut, so anything it draws AT the hole's edge is half cut away. This sits
+   beside it, unclipped, reading the SAME measurements the polygon uses, so the
+   ring and the hole always agree (drawer open, terminal view, welcome screen).
+   pointer-events: none — it is paint only. */
+.chrome-outline {
+  --chat-right-offset: var(--frame-edge);
+  position: absolute;
+  z-index: 10;
+  pointer-events: none;
+  top: var(--top-chrome-height, 3rem);
+  left: var(--frame-edge);
+  right: var(--chat-right-offset);
+  bottom: var(--bottom-chrome-total);
+  border-radius: var(--frame-corner);
+  box-shadow: 0 0 0 1px var(--edge-card);
+}
+.chrome-outline--drawer-open {
+  --chat-right-offset: calc(var(--frame-edge) * 2 + var(--right-pane-width, 480px));
+}
+/* Same two geometry overrides the glass takes (globals.css, same reasons). */
+html[data-platform="electron"][data-view-mode="terminal"] .chrome-outline {
+  --bottom-chrome-total: calc(var(--frame-edge) + var(--vvp-offset, 0px));
+}
+.chrome-outline--bare {
+  --bottom-chrome-total: calc(var(--top-chrome-height, 3rem) + var(--vvp-offset, 0px));
+}
+/* The side pane (files drawer or games) sits in the frame beside the chat: same
+   ring, so both panes read as windows in one frame. */
+body:not([data-chrome-style='floating']):not([data-chrome-style='float']):not([data-input-style='floating']) .framed-shell > .drawer-pane {
+  box-shadow: 0 0 0 1px var(--edge-card);
+}
+/* No frame, no outline: floating layouts hide the glass, and 'float' collapses it. */
+[data-chrome-style='floating'] .chrome-outline,
+[data-input-style='floating'] .chrome-outline,
+[data-chrome-style='float'] .chrome-outline {
+  display: none;
+}
+/* Full screens (Projects, Pages, Marketplace…) draw their own framed pane over
+   the chat: the same ring, so every screen's pane has the same edge. */
+body:not([data-chrome-style='floating']):not([data-chrome-style='float']):not([data-input-style='floating']) .screen-pane--frame {
+  box-shadow: 0 0 0 1px var(--edge-card);
+}
