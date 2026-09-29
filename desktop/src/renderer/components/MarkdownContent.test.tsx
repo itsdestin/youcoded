@@ -877,8 +877,11 @@ describe('MarkdownContent while a reply streams in', () => {
     let seed = 20260925;
     const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
     // A fixed count sized to ~5 s here, not a time box (under load a time box
-    // would quietly test less).
-    for (let docs = 0; docs < 200; docs++) {
+    // would quietly test less). WHY 70, not 200 (2026-09-29): the awkward-cut
+    // fragments added since made 200 documents take ~15 s alone and ~46 s in
+    // the full parallel suite, past the 30 s limit — a flake. 70 is back at
+    // ~5 s; the seed is fixed, so the same 70 documents run every time.
+    for (let docs = 0; docs < 70; docs++) {
       const md = Array.from({ length: 2 + Math.floor(rnd() * 5) }, () => FRAGS[Math.floor(rnd() * FRAGS.length)]).join(rnd() < 0.35 ? '\n' : '\n\n');
       const cuts = boundaries(md);
       const prefixes: string[] = [];
@@ -922,5 +925,6 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
       today.unmount();
     }
-  });
+    // Headroom for a busy machine (the suite runs files in parallel).
+  }, 60_000);
 });
