@@ -41,6 +41,78 @@ function entry(key: string, height: number) {
 }
 
 describe('useEntryFolding', () => {
+  it('reveals just the requested row and pins it until release, then folds normally', () => {
+    const { result } = renderHook(() => useEntryFolding(true, rootRef));
+    const a = entry('a', 90), b = entry('b', 100);
+    act(() => { result.current.registerEntry(a); result.current.registerEntry(b); fire([
+      { target: a, isIntersecting: false }, { target: b, isIntersecting: false },
+    ]); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(result.current.isFolded('a')).toBe(true);
+    let release!: () => void;
+    let secondRelease!: () => void;
+    act(() => { release = result.current.revealAndPin('a'); secondRelease = result.current.revealAndPin('a'); });
+    expect(result.current.isFolded('a')).toBe(false);
+    expect(result.current.isFolded('b')).toBe(true);
+    act(() => { fire([{ target: a, isIntersecting: false }]); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(result.current.isFolded('a')).toBe(false);
+    act(() => { release(); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(result.current.isFolded('a')).toBe(false);
+    act(() => { secondRelease(); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(result.current.isFolded('a')).toBe(true);
+  });
+
+  it('drops published spacer state before a removed row key is reused', async () => {
+    const { result } = renderHook(() => useEntryFolding(true, rootRef));
+    const old = entry('reuse', 240);
+    let detach!: () => void;
+    act(() => { detach = result.current.registerEntry(old); fire([{ target: old, isIntersecting: false }]); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(result.current.isFolded('reuse')).toBe(true);
+    await act(async () => { detach(); await Promise.resolve(); });
+    expect(result.current.isFolded('reuse')).toBe(false);
+    expect(result.current.heightOf('reuse')).toBeUndefined();
+    act(() => { result.current.registerEntry(entry('reuse', 50)); });
+    expect(result.current.isFolded('reuse')).toBe(false);
+  });
+
+  it('keeps a revealed body and its Range mounted until the selection releases', () => {
+    let api!: EntryFolding;
+    function Row() {
+      api = useEntryFolding(true, rootRef);
+      return React.createElement('div', { 'data-entry-key': 'selected', ref: api.registerEntry },
+        api.isFolded('selected') ? null : React.createElement('span', null, 'selected match'));
+    }
+    const view = render(React.createElement(Row));
+    const el = view.container.firstElementChild as HTMLElement;
+    Object.defineProperty(el, 'offsetHeight', { value: 120 });
+    act(() => { fire([{ target: el, isIntersecting: false }]); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(el.childElementCount).toBe(0);
+    let release!: () => void;
+    act(() => { release = api.revealAndPin('selected'); });
+    const text = el.querySelector('span')!.firstChild!;
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    act(() => { fire([{ target: el, isIntersecting: false }]); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(text.isConnected).toBe(true);
+    expect(range.toString()).toBe('selected match');
+    act(() => { release(); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(text.isConnected).toBe(false);
+    expect(el.childElementCount).toBe(0);
+  });
+
+  it('releases registered records and pins at root unmount', () => {
+    const { result, unmount } = renderHook(() => useEntryFolding(true, rootRef));
+    const el = entry('a', 80);
+    let detach!: () => void;
+    act(() => { detach = result.current.registerEntry(el); result.current.revealAndPin('a'); });
+    act(() => { detach(); });
+    unmount();
+    expect(observed).toEqual([]);
+    // A stale selection cannot keep a removed key pinned on reuse.
+    const { result: next } = renderHook(() => useEntryFolding(true, rootRef));
+    act(() => { next.current.registerEntry(entry('a', 80)); });
+    expect(next.current.isFolded('a')).toBe(false);
+  });
+
   it('folds an entry that scrolled away, at the height it last occupied', () => {
     const { result } = renderHook(() => useEntryFolding(true, rootRef));
     const el = entry('a', 240);
@@ -304,6 +376,25 @@ describe('useEntryFolding', () => {
     expect(result.current.isFolded('far')).toBe(true);
   });
 
+  it('a search jump to the middle inspects a viewport band, not every newer spacer', () => {
+    const { result } = renderHook(() => useEntryFolding(true, rootRef));
+    rootRef.current!.getBoundingClientRect = () => ({ top: 0, bottom: 800 } as DOMRect);
+    let reads = 0;
+    const els = Array.from({ length: 3000 }, (_, i) => {
+      const el = entry(`row-${i}`, 100);
+      el.getBoundingClientRect = () => { reads++; const top = (i - 1500) * 120; return { top, bottom: top + 100 } as DOMRect; };
+      return el;
+    });
+    rootRef.current!.append(...els);
+    act(() => { for (const el of els) result.current.registerEntry(el); });
+    act(() => { fire(els.map((target) => ({ target, isIntersecting: false }))); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    reads = 0;
+    act(() => { result.current.unfoldNearViewport(); });
+    expect(result.current.isFolded('row-1500')).toBe(false);
+    expect(result.current.isFolded('row-2900')).toBe(true);
+    expect(reads).toBeLessThan(100); // not 1500 getBoundingClientRect calls
+  });
+
   it('unfoldNearViewport stops measuring at the first entry above the band', () => {
     // It runs inside the click, ahead of the switch's first frame. A conversation
     // read to its top holds thousands of folded entries far above; measuring all
@@ -328,7 +419,7 @@ describe('useEntryFolding', () => {
     reads = 0;
     act(() => { result.current.unfoldNearViewport(); });
     expect(result.current.isFolded('near')).toBe(false);
-    expect(reads).toBe(2);   // the one near the screen, and the first one above the band
+    expect(reads).toBeLessThan(20); // binary seek + band, never every older entry
   });
 
   it('returns a cleanup even with no element or no observer', () => {
