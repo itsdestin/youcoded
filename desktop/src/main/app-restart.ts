@@ -54,6 +54,9 @@ interface GatedQuitDeps {
   quit?(): void;
   /** How many windows are still open. */
   openWindows?(): number;
+  /** A responsive window got an unsaved text editor after teardown began: it was just told
+   *  "Save it, then quit again" (true) and must not be forced (fix round 10). */
+  refuseForUnsaved?(): boolean;
   exit?(): void;
   setTimer?(fn: () => void, ms: number): void;
 }
@@ -63,6 +66,7 @@ function electronDefaults() {
     relaunch: () => app.relaunch(),
     quit: () => app.quit(),
     openWindows: () => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
+    refuseForUnsaved: () => false,
     exit: () => app.exit(0),
     setTimer: (fn: () => void, ms: number) => { setTimeout(fn, ms).unref?.(); },
   };
@@ -88,6 +92,13 @@ export async function gatedQuit(deps: GatedQuitDeps): Promise<void> {
     d.setTimer(() => {
       const open = d.openWindows();
       if (open === 0) return;
+      // Edited AFTER the gate's check (typing during teardown): never forced. The person was just
+      // told to save; the next quit passes straight through (teardown is done) and finishes then.
+      if (d.refuseForUnsaved()) {
+        relaunchOnQuit = false;
+        log('WARN', 'quit', 'quit held after teardown by a window with unsaved edits', { windows: open });
+        return;
+      }
       log('WARN', 'quit', 'windows still open 10 s after teardown; exiting', { windows: open });
       onWillQuit(d.relaunch); // exit() skips will-quit, so a restart relaunches here
       d.exit();

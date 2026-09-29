@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
   OFFICE_FLUSH_DONE, OFFICE_FLUSH_REQUEST, OFFICE_OTHER_UNSAVED, OFFICE_PROCEED, OFFICE_UNSAVED_PROMPT,
-  askToFlush, flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, watchOtherUnsaved,
+  askToFlush, flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, refuseQuitForOtherUnsaved, watchOtherUnsaved,
 } from '../../src/main/office/office-flush';
 import { gatedQuit, onWillQuit, requestRestart, resetRestartForTests } from '../../src/main/app-restart';
 
@@ -260,6 +260,41 @@ describe('quitting while a text file has unsaved edits', () => {
     onWillQuit(relaunch);
     expect(relaunch).not.toHaveBeenCalled();
     t.sender.emit('destroyed');
+  });
+
+  it('a file edited during teardown holds the quit: the watchdog tells that window and does not exit', async () => {
+    resetRestartForTests();
+    const t = editing(24);
+    requestRestart(() => {});
+    let fire!: () => void;
+    const d = {
+      gate: (onProceed: () => void) => officeQuitGate([t.win], depsFor(t.ipc, [24]), onProceed),
+      shutdown: vi.fn(async () => { t.report(true); }), // typed into a text file while teardown ran
+      relaunch: vi.fn(), quit: vi.fn(), openWindows: () => 1, exit: vi.fn(),
+      refuseForUnsaved: () => refuseQuitForOtherUnsaved([t.win], () => false),
+      setTimer: (fn: () => void) => { fire = fn; },
+    };
+    await gatedQuit(d);
+    expect(d.shutdown).toHaveBeenCalled();
+    fire();
+    expect(d.exit).not.toHaveBeenCalled();
+    expect(t.pushes).toEqual([{ count: 0, firstPath: '', other: true }]);
+    const relaunch = vi.fn();
+    onWillQuit(relaunch); // the restart was dropped
+    expect(relaunch).not.toHaveBeenCalled();
+    t.sender.emit('destroyed');
+  });
+
+  it('ignores a hung window, and forgets one whose page crashed', async () => {
+    const hung = editing(25);
+    hung.report(true);
+    await expect(officeQuitGate([hung.win], { ...depsFor(hung.ipc, [25]), hung: () => true })).resolves.toBe(true);
+    hung.sender.emit('destroyed');
+    const crashed = editing(26);
+    crashed.report(true);
+    crashed.sender.emit('render-process-gone');
+    await expect(officeQuitGate([crashed.win], depsFor(crashed.ipc, [26]))).resolves.toBe(true);
+    crashed.sender.emit('destroyed');
   });
 
   it('forgets a window once its page reloads or it is gone', async () => {

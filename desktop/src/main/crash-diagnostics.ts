@@ -161,7 +161,7 @@ export function wireWindowHangDiagnostics(win: BrowserWindow, label: string): { 
 
 const hangs = new WeakMap<BrowserWindow, { readonly unresponsive: boolean }>();
 /** Whether this window is hung right now (false for a window never wired). */
-function isUnresponsive(win: BrowserWindow): boolean {
+export function isUnresponsive(win: BrowserWindow): boolean {
   return hangs.get(win)?.unresponsive ?? false;
 }
 

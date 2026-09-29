@@ -91,6 +91,19 @@ describe('the quit watchdog', () => {
     expect(t.d.exit).toHaveBeenCalledTimes(1);
   });
 
+  it('never forces a window that got unsaved edits after the check, and drops the restart', async () => {
+    requestRestart(() => {});
+    const t = deps(true, 1);
+    const refuse = vi.fn(() => true);
+    await gatedQuit({ ...t.d, refuseForUnsaved: refuse });
+    t.fire();
+    expect(refuse).toHaveBeenCalled();
+    expect(t.d.exit).not.toHaveBeenCalled();
+    const relaunch = vi.fn();
+    onWillQuit(relaunch);
+    expect(relaunch).not.toHaveBeenCalled();
+  });
+
   it('does nothing when every window already closed', async () => {
     const t = deps(true, 0);
     await gatedQuit(t.d);

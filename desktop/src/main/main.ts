@@ -45,7 +45,7 @@ import { registerOfficeProtocol } from './office/office-protocol';
 import { registerOfficeIpc } from './office/office-ipc';
 import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
-import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, watchOtherUnsaved } from './office/office-flush';
+import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, refuseQuitForOtherUnsaved, watchOtherUnsaved } from './office/office-flush';
 import { createCloseGate } from './window-close-gate';
 import { gatedQuit, onWillQuit } from './app-restart';
 import { isAppPageUrl } from './app-navigation';
@@ -1134,6 +1134,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
     chatgptAuth, welcomeBackStore);
   cleanupIpcHandlers = ipcWiring.cleanup;
+  watchOtherUnsaved(); // unsaved text editors refuse a quit before teardown (office-flush.ts, fix rounds 9–10)
   cancelWindowHandoffs = (id) => ipcWiring.handoffAttempts?.cancelOwner(`window:${id}`);
   const hasUsableProvider = ipcWiring.hasUsableProvider;
 
@@ -1931,7 +1932,6 @@ void app.whenReady().then(async () => {
   // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
   // handler. WHY the getter: the registry goes away at quit, and each request must see that.
   registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot() });
-  watchOtherUnsaved(); // unsaved text editors refuse a quit before teardown (office-flush.ts, fix round 9)
   perfMark('main:chore:office-protocol:done');
 
   // Marketplace auth store — instantiated once at startup, passed to IPC handlers.
@@ -2610,6 +2610,7 @@ app.on('before-quit', (e) => {
   void gatedQuit({ // app-restart.ts: also carries a pending restart through the gate (fix round 6, I-B)
     gate: (onProceed) => officeQuitGate(undefined, undefined, onProceed),
     shutdown: () => shutdownApp(),
+    refuseForUnsaved: () => refuseQuitForOtherUnsaved(),
   }).catch(() => {});
 });
 app.on('will-quit', () => onWillQuit(() => app.relaunch())); // a restart relaunches only now (app-restart.ts)

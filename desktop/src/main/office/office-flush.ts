@@ -19,6 +19,7 @@
 // text-file edit, typing after the approval) is legitimate and must keep the window open.
 import { BrowserWindow, app, ipcMain } from 'electron';
 import { getOfficeSessions, quitOfficeSessions } from './office-session-registry';
+import { isUnresponsive } from '../crash-diagnostics';
 
 export const OFFICE_FLUSH_REQUEST = 'office:flush-request';
 export const OFFICE_FLUSH_DONE = 'office:flush-done';
@@ -89,6 +90,7 @@ interface ReportingSender {
   id: number;
   once?(event: 'destroyed', l: () => void): unknown;
   on?(event: 'did-start-navigation', l: (d: { isMainFrame?: boolean; isSameDocument?: boolean }) => void): unknown;
+  on?(event: 'render-process-gone', l: () => void): unknown;
 }
 const watchedSenders = new Set<number>();
 /** Call once at startup: records each window's "unsaved non-Office editor" state. */
@@ -102,9 +104,29 @@ export function watchOtherUnsaved(ipc: FlushIpc = ipcMain): void {
     watchedSenders.add(id);
     s.once?.('destroyed', () => { otherUnsaved.delete(id); watchedSenders.delete(id); });
     s.on?.('did-start-navigation', (d) => { if (d?.isMainFrame && !d.isSameDocument) otherUnsaved.delete(id); });
+    // A crashed page has lost its editor (and its edits) already: it cannot hold a quit (fix round 10).
+    s.on?.('render-process-gone', () => { otherUnsaved.delete(id); });
   });
 }
-interface GateDeps { hasDocuments(senderId: number): boolean; ipc?: FlushIpc; capMs?: number; quitApp?: () => void }
+
+/**
+ * If a window that is still responding has an unsaved text editor, refuse the quit in it: focus
+ * it and show "A file has unsaved changes. Save it, then quit again." Returns whether it did.
+ * WHY a hung window is skipped (fix round 10): its editor can neither be saved nor answer, so
+ * it could only block the quit forever — the hang question (close it anyway) covers it instead.
+ * Used by the quit gate before teardown and by the quit watchdog after it.
+ */
+export function refuseQuitForOtherUnsaved(
+  windows: ClosingWindow[] = BrowserWindow.getAllWindows() as unknown as ClosingWindow[],
+  hung: (w: ClosingWindow) => boolean = (w) => isUnresponsive(w as unknown as BrowserWindow),
+): boolean {
+  const editing = windows.find((w) => !w.isDestroyed() && otherUnsaved.has(w.webContents.id) && !hung(w));
+  if (!editing) return false;
+  editing.focus?.();
+  if (!editing.webContents.isDestroyed()) editing.webContents.send(OFFICE_UNSAVED_PROMPT, { count: 0, firstPath: '', other: true });
+  return true;
+}
+interface GateDeps { hasDocuments(senderId: number): boolean; ipc?: FlushIpc; capMs?: number; quitApp?: () => void; hung?: (w: ClosingWindow) => boolean }
 const realDeps = (): GateDeps => ({ hasDocuments: (id) => getOfficeSessions()?.hasFor(id) ?? false });
 
 // Windows whose documents were just saved for a close in progress: the close that follows lets
@@ -181,13 +203,7 @@ export async function officeQuitGate(
 ): Promise<boolean> {
   // First, before anything (even a Close anyway's re-issued quit): a window with an unsaved text
   // file would veto the unload after teardown — refuse the quit now, in that window (fix round 9).
-  const editing = windows.find((w) => !w.isDestroyed() && otherUnsaved.has(w.webContents.id));
-  if (editing) {
-    skipQuitGate = false;
-    editing.focus?.();
-    if (!editing.webContents.isDestroyed()) editing.webContents.send(OFFICE_UNSAVED_PROMPT, { count: 0, firstPath: '', other: true });
-    return false;
-  }
+  if (refuseQuitForOtherUnsaved(windows, deps.hung)) { skipQuitGate = false; return false; }
   if (skipQuitGate) { skipQuitGate = false; return true; }
   const ipc = deps.ipc ?? ipcMain;
   listenForProceed(ipc);

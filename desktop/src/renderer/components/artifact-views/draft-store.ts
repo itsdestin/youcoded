@@ -15,6 +15,7 @@
 // use-disk-version — the stash only ever holds drafts the user has neither
 // kept nor thrown away.
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
+import { holdUnsavedEditor } from '../../state/unsaved-editors';
 
 export interface StashedDraft {
   draft: string;
@@ -24,6 +25,14 @@ export interface StashedDraft {
 }
 
 const stash = new Map<string, StashedDraft>();
+// WHY (Task 6 fix round 10): a stashed draft is unsaved work with no editor on screen — nothing
+// vetoes the window's unload for it, so a quit dropped it without a word. While the stash holds
+// anything, it holds the same "unsaved editor" mark a dirty editor does, so a quit asks first.
+let release: (() => void) | null = null;
+function markWhileStashed(): void {
+  if (stash.size > 0 && !release) release = holdUnsavedEditor();
+  else if (stash.size === 0 && release) { release(); release = null; }
+}
 
 export function draftKey(projectRoot: string, artifactId: string): string {
   return canonicalize(projectRoot, null) + '|' + artifactId;
@@ -31,6 +40,7 @@ export function draftKey(projectRoot: string, artifactId: string): string {
 
 export function stashDraft(key: string, entry: StashedDraft): void {
   stash.set(key, entry);
+  markWhileStashed();
 }
 
 /** Read-and-remove: restoration consumes the entry (the live editor owns the
@@ -38,9 +48,11 @@ export function stashDraft(key: string, entry: StashedDraft): void {
 export function takeDraft(key: string): StashedDraft | undefined {
   const entry = stash.get(key);
   stash.delete(key);
+  markWhileStashed();
   return entry;
 }
 
 export function clearDraft(key: string): void {
   stash.delete(key);
+  markWhileStashed();
 }

@@ -23,6 +23,19 @@ describe('unsaved non-Office editors', () => {
     expect(setOtherUnsaved.mock.calls).toEqual([[true], [false]]);
   });
 
+  it('a draft parked after its editor went away holds the mark until it is taken back or cleared', async () => {
+    const setOtherUnsaved = vi.fn();
+    (window as unknown as { claude: unknown }).claude = { office: { setOtherUnsaved } };
+    const { stashDraft, takeDraft, clearDraft } = await import('../src/renderer/components/artifact-views/draft-store');
+    stashDraft('a', { draft: 'x', mtimeMs: null });
+    stashDraft('b', { draft: 'y', mtimeMs: null });
+    expect(setOtherUnsaved.mock.calls).toEqual([[true]]);
+    takeDraft('a');
+    expect(setOtherUnsaved.mock.calls).toEqual([[true]]); // 'b' is still parked
+    clearDraft('b');
+    expect(setOtherUnsaved.mock.calls).toEqual([[true], [false]]);
+  });
+
   it('shows the refused-quit message with just OK', async () => {
     let prompt!: (p: { count: number; firstPath: string; other?: boolean }) => void;
     (window as unknown as { claude: unknown }).claude = { office: {

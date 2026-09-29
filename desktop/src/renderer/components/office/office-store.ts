@@ -193,7 +193,12 @@ function answerFlushRequests(): void {
       office.flushDone?.(id, { failed: reason === 'final' ? 0 : failed.length, firstPath: failed[0] });
     });
   });
-  office.onUnsavedPrompt?.((p) => { heldReload = null; setAlerts({ ...alerts, unsaved: { count: p.count, firstPath: p.firstPath, other: p.other === true } }); });
+  office.onUnsavedPrompt?.((p) => {
+    // A quit refused for an unsaved text file (fix rounds 9–10) is its own message.
+    if (p.other === true) { setAlerts({ ...alerts, quitRefused: true }); return; }
+    heldReload = null;
+    setAlerts({ ...alerts, unsaved: { count: p.count, firstPath: p.firstPath } });
+  });
 }
 
 /** "Close anyway": main goes ahead with the close or quit it held. WHY nothing is taken down
@@ -214,18 +219,22 @@ export function closeAnyway(): void {
 //   unsaved       a window close or quit found documents whose save failed
 //   closeFailed   a tab closed while the page was hidden could not save, so it came back
 interface OfficeAlertsState {
-  /** reload: the prompt is a reload's (fix round 6, M3), so it says "Reload anyway".
-   *  other: a quit was refused because a text file has unsaved edits (fix round 9): OK only. */
-  unsaved: { count: number; firstPath: string; reload?: boolean; other?: boolean } | null;
+  /** reload: the prompt is a reload's (fix round 6, M3), so it says "Reload anyway". */
+  unsaved: { count: number; firstPath: string; reload?: boolean } | null;
+  /** A quit was refused because a text file has unsaved edits (fix rounds 9–10): OK only. */
+  quitRefused: boolean;
   closeFailed: string | null;
 }
-let alerts: OfficeAlertsState = { unsaved: null, closeFailed: null };
+let alerts: OfficeAlertsState = { unsaved: null, closeFailed: null, quitRefused: false };
 const alertListeners = new Set<() => void>();
 function setAlerts(next: OfficeAlertsState) { alerts = next; alertListeners.forEach((l) => l()); }
 export function useOfficeAlerts(): OfficeAlertsState {
   return useSyncExternalStore((l) => { alertListeners.add(l); return () => { alertListeners.delete(l); }; }, () => alerts, () => alerts);
 }
 export function clearUnsavedPrompt(): void { heldReload = null; setAlerts({ ...alerts, unsaved: null }); }
+export function clearQuitRefused(): void { setAlerts({ ...alerts, quitRefused: false }); }
+/** Photo-only (`shoot`): a quit refused for an unsaved text file. */
+export function previewQuitRefused(): void { setAlerts({ ...alerts, quitRefused: true }); }
 /** Photo-only (`shoot`): the prompt as a window close with two unsaved documents shows it. */
 export function previewUnsavedPrompt(): void {
   setAlerts({ ...alerts, unsaved: { count: 2, firstPath: state.docs[0]?.file.path ?? '' } });
@@ -441,7 +450,7 @@ export function resetOfficeStoreForTests(): void {
   heldReload = null;
   copyingPaths = new Set();
   if (unloadGuarded) { window.removeEventListener('beforeunload', onBeforeUnload); unloadGuarded = false; }
-  alerts = { unsaved: null, closeFailed: null };
+  alerts = { unsaved: null, closeFailed: null, quitRefused: false };
   listeners.forEach((l) => l());
   saveListeners.forEach((l) => l());
 }
