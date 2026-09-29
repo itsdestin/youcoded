@@ -17,6 +17,7 @@ import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
 import { keepAbandonedSavesIn, recordAbandonedSaves, takeAbandonedSaves } from './abandoned-saves';
 import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
+import { grantPicked } from './office-pictures';
 import type { createSessions, OfficeSession } from './office-sessions';
 import { formatFor } from './x2t';
 import * as versions from './versions';
@@ -126,6 +127,9 @@ export interface OfficeIpcDeps {
   /** Test seams for the project walk: its file-system calls, and how long a request waits for it. */
   walkFs?: WalkOptions['fs'];
   walkDeadlineMs?: number;
+  /** The system file picker the editor asks for (office-dialogs.ts pickEditorFiles); null when
+   *  cancelled. Tests pass a fake. WHY optional: as with pickCopyTarget, loaded only when used. */
+  pickEditorFiles?(sender: unknown, opts: { multiple: boolean; filters: unknown }): Promise<string[] | null>;
   /** Test seam: the translator (a fake that copies). Production uses x2t. */
   convert?: Parameters<typeof createOfficeCommands>[0]['convert'];
 }
@@ -298,6 +302,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     // WHY a plain object only: the commands read named fields from it; anything else (an
     // array, null) is treated as no arguments rather than reaching them.
     const a = args && typeof args === 'object' && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+    if (cmd === 'open_dialog') return openDialog(sender, s, a);
     const page = pageLoads.get(sender.id) ?? 0;
     try {
       return await commandsFor(reg)(token, cmd, a);
@@ -313,6 +318,20 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       if (cmd === 'save_file' && sender.isDestroyed?.()) void recordAbandonedSaves([s.path], deps.userData);
       throw e;
     }
+  }
+
+  // Insert → Picture → From file (finish plan Task 1): Tauri's dialog.open, which the add-on's
+  // relay sends as open_dialog. WHY here and not in the command runner: the dialog is parented to
+  // the asking window, and only the handles office-pictures.ts grants for THIS document go back —
+  // the frame never sees a folder, and copy-to-media reads only what this dialog granted.
+  async function openDialog(sender: OfficeSender, s: OfficeSession, a: Record<string, unknown>): Promise<string | string[] | null> {
+    const multiple = a.multiple === true;
+    const pick = deps.pickEditorFiles ?? (await import('./office-dialogs')).pickEditorFiles;
+    const paths = await pick(sender, { multiple, filters: a.filters });
+    if (!paths?.length) return null;
+    const handles = grantPicked(s, paths);
+    // Tauri's shape: a list when several may be chosen, else the one file.
+    return multiple ? handles : handles[0];
   }
 
   async function close(sender: OfficeSender, token: unknown): Promise<void> {

@@ -40,3 +40,35 @@ export async function pickCopyTarget(sender: unknown, filePath: string): Promise
 export async function pickOfficeFile(sender: unknown): Promise<OfficeFile | null> {
   return pickFile(BrowserWindow.fromWebContents(sender as WebContents));
 }
+
+type FileFilter = { name: string; extensions: string[] };
+
+/** The editor's filters, made safe (finish plan Task 1). They come from the editor frame, so only
+ *  well-formed entries reach the system dialog: a short name, plain extensions or '*'. */
+export function cleanFilters(raw: unknown): FileFilter[] {
+  if (!Array.isArray(raw)) return [];
+  const out: FileFilter[] = [];
+  for (const f of raw.slice(0, 10)) {
+    if (!f || typeof f !== 'object') continue;
+    const { name, extensions } = f as { name?: unknown; extensions?: unknown };
+    if (typeof name !== 'string' || !name || name.length > 60 || !Array.isArray(extensions)) continue;
+    const exts = extensions.filter((e): e is string => typeof e === 'string' && /^(\*|[a-z0-9]{1,10})$/i.test(e)).slice(0, 30);
+    if (exts.length) out.push({ name, extensions: exts });
+  }
+  return out;
+}
+
+/** The system file picker the editor asks for (Insert → Picture → From file), parented to the
+ *  asking window. The chosen paths, or null when cancelled. WHY main shows it: a path the editor
+ *  may copy from must be one the person chose in a dialog main itself showed (office-pictures.ts
+ *  grants exactly these, for this one document). */
+export async function pickEditorFiles(sender: unknown, opts: { multiple: boolean; filters: unknown }): Promise<string[] | null> {
+  const win = BrowserWindow.fromWebContents(sender as WebContents);
+  const o = {
+    properties: opts.multiple ? ['openFile' as const, 'multiSelections' as const] : ['openFile' as const],
+    filters: cleanFilters(opts.filters),
+  };
+  const r = win ? await dialog.showOpenDialog(win, o) : await dialog.showOpenDialog(o);
+  if (r.canceled || !r.filePaths.length) return null;
+  return r.filePaths;
+}

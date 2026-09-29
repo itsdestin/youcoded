@@ -1,6 +1,7 @@
 import { net, protocol } from 'electron';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { copyToMedia, downloadToMedia, PICTURE_DOWNLOAD_TIMEOUT_MS, uploadToMedia } from './office-pictures';
 import type { createSessions } from './office-sessions';
 import { createThemeFonts, currentThemeFontLinks, type ThemeFonts } from './theme-fonts';
 
@@ -20,6 +21,8 @@ const OFFICE_SCHEME = 'office';
 export const OFFICE_CSP =
   "default-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'; connect-src 'self' data: blob:; img-src 'self' data: blob:; font-src 'self' data:; form-action 'none'; base-uri 'none'";
 
+export const MEDIA_CSP = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'";
+
 const MIME: Record<string, string> = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -31,6 +34,9 @@ const MIME: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
   '.svg': 'image/svg+xml',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
@@ -79,7 +85,22 @@ async function serveFont(fonts: ThemeFonts | undefined, kind: string, u: string 
   return file ? new Response(file.data, { headers: { 'content-type': file.type } }) : notFound();
 }
 
-type HandlerDeps = { root: string; sessions: ReturnType<typeof createSessions>; fonts?: ThemeFonts };
+type HandlerDeps = {
+  root: string;
+  sessions: ReturnType<typeof createSessions>;
+  fonts?: ThemeFonts;
+  /** Fetches a picture by web address for download-to-media (Task 1). Production: net.fetch;
+   *  tests pass a fake. */
+  download?: (url: string, init?: RequestInit) => Promise<Response>;
+  /** Test seam: a short cap, so the time limit is testable. */
+  downloadTimeoutMs?: number;
+};
+
+/** The answer to copy-to-media / download-to-media (Task 1): the bare media name as text, which
+ *  is what bridge.js's LocalFileGetImageUrl writes into the document. WHY no-store: the same
+ *  request must copy again after a reopen cleared media/, never be answered from a cache. */
+const mediaName = (name: string | null) =>
+  name === null ? notFound() : new Response(name, { headers: { 'content-type': 'text/plain', 'cache-control': 'no-store' } });
 
 export function officeRequestHandler(deps: HandlerDeps) {
   return async (req: Request): Promise<Response> => {
@@ -88,6 +109,7 @@ export function officeRequestHandler(deps: HandlerDeps) {
     // origin itself, so the browser's own same-origin checks (storage, fetch, workers) already
     // keep two documents apart — nothing here has to re-implement that.
     const s = deps.sessions.get(u.hostname);
+    const docMedia = u.pathname.startsWith('/asc/docmedia/');
     let res: Response;
     if (!s) res = notFound();
     else {
@@ -97,6 +119,15 @@ export function officeRequestHandler(deps: HandlerDeps) {
         // way an absent file is, not turned into an uncaught exception in the main process.
         const rel = decodeURIComponent(u.pathname).replace(/^\/+/, '') || 'index.html';
         if (rel === 'yc-fonts/css' || rel === 'yc-fonts/file') res = await serveFont(deps.fonts, rel.slice('yc-fonts/'.length), u.searchParams.get('u'));
+        // Drag and drop (Task 1): the add-on's yc-bridge.js posts a dropped picture's bytes to
+        // upload/drop and reads {"media/<name>": "<address>"} back — the shape a document server's
+        // upload answers, so sdkjs's own web upload path gets the same answer.
+        else if (rel.startsWith('upload/')) {
+          const name = await uploadToMedia(s, req);
+          res = name === null ? notFound() : Response.json({ [`media/${name}`]: `${u.protocol}//${u.host}/asc/docmedia/media/${name}` }, { headers: { 'cache-control': 'no-store' } });
+        } else if (rel.startsWith('asc/copy-to-media/')) res = mediaName(await copyToMedia(s, rel.slice('asc/copy-to-media/'.length)));
+        else if (rel.startsWith('asc/download-to-media/'))
+          res = mediaName(deps.download ? await downloadToMedia(s, rel.slice('asc/download-to-media/'.length), deps.download, deps.downloadTimeoutMs ?? PICTURE_DOWNLOAD_TIMEOUT_MS) : null);
         else if (rel.startsWith('asc/docmedia/')) res = await serveConfined(s.temp, rel.slice('asc/docmedia/'.length));
         else if (rel.startsWith('asc/dictionaries/'))
           res = await serveConfined(path.join(deps.root, 'editors', 'dictionaries'), rel.slice('asc/dictionaries/'.length));
@@ -108,7 +139,11 @@ export function officeRequestHandler(deps: HandlerDeps) {
     // WHY set these headers even on a 404: the editor page itself must always carry them, and
     // an attacker probing for a missing-header path should not learn anything from its absence.
     const h = new Headers(res.headers);
-    h.set('Content-Security-Policy', OFFICE_CSP);
+    // WHY a sandboxing policy for the document's own pictures (finish plan Task 1): media/ now
+    // also holds pictures fetched from any web address, and an SVG is a document that can carry
+    // script. Shown as a picture (<img>, canvas) this changes nothing; opened as a page on this
+    // origin it runs nothing and reaches nothing, instead of acting as the editor.
+    h.set('Content-Security-Policy', docMedia ? MEDIA_CSP : OFFICE_CSP);
     // WHY nosniff: without it, a response served with a generic/incorrect content-type (the
     // `application/octet-stream` fallback above, or a mismatched extension) can still be
     // executed as script or rendered as HTML by MIME-sniffing — nosniff makes the declared
@@ -130,5 +165,8 @@ export function officeThemeFonts(userData: string, claudeDir: string): ThemeFont
 }
 
 export function registerOfficeProtocol(deps: HandlerDeps): void {
-  protocol.handle(OFFICE_SCHEME, officeRequestHandler(deps));
+  // WHY net.fetch for pictures by address: the system proxy applies, as for theme fonts. The
+  // editor itself can reach no network (OFFICE_CSP); main fetches, with the checks in
+  // office-pictures.ts (http(s) only, pictures only, 25 MB, 20 s).
+  protocol.handle(OFFICE_SCHEME, officeRequestHandler({ download: (u, init) => net.fetch(u, init), ...deps }));
 }

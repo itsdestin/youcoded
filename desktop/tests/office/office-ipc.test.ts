@@ -427,6 +427,44 @@ describe('the start screen: Recent, the project list, New and Open', () => {
   });
 });
 
+describe('the editor asks for a file dialog (Insert → Picture)', () => {
+  /** Re-registers with a fake open dialog that answers `paths`. */
+  function withPicker(paths: string[] | null) {
+    const pick = vi.fn(async () => paths);
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickEditorFiles: pick });
+    return pick;
+  }
+
+  it('shows the dialog for the asking window and answers handles, never the folders', async () => {
+    const pick = withPicker([path.join(dir, 'pics', 'cat.png'), path.join(dir, 'pics', 'dog.jpg')]);
+    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const filters = [{ name: 'Images', extensions: ['png'] }];
+    const many = (await call('office:invoke', win1, token, 'open_dialog', { multiple: true, filters })) as string[];
+    expect(pick).toHaveBeenCalledWith(win1, { multiple: true, filters });
+    expect(many).toHaveLength(2);
+    expect(many[0]).toMatch(/^yc-picked\/[0-9a-f]{32}\/cat\.png$/);
+    expect(many[1].endsWith('/dog.jpg')).toBe(true);
+    expect(JSON.stringify(many)).not.toContain(dir);
+    // one file, as Tauri's dialog answers when multiple is off
+    const one = await call('office:invoke', win1, token, 'open_dialog', { multiple: false });
+    expect(typeof one).toBe('string');
+  });
+
+  it('answers null when the dialog is cancelled', async () => {
+    withPicker(null);
+    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    await expect(call('office:invoke', win1, token, 'open_dialog', {})).resolves.toBeNull();
+  });
+
+  it("never shows a dialog for another window's document", async () => {
+    const pick = withPicker(['/p/a.png']);
+    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    await expect(call('office:invoke', win2, token, 'open_dialog', {})).rejects.toThrow('refused');
+    expect(pick).not.toHaveBeenCalled();
+  });
+});
+
 describe('office:save-copy', () => {
   /** Re-registers with a fake save dialog that answers `target`. */
   function withDialog(target: string | null) {

@@ -16,6 +16,10 @@ export const OFFICE_COMMANDS: ReadonlySet<string> = new Set([
   'set_recent_files_enabled', 'clear_recent_files', 'get_system_fonts', 'list_user_dictionaries', 'recovery_begin',
   'recovery_end', 'recovery_mark_saved', 'recovery_candidates', 'recovery_load', 'recovery_discard', 'open_file',
   'write_editor_bin', 'save_file', 'save_changes', 'convert_for_insert', 'force_close',
+  // WHY (finish plan Task 1): the add-on's relay turns the editor's dialog.open (Insert → Picture
+  // → From file) into this. office-ipc.ts answers it itself — it needs the asking window for the
+  // dialog — so it never reaches dispatch below; the answer is handles, never paths.
+  'open_dialog',
 ]);
 
 const MSG = {
