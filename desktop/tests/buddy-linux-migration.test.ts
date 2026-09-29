@@ -264,7 +264,7 @@ describe('R12 — only a buddy that is actually broken is hidden', () => {
 // ─── A refused show() (design §5) ──────────────────────────────────────────
 describe('the launch path does not claim a buddy that was refused', () => {
   it('clears the stored preference when the desktop says no', async () => {
-    // Otherwise Settings → Buddy Floater would read "On" with nothing on the
+    // Otherwise Settings → Buddy floater would read "On" with nothing on the
     // desktop: the helper went missing since the last launch (the user switched
     // the script off in KDE's own settings), main refuses, and the row lies.
     const { bootBuddyOnLaunch } = await loadApp();
@@ -320,7 +320,7 @@ describe('R12 — the migration runs BEFORE the launch path reads the preference
 
 describe('R13 — no dialog interrupts you after an update', () => {
   it('the launch path only stores a preference; it never asks anything', async () => {
-    // The helper offer lives in Settings → Buddy Floater and is reached by
+    // The helper offer lives in Settings → Buddy floater and is reached by
     // switching the buddy on. Launch must not reach for it: no helper status
     // call, no install, no window shown.
     const { bootBuddyOnLaunch } = await loadApp();

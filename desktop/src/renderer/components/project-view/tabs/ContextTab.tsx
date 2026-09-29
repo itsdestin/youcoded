@@ -34,7 +34,7 @@ interface ContextTabProps {
 
 // Per-scope teaching copy. Descriptions are EXACT and intentionally have NO
 // trailing periods (the wording was specified verbatim by the user).
-// WHY the labels: the tab is now "Instructions & Memories", so the scopes read
+// WHY the labels: the tab is now "Instructions & memories", so the scopes read
 // "Global instructions" and "Project instructions" — "Global"/"This project"
 // alone no longer said what the group contained.
 const GROUP_META: Record<ContextScope, { label: string; desc: string }> = {

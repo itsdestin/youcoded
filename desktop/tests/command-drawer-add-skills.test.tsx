@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Skills drawer browse mode — "Add Skills" placement and the empty states
+// Skills drawer browse mode — "Add skills" placement and the empty states
 // (UI review P-9 #3, 2026-08-27), plus the chip row's shape (P-9 #1).
 //
 // Before: <AddSkillsCard/> always lived in its OWN grid after the two sections,
@@ -68,19 +68,19 @@ function renderDrawer() {
   return { ...utils, onClose, onOpenMarketplace };
 }
 
-const addSkillsCard = () => screen.queryByRole('button', { name: /Add Skills/ });
+const addSkillsCard = () => screen.queryByRole('button', { name: /Add skills/ });
 // A SkillCard's accessible name starts with its FavoriteStar's label, so find
 // the card by its title text and climb to the role=button root.
 const skillCard = (name: string) => screen.getByText(name).closest('[role="button"]') as HTMLElement;
 
-describe('CommandDrawer — Add Skills joins the grid', () => {
+describe('CommandDrawer — Add skills joins the grid', () => {
   it('sits in the same grid as the last "All installed" card', () => {
     ctx.drawerSkills = [skill('alpha'), skill('beta'), skill('gamma')];
     ctx.favorites = ['alpha'];
     renderDrawer();
     const add = addSkillsCard()!;
     expect(add).toBeTruthy();
-    // gamma sorts last among the non-favorites; Add Skills must be its sibling
+    // gamma sorts last among the non-favorites; Add skills must be its sibling
     // AND the final child of that grid.
     const grid = skillCard('gamma').parentElement!;
     expect(grid.className).toContain('grid');
@@ -88,7 +88,7 @@ describe('CommandDrawer — Add Skills joins the grid', () => {
     expect(grid.lastElementChild).toBe(add);
     // …and NOT a sibling of the favorites grid.
     expect(skillCard('alpha').parentElement).not.toBe(grid);
-    expect(screen.getAllByRole('button', { name: /Add Skills/ })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /Add skills/ })).toHaveLength(1);
   });
 
   it('moves into the Favorites grid when that is the last section showing', () => {
@@ -109,7 +109,7 @@ describe('CommandDrawer — Add Skills joins the grid', () => {
     expect(addSkillsCard()).toBeNull();
     expect(screen.getByText('No skills installed yet.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Browse the Marketplace' }));
-    // Same behaviour Add Skills had: close the drawer, open the marketplace.
+    // Same behaviour Add skills had: close the drawer, open the marketplace.
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onOpenMarketplace).toHaveBeenCalledTimes(1);
   });

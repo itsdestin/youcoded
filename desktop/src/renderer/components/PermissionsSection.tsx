@@ -73,7 +73,7 @@ import type {
 // exemption in setting-row-authority.test.tsx — so modelling on it (which the
 // rejected first version did) inherits drift that the guards will not catch.
 // The exemplars actually followed (pre-card-levels-sweep shapes; see above):
-//   · rows         SettingsPanel Connected Devices — <SettingRow variant="item">
+//   · rows         SettingsPanel Connected devices — <SettingRow variant="item">
 //   · destructive  SyncPanel DevicesTab — outline opens, filled commits, in
 //                  place, autoFocus + Escape-to-cancel
 //   · tail         LocalModelsSection.tsx:418-422 — "Show all N"
@@ -344,7 +344,7 @@ export default function PermissionsSection() {
   const [projects, setProjects] = useState<StoredProject[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   // Both of the general ErrorState's actions land on the app's existing
-  // bug-report surface, exactly as Remote Access does: "Report bug" files it and
+  // bug-report surface, exactly as Remote access does: "Report bug" files it and
   // "Diagnose with the assistant" is the same popup's summarize path. One destination,
   // no invented flow. It portals, so nesting it here is safe.
   const [reportContext, setReportContext] = useState<ReportContext | null>(null);

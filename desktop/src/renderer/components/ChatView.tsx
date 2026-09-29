@@ -73,7 +73,7 @@ interface Props {
    *  provider-config error bubble (missing/disabled key) can jump the user
    *  straight to the fix. App owns Settings open-state, so it passes this down. */
   onOpenProviderSettings?: () => void;
-  /** Plan-limit card's Switch Providers button (Sign in with ChatGPT): opens
+  /** Plan-limit card's Switch providers button (Sign in with ChatGPT): opens
    *  the model picker. The banner shows it only for a plan-limit error. */
   onSwitchProviders?: () => void;
   /** Plan-limit card's Upgrade plan button: opens OpenAI's upgrade page. */
@@ -1317,7 +1317,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     // "check Terminal view" pointer — they have no Terminal.
                     provider={provider}
                     // Provider-config errors (missing/disabled key) show an
-                    // "Open Settings" button that deep-links to Model Providers.
+                    // "Open settings" button that deep-links to Model Providers.
                     onOpenProviderSettings={onOpenProviderSettings}
                     onSwitchProviders={onSwitchProviders}
                     onUpgradePlan={onUpgradePlan}

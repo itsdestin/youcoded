@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// SessionStrip — the session pill bar and its All Sessions menu. Each section
+// SessionStrip — the session pill bar and its All sessions menu. Each section
 // below keeps its own window.claude bridge, mount helper and hooks; only the
 // jsdom accommodations and the DataTransfer model are shared.
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
@@ -43,7 +43,7 @@ function transfer(initial: Record<string, string> = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// INVARIANT: a row in the All Sessions menu reorders by being dragged UP or
+// INVARIANT: a row in the All sessions menu reorders by being dragged UP or
 // DOWN the list, from its grip, and lands where the insertion line says.
 //
 // Why this needs a guard: the menu rows used to share the pill bar's pointer
@@ -61,7 +61,7 @@ function transfer(initial: Record<string, string> = {}) {
 // are dispatched as real MouseEvents named 'dragover'/'drop' with the buffer
 // attached, which is the only shape that delivers a coordinate.
 // ---------------------------------------------------------------------------
-describe('All Sessions menu reordering', () => {
+describe('All sessions menu reordering', () => {
   const MY_WINDOW = 1;
 
   const detach = {
@@ -140,7 +140,7 @@ describe('All Sessions menu reordering', () => {
         />
       </ArtifactProvider>,
     );
-    fireEvent.click(view.getByLabelText('All Sessions'));
+    fireEvent.click(view.getByLabelText('All sessions'));
     const portal = document.getElementById('root') as HTMLElement;
     const list = portal.querySelector('.scroll-fade') as HTMLElement;
     const rows = Array.from(list.querySelectorAll('[data-session-id]')) as HTMLElement[];
@@ -174,7 +174,7 @@ describe('All Sessions menu reordering', () => {
     return dt;
   }
 
-  describe('All Sessions menu — reordering by drag', () => {
+  describe('All sessions menu — reordering by drag', () => {
     it('the grip is the handle, and it carries the row\'s session', () => {
       const g = openMenu();
       expect(g.grips.every(Boolean)).toBe(true);
@@ -281,7 +281,7 @@ describe('All Sessions menu reordering', () => {
     });
   });
 
-  describe('All Sessions menu — reordering on the live-window platforms', () => {
+  describe('All sessions menu — reordering on the live-window platforms', () => {
     beforeAll(() => { facts = { platform: 'win32', wayland: false }; });
     afterAll(() => { facts = { platform: 'linux', wayland: true }; });
 
@@ -560,7 +560,7 @@ describe('renaming from the session list', () => {
       { container: root },
     );
     // Open the "Sessions in this window" list.
-    fireEvent.click(view.container.querySelector('[data-hint="All Sessions"]')!);
+    fireEvent.click(view.container.querySelector('[data-hint="All sessions"]')!);
     // `data-session-id` is on the pill in the strip AND on the dropdown row.
     // Only the dropdown one is the subject here.
     const row = (id: string) => {
@@ -575,7 +575,7 @@ describe('renaming from the session list', () => {
   beforeEach(() => { vi.clearAllMocks(); document.body.innerHTML = ''; });
 
   // Escape closes what is on top, one layer per press (found 2026-09-26: Escape did
-  // nothing to the All Sessions menu, nor to the Rename session dialog opened from it —
+  // nothing to the All sessions menu, nor to the Rename session dialog opened from it —
   // neither had joined the app's Escape stack). Mounted inside the provider the app has.
   describe('SessionStrip — Escape', () => {
     function mountWithEsc() {
@@ -589,12 +589,12 @@ describe('renaming from the session list', () => {
         </EscCloseProvider>,
         { container: root },
       );
-      fireEvent.click(view.container.querySelector('[data-hint="All Sessions"]')!);
+      fireEvent.click(view.container.querySelector('[data-hint="All sessions"]')!);
       return view;
     }
     const menuRow = () => Array.from(document.querySelectorAll('[data-session-id="b"]')).find((el) => !el.closest('[data-session-strip]'));
 
-    it('closes the All Sessions menu', () => {
+    it('closes the All sessions menu', () => {
       bridge(true);
       mountWithEsc();
       expect(menuRow()).toBeTruthy();
@@ -746,7 +746,7 @@ describe('sessions in other windows', () => {
     );
     // Open the switcher. The dropdown is portalled out of the strip, so scope
     // queries to document.body rather than the container.
-    fireEvent.click(view.getByLabelText('All Sessions'));
+    fireEvent.click(view.getByLabelText('All sessions'));
     const heading = view.getByText('Sessions in other windows');
     const peerList = heading.nextElementSibling as HTMLElement;
     // Both lists carry `.scroll-fade`; the local one is the one that is not the
@@ -761,13 +761,13 @@ describe('sessions in other windows', () => {
       // App looks names up in its OWN session list, which by definition does not
       // contain a peer session — without the name the prompt reads "this session".
       const { peerList, onCloseSession } = mount();
-      fireEvent.click(within(peerList).getByLabelText('Close Session'));
+      fireEvent.click(within(peerList).getByLabelText('Close session'));
       expect(onCloseSession).toHaveBeenCalledWith('theirs', 'their session');
     });
 
     it('is draggable, and dropping it on this window\'s list claims it', () => {
       const { peerList, localList } = mount();
-      const row = within(peerList).getByLabelText('Close Session').closest('[draggable]') as HTMLElement;
+      const row = within(peerList).getByLabelText('Close session').closest('[draggable]') as HTMLElement;
       expect(row.getAttribute('draggable')).toBe('true');
 
       const dt = transfer();

@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 //
-// The buddy floater's empty screen — its New Session form and its Resume list.
+// The buddy floater's empty screen — its New session form and its Resume list.
 //
 // WHAT THIS FILE IS REALLY GUARDING. Before 2026-09-10 there was NO test
 // touching this screen anywhere in the suite (19 buddy test files, none of them
-// here), and it drifted for two months without anyone noticing: Resume Session
+// here), and it drifted for two months without anyone noticing: Resume session
 // was a July placeholder that set an error string and did nothing, the form
 // hardcoded provider:'claude' so ChatGPT and local models were unreachable from
 // the floater, and a saved non-Claude default was silently replaced by Claude
@@ -60,7 +60,7 @@ describe('the buddy floater empty screen', () => {
     expect(screen.getByRole('button', { name: /Resume Session/i })).toBeInTheDocument();
   });
 
-  it('Resume Session opens a list instead of telling you to go to the main window', async () => {
+  it('Resume session opens a list instead of telling you to go to the main window', async () => {
     // The July placeholder rendered the literal sentence below and nothing else.
     // The button read as an action and behaved as a label.
     render(<BuddyWelcome onSessionCreated={vi.fn()} />);

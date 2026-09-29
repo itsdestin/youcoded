@@ -964,7 +964,7 @@ body[data-mode="buddy-chat"] #theme-bg {
   .switch-arrival { animation: none; }
 }
 
-/* Reduce Visual Effects — the app's own toggle, set on <html> by
+/* Reduce visual effects — the app's own toggle, set on <html> by
    theme-engine.ts. Honoured alongside the OS preference, never instead of it. */
 [data-reduced-effects] .switch-arrival { animation: none; }
 
@@ -1562,7 +1562,7 @@ pre.yc-code code {
 /* Command-drawer tiles opt OUT of glassmorphism.
    theme-engine.ts injects `[data-wallpaper] .layer-surface { backdrop-filter:
    blur(<panels-blur>px) ... }`, and change 22 moved every drawer tile (skill
-   cards, command cards, Add Skills) onto .layer-surface. That turns a full
+   cards, command cards, Add skills) onto .layer-surface. That turns a full
    drawer into 20-40 live blur regions, each its own Chromium compositing layer,
    inside a box that is overflow-hidden AND animating `transform` — so they all
    re-rasterize per frame. On Windows Electron the compositor drops their paint
@@ -1850,7 +1850,7 @@ pre.yc-code code {
 
 .tooltip-in { animation: tooltip-in 110ms ease-out both; }
 
-/* Both gates, per the design guide: the app's own Reduce Visual Effects toggle
+/* Both gates, per the design guide: the app's own Reduce visual effects toggle
    AND the OS preference. */
 [data-reduced-effects] .tooltip-in { animation: none; }
 

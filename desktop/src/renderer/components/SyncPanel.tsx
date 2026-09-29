@@ -38,7 +38,7 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
     "YouCoded keeps your work safe in two layers. Cross-device sync is the main one: your conversations, projects, and files live in your own private GitHub, so they're backed up AND kept up to date on every device you use. Extra cloud backups (Google Drive, iCloud) are an optional second copy on top of that.",
   sections: [
     {
-      heading: 'Cross-Device Backup & Sync (the main one)',
+      heading: 'Cross-device backup & sync (the main one)',
       paragraphs: [
         "Turn this on and YouCoded stores your conversations, project folders, and personal files in private GitHub repositories — one per space. That's your primary backup and the way your work follows you from computer to computer.",
         "It needs a GitHub connection (a one-time sign-in). Changes sync automatically in the background, usually within seconds.",
@@ -86,7 +86,7 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
         { term: '"No Internet Connection"', text: 'Check your WiFi or cellular and try again.' },
         // WHY: give a filename cue without promising a deleted file remains.
         { term: 'A conflict note appeared', text: 'Conflicting changes were saved in separate files. Look for “(from …)” in their names. They appear in the same folder as the affected file.' },
-        { term: 'Something seems stuck', text: 'Open Sync Log and look for ERROR or WARN lines.' },
+        { term: 'Something seems stuck', text: 'Open Sync log and look for ERROR or WARN lines.' },
       ],
     },
   ],
@@ -175,7 +175,7 @@ function primaryLabelForState(state: SyncDisplayState, loading: boolean): string
   switch (state.kind) {
     case 'unconfigured': return 'Not configured';
     case 'syncing':      return 'Syncing...';
-    case 'failing':      return 'Sync Failing';
+    case 'failing':      return 'Sync failing';
     case 'attention':    return state.lastSyncEpoch ? `Last synced ${timeAgo(state.lastSyncEpoch)}` : 'Never synced';
     case 'synced':       return `Last synced ${timeAgo(state.lastSyncEpoch)}`;
     case 'stale':        return state.lastSyncEpoch ? `Last synced ${timeAgo(state.lastSyncEpoch)}` : 'Never synced';
@@ -256,7 +256,7 @@ const CATEGORY_DESCRIPTIONS: Record<string, string> = {
 // --- Config display fields per backend type (read-only in edit form) ---
 const BACKEND_CONFIG_DISPLAY: Record<string, { key: string; label: string }[]> = {
   drive: [
-    { key: 'DRIVE_ROOT', label: 'Drive Folder' },
+    { key: 'DRIVE_ROOT', label: 'Drive folder' },
     { key: 'rcloneRemote', label: 'Connected via' },
   ],
   github: [
@@ -321,7 +321,7 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
           // Keep per-device recency live between full refetches (same pattern as
           // lastSyncEpoch). Absent on the push → keep the last-known map.
           lastSyncByDevice: data.lastSyncByDevice ?? prev.lastSyncByDevice,
-          // Fix (2026-07-26): warnings drive the row's red "Sync Failing" dot +
+          // Fix (2026-07-26): warnings drive the row's red "Sync failing" dot +
           // badge, and used to be frozen at the ONE mount-time getSyncStatus().
           // This component mounts with the APP (DesktopSettings renders
           // unconditionally inside the always-mounted settings drawer), so that
@@ -431,7 +431,7 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
             <path d="M8 17l4-4 4 4" />
           </svg>
         }
-        title="Backup & Sync"
+        title="Backup & sync"
         description={
           <RowStatus dotClassName={dotColor}>
             {counts ? `${primaryLabel} \u00B7 ${counts}` : primaryLabel}
@@ -961,7 +961,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         <Dialog
           open
           onClose={onClose}
-          aria-label="Backup & Sync"
+          aria-label="Backup & sync"
           size="panel"
           fill
           scrollBody={false}
@@ -991,10 +991,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         onClose={onClose}
         panelRef={popupRef}
         title={
-          showInfo ? 'About Backup & Sync'
+          showInfo ? 'About Backup & sync'
             : isWizard ? undefined
               : isEdit ? `Edit ${editingBackend?.label ?? 'backup'}`
-                : 'Backup & Sync'
+                : 'Backup & sync'
         }
         onBack={
           showInfo ? () => setShowInfo(false)
@@ -1002,7 +1002,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               : undefined
         }
         headerActions={!showInfo && !isWizard && !isEdit ? <InfoIconButton onClick={() => setShowInfo(true)} /> : undefined}
-        aria-label="Backup & Sync"
+        aria-label="Backup & sync"
         size="panel"
         fill
         // The wizard still owns its whole surface — it is the one view whose
@@ -1073,7 +1073,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         <div className="space-y-4">
 
             {/* ============================================================
-                PRIMARY — Cross-Device Backup & Sync box (redesign 2026-07-15).
+                PRIMARY — Cross-device backup & sync box (redesign 2026-07-15).
                 One bordered "sync box": a unified status header (dot · title · sub ·
                 toggle), then — only when enabled & healthy — Devices/Projects/
                 Conversations count tabs with a switchable list, plus the conflict /
@@ -1567,7 +1567,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                               message={failure.message}
                               onRetry={() => handlePushBackend(b.id)}
                               onReportBug={failure.reportable
-                                ? () => setReportContext({ surface: `Backup & Sync → ${b.label}`, error: failure.message })
+                                ? () => setReportContext({ surface: `Backup & sync → ${b.label}`, error: failure.message })
                                 : undefined}
                             />
                           )}
@@ -1697,7 +1697,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               </div>
             )}
 
-            {/* 5. Sync Log — WHY a FoldRow (fix batch 2, 2026-09-26 — decisions.md
+            {/* 5. Sync log — WHY a FoldRow (fix batch 2, 2026-09-26 — decisions.md
                 "Fold-out sections", settings-pieces#P-1): a boxed row like a
                 setting, arrow on the right. It was a bare "› Sync log" text toggle
                 with the arrow on the left (Destin, B1-6: "sync log dropdown …
@@ -1759,7 +1759,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 deprecated and the app owns sync natively now. */}
             {!status && !loading && (
               <div className="text-center py-6">
-                <div className="text-fg-muted text-sm mb-1">No Sync Data</div>
+                <div className="text-fg-muted text-sm mb-1">No sync data</div>
                 <div className="text-fg-muted text-2xs">Sync hasn't run yet. Configure a backup destination to get started.</div>
               </div>
             )}

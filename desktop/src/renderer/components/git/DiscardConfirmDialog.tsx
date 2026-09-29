@@ -51,7 +51,7 @@ export function DiscardConfirmDialog({ fileName, willTrash, onConfirm, onCancel 
         </div>
         <div className="flex gap-2 justify-end">
           <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-          <Button variant="danger" onClick={onConfirm}>{willTrash ? 'Move to Trash' : 'Revert Changes'}</Button>
+          <Button variant="danger" onClick={onConfirm}>{willTrash ? 'Move to trash' : 'Revert changes'}</Button>
         </div>
       </OverlayPanel>
     </Scrim>

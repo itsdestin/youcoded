@@ -97,10 +97,10 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
   // the body's own text classes off everything after it.
   //
   // WHY the title is text-xs (12px) medium, not the old text-3xs: the guide's
-  // reference notice is Backup & Sync's "too big to sync" box, whose title is
+  // reference notice is Backup & sync's "too big to sync" box, whose title is
   // the collapsible branch above at text-xs. The plain branch used a smaller
   // title, so the "same" box read as two looks; the audit also flagged the
-  // tiny amber title on Setup Complete as hard to read.
+  // tiny amber title on Setup complete as hard to read.
   const text = (
     <>
       {title && <div className={`text-xs font-medium ${children ? 'mb-0.5' : ''} ${t.title}`.trim()}>{title}</div>}

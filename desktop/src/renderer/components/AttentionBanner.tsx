@@ -26,7 +26,7 @@ interface Props {
   onRetry?: () => void;
   /** Opens Settings → Model Providers. When the provider error is a
    *  configuration problem (missing/disabled key), the bubble shows an
-   *  "Open Settings" button that calls this so the user can fix it in one hop. */
+   *  "Open settings" button that calls this so the user can fix it in one hop. */
   onOpenProviderSettings?: () => void;
   /** When the turn parked, on this client's clock. Drives the count-up. */
   stalledSince?: number | null;
@@ -38,7 +38,7 @@ interface Props {
   onSwitchProviders?: () => void;
   /** Plan-limit card: opens OpenAI's upgrade page (chatgpt.com/explore/pro) so
    *  the user can raise the exhausted window, side by side with switching
-   *  providers. Shown only for a plan-limit error, like Switch Providers. */
+   *  providers. Shown only for a plan-limit error, like Switch providers. */
   onUpgradePlan?: () => void;
   /** OpenRouter "not enough credit" card: opens OpenRouter's add-credit page. */
   onAddCredit?: () => void;
@@ -203,7 +203,7 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
         {showUpgrade && (
           // Upgrade path for the exhausted plan: OpenAI's own upgrade page
           // (the URL the Codex CLI's limit error names). Destin's requested
-          // label AND style: transparent (secondary), left of Switch Providers.
+          // label AND style: transparent (secondary), left of Switch providers.
           <Button size="sm" variant="secondary" onClick={onUpgradePlan} className="ml-auto shrink-0">
             Upgrade plan
           </Button>
@@ -214,7 +214,7 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
           // its models already are, so the choice is the user's, not a guess.
           // Stays the green (primary) action, right of Upgrade plan.
           <Button size="sm" onClick={onSwitchProviders} className="shrink-0">
-            Switch Providers
+            Switch providers
           </Button>
         )}
         {showAddCredit && (
@@ -230,7 +230,7 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
             onClick={onOpenProviderSettings}
             className="ml-auto shrink-0"
           >
-            Open Settings
+            Open settings
           </Button>
         )}
       </div>

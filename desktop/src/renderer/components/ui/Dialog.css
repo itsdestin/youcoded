@@ -1,6 +1,6 @@
 /* WHY: Destin approved the Settings treatment on both a long About popup and
    a shorter Development popup. Titled Dialog bodies own this treatment; the
-   separately reviewed Session Files list opts into the same header/scroll
+   separately reviewed Session files list opts into the same header/scroll
    classes. Other custom headers and the generic .scroll-fade keep their roles. */
 .dialog-header, [data-session-files-header] { position: relative; }
 .dialog-header::after, [data-session-files-header]::after {

@@ -1,7 +1,7 @@
 // Live count of a session's still-present artifacts.
 //
 // Extracted from ArtifactDrawerButton so the narrow-viewport overflow menu can
-// show the same number on its "Session Files" row. Two ways a file stops
+// show the same number on its "Session files" row. Two ways a file stops
 // being present:
 //   1. status === 'deleted' — an explicit Delete tool version (rare; CC has no
 //      Delete tool, so this mostly never happens).

@@ -163,9 +163,9 @@ const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
       + '(review-5 Q-1 chose "never" for opening by itself), so it is a K5 status strip rather '
       + 'than passive text',
   },
-  // 3 -> 2 (fix batch 2, 2026-09-26): the Remote Access setup banner lost its
+  // 3 -> 2 (fix batch 2, 2026-09-26): the Remote access setup banner lost its
   // outer box — the intro is plain text and the status strip stands alone.
-  // 2 -> 1 (2026-09-28): Package Tier's options are the shared radio rows now.
+  // 2 -> 1 (2026-09-28): Package tier's options are the shared radio rows now.
   'SettingsPanel.tsx': {
     count: 1,
     why: 'the phone\'s "Connected to X" banner (green, with a Disconnect button — not yet moved onto '

@@ -128,7 +128,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
   );
 
   // P-9 #3 (2026-08-27): which browse-mode section is the LAST one on screen.
-  // "Add Skills" is rendered as the final card of THAT section's grid so it
+  // "Add skills" is rendered as the final card of THAT section's grid so it
   // fills the empty slot at the end of the row instead of always starting a
   // new row of its own. When neither section shows, the drawer body needs an
   // empty state — see the browse-mode JSX for the three cases.
@@ -268,13 +268,13 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
                 className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
               />
             )}
-            {/* Pencil — opens Your Library (favorites/installed management).
+            {/* Pencil — opens Your library (favorites/installed management).
                 Falls back to the legacy Skill Manager when the redesign flag
                 is off; onOpenLibrary is only supplied in that mode. */}
             <button
               onClick={() => { onClose(); (onOpenLibrary ?? onOpenManager)(); }}
               className="shrink-0 p-1 rounded-sm hover:bg-inset text-fg-muted hover:text-fg transition-colors"
-              title={onOpenLibrary ? "Your Library — favorites & installed" : "Manage skills"}
+              title={onOpenLibrary ? "Your library — favorites & installed" : "Manage skills"}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" strokeLinecap="round" strokeLinejoin="round" />
@@ -295,7 +295,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
         </div>
 
         {/* Scrollable content.
-             "Add Skills +" is the last box of whatever list is showing, so the
+             "Add skills +" is the last box of whatever list is showing, so the
              marketplace is always one click away. When a search has zero matches
              it stands alone; when NOTHING is listed in browse mode an <EmptyState>
              with a "Browse the Marketplace" button takes its place (P-9 #3). */}
@@ -341,7 +341,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
                 </FilterChip>
               </div>
 
-              {/* Favorites section. Hosts "Add Skills" only when it is the last
+              {/* Favorites section. Hosts "Add skills" only when it is the last
                   section on screen (favorites-only on, or nothing else installed). */}
               {showFavs && (
                 <section className="px-2 pt-2">
@@ -358,7 +358,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
               )}
 
               {/* All installed (non-favorites) — hidden when favoritesOnly toggle is on.
-                  P-9 #3: "Add Skills" is the last card IN this grid, so it takes the
+                  P-9 #3: "Add skills" is the last card IN this grid, so it takes the
                   spare slot at the end of the row rather than a row of its own. */}
               {showOthers && (
                 <section className="px-2 pt-3">
@@ -371,7 +371,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
               )}
 
               {/* Nothing to list. Three reasons, told apart in plain words —
-                  before P-9 #3 all three showed one dashed "Add Skills" card
+                  before P-9 #3 all three showed one dashed "Add skills" card
                   hugging the left edge, which read as a broken grid. */}
               {addSkillsIn === null && (
                 drawerSkills.length === 0 && loadError ? (
@@ -382,7 +382,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
                   <ErrorState className="mx-4" message={`Couldn't load your skills: ${loadError}`} onRetry={retryLoad} />
                 ) : drawerSkills.length === 0 ? (
                   // Truly nothing installed: the standard empty state with the
-                  // marketplace as the way out (same action Add Skills has).
+                  // marketplace as the way out (same action Add skills has).
                   <EmptyState
                     className="px-4"
                     message="No skills installed yet."
@@ -414,7 +414,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
   );
 }
 
-// Persistent "Add Skills +" tile — matches SkillCard's drawer dimensions so it
+// Persistent "Add skills +" tile — matches SkillCard's drawer dimensions so it
 // sits naturally at the end of the grid. Uses dashed border + accent color to
 // read as an action, not a skill.
 function AddSkillsCard({ onClick }: { onClick: () => void }) {
@@ -429,7 +429,7 @@ function AddSkillsCard({ onClick }: { onClick: () => void }) {
       className="layer-surface !rounded-lg !border-dashed !border-edge card-interactive p-3 text-left hover:!border-accent transition-colors flex flex-col items-center justify-center text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
       <span className="text-lg font-medium leading-none">+</span>
-      <span className="text-sm font-medium mt-1">Add Skills</span>
+      <span className="text-sm font-medium mt-1">Add skills</span>
       <span className="text-2xs text-fg-muted mt-1">Browse marketplace</span>
     </button>
   );

@@ -47,7 +47,7 @@ export default function OverflowMenu({
   onToggleGamePanel, gamePanelOpen, gameConnected, challengePending,
 }: Props) {
   const dispatch = useArtifactDispatch();
-  // Session Files joined this menu on narrow (Destin, 2026-07-20; renamed from
+  // Session files joined this menu on narrow (Destin, 2026-07-20; renamed from
   // "Session artifacts" 2026-07-23) — the header's right cluster is now the
   // chat/terminal toggle's home.
   // Narrow selector: only the active session's drawer flag redraws this menu.
@@ -108,7 +108,7 @@ export default function OverflowMenu({
     },
     {
       key: 'artifacts',
-      label: artifactCount > 0 ? `Session Files (${artifactCount})` : 'Session Files',
+      label: artifactCount > 0 ? `Session files (${artifactCount})` : 'Session files',
       onClick: choose(() => {
         if (!activeSessionId) return;
         // Same D3 guard as the HeaderBar toggle — closing can discard a draft.

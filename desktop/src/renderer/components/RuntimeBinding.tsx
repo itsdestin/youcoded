@@ -116,7 +116,7 @@ function isNativeSupported(): boolean {
 // WHY BOTH FORMS MUST ALSO USE THIS FOR THEIR POST-CREATE RESET (review R2-3):
 // after every create, each form resets its runtime back to a default so the next
 // open starts clean. When that reset was the literal 'claude', the ChatGPT
-// default lasted exactly ONE session -- the second New Session was Claude Code
+// default lasted exactly ONE session -- the second New session was Claude Code
 // again, with no Claude login behind it. Resetting to defaultRuntime() instead
 // makes the default hold for every session, not just the first.
 //

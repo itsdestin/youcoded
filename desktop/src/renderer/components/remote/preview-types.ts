@@ -1,5 +1,5 @@
 /**
- * Shapes the Remote Access mock preview speaks in. There is deliberately NO component
+ * Shapes the Remote access mock preview speaks in. There is deliberately NO component
  * here: round-2 review rejected a bespoke panel, so every stage renders through the
  * existing Settings dialog's own setup banner (StatusStrip / Callout / ErrorState).
  */

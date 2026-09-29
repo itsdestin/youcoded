@@ -43,7 +43,7 @@ const INTEGRATION_ICON_BASE = `https://raw.githubusercontent.com/itsdestin/wecod
 
 interface Props {
   onExit(): void;
-  // Phase 2 redesign — jump to Your Library without round-tripping through
+  // Phase 2 redesign — jump to Your library without round-tripping through
   // the command drawer. Optional so the screen still renders standalone.
   onOpenLibrary?(): void;
   // ShareSheet (link/QR) is owned by App.tsx so it layers above this screen.
@@ -427,12 +427,12 @@ export default function MarketplaceScreen({
               type="button"
               onClick={onOpenLibrary}
               className="panel-glass py-1"
-              aria-label="Open Your Library"
-              title="Your Library"
+              aria-label="Open your library"
+              title="Your library"
             >
               {/* Wide: text label. Narrow: bookmark icon — matches the close-X
                   treatment on the adjacent button. */}
-              <span className="hidden sm:inline">Your Library</span>
+              <span className="hidden sm:inline">Your library</span>
               <span className="sm:hidden inline-flex p-0.5" aria-hidden>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
@@ -926,7 +926,7 @@ function IntegrationActions({
   if (state.kind === 'install-error') {
     return (
       <button type="button" onClick={() => { void onInstall(); }} className={primaryCls}>
-        Retry Install
+        Retry install
       </button>
     );
   }

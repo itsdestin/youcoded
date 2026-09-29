@@ -449,7 +449,7 @@ export default function ModelPicker({
     const spaceAbove = r.top - edge;
     const opensUpward = spaceBelow < 180 && spaceAbove > spaceBelow;
     setPanelPos({
-      // WHY: A New Session menu can put this field near the bottom of a short
+      // WHY: A New session menu can put this field near the bottom of a short
       // window. Choose the side with usable room instead of forcing a panel
       // below the field where the viewport clips its search and model rows.
       ...(opensUpward ? { bottom: window.innerHeight - r.top + gap } : { top: r.bottom + gap }),

@@ -514,14 +514,14 @@ describe('FirstRunView — the ChatGPT button and the kill switch', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The wizard's error line and its Try Again button
+// The wizard's error line and its Try again button
 // ---------------------------------------------------------------------------
 
-describe('FirstRunView — Try Again is offered only when something actually failed', () => {
+describe('FirstRunView — Try again is offered only when something actually failed', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
-  it('a refused OpenRouter key shows the message with no Try Again button', async () => {
-    // One click reaches this state and nothing broke. "Try Again" here would
+  it('a refused OpenRouter key shows the message with no Try again button', async () => {
+    // One click reaches this state and nothing broke. "Try again" here would
     // re-run the whole Node/Git/Claude install pass against a working machine.
     stubClaude({ state: viewState({
       currentStep: 'AUTHENTICATE',
@@ -530,13 +530,13 @@ describe('FirstRunView — Try Again is offered only when something actually fai
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
     await waitFor(() => expect(screen.getByText("OpenRouter didn't accept this key. Check that you copied all of it.")).toBeTruthy());
-    expect(screen.queryByText('Try Again')).toBeNull();
+    expect(screen.queryByText('Try again')).toBeNull();
     // …and the headline stays the step's own line, not "Something went wrong".
     expect(screen.queryByText(/Something went wrong/)).toBeNull();
     expect(screen.getByText('Sign in with an account, or run a model on this computer, to finish setup.')).toBeTruthy();
   });
 
-  it('a ChatGPT sign-in that timed out keeps its Try Again button', async () => {
+  it('a ChatGPT sign-in that timed out keeps its Try again button', async () => {
     // handleChatGptLogin marks the 'auth' prerequisite failed, which is the
     // signal the button reads.
     const prerequisites = INITIAL_PREREQUISITES.map((p) => (
@@ -550,12 +550,12 @@ describe('FirstRunView — Try Again is offered only when something actually fai
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
     await waitFor(() => expect(screen.getByText('Sign-in timed out. Try again?')).toBeTruthy());
-    expect(screen.getByText('Try Again')).toBeTruthy();
+    expect(screen.getByText('Try again')).toBeTruthy();
     expect(screen.getByText('Something went wrong. You can retry the last step.')).toBeTruthy();
   });
 
-  it('an error with no failed prerequisite and no other control (no disk space) keeps its Try Again button', async () => {
-    // On the install step there are no sign-in buttons — Try Again is the only
+  it('an error with no failed prerequisite and no other control (no disk space) keeps its Try again button', async () => {
+    // On the install step there are no sign-in buttons — Try again is the only
     // way forward, so removing it would strand the user.
     stubClaude({ state: viewState({
       currentStep: 'INSTALL_PREREQUISITES',
@@ -564,10 +564,10 @@ describe('FirstRunView — Try Again is offered only when something actually fai
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
     await waitFor(() => expect(screen.getByText(/Insufficient disk space/)).toBeTruthy());
-    expect(screen.getByText('Try Again')).toBeTruthy();
+    expect(screen.getByText('Try again')).toBeTruthy();
   });
 
-  it('a failed prerequisite install keeps its Try Again button', async () => {
+  it('a failed prerequisite install keeps its Try again button', async () => {
     const prerequisites = INITIAL_PREREQUISITES.map((p) => (
       p.name === 'node' ? { ...p, status: 'failed' as const, error: 'network' } : { ...p }
     ));
@@ -579,7 +579,7 @@ describe('FirstRunView — Try Again is offered only when something actually fai
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
     await waitFor(() => expect(screen.getByText('Could not download Node.js')).toBeTruthy());
-    expect(screen.getByText('Try Again')).toBeTruthy();
+    expect(screen.getByText('Try again')).toBeTruthy();
   });
 });
 

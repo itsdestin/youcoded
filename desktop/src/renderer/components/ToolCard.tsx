@@ -393,10 +393,10 @@ export function friendlyToolDisplay(
     }
 
     case 'TaskCreate': {
-      // Fix: a non-string subject rendered "New Task: [object Object]".
+      // Fix: a non-string subject rendered "New task: [object Object]".
       const subject = asString(input.subject);
       return {
-        label: subject ? `New Task: ${truncate(subject, 50)}` : 'New Task',
+        label: subject ? `New task: ${truncate(subject, 50)}` : 'New task',
         detail: '',
       };
     }
@@ -406,16 +406,16 @@ export function friendlyToolDisplay(
       let label: string;
       switch (status) {
         case 'completed':
-          label = 'Task Completed';
+          label = 'Task completed';
           break;
         case 'in_progress':
-          label = 'Task Started';
+          label = 'Task started';
           break;
         case 'deleted':
-          label = 'Task Deleted';
+          label = 'Task deleted';
           break;
         default:
-          label = 'Updating Task';
+          label = 'Updating task';
       }
       // Fix: a non-string taskId rendered "#[object Object]" (task ids are
       // strings throughout — see task-state.ts).
@@ -544,7 +544,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   external?: boolean;
   specialistName?: string;
   /** Budget gates (max_steps / doom_loop) are a binary "Continue?" — never offer
-   *  "Always Allow" (it'd persist a rule that permanently disables the guard).
+   *  "Always allow" (it'd persist a rule that permanently disables the guard).
    *  Also set for an external-directory ask, where a remembered rule could
    *  never be consulted (harness-session.ts, step 4). */
   suppressAlwaysAllow?: boolean;
@@ -585,7 +585,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // 'full-auto-ask', R1–R4). Every other combination keeps the row as-is.
   // An admin command gets the same stop band in EVERY mode (admin-password
   // design, review R-1: "should match push/deletion prompt… no extra subtext
-  // below the buttons"). It never offers Always Allow (floorStop suppresses it).
+  // below the buttons"). It never offers Always allow (floorStop suppresses it).
   const adminStop = floorStop === 'admin';
   const fullAutoStop = (permissionMode === 'full-auto' && !!denyListed) || adminStop;
   // WHY: a forced outside-folder ask isn't deny-listed, but without its own
@@ -623,9 +623,9 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   const chosen = grantOptions.find((o) => o.scope === chosenScope) ?? grantOptions[0];
   const canAlwaysAllow = (hasSuggestions || isNative) && !suppressAlwaysAllow && !noGrantPossible;
   // Both layouts start on index 0 — Yes / Run it, a one-time allow.
-  // WHY: the generic row used to start on Always Allow, so any Enter the card
+  // WHY: the generic row used to start on Always allow, so any Enter the card
   // caught saved a lasting rule; a stray key must never be able to do that
-  // (2026-09-14). Always Allow stays one arrow press away.
+  // (2026-09-14). Always allow stays one arrow press away.
   const [focusIdx, setFocusIdx] = useState(0);
   const buttonsRef = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -684,7 +684,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 
   // Build actions list so keyboard handler can index into it. The array MUST
   // match the VISUAL order so Arrow Left/Right walk the row: the safety stop
-  // puts deny in the MIDDLE (Run it / Deny | Always Allow) — red mid-row is
+  // puts deny in the MIDDLE (Run it / Deny | Always allow) — red mid-row is
   // owner-approved (compare R2) even though every other row ends on red.
   const actions = useRef<(() => void)[]>([]);
   actions.current = externalStop || budgetStop
@@ -845,7 +845,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   }
 
   // WHY: the new permission floor cannot be remembered; keep its stop in the
-  // same explained band but with no persistent Always Allow choice.
+  // same explained band but with no persistent Always allow choice.
   if (confirmingExternal || externalStop || budgetStop || fullAutoStop) return (
     <FullAutoStops
       kind={externalStop || confirmingExternal ? 'external' : budgetStop ? 'budget' : 'danger'}
@@ -886,7 +886,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
           onClick={onAlwaysAllow}
           className={`px-3 ${pad} text-xs font-medium rounded-lg ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
         >
-          Always Allow
+          Always allow
         </button>
       ) : null}
       <button
@@ -898,14 +898,14 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
         No
       </button>
     </div>
-      {/* Why there is no "Always Allow" here. Without it a missing button on a
+      {/* Why there is no "Always allow" here. Without it a missing button on a
           command the user runs constantly reads as a bug rather than a decision
           (compare R2·C). Shape-owned copy — see CommandShape.noGrantNote. */}
       {noGrantPossible && noGrantNote && !floorStop && (
         <p className="text-3xs text-fg-muted leading-relaxed">{noGrantNote}</p>
       )}
       {/* A floor below the rules forced this card (rm-target / secret paths):
-          say why it has no "Always Allow" and will keep asking. Replaces the
+          say why it has no "Always allow" and will keep asking. Replaces the
           shape note above so the card never gives two reasons. */}
       {floorStop && (
         <p className="text-3xs text-fg-muted leading-relaxed">{floorAskNote(floorStop)}</p>
@@ -1535,7 +1535,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             permissionMode={tool.permissionMode}
             command={typeof (tool.input as any)?.command === 'string' ? (tool.input as any).command : undefined}
             folderName={sessionCwd ? basename(sessionCwd) : undefined}
-            // Budget gates are a plain Yes/No "Continue?" — no "Always Allow".
+            // Budget gates are a plain Yes/No "Continue?" — no "Always allow".
             // `tool.external` joins them: the engine forces an ask for every path
             // outside the session folder and never consults the stored rules
             // there, so offering "Always allow" would promise a grant that can

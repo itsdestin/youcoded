@@ -5,7 +5,7 @@
 // with Fine-tune on request, AP-4 bubble shape / roundness, AP-S1
 // nobody's look changes until they change a setting; appearance-panel-review-3 —
 // pictures for every choice, painted in the theme's real colours, and the Look
-// settings behind one "Additional Customizations" row (under Layout — review-5 AR5-2); review-4 — no Message box setting (it now
+// settings behind one "Additional customizations" row (under Layout — review-5 AR5-2); review-4 — no Message box setting (it now
 // rides on the layout, look-overrides.ts), and the opened settings live inside that row's box.
 //
 // What must last is the FUNCTIONALITY — `lookOverrides` / `setLookOverrides` on
@@ -266,7 +266,7 @@ function GlassSettings({ active, raw, look, set, reducedEffects }: {
   // WHY the hint sits under the title (redesign, 2026-09-24): it used to be a loose
   // paragraph under the strip, which read as a separate block of text.
   const hint = !seeThrough ? 'No effect on this theme — it has no wallpaper'
-    : reducedEffects ? 'Blur is off while Reduce Visual Effects is on' : undefined;
+    : reducedEffects ? 'Blur is off while Reduce visual effects is on' : undefined;
 
   return (
     <div className="space-y-1.5">
@@ -341,7 +341,7 @@ export function LayoutSettings() {
 
 const LOOK_KEYS: (keyof LookOverrides)[] = ['glass', 'bubbleStyle', 'roundness'];
 
-/** Bubbles, message box, roundness and glass, behind one "Additional Customizations" row (under Layout — review-5 AR5-2).
+/** Bubbles, message box, roundness and glass, behind one "Additional customizations" row (under Layout — review-5 AR5-2).
  *  WHY folded (Destin, review-3 AR3-2, picked "Look tucked away"): the most-used
  *  settings — layout, themes, the two switches — stay up front; these open in place. */
 export function LookSettings() {
@@ -364,7 +364,7 @@ export function LookSettings() {
     <div>
       <SettingRow
         variant="item"
-        title="Additional Customizations"
+        title="Additional customizations"
         description={changed === 0 ? 'Message bubbles, corners, glass' : `${changed} changed from the theme`}
         expanded={open}
         onClick={() => setOpen(v => !v)}

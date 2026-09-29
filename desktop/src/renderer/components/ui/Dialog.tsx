@@ -158,7 +158,7 @@ export type DialogProps = {
   /**
    * Hold the full height instead of hugging content. For dialogs that host
    * sub-views and would otherwise resize as you navigate between them
-   * (Appearance, Remote Access). This is the honest version of the fixed height
+   * (Appearance, Remote access). This is the honest version of the fixed height
    * those two used to set: "always maximum", not an invented pixel count.
    *
    * There is no `height` or `maxHeight` prop. The cap comes from the size — a
@@ -171,7 +171,7 @@ export type DialogProps = {
   className?: string;
   /**
    * Set false when the caller owns its whole surface and supplies its own
-   * scroll region (Appearance hands the panel to ThemeScreen; Remote Access
+   * scroll region (Appearance hands the panel to ThemeScreen; Remote access
    * swaps in SettingsExplainer). Default true.
    */
   scrollBody?: boolean;

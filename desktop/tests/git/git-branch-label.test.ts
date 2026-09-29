@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { gitBranchLabel } from '../../src/main/git/git-branch-label';
 
-// The status bar's Git Branch chip in a native session. Claude Code's status
+// The status bar's Git branch chip in a native session. Claude Code's status
 // line is the chip's only feed for Claude Code sessions; a native session has
 // none, so main reads the branch itself — in the SAME "repo/branch" shape the
 // status line writes (hook-scripts/statusline.sh), so the chip reads alike.

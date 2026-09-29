@@ -100,7 +100,7 @@ export default function MarketplaceDetailOverlay({
           installed={installed}
           favorited={favorited}
           isInstalling={installing}
-          // Only an INSTALL failure feeds "Retry Install" — the key is shared with
+          // Only an INSTALL failure feeds "Retry install" — the key is shared with
           // uninstall and update (error inventory 2026-09-10, false message 14).
           installError={errEntry?.op === 'install' ? errEntry.message : null}
           updateAvailable={!!mp.updateAvailable[target.id]}
@@ -126,7 +126,7 @@ export default function MarketplaceDetailOverlay({
         <ThemeBody
           entry={entry}
           isInstalling={installing}
-          // Same rule as SkillBody above: only an INSTALL failure feeds "Retry Install".
+          // Same rule as SkillBody above: only an INSTALL failure feeds "Retry install".
           installError={errEntry?.op === 'install' ? errEntry.message : null}
           updateAvailable={!!mp.updateAvailable[target.slug]}
           isActive={isActive}
@@ -377,7 +377,7 @@ function SkillBody({
               className={installError ? 'ring-2 ring-destructive' : ''}
               title={installError || undefined}
             >
-              {installError ? 'Retry Install' : 'Install'}
+              {installError ? 'Retry install' : 'Install'}
             </Button>
           )}
         </div>
@@ -625,7 +625,7 @@ function ThemeBody({
               className={installError ? 'ring-2 ring-destructive' : ''}
               title={installError || undefined}
             >
-              {installError ? 'Retry Install' : 'Install'}
+              {installError ? 'Retry install' : 'Install'}
             </Button>
           ) : isActive ? (
             <>

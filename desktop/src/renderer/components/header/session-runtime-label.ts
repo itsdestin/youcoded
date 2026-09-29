@@ -73,7 +73,7 @@ export function sessionRuntimeLabel(s: {
   }
   // Claude Code. The model is an alias ('sonnet', 'claude-opus-5', …); an id
   // no alias matches shows nothing rather than a guess — the status bar's
-  // "Model Unknown" is its own affordance and does not belong in a list row.
+  // "Model unknown" is its own affordance and does not belong in a list row.
   const alias = s.model ? claudeAliasForModelId(s.model) : null;
   const model = alias ? CLAUDE_LABEL[alias] : null;
   return {

@@ -1,6 +1,6 @@
 /* WHY: this small Tags & note editor has its own header and scrolling body;
    Destin selected the approved divider plus a conditional, unpainted fade.
-   Other tag menus and the shared Manage Tags Dialog are not changed here. */
+   Other tag menus and the shared Manage tags Dialog are not changed here. */
 [data-tag-note-header] { position: relative; }
 [data-tag-note-header]::after {
   content: '';

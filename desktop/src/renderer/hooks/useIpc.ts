@@ -491,7 +491,7 @@ declare global {
         detectEndpoints: () => Promise<any[]>;
         setBackend: (backend: string) => Promise<any>;
         onDownloadProgress: (cb: (p: any) => void) => () => void;
-        // Create-time / swap memory guard + [Reload Model] (2026-07-14).
+        // Create-time / swap memory guard + [Reload model] (2026-07-14).
         memoryCheck: (modelId: string) => Promise<{ verdict: 'ok' | 'tight' | 'too-large'; headline: string; detail: string }>;
         load: (modelId: string) => Promise<boolean>;
         // 2026-09-05 local-engine upgrades. Real on every surface now.

@@ -5,13 +5,13 @@ import { BuddyResumeList } from './BuddyResumeList';
 
 /**
  * Buddy empty-state — mirrors the main app's no-active-session screen
- * ("No Active Session" + New Session/Resume buttons — deliberately NO
+ * ("No active session" + New session/Resume buttons — deliberately NO
  * mascot here: the buddy floater right next to this window IS the mascot,
  * a second one read as clutter — Destin 2026-07-16).
  *
- * Both buttons now open something. New Session swaps the CTA cluster for the
+ * Both buttons now open something. New session swaps the CTA cluster for the
  * shared BuddyNewSessionForm (also reused by SessionPill's dropdown, so the two
- * buddy entry points cannot drift); Resume Session swaps it for BuddyResumeList.
+ * buddy entry points cannot drift); Resume session swaps it for BuddyResumeList.
  *
  * WHY RESUME CHANGED (Destin, 2026-09-10). Resume used to set an error string —
  * "Open Resume from the main window for now" — and do nothing else: a July
@@ -51,7 +51,7 @@ export function BuddyWelcome({ onSessionCreated }: Props) {
     >
       {pane === 'buttons' && (
         <>
-          <p style={{ fontSize: 14, color: 'var(--fg-muted)', margin: 0 }}>No Active Session</p>
+          <p style={{ fontSize: 14, color: 'var(--fg-muted)', margin: 0 }}>No active session</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', marginTop: 4 }}>
             {/* panel-glass is a deliberate className override, not a leftover:
                 it re-tiers translucency from bubble→panel on wallpaper themes,
@@ -62,7 +62,7 @@ export function BuddyWelcome({ onSessionCreated }: Props) {
               className="panel-glass w-full"
               onClick={() => setPane('new')}
             >
-              New Session
+              New session
             </Button>
             <Button
               variant="secondary"
@@ -73,7 +73,7 @@ export function BuddyWelcome({ onSessionCreated }: Props) {
               <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <span>Resume Session</span>
+              <span>Resume session</span>
             </Button>
           </div>
         </>

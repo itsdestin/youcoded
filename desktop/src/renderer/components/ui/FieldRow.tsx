@@ -8,7 +8,7 @@ import { CARD_LEVEL_1 } from './cardLevels';
  * — design guide "Settings" → "Small controls … sit beside … Wide controls …
  * go below", decisions.md's setting-row-layout rule SA-1): the shape already
  * existed as a local `FieldRow` used only on Assistant settings' General page
- * (Default model, Default project folder, Step guard) — Remote Access's
+ * (Default model, Default project folder, Step guard) — Remote access's
  * Password field and every other "a text box needs a label and a hint" site
  * hand-rolled a slightly different shape instead (settings-screens.md's
  * candidate rule 1). One shared primitive, same recipe, so the next wide

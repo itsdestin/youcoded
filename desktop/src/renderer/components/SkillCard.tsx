@@ -47,7 +47,7 @@ function MarketplaceIconButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); onClick(); }}
-      title="Show Marketplace Detail Page"
+      title="Show marketplace detail page"
       className="p-1 rounded-md bg-panel text-fg-dim hover:text-fg hover:bg-inset transition-colors"
     >
       <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>

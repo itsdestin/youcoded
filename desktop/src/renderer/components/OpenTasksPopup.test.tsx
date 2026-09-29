@@ -65,7 +65,7 @@ describe('OpenTasksPopup', () => {
     expect(screen.getByText(/Running things…/)).toBeTruthy();
   });
 
-  it('fires onMarkInactive when the Mark Inactive button is clicked', () => {
+  it('fires onMarkInactive when the Mark inactive button is clicked', () => {
     const onMarkInactive = vi.fn();
     render(
       <OpenTasksPopup
@@ -81,7 +81,7 @@ describe('OpenTasksPopup', () => {
     expect(onMarkInactive).toHaveBeenCalledWith('5');
   });
 
-  it('shows a "Marked Inactive" section at the bottom with an Unhide button per row', () => {
+  it('shows a "Marked inactive" section at the bottom with an Unhide button per row', () => {
     const onUnhide = vi.fn();
     render(
       <OpenTasksPopup

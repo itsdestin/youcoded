@@ -55,7 +55,7 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
    *  'bad' is the destructive colour for a reason the user must read. */
   detail?: { text: React.ReactNode; tone?: 'muted' | 'bad' } | null;
   action?: React.ReactNode;
-  /** Round 2 (R2-3): a "My Account" button, top right, that opens the
+  /** Round 2 (R2-3): a "My account" button, top right, that opens the
    *  provider's own account page in the browser. Only passed when signed in —
    *  an account page is no use to someone who has no account here yet. */
   account?: string;
@@ -81,7 +81,7 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
             {account && (
               <Button variant="secondary" size="sm"
                 onClick={() => void (window as any).claude.shell.openExternal(account)}>
-                My Account
+                My account
               </Button>
             )}
             {action}
@@ -616,7 +616,7 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
               Waiting for the browser…
             </span>
           ) : openrouter === undefined ? 'Checking…' : connected ? words.status : 'Not connected'}
-          // My Account only for a key that works: with a refused key there is
+          // My account only for a key that works: with a refused key there is
           // no account connection to visit (review SI-4).
           account={connected && !waiting && !words.broken ? OPENROUTER_CREDITS_URL : undefined}
           detail={waiting ? null
@@ -812,7 +812,7 @@ export const LOCAL_MODELS_INFO = {
 export function LocalModelsBlock({ withHeader = true }: { withHeader?: boolean } = {}) {
   return (
     <section>
-      {withHeader && <SectionHeader title="Local Models" info={LOCAL_MODELS_INFO} />}
+      {withHeader && <SectionHeader title="Local models" info={LOCAL_MODELS_INFO} />}
 
       {/* Embedded: no standalone header (this section supplies it). */}
       <LocalModelsSection embedded />
@@ -935,7 +935,7 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
           <p className="text-xs text-fg font-medium">Web search</p>
           <AnchorTip label={WEB_SEARCH_INFO.label} title="Web search">{WEB_SEARCH_INFO.body}</AnchorTip>
         </div>
-      ) : withHeader && <SectionHeader title="Web Search" info={WEB_SEARCH_INFO} />}
+      ) : withHeader && <SectionHeader title="Web search" info={WEB_SEARCH_INFO} />}
 
       <p className={`text-3xs text-fg-muted leading-relaxed ${card ? 'mb-1.5' : 'mb-2.5'}`}>
         Web search works for free with no setup. Add an optional key to make it faster and more reliable.

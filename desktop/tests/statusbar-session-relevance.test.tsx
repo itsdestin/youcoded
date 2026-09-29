@@ -123,7 +123,7 @@ describe('StatusBar runtime relevance', () => {
 
 describe('StatusBar renders no empty chips', () => {
   // Rule 1 (spec §3): a chip with no value hides. Verified today: Session
-  // Duration (StatusBar.tsx:1289) and Active Ratio (:1377) both print a literal
+  // Duration (StatusBar.tsx:1289) and Active ratio (:1377) both print a literal
   // '--' in every native session, forever, and the token/speed chips do the same
   // before their first turn.
   const widgets = ['session-time', 'active-ratio', 'tokens-in', 'tokens-out', 'output-speed', 'cache-stats', 'cache-hit-rate'];
@@ -215,7 +215,7 @@ describe('StatusBar session totals', () => {
     expect(byHint(/Output tokens: 678\./)).toBeInTheDocument();
   });
 
-  it('renders a derived Code Changes count in a native session', () => {
+  it('renders a derived Code changes count in a native session', () => {
     withWidgets(['code-changes']);
     const totals = { ...emptyTotals(), linesAdded: 40, linesRemoved: 9 };
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={totals} sessionId="s1" />);
@@ -223,7 +223,7 @@ describe('StatusBar session totals', () => {
     expect(screen.getByText('-9')).toBeInTheDocument();
   });
 
-  it('renders NOTHING for Code Changes when nothing has been edited — never "No changes"', () => {
+  it('renders NOTHING for Code changes when nothing has been edited — never "No changes"', () => {
     withWidgets(['code-changes']);
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={emptyTotals()} sessionId="s1" />);
     expect(screen.queryByText(/no changes/i)).toBeNull();
@@ -334,7 +334,7 @@ describe('StatusBar — a measured zero is a real reading, not an unmeasured one
   });
 });
 
-describe('Session Cost chip', () => {
+describe('Session cost chip', () => {
   const costTotals = (over: Partial<ReturnType<typeof emptyTotals>>) => ({ ...emptyTotals(), ...over });
 
   it('shows a cost when priced work happened', () => {
@@ -501,7 +501,7 @@ describe('Session Cost chip', () => {
 // (a local model has no rate card), the accumulator read the null alone as
 // "unpriced", and the bar drew "Cost: not listed" with a tooltip claiming the
 // provider bills the user for a model running on their own machine.
-describe('Session Cost — a purely local session, end to end', () => {
+describe('Session cost — a purely local session, end to end', () => {
   // Built through the real accumulator, never by hand: hand-built flags are
   // what let this through the first time.
   const localSessionTotals = () => {

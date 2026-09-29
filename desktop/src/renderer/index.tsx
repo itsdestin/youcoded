@@ -234,7 +234,7 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
         return;
       }
       // The buddy floater's empty screen (dev/workbench/mockups/BuddySessionScreens.tsx)
-      // — its New Session form and Resume list at the floater's real 320x480, so
+      // — its New session form and Resume list at the floater's real 320x480, so
       // both panes can be operated in every theme without launching a dev
       // Electron instance. ThemeProvider so the themes are the real ones; no
       // ChatProvider because nothing on that screen touches chat state.

@@ -19,7 +19,7 @@ import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 // The shared empty-state primitive (design guide G-18): every empty list goes
 // through it rather than a bare muted paragraph. No action here on purpose —
 // this tab has no "new conversation" callback (ProjectView passes only the
-// list and the preview opener; New Conversation lives on the hero above).
+// list and the preview opener; New conversation lives on the hero above).
 import { EmptyState } from '../../ui';
 import { TabHeading } from '../TabHeading';
 import { useScrollFade } from '../../../hooks/useScrollFade';

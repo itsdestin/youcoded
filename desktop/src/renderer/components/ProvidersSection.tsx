@@ -407,7 +407,7 @@ function ProviderRow({ provider, onChanged }: { provider: ProviderStatus; onChan
       {/* Local engine install/status/restart controls moved to the Local Models
           section (Plan C) — the local row just points there now. */}
       {isLocal && (
-        <p className="text-3xs text-fg-muted mt-2">Managed in Local Models below.</p>
+        <p className="text-3xs text-fg-muted mt-2">Managed in Local models below.</p>
       )}
     </div>
   );

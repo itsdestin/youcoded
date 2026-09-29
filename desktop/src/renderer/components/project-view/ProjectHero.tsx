@@ -3,7 +3,7 @@
 //
 // Layout (matches docs/superpowers/prototypes/2026-06-14-project-view-redesign.html):
 //   PROJECT eyebrow
-//   <project name button ▾>                        [New Conversation]
+//   <project name button ▾>                        [New conversation]
 //   [folder] path · [octocat] owner/name  (both inline click targets)
 //   N files · N conversations · N context files · active <when>
 // (2026-07-23: the separate "N artifacts" stat was dropped when the Artifacts
@@ -11,7 +11,7 @@
 //
 // The project name is a clickable switcher trigger (opens <ProjectSwitcher>,
 // Task 2.3) and MUST NOT truncate — it wraps. The ONE accent use in this card is
-// the New Conversation primary button.
+// the New conversation primary button.
 import React, { useEffect, useState } from 'react';
 import type { CentralIndexProject } from '../../../shared/artifacts/types';
 import { getPlatform } from '../../platform';
@@ -297,7 +297,7 @@ export function ProjectHero({
     // once a project exists (a fresh install rings "Add a project" instead).
     <div className="layer-surface p-3 sm:p-5 flex flex-col gap-3 sm:gap-4" data-guide-anchor="project-hero">
       {/* Top row: the content column, plus the narrow-only cog pinned right.
-          WHY the card is a COLUMN now (2026-08-06): New Conversation moved to
+          WHY the card is a COLUMN now (2026-08-06): New conversation moved to
           the bottom-right, so the old left/right split stopped describing the
           layout — the cog is the only thing still anchored top-right. */}
       <div className="flex items-start justify-between gap-3">
@@ -478,7 +478,7 @@ export function ProjectHero({
         </div>
 
         {/* Narrow-only cog, now top-right of the card (it used to sit beside
-            New Conversation, which moved to the bottom). */}
+            New conversation, which moved to the bottom). */}
         {narrow && (
           <button
             ref={menu.anchorRef}
@@ -498,8 +498,8 @@ export function ProjectHero({
       </div>
 
       {/* Bottom row: management actions left, the primary action right
-          (2026-08-06 — New Conversation moved down here from the top-right).
-          It renders unconditionally because New Conversation always exists,
+          (2026-08-06 — New conversation moved down here from the top-right).
+          It renders unconditionally because New conversation always exists,
           even when the actions cluster inside it does not. */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         {/* Management actions (spec §4). The cluster renders at every width
@@ -593,7 +593,7 @@ export function ProjectHero({
           className="w-full sm:w-auto sm:shrink-0 sm:ml-auto"
           onClick={() => onNewConversation(project.path)}
         >
-          New Conversation
+          New conversation
         </Button>
       </div>
 

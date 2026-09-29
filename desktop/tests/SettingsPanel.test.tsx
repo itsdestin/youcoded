@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// SettingsPanel — the Remote Access section: the mock panel's controls, the setup banner and
+// SettingsPanel — the Remote access section: the mock panel's controls, the setup banner and
 // the end-of-setup check.
 import { afterEach, expect, it, vi, describe } from 'vitest';
 import React from 'react';

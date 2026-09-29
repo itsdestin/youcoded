@@ -54,7 +54,7 @@ export interface PageContext {
   onDefaultsChange: (updates: DefaultsUpdate) => void;
   cwd?: string;
   onOpenClaudePreferences?: () => void;
-  /** Closes the whole panel — the Claude Code Preferences button hands off to
+  /** Closes the whole panel — the Claude Code preferences button hands off to
    *  another dialog and must not leave this one open underneath it. */
   onClosePanel: () => void;
   /** Switch to another page. */

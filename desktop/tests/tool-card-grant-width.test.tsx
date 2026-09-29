@@ -3,7 +3,7 @@
  * The Always-allow WIDTH choice on a native Bash ask (M5 2c).
  *
  * Shape settled in compare round 1 (candidate B): the card keeps exactly one
- * "Always Allow" button and never changes shape; the choice — and the sentence
+ * "Always allow" button and never changes shape; the choice — and the sentence
  * saying what the grant will not cover — live in the confirm behind it. Copy
  * settled in round 2 (candidate C).
  *
@@ -40,8 +40,8 @@ const askTool = (command: string, over: Partial<ToolCallState> = {}): ToolCallSt
 function renderAsk(command: string, over: Partial<ToolCallState> = {}) {
   return render(<ChatProvider><ToolCard tool={askTool(command, over)} sessionId="s1" /></ChatProvider>);
 }
-const alwaysAllowButton = () => screen.queryByRole('button', { name: 'Always Allow' });
-const openConfirm = () => fireEvent.click(screen.getByRole('button', { name: 'Always Allow' }));
+const alwaysAllowButton = () => screen.queryByRole('button', { name: 'Always allow' });
+const openConfirm = () => fireEvent.click(screen.getByRole('button', { name: 'Always allow' }));
 const commit = () => fireEvent.click(screen.getByRole('button', { name: 'Always allow' }));
 
 describe('grant width — what the card sends', () => {
@@ -127,7 +127,7 @@ describe('grant width — what the card shows', () => {
 });
 
 describe('grant width — when nothing may be granted', () => {
-  it('offers no Always Allow at all, and says why', () => {
+  it('offers no Always allow at all, and says why', () => {
     renderAsk('git push', { denyListed: true });
     expect(alwaysAllowButton()).toBeNull();
     expect(screen.getByText(/whichever branch is checked out/)).toBeTruthy();
@@ -156,7 +156,7 @@ describe('grant width — surfaces that must not change', () => {
         />
       </ChatProvider>,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Always Allow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Always allow' }));
     await waitFor(() => expect(respondToPermission).toHaveBeenCalledTimes(1));
     expect(respondToPermission.mock.calls[0][1]).not.toHaveProperty('grantScope');
   });

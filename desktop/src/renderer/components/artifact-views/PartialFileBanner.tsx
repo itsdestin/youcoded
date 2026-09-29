@@ -44,10 +44,10 @@ export function PartialFileBanner({ sizeBytes, onLoadFull, onOpenExternally }: {
                     rounded-full bg-panel border border-edge shadow-lg
                     pl-4 pr-1.5 py-1.5">
       {/* Terse on purpose: the bar shares its width with a button, so the
-          sentence has to survive a narrow pane. "Large File" is the label, the
+          sentence has to survive a narrow pane. "Large file" is the label, the
           fraction is the fact (Destin, 2026-08-25). */}
       <span className="flex-1 min-w-0 truncate text-sm text-fg-2">
-        <span className="font-semibold text-fg">Large File</span>
+        <span className="font-semibold text-fg">Large file</span>
         {' — '}Showing {mb(EDIT_MAX_BYTES)}/{mb(sizeBytes)} MB
       </span>
       {action && (

@@ -177,7 +177,7 @@ export function ResumeOptionsForm({ session: s, options, onResume, flush, allowN
           disabled={nativeNeedsPick || busy}
           className="w-full py-1.5"
         >
-          {busy ? 'Resuming…' : dangerous ? 'Resume (Dangerous)' : 'Resume Session'}
+          {busy ? 'Resuming…' : dangerous ? 'Resume (dangerous)' : 'Resume session'}
         </Button>
       </div>
     </div>

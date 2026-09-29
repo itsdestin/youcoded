@@ -215,7 +215,7 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
           size={size}
           className="flex-1"
         >
-          {creating ? 'Creating…' : (dangerous && showSkipPermissions) ? 'Create (Dangerous)' : 'Create Session'}
+          {creating ? 'Creating…' : (dangerous && showSkipPermissions) ? 'Create (dangerous)' : 'Create session'}
         </Button>
       </div>
       {error && (

@@ -731,13 +731,13 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const listInner = (
     <>
       <div data-session-files-header className="flex items-center justify-between min-h-14 px-4 py-3 shrink-0">
-        {/* "Session Files" (Destin, 2026-07-23) — was "Session artifacts"
+        {/* "Session files" (Destin, 2026-07-23) — was "Session artifacts"
             (2026-07-20, which itself superseded reserving "Artifacts" for the
             Project View tab). "Files" is the plain word for what this actually
             lists; the "Session" qualifier still carries the distinction: this
             drawer is one session's activity log (created/edited/viewed all
             appear), vs the project-wide set in Project View. */}
-        <span className="text-base font-semibold text-fg">Session Files{listSettling ? '' : ` (${listedArtifacts.length})`}</span>
+        <span className="text-base font-semibold text-fg">Session files{listSettling ? '' : ` (${listedArtifacts.length})`}</span>
         {/* Only in the list-only shape (no artifact, no preview) — once
             either is showing, the top bar's own Close icon covers this, and
             showing both would be a redundant second close button. */}
@@ -1364,7 +1364,7 @@ export function GitFooterEntry({
         onClick={onOpenReview}
         className="flex items-center gap-1 px-2 py-0.5 rounded-md text-2xs text-fg-dim hover:text-fg hover:bg-inset transition-colors"
       >
-        Review Changes <Ic name="forward" size={11} />
+        Review changes <Ic name="forward" size={11} />
       </button>
       </Tooltip>
     </>

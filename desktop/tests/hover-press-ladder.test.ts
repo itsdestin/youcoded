@@ -151,7 +151,7 @@ describe('a frosted control answers with a ring, because its fill IS the glass',
 describe('primary buttons on glass: a visible hover, and the press the unlayered rules were eating', () => {
   const globals = readSource(join(RENDERER, 'styles', 'globals.css')).replace(/\r/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
-  it('the welcome screen\'s New Session moves toward its label colour, not just 10% more see-through', () => {
+  it('the welcome screen\'s New session moves toward its label colour, not just 10% more see-through', () => {
     const hover = rule('[data-wallpaper] .panel-glass.bg-accent:hover:not(:disabled)');
     expect(hover).toContain('var(--on-accent)');
     expect(hover).toContain('var(--panels-opacity, 1) * 100%');   // keeps the alpha it had

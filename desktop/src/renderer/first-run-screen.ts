@@ -1,6 +1,6 @@
 /**
  * Whether the welcome screen shows its first-time version ("Start your first session") rather
- * than the everyday "No Active Session".
+ * than the everyday "No active session".
  *
  * WHY this is a function with its own test (Destin, 2026-09-11, on his phone: "sometimes
  * erroneously showing me the very first run 'start your first session' screen when i connect

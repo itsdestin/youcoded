@@ -714,9 +714,9 @@ describe('ModelPicker recommended-models bands', () => {
   });
 });
 
-// ── The inline layout (the Model & Effort dialog) ────────────────────────────
+// ── The inline layout (the Model & effort dialog) ────────────────────────────
 /**
- * Two bugs `explore` found on 2026-09-26 in the Model & Effort dialog, which hosts this
+ * Two bugs `explore` found on 2026-09-26 in the Model & effort dialog, which hosts this
  * picker with `layout="inline"` above its Effort buttons and Fast mode switch:
  * 1. Pressing any other control in the dialog counted as "a click outside the picker" and
  *    collapsed the list; the dialog shrank, the button left the pointer before the release,

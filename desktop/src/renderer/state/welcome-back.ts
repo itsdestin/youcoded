@@ -21,7 +21,7 @@ export async function fetchReopenList(): Promise<string[]> {
     return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [];
   } catch {
     // A failed read only means no Welcome back screen this launch; the
-    // sessions are all still in Resume Session.
+    // sessions are all still in Resume session.
     return [];
   }
 }

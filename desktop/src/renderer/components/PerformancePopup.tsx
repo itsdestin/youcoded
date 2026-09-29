@@ -33,7 +33,7 @@ const PERFORMANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
     {
       heading: 'Other places to look for power savings',
       bullets: [
-        { term: 'Themes', text: "Pick a theme without glassmorphism / blur, or enable Reduced Effects in Appearance — biggest GPU savings after this toggle." },
+        { term: 'Themes', text: "Pick a theme without glassmorphism / blur, or enable Reduced effects in Appearance — biggest GPU savings after this toggle." },
         { term: 'Close unused sessions', text: 'Each session uses memory and a terminal, even when idle.' },
         { term: 'Windows', text: 'Settings → System → Display → Graphics → add YouCoded.exe → set "High performance" or "Power saving" per app. The OS setting overrides this toggle.' },
         { term: 'macOS', text: 'Apple Silicon switches automatically. On Intel Macs, System Settings → Battery → "Automatic graphics switching" controls this globally.' },
@@ -100,7 +100,7 @@ export default function PerformancePopup({
                 into eachother and the visual heirarchy is unclear"): the setting and
                 everything about THIS machine in one card; the explanation in a
                 second, its sections folded so the popup opens short. Nothing sits
-                bare on the popup (Remote Access is the reference). The old one-line
+                bare on the popup (Remote access is the reference). The old one-line
                 intro ("GPU choice affects performance.") repeated the explainer and
                 is gone; every other word is unchanged. */}
             <section>

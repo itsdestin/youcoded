@@ -92,7 +92,7 @@ describe('SettingRow structure', () => {
   });
 
   it('a control row can take a whole-row click without double-firing', () => {
-    // This is what the <label> wrappers around the Remote Access toggles bought,
+    // This is what the <label> wrappers around the Remote access toggles bought,
     // and what PerformancePopup hand-rolled as a closest('[role="switch"]')
     // guard. Without the stopPropagation, clicking the toggle would fire the
     // row handler too and land straight back where it started.

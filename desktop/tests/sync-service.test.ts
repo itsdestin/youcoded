@@ -269,7 +269,7 @@ describe('runHealthCheck — primary (GitHub sync spaces) vs additional backups'
 /**
  * Health-check-owned warnings must clear themselves when their cause goes away.
  *
- * Bug (reported by Destin 2026-08-11, from his live app): the Backup & Sync
+ * Bug (reported by Destin 2026-08-11, from his live app): the Backup & sync
  * popup showed a red "No internet · Can't reach the network" card directly
  * under a green "All synced · GitHub · 1m ago" header. runHealthCheck() ran
  * exactly once — at the end of SyncService.start() — so a launch that lost the

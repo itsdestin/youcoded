@@ -53,7 +53,7 @@ describe('Dialog shell', () => {
   });
 
   it('scrollBody={false} lets a caller own its whole surface', () => {
-    // Appearance hands the panel to ThemeScreen; Remote Access swaps in
+    // Appearance hands the panel to ThemeScreen; Remote access swaps in
     // SettingsExplainer. Those own their own scroll regions.
     render(<Dialog open onClose={() => {}} scrollBody={false}><p>custom</p></Dialog>);
     expect(panel().querySelector('.scroll-fade')).toBeNull();
@@ -166,7 +166,7 @@ describe('Dialog shell', () => {
   });
 
   it('fill holds the full height for dialogs hosting sub-views', () => {
-    // Appearance and Remote Access swap between an index and a detail view and
+    // Appearance and Remote access swap between an index and a detail view and
     // would otherwise resize under the cursor. "Always maximum" is the honest
     // version of the invented pixel height they used to set.
     render(<Dialog open onClose={() => {}} title="X" fill>body</Dialog>);
@@ -186,7 +186,7 @@ describe('Dialog shell', () => {
 // Escape closes a Dialog — the shell's job, not each caller's. Ten dialogs never
 // registered (2026-09-26): Escape did nothing (quit warning, first-time warnings), or
 // closed the panel UNDER the dialog and left the dialog up (Donate, Assistant settings,
-// Create a page), or closed two layers at once (Manage Tags). A sweep of every shoot
+// Create a page), or closed two layers at once (Manage tags). A sweep of every shoot
 // screen found none left after this.
 describe('Dialog — Escape', () => {
   it('closes the dialog, and only the top one', async () => {

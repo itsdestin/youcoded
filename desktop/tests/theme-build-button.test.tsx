@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// ThemeScreen's "Build New Theme with Claude" — the M3 handoff calls this "the
+// ThemeScreen's "Build new theme with Claude" — the M3 handoff calls this "the
 // single most visible instance of the gap M3 closes" (§2.3).
 //
 // It called onSendInput, which App wired straight to guardedPtySend, which

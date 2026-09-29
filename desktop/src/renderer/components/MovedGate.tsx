@@ -47,7 +47,7 @@ export default function MovedGate({ device, onExit, onResume, canResume = true }
             primitive's `secondary` outline (spec decision 60) — the two buttons
             are genuine peers here, so ghost would under-weight Exit. */}
         <Button variant="secondary" size="lg" onClick={onExit} className="py-1.5">
-          Exit Session
+          Exit session
         </Button>
         {canResume && (
           // Behavior change (spec change 75): this button's old `hover:bg-accent`

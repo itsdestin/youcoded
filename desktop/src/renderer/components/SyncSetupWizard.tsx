@@ -594,7 +594,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
   if (step === 'done') {
     return (
       <div className="flex flex-col h-full">
-        <WizardHeader title="Setup Complete" onClose={onClose} />
+        <WizardHeader title="Setup complete" onClose={onClose} />
         <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 text-center">
           {/* Animated checkmark */}
           <div className="w-16 h-16 rounded-full bg-green-400/10 flex items-center justify-center mb-4">
@@ -723,7 +723,7 @@ function PrereqCheckStep({
 
   return (
     <div className="flex flex-col h-full">
-      <WizardHeader title="Checking Setup" onBack={onBack} onClose={onClose} />
+      <WizardHeader title="Checking setup" onBack={onBack} onClose={onClose} />
       <div ref={bodyRef} className="scroll-fade flex-1">
         <div className="px-4 py-4 space-y-4">
 
@@ -828,7 +828,7 @@ function IcloudMissingHelp({ onRecheck }: { onRecheck: () => void }) {
               apple.com/icloud
             </button>
           </div>
-          <div>After installing, sign in with your Apple ID and enable iCloud Drive. Then come back and tap "Check Again".</div>
+          <div>After installing, sign in with your Apple ID and enable iCloud Drive. Then come back and tap "Check again".</div>
         </div>
       )}
       {os === 'linux' && (
@@ -845,7 +845,7 @@ function IcloudMissingHelp({ onRecheck }: { onRecheck: () => void }) {
       {os !== 'linux' && (
         /* Filled-grey (bg-inset) becomes the outline `secondary` — spec decision 60. */
         <Button variant="secondary" onClick={onRecheck}>
-          Check Again
+          Check again
         </Button>
       )}
     </div>
@@ -878,7 +878,7 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
         // is the deterministic fix (same contract as installClaude).
         setInstallError(
           result.error ||
-            "GitHub CLI was installed, but this app can't see it yet. Quit and reopen YouCoded, then tap Check Again.",
+            "GitHub CLI was installed, but this app can't see it yet. Quit and reopen YouCoded, then tap Check again.",
         );
       } else {
         setInstallError(result.error || 'Installation failed');
@@ -945,15 +945,15 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
       )}
       {(installError || !canAutoInstall) && os === 'other' && (
         <div className="text-3xs text-fg-muted">
-          Install from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>, then come back and tap "Check Again".
+          Install from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>, then come back and tap "Check again".
         </div>
       )}
       {(installError || !canAutoInstall) && (
-        <div className="text-3xs text-fg-muted">After installing, come back and tap "Check Again".</div>
+        <div className="text-3xs text-fg-muted">After installing, come back and tap "Check again".</div>
       )}
       {/* Filled-grey (bg-inset) becomes the outline `secondary` — spec decision 60. */}
       <Button variant="secondary" onClick={onRecheck}>
-        Check Again
+        Check again
       </Button>
     </div>
   );
@@ -1083,7 +1083,7 @@ function AuthStep({
             </div>
             {/* Filled-grey (bg-inset) becomes the outline `secondary` — spec decision 60. */}
             <Button variant="secondary" onClick={handleAuth}>
-              Try Again
+              Try again
             </Button>
           </div>
         )}

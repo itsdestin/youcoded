@@ -8,7 +8,7 @@ import { Button, Dialog, Toggle, TextInput, Textarea, LoadingState, RadioGroup, 
 // ~/.claude/settings.json via the settings:* IPC bridge.
 // Opens from:
 //   • Typing /config in chat view (SlashCommandDispatcher)
-//   • "Claude Code Preferences" button in SettingsPanel
+//   • "Claude Code preferences" button in SettingsPanel
 // In terminal view, /config passes through to the PTY instead (see dispatcher).
 //
 // Scope: the most-used ~5 options. "Advanced" button at the bottom switches
@@ -46,7 +46,7 @@ const DEFAULTS: PrefsState = {
 
 const PERMISSION_LABELS: Record<PermissionDefault, { label: string; desc: string }> = {
   default: { label: 'Default', desc: 'Ask before each tool use' },
-  acceptEdits: { label: 'Accept Edits', desc: 'Auto-approve file edits' },
+  acceptEdits: { label: 'Accept edits', desc: 'Auto-approve file edits' },
   plan: { label: 'Plan', desc: 'Plan-only mode, no execution' },
   bypassPermissions: { label: 'Bypass', desc: 'Skip all permission prompts (risky)' },
 };
@@ -116,7 +116,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
 
   return createPortal(
     <>
-      <Dialog screen="chat/preferences" open={open} onClose={onClose} title="Claude Code Preferences" size="panel">
+      <Dialog screen="chat/preferences" open={open} onClose={onClose} title="Claude Code preferences" size="panel">
         {!loaded ? (
           <LoadingState what="preferences" />
         ) : (
@@ -134,7 +134,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
                 options={Object.keys(PERMISSION_LABELS) as PermissionDefault[]}
                 value={prefs.defaultMode}
                 onChange={(m) => save('defaultMode', m as PermissionDefault)}
-                aria-label="Default Permission Mode"
+                aria-label="Default permission mode"
                 className="space-y-1.5"
               >
                 {(Object.keys(PERMISSION_LABELS) as PermissionDefault[]).map((mode) => (
@@ -157,7 +157,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
               {/* K3: <=4 short options with no description -> segmented. */}
               <SegmentedTabs
                 variant="contained"
-                aria-label="Editor Mode"
+                aria-label="Editor mode"
                 value={prefs.editorMode}
                 onChange={(id) => save('editorMode', id as EditorMode)}
                 tabs={[
@@ -177,7 +177,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
                 value={prefs.outputStyle}
                 onChange={(e) => save('outputStyle', e.target.value)}
                 placeholder="e.g. concise, explanatory"
-                aria-label="Output Style"
+                aria-label="Output style"
                 className="w-full"
               />
               <p className="text-2xs text-fg-muted mt-1.5">Preset name that tunes your assistant's response style. Leave blank for default.</p>
@@ -215,7 +215,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
                 onChange={(e) => save('systemPrompt', e.target.value)}
                 placeholder="Instructions appended to every session..."
                 rows={4}
-                aria-label="System Prompt"
+                aria-label="System prompt"
                 className="w-full"
               />
               <p className="text-2xs text-fg-muted mt-1.5">Applied globally. Leave blank to use Claude Code defaults.</p>

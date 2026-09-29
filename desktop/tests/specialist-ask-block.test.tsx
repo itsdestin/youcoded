@@ -58,7 +58,7 @@ describe('SpecialistAskBlock — copy', () => {
     expect(screen.queryByRole('button', { name: 'Allow outside edits for this session' })).toBeNull();
   });
 
-  it('external (outside-the-folder) ask says the helper has to ask every time — and offers no Always Allow', () => {
+  it('external (outside-the-folder) ask says the helper has to ask every time — and offers no Always allow', () => {
     renderBlock({ external: true });
     expect(screen.getByText(/outside the project folder/i).textContent).toBe(
       'This is outside the project folder, so Wren has to ask every time.',

@@ -116,7 +116,7 @@ const HARDCODED_ERROR_FALLBACK: Record<string, { count: number; why: string }> =
 
 describe('status adoption', () => {
   it('no status line in the settings family is a centred coloured paragraph', () => {
-    // The shape Remote Access used for four of its eleven branches:
+    // The shape Remote access used for four of its eleven branches:
     // `text-center` on a <p> carrying a status colour. It reads as a banner in
     // a column of left-aligned rows, and it has nowhere to put the action that
     // resolves the state — which is why two branches ended up with a

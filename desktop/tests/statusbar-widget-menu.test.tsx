@@ -106,21 +106,21 @@ function rowAround(label: HTMLElement, reason: string): HTMLElement {
 describe('Always On section and announcement popup', () => {
   // WHY: these four are the controls the bar always draws; the menu names them
   // once, at the top, instead of tagging a single row "always on".
-  it('lists Model, Permissions, Tags & Note and Announcements first, with no per-row tag', async () => {
+  it('lists Model, Permissions, Tags & note and Announcements first, with no per-row tag', async () => {
     await openMenu('claude');
     const headings = screen.getAllByRole('heading', { level: 3 }).map(h => h.textContent);
     // WHY sentence case (labels batch, guide: no spaced capitals): this
     // heading is now the shared SectionLabel primitive.
     expect(headings[0]).toBe('Always on');
-    for (const label of ['Model', 'Permissions', 'Tags & Note', 'Announcements']) {
+    for (const label of ['Model', 'Permissions', 'Tags & note', 'Announcements']) {
       expect(screen.getByText(label).closest('button')!.hasAttribute('disabled')).toBe(true);
     }
     expect(screen.queryByText('always on')).toBeNull();
   });
 
-  it('turns Git Branch off for a fresh install', async () => {
+  it('turns Git branch off for a fresh install', async () => {
     await openMenu('claude');
-    const box = screen.getByText('Git Branch').closest('button')!.querySelector('span')!;
+    const box = screen.getByText('Git branch').closest('button')!.querySelector('span')!;
     expect(box.className).not.toContain('bg-accent');
   });
 
@@ -135,7 +135,7 @@ describe('Always On section and announcement popup', () => {
   });
 });
 
-describe('Customize Status Bar menu', () => {
+describe('Customize status bar menu', () => {
   it('keeps Cost switchable when live work is unpriced, and explains free live work', () => {
     window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['session-cost']));
     const { wrapper, store } = makeStoreWrapper(['s1']);
@@ -146,7 +146,7 @@ describe('Customize Status Bar menu', () => {
       usageProgress: progress(false), timestamp: 10, uuid: 'unpriced' }));
     expect(screen.getByText('not listed')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /status bar widgets|customize/i }));
-    expect(screen.getByText('Session Cost').closest('button')?.disabled).toBe(false);
+    expect(screen.getByText('Session cost').closest('button')?.disabled).toBe(false);
     act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
       usageProgress: progress(true), timestamp: 11, uuid: 'free' }));
     expect(screen.queryByText('not listed')).toBeNull();
@@ -163,9 +163,9 @@ describe('Customize Status Bar menu', () => {
     expect(screen.getAllByText('Not available in this kind of session').length).toBe(2);
   });
 
-  it('leaves Git Branch unexplained — it is a missing feed, not a relevance rule', async () => {
+  it('leaves Git branch unexplained — it is a missing feed, not a relevance rule', async () => {
     await openMenu('native');
-    const row = screen.getByText('Git Branch').closest('div')!;
+    const row = screen.getByText('Git branch').closest('div')!;
     expect(row.textContent).not.toMatch(/only|not measured|no published/i);
   });
 
@@ -214,7 +214,7 @@ describe('Customize Status Bar menu', () => {
     await openMenu('native', totals({ anyUnpriced: true }));
     expect(screen.queryByText('No published price for this model')).toBeNull();
     expect(screen.queryByText("Models on your own machine don't cost anything to run")).toBeNull();
-    expect(screen.getByText('Session Cost').closest('button')).toBeTruthy();
+    expect(screen.getByText('Session cost').closest('button')).toBeTruthy();
   });
 
   // Task 20, defect B. A free local parent that delegated to a metered
@@ -224,12 +224,12 @@ describe('Customize Status Bar menu', () => {
   it('never tells a session it is free to run when metered work also ran', async () => {
     await openMenu('native', totals({ anyFree: true, anyUnpriced: true }));
     expect(screen.queryByText("Models on your own machine don't cost anything to run")).toBeNull();
-    expect(screen.getByText('Session Cost').closest('button')).toBeTruthy();
+    expect(screen.getByText('Session cost').closest('button')).toBeTruthy();
   });
 
   it('stacks the reason under the label instead of beside it', async () => {
     // Checkpoint #6: the reason used to sit BESIDE the label on the same
-    // single-line flex row, which wrapped "Session Duration" onto two lines and
+    // single-line flex row, which wrapped "Session duration" onto two lines and
     // made that row taller than its neighbours. Structure, not pixels: the
     // reason must not be a direct child of the row that holds the checkbox
     // spacer, and must share a two-child wrapper with the label.
@@ -326,7 +326,7 @@ describe('the bar and the Customize menu agree about Cost', () => {
 
   for (const shape of shapes) {
     it(`${shape.name}: bar ${shape.chip ? `shows "${shape.chip}"` : 'shows nothing'}, menu row ${shape.rowEnabled ? 'stays a switch' : 'is dimmed'}`, async () => {
-      // Session Cost is defaultVisible:false — switch it on, or the bar would
+      // Session cost is defaultVisible:false — switch it on, or the bar would
       // be silent for a reason that has nothing to do with pricing.
       window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['session-cost']));
       await openMenu(shape.provider, shape.totals, shape.sessionStats);
@@ -341,12 +341,12 @@ describe('the bar and the Customize menu agree about Cost', () => {
       }
 
       // --- what the menu offered ---
-      const label = screen.getByText('Session Cost');
+      const label = screen.getByText('Session cost');
       const rowEnabled = label.closest('button') !== null;
       expect(rowEnabled).toBe(shape.rowEnabled);
       if (shape.reason === null) {
         // Nothing but the label on the row — no sentence at all.
-        expect(label.parentElement!.textContent).toBe('Session Cost');
+        expect(label.parentElement!.textContent).toBe('Session cost');
       } else {
         expect(label.nextElementSibling!.textContent).toBe(shape.reason);
       }

@@ -736,11 +736,11 @@ export function ProjectView(props: ProjectViewProps) {
   const SEGMENTS: { id: TabId; label: string; icon: React.ReactNode; count: string }[] = [
     { id: 'files', label: 'Files', icon: <FolderIcon />, count: formatFileCount(heroStats.files, heroStats.filesTruncated) },
     { id: 'conversations', label: 'Conversations', icon: <ChatIcon />, count: String(heroStats.conversations) },
-    // WHY "Instructions & Memories" (not "Context", which it was built as): the
+    // WHY "Instructions & memories" (not "Context", which it was built as): the
     // tab surfaces the files that tell the assistant HOW to behave — instructions
     // (CLAUDE.md/AGENTS.md/rules) and memories — and "instructions" is the term
     // the product uses everywhere else a non-technical user meets this concept.
-    { id: 'context', label: 'Instructions & Memories', icon: <DocIcon />, count: String(heroStats.contextFiles) },
+    { id: 'context', label: 'Instructions & memories', icon: <DocIcon />, count: String(heroStats.contextFiles) },
   ];
 
   // Per-active-project sync props for the hero. `dot` is null when syncStatus is

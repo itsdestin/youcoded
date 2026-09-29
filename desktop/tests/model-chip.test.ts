@@ -7,7 +7,7 @@ const native = (model?: string) => ({ provider: 'native', model });
 
 describe('modelChipFor', () => {
   // The bug this whole module exists for: every native session rendered the red
-  // "Model Unknown" error chip, because an OpenRouter/GGUF id matches none of
+  // "Model unknown" error chip, because an OpenRouter/GGUF id matches none of
   // the four Claude Code aliases and fell through to the 'unknown' sentinel.
   it('renders a native session from its bound model id, never as unknown', () => {
     expect(modelChipFor(native('anthropic/claude-sonnet-5'), 'unknown')).toEqual({

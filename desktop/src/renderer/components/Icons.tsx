@@ -313,7 +313,7 @@ export function ThemeMascot({ variant, fallback: Fallback, className = 'w-6 h-6'
   const rigSrc = desktop ? activeTheme?.mascot?.rig ?? null : null;
   const companions = scene && desktop ? activeTheme?.companions ?? [] : [];
   // A picture this page cannot show gets the default mascot, never a broken-image box (Destin,
-  // 2026-09-11: a screenshot of "No Active Session" with one where Meadow Mist's mascot belongs).
+  // 2026-09-11: a screenshot of "No active session" with one where Meadow Mist's mascot belongs).
   // A browser connected over remote access cannot load theme-asset:// at all: the files are on the
   // computer. The Android app serves them from the phone, so it still tries. Any picture that fails
   // to load falls back too; keyed on the address, so switching theme tries the new picture.

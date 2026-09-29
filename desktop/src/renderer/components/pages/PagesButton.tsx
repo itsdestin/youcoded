@@ -41,7 +41,7 @@ export function PagesButton({ active = false }: { active?: boolean } = {}) {
         type="button"
         className={`${HEADER_ICON_BUTTON} ${active ? 'text-fg bg-inset' : ''}`}
         onClick={toggle}
-        aria-label="Open Pages"
+        aria-label="Open pages"
         aria-pressed={active}
         data-guide-anchor="pages"
       >

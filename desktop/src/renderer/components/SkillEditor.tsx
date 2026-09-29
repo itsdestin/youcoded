@@ -81,7 +81,7 @@ export default function SkillEditor({ skillId, onClose }: SkillEditorProps) {
   return (
     // Overlay layer L2 — theme-driven via Scrim/OverlayPanel.
     <>
-      <Dialog open onClose={onClose} size="prompt" title="Edit Skill" scrollBody={false} className="p-5" screen="chat/skills/edit">
+      <Dialog open onClose={onClose} size="prompt" title="Edit skill" scrollBody={false} className="p-5" screen="chat/skills/edit">
 
         {/* Name */}
         {/* WHY: this was a spaced-caps label achieved by hand-typing capitals

@@ -695,7 +695,7 @@ describe('RemoteServer unhandled channels', () => {
     // This channel reached preload, the shim, the desktop IPC handlers and Android, and
     // not this host. The shim rejects on `unsupported`, and the panel asks for status in
     // the same Promise.all as the config, the Tailscale info and the device list — so the
-    // whole Remote Access screen opened blank on a phone, and every reconnect re-asked.
+    // whole Remote access screen opened blank on a phone, and every reconnect re-asked.
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
     const sent = await sendAndCollect(server, { type: 'remote:status', id: 'req-status', payload: {} });

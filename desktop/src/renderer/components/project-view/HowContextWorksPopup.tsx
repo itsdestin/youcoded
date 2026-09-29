@@ -290,7 +290,7 @@ interface OverviewLayer {
   path: string;
   timing: string;
 }
-// WHY the labels: renamed with the tab ("Instructions & Memories") so the
+// WHY the labels: renamed with the tab ("Instructions & memories") so the
 // overview's vocabulary matches what the user just clicked.
 const OVERVIEW_LAYERS: OverviewLayer[] = [
   { Icon: GlobeIcon, label: 'Global instructions', path: '~/.claude/CLAUDE.md', timing: 'Always · every project' },

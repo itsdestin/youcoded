@@ -83,7 +83,7 @@ const MODEL_DISPLAY: Record<ModelAlias | 'unknown', { label: string; color: stri
   fable:       { label: CLAUDE_ALIAS_LABELS.fable,      color: '#E879F9', border: 'rgba(232,121,249,0.35)',  icon: 'claudecode' },
   // Error state, not a real model — red like the high-danger usage threshold
   // (utilizationColor/contextColor) so it reads as "wrong", never as a normal pill.
-  unknown:     { label: 'Model Unknown', color: '#DD4444', border: 'rgba(221,68,68,0.3)' },
+  unknown:     { label: 'Model unknown', color: '#DD4444', border: 'rgba(221,68,68,0.3)' },
 };
 
 /**
@@ -438,7 +438,7 @@ interface Props {
   /** Open-tasks counts for the chip — derived at App root from a single
    *  useSessionTasks instance so the chip and popup share inactiveMap state. */
   openTasksCounts?: { running: number; pending: number };
-  /** Fired when the user clicks the Open Tasks chip. */
+  /** Fired when the user clicks the Open tasks chip. */
   onOpenOpenTasks?: () => void;
   /** Native-runtime sessions only (Task 12): the active session's most-recent
    *  turn-complete usage. null/absent for CC + idle sessions (chips stay hidden). */
@@ -488,7 +488,7 @@ interface WidgetCategory {
 
 const WIDGET_CATEGORIES: WidgetCategory[] = [
   // WHY first and locked: these are the controls the bar always draws. Listing
-  // them here (instead of a lone "always on" tag beside Tags & Note) tells the
+  // them here (instead of a lone "always on" tag beside Tags & note) tells the
   // user up front what cannot be switched off, so the rows below are all choices.
   {
     name: 'Always on', // WHY sentence case (labels batch): feeds the section heading below verbatim.
@@ -511,7 +511,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
       },
       {
         id: 'session-tags',
-        label: 'Tags & Note',
+        label: 'Tags & note',
         defaultVisible: true,
         locked: true,
         description: 'Tag the current session and attach a freeform note. Always shown next to the model and permission controls.',
@@ -558,21 +558,21 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
       },
       {
         id: 'session-cost',
-        label: 'Session Cost',
+        label: 'Session cost',
         defaultVisible: false,
         description: 'Estimated cost of this session in USD. For Pro/Max subscribers this is informational only (you\'re not billed per-token).',
         bestFor: 'API users tracking spend. Also useful for Pro/Max users curious about what their session would cost on the API.',
       },
       {
         id: 'session-time',
-        label: 'Session Duration',
+        label: 'Session duration',
         defaultVisible: false,
         description: 'Total session time and how much of it your assistant spent thinking (API time). Helps you understand your workflow pace.',
         bestFor: 'Power users who want to see how much of a session is active assistant work vs your own thinking/typing time.',
       },
       {
         id: 'active-ratio',
-        label: 'Active Ratio',
+        label: 'Active ratio',
         defaultVisible: false,
         description: 'What percentage of the session your assistant was actively thinking (API time / wall time). Low means you\'re mostly reading; high means it is doing heavy lifting.',
         bestFor: 'Understanding your workflow rhythm. A 5% ratio on a long session means you\'re mostly reviewing; 50%+ means it is working hard.',
@@ -584,21 +584,21 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
     widgets: [
       {
         id: 'tokens-in',
-        label: 'Input Tokens',
+        label: 'Input tokens',
         defaultVisible: false,
         description: 'Cumulative input tokens sent to your assistant this session. Includes your messages, files, and system context.',
         bestFor: 'Power users monitoring how much context is being sent. Helpful for optimizing large-file workflows.',
       },
       {
         id: 'tokens-out',
-        label: 'Output Tokens',
+        label: 'Output tokens',
         defaultVisible: false,
         description: 'Cumulative output tokens your assistant has generated this session. Higher means more verbose responses.',
         bestFor: 'Users who want to understand how much your assistant is writing. Useful for gauging response verbosity.',
       },
       {
         id: 'cache-stats',
-        label: 'Cache Efficiency',
+        label: 'Cache efficiency',
         defaultVisible: false,
         description: 'Tokens read from the prompt cache vs created. Higher cached reads mean faster, cheaper requests.',
         bestFor: 'API users and power users. Shows how effectively prompt caching is working in your conversation.',
@@ -608,14 +608,14 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         // everyone who already turned this chip on. Only what it MEASURES and
         // what it is CALLED changed; renaming the id would silently reset them.
         id: 'cache-hit-rate',
-        label: 'Context Reuse',
+        label: 'Context reuse',
         defaultVisible: false,
         description: 'How much of each prompt was reused from cache instead of re-read. Reused context is cheaper and much faster.',
         bestFor: 'Long conversations. A sudden drop means the cache stopped working — usually an idle gap, or a change of model.',
       },
       {
         id: 'output-speed',
-        label: 'Output Speed',
+        label: 'Output speed',
         defaultVisible: false,
         description: 'Average output tokens per second across the session. Varies by model — Haiku is fastest, Opus is slowest.',
         bestFor: 'Comparing model performance. Useful when deciding whether to switch models for faster iteration.',
@@ -627,14 +627,14 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
     widgets: [
       {
         id: 'code-changes',
-        label: 'Code Changes',
+        label: 'Code changes',
         defaultVisible: false,
         description: 'Lines of code added and removed this session. A quick productivity snapshot.',
         bestFor: 'Developers using Claude for coding tasks. See at a glance how much code Claude has written.',
       },
       {
         id: 'git-branch',
-        label: 'Git Branch',
+        label: 'Git branch',
         defaultVisible: false,
         description: 'The current git repository and branch for your working directory.',
         bestFor: 'Developers working across multiple branches or repos.',
@@ -646,7 +646,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
     widgets: [
       {
         id: 'open-tasks',
-        label: 'Open Tasks',
+        label: 'Open tasks',
         defaultVisible: true,
         description: 'Chip showing tasks Claude is tracking in the current session (running + pending counts). Hides when there are no open tasks. Click to see the full list.',
         bestFor: 'Everyone who uses sessions where Claude juggles multiple tasks. Lets you see what\'s in flight without scrolling the chat.',
@@ -658,7 +658,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
     widgets: [
       {
         id: 'sync-warnings',
-        label: 'Sync Warnings',
+        label: 'Sync warnings',
         defaultVisible: true,
         description: 'Alerts when sync isn\'t working (no internet, stale data, unsynced skills).',
         bestFor: 'YouCoded toolkit users. Keeps you aware of sync issues that could cause data loss.',
@@ -791,7 +791,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
           "No flex-1" workaround is gone too: that was needed because its body
           was a bare overflow-y-auto div with no min-height:0, which .scroll-fade
           supplies. */}
-      <Dialog screen="chat/status-bar" open onClose={onClose} title="Status Bar Widgets" size="panel">
+      <Dialog screen="chat/status-bar" open onClose={onClose} title="Status bar widgets" size="panel">
             {WIDGET_CATEGORIES.map((cat) => (
               <section key={cat.name}>
                 {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
@@ -820,7 +820,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                             /* Label on its own line, reason on the line beneath
                                it. WHY not side by side (how this used to read):
                                a long reason squeezed the label and wrapped
-                               "Session Duration" onto two lines, so that one row
+                               "Session duration" onto two lines, so that one row
                                stood taller than every other row in the menu.
                                Stacked, each part gets a full line and every
                                dimmed row is the same height. The empty spacer
@@ -1159,7 +1159,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
               {model.kind !== 'unknown' && (
                 <>
                   <span className="opacity-40">|</span>
-                  <span className="capitalize">{effort || 'auto'} Effort</span>
+                  {/* No CSS `capitalize` (2026-09-29): it title-cases every word; capitalize only the first letter in JS. */}<span>{(effort || 'auto').replace(/^./, (c) => c.toUpperCase())} effort</span>
                 </>
               )}
             </button>
@@ -1214,7 +1214,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         </span>
       )}
 
-      {/* Open Tasks chip — hidden when 0 open OR when widget is toggled off.
+      {/* Open tasks chip — hidden when 0 open OR when widget is toggled off.
           Counts are derived at App root to share one useSessionTasks instance
           with the popup; two instances would have separate inactiveMap state
           that don't sync within the same page. */}
@@ -1652,15 +1652,15 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           there is no pull/restore path feeding it anymore. */}
 
       {/* Sync status pill — at most one badge total.
-          Red "Sync Failing" for any danger-level warning,
-          orange "Sync Warning" for warn-only,
+          Red "Sync failing" for any danger-level warning,
+          orange "Sync warning" for warn-only,
           nothing when synced. Click opens the panel where the descriptive copy lives. */}
       {show('sync-warnings') && (() => {
         const handler = onOpenSync || onRunSync;
         const severity = deriveWarningSeverity(syncWarnings ?? []);
         if (severity === null) return null;
         const isFailing = severity === 'failing';
-        const label = isFailing ? 'Sync Failing' : 'Sync Warning';
+        const label = isFailing ? 'Sync failing' : 'Sync warning';
         const styleClass = isFailing ? warnStyles.danger : warnStyles.warn;
         return (
           <Tooltip text={isFailing ? 'Sync is failing — click for details' : 'Sync warnings — click for details'}>
@@ -1710,7 +1710,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       )}
 
       {/* Version pill — shows YouCoded app version, glows yellow when update available.
-         Click opens the in-app UpdatePanel (changelog + Update Now) — no more raw URL jumps. */}
+         Click opens the in-app UpdatePanel (changelog + Update now) — no more raw URL jumps. */}
       {show('version') && updateStatus && (
         <Tooltip text={
             (devLabel ? `Dev instance: ${devLabel} — ` : '') +
@@ -1751,7 +1751,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       )}
 
       {/* Customize widget — pencil icon opens config popup, always last */}
-      <Tooltip text="Customize Status Bar">
+      <Tooltip text="Customize status bar">
       <button
         onClick={() => setPopupOpen(true)}
         className="ml-auto flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"

@@ -21,7 +21,7 @@ export interface ModelChipSession {
  * (authoritative, and kept live on every swap) instead of going through the
  * Claude Code alias matcher — an OpenRouter slug or a local GGUF filename
  * matches none of the four aliases, which is why every native session used to
- * render the red "Model Unknown" error chip.
+ * render the red "Model unknown" error chip.
  *
  * Returns undefined when there is nothing honest to show: no session, or a
  * native session whose binding hasn't landed yet (create in flight). A missing
@@ -32,7 +32,7 @@ export function modelChipFor(
   currentModel: ModelAlias | 'unknown',
 ): ModelChip | undefined {
   // A shell session runs no model at all. Falling through would hand it the
-  // Claude Code alias matcher and render the red "Model Unknown" error chip for
+  // Claude Code alias matcher and render the red "Model unknown" error chip for
   // a session that is not missing a model — it is a terminal.
   if (session?.provider === 'shell') return undefined;
   if (session?.provider === 'native') {

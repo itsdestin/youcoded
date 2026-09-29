@@ -5,7 +5,7 @@ import BrailleSpinner from '../BrailleSpinner';
  * K5 — the status strip. "What is this subsystem doing right now", plus the one
  * action that resolves it.
  *
- * Replaces Remote Access's ELEVEN ad-hoc setup branches (the spec said eight),
+ * Replaces Remote access's ELEVEN ad-hoc setup branches (the spec said eight),
  * which between them used loose <p> tags, centred green text, centred muted
  * text, a bare button with no message at all, and full-width buttons stacked
  * mid-scroll. The words were mostly fine — the shape was eleven shapes.

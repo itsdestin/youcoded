@@ -504,9 +504,9 @@ describe('SessionDrawer previewing a past conversation', () => {
   // preview, which carries the Resume browser's own action card). The top bar
   // keeps the tag button and gains Complete; it no longer carries Resume.
   describe('Resume card at the foot of the preview (spec A2 reasons)', () => {
-    const resumeButton = () => screen.queryByRole('button', { name: 'Resume Session' });
+    const resumeButton = () => screen.queryByRole('button', { name: 'Resume session' });
 
-    it('offers the model picker and Resume Session when the conversation resolves resumable, and nothing in the top bar', async () => {
+    it('offers the model picker and Resume session when the conversation resolves resumable, and nothing in the top bar', async () => {
       mockWindowClaudeFor(okRow());
       renderDrawerWithPreview();
       await waitFor(() => expect(resumeButton()).toBeTruthy());
@@ -542,7 +542,7 @@ describe('SessionDrawer previewing a past conversation', () => {
       expect(screen.queryByRole('switch', { name: 'Skip permissions' })).toBeNull();
     });
 
-    it('Resume Session dispatches youcoded:resume-session with the conversation and the picked options', async () => {
+    it('Resume session dispatches youcoded:resume-session with the conversation and the picked options', async () => {
       mockWindowClaudeFor(okRow({ projectSlug: 'my-slug', projectPath: '/my/path' }));
       renderDrawerWithPreview();
       await waitFor(() => expect(resumeButton()).toBeTruthy());
@@ -589,7 +589,7 @@ describe('SessionDrawer previewing a past conversation', () => {
 
       expect(await screen.findByPlaceholderText('Search or create a tag…')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'work' })).toHaveAttribute('aria-pressed', 'true');
-      expect(screen.getByPlaceholderText('A note for later — shows under All Sessions')).toHaveValue('a note');
+      expect(screen.getByPlaceholderText('A note for later — shows under All sessions')).toHaveValue('a note');
     });
 
     it('applies a tag optimistically and keeps it applied once session:set-tag confirms', async () => {
@@ -631,14 +631,14 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      const noteField = await screen.findByPlaceholderText('A note for later — shows under All Sessions');
+      const noteField = await screen.findByPlaceholderText('A note for later — shows under All sessions');
       expect(noteField).toHaveValue('original');
 
       fireEvent.change(noteField, { target: { value: 'edited' } });
       fireEvent.blur(noteField);
       await waitFor(() => expect(setNote).toHaveBeenCalledWith(PREVIEW.id, 'edited'));
       // The UI must not keep a change the backend rejected.
-      await waitFor(() => expect(screen.getByPlaceholderText('A note for later — shows under All Sessions')).toHaveValue('original'));
+      await waitFor(() => expect(screen.getByPlaceholderText('A note for later — shows under All sessions')).toHaveValue('original'));
     });
 
     it('keeps a note edit once session:set-note confirms it — positive control for the rollback test above', async () => {
@@ -650,12 +650,12 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      const noteField = await screen.findByPlaceholderText('A note for later — shows under All Sessions');
+      const noteField = await screen.findByPlaceholderText('A note for later — shows under All sessions');
 
       fireEvent.change(noteField, { target: { value: 'edited' } });
       fireEvent.blur(noteField);
       await waitFor(() => expect(setNote).toHaveBeenCalledWith(PREVIEW.id, 'edited'));
-      expect(screen.getByPlaceholderText('A note for later — shows under All Sessions')).toHaveValue('edited');
+      expect(screen.getByPlaceholderText('A note for later — shows under All sessions')).toHaveValue('edited');
     });
   });
 });

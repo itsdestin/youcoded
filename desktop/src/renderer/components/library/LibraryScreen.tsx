@@ -1,4 +1,4 @@
-// Your Library — management destination. Favorites + Installed + Updates.
+// Your library — management destination. Favorites + Installed + Updates.
 // Shares MarketplaceProvider with MarketplaceScreen (per design doc — do
 // not fork the context; install/uninstall must mutate one source of truth).
 
@@ -114,7 +114,7 @@ export default function LibraryScreen({
   // id, or `theme:<slug>`), which is exactly what routes it. This does NOT
   // make the card's memo hold here: the `item`/`pluginBadge` objects below are
   // still built per render, and the card reads marketplace context itself, so
-  // Your Library redraws its cards on every re-render. That is deliberate —
+  // Your library redraws its cards on every re-render. That is deliberate —
   // these lists are tens of cards, not the thousands the Marketplace grid
   // windows; stabilising them would buy nothing a user could feel.
   const openLibraryEntry = useCallback((id: string) => {
@@ -179,7 +179,7 @@ export default function LibraryScreen({
       <WallpaperBackdrop />
       <div className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       <div className="flex items-center justify-between gap-2 p-3">
-        <h1 className="text-xl font-semibold text-fg pl-2 truncate min-w-0">Your Library</h1>
+        <h1 className="text-xl font-semibold text-fg pl-2 truncate min-w-0">Your library</h1>
         <div className="flex items-center gap-2 shrink-0">
           {/* panel-glass and the tighter py-1 stay as className overrides (spec
               decision 69) — glass re-tiers translucency on wallpaper themes, so a

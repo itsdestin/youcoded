@@ -136,7 +136,7 @@ describe('hidden FilesTab does not re-render', () => {
     // Switching away flips `hidden`, which is a real prop change — one render
     // is expected there. Measure from after that commit.
     const afterSwitch = probe.filesTabRenders;
-    fireEvent.click(view.getByRole('button', { name: 'Instructions & Memories' }));
+    fireEvent.click(view.getByRole('button', { name: 'Instructions & memories' }));
     fireEvent.click(view.getByRole('button', { name: 'Conversations' }));
     expect(probe.filesTabRenders).toBe(afterSwitch);
   });

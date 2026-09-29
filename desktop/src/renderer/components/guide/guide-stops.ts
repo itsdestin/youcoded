@@ -14,7 +14,7 @@
  *  open/close state; the tour never touches that state directly. */
 export type GuideScreen =
   | 'welcome'              // the between-sessions screen, form closed
-  | 'welcome-form'         // the same, with the New Session form open
+  | 'welcome-form'         // the same, with the New session form open
   | 'projects'             // the Projects screen
   | 'settings:cloud'       // Settings → Assistant settings → Cloud providers
   | 'settings:appearance'  // Settings → Appearance
@@ -61,8 +61,8 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
     id: 'tags',
     // The anchor is the status bar's tags chip (Destin, 2026-09-11: the drawer's
     // button belongs to previews and the old sentence was "not entirely correct").
-    text: 'Down here you can give a session tags, or leave yourself a note about it. Both show under All Sessions, so a conversation from last month is easy to find.',
-    textWhenMissing: 'Once a session is open, a tags button sits in the bar at the bottom. Tags and a note to yourself both show under All Sessions, so old conversations are easy to find.',
+    text: 'Down here you can give a session tags, or leave yourself a note about it. Both show under All sessions, so a conversation from last month is easy to find.',
+    textWhenMissing: 'Once a session is open, a tags button sits in the bar at the bottom. Tags and a note to yourself both show under All sessions, so old conversations are easy to find.',
     screen: 'welcome-form',
     anchor: 'tags-notes',
     // The one stop with a "Do it now" (deck Q-3): opens the tags popup.
@@ -93,7 +93,7 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
   },
   {
     id: 'themes',
-    text: 'Make it yours: pick a theme here. Browse Marketplace, just below, has more themes and plugins made by other people.',
+    text: 'Make it yours: pick a theme here. Browse marketplace, just below, has more themes and plugins made by other people.',
     screen: 'settings:appearance',
     anchor: 'theme-grid',
     pose: 'inquisitive',

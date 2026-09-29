@@ -444,8 +444,8 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
             <DevModeScreen onEnable={handleDevMode} />
           )}
 
-          {/* Error display. The message is always shown; the Try Again button
-              only when a PREREQUISITE actually failed. WHY: "Try Again" here
+          {/* Error display. The message is always shown; the Try again button
+              only when a PREREQUISITE actually failed. WHY: "Try again" here
               re-runs the whole Node/Git/Claude install pass, and a refused
               OpenRouter key or sign-in sets an error message without any
               prerequisite having failed — offering to reinstall
@@ -465,7 +465,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
                 disabled={busy}
                 className="px-3 py-1.5 rounded-full bg-well border border-edge hover:bg-inset text-fg text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {busy ? 'Working…' : 'Try Again'}
+                {busy ? 'Working…' : 'Try again'}
               </button>
               )}
             </div>

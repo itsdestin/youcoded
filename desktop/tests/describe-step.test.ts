@@ -106,7 +106,7 @@ describe('describeStep', () => {
   });
 
   // A refused OpenRouter key sets lastError without any prerequisite failing
-  // (first-run.ts handleNativeApiKey). There is no Try Again button beside it,
+  // (first-run.ts handleNativeApiKey). There is no Try again button beside it,
   // so the headline must stay the step's own line — the sentence is rendered
   // underneath on its own.
   it('keeps the step headline when lastError is set but no prerequisite failed', () => {
@@ -120,7 +120,7 @@ describe('describeStep', () => {
   });
 
   // Nothing failed and there is no other control on the screen (no sign-in
-  // buttons on the install step) — Try Again is the only way forward, so the
+  // buttons on the install step) — Try again is the only way forward, so the
   // headline that introduces it stays.
   it('describes an error state when the run itself failed off-step (no disk space)', () => {
     const s = state({
@@ -131,7 +131,7 @@ describe('describeStep', () => {
   });
 
   // A ChatGPT / Claude sign-in that times out DOES mark the auth prerequisite
-  // failed, so that case keeps the error headline and its Try Again button.
+  // failed, so that case keeps the error headline and its Try again button.
   it('describes an error state when a sign-in failed', () => {
     const s = state({
       currentStep: 'AUTHENTICATE',

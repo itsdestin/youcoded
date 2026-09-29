@@ -296,7 +296,7 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
 
   return createPortal(
     <>
-      <Dialog screen="chat/quick-chips" open onClose={onClose} title="Edit Quick Chips" size="panel">
+      <Dialog screen="chat/quick-chips" open onClose={onClose} title="Edit quick chips" size="panel">
             {/* Chip list — drag-to-reorder via pointer events (mirrors
                 SessionStrip dropdown). Grip icon appears on hover; drop
                 splices the row into the target position. */}
@@ -451,7 +451,7 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                       onClick={addCustom}
                       disabled={!customLabel.trim() || !customPrompt.trim()}
                     >
-                      Add Custom
+                      Add custom
                     </Button>
                     <button onClick={() => setShowAddForm(false)} className="px-2 py-1 text-3xs text-fg-muted hover:text-fg">Cancel</button>
                   </div>

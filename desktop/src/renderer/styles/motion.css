@@ -72,7 +72,7 @@
 
    Hover sits behind (hover: hover) so a tap never leaves a control looking
    hovered; press does not, because a finger deserves the feedback too.
-   Colour fades are state feedback, not motion, so Reduce Visual Effects and
+   Colour fades are state feedback, not motion, so Reduce visual effects and
    prefers-reduced-motion leave them alone (same call as the wide-view toggle
    in globals.css). One-off controls fade smoothly; only dense rows a pointer
    SWEEPS across need steps() — see tests/animation-css-budget.test.ts.

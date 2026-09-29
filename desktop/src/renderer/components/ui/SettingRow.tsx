@@ -240,7 +240,7 @@ export function SettingRow({
       {control &&
         (onClick ? (
           // A control row can still take a whole-row click — that is what the
-          // <label> wrappers around the Remote Access toggles used to buy. The
+          // <label> wrappers around the Remote access toggles used to buy. The
           // control must not let its own click bubble back up to the row, or
           // clicking the toggle would fire the handler twice and land back where
           // it started.

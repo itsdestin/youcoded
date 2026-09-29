@@ -285,7 +285,7 @@ export function GitReviewView({
                 onClick={() => onRequestDiscard(!uncommitted.inHead)}
                 className="px-2 py-1 rounded-md text-2xs text-destructive-fg hover:bg-destructive/10 transition-colors"
               >
-                Revert Changes…
+                Revert changes…
               </button>
             </div>
           </GitReviewCard>

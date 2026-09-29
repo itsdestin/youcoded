@@ -125,7 +125,7 @@ function StatusPill({ h }: { h: HelperView }) {
   if (h.group === 'needs-you') return <span className={`${base} border-amber-700/40 text-amber-700 bg-amber-700/10`}><QuestionIcon className="w-3 h-3" />Needs you</span>;
   // Green, not blue (Destin, 2026-09-05 deck note). The session pills in the
   // header are this app's status vocabulary — StatusDot.tsx STATUS_LABEL reads
-  // green: 'Working', blue: 'Response Ready' — so a blue "Working" pill here
+  // green: 'Working', blue: 'Response ready' — so a blue "Working" pill here
   // said the OPPOSITE of the colour he reads on every session all day.
   //
   // The WORD stays on a theme text colour and the green lives in the ring and

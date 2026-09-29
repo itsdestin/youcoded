@@ -52,7 +52,7 @@ vi.mock('../src/renderer/utils/format-time', async (importOriginal) => {
 
 import { SessionDrawer } from '../src/renderer/components/SessionDrawer';
 
-// WHY: Session Files now mounts lazy previews in every file row; jsdom does not
+// WHY: Session files now mounts lazy previews in every file row; jsdom does not
 // supply the browser visibility observer used to defer thumbnail reads.
 beforeEach(() => vi.stubGlobal('IntersectionObserver', class {
   observe() {}

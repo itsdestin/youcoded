@@ -201,15 +201,15 @@ describe('GitReviewView', () => {
   // deleting the underlying file even though it only moves it to the OS
   // trash (or restores from HEAD) — same label for both tracked and
   // untracked files now, behavior (onRequestDiscard(!inHead)) unchanged.
-  it('revert button reads "Revert Changes…" for a tracked file and calls onRequestDiscard(false)', async () => {
+  it('revert button reads "Revert changes…" for a tracked file and calls onRequestDiscard(false)', async () => {
     const onRequestDiscard = vi.fn();
     mountWith({}, { onRequestDiscard });
-    const btn = await waitFor(() => screen.getByRole('button', { name: 'Revert Changes…' }));
+    const btn = await waitFor(() => screen.getByRole('button', { name: 'Revert changes…' }));
     fireEvent.click(btn);
     expect(onRequestDiscard).toHaveBeenCalledWith(false);
   });
 
-  it('revert button also reads "Revert Changes…" for an untracked file and calls onRequestDiscard(true)', async () => {
+  it('revert button also reads "Revert changes…" for an untracked file and calls onRequestDiscard(true)', async () => {
     const onRequestDiscard = vi.fn();
     mountWith({
       uncommitted: {
@@ -217,7 +217,7 @@ describe('GitReviewView', () => {
         counts: { added: 1, removed: 0 }, staged: false, untracked: true, inHead: false, binary: false, conflicted: false,
       },
     }, { onRequestDiscard });
-    const btn = await waitFor(() => screen.getByRole('button', { name: 'Revert Changes…' }));
+    const btn = await waitFor(() => screen.getByRole('button', { name: 'Revert changes…' }));
     fireEvent.click(btn);
     expect(onRequestDiscard).toHaveBeenCalledWith(true);
   });

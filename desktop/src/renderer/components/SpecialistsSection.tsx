@@ -167,7 +167,7 @@ export default function SpecialistsSection({ cwd }: {
   if (roster.status === 'unavailable' || tiersUnavailable) {
     return (
       <section className="space-y-5">
-        <EmptyState message="Specialists run on the desktop app. Open Settings there to add or edit them." />
+        <EmptyState message="Specialists run on the desktop app. Open settings there to add or edit them." />
       </section>
     );
   }

@@ -692,7 +692,7 @@ describe('read lifecycle through useArtifactContent', () => {
         ok: true, content: 'all of it\n', orphan: false, binary: false,
         truncated: false, sizeBytes: 10, mtimeMs: 1,
       }));
-      expect(utils.queryByText(/Large File/)).toBeNull();
+      expect(utils.queryByText(/Large file/)).toBeNull();
     });
   });
 });

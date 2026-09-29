@@ -105,7 +105,7 @@ describe('HTML artifact viewer — stale content across file switches', () => {
       // useTagRegistry() unconditionally on every render, file-viewing or not.
       tags: { list: vi.fn().mockResolvedValue([]) },
     };
-    // WHY: the Session Files list now mounts lazy thumbnails beside filenames;
+    // WHY: the Session files list now mounts lazy thumbnails beside filenames;
     // jsdom cannot observe their visibility, and the viewer test does not need to.
     vi.stubGlobal('IntersectionObserver', class {
       observe() {}

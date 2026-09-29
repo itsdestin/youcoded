@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Settings → Buddy Floater, in each of the four states the desktop can report
+// Settings → Buddy floater, in each of the four states the desktop can report
 // (docs/active/design/2026-09-04-linux-buddy-helper/ §4's table).
 //
 // WHAT THIS FILE IS REALLY GUARDING. The buddy works today on Windows, macOS,
@@ -96,8 +96,8 @@ async function openPopup(): Promise<void> {
   render(<BuddyButton />);
   // The platform lookup and the helper lookup both resolve on microtasks; the
   // popup must be opened after them or every assertion reads the loading state.
-  await waitFor(() => expect(screen.getByText('Buddy Floater')).toBeInTheDocument());
-  fireEvent.click(screen.getByText('Buddy Floater'));
+  await waitFor(() => expect(screen.getByText('Buddy floater')).toBeInTheDocument());
+  fireEvent.click(screen.getByText('Buddy floater'));
   await waitFor(() => expect(screen.getByText('Show buddy floater')).toBeInTheDocument());
 }
 

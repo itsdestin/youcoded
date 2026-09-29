@@ -13,7 +13,7 @@
       "do": "click",
       "target": {
         "role": "button",
-        "label": "All Sessions",
+        "label": "All sessions",
         "nth": 1
       }
     },
@@ -57,7 +57,7 @@
       "do": "click",
       "target": {
         "role": "button",
-        "label": "Resume Session",
+        "label": "Resume session",
         "nth": 1
       }
     },

@@ -44,7 +44,7 @@ export interface TaskState {
  * Example input: "Task #1 created successfully: Sync youcoded master"
  *
  * The numeric id is NOT in the tool input — only in this response string. If
- * this format ever changes in Claude Code, the Open Tasks chip degrades
+ * this format ever changes in Claude Code, the Open tasks chip degrades
  * gracefully: tasks appear only once TaskUpdate/TaskList mention them. See
  * youcoded/docs/cc-dependencies.md for the coupling.
  */

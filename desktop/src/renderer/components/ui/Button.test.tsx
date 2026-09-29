@@ -58,7 +58,7 @@ describe('mergeClasses padding conflict groups', () => {
 
 describe('buttonClasses end-to-end', () => {
   it('size=lg with a wider px- override keeps vertical padding', () => {
-    // Mirrors App.tsx welcome "New Session": panel-glass w-full px-8 text-base
+    // Mirrors App.tsx welcome "New session": panel-glass w-full px-8 text-base
     const t = tokens(buttonClasses('primary', 'lg', 'panel-glass w-full px-8 text-base'));
     expect(t).toContain('py-2');
     expect(t).toContain('px-8');

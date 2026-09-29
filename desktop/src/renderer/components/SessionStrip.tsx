@@ -2170,7 +2170,7 @@ export default function SessionStrip({
 
         {/* ── Dropdown trigger ───────────────────────────── */}
         <div ref={menuRef}>
-          <Tooltip text="All Sessions">
+          <Tooltip text="All sessions">
           <button
             ref={triggerBtnRef}
             onClick={handleMenuToggle}
@@ -2201,7 +2201,7 @@ export default function SessionStrip({
             // Half the rendered width, which is min(384px, 88vw) — the clamp below
             // keeps the menu on screen, so it has to track the real width.
             const halfDropdown = Math.min(384, window.innerWidth * 0.88) / 2;
-            // WHY: a fixed 432px session list let its rows plus the New Session
+            // WHY: a fixed 432px session list let its rows plus the New session
             // form run below short windows. Cap the complete menu at the space
             // below its trigger; the list is the flexing, scrollable portion.
             const belowTrigger = triggerRect
@@ -2240,7 +2240,7 @@ export default function SessionStrip({
           )}
           {/* WHY: This is the menu's flexible middle. With the menu capped to
               the available screen height above, it shrinks first (roughly five
-              rows on short windows) and scrolls before its New Session controls
+              rows on short windows) and scrolls before its New session controls
               can be pushed past the bottom edge. */}
           {sessions.length > 0 && (
             <div
@@ -2494,7 +2494,7 @@ export default function SessionStrip({
                         </span>
                       </span>
                     </div>
-                    <Tooltip text="Close Session">
+                    <Tooltip text="Close session">
                     <button
                       // Close the dropdown so the CloseSessionPrompt (L2 popup)
                       // isn't competing with the still-open session menu above it.
@@ -2549,7 +2549,7 @@ export default function SessionStrip({
                 <SectionLabel className="mx-3 mt-1.5">Sessions in other windows</SectionLabel>
                 {/* WHY: Peer windows can hold an unbounded number of sessions.
                     Keep this group inside the same scrolling middle as local
-                    sessions, so it cannot hide the New Session actions below. */}
+                    sessions, so it cannot hide the New session actions below. */}
                 <div className="scroll-fade flex-1 py-1">
                   {remoteGroups.flatMap((g) =>
                     g.sessions.map((s) => {
@@ -2625,7 +2625,7 @@ export default function SessionStrip({
                               </span>
                             </span>
                           </button>
-                          <Tooltip text="Close Session">
+                          <Tooltip text="Close session">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -2757,7 +2757,7 @@ export default function SessionStrip({
                 disabled={nb.nativeCreateBlocked}
                 className="w-full py-1.5"
               >
-                {dangerous && runtime !== 'native' ? 'Create (Dangerous)' : 'Create Session'}
+                {dangerous && runtime !== 'native' ? 'Create (dangerous)' : 'Create session'}
               </Button>
             </div>
           ) : (
@@ -2788,7 +2788,7 @@ export default function SessionStrip({
                 className="flex-1 px-3 py-2 text-sm text-fg-dim hover:bg-inset hover:text-fg transition-colors flex items-center justify-center gap-1.5"
               >
                 <span className="text-base leading-none">+</span>
-                <span>New Session</span>
+                <span>New session</span>
               </button>
             </div>
           )}

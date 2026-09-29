@@ -13,7 +13,7 @@ afterEach(cleanup);
 describe('PartialFileBanner', () => {
   it('states how much of how much, so the notice is information not a refusal', () => {
     render(<PartialFileBanner sizeBytes={8.4 * 1024 * 1024} onLoadFull={() => {}} onOpenExternally={() => {}} />);
-    expect(screen.getByText(/Large File/)).toBeInTheDocument();
+    expect(screen.getByText(/Large file/)).toBeInTheDocument();
     expect(screen.getByText(/Showing 3\.0\/8\.4 MB/)).toBeInTheDocument();
   });
 

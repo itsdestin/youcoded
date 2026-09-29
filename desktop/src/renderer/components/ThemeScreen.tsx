@@ -27,23 +27,23 @@ const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
     {
       heading: 'What the settings do',
       bullets: [
-        { term: 'Your Themes', text: 'Every theme installed on your device. Tap one to use it right away.' },
-        { term: 'Layout and Additional Customizations', text: "Your own layout (which brings its matching message box), message bubbles, roundness and glass, applied to every theme. Each one starts on \"Auto\", which keeps the theme exactly as its author made it. Change one and it applies to every theme until you set it back to Auto." },
+        { term: 'Your themes', text: 'Every theme installed on your device. Tap one to use it right away.' },
+        { term: 'Layout and additional customizations', text: "Your own layout (which brings its matching message box), message bubbles, roundness and glass, applied to every theme. Each one starts on \"Auto\", which keeps the theme exactly as its author made it. Change one and it applies to every theme until you set it back to Auto." },
         { term: 'Glass', text: 'How see-through the panels and bubbles are over a wallpaper. Clear, Frosted and Solid are one-tap choices; Fine-tune sets each blur and see-through level yourself. Themes without a wallpaper are not affected.' },
         { term: 'The pencil icon', text: 'Appears on themes you built yourself. It opens an edit menu for that theme: accent color, roundness, particles, glass, and publishing it to the marketplace.' },
         { term: 'Theme cycle', text: 'Configured from the status bar widget editor (tap the gear in the status bar → the pencil next to "Theme"). Themes in the cycle rotate when you tap the theme pill at the bottom.' },
-        { term: 'Reduce Visual Effects', text: 'Turns off particles, glass blur, and animations. Use this if the app feels slow or if movement bothers you. Glass blur sliders are automatically disabled while this is on.' },
-        { term: 'Message Timestamps', text: 'Shows the time each chat message was sent inside the bubble.' },
-        { term: 'Browse Marketplace', text: 'Open the gallery of themes other people have made and shared. Free to install.' },
-        { term: 'Build New Theme', text: "Asks Claude to create a brand-new theme just by describing what you want in plain English (e.g. 'a soft sage green theme with rounded corners')." },
+        { term: 'Reduce visual effects', text: 'Turns off particles, glass blur, and animations. Use this if the app feels slow or if movement bothers you. Glass blur sliders are automatically disabled while this is on.' },
+        { term: 'Message timestamps', text: 'Shows the time each chat message was sent inside the bubble.' },
+        { term: 'Browse marketplace', text: 'Open the gallery of themes other people have made and shared. Free to install.' },
+        { term: 'Build new theme', text: "Asks Claude to create a brand-new theme just by describing what you want in plain English (e.g. 'a soft sage green theme with rounded corners')." },
       ],
     },
     {
       heading: 'Common issues',
       bullets: [
         { term: 'Theme looks broken or colors are missing', text: "The theme file may be corrupted. Switch back to a built-in theme (Light/Dark/Midnight/Crème) first, then try the broken one again." },
-        { term: 'App feels slow or laggy', text: 'Turn on "Reduce Visual Effects". Particles and glass blur use the most power — disabling them usually fixes it instantly.' },
-        { term: "Can't edit most of a theme", text: "Only themes you made yourself can be edited. For any other theme, use the Look settings, which apply to every theme, or tap 'Build New Theme' to make your own copy." },
+        { term: 'App feels slow or laggy', text: 'Turn on "Reduce visual effects". Particles and glass blur use the most power — disabling them usually fixes it instantly.' },
+        { term: "Can't edit most of a theme", text: "Only themes you made yourself can be edited. For any other theme, use the Look settings, which apply to every theme, or tap 'Build new theme' to make your own copy." },
         { term: "Theme cycle isn't switching", text: 'Open the status bar widget editor and use the pencil next to "Theme" to pick at least 2 themes for the cycle.' },
         { term: 'Custom font not showing', text: "YouCoded reads fonts installed on your computer. If the font you want isn't installed system-wide, it can't be selected here. Install it through your operating system first." },
         { term: 'Published theme not appearing in marketplace', text: 'Theme submissions are reviewed before they go live. Yours should appear within a day or two if it passes the safety checks.' },
@@ -131,7 +131,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
 
   // Appearance panel shows favorites only, plus the active theme as a fallback
   // so there's always at least one card even when the user has unstarred their
-  // current theme. The full installed list lives in Your Library › Themes.
+  // current theme. The full installed list lives in Your library › Themes.
   const gridThemes = useMemo(() => {
     const favs = allThemes.filter(t => themeFavSet.has(t.slug));
     if (favs.some(t => t.slug === activeSlug)) return favs;
@@ -239,7 +239,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
 
           <div className="absolute inset-x-0 bottom-0 grid grid-cols-2 gap-2 p-2">
         {/* Browse marketplace — above Build (Destin, Phase C P-3 #3, 2026-08-27):
-            the old "Browse all themes →" button is gone; it opened Your Library ›
+            the old "Browse all themes →" button is gone; it opened Your library ›
             Themes and read as a duplicate of this one. Installed themes are one
             click away in the Library; this button is how you get MORE. */}
         {onOpenMarketplace && (
@@ -251,7 +251,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
             }}
             className="w-full py-2"
           >
-            Browse Marketplace
+            Browse marketplace
           </Button>
         )}
 
@@ -278,7 +278,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
           }}
           className="w-full py-2"
         >
-          ✦ Build New Theme
+          ✦ Build new theme
         </Button>
           </div>
         </div>
@@ -293,7 +293,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
         <SectionLabel>Layout</SectionLabel>
         <LayoutSettings />
         {/* WHY here, not its own section (Destin, appearance-panel-review-5 AR5-2: "put
-            this right under frames and label the card 'Additional Customizations'"): the
+            this right under frames and label the card 'Additional customizations'"): the
             rest of the Look sits with the layout it refines, above the themes. */}
         <div className="mt-2">
           <LookSettings />
@@ -304,13 +304,13 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
         <SectionLabel>Effects &amp; chat</SectionLabel>
 
 
-        {/* Reduce Visual Effects — always on the main screen (accessibility/perf toggle).
+        {/* Reduce visual effects — always on the main screen (accessibility/perf toggle).
             Global: disables particles, forces blur to 0, shortens animations. Previously
             this was nested inside the wallpaper-only Glass section, hiding it from users
             on solid/gradient themes who also benefit from the accessibility setting. */}
         <SettingRow
           variant="item"
-          title="Reduce Visual Effects"
+          title="Reduce visual effects"
           description="Disables particles, blur, and animations"
           control={
             // Was a hand-rolled 36x20 switch (change 15): same geometry, but the
@@ -319,7 +319,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
             <Toggle
               checked={reducedEffects}
               onChange={(next) => setReducedEffects(next)}
-              aria-label="Reduce Visual Effects"
+              aria-label="Reduce visual effects"
             />
           }
         />
@@ -327,14 +327,14 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
         {/* Message timestamps toggle */}
         <SettingRow
           variant="item"
-          title="Message Timestamps"
+          title="Message timestamps"
           description="Show time sent in each chat bubble"
           // Same migration as the toggle above (change 15).
           control={
             <Toggle
               checked={showTimestamps}
               onChange={(next) => setShowTimestamps(next)}
-              aria-label="Message Timestamps"
+              aria-label="Message timestamps"
             />
           }
         />
@@ -425,7 +425,7 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
     <div className="space-y-4">
         {(overridden.glass || overridden.roundness) && (
           <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 leading-relaxed">
-            Your Look settings are overriding this theme's {overridden.glass && overridden.roundness ? 'glass and roundness' : overridden.glass ? 'glass' : 'roundness'}, so {overridden.glass && overridden.roundness ? 'those sliders are' : 'that slider is'} greyed out. Set {overridden.glass && overridden.roundness ? 'them' : 'it'} back to Auto in Additional Customizations to see this theme's own values.
+            Your Look settings are overriding this theme's {overridden.glass && overridden.roundness ? 'glass and roundness' : overridden.glass ? 'glass' : 'roundness'}, so {overridden.glass && overridden.roundness ? 'those sliders are' : 'that slider is'} greyed out. Set {overridden.glass && overridden.roundness ? 'them' : 'it'} back to Auto in Additional customizations to see this theme's own values.
           </p>
         )}
 
@@ -482,7 +482,7 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
         {/* Glass — themes with an image OR gradient background composite a real layer
             behind the chrome, so blurring/translucency produces a visible effect. Solid
             themes have nothing behind the chrome so the sliders are hidden. Blur sliders
-            are greyed when Reduce Visual Effects is on (the engine forces blur:0). */}
+            are greyed when Reduce visual effects is on (the engine forces blur:0). */}
         {(hasWallpaper || hasGradient) && (
           <div>
             {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
@@ -491,12 +491,12 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
             <SectionLabel className="mb-2">Glass</SectionLabel>
             {reducedEffects && (
               <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
-                Reduce Visual Effects is active — blur is disabled. Opacity still applies.
+                Reduce visual effects is active — blur is disabled. Opacity still applies.
               </p>
             )}
             <div className="space-y-3">
               <LookSlider
-                label="Panel Blur"
+                label="Panel blur"
                 min={0} max={30} step={1}
                 value={theme.background?.['panels-blur'] ?? 24}
                 disabled={reducedEffects || overridden.glass}
@@ -504,7 +504,7 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
                 format={v => String(Math.round(v))}
               />
               <LookSlider
-                label="Panel Opacity"
+                label="Panel opacity"
                 min={0.3} max={1} step={0.02}
                 value={theme.background?.['panels-opacity'] ?? 0.88}
                 disabled={overridden.glass}
@@ -512,7 +512,7 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
                 format={v => `${Math.round(v * 100)}%`}
               />
               <LookSlider
-                label="Bubble Blur"
+                label="Bubble blur"
                 min={0} max={24} step={1}
                 value={theme.background?.['bubble-blur'] ?? 16}
                 disabled={reducedEffects || overridden.glass}
@@ -520,7 +520,7 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
                 format={v => String(Math.round(v))}
               />
               <LookSlider
-                label="Bubble Opacity"
+                label="Bubble opacity"
                 min={0.3} max={1} step={0.02}
                 value={theme.background?.['bubble-opacity'] ?? 0.88}
                 disabled={overridden.glass}
@@ -541,7 +541,7 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
             <SectionLabel className="mb-2">Terminal</SectionLabel>
             {canTuneTerminalFilter && reducedEffects && (
               <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
-                Reduce Visual Effects is active — wallpaper blur is disabled. Opacity + brightness still apply.
+                Reduce visual effects is active — wallpaper blur is disabled. Opacity + brightness still apply.
               </p>
             )}
             {hasBakedTerminalBg && (
@@ -560,7 +560,7 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
                   one (a pack that stored 0.6 reads "80%", which is what it
                   actually paints). Flat themes have no slider at all. */}
               <LookSlider
-                label="Terminal Opacity"
+                label="Terminal opacity"
                 min={TERMINAL_WALLPAPER_OPACITY_FLOOR} max={1} step={0.02}
                 value={Math.max(TERMINAL_WALLPAPER_OPACITY_FLOOR, theme.background?.['terminal-opacity'] ?? 0.6)}
                 disabled={overridden.glass}
@@ -570,7 +570,7 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
               {canTuneTerminalFilter && (
                 <>
                   <LookSlider
-                    label="Wallpaper Blur"
+                    label="Wallpaper blur"
                     min={0} max={30} step={1}
                     value={theme.background?.['terminal-blur'] ?? 8}
                     disabled={reducedEffects || overridden.glass}
@@ -578,7 +578,7 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
                     format={v => String(Math.round(v))}
                   />
                   <LookSlider
-                    label="Wallpaper Brightness"
+                    label="Wallpaper brightness"
                     min={0.5} max={1.2} step={0.02}
                     value={theme.background?.['terminal-brightness'] ?? 0.86}
                     disabled={overridden.glass}

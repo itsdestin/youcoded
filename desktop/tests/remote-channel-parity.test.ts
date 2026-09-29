@@ -35,7 +35,7 @@ describe('remote channels — every channel is answered', () => {
    * This is the guard that was missing. `remote:status` shipped to preload, the shim, the
    * desktop IPC handlers and Android, and not to the host; the panel requests it in the same
    * `Promise.all` as the config, the Tailscale info and the device list, so one missing case
-   * opened the whole Remote Access screen blank on a phone. Every test that could have caught
+   * opened the whole Remote access screen blank on a phone. Every test that could have caught
    * it was a `toContain` over source text for the channels somebody remembered to list.
    */
   describe('every remote channel the shim invokes is answered by the host', () => {

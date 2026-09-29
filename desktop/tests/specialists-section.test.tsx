@@ -155,7 +155,7 @@ describe('roster status: loading / failed / unavailable', () => {
 
     render(<SpecialistsSection cwd="cwd-unavailable" />);
 
-    expect(await screen.findByText('Specialists run on the desktop app. Open Settings there to add or edit them.')).toBeInTheDocument();
+    expect(await screen.findByText('Specialists run on the desktop app. Open settings there to add or edit them.')).toBeInTheDocument();
     // Whole-section takeover, not a per-widget fallback: the tier pickers
     // above the roster must not render alongside this message either.
     expect(screen.queryByText('Models specialists run on')).toBeNull();
@@ -292,7 +292,7 @@ describe('desktop-only takeover: the tier-call signal, independent of the roster
 
     render(<SpecialistsSection cwd="cwd-tiers-unavailable" />);
 
-    expect(await screen.findByText('Specialists run on the desktop app. Open Settings there to add or edit them.')).toBeInTheDocument();
+    expect(await screen.findByText('Specialists run on the desktop app. Open settings there to add or edit them.')).toBeInTheDocument();
     // Whole-section takeover — the roster that DID load must not show through.
     expect(screen.queryByText('Models specialists run on')).toBeNull();
     expect(screen.queryByText('Explorer')).toBeNull();

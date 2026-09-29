@@ -40,7 +40,7 @@ const MAX_ROWS = 20;
 /**
  * Resume a past conversation from inside the buddy floater.
  *
- * WHY THIS EXISTS (Destin, 2026-09-10). The floater's "Resume Session" button
+ * WHY THIS EXISTS (Destin, 2026-09-10). The floater's "Resume session" button
  * was a placeholder written in July: clicking it printed "Open Resume from the
  * main window for now" and did nothing else. Asked what it should do, Destin
  * chose a short list inside the buddy over bouncing to the main window — the

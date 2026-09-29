@@ -42,17 +42,17 @@ import { useGuideReset } from './guide/guide-events';
 const desktopVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '';
 const desktopChannel = typeof __BUILD_CHANNEL__ !== 'undefined' ? __BUILD_CHANNEL__ : '';
 
-// Plain-language explainer for the Remote Access popup. Shown when the user
+// Plain-language explainer for the Remote access popup. Shown when the user
 // taps the (i) icon in the popup header — see RemoteButton's `showInfo` state.
 const REMOTE_ACCESS_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
   intro:
-    "Remote Access lets you use YouCoded from any phone, tablet, or other computer — even when you're across the world. Your main computer keeps doing all the actual work; the other device just shows you what's happening and lets you type.",
+    "Remote access lets you use YouCoded from any phone, tablet, or other computer — even when you're across the world. Your main computer keeps doing all the actual work; the other device just shows you what's happening and lets you type.",
   sections: [
     {
       heading: 'What is Tailscale?',
       paragraphs: [
         "Tailscale is a free, secure tunnel that connects your devices like they're on the same WiFi, even when they're far apart. We use it because it's much safer than opening your computer to the open internet.",
-        'You install it once on your main computer (that\'s what the "Set Up Remote Access" button does), then sign in with Google or GitHub. After that, you can scan a QR code on your phone to connect.',
+        'You install it once on your main computer (that\'s what the "Set up remote access" button does), then sign in with Google or GitHub. After that, you can scan a QR code on your phone to connect.',
       ],
     },
     {
@@ -66,12 +66,12 @@ const REMOTE_ACCESS_EXPLAINER: { intro: string; sections: ExplainerSection[] } =
     {
       heading: 'Common issues',
       bullets: [
-        { term: '"Tailscale not installed"', text: 'Click "Set Up Remote Access" and follow the prompts. It downloads about 50MB and asks you to sign in through a browser.' },
-        { term: '"Switched off" or "Not signed in"', text: 'Tailscale is installed but not running. The Remote Access panel has a button that fixes whichever one it is.' },
+        { term: '"Tailscale not installed"', text: 'Click "Set up remote access" and follow the prompts. It downloads about 50MB and asks you to sign in through a browser.' },
+        { term: '"Switched off" or "Not signed in"', text: 'Tailscale is installed but not running. The Remote access panel has a button that fixes whichever one it is.' },
         { term: "Phone can't connect", text: 'Make sure Tailscale is also installed on your phone and signed in to the same account. Both devices need it running at the same time.' },
         { term: "QR code won't scan", text: 'Tap "Copy link" instead, send the link to your phone (text it to yourself), and open it in your phone\'s browser.' },
         { term: 'Forgot the password', text: 'Just type a new one into the password box and hit "Set". The old one is replaced — there\'s nothing to recover.' },
-        { term: 'Connected device should be removed', text: 'Use the Disconnect button next to a device under "Connected Devices". They\'ll need the password again to reconnect.' },
+        { term: 'Connected device should be removed', text: 'Use the Disconnect button next to a device under "Connected devices". They\'ll need the password again to reconnect.' },
       ],
     },
   ],
@@ -176,7 +176,7 @@ interface Props {
   syncAutoOpen?: boolean;
   onSyncAutoOpenHandled?: () => void;
   // Deep-link the Model Providers popup open on panel mount — used by the
-  // provider-error bubble's "Open Settings" jump. Desktop-only (the Model
+  // provider-error bubble's "Open settings" jump. Desktop-only (the Model
   // Providers section isn't mounted in AndroidSettings).
   providersAutoOpen?: boolean;
   onProvidersAutoOpenHandled?: () => void;
@@ -238,7 +238,7 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
           header + scrolling body (scrollBody defaults true) fixes the reachability;
           "panel" (420px) stops the wrapping. The grid keeps the key chips in their
           own column so a long label can never push one out of line. */}
-      <Dialog screen="settings/shortcuts" open onClose={onClose} size="panel" title="Keyboard Shortcuts">
+      <Dialog screen="settings/shortcuts" open onClose={onClose} size="panel" title="Keyboard shortcuts">
         {SHORTCUT_GROUPS.map((g) => (
           <section key={g.label}>
             <SectionLabel className="mb-2">{g.label}</SectionLabel>
@@ -587,12 +587,12 @@ function SoundCategorySection({ category, label, description, dotColor }: {
  *  description and the status dot can never drift apart. */
 const SOUND_CATEGORY_META: Record<SoundCategory, { label: string; description: string; dotColor: string }> = {
   attention: {
-    label: 'Needs Attention',
+    label: 'Needs attention',
     description: 'Plays when a session needs approval',
     dotColor: 'bg-red-400',
   },
   ready: {
-    label: 'Response Ready',
+    label: 'Response ready',
     description: 'Plays when a background session has a new response',
     dotColor: 'bg-blue-400',
   },
@@ -680,7 +680,7 @@ function SoundButton() {
                 <section>
                   {/* WHY SectionLabel (fix batch 2): the guide's small label — normal case, no spaced-out capitals. */}
                   <SectionLabel className="mb-2">Volume</SectionLabel>
-                  <div className={`${CARD_LEVEL_1} px-3 py-2.5 flex items-center gap-3`}>{/* WHY a card: nothing bare on the popup (popup-spacing SP-1; Remote Access) */}
+                  <div className={`${CARD_LEVEL_1} px-3 py-2.5 flex items-center gap-3`}>{/* WHY a card: nothing bare on the popup (popup-spacing SP-1; Remote access) */}
                     {/* Mute toggle */}
                     <button onClick={handleToggleMute} className="text-fg-muted hover:text-fg shrink-0">
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
@@ -724,8 +724,8 @@ function SoundButton() {
                     value={soundCategory}
                     onChange={(id) => setSoundCategory(id as SoundCategory)}
                     tabs={[
-                      { id: 'attention', label: 'Needs Attention' },
-                      { id: 'ready', label: 'Response Ready' },
+                      { id: 'attention', label: 'Needs attention' },
+                      { id: 'ready', label: 'Response ready' },
                     ]}
                     className="mb-3"
                   />
@@ -842,7 +842,7 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
 // via localStorage['youcoded-buddy-enabled'] (matches theme/font persistence
 // pattern). Toggling fires window.claude.buddy.show/hide; App.tsx also reads
 // the flag on mount to auto-show if previously enabled. Follows the same
-// row-opens-popup pattern as Sound/Appearance/Remote Access instead of being
+// row-opens-popup pattern as Sound/Appearance/Remote access instead of being
 // a bare checkbox — see docs/active/specs/2026-07-15-settings-panel-card-redesign-design.md.
 function BuddyIcon() {
   // Simplified outline mascot silhouette (rounded head + dot eyes + arm/leg
@@ -1157,7 +1157,7 @@ export function BuddyButton() {
     <>
       <SettingRow
         icon={<BuddyIcon />}
-        title="Buddy Floater"
+        title="Buddy floater"
         description={status}
         // The failure line is cleared on the way IN, so a warning from an earlier
         // attempt is never the first thing in a freshly-opened popup. This row is
@@ -1175,7 +1175,7 @@ export function BuddyButton() {
       <Dialog screen="settings/buddy"
         open={open}
         onClose={() => setOpen(false)}
-        title="Buddy Floater"
+        title="Buddy floater"
         size="prompt"
         scrollBody={false}
         panelRef={popupRef}
@@ -1745,7 +1745,7 @@ function RemoteButton(props: RemoteButtonProps) {
             <path d="M19.5 5a7 7 0 0 1 0 10" />
           </svg>
         }
-        title="Remote Access"
+        title="Remote access"
         // Status dot — green when remote + Tailscale VPN fully active, gray otherwise
         description={
           <RowStatus dotClassName={isFullyConnected ? 'bg-green-400' : 'bg-fg-muted/40'}>
@@ -1764,7 +1764,7 @@ function RemoteButton(props: RemoteButtonProps) {
       <Dialog screen="settings/remote"
         open={open}
         onClose={() => setOpen(false)}
-        title={showInfo ? 'About Remote Access' : showEncryption ? 'Browser encryption' : 'Remote Access'}
+        title={showInfo ? 'About Remote access' : showEncryption ? 'Browser encryption' : 'Remote access'}
         onBack={showInfo ? () => setShowInfo(false) : showEncryption ? () => setShowEncryption(false) : undefined}
         // WHY: Workbench catch-all APIs can return a truthy Promise; only a rendered preview view replaces the legacy Info action.
         headerActions={showInfo || showEncryption ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
@@ -1880,7 +1880,7 @@ function RemoteButton(props: RemoteButtonProps) {
                                   label inherited the theme fg — near-black on blue
                                   on Creme. Button primary carries text-on-accent. */}
                               <Button onClick={() => onSetShowSetupQR(true)} className="w-full">
-                                Set Up Remote Access
+                                Set up remote access
                               </Button>
                             </div>
                           )
@@ -2229,13 +2229,13 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
 
   return (
     <>
-      {/* Current tier row — title is the static "Package Tier" label, subtitle
+      {/* Current tier row — title is the static "Package tier" label, subtitle
           is the current tier's name (was reversed: the tier name used to be
           the title with no static label, the one anti-pattern this component
-          shared with pre-redesign Appearance/Remote Access/Buddy Floater). */}
+          shared with pre-redesign Appearance/Remote access/Buddy floater). */}
       <SettingRow
         icon={<span className="text-sm leading-none text-fg-dim">⬡</span>}
-        title="Package Tier"
+        title="Package tier"
         description={currentTier.name}
         onClick={() => setOpen(true)}
       />
@@ -2249,7 +2249,7 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
-        title="Package Tier"
+        title="Package tier"
         size="prompt"
         panelRef={popupRef}
         screen="settings/android/tier"
@@ -2551,10 +2551,10 @@ export function ConnectToDesktopButton() {
                       {/* Both only had an active: state, so on desktop nothing
                           happened on hover at all. */}
                       <Button onClick={handleScanQr} className="w-full">
-                        Scan QR Code
+                        Scan QR code
                       </Button>
                       <Button variant="secondary" onClick={() => setShowConnectForm(true)} className="w-full">
-                        Enter Manually
+                        Enter manually
                       </Button>
                     </div>
                   ) : (
@@ -2572,7 +2572,7 @@ export function ConnectToDesktopButton() {
                           size="sm"
                           value={formName}
                           onChange={e => setFormName(e.target.value)}
-                          placeholder="My Desktop"
+                          placeholder="My desktop"
                           // WHY: matches the visible label's new sentence
                           // case (labels batch) — this field has no other
                           // established Title-Case reference elsewhere.
@@ -2888,7 +2888,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
 
   // The panel's five reads. Its own function so a remote reconnect can repeat them while the
   // panel is open. WHY (2026-09-11 phone pass sweep): they ran once per open, so one read
-  // lost during a phone's drop left the Remote Access panel empty or wrong until it was
+  // lost during a phone's drop left the Remote access panel empty or wrong until it was
   // closed and reopened. The reconnect re-read leaves the setup steps where they are.
   function loadRemotePanel() {
     const claude = (window as any).claude;
@@ -3179,7 +3179,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
               <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M8 16h8" />
             </svg>
           }
-          title="Keyboard Shortcuts"
+          title="Keyboard shortcuts"
           description="View all hotkeys"
           onClick={() => setShowShortcuts(true)}
         />

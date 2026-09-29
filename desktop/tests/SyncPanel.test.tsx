@@ -5,12 +5,12 @@ import { render, screen, act, cleanup, fireEvent, waitFor, within } from '@testi
 import '@testing-library/jest-dom/vitest';
 import SyncSection from '../src/renderer/components/SyncPanel';
 
-// Every section renders the real Backup & Sync panel (SyncPanel's default export,
+// Every section renders the real Backup & sync panel (SyncPanel's default export,
 // SyncSection) against a hand-built `window.claude`; each section keeps its own fake
 // inside its describe, because the fakes answer differently on purpose.
 
 /**
- * Backup & Sync must never report a success the backend did not confirm.
+ * Backup & sync must never report a success the backend did not confirm.
  *
  * Error inventory 2026-09-10, the first two of the seventeen false messages
  * (youcoded-dev docs/active/investigations/2026-09-10-error-inventory/README.md):
@@ -80,7 +80,7 @@ async function openSetup(): Promise<HTMLElement> {
   return screen.findByRole('button', { name: 'Start Backup' });
 }
 
-describe('Backup & Sync reports only what the backend confirmed', () => {
+describe('Backup & sync reports only what the backend confirmed', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
   it('explains handoff limits without promising exclusive offline use or lossless merging', async () => {
@@ -224,7 +224,7 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
   });
 });
 
-// Regression test for "YouCoded failed to start" when opening Backup & Sync
+// Regression test for "YouCoded failed to start" when opening Backup & sync
 // (reported by Destin 2026-09-04, seen on the PUBLIC landing page's live demo).
 //
 // WHAT HAPPENED: the workbench mock shim answers an unimplemented channel with
@@ -243,7 +243,7 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
 // shape this renderer version doesn't know about (an older remote host over the
 // remote shim, a partial reply mid-migration), and "the panel renders without
 // that section" must always beat "the app dies".
-describe('Backup & Sync — a partial status must not crash the app', () => {
+describe('Backup & sync — a partial status must not crash the app', () => {
   function spacesStatus() {
     return {
       enabled: true,
@@ -299,7 +299,7 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
     const notice = screen.getByText(explanation);
     expect(notice.textContent).not.toMatch(/local|remote|canonical|resolving device|original filename/i);
     fireEvent.click(screen.getByRole('button', { name: 'What is this?' }));
-    await waitFor(() => expect(document.body.textContent).toContain('About Backup & Sync'));
+    await waitFor(() => expect(document.body.textContent).toContain('About Backup & sync'));
     expect(document.body.textContent).toContain(`${explanation} They appear in the same folder as the affected file.`);
   });
 
@@ -309,7 +309,7 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
     await renderOpen();
     // Reaching this line is the assertion — before the fix SyncPopup threw
     // during render, so 'Additional backups' never appeared at all.
-    expect(document.body.textContent).toContain('Backup & Sync');
+    expect(document.body.textContent).toContain('Backup & sync');
   });
 
   // The general case: a well-formed object that is simply missing fields this
@@ -346,7 +346,7 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
   });
 });
 
-// Regression test for the Settings → "Backup & Sync" row freezing on the
+// Regression test for the Settings → "Backup & sync" row freezing on the
 // warnings it read at APP LAUNCH (reported by Destin 2026-07-26).
 //
 // The row lives in SyncSection, which mounts with the app — DesktopSettings
@@ -357,14 +357,14 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
 // warnings and then never refetches: its status:data handler patched only the
 // recency fields, and the popup's refreshStatus only auto-fires when the LEGACY
 // .sync-marker epoch advances (a file that doesn't exist on a spaces-only
-// install). Result: red "Sync Failing · 2" for the whole app run while the
+// install). Result: red "Sync failing · 2" for the whole app run while the
 // popup two clicks away reads green "All synced" off a fresh fetch.
 //
 // The fix takes warnings from the same authoritative 10s status:data push that
 // App.tsx's gear danger-dot already uses (buildStatusData reads the warnings
 // file every cycle). These tests pin BOTH directions — a push must be able to
 // clear a stale warning AND raise a fresh one.
-describe('Settings row — Backup & Sync warnings freshness', () => {
+describe('Settings row — Backup & sync warnings freshness', () => {
   // Two danger warnings — the pair runHealthCheck leaves behind when a launch
   // finds no network and no legacy backend (OFFLINE + PERSONAL_NOT_CONFIGURED),
   // which is exactly what the reported row was showing.
@@ -434,7 +434,7 @@ describe('Settings row — Backup & Sync warnings freshness', () => {
 
     // The mount fetches are deferred 350ms past the settings slide-in.
     await waitFor(() => {
-      expect(container.textContent).toContain('Sync Failing');
+      expect(container.textContent).toContain('Sync failing');
     }, { timeout: 3000 });
     expect(container.textContent).toContain('2');
   });
@@ -444,7 +444,7 @@ describe('Settings row — Backup & Sync warnings freshness', () => {
     const { container } = render(<SyncSection />);
 
     await waitFor(() => {
-      expect(container.textContent).toContain('Sync Failing');
+      expect(container.textContent).toContain('Sync failing');
     }, { timeout: 3000 });
 
     // runHealthCheck has since swept both codes and unlinked the file, so the
@@ -453,7 +453,7 @@ describe('Settings row — Backup & Sync warnings freshness', () => {
       pushStatusData!({ syncWarnings: [], lastSyncEpoch: null, syncInProgress: false });
     });
 
-    expect(container.textContent).not.toContain('Sync Failing');
+    expect(container.textContent).not.toContain('Sync failing');
     expect(container.textContent).toContain('Last synced');
   });
 
@@ -469,7 +469,7 @@ describe('Settings row — Backup & Sync warnings freshness', () => {
       pushStatusData!({ syncWarnings: [STALE_WARNINGS[0]], lastSyncEpoch: null, syncInProgress: false });
     });
 
-    expect(container.textContent).toContain('Sync Failing');
+    expect(container.textContent).toContain('Sync failing');
   });
 
   it('keeps the last-known warnings when a push omits the field entirely', async () => {
@@ -480,13 +480,13 @@ describe('Settings row — Backup & Sync warnings freshness', () => {
     const { container } = render(<SyncSection />);
 
     await waitFor(() => {
-      expect(container.textContent).toContain('Sync Failing');
+      expect(container.textContent).toContain('Sync failing');
     }, { timeout: 3000 });
 
     await act(async () => {
       pushStatusData!({ lastSyncEpoch: null, syncInProgress: false });
     });
 
-    expect(container.textContent).toContain('Sync Failing');
+    expect(container.textContent).toContain('Sync failing');
   });
 });

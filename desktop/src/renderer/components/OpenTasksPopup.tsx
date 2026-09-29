@@ -4,9 +4,9 @@ import type { TaskState } from '../state/task-state';
 import { Button, Dialog, SectionLabel } from './ui';
 
 // L2 popup opened by OpenTasksChip in the StatusBar. Groups tasks by status:
-// In Progress → Pending → Completed (collapsible). A separate "Marked Inactive"
+// In progress → Pending → Completed (collapsible). A separate "Marked inactive"
 // expander at the bottom holds user-hidden tasks. Each active row has a
-// Mark Inactive button; each inactive row has an Unhide button.
+// Mark inactive button; each inactive row has an Unhide button.
 
 interface Props {
   open: boolean;
@@ -86,7 +86,7 @@ function Row({ t, group, onMarkInactive, onUnhide }: {
           onClick={() => onMarkInactive(t.id)}
           aria-label={`Mark task #${t.id} inactive`}
         >
-          Mark Inactive
+          Mark inactive
         </Button>
       )}
     </div>
@@ -126,7 +126,7 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
 
   return (
     <>
-      <Dialog screen="chat/open-tasks" open onClose={onClose} title="Open Tasks" size="panel">
+      <Dialog screen="chat/open-tasks" open onClose={onClose} title="Open tasks" size="panel">
         <>
           {/* Empty state: nothing at all */}
           {openCount === 0 && completed.length === 0 && inactive.length === 0 && (
@@ -176,7 +176,7 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
             </>
           )}
 
-          {/* Marked Inactive section — same collapsed-toggle-with-count pattern. */}
+          {/* Marked inactive section — same collapsed-toggle-with-count pattern. */}
           {inactive.length > 0 && (
             <>
               <button

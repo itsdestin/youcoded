@@ -294,10 +294,10 @@
 [data-chrome-style='float'] .header-bar > .header-controls-left button[aria-pressed='true']:not(.wide-view-toggle *) > svg {
   color: var(--fg) !important;
 }
-/* Session Files' count uses `bg-accent`, which is translucent on some packs;
+/* Session files' count uses `bg-accent`, which is translucent on some packs;
    over a see-through button it went white-on-pale (1.05:1). The badge alone
    gets an opaque accent. */
-[data-chrome-style='float'] .header-bar [aria-label='Session Files']:not(.bg-accent) > span {
+[data-chrome-style='float'] .header-bar [aria-label='Session files']:not(.bg-accent) > span {
   background-color: var(--accent);
 }
 
@@ -438,7 +438,7 @@
   --float-sheet-drop: 0 8px 24px -10px rgba(0, 0, 0, .3);
 }
 
-/* ── Session Files / Games pane ─────────────────────────────────────────────
+/* ── Session files / Games pane ─────────────────────────────────────────────
    Floats clear of the header and the chips (the gaps 'floating' uses) instead
    of butting against the invisible bars. */
 [data-chrome-style='float'] .framed-shell > .drawer-pane {

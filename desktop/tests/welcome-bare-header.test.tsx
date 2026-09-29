@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 //
-// Pins P-6 (Destin, 2026-08-27): the welcome screen ("No Active Session")
+// Pins P-6 (Destin, 2026-08-27): the welcome screen ("No active session")
 // wears the app's BARE frame — the same header bar as a session, holding only
 // what works without a session: the Settings gear, the Projects button and the
 // window controls. Nothing session-scoped (session strip, chat/terminal
-// toggle, Session Files, Games, the ||| overflow menu) may appear there.
+// toggle, Session files, Games, the ||| overflow menu) may appear there.
 //
 // The gear must be byte-identical to the session header's, so it lives in ONE
 // component in HeaderBar.tsx. (Where App.tsx places this header, and the
@@ -46,7 +46,7 @@ describe('BareHeaderBar (welcome screen frame)', () => {
   it('renders the Settings gear and the Projects button', () => {
     renderBare();
     expect(screen.getByLabelText('Settings')).toBeTruthy();
-    expect(screen.getByLabelText('Open Projects')).toBeTruthy();
+    expect(screen.getByLabelText('Open projects')).toBeTruthy();
   });
 
   it('renders nothing session-scoped: no session strip, view toggle, files, game or ||| menu', () => {
@@ -54,7 +54,7 @@ describe('BareHeaderBar (welcome screen frame)', () => {
     expect(container.querySelector('.session-strip')).toBeNull();
     expect(screen.queryByLabelText('Chat')).toBeNull();
     expect(screen.queryByLabelText('Terminal')).toBeNull();
-    expect(screen.queryByLabelText('Session Files')).toBeNull();
+    expect(screen.queryByLabelText('Session files')).toBeNull();
     // Renamed from 'Connect 4' with the arcade (§4.1) — the button now opens a
     // four-game pane, so it names the pane.
     expect(screen.queryByLabelText('Games')).toBeNull();
@@ -76,7 +76,7 @@ describe('BareHeaderBar (welcome screen frame)', () => {
     const { dispatch } = renderBare({ onToggleSettings });
     fireEvent.click(screen.getByLabelText('Settings'));
     expect(onToggleSettings).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByLabelText('Open Projects'));
+    fireEvent.click(screen.getByLabelText('Open projects'));
     expect(dispatch).toHaveBeenCalledWith({ type: 'PROJECT_VIEW_OPENED' });
   });
 
@@ -97,7 +97,7 @@ describe('BareHeaderBar (welcome screen frame)', () => {
     stubViewport(true);
     renderBare();
     expect(screen.getByLabelText('Settings')).toBeTruthy();
-    expect(screen.getByLabelText('Open Projects')).toBeTruthy();
+    expect(screen.getByLabelText('Open projects')).toBeTruthy();
     expect(screen.queryByLabelText('Open menu')).toBeNull();
   });
 

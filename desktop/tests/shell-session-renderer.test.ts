@@ -4,7 +4,7 @@
 // transcript, no assistant. "Run in terminal" creates one AND selects it, so the
 // user is sitting inside a session every renderer branch has to have an opinion
 // about. Everything wrong here is wrong in a way the user sees: a composer that
-// sends nowhere, a red "Model Unknown" chip on a session that has no model, a
+// sends nowhere, a red "Model unknown" chip on a session that has no model, a
 // toggle that strands them on an empty chat pane, or a Claude Code slash command
 // typed at their shell prompt.
 //
@@ -41,7 +41,7 @@ describe('a shell session in the renderer', () => {
   });
 
   describe('no model', () => {
-    it('shows no model chip at all — not the red "Model Unknown" one', () => {
+    it('shows no model chip at all — not the red "Model unknown" one', () => {
       expect(modelChipFor({ provider: 'shell' }, 'unknown')).toBeUndefined();
       expect(modelChipFor({ provider: 'shell' }, 'sonnet')).toBeUndefined();
     });

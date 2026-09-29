@@ -2,7 +2,7 @@ import { SectionLabel, Tooltip } from './ui';
 /**
  * SettingsExplainer.tsx — the explainer payload, and nothing else.
  *
- * Used by Remote Access, Backup & Sync, Appearance and Context to render a
+ * Used by Remote access, Backup & sync, Appearance and Context to render a
  * "What is this?" view inside the same modal frame. The host keeps a `showInfo`
  * boolean and renders this instead of its main content, so the user can back
  * out to the original settings.
@@ -54,7 +54,7 @@ export default function SettingsExplainer({ intro, sections }: Props) {
           {/* h3 (SectionLabel renders one), matching K1 — the dialog title is h2,
               so an h3 here announces as its child rather than its sibling.
               WHY SectionLabel reading (fix batch 2, 2026-09-26): these head
-              sections of READING text ("About Permissions", the Remote Access and
+              sections of READING text ("About Permissions", the Remote access and
               Sync explainers), so they are the guide's small label, normal case,
               with the soft underline — no spaced-out capitals (decisions.md
               "Labels over reading sections", final#F-1). */}

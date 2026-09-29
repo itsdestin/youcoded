@@ -19,12 +19,12 @@ export interface GuideTip {
 }
 
 export const TIPS: readonly GuideTip[] = [
-  { id: 'tags', text: 'Tag this session, or leave yourself a note. Both show under All Sessions, so it is easy to find again.' },
-  { id: 'notes', text: 'Before you close a session, a one-line note here is what you will read under All Sessions next week.' },
+  { id: 'tags', text: 'Tag this session, or leave yourself a note. Both show under All sessions, so it is easy to find again.' },
+  { id: 'notes', text: 'Before you close a session, a one-line note here is what you will read under All sessions next week.' },
   { id: 'projects', text: 'Working in the same folder a lot? Add it as a project and the assistant keeps its instructions, memories and conversations together.' },
-  { id: 'resume', text: 'You have a session from earlier. Resume Session picks it up where you left off, with everything it remembered.' },
+  { id: 'resume', text: 'You have a session from earlier. Resume session picks it up where you left off, with everything it remembered.' },
   { id: 'local-models', text: 'Models can run on your own computer, free and private. Local models live under Settings, Assistant settings.' },
-  { id: 'floater', text: 'The buddy can sit on your desktop while you work elsewhere and wave when a session needs you. Turn it on under Settings, Buddy Floater.' },
+  { id: 'floater', text: 'The buddy can sit on your desktop while you work elsewhere and wave when a session needs you. Turn it on under Settings, Buddy floater.' },
   { id: 'themes', text: 'Themes change more than colours: the buddy, the wallpaper and the chat bubbles all come with one. Settings, Appearance.' },
   { id: 'help', text: 'Something went wrong? Report a bug sends the details to the maintainers, and the community at r/youcoded is a good place to ask.' },
 ];

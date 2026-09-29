@@ -1,6 +1,6 @@
 // UpdatePanel.tsx — L2 overlay opened from the StatusBar version pill.
 // Two modes driven by updateStatus.update_available:
-//   - true  → "Update available" + Update Now button + changelog entries since current version
+//   - true  → "Update available" + Update now button + changelog entries since current version
 //   - false → "What's new" + full changelog, no button
 // Cache lives main-side (see changelog-service.ts).
 
@@ -152,7 +152,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   const activeJobIdRef = useRef<string | null>(null);
   // Aborted-close guard: if the user closes the popup mid-download and the
   // download() promise still resolves afterwards (cancel didn't race in time),
-  // we must NOT setInstallState(ready) — that would leave stale "Launch Installer"
+  // we must NOT setInstallState(ready) — that would leave stale "Launch installer"
   // state showing on next open.
   const abortedRef = useRef(false);
 
@@ -245,7 +245,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       setInstallState({ kind: 'downloading', jobId: null, percent: -1 });
       const result = await window.claude.update.download();
       // Guard: if the popup closed during the download, don't leave stale
-      // "Launch Installer" state showing on next open.
+      // "Launch installer" state showing on next open.
       if (abortedRef.current) return;
       activeJobIdRef.current = result.jobId;
       setInstallState({ kind: 'ready', jobId: result.jobId, filePath: result.filePath });
@@ -370,11 +370,11 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 (installState.kind === 'error' && !isRetriableErrorCode(installState.code))
               }
             >
-              {installState.kind === 'idle' && `Update Now: v${updateStatus.current} → v${updateStatus.latest}`}
+              {installState.kind === 'idle' && `Update now: v${updateStatus.current} → v${updateStatus.latest}`}
               {installState.kind === 'downloading' && (
                 installState.percent >= 0 ? `Downloading ${installState.percent}%…` : 'Downloading…'
               )}
-              {installState.kind === 'ready' && 'Launch Installer'}
+              {installState.kind === 'ready' && 'Launch installer'}
               {installState.kind === 'launching' && 'Launching…'}
               {installState.kind === 'manual' && 'Downloaded — one step left'}
               {installState.kind === 'error' && (

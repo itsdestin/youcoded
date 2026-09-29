@@ -159,7 +159,7 @@ describe('the approved float look', () => {
     expect(css).toMatch(/button\.bg-accent,\s*\[data-chrome-style='float'\] \.header-bar \.wide-view-toggle-indicator,[^{]*button\[aria-pressed='true'\]:not\(\.wide-view-toggle \*\) \{\s*background: color-mix\(in srgb, var\(--panel\) 85%/);
   });
 
-  it('floats Session Files / Games, Projects, Pages and the terminal as frosted sheets', () => {
+  it('floats Session files / Games, Projects, Pages and the terminal as frosted sheets', () => {
     const css = floatCSS();
     // WHY bubble density, not the controls' 16%: a file list's text vanished over dark wallpaper.
     expect(css).toContain('--float-sheet-fill: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);');

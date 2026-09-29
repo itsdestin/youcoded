@@ -657,7 +657,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // U1: whichever row just opened its Organize sheet or its resume-options
   // panel scrolls into view — see the rowElRefs comment above. Only Welcome
   // back's list shares its column with a footer tall enough to squeeze it;
-  // the everyday Resume Session screen has no such fixed footer to hide
+  // the everyday Resume session screen has no such fixed footer to hide
   // behind, so this is deliberately scoped to `wb` rather than changing that
   // screen's already-approved scroll behavior.
   useEffect(() => {
@@ -1816,7 +1816,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               </div>
             ) : (<>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-base font-medium text-fg">Resume Session</h2>
+              <h2 className="text-base font-medium text-fg">Resume session</h2>
               {/* Show complete — same toggle pattern as Skip permissions
                   in SessionStrip, but accent-colored to signal "on" rather than "danger". */}
               <div className="flex items-center gap-2">
@@ -1959,7 +1959,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
             </div>
           </div>
           {/* Welcome back's two ways out. Start fresh forgets the list (the
-              sessions stay in Resume Session as always); Resume opens every
+              sessions stay in Resume session as always); Resume opens every
               ticked row. The count is in the button so it says exactly what
               one press will do. */}
           {wb && (

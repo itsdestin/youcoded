@@ -377,14 +377,14 @@ function AppInner() {
   // Bumped when a hydrate lands, so sessions waiting on it load their first page.
   const [hydrateTick, setHydrateTick] = useState(0);
   // Batch 2 (§3): before the computer's copy arrives, the no-conversation screen says it is
-  // catching up instead of offering New Session — a tap there created a stray conversation.
+  // catching up instead of offering New session — a tap there created a stray conversation.
   const remoteCatchingUp = isRemoteMode() && (conversationStatus === 'restoring' || conversationStatus === 'reconnecting');
   const handleRefreshConversation = useCallback(() => {
     void (window.claude as any).remote?.rehydrate?.();
   }, []);
   const [syncAutoOpen, setSyncAutoOpen] = useState(false);
   // Deep-link flag for the Model Providers popup — set by a provider-error
-  // bubble's "Open Settings" jump so Settings opens straight to that section.
+  // bubble's "Open settings" jump so Settings opens straight to that section.
   const [providersAutoOpen, setProvidersAutoOpen] = useState(false);
   const [specialistsAutoOpen, setSpecialistsAutoOpen] = useState(false);
 
@@ -483,7 +483,7 @@ function AppInner() {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   // Model/effort/fast picker — opened by bare /model, /fast, /effort (and future status-bar chip clicks)
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  // Open Tasks popup — opened by the OpenTasksChip in the StatusBar
+  // Open tasks popup — opened by the OpenTasksChip in the StatusBar
   const [openTasksPopupOpen, setOpenTasksPopupOpen] = useState(false);
   // SINGLE useSessionTasks instance for the whole page. The chip (in StatusBar)
   // and the popup both read from this one derivation so their inactiveMap state
@@ -563,7 +563,7 @@ function AppInner() {
   const [tourOpen, setTourOpen] = useState(false);
   useEffect(() => { if (isFirstRun === false && isGuidePending()) setTourOpen(true); }, [isFirstRun]);
 
-  // Welcome screen "New Session" expansion form state
+  // Welcome screen "New session" expansion form state
   const [welcomeFormOpen, setWelcomeFormOpen] = useState(false);
   const [welcomeCwd, setWelcomeCwd] = useState('');
   const [welcomeModel, setWelcomeModel] = useState('sonnet');
@@ -2164,7 +2164,7 @@ function AppInner() {
       // rendering, StrictMode) and keeps only the returned value, so nested
       // dispatch/setState calls could be replayed or dropped on the floor. That
       // left the session list populated while the model/permission maps stayed
-      // empty, which surfaces as "Model Unknown" / "PERMISSION UNKNOWN" chips
+      // empty, which surfaces as "Model unknown" / "PERMISSION UNKNOWN" chips
       // after a reload. Every setter here is has()-guarded, so running it across
       // the whole list (rather than only the not-yet-known ones) is idempotent
       // and never clobbers what session:created already seeded.
@@ -2437,7 +2437,7 @@ function AppInner() {
   }, [chatStore]);
 
   // Check if remote setup banner is active (show badge on gear icon)
-  // Badge shows whenever the blue "Set Up Remote Access" banner would be visible
+  // Badge shows whenever the blue "Set up remote access" banner would be visible
   // in the settings panel — i.e., no remote clients are connected
   // WHY no poll (audit W18): the count rides the remote status push now — one read seeds the badge, onStatus keeps it current; a remote browser or phone gets a no-op onStatus and keeps the seed, being a client itself.
   useEffect(() => {
@@ -3471,7 +3471,7 @@ function AppInner() {
   }, [isFirstRun, sessions.length, resumeRequested, resumeProbe]);
   const firstTimeWelcome = showFirstRunWelcome({ sessionCount: sessions.length, hasResumable, sessionListLoaded });
 
-  // One opener for the welcome form, shared by the New Session button, the
+  // One opener for the welcome form, shared by the New session button, the
   // first-time auto-open and the tour, so the defaults it loads cannot drift.
   const openWelcomeForm = useCallback(() => {
     setWelcomeCwd(sessionDefaults.projectFolder || '');
@@ -4069,7 +4069,7 @@ function AppInner() {
             style={{ paddingTop: 'var(--top-chrome-bottom, 2.5rem)', paddingBottom: 'var(--top-chrome-height, 2.5rem)' }}
           >
             <ScreenMark name="welcome" />
-            {/* First-time version (deck 2026-09-10, Q-8): "No Active Session"
+            {/* First-time version (deck 2026-09-10, Q-8): "No active session"
                 reads like an error to someone who has never had one. Once a
                 session exists to resume, this is the everyday screen again.
                 select-none: a screen title, not content. Ctrl+A must not paint
@@ -4099,7 +4099,7 @@ function AppInner() {
                 <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
               </div>
             ) : (
-              <p className="text-xl text-fg-muted select-none">No Active Session</p>
+              <p className="text-xl text-fg-muted select-none">No active session</p>
             )}
             {/* scene: the hero surface renders the theme's companions (sun,
                 motes, sparkles) orbiting the mascot — big canvas, no clipping.
@@ -4107,7 +4107,7 @@ function AppInner() {
             <div data-guide-anchor="welcome-mascot" className="flex">
               <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
             </div>
-            {/* Welcome screen: New Session (expandable) + Resume Session */}
+            {/* Welcome screen: New session (expandable) + Resume session */}
             <div className={`flex flex-col items-center gap-2 mt-1 w-64${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
               {welcomeFormOpen ? (
                 /* Expanded new-session form with toggles.
@@ -4245,7 +4245,7 @@ function AppInner() {
                       size="lg"
                       className="flex-1 py-1.5"
                     >
-                      {welcomeDangerous && welcomeRuntime !== 'native' ? 'Create (Dangerous)' : 'Create Session'}
+                      {welcomeDangerous && welcomeRuntime !== 'native' ? 'Create (dangerous)' : 'Create session'}
                     </Button>
                   </div>
                 </div>
@@ -4267,7 +4267,7 @@ function AppInner() {
                     data-guide-anchor="new-session"
                     onClick={openWelcomeForm}
                   >
-                    New Session
+                    New session
                   </Button>
                   {/* Same decision-69 rationale as above: panel-glass is preserved
                       as a className override so wallpaper themes still re-tier it.
@@ -4282,7 +4282,7 @@ function AppInner() {
                       <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
-                      <span className="text-sm font-medium">Resume Session</span>
+                      <span className="text-sm font-medium">Resume session</span>
                     </Button>
                   )}
                 </>
@@ -4363,7 +4363,7 @@ function AppInner() {
           // CC's live Ink menu and the trailing \r would answer it.
           if (sessionId) guardedPtySend(sessionId, text + '\r');
         }}
-        // Slash commands from settings (currently only "Build New Theme with
+        // Slash commands from settings (currently only "Build new theme with
         // Claude") route through the dispatcher instead of raw PTY text. In a
         // native session onSendInput reached guardedPtySend, which refuses and
         // whose return value was discarded — so that button did NOTHING at all
@@ -4543,7 +4543,7 @@ function AppInner() {
           ? { type: 'COMPACTION_PENDING', sessionId: sid, cardId: `compact-switch-${Date.now()}`, beforeContextTokens: null, awaitsResult: true }
           : { type: 'COMPACTION_CANCELLED', sessionId: sid })}
       />
-      {/* Open Tasks popup — rendered at App root so it escapes any inner stacking context.
+      {/* Open tasks popup — rendered at App root so it escapes any inner stacking context.
           Reads from the single `openTasks` useSessionTasks instance declared in AppInner. */}
       {sessionId && (
         <OpenTasksPopup
@@ -4810,7 +4810,7 @@ function AppInnerProfiler({ children }: { children: React.ReactNode }) {
 //
 // WHAT THE USER SEES: a Linux user who already had the buddy switched on finds it
 // OFF exactly once, the first time they launch the version that adds the KDE
-// helper. Turning it back on is one click in Settings → Buddy Floater, and that
+// helper. Turning it back on is one click in Settings → Buddy floater, and that
 // click is where the helper is offered. Nothing pops up at launch (R13).
 //
 // WHY it has to happen at all: before this version the buddy appeared on Wayland
@@ -4895,7 +4895,7 @@ export async function bootBuddyOnLaunch(): Promise<void> {
   // show() can now answer "no" (design §5) — a Wayland desktop whose helper has
   // gone missing since last launch refuses rather than putting a buddy on screen
   // that cannot be dragged. When it does, the stored preference is cleared, so
-  // Settings → Buddy Floater does not sit there reading "On" with nothing on the
+  // Settings → Buddy floater does not sit there reading "On" with nothing on the
   // desktop. The refusal itself is main's to explain; the launch path stays
   // silent (R13: no dialog interrupts you).
   try {

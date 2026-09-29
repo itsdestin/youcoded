@@ -162,7 +162,7 @@ const CONFLICT_GROUPS: readonly RegExp[] = [
   // group treated px- and py- as interchangeable, so a caller passing
   // className="px-8" (wider horizontal padding) silently DROPPED the size's
   // py-2 — buttons rendered at text height with no vertical padding. Hit the
-  // welcome-screen CTAs (App.tsx "New Session"/"Resume Session") and
+  // welcome-screen CTAs (App.tsx "New session"/"Resume session") and
   // SyncPanel's Save button. Regression pinned by Button.test.tsx.
   /^px-/,
   /^py-/,

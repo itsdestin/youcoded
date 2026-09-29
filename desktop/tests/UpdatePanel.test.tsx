@@ -75,7 +75,7 @@ describe('UpdatePanel — the version pill popup', () => {
   });
 
   describe('UpdatePanel — update available', () => {
-    it('renders "Update available" header and Update Now button', async () => {
+    it('renders "Update available" header and Update now button', async () => {
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       await waitFor(() => expect(screen.getByText(/update available/i)).toBeInTheDocument());
       expect(screen.getByRole('button', { name: /update now.*1\.1\.1.*1\.1\.2/i })).toBeInTheDocument();
@@ -86,9 +86,9 @@ describe('UpdatePanel — the version pill popup', () => {
       await waitFor(() => expect((window as any).claude.update.changelog).toHaveBeenCalledWith({ forceRefresh: true }));
     });
 
-    it('Update Now button kicks off download then shows Launch Installer', async () => {
+    it('Update now button kicks off download then shows Launch installer', async () => {
       // Behavior changed from Task 11: clicking no longer opens the browser directly —
-      // it starts the download flow. After download() resolves the button shows "Launch Installer".
+      // it starts the download flow. After download() resolves the button shows "Launch installer".
       const onClose = vi.fn();
       render(<UpdatePanel open={true} onClose={onClose} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       const btn = await screen.findByRole('button', { name: /update now/i });
@@ -138,7 +138,7 @@ describe('UpdatePanel — the version pill popup', () => {
   });
 
   describe('UpdatePanel — up to date', () => {
-    it('renders "What\'s new" header and no Update Now button', async () => {
+    it('renders "What\'s new" header and no Update now button', async () => {
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_OK} />);
       await waitFor(() => expect(screen.getByText(/what'?s new/i)).toBeInTheDocument());
       expect(screen.queryByRole('button', { name: /update now/i })).not.toBeInTheDocument();
@@ -165,7 +165,7 @@ describe('UpdatePanel — the version pill popup', () => {
       expect((window as any).claude.shell.openChangelog).toHaveBeenCalled();
     });
 
-    it('Update Now button stays visible even when changelog failed to load', async () => {
+    it('Update now button stays visible even when changelog failed to load', async () => {
       (window as any).claude.update.changelog.mockResolvedValue(CHANGELOG_ERROR);
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       expect(await screen.findByRole('button', { name: /update now/i })).toBeInTheDocument();

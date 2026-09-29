@@ -498,6 +498,6 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
 // click, not the thousands of elements the window removed; closing it needs a
 // selector-scoped marketplace store, the same shape as splitting
 // ArtifactContext (plan: "Deliberately out of scope").
-// Your Library's cards gain nothing from this memo (their `item` objects are
+// Your library's cards gain nothing from this memo (their `item` objects are
 // per render) — deliberately, see LibraryScreen's openLibraryEntry comment.
 export default memo(MarketplaceCard);

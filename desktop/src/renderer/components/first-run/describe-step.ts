@@ -18,11 +18,11 @@ function activePrerequisite(prereqs: PrerequisiteState[]): PrerequisiteState | u
  * what's happening right now and why, scoped to the current state.
  */
 /**
- * Is "Try Again" the right answer to the message currently on screen?
+ * Is "Try again" the right answer to the message currently on screen?
  *
  * WHY it exists: `lastError` is the only channel the wizard has for saying
  * anything to the user, and one CLICK reaches it without anything breaking —
- * a refused OpenRouter key, or a sign-in that timed out. Try Again there
+ * a refused OpenRouter key, or a sign-in that timed out. Try again there
  * re-runs the whole Node/Git/Claude install pass on a machine where nothing is
  * wrong, and "Something went wrong. You can retry the last step." would be two
  * false statements in one sentence.
@@ -30,7 +30,7 @@ function activePrerequisite(prereqs: PrerequisiteState[]): PrerequisiteState | u
  * The test: a failed prerequisite always earns a retry. Otherwise it depends on
  * whether the user has another way forward — on the sign-in step the three
  * sign-in buttons are right there, so a message needs no button of its own;
- * on every other step (a failed download, no disk space) Try Again is the only
+ * on every other step (a failed download, no disk space) Try again is the only
  * control on the screen and must stay.
  *
  * FirstRunView shows the button on exactly this test, so the headline and the
