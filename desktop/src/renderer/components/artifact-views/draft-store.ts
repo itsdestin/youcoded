@@ -31,9 +31,9 @@ export interface StashedDraft {
   /** The file's name (no folder), for the refused-quit prompt. */
   name?: string;
   /** Whether the file could still take the draft (the editor's own edit rules). */
-  available?: () => Promise<boolean>;
-  /** Save the draft to its file from the refused-quit prompt (force = Save anyway). */
-  save?: (force?: boolean) => Promise<import('../../state/unsaved-editors').ParkedSaveResult>;
+  available?: () => Promise<import('../../state/unsaved-editors').DraftFileStatus>;
+  /** Save the draft to its file from the refused-quit prompt. */
+  save?: (o?: import('../../state/unsaved-editors').ParkedSaveOptions) => Promise<import('../../state/unsaved-editors').ParkedSaveResult>;
 }
 
 interface Parked { entry: StashedDraft; taken: boolean; release: () => void }
@@ -49,8 +49,8 @@ export function stashDraft(key: string, entry: StashedDraft): void {
   const release = holdUnsavedEditor({
     name: entry.name ?? 'A file',
     parked: {
-      available: () => stash.get(key)?.entry.available?.() ?? Promise.resolve(false),
-      save: (force) => stash.get(key)?.entry.save?.(force) ?? Promise.resolve({ error: "YouCoded couldn't save this file." }),
+      available: () => stash.get(key)?.entry.available?.() ?? Promise.resolve('gone' as const),
+      save: (o) => stash.get(key)?.entry.save?.(o) ?? Promise.resolve({ error: "YouCoded couldn't save this file." }),
     },
     discard: () => clearDraft(key),
   });

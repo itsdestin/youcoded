@@ -2,6 +2,7 @@ import { EDIT_MAX_BYTES, editTier, type EditTier } from '../../../shared/artifac
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { rendersFromBytesOnly } from './RendererRegistry';
+import { describeReadError } from './read-error-copy';
 import type { ArtifactContentInfo } from './ActiveArtifactView';
 
 /**
@@ -35,20 +36,23 @@ export function canEditArtifact(
 }
 
 /**
- * Whether a parked draft's file could take the draft back RIGHT NOW (Task 6 fix round 12): the
- * same rules the editor applies when it restores one — it exists, it is text (not a file drawn
- * from its bytes, not binary), it is within the size limit, and the write policy allows it.
- * "Readable" was not enough: the prompt offered "Open it" for a file the editor would then refuse
- * to put back into edit mode.
+ * Whether a parked draft's file could take the draft RIGHT NOW (Task 6 fix rounds 12–14): the
+ * same rules the editor applies — it exists, it is text (not a file drawn from its bytes, not
+ * binary), it is within the size limit, and the write policy allows it. Only "not there" or "not
+ * editable" is 'gone'; a read that failed for another reason says why (the prompt offers Retry),
+ * so a passing hiccup never reads as "no longer available".
  */
-export async function draftFileEditable(projectRoot: string, artifact: ArtifactRecord): Promise<boolean> {
-  if (rendersFromBytesOnly(artifact.path)) return false;
+export async function draftFileStatus(projectRoot: string, artifact: ArtifactRecord): Promise<'editable' | 'gone' | { error: string }> {
+  if (rendersFromBytesOnly(artifact.path)) return 'gone';
   let res: any;
-  try { res = await (window.claude as any)?.artifacts?.get(projectRoot, artifact.id); } catch { return false; }
-  if (!res || res.ok !== true || res.orphan) return false;
+  try { res = await (window.claude as any)?.artifacts?.get(projectRoot, artifact.id); } catch (e) {
+    return { error: `YouCoded couldn't read this file: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (res && res.ok === true && res.orphan) return 'gone';
+  if (!res || res.ok !== true) return { error: describeReadError(res?.error, res?.code) };
   const absolutePath = typeof res.resolvedPath === 'string' ? res.resolvedPath : artifact.kind === 'internal'
     ? `${projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${artifact.path.replace(/\\/g, '/')}`
     : (artifact.absolutePath ?? artifact.path);
   const info = { binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes };
-  return canEditArtifact(info, typeof res.content === 'string' ? res.content : null, editTier(canonicalize(absolutePath, null)));
+  return canEditArtifact(info, typeof res.content === 'string' ? res.content : null, editTier(canonicalize(absolutePath, null))) ? 'editable' : 'gone';
 }

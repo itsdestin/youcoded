@@ -4,7 +4,7 @@
 import { lazy, useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
 import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer } from './RendererRegistry';
 import { PartialFileBanner } from './PartialFileBanner';
-import { canEditArtifact, draftFileEditable } from './edit-permission';
+import { canEditArtifact, draftFileStatus } from './edit-permission';
 import { ViewerErrorBoundary } from './ViewerErrorBoundary';
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-path-policy';
@@ -70,16 +70,19 @@ function saveErrorMessage(res: any): string {
  */
 export async function saveParkedDraft(p: {
   projectRoot: string; projectId: string; projectName: string; artifact: ArtifactRecord; sessionId: string;
-  draft: string; baseMtimeMs: number | null; force?: boolean;
+  draft: string; baseMtimeMs: number | null; resolvedPath?: string | null; force?: boolean; confirmed?: boolean;
 }): Promise<import('../../state/unsaved-editors').ParkedSaveResult> {
+  // The write tier is judged on the RESOLVED path, as the editor does (a link may lead into a
+  // settings folder); a settings file asks first, inline (fix round 14) — never a dead-end message.
+  const abs = p.resolvedPath ?? (p.artifact.kind === 'internal'
+    ? `${p.projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${p.artifact.path.replace(/\\/g, '/')}`
+    : (p.artifact.absolutePath ?? p.artifact.path));
+  const needsConfirm = editTier(canonicalize(abs, null)) === 'needs-confirm';
+  if (needsConfirm && !p.confirmed) return { needsConfirm: true };
   if (!p.force && p.baseMtimeMs === null) return { conflict: true, unknown: true };
   const opts: { baseMtimeMs?: number; confirmed?: boolean } = {};
   if (!p.force && p.baseMtimeMs !== null) opts.baseMtimeMs = p.baseMtimeMs;
-  // The person confirmed editing this file when they started (startEdit asks for such files).
-  const abs = p.artifact.kind === 'internal'
-    ? `${p.projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${p.artifact.path.replace(/\\/g, '/')}`
-    : (p.artifact.absolutePath ?? p.artifact.path);
-  if (editTier(canonicalize(abs, null)) === 'needs-confirm') opts.confirmed = true;
+  if (needsConfirm) opts.confirmed = true;
   let res: any;
   try {
     res = await (window.claude as any).artifacts.save(p.projectRoot, p.projectId, p.projectName, p.artifact.id, p.draft, p.sessionId, opts);
@@ -313,10 +316,11 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         // Named and savable from the refused-quit prompt (fix rounds 11–13): the file name only.
         const draftText = cur.draft;
         const baseMtimeMs = mtimeRef.current;
+        const resolvedPath = cur.contentInfo?.resolvedPath ?? null;
         stashDraft(key, {
           draft: draftText, mtimeMs: baseMtimeMs, name: artifact.path.split(/[\\/]/).pop() || artifact.path,
-          available: () => draftFileEditable(projectRoot, artifact),
-          save: (force) => saveParkedDraft({ projectRoot, projectId, projectName, artifact, sessionId, draft: draftText, baseMtimeMs, force }),
+          available: () => draftFileStatus(projectRoot, artifact),
+          save: (o) => saveParkedDraft({ projectRoot, projectId, projectName, artifact, sessionId, draft: draftText, baseMtimeMs, resolvedPath, ...o }),
         });
       }
     };

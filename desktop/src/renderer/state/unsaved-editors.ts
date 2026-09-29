@@ -13,15 +13,20 @@
 import { useSyncExternalStore } from 'react';
 
 /** How a parked draft's Save ended: saved, the file changed on disk since (or that can't be
- *  told — `unknown`), or a specific failure message. */
-export type ParkedSaveResult = { ok: true } | { conflict: true; unknown?: boolean } | { error: string };
+ *  told — `unknown`), a settings file that needs a yes first, or a specific failure message. */
+export type ParkedSaveResult = { ok: true } | { conflict: true; unknown?: boolean } | { needsConfirm: true } | { error: string };
+/** Whether a parked draft's file can take it: yes; no — gone or not editable any more (the only
+ *  "no longer available" case, fix round 14); or the check itself failed (shown, with Retry). */
+export type DraftFileStatus = 'editable' | 'gone' | { error: string };
+/** Save options: force = Save anyway (no changed-on-disk check); confirmed = yes to a settings file. */
+export interface ParkedSaveOptions { force?: boolean; confirmed?: boolean }
 
 export interface UnsavedEdit {
   /** The file's name only — never its folder (it is shown on screen and sent to main). */
   name: string;
   /** A parked draft (no editor on screen): whether its file could still take it, and saving it
    *  there from the prompt (fix round 13). Absent for an editor that is on screen. */
-  parked?: { available(): Promise<boolean>; save(force?: boolean): Promise<ParkedSaveResult> };
+  parked?: { available(): Promise<DraftFileStatus>; save(o?: ParkedSaveOptions): Promise<ParkedSaveResult> };
   /** Throw these edits away (the discard choice in the refused prompt). */
   discard(): void;
 }
