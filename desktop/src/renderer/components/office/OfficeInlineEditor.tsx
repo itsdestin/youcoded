@@ -111,7 +111,13 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
       {/* A failed save shows its reason and the save-failed actions right above the document
           (I1, Task 6 fix round 1): Done and closing the panel wait on it rather than dropping
           the changes. "Close without saving" leaves the in-place edit. */}
-      {saveState.phase === 'saved' && saveState.copiedTo && (
+      {/* Save As / Export (finish plan Task 2): where the separate file went, or why it could not. */}
+      {saveState.phase !== 'failed' && saveState.note && (
+        <div className="shrink-0 px-3 py-1.5 text-2xs text-fg-muted border-b border-edge-dim" role="status">
+          {saveState.note}
+        </div>
+      )}
+      {saveState.phase === 'saved' && saveState.copiedTo && !saveState.note && (
         <div className="shrink-0 px-3 py-1.5 text-2xs text-fg-muted border-b border-edge-dim" role="status">
           Saved a copy to {saveState.copiedTo} — now editing the copy.
         </div>

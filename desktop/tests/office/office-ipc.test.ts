@@ -485,6 +485,86 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
   });
 });
 
+// Save As / Download as / Export to PDF (finish plan Task 2): the editor's dialog.save becomes
+// save_dialog, and its answer comes back in save_file_as.
+describe('the editor asks for a save dialog (Save As, Export)', () => {
+  const fakeDoc = async (_r: string, _f: string, to: string) => { await writeFile(to, 'PK\x03\x04doc'); };
+  /** Re-registers with a fake save dialog answering `answer`, and a translator that writes a zip. */
+  function withSaver(answer: string | null | { refused: string } | Error) {
+    const pick = vi.fn(async () => { if (answer instanceof Error) throw answer; return answer; });
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickSaveTarget: pick, convert: fakeDoc });
+    return pick;
+  }
+  async function openEdited() {
+    const file = await aDocx();
+    const { token } = (await call('office:open', win1, file)) as { token: string };
+    await call('office:invoke', win1, token, 'write_editor_bin', { data: Buffer.from('edits').toString('base64') });
+    return { file, token };
+  }
+
+  it("shows the asking window's dialog in the document's folder, and answers a handle, never the folder", async () => {
+    const target = path.join(dir, 'out', 'Report.docx');
+    const pick = withSaver(target);
+    const { file, token } = await openEdited();
+    const filters = [{ name: 'Word', extensions: ['docx'] }];
+    const handle = (await call('office:invoke', win1, token, 'save_dialog', { filters })) as string;
+    expect(pick).toHaveBeenCalledWith(win1, { filters, folder: path.dirname(file), name: 'memo', ext: 'docx' });
+    expect(handle).toMatch(/^yc-save\/[0-9a-f]{32}\/Report\.docx$/);
+    expect(handle).not.toContain(dir);
+  });
+
+  it('save_file_as writes where that dialog said, once, and says only the name and folder name', async () => {
+    const target = path.join(dir, 'out', 'Report.docx');
+    await mkdir(path.dirname(target), { recursive: true });
+    withSaver(target);
+    const { file, token } = await openEdited();
+    const original = await readFile(file);
+    const handle = await call('office:invoke', win1, token, 'save_dialog', {});
+    await expect(call('office:invoke', win1, token, 'save_file_as', { path: handle })).resolves.toEqual({ name: 'Report.docx', folder: 'out' });
+    expect((await readFile(target)).toString('latin1')).toBe('PK\x03\x04doc');
+    expect(await readFile(file)).toEqual(original);
+    // A handle is good for one save.
+    await expect(call('office:invoke', win1, token, 'save_file_as', { path: handle })).rejects.toThrow('refused');
+  });
+
+  it("refuses a made-up handle, a path, and another document's handle", async () => {
+    withSaver(path.join(dir, 'Report.docx'));
+    const { token } = await openEdited();
+    const other = (await call('office:open', win1, await aDocx('other.docx'))) as { token: string };
+    const theirs = await call('office:invoke', win1, other.token, 'save_dialog', {});
+    await expect(call('office:invoke', win1, token, 'save_file_as', { path: theirs })).rejects.toThrow('refused');
+    await expect(call('office:invoke', win1, token, 'save_file_as', { path: `yc-save/${'0'.repeat(32)}/Report.docx` })).rejects.toThrow('refused');
+    await expect(call('office:invoke', win1, token, 'save_file_as', { path: path.join(dir, 'Report.docx') })).rejects.toThrow('refused');
+    expect(existsSync(path.join(dir, 'Report.docx'))).toBe(false);
+  });
+
+  it('answers null when cancelled, and says why when the dialog refused the name', async () => {
+    withSaver(null);
+    const { token } = await openEdited();
+    await expect(call('office:invoke', win1, token, 'save_dialog', {})).resolves.toBeNull();
+    withSaver({ refused: 'A file named "memo.pdf" already exists there. Choose another name.' });
+    const again = await openEdited();
+    await expect(call('office:invoke', win1, again.token, 'save_dialog', {})).rejects.toThrow('A file named "memo.pdf" already exists there. Choose another name.');
+  });
+
+  it('a dialog that fails answers null and logs only its kind and code', async () => {
+    withSaver(Object.assign(new Error('GTK failed at /home/secret/folder'), { code: 'EACCES' }));
+    const { token } = await openEdited();
+    await expect(call('office:invoke', win1, token, 'save_dialog', {})).resolves.toBeNull();
+    const logged = vi.mocked(log).mock.calls.filter((c) => c[2] === 'editor save dialog failed');
+    expect(logged).toHaveLength(1);
+    expect(logged[0][3]).toEqual({ kind: 'Error', code: 'EACCES' });
+  });
+
+  it("never shows a dialog for another window's document", async () => {
+    const pick = withSaver(path.join(dir, 'x.docx'));
+    const { token } = await openEdited();
+    await expect(call('office:invoke', win2, token, 'save_dialog', {})).rejects.toThrow('refused');
+    expect(pick).not.toHaveBeenCalled();
+  });
+});
+
 describe('office:save-copy', () => {
   /** Re-registers with a fake save dialog that answers `target`. */
   function withDialog(target: string | null) {

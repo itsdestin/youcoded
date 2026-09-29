@@ -10,6 +10,7 @@
 //
 // WHY no electron import: ipcMain is passed in (and typed structurally), so the tests drive
 // these handlers with a fake that records them. main.ts passes the real one.
+import { randomBytes } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { OFFICE_MAX_BYTES, type OfficeFile, type OfficeOpen, type OfficeSaveCopyResult, type OfficeStatus, type OfficeVersion } from '../../shared/office-types';
@@ -130,6 +131,9 @@ export interface OfficeIpcDeps {
   /** The system file picker the editor asks for (office-dialogs.ts pickEditorFiles); null when
    *  cancelled. Tests pass a fake. WHY optional: as with pickCopyTarget, loaded only when used. */
   pickEditorFiles?(sender: unknown, opts: { multiple: boolean; filters: unknown }): Promise<string[] | null>;
+  /** The system save dialog the editor asks for (office-dialogs.ts pickSaveTarget): Save As,
+   *  Download as, Export to PDF. null when cancelled. Tests pass a fake; loaded only when used. */
+  pickSaveTarget?(sender: unknown, opts: { filters: unknown; folder: string; name: string; ext: string }): Promise<string | null | { refused: string }>;
   /** Test seam: the translator (a fake that copies). Production uses x2t. */
   convert?: Parameters<typeof createOfficeCommands>[0]['convert'];
 }
@@ -146,6 +150,15 @@ const errorKind = (e: unknown) => ({
   code: (e as NodeJS.ErrnoException | null)?.code ?? null,
 });
 let activePruner: PruneScheduler | null = null;
+
+// ── Save As targets (finish plan Task 2) ──
+// WHY handles: the editor's save-as hands dialog.save's answer straight to save_file_as, and the
+// frame must never learn a folder. So save_dialog answers `yc-save/<random>/<chosen name>` —
+// bridge.js reads the name (and its extension) from the end — and save_file_as writes only to
+// the path main's own dialog recorded for that exact handle, for that document, once.
+const SAVE_HANDLE = /^yc-save\/[0-9a-f]{32}\/[^/\\]+$/;
+// Per document; a WeakMap so a closed document's grants go with it.
+const saveTargets = new WeakMap<OfficeSession, Map<string, string>>();
 
 export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): void {
   // WHY: ipcMain.handle throws on re-registration. Clearing first keeps hot-reload dev
@@ -311,6 +324,8 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     // array, null) is treated as no arguments rather than reaching them.
     const a = args && typeof args === 'object' && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
     if (cmd === 'open_dialog') return openDialog(sender, s, a);
+    if (cmd === 'save_dialog') return saveDialog(sender, s, a);
+    if (cmd === 'save_file_as') return saveFileAs(reg, s, a);
     const page = pageLoads.get(sender.id) ?? 0;
     try {
       return await commandsFor(reg)(token, cmd, a);
@@ -349,6 +364,43 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     const handles = grantPicked(s, paths);
     // Tauri's shape: a list when several may be chosen, else the one file.
     return multiple ? handles : handles[0];
+  }
+
+  // Save As / Download as / Export to PDF (finish plan Task 2): Tauri's dialog.save, which the
+  // add-on's relay sends as save_dialog. WHY here, as open_dialog: the dialog is parented to the
+  // asking window, and what goes back is a handle only this document can spend.
+  async function saveDialog(sender: OfficeSender, s: OfficeSession, a: Record<string, unknown>): Promise<string | null> {
+    let chosen: string | null | { refused: string };
+    try {
+      const pick = deps.pickSaveTarget ?? (await import('./office-dialogs')).pickSaveTarget;
+      // WHY the document's own folder: where Save As starts in every office suite. main knows it;
+      // the frame never does.
+      chosen = await pick(sender, { filters: a.filters, folder: path.dirname(s.path), name: path.basename(s.path, path.extname(s.path)), ext: path.extname(s.path).slice(1).toLowerCase() });
+    } catch (e) {
+      // As open_dialog: a failing dialog's text can name folders; the frame gets a cancel.
+      log('WARN', 'Office', 'editor save dialog failed', errorKind(e));
+      return null;
+    }
+    if (chosen === null) return null;
+    // Worded for a person and naming only the file (office-dialogs.ts resolveCopyTarget).
+    if (typeof chosen === 'object') throw new Error(chosen.refused);
+    let mine = saveTargets.get(s);
+    if (!mine) saveTargets.set(s, (mine = new Map()));
+    const handle = `yc-save/${randomBytes(16).toString('hex')}/${path.basename(chosen)}`;
+    mine.set(handle, chosen);
+    return handle;
+  }
+
+  // The answer's second half: write the copy where the dialog said. Answers the chosen file's
+  // name and its folder's name for YouCoded's own note (EditorFrame keeps them from the frame).
+  async function saveFileAs(reg: Sessions, s: OfficeSession, a: Record<string, unknown>): Promise<{ name: string; folder: string }> {
+    const handle = a.path;
+    const target = typeof handle === 'string' && SAVE_HANDLE.test(handle) ? saveTargets.get(s)?.get(handle) : undefined;
+    if (!target) throw new Error(MSG.refused);
+    // One save per dialog: a handle the frame kept can't write there again later.
+    saveTargets.get(s)?.delete(handle as string);
+    await commandsFor(reg).saveAs(s.token, target);
+    return { name: path.basename(target), folder: path.basename(path.dirname(target)) };
   }
 
   async function close(sender: OfficeSender, token: unknown): Promise<void> {

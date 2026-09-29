@@ -229,6 +229,8 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
 }
 
 function saveLabel(s: OfficeSaveState): string {
+  // A Save As note wins while it lasts: it is the answer to what the person just did.
+  if (s.note) return s.note;
   if (s.phase !== 'saved') return 'Saving…';
   // After "Save a copy…", say where it went — the folder's name only, never a full path.
   return s.copiedTo ? `Saved a copy to ${s.copiedTo} — now editing the copy.` : 'Saved';

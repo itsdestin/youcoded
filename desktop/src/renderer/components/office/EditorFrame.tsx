@@ -15,7 +15,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, editorFontLinks, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, onDocumentReplaced, registerFlush, withdrawUnloadApproval } from './office-store';
+import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, onDocumentReplaced, registerFlush, withdrawUnloadApproval } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -48,6 +48,11 @@ const CLOSE_SAVE_WAIT_MS = 5_000;
  *  anything this late means the editor gave up without telling the host (a failed
  *  get_current_path, an exception in its save path), and "Saving…" must not stay up forever. */
 const REQUESTED_SAVE_LIMIT_MS = 60_000;
+/** How recently a "not modified" may have dropped unsaved changes and still count as the start of
+ *  a Save As (measured: the editor sends it milliseconds before the Save As dialog is asked for). */
+const SAVE_AS_START_MS = 5_000;
+/** How long after a Save As ends its trailing "not modified" is ignored (measured: milliseconds). */
+const SAVE_AS_END_MS = 2_000;
 /** A restore landed while this editor still held unsaved typing (see onDocumentReplaced below). */
 const REPLACED_WHILE_EDITING = 'This file was restored while you had unsaved changes here. Save a copy to keep them.';
 
@@ -100,6 +105,8 @@ interface RpcMessage { yc: 'rpc'; id: unknown; cmd: string; args?: unknown }
 // the START of the editor's own save; counting it as the save let a close settle before the
 // real save_file had even been sent.
 const isSaveCmd = (cmd: string) => cmd === 'save_file';
+/** Save As / Download as / Export to PDF (finish plan Task 2): its dialog and its write. */
+const isSaveAsCmd = (cmd: string) => cmd === 'save_dialog' || cmd === 'save_file_as';
 
 export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(function EditorFrame(
   { file, hidden = false, slim = false, onCommandState, screen, closing = false, onClosed, onCloseFailed, onSwitchTo }, handleRef,
@@ -173,6 +180,12 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     timer: 0 as ReturnType<typeof setTimeout> | 0,
     requestTimer: 0 as ReturnType<typeof setTimeout> | 0,
     waiters: [] as Array<() => void>,
+    // Save As (finish plan Task 2, measured in the dev window 2026-09-29): the editor starts every
+    // save — a Save As too — by saying "not modified", and says it again when the copy is done,
+    // yet a Save As never writes the document's own file. droppedAt: when a "not modified" last
+    // dropped unsaved changes; saveAsDirty: the document had unsaved changes when a Save As began;
+    // saveAsUntil: until then a "not modified" is the Save As ending, not the document.
+    droppedAt: 0, saveAsDirty: false, saveAsUntil: 0,
   });
   // A save that failed without save_file failing (fix round 2): the editor's write_editor_bin
   // was refused, the editor's save path gave up, or no save_file ever came. Same outcome as a
@@ -496,6 +509,12 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         wake();
         return true;
       }
+      // WHY refused (finish plan Task 2): a Save As writes the session's Editor.bin, which a kept
+      // editor never feeds (its typing lives only in keptBinRef). "Save a copy" keeps it instead.
+      if (isSaveAsCmd(m.cmd)) {
+        post({ yc: 'rpc-result', id: m.id, error: REPLACED_WHILE_EDITING });
+        return true;
+      }
       if (m.cmd === 'set_document_modified') {
         // More typing: still only in this editor. The strip stays as it is.
         if ((m.args as { modified?: unknown } | undefined)?.modified === true) { s.dirty = true; withdrawUnloadApproval(); }
@@ -503,6 +522,22 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         return true;
       }
       return false;
+    };
+    // WHY (finish plan Task 2): the copy holds the edits, the document's own file does not. The
+    // edits it had become unsaved again and autosave writes them where the person opened the
+    // file — otherwise closing now would lose them from it (measured: it did). The editor's own
+    // closing "not modified" is ignored for a moment; yc-bridge saves even though the editor
+    // now thinks nothing changed (add-on v0.1.13).
+    const saveAsEnded = () => {
+      const s = save.current;
+      s.saveAsUntil = Date.now() + SAVE_AS_END_MS;
+      if (!s.saveAsDirty || !mountedRef.current) return;
+      s.saveAsDirty = false;
+      s.dirty = true;
+      if (!s.failed) {
+        markChanged(file.path);
+        if (!s.saving && !s.requested) armAutosave();
+      }
     };
     const relay = (m: RpcMessage) => {
       if (!b) return;
@@ -540,11 +575,19 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         const s = save.current;
         // Not while a requested save is on its way: the editor's own save reports "not
         // modified" BEFORE its save_file (measured), and that save must still be waited for.
-        if (s.dirty && !s.saving && !s.failed && !s.requested) {
+        if (s.dirty && !s.saving && !s.failed && !s.requested && Date.now() >= s.saveAsUntil) {
+          s.droppedAt = Date.now();
           s.dirty = false;
           if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
           markUnchanged(file.path);
         }
+      }
+      // A Save As begins (its dialog): were there unsaved changes? Either still pending, or just
+      // dropped by the "not modified" the editor sends as it starts (see droppedAt).
+      if (m.cmd === 'save_dialog') {
+        const s = save.current;
+        s.saveAsDirty = s.dirty || Date.now() - s.droppedAt < SAVE_AS_START_MS;
+        s.saveAsUntil = Number.MAX_SAFE_INTEGER;
       }
       const saving = isSaveCmd(m.cmd);
       // The request this hand-over answers (see requestSeq): the one current when it arrived.
@@ -559,7 +602,15 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         markSaving(file.path);
       }
       b.invoke(opened.token, m.cmd, m.args ?? {}).then((result) => {
-        post({ yc: 'rpc-result', id: m.id, result });
+        // WHY not main's answer for save_file_as: it names the copy's folder for the note below,
+        // and the sealed frame is never told folders; bridge.js only needs it to succeed.
+        post({ yc: 'rpc-result', id: m.id, result: m.cmd === 'save_file_as' ? 'ok' : result });
+        // The Save As is over when its copy is written, or when its dialog was cancelled.
+        if (m.cmd === 'save_file_as' || (m.cmd === 'save_dialog' && result === null)) saveAsEnded();
+        if (m.cmd === 'save_file_as' && mountedRef.current) {
+          const r = result as { name?: unknown; folder?: unknown } | null;
+          if (r && typeof r.name === 'string' && typeof r.folder === 'string') markNote(file.path, `Saved a copy as ${r.name} in ${r.folder}.`);
+        }
         // M4 (fix round 4): an answer that lands after this frame unmounted must not write a
         // save state for a file no editor holds any more (it would linger in the store).
         if (!mountedRef.current) return;
@@ -578,8 +629,13 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
           saveSettled();
         }
       }, (e: unknown) => {
-        const message = plainMessage(e, saving ? "Office couldn't save this file." : "Office couldn't finish that.");
+        const message = plainMessage(e, saving || m.cmd === 'save_file_as' ? "Office couldn't save this file." : "Office couldn't finish that.");
         post({ yc: 'rpc-result', id: m.id, error: message });
+        // Save As (finish plan Task 2): bridge.js answers a failure with a message box the relay
+        // does not show, so main's reason (worded for a person) goes on YouCoded's own strip.
+        // A bare 'refused' (a handle main did not grant) is no sentence for a person.
+        if (isSaveAsCmd(m.cmd)) saveAsEnded();
+        if (isSaveAsCmd(m.cmd) && mountedRef.current) markNote(file.path, message === 'refused' ? "Office couldn't save this file." : message);
         if (!mountedRef.current) {
           // See M4 above. But a save the close let go of (drainPending) that then failed in
           // main's drain is said, with the toast a hidden close uses (fix round 5): the tab is

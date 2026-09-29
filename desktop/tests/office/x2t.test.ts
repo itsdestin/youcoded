@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { convert, FORMAT, formatFor, killRunningConverters, X2tError } from '../../src/main/office/x2t';
+import { inflateSync } from 'node:zlib';
+import { convert, exportFormatFor, FORMAT, formatFor, killRunningConverters, pdfFontData, X2tError } from '../../src/main/office/x2t';
 
 const ROOT = fileURLToPath(new URL('../../office-addon/', import.meta.url));
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
@@ -22,6 +23,30 @@ describe('formatFor', () => {
     expect(formatFor('c.pptx')).toBe(FORMAT.pptx);
     expect(formatFor('a.odt')).toBeNull();
     expect(formatFor('a.bin')).toBeNull();
+  });
+});
+
+// Save As / Export (finish plan Task 2): what each kind of document may be written as.
+describe('exportFormatFor', () => {
+  it('offers each kind its own formats and PDF, case-insensitively', () => {
+    expect(exportFormatFor('/d/a.docx', '/e/b.PDF')).toBe(FORMAT.pdf);
+    expect(exportFormatFor('/d/a.docx', '/e/b.odt')).toBe(FORMAT.odt);
+    expect(exportFormatFor('/d/a.docx', '/e/b.rtf')).toBe(FORMAT.rtf);
+    expect(exportFormatFor('/d/a.docx', '/e/b.txt')).toBe(FORMAT.txt);
+    expect(exportFormatFor('/d/a.DOCX', '/e/b.docx')).toBe(FORMAT.docx);
+    expect(exportFormatFor('/d/a.xlsx', '/e/b.ods')).toBe(FORMAT.ods);
+    expect(exportFormatFor('/d/a.xlsx', '/e/b.csv')).toBe(FORMAT.csv);
+    expect(exportFormatFor('/d/a.pptx', '/e/b.odp')).toBe(FORMAT.odp);
+    expect(exportFormatFor('/d/a.pptx', '/e/b.pdf')).toBe(FORMAT.pdf);
+  });
+
+  it("refuses another kind's formats, legacy formats and unknown ones", () => {
+    expect(exportFormatFor('/d/a.docx', '/e/b.xlsx')).toBeNull();
+    expect(exportFormatFor('/d/a.pptx', '/e/b.txt')).toBeNull();
+    expect(exportFormatFor('/d/a.xlsx', '/e/b.odt')).toBeNull();
+    expect(exportFormatFor('/d/a.docx', '/e/b.doc')).toBeNull();
+    expect(exportFormatFor('/d/a.docx', '/e/b')).toBeNull();
+    expect(exportFormatFor('/d/a.odt', '/e/b.pdf')).toBeNull();
   });
 });
 
@@ -51,6 +76,35 @@ describe.skipIf(!HAS_ADDON)('convert with the bundled x2t', () => {
     await convert(ROOT, bin, back, FORMAT.docx, dir);
     expect((await stat(back)).size).toBeGreaterThan(1024);
   });
+
+  // WHY each check (measured 2026-09-29): without the add-on's matching native.js x2t's PDF
+  // renderer crashed and wrote nothing; without font data listing real font files it wrote a
+  // PDF whose every character was glyph 0 — a blank page. So the test reads the glyphs back.
+  it('writes a real PDF, with its text drawn, from the editor form', async () => {
+    const bin = path.join(dir, 'Editor.bin');
+    const pdf = path.join(dir, 'out.pdf');
+    await convert(ROOT, MEMO, bin, FORMAT.bin, dir);
+    const fonts = await pdfFontData(ROOT, dir);
+    await convert(ROOT, bin, pdf, FORMAT.pdf, dir, undefined, fonts);
+    const bytes = await readFile(pdf);
+    expect(bytes.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+    const glyphs: string[] = [];
+    for (const m of bytes.toString('latin1').matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+      let text: string;
+      try { text = inflateSync(Buffer.from(m[1], 'latin1')).toString('latin1'); } catch { continue; }
+      for (const g of text.matchAll(/<([0-9A-Fa-f]{4})>/g)) glyphs.push(g[1]);
+    }
+    expect(glyphs.length).toBeGreaterThan(0);
+    expect(glyphs.some((g) => g !== '0000')).toBe(true);
+  }, X2T_WARMUP_BUDGET_MS);
+
+  it('makes the font data once per temp base and reuses it', async () => {
+    const a = await pdfFontData(ROOT, dir);
+    const b = await pdfFontData(ROOT, dir);
+    expect(a).toBe(b);
+    expect(a.startsWith(dir)).toBe(true);
+    expect((await stat(a)).size).toBeGreaterThan(0);
+  }, X2T_WARMUP_BUDGET_MS);
 
   it('leaves no job folders behind in the temp base', async () => {
     await convert(ROOT, MEMO, path.join(dir, 'Editor.bin'), FORMAT.bin, dir);

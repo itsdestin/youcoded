@@ -1,7 +1,7 @@
 // "Save a copy…"'s file dialog: the overwrite question and the extension the copy is given.
 import { describe, expect, it, vi } from 'vitest';
 import { BrowserWindow, dialog } from 'electron';
-import { pickCopyTarget, pickEditorFiles, resolveCopyTarget } from '../../src/main/office/office-dialogs';
+import { pickCopyTarget, pickEditorFiles, pickSaveTarget, resolveCopyTarget } from '../../src/main/office/office-dialogs';
 
 describe('where a copy goes', () => {
   it('keeps a name the person typed with the right extension (the dialog confirmed any overwrite)', () => {
@@ -61,5 +61,47 @@ describe('the file dialog the editor asks for (Insert → Picture)', () => {
       { name: 'Images', extensions: ['png', 'JPG'] },
       { name: 'All files', extensions: ['*'] },
     ]);
+  });
+});
+
+// Save As / Download as / Export to PDF (finish plan Task 2).
+describe('the save dialog the editor asks for', () => {
+  const lastOpts = () => vi.mocked(dialog.showSaveDialog).mock.calls.at(-1)!.at(-1) as { properties: string[]; filters: { name: string; extensions: string[] }[]; defaultPath: string };
+  const pdf = [{ name: 'PDF', extensions: ['pdf'] }];
+
+  it("starts in the document's folder with its name in the first format, and confirms overwriting", async () => {
+    (BrowserWindow as unknown as { fromWebContents: () => null }).fromWebContents = () => null;
+    vi.mocked(dialog.showSaveDialog).mockResolvedValueOnce({ canceled: true, filePath: undefined } as never);
+    await expect(pickSaveTarget({}, { filters: pdf, folder: '/home/you/work', name: 'plan' })).resolves.toBeNull();
+    expect(lastOpts().defaultPath).toBe('/home/you/work/plan.pdf');
+    expect(lastOpts().filters).toEqual(pdf);
+    expect(lastOpts().properties).toContain('showOverwriteConfirmation');
+  });
+
+  it("suggests a copy's name in the document's own format, never the open file itself", async () => {
+    (BrowserWindow as unknown as { fromWebContents: () => null }).fromWebContents = () => null;
+    vi.mocked(dialog.showSaveDialog).mockResolvedValueOnce({ canceled: true, filePath: undefined } as never);
+    await pickSaveTarget({}, { filters: [{ name: 'Word', extensions: ['docx'] }], folder: '/home/you/work', name: 'plan', ext: 'docx' });
+    expect(lastOpts().defaultPath).toBe('/home/you/work/plan (copy).docx');
+    vi.mocked(dialog.showSaveDialog).mockResolvedValueOnce({ canceled: true, filePath: undefined } as never);
+    await pickSaveTarget({}, { filters: pdf, folder: '/home/you/work', name: 'plan', ext: 'docx' });
+    expect(lastOpts().defaultPath).toBe('/home/you/work/plan.pdf');
+  });
+
+  it("keeps a typed name in one of the offered formats, and adds the first format's extension otherwise", async () => {
+    (BrowserWindow as unknown as { fromWebContents: () => null }).fromWebContents = () => null;
+    const word = [{ name: 'Word', extensions: ['docx'] }, { name: 'PDF', extensions: ['pdf'] }];
+    vi.mocked(dialog.showSaveDialog).mockResolvedValueOnce({ canceled: false, filePath: '/tmp/none-such-dir/plan.PDF' } as never);
+    await expect(pickSaveTarget({}, { filters: word, folder: '/d', name: 'plan' })).resolves.toBe('/tmp/none-such-dir/plan.PDF');
+    vi.mocked(dialog.showSaveDialog).mockResolvedValueOnce({ canceled: false, filePath: '/tmp/none-such-dir/plan' } as never);
+    await expect(pickSaveTarget({}, { filters: word, folder: '/d', name: 'plan' })).resolves.toBe('/tmp/none-such-dir/plan.docx');
+    vi.mocked(dialog.showSaveDialog).mockResolvedValueOnce({ canceled: false, filePath: '/tmp/none-such-dir/plan.odt' } as never);
+    await expect(pickSaveTarget({}, { filters: pdf, folder: '/d', name: 'plan' })).resolves.toBe('/tmp/none-such-dir/plan.odt.pdf');
+  });
+
+  it('shows nothing when the editor offered no usable format', async () => {
+    vi.mocked(dialog.showSaveDialog).mockClear();
+    await expect(pickSaveTarget({}, { filters: [{ name: 'All', extensions: ['*'] }], folder: '/d', name: 'plan' })).resolves.toBeNull();
+    expect(dialog.showSaveDialog).not.toHaveBeenCalled();
   });
 });

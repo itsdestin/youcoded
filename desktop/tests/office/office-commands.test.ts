@@ -66,6 +66,7 @@ describe('office commands without the translator', () => {
         'set_recent_files_enabled', 'clear_recent_files', 'get_system_fonts', 'list_user_dictionaries', 'recovery_begin',
         'recovery_end', 'recovery_mark_saved', 'recovery_candidates', 'recovery_load', 'recovery_discard', 'open_file',
         'write_editor_bin', 'save_file', 'save_changes', 'convert_for_insert', 'force_close', 'open_dialog',
+        'save_dialog', 'save_file_as',
       ].sort(),
     );
   });
@@ -848,4 +849,118 @@ describe.skipIf(!HAS_ADDON)('saving a copy when the file itself cannot be saved'
     await run(s.token, 'open_file', {});
     expect(run.canCopy(s.token)).toBe(false);
   });
+});
+
+// Save As / Download as / Export to PDF (finish plan Task 2): the editor's save-as writes a
+// separate file through the same safe path as "Save a copy"; the open document, its session and
+// its autosave stay on the file the person opened.
+describe('Save As writes a separate file and leaves the document on its own', () => {
+  /** A session whose editor has just handed over its edits (bridge.js's first Save As step). */
+  async function editedSession(convert: Parameters<typeof createOfficeCommands>[0]['convert'] = fakeDoc) {
+    const s = await sessionFor(MEMO);
+    const run = createOfficeCommands({ root: ROOT, sessions, convert });
+    await run(s.token, 'write_editor_bin', { data: Buffer.from('edited').toString('base64') });
+    return { s, run };
+  }
+  const pdfOut = async (_r: string, _f: string, to: string) => { await writeFile(to, '%PDF-1.7 fake'); };
+
+  it('is one of the editor commands', () => {
+    expect(OFFICE_COMMANDS.has('save_dialog')).toBe(true);
+    expect(OFFICE_COMMANDS.has('save_file_as')).toBe(true);
+  });
+
+  it('writes the copy, leaves the original untouched, and the session stays on the original', async () => {
+    const { s, run } = await editedSession();
+    const original = await readFile(s.path);
+    const target = path.join(dir, 'out', 'memo 2.docx');
+    await mkdir(path.dirname(target), { recursive: true });
+    await run.saveAs(s.token, target);
+    expect((await readFile(target)).subarray(0, 4).toString('latin1')).toBe('PK\x03\x04');
+    expect(await readFile(s.path)).toEqual(original);
+    expect(sessions.get(s.token)?.path).toBe(s.path);
+    expect(await readdir(path.dirname(target))).toEqual(['memo 2.docx']);
+  });
+
+  it('asks x2t for the format the chosen name ends in, and checks the output is that kind of file', async () => {
+    const asked: number[] = [];
+    const { s, run } = await editedSession(async (r, f, to, fmt) => { asked.push(fmt); await pdfOut(r, f, to); });
+    const target = path.join(dir, 'memo.pdf');
+    await run.saveAs(s.token, target);
+    expect(asked).toEqual([FORMAT.pdf]);
+    expect((await readFile(target)).toString('latin1')).toBe('%PDF-1.7 fake');
+    // A "PDF" that is not one is never put in place.
+    const { s: s2, run: run2 } = await editedSession(fakeDoc);
+    await expect(run2.saveAs(s2.token, path.join(dir, 'bad.pdf'))).rejects.toThrow("Office couldn't save this file.");
+    expect(existsSync(path.join(dir, 'bad.pdf'))).toBe(false);
+  });
+
+  it("refuses another kind's format, and a name without a format", async () => {
+    const { s, run } = await editedSession();
+    await expect(run.saveAs(s.token, path.join(dir, 'memo.xlsx'))).rejects.toThrow("Office can't save this kind of file.");
+    await expect(run.saveAs(s.token, path.join(dir, 'memo'))).rejects.toThrow("Office can't save this kind of file.");
+  });
+
+  it('refuses a protected folder', async () => {
+    const { s, run } = await editedSession();
+    await mkdir(path.join(dir, 'repo', '.git'), { recursive: true });
+    await expect(run.saveAs(s.token, path.join(dir, 'repo', '.git', 'memo.docx'))).rejects.toThrow("Office can't save a copy there. Choose another folder.");
+    expect(await readdir(path.join(dir, 'repo', '.git'))).toEqual([]);
+  });
+
+  it('refuses the original itself and any file open in Office', async () => {
+    const { s, run } = await editedSession();
+    await expect(run.saveAs(s.token, s.path)).rejects.toThrow("Office can't save a copy there. Choose another folder.");
+    const other = await sessionFor(NOTICE, 'elsewhere/notice.docx');
+    await expect(run.saveAs(s.token, other.path)).rejects.toThrow('That file is open in Office. Close it or choose another name.');
+  });
+
+  it('does not change what "Save a copy again" would write', async () => {
+    const { s, run } = await editedSession();
+    await run.saveAs(s.token, path.join(dir, 'exported.docx'));
+    await expect(run.saveCopyAgain(s.token)).resolves.toBeNull();
+  });
+
+  it('never answers with a path', async () => {
+    const { s, run } = await editedSession(async () => { throw Object.assign(new Error(`EACCES: permission denied, open '${dir}/x'`), { code: 'EACCES' }); });
+    const err = await run.saveAs(s.token, path.join(dir, 'x.docx')).catch((e: Error) => e);
+    expect(String(err)).not.toContain(dir);
+  });
+});
+
+describe.skipIf(!HAS_ADDON)('Save As with the bundled x2t, to every format each kind offers', () => {
+  const TEMPLATES = path.join(ROOT, 'templates');
+  const HEAD: Record<string, string> = { docx: 'PK\x03\x04', odt: 'PK\x03\x04', xlsx: 'PK\x03\x04', ods: 'PK\x03\x04', pptx: 'PK\x03\x04', odp: 'PK\x03\x04', pdf: '%PDF', rtf: '{\\rt' };
+
+  async function exportAll(src: string, rel: string, exts: string[]) {
+    const s = await sessionFor(src, rel);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    // The editor form of the file itself stands in for the editor's edits.
+    await run(s.token, 'open_file', {});
+    const bin = (await readFile(path.join(s.temp, 'Editor.bin'))).toString('base64');
+    await run(s.token, 'write_editor_bin', { data: bin });
+    const before = await readFile(s.path);
+    for (const ext of exts) {
+      const target = path.join(dir, 'exports', `out.${ext}`);
+      await mkdir(path.dirname(target), { recursive: true });
+      await run.saveAs(s.token, target);
+      const head = (await readFile(target)).subarray(0, 4).toString('latin1');
+      if (HEAD[ext]) expect(head, ext).toBe(HEAD[ext]);
+      else expect((await stat(target)).size, ext).toBeGreaterThan(0);
+    }
+    expect(await readFile(s.path)).toEqual(before);
+    return s;
+  }
+
+  it('a document: docx, odt, rtf, txt and pdf', async () => {
+    await exportAll(NOTICE, 'docs/notice.docx', ['docx', 'odt', 'rtf', 'txt', 'pdf']);
+    expect((await readFile(path.join(dir, 'exports', 'out.txt'), 'utf8')).length).toBeGreaterThan(0);
+  }, X2T_WARMUP_BUDGET_MS);
+
+  it('a spreadsheet: xlsx, ods, csv and pdf', async () => {
+    await exportAll(path.join(TEMPLATES, 'blank.xlsx'), 'docs/sheet.xlsx', ['xlsx', 'ods', 'csv', 'pdf']);
+  }, X2T_WARMUP_BUDGET_MS);
+
+  it('a presentation: pptx, odp and pdf', async () => {
+    await exportAll(path.join(TEMPLATES, 'blank.pptx'), 'docs/slides.pptx', ['pptx', 'odp', 'pdf']);
+  }, X2T_WARMUP_BUDGET_MS);
 });

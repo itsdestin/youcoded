@@ -1,7 +1,7 @@
 // The system dialog behind "Save a copy…" (Task 6 fix round 1). Kept out of office-ipc.ts so
 // that file stays free of electron and its tests keep driving handlers with fakes.
 import { BrowserWindow, app, dialog, type WebContents } from 'electron';
-import { existsSync } from 'node:fs';
+import { existsSync, promises as fsp } from 'node:fs';
 import path from 'node:path';
 import type { OfficeFile } from '../../shared/office-types';
 import { pickFile } from './office-home';
@@ -71,4 +71,33 @@ export async function pickEditorFiles(sender: unknown, opts: { multiple: boolean
   const r = win ? await dialog.showOpenDialog(win, o) : await dialog.showOpenDialog(o);
   if (r.canceled || !r.filePaths.length) return null;
   return r.filePaths;
+}
+
+/** The system save dialog the editor asks for (Save As, Download as, Export to PDF — finish plan
+ *  Task 2), parented to the asking window and starting at `folder`/`name`.<first format>. The
+ *  editor's filters say which formats it offers (one, on Linux, where the dialog can't report a
+ *  chosen filter). null when cancelled, or when the editor offered no format at all. */
+export async function pickSaveTarget(sender: unknown, opts: { filters: unknown; folder: string; name: string; ext?: string }): Promise<string | null | { refused: string }> {
+  const filters = cleanFilters(opts.filters);
+  const exts = filters.flatMap((f) => f.extensions).filter((e) => e !== '*').map((e) => e.toLowerCase());
+  if (!exts.length) return null;
+  const win = BrowserWindow.fromWebContents(sender as WebContents);
+  // WHY "(copy)" in the document's own format (measured in the dev window): Save As offers the
+  // document's format first, and its plain name there IS the open file — which a Save As may not
+  // write over (office-commands refuses it). Another format (a PDF) keeps the plain name.
+  const stem = exts[0] === opts.ext ? `${opts.name} (copy)` : opts.name;
+  const o = {
+    defaultPath: path.join(opts.folder, `${stem}.${exts[0]}`),
+    filters,
+    // WHY: the new file replaces whatever has the chosen name; the person must confirm that.
+    properties: ['showOverwriteConfirmation' as const, 'createDirectory' as const],
+  };
+  const r = win ? await dialog.showSaveDialog(win, o) : await dialog.showSaveDialog(o);
+  if (r.canceled || !r.filePath) return null;
+  // A name typed in one of the offered formats keeps it; any other gets the first format's
+  // extension, with the same never-silently-replace rule as "Save a copy" (resolveCopyTarget).
+  if (exts.includes(path.extname(r.filePath).slice(1).toLowerCase())) return r.filePath;
+  // WHY checked ahead, asynchronously: main's code keeps no blocking file calls of its own.
+  const taken = await fsp.access(`${r.filePath}.${exts[0]}`).then(() => true, () => false);
+  return resolveCopyTarget(r.filePath, exts[0], () => taken);
 }

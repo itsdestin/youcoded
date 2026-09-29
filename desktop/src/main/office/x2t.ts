@@ -2,9 +2,32 @@ import { type ChildProcess, execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-// x2t format codes (OnlyOffice AVS_OFFICESTUDIO_FILE_*). Only the three kinds Office opens
-// and saves in this plan, plus the editor's own internal form (bin).
-export const FORMAT = { bin: 8192, docx: 65, xlsx: 257, pptx: 129 } as const;
+// x2t format codes (OnlyOffice AVS_OFFICESTUDIO_FILE_*). The three kinds Office opens and saves,
+// the editor's own internal form (bin), and what Save As / Export writes (finish plan Task 2).
+export const FORMAT = {
+  bin: 8192, docx: 65, xlsx: 257, pptx: 129,
+  odt: 67, rtf: 68, txt: 69, odp: 131, ods: 259, csv: 260, pdf: 513,
+} as const;
+
+// What each kind of document may be written as by Save As / Export. WHY exactly these: they are
+// the formats the editor's own Download-as panel is trimmed to (editor-patches.js keeps 65, 67,
+// 68, 69, 257, 259, 260, 129, 131, 513), and each was measured 2026-09-29 to come out of x2t
+// from the editor form as a real file. Legacy doc/xls/ppt are not offered there.
+const EXPORTS: Record<'docx' | 'xlsx' | 'pptx', readonly (keyof typeof FORMAT)[]> = {
+  docx: ['docx', 'odt', 'rtf', 'txt', 'pdf'],
+  xlsx: ['xlsx', 'ods', 'csv', 'pdf'],
+  pptx: ['pptx', 'odp', 'pdf'],
+};
+const extOf = (p: string) => path.extname(p).slice(1).toLowerCase();
+
+/** The x2t code for writing a document of `source`'s kind to `target`, or null when that kind
+ *  can't be written in `target`'s format. */
+export function exportFormatFor(source: string, target: string): number | null {
+  const kind = extOf(source);
+  if (kind !== 'docx' && kind !== 'xlsx' && kind !== 'pptx') return null;
+  const ext = extOf(target);
+  return (EXPORTS[kind] as readonly string[]).includes(ext) ? FORMAT[ext as keyof typeof FORMAT] : null;
+}
 
 export function formatFor(filePath: string): number | null {
   const ext = path.extname(filePath).slice(1).toLowerCase();
@@ -63,6 +86,8 @@ export async function convert(
   root: string, from: string, to: string, formatTo: number, tempBase: string,
   /** Aborting it kills this translation (a closed document whose close stopped waiting). */
   signal?: AbortSignal,
+  /** The font list to use instead of the bundled one — a PDF needs pdfFontData()'s. */
+  allFontsPath?: string,
 ): Promise<void> {
   if (signal?.aborted) throw new X2tError('x2t failed (stopped)', 'stopped', '');
   const bin = path.join(root, 'converter');
@@ -83,7 +108,7 @@ export async function convert(
       `<m_nFormatTo>${formatTo}</m_nFormatTo>` +
       `<m_sTempDir>${xmlEscape(job)}</m_sTempDir>` +
       `<m_sFontDir>${xmlEscape(path.join(bin, 'fonts'))}</m_sFontDir>` +
-      `<m_sAllFontsPath>${xmlEscape(path.join(bin, 'AllFonts.js'))}</m_sAllFontsPath>` +
+      `<m_sAllFontsPath>${xmlEscape(allFontsPath ?? path.join(bin, 'AllFonts.js'))}</m_sAllFontsPath>` +
       '</TaskQueueDataConvert>';
     await fsp.writeFile(params, xml, 'utf8');
     // WHY the library path: x2t loads its shared libraries from its own folder. On macOS the
@@ -123,4 +148,50 @@ export async function convert(
   } finally {
     await fsp.rm(job, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+// ── Font data for PDF (finish plan Task 2) ──
+// WHY: a PDF is drawn by x2t's renderer, which reads each font file named in its font list. The
+// bundled list (converter/AllFonts.js) names bare file names, fine for docx/xlsx/pptx but not for
+// drawing: measured 2026-09-29, a PDF made with it had every character as glyph 0 — blank pages.
+// x2t makes a list of real font files itself (`-create-allfonts`, what Euro-Office's own app runs
+// at first start); it takes about half a second, so it is made once per run, on the first PDF,
+// in the instance temp base (removed at quit like every other Office temp file).
+const fontData = new Map<string, Promise<string>>();
+
+/** The AllFonts.js a PDF translation needs (pass it to convert's allFontsPath). */
+export function pdfFontData(root: string, tempBase: string): Promise<string> {
+  let p = fontData.get(tempBase);
+  if (!p) {
+    p = makeFontData(root, tempBase);
+    fontData.set(tempBase, p);
+    // A failure is not remembered: the next PDF tries again.
+    p.catch(() => { if (fontData.get(tempBase) === p) fontData.delete(tempBase); });
+  }
+  return p;
+}
+
+async function makeFontData(root: string, tempBase: string): Promise<string> {
+  const bin = path.join(root, 'converter');
+  const out = path.join(tempBase, 'fontdata');
+  // WHY not recursive: as convert's job folders — a temp base removed at quit is not recreated.
+  await fsp.mkdir(out).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'EEXIST') throw e; });
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (process.platform === 'linux') env.LD_LIBRARY_PATH = bin;
+  if (process.platform === 'darwin') env.DYLD_LIBRARY_PATH = bin;
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(path.join(bin, 'x2t'), ['-create-allfonts', out, path.join(bin, 'fonts')],
+      { cwd: bin, env, timeout: X2T_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024 }, (err, _o, stderr) => {
+        running.delete(child);
+        if (!err) return resolve();
+        const e = err as NodeJS.ErrnoException & { signal?: string | null };
+        const code = stoppedAtQuit.has(child) ? 'stopped' : (e.code ?? e.signal ?? 'unknown');
+        reject(new X2tError(`x2t font list failed (${code})`, code, String(stderr ?? '')));
+      });
+    running.add(child);
+  });
+  const list = path.join(out, 'AllFonts.js');
+  const st = await fsp.stat(list).catch(() => null);
+  if (!st || st.size === 0) throw new X2tError('x2t made no font list', 'no-output', '');
+  return list;
 }

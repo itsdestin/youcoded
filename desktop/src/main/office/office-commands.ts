@@ -7,7 +7,7 @@ import { noteOwnWrite } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
 import type { createSessions, OfficeSession } from './office-sessions';
-import { convert as realConvert, FORMAT, formatFor, X2T_TIMEOUT_MS, X2tError } from './x2t';
+import { convert as realConvert, exportFormatFor, FORMAT, formatFor, pdfFontData as realPdfFontData, X2T_TIMEOUT_MS, X2tError } from './x2t';
 
 // The editor (Euro-Office's desktop bridge) asks its host for these by name. Exactly the set
 // the spike answered (main2.cjs); anything else is refused before it reaches a handler.
@@ -20,6 +20,10 @@ export const OFFICE_COMMANDS: ReadonlySet<string> = new Set([
   // → From file) into this. office-ipc.ts answers it itself — it needs the asking window for the
   // dialog — so it never reaches dispatch below; the answer is handles, never paths.
   'open_dialog',
+  // WHY (finish plan Task 2): Save As, Download as and Export to PDF. The relay turns the editor's
+  // dialog.save into save_dialog; office-ipc.ts answers both itself (the dialog needs the asking
+  // window, and save_file_as names a handle only that dialog granted), then calls saveAs below.
+  'save_dialog', 'save_file_as',
 ]);
 
 const MSG = {
@@ -184,7 +188,7 @@ function toEditorError(e: unknown, cmd: string, filePath: string): Error {
     code: err?.code ?? null,
     stderr: e instanceof X2tError ? e.stderr.slice(0, 4000) : undefined,
   });
-  const verb = cmd === 'open_file' ? 'open' : cmd === 'save_file' || cmd === 'save_copy' ? 'save' : null;
+  const verb = cmd === 'open_file' ? 'open' : cmd === 'save_file' || cmd === 'save_copy' || cmd === 'save_file_as' ? 'save' : null;
   if (e instanceof X2tError) {
     if (e.code === 'timeout') return new Error('This file took too long to convert, so Office stopped.');
   } else if (verb) {
@@ -216,6 +220,9 @@ export interface OfficeCopyRunner {
   saveCopy(token: string, target: string, bin?: string): Promise<void>;
   /** Re-translate into the last copy's target if Editor.bin (or `bin`) changed since. null: no copy yet. */
   saveCopyAgain(token: string, bin?: string): Promise<{ target: string; unchanged: boolean } | null>;
+  /** Save As / Download as / Export to PDF (finish plan Task 2): translate the document's current
+   *  Editor.bin into `target`, in the format its name ends in. The document stays on its file. */
+  saveAs(token: string, target: string): Promise<void>;
 }
 /** Work that must not interleave with the document's saves (a restore, Task 7). */
 export interface OfficeExclusiveRunner {
@@ -257,10 +264,15 @@ export function createOfficeCommands(deps: {
   wantsBefore?(s: OfficeSession): boolean;
   /** Test seam: swap the translator (a slow or failing fake). Production uses x2t. */
   convert?: typeof realConvert;
+  /** Test seam: where a PDF's font list comes from. Production has x2t make it (x2t.ts). */
+  pdfFontData?: typeof realPdfFontData;
   /** Test seam: a small limit, so the size refusal is testable without a 1 GB string. */
   editorBinMaxBytes?: number;
 }): OfficeRunner {
   const convert = deps.convert ?? realConvert;
+  // WHY a fake font list alongside a fake translator: a test's stand-in x2t must never cause the
+  // real one to run just to make PDF font data it would ignore.
+  const pdfFontData = deps.pdfFontData ?? (deps.convert ? async () => '' : realPdfFontData);
   const binMax = deps.editorBinMaxBytes ?? EDITOR_BIN_MAX_BYTES;
   const editorBin = (s: OfficeSession) => path.join(s.temp, 'Editor.bin');
   // WHY x2t's job folders go in the instance temp base and not the session's own temp: the
@@ -521,9 +533,12 @@ export function createOfficeCommands(deps: {
     }
   }
 
-  async function saveCopyFile(s: OfficeSession, target: string, bin: string = editorBin(s)): Promise<void> {
-    const fmt = formatFor(target);
-    if (fmt === null || fmt !== formatFor(s.path)) throw userError(MSG.unsupportedSave);
+  // `exporting` (finish plan Task 2): Save As / Download as / Export to PDF — any format the
+  // document's kind may be written as (x2t.ts exportFormatFor), not only its own, and no record
+  // for "Save a copy again": that one keeps writing to the copy the failed-save flow made.
+  async function saveCopyFile(s: OfficeSession, target: string, bin: string = editorBin(s), exporting = false): Promise<void> {
+    const fmt = exporting ? exportFormatFor(s.path, target) : formatFor(target);
+    if (fmt === null || (!exporting && fmt !== formatFor(s.path))) throw userError(MSG.unsupportedSave);
     const auth = await authorizeArtifactWrite({ projectRoot: path.dirname(target), fullPath: target, mustStayInRoot: false });
     if (!auth.ok) throw userError(MSG.copyRefused);
     // WHY refuse the original itself: this path exists precisely because saving there failed,
@@ -539,10 +554,13 @@ export function createOfficeCommands(deps: {
     const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
     const tmp = path.join(priv, base);
     try {
-      const hash = await hashFile(bin);
-      await convert(deps.root, bin, tmp, fmt, jobsBase(s), abortOf(s).signal);
-      await finishCopy(tmp, null);
-      copyStateOf(s).lastCopy = { target, hash };
+      const hash = exporting ? '' : await hashFile(bin);
+      // WHY a font list for PDF only: x2t draws a PDF from real font files, which the bundled list
+      // does not name (a blank page — see pdfFontData); every other format keeps the bundled list.
+      const fonts = fmt === FORMAT.pdf ? await pdfFontData(deps.root, jobsBase(s)) : undefined;
+      await convert(deps.root, bin, tmp, fmt, jobsBase(s), abortOf(s).signal, fonts);
+      await finishCopy(tmp, null, path.extname(target).slice(1).toLowerCase());
+      if (!exporting) copyStateOf(s).lastCopy = { target, hash };
       if (isClosing(s)) throw userError(MSG.closing, true);
       // Again right before the rename (fix round 2), as a save does: the translation takes time,
       // and the folder may have become protected, or a link swapped in, meanwhile.
@@ -622,6 +640,19 @@ export function createOfficeCommands(deps: {
         throw toEditorError(e, 'save_copy', last.target);
       }
     },
+    async saveAs(token: string, target: string): Promise<void> {
+      const s = deps.sessions.get(token);
+      if (!s) throw new Error(MSG.refused);
+      if (closing) throw new Error(MSG.closing);
+      try {
+        // In the document's queue, right behind the write_editor_bin bridge.js sends first, so the
+        // copy holds exactly the edits the editor handed over. Refused while a restore replaced
+        // the file: the editor still holds the old document (see `replaced`).
+        await enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : saveCopyFile(s, target, editorBin(s), true)));
+      } catch (e) {
+        throw toEditorError(e, 'save_file_as', target);
+      }
+    },
     async saveCopy(token: string, target: string, bin?: string): Promise<void> {
       const s = deps.sessions.get(token);
       if (!s) throw new Error(MSG.refused);
@@ -665,12 +696,25 @@ async function sweepStaleSaveDirs(dir: string, base: string): Promise<void> {
 // that wrote something else must not replace the user's working document. The same handle
 // then carries the original's permissions over and flushes the copy to disk.
 // Exported for versions.ts (Task 7): a restore must keep the file's mode and group exactly as a save does.
-export async function finishCopy(file: string, orig: { mode: number; uid: number; gid: number } | null): Promise<void> {
+// `ext` (finish plan Task 2): what Save As wrote. The OpenDocument formats are zips too; a PDF
+// starts "%PDF", an RTF "{\rtf"; text and CSV have no signature, so they must read as UTF-8
+// text (x2t writes them so, measured 2026-09-29) — never a zip or a PDF under a .txt name.
+const SIGNATURE: Record<string, string> = { pdf: '%PDF', rtf: '{\\rt' };
+export async function finishCopy(file: string, orig: { mode: number; uid: number; gid: number } | null, ext = 'zip'): Promise<void> {
   const fh = await fsp.open(file, 'r+');
   try {
-    const head = Buffer.alloc(4);
-    const { bytesRead } = await fh.read(head, 0, 4, 0);
-    if (bytesRead < 4 || head.toString('latin1') !== 'PK\x03\x04') throw userError(MSG.notADocument);
+    if (ext === 'txt' || ext === 'csv') {
+      const head = Buffer.alloc(64 * 1024);
+      const { bytesRead } = await fh.read(head, 0, head.length, 0);
+      // stream: true — a character cut at the end of the sample is not an error.
+      try { new TextDecoder('utf-8', { fatal: true }).decode(head.subarray(0, bytesRead), { stream: true }); } catch { throw userError(MSG.notADocument); }
+      if (bytesRead === 0 || head.subarray(0, bytesRead).includes(0)) throw userError(MSG.notADocument);
+    } else {
+      const want = SIGNATURE[ext] ?? 'PK\x03\x04';
+      const head = Buffer.alloc(4);
+      const { bytesRead } = await fh.read(head, 0, 4, 0);
+      if (bytesRead < 4 || head.toString('latin1') !== want) throw userError(MSG.notADocument);
+    }
     if (orig) {
       await fh.chmod(orig.mode & 0o7777);
       // WHY: the new copy belongs to us with our default group. Root can restore the original

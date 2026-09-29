@@ -3831,6 +3831,9 @@ function createOfficeMock(empty: boolean): OfficeBridge {
           return r.text();
         }
         case 'write_editor_bin': case 'save_file': case 'save_changes': return 'ok';
+        // Save As / Export (finish plan Task 2): main's handle for the chosen name, then where it went.
+        case 'save_dialog': return `yc-save/${'0'.repeat(32)}/${base}`;
+        case 'save_file_as': return { name: base, folder: 'Documents' };
         // The rest answer as main's own defaults do (main/office/office-commands.ts).
         case 'get_current_path': return base;
         case 'recent_files_state': return { enabled: false, files: [] };

@@ -1,9 +1,9 @@
 {
-  "version": "0.1.11",
+  "version": "0.1.13",
   "platforms": {
     "linux-x64": {
-      "url": "https://github.com/itsdestin/youcoded-office/releases/download/v0.1.11/youcoded-office-0.1.11-linux-x64.tar.gz",
-      "sha256": "b838c5294e32d8c28029c18048d1ae36474f61d887c99b9441bedf57a6ff3c82"
+      "url": "https://github.com/itsdestin/youcoded-office/releases/download/v0.1.13/youcoded-office-0.1.13-linux-x64.tar.gz",
+      "sha256": "0f6ac124de36a92d38ef00b6334bf9744e8245bb5ea775cb823b7470f69d6577"
     }
   }
 }

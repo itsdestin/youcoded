@@ -451,3 +451,75 @@ describe('EditorFrame autosave', () => {
     expect(saves()).toBe(0);
   });
 });
+
+// Save As / Download as / Export to PDF (finish plan Task 2): main writes the copy and answers
+// where it went; the editor is told only "ok", and YouCoded's own strip says where.
+describe('EditorFrame and Save As', () => {
+  it('tells the editor only "ok", and notes the copy\'s name and folder on the strip', async () => {
+    const bridge = fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'save_file_as' ? { name: 'Report.pdf', folder: 'out' } : 'ok')) as never });
+    const { fromEditor, posted } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 9, cmd: 'save_file_as', args: { path: 'yc-save/abc/Report.pdf' } });
+    await settle();
+    expect(bridge.invoke).toHaveBeenCalledWith('t1', 'save_file_as', { path: 'yc-save/abc/Report.pdf' });
+    expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 9, result: 'ok' }, ORIGIN);
+    expect(saveStateFor(FILE.path).note).toBe('Saved a copy as Report.pdf in out.');
+    // The document itself was not saved by it: its own save state is untouched.
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
+  it("says main's reason on the strip when the copy or its dialog is refused", async () => {
+    fakeBridge({ invoke: vi.fn(async () => { throw new Error('That file is open in Office. Close it or choose another name.'); }) });
+    const { fromEditor, posted } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'save_file_as', args: { path: 'yc-save/abc/x.docx' } });
+    await settle();
+    expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 3, error: 'That file is open in Office. Close it or choose another name.' }, ORIGIN);
+    expect(saveStateFor(FILE.path).note).toBe('That file is open in Office. Close it or choose another name.');
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
+  it('a Save As does not drop the pending save of the document itself', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'save_file_as' ? { name: 'x.pdf', folder: 'out' } : cmd === 'save_dialog' ? 'yc-save/abc/x.pdf' : 'ok')) as never });
+    const { fromEditor, saves } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    // The editor's save-as path, as measured: "not modified", its bytes, the dialog, the copy,
+    // then "not modified" once more.
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'set_document_modified', args: { modified: false } });
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'write_editor_bin', args: { data: 'AA==' } });
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_dialog', args: {} });
+    await settle();
+    fromEditor({ yc: 'rpc', id: 5, cmd: 'save_file_as', args: { path: 'yc-save/abc/x.pdf' } });
+    await settle();
+    fromEditor({ yc: 'rpc', id: 6, cmd: 'set_document_modified', args: { modified: false } });
+    expect(saveStateFor(FILE.path).phase).toBe('unsaved');
+    await act(async () => { vi.advanceTimersByTime(3_100); });
+    expect(saves()).toBe(1);
+  });
+
+  it('a Save As of a document with nothing unsaved asks for no save', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'save_file_as' ? { name: 'x.pdf', folder: 'out' } : cmd === 'save_dialog' ? 'yc-save/abc/x.pdf' : 'ok')) as never });
+    const { fromEditor, saves } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'set_document_modified', args: { modified: false } });
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_dialog', args: {} });
+    await settle();
+    fromEditor({ yc: 'rpc', id: 5, cmd: 'save_file_as', args: { path: 'yc-save/abc/x.pdf' } });
+    await settle();
+    await act(async () => { vi.advanceTimersByTime(3_100); });
+    expect(saves()).toBe(0);
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
+  it('a cancelled Save As keeps the unsaved changes pending too', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'save_dialog' ? null : 'ok')) as never });
+    const { fromEditor, saves } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'set_document_modified', args: { modified: false } });
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_dialog', args: {} });
+    await settle();
+    fromEditor({ yc: 'rpc', id: 6, cmd: 'set_document_modified', args: { modified: false } });
+    await act(async () => { vi.advanceTimersByTime(3_100); });
+    expect(saves()).toBe(1);
+  });
+});

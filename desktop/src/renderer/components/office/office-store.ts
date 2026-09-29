@@ -390,6 +390,10 @@ export interface OfficeSaveState {
   message?: string;
   /** After "Save a copy…": the folder the copy went to (its name only, never a full path). */
   copiedTo?: string;
+  /** After Save As / Download as / Export to PDF (finish plan Task 2): where the separate file
+   *  went, or main's reason it could not be written. Shown briefly; the document's own save
+   *  state is unchanged by it. */
+  note?: string;
   /** failed because a restore replaced the file while this editor held unsaved typing: the only
    *  ways out are Save a copy… and Close without saving — a Retry would undo the restore. */
   keptAfterRestore?: boolean;
@@ -399,6 +403,9 @@ const SAVED: OfficeSaveState = { phase: 'saved' };
 let saves: Record<string, OfficeSaveState> = {};
 const saveListeners = new Set<() => void>();
 function setSave(path: string, next: OfficeSaveState) {
+  // A Save As note outlives the save states around it (the document's own autosave follows a Save
+  // As within seconds); only its own timer, or a new note, replaces it.
+  if (!('note' in next) && saves[path]?.note) next = { ...next, note: saves[path].note };
   saves = { ...saves, [path]: next };
   saveListeners.forEach((l) => l());
 }
@@ -429,6 +436,12 @@ export function markCopied(path: string, folder: string): void {
   setTimeout(() => { if (saves[path]?.copiedTo === folder && saves[path]?.phase === 'saved') setSave(path, { phase: 'saved', savedAt: saves[path]?.savedAt }); }, COPIED_NOTE_MS);
 }
 const COPIED_NOTE_MS = 8_000;
+/** Save As wrote (or could not write) a separate file: say so briefly, keeping the document's own
+ *  save state — a Save As never saves the document itself (finish plan Task 2). */
+export function markNote(path: string, note: string): void {
+  setSave(path, { ...saveStateFor(path), note });
+  setTimeout(() => { if (saves[path]?.note === note) setSave(path, { ...saves[path], note: undefined }); }, COPIED_NOTE_MS);
+}
 /** The editor says nothing is unsaved after all (see EditorFrame): back to the last save. */
 export function markUnchanged(path: string): void {
   setSave(path, { phase: 'saved', savedAt: saves[path]?.savedAt });
