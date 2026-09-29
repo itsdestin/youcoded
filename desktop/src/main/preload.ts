@@ -528,6 +528,7 @@ async function unwrap(p: Promise<any>): Promise<void> {
   if (!r || r.ok !== true) throw new Error(r?.error || 'That could not be saved.');
 }
 
+// WHY (2026-09-29 one-core R2): every call below sends ONE object ({ sessionId, text }, not (sessionId, text)) — the same object the phone sends, so one handler can serve both doors and two same-typed arguments can no longer be swapped unnoticed. tests/wire-shape-parity.test.ts checks these keys against preload's.
 contextBridge.exposeInMainWorld('claude', {
   // Dev-instance descriptor from `run-dev.sh --label` (YOUCODED_DEV_LABEL). The
   // StatusBar version pill shows it so concurrent dev instances are tellable
@@ -549,11 +550,11 @@ contextBridge.exposeInMainWorld('claude', {
   // over as success.
   sessionNaming: {
     get: () => ipcRenderer.invoke(IPC.SESSION_NAMING_GET),
-    set: (value: unknown) => unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_SET, value)),
+    set: (value: unknown) => unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_SET, { value })),
     title: (sessionId: string, fallback: string) =>
-      ipcRenderer.invoke(IPC.SESSION_NAMING_TITLE, sessionId, fallback),
+      ipcRenderer.invoke(IPC.SESSION_NAMING_TITLE, { sessionId, fallback }),
     rename: (sessionId: string, title: string) =>
-      unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_RENAME, sessionId, title)),
+      unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_RENAME, { sessionId, title })),
   },
   session: {
     // WHY: begin returns the pending token immediately; wait is a separate bounded observation.
@@ -571,7 +572,7 @@ contextBridge.exposeInMainWorld('claude', {
     create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string; provider?: 'claude' | 'native'; model?: string }) =>
       ipcRenderer.invoke(IPC.SESSION_CREATE, opts),
     destroy: (sessionId: string) =>
-      ipcRenderer.invoke(IPC.SESSION_DESTROY, sessionId),
+      ipcRenderer.invoke(IPC.SESSION_DESTROY, { sessionId }),
     list: () => ipcRenderer.invoke(IPC.SESSION_LIST),
     // The desktop talks over IPC, so there is no connection to be down. Present on both
     // bridges so the composer can ask without knowing which one it has.
@@ -579,50 +580,50 @@ contextBridge.exposeInMainWorld('claude', {
     // One device at a time answers a menu by verified navigation — the lock
     // lives in main (menu-answer-lock.ts), shared with the remote host.
     menuLock: (sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean> =>
-      ipcRenderer.invoke(IPC.SESSION_MENU_LOCK, sessionId, holder, action),
+      ipcRenderer.invoke(IPC.SESSION_MENU_LOCK, { sessionId, holder, action }),
     sendInput: (sessionId: string, text: string) =>
-      ipcRenderer.send(IPC.SESSION_INPUT, sessionId, text),
+      ipcRenderer.send(IPC.SESSION_INPUT, { sessionId, text }),
     resize: (sessionId: string, cols: number, rows: number) =>
-      ipcRenderer.send(IPC.SESSION_RESIZE, sessionId, cols, rows),
+      ipcRenderer.send(IPC.SESSION_RESIZE, { sessionId, cols, rows }),
     signalReady: (sessionId: string) =>
-      ipcRenderer.send(IPC.TERMINAL_READY, sessionId),
+      ipcRenderer.send(IPC.TERMINAL_READY, { sessionId }),
     respondToPermission: (requestId: string, decision: object) =>
-      ipcRenderer.invoke(IPC.PERMISSION_RESPOND, requestId, decision),
+      ipcRenderer.invoke(IPC.PERMISSION_RESPOND, { requestId, decision }),
     browse: (): Promise<any[]> =>
       ipcRenderer.invoke(IPC.SESSION_BROWSE),
     loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean): Promise<any[]> =>
-      ipcRenderer.invoke(IPC.SESSION_HISTORY, sessionId, projectSlug, count || 10, all || false),
+      ipcRenderer.invoke(IPC.SESSION_HISTORY, { sessionId, projectSlug, count: count || 10, all: all || false }),
     switch: (sessionId: string) =>
-      ipcRenderer.invoke(IPC.SESSION_SWITCH, sessionId),
+      ipcRenderer.invoke(IPC.SESSION_SWITCH, { sessionId }),
     // Remote access batch 2 (§2): report this window's selection to main, which
     // caches it per window so a phone's first connect opens what the desktop shows.
     noteSelected: (sessionId: string | null) =>
-      ipcRenderer.send(IPC.SESSION_SELECTED, sessionId),
+      ipcRenderer.send(IPC.SESSION_SELECTED, { sessionId }),
     // Mark/unmark a session flag (complete, priority, helpful, …).
     // Persists in conversation-index.json and rides the existing sync pipeline.
     setFlag: (sessionId: string, flag: string, value: boolean) =>
-      ipcRenderer.invoke(IPC.SESSION_SET_FLAG, sessionId, flag, value),
+      ipcRenderer.invoke(IPC.SESSION_SET_FLAG, { sessionId, flag, value }),
     // Toggle a custom user tag on a session (persists in conversation-index.json).
     setTag: (sessionId: string, tagId: string, value: boolean) =>
-      ipcRenderer.invoke(IPC.SESSION_SET_TAG, sessionId, tagId, value),
+      ipcRenderer.invoke(IPC.SESSION_SET_TAG, { sessionId, tagId, value }),
     // Set the freeform note on a session.
     setNote: (sessionId: string, note: string) =>
-      ipcRenderer.invoke(IPC.SESSION_SET_NOTE, sessionId, note),
+      ipcRenderer.invoke(IPC.SESSION_SET_NOTE, { sessionId, note }),
     // Read a session's applied tag ids + note (used by the in-session Tag chip).
     getMeta: (sessionId: string): Promise<SessionMetaResult> =>
-      ipcRenderer.invoke(IPC.SESSION_GET_META, sessionId),
+      ipcRenderer.invoke(IPC.SESSION_GET_META, { sessionId }),
     // Welcome back (design §3): conversation ids open at the last shutdown.
     reopenList: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.SESSION_REOPEN_LIST),
     forgetReopen: (ids: string[]): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke(IPC.SESSION_FORGET_REOPEN, ids),
+      ipcRenderer.invoke(IPC.SESSION_FORGET_REOPEN, { ids }),
   },
   // Tag registry CRUD (custom user-defined tags shared across sessions).
   tags: {
     list: () => ipcRenderer.invoke('tags:list'),
-    create: (label: string, color: string) => ipcRenderer.invoke('tags:create', label, color),
-    update: (id: string, patch: object) => ipcRenderer.invoke('tags:update', id, patch),
-    delete: (id: string) => ipcRenderer.invoke('tags:delete', id),
+    create: (label: string, color: string) => ipcRenderer.invoke('tags:create', { label, color }),
+    update: (id: string, patch: object) => ipcRenderer.invoke('tags:update', { id, patch }),
+    delete: (id: string) => ipcRenderer.invoke('tags:delete', { id }),
   },
   on: {
     sessionCreated: (cb: (info: any) => void) => {
@@ -774,32 +775,32 @@ contextBridge.exposeInMainWorld('claude', {
   skills: {
     list: (): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_LIST),
     listMarketplace: (filters?: any): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_LIST_MARKETPLACE, filters),
-    getDetail: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_GET_DETAIL, id),
-    search: (query: string): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_SEARCH, query),
-    install: (id: string): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_INSTALL, id),
-    uninstall: (id: string): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_UNINSTALL, id),
+    getDetail: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_GET_DETAIL, { id }),
+    search: (query: string): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_SEARCH, { query }),
+    install: (id: string): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_INSTALL, { id }),
+    uninstall: (id: string): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_UNINSTALL, { id }),
     getFavorites: (): Promise<string[]> => ipcRenderer.invoke(IPC.SKILLS_GET_FAVORITES),
-    setFavorite: (id: string, favorited: boolean): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_SET_FAVORITE, id, favorited),
+    setFavorite: (id: string, favorited: boolean): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_SET_FAVORITE, { id, favorited }),
     getChips: (): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_GET_CHIPS),
-    setChips: (chips: any[]): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_SET_CHIPS, chips),
-    getOverride: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_GET_OVERRIDE, id),
-    setOverride: (id: string, override: any): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_SET_OVERRIDE, id, override),
+    setChips: (chips: any[]): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_SET_CHIPS, { chips }),
+    getOverride: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_GET_OVERRIDE, { id }),
+    setOverride: (id: string, override: any): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_SET_OVERRIDE, { id, override }),
     createPrompt: (skill: any): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_CREATE_PROMPT, skill),
-    deletePrompt: (id: string): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_DELETE_PROMPT, id),
-    publish: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_PUBLISH, id),
-    getShareLink: (id: string): Promise<string> => ipcRenderer.invoke(IPC.SKILLS_GET_SHARE_LINK, id),
-    importFromLink: (encoded: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_IMPORT_FROM_LINK, encoded),
+    deletePrompt: (id: string): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_DELETE_PROMPT, { id }),
+    publish: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_PUBLISH, { id }),
+    getShareLink: (id: string): Promise<string> => ipcRenderer.invoke(IPC.SKILLS_GET_SHARE_LINK, { id }),
+    importFromLink: (encoded: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_IMPORT_FROM_LINK, { encoded }),
     getCuratedDefaults: (): Promise<string[]> => ipcRenderer.invoke(IPC.SKILLS_GET_CURATED_DEFAULTS),
     getFeatured: (): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_GET_FEATURED),
     // Decomposition v3 §9.9: integration badges for SkillDetail
-    getIntegrationInfo: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_GET_INTEGRATION_INFO, id),
+    getIntegrationInfo: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_GET_INTEGRATION_INFO, { id }),
     // Decomposition v3 §9.10: onboarding helpers
     installMany: (ids: string[]): Promise<Array<{ id: string; status: string; error?: string }>> =>
-      ipcRenderer.invoke(IPC.SKILLS_INSTALL_MANY, ids),
+      ipcRenderer.invoke(IPC.SKILLS_INSTALL_MANY, { ids }),
     applyOutputStyle: (styleId: string): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke(IPC.SKILLS_APPLY_OUTPUT_STYLE, styleId),
+      ipcRenderer.invoke(IPC.SKILLS_APPLY_OUTPUT_STYLE, { styleId }),
     // Phase 3b: update an already-installed plugin
-    update: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_UPDATE, id),
+    update: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_UPDATE, { id }),
   },
   commands: {
     list: (): Promise<any[]> => ipcRenderer.invoke(IPC.COMMANDS_LIST),
@@ -807,9 +808,9 @@ contextBridge.exposeInMainWorld('claude', {
   // Phase 3: unified marketplace APIs (packages map, per-entry config)
   marketplace: {
     getPackages: (): Promise<Record<string, any>> => ipcRenderer.invoke(IPC.MARKETPLACE_GET_PACKAGES),
-    getConfig: (id: string): Promise<Record<string, any>> => ipcRenderer.invoke(IPC.MARKETPLACE_GET_CONFIG, id),
+    getConfig: (id: string): Promise<Record<string, any>> => ipcRenderer.invoke(IPC.MARKETPLACE_GET_CONFIG, { id }),
     setConfig: (id: string, values: Record<string, any>): Promise<void> =>
-      ipcRenderer.invoke(IPC.MARKETPLACE_SET_CONFIG, id, values),
+      ipcRenderer.invoke(IPC.MARKETPLACE_SET_CONFIG, { id, values }),
     // Phase 4 — user-initiated cache bust.
     invalidateCache: (): Promise<void> => ipcRenderer.invoke(IPC.MARKETPLACE_INVALIDATE_CACHE),
     // In-app file viewer — returns { content, source, path } or { error }.
@@ -821,12 +822,12 @@ contextBridge.exposeInMainWorld('claude', {
   // install/uninstall/configure are stubbed pending Google OAuth work.
   integrations: {
     list: (): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_LIST),
-    install: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_INSTALL, slug),
-    uninstall: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_UNINSTALL, slug),
-    status: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_STATUS, slug),
+    install: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_INSTALL, { slug }),
+    uninstall: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_UNINSTALL, { slug }),
+    status: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_STATUS, { slug }),
     configure: (slug: string, settings: Record<string, any>): Promise<any> =>
-      ipcRenderer.invoke(IPC.INTEGRATIONS_CONFIGURE, slug, settings),
-    connect: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_CONNECT, slug),
+      ipcRenderer.invoke(IPC.INTEGRATIONS_CONFIGURE, { slug, settings }),
+    connect: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_CONNECT, { slug }),
   },
   // Returns the raw process.platform code so the renderer can gate UI (e.g.
   // hide Install buttons on macOS-only integrations when running on Windows).
@@ -856,7 +857,7 @@ contextBridge.exposeInMainWorld('claude', {
     start: (): Promise<ApiResult<AuthStartResponse>> =>
       ipcRenderer.invoke(IPC.ACCOUNT_START),
     poll: (deviceCode: string): Promise<ApiResult<AuthPollResponse>> =>
-      ipcRenderer.invoke(IPC.ACCOUNT_POLL, deviceCode),
+      ipcRenderer.invoke(IPC.ACCOUNT_POLL, { deviceCode }),
     signedIn: (): Promise<boolean> =>
       ipcRenderer.invoke(IPC.ACCOUNT_SIGNED_IN),
     user: (): Promise<MarketplaceUser | null> =>
@@ -868,9 +869,9 @@ contextBridge.exposeInMainWorld('claude', {
     signOut: (): Promise<void> =>
       ipcRenderer.invoke(IPC.ACCOUNT_SIGN_OUT),
     updateProfile: (displayName: string): Promise<ApiResult<{ display_name: string }>> =>
-      ipcRenderer.invoke(IPC.ACCOUNT_UPDATE_PROFILE, displayName),
+      ipcRenderer.invoke(IPC.ACCOUNT_UPDATE_PROFILE, { displayName }),
     setHandle: (handle: string): Promise<ApiResult<{ handle: string }>> =>
-      ipcRenderer.invoke(IPC.ACCOUNT_SET_HANDLE, handle),
+      ipcRenderer.invoke(IPC.ACCOUNT_SET_HANDLE, { handle }),
     deleteAccount: (): Promise<ApiResult<void>> =>
       ipcRenderer.invoke(IPC.ACCOUNT_DELETE),
     // Export all account data. Resolves to { path } on save, { canceled: true }
@@ -884,25 +885,25 @@ contextBridge.exposeInMainWorld('claude', {
   // ipcMain.handle signatures in social-handlers.ts.
   social: {
     lookupHandle: (handle: string): Promise<ApiResult<unknown>> =>
-      ipcRenderer.invoke(IPC.SOCIAL_LOOKUP_HANDLE, handle),
+      ipcRenderer.invoke(IPC.SOCIAL_LOOKUP_HANDLE, { handle }),
     sendRequest: (handle: string): Promise<ApiResult<unknown>> =>
-      ipcRenderer.invoke(IPC.SOCIAL_SEND_REQUEST, handle),
+      ipcRenderer.invoke(IPC.SOCIAL_SEND_REQUEST, { handle }),
     listRequests: (): Promise<ApiResult<unknown>> =>
       ipcRenderer.invoke(IPC.SOCIAL_LIST_REQUESTS),
     acceptRequest: (id: string): Promise<ApiResult<unknown>> =>
-      ipcRenderer.invoke(IPC.SOCIAL_ACCEPT_REQUEST, id),
+      ipcRenderer.invoke(IPC.SOCIAL_ACCEPT_REQUEST, { id }),
     declineRequest: (id: string): Promise<ApiResult<unknown>> =>
-      ipcRenderer.invoke(IPC.SOCIAL_DECLINE_REQUEST, id),
+      ipcRenderer.invoke(IPC.SOCIAL_DECLINE_REQUEST, { id }),
     cancelRequest: (id: string): Promise<ApiResult<unknown>> =>
-      ipcRenderer.invoke(IPC.SOCIAL_CANCEL_REQUEST, id),
+      ipcRenderer.invoke(IPC.SOCIAL_CANCEL_REQUEST, { id }),
     listFriends: (): Promise<ApiResult<unknown>> =>
       ipcRenderer.invoke(IPC.SOCIAL_LIST_FRIENDS),
     unfriend: (userId: string): Promise<ApiResult<unknown>> =>
-      ipcRenderer.invoke(IPC.SOCIAL_UNFRIEND, userId),
+      ipcRenderer.invoke(IPC.SOCIAL_UNFRIEND, { userId }),
     block: (userId: string): Promise<ApiResult<unknown>> =>
-      ipcRenderer.invoke(IPC.SOCIAL_BLOCK, userId),
+      ipcRenderer.invoke(IPC.SOCIAL_BLOCK, { userId }),
     unblock: (userId: string): Promise<ApiResult<unknown>> =>
-      ipcRenderer.invoke(IPC.SOCIAL_UNBLOCK, userId),
+      ipcRenderer.invoke(IPC.SOCIAL_UNBLOCK, { userId }),
     listBlocks: (): Promise<ApiResult<unknown>> =>
       ipcRenderer.invoke(IPC.SOCIAL_LIST_BLOCKS),
     // Presence socket (Task 6). connect/disconnect/send return { ok: true };
@@ -915,7 +916,7 @@ contextBridge.exposeInMainWorld('claude', {
     // presenceSend returns an honest receipt: { ok:false, status:0, message }
     // when no socket is connected (the frame would otherwise silently drop).
     presenceSend: (message: Record<string, unknown>): Promise<{ ok: true } | { ok: false; status: number; message: string }> =>
-      ipcRenderer.invoke(IPC.SOCIAL_PRESENCE_SEND, message),
+      ipcRenderer.invoke(IPC.SOCIAL_PRESENCE_SEND, { message }),
     // Subscribe to relayed presence events (server frames + synthetic
     // connection-state events). Returns an unsubscribe that removes the listener
     // — same pattern as onChatExportSnapshot above.
@@ -929,17 +930,17 @@ contextBridge.exposeInMainWorld('claude', {
   // surface install-gate (403) vs. generic errors (Task 7+).
   marketplaceApi: {
     install: (pluginId: string): Promise<ApiResult<void>> =>
-      ipcRenderer.invoke(IPC.MARKETPLACE_INSTALL, pluginId),
+      ipcRenderer.invoke(IPC.MARKETPLACE_INSTALL, { pluginId }),
     rate: (input: PostRatingInput): Promise<ApiResult<{ hidden: boolean }>> =>
       ipcRenderer.invoke(IPC.MARKETPLACE_RATE, input),
     deleteRating: (pluginId: string): Promise<ApiResult<void>> =>
-      ipcRenderer.invoke(IPC.MARKETPLACE_RATE_DELETE, pluginId),
+      ipcRenderer.invoke(IPC.MARKETPLACE_RATE_DELETE, { pluginId }),
     likeTheme: (themeId: string): Promise<ApiResult<{ liked: boolean }>> =>
-      ipcRenderer.invoke(IPC.MARKETPLACE_THEME_LIKE, themeId),
+      ipcRenderer.invoke(IPC.MARKETPLACE_THEME_LIKE, { themeId }),
     thumb: (input: { plugin_id: string; value: 'up' | 'down' | null }): Promise<ApiResult<{ vote: 'up' | 'down' | null; thumbs_up: number; thumbs_down: number }>> =>
       ipcRenderer.invoke(IPC.MARKETPLACE_THUMB, input),
     myThumb: (pluginId: string): Promise<ApiResult<{ vote: 'up' | 'down' | null; thumbs_up: number; thumbs_down: number }>> =>
-      ipcRenderer.invoke(IPC.MARKETPLACE_THUMB_GET, pluginId),
+      ipcRenderer.invoke(IPC.MARKETPLACE_THUMB_GET, { plugin_id: pluginId }),
     comment: (input: { plugin_id: string; text: string }): Promise<ApiResult<{ id: string; hidden: boolean }>> =>
       ipcRenderer.invoke(IPC.MARKETPLACE_COMMENT, input),
     report: (input: { rating_user_id: string; rating_plugin_id: string; reason?: string }): Promise<ApiResult<void>> =>
@@ -953,7 +954,7 @@ contextBridge.exposeInMainWorld('claude', {
     openSound: (): Promise<string | null> =>
       ipcRenderer.invoke(IPC.DIALOG_OPEN_SOUND),
     readTranscriptMeta: (transcriptPath: string): Promise<{ model: string; contextPercent: number } | null> =>
-      ipcRenderer.invoke(IPC.READ_TRANSCRIPT_META, transcriptPath),
+      ipcRenderer.invoke(IPC.READ_TRANSCRIPT_META, { path: transcriptPath }),
     saveClipboardImage: (): Promise<string | null> =>
       ipcRenderer.invoke(IPC.CLIPBOARD_SAVE_IMAGE),
   },
@@ -961,14 +962,14 @@ contextBridge.exposeInMainWorld('claude', {
     openChangelog: (): Promise<void> =>
       ipcRenderer.invoke(IPC.OPEN_CHANGELOG),
     openExternal: (url: string): Promise<void> =>
-      ipcRenderer.invoke(IPC.OPEN_EXTERNAL, url),
+      ipcRenderer.invoke(IPC.OPEN_EXTERNAL, { url }),
     // Reveal a file in the OS file manager (Finder / Explorer / Files).
     showItemInFolder: (filePath: string): Promise<void> =>
-      ipcRenderer.invoke(IPC.SHOW_ITEM_IN_FOLDER, filePath),
+      ipcRenderer.invoke(IPC.SHOW_ITEM_IN_FOLDER, { filePath }),
     // Open a local file with the OS default app (HTML→browser, .docx→Word, …).
     // Returns the empty string on success, or an error message on failure.
     openPath: (filePath: string): Promise<string> =>
-      ipcRenderer.invoke(IPC.OPEN_PATH, filePath),
+      ipcRenderer.invoke(IPC.OPEN_PATH, { filePath }),
   },
   update: {
     changelog: (opts: { forceRefresh: boolean }): Promise<ChangelogIpcResult> =>
@@ -983,7 +984,7 @@ contextBridge.exposeInMainWorld('claude', {
     getBetaChannel: (): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
       ipcRenderer.invoke(IPC.UPDATE_GET_BETA_CHANNEL),
     setBetaChannel: (enabled: boolean): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
-      ipcRenderer.invoke(IPC.UPDATE_SET_BETA_CHANNEL, enabled),
+      ipcRenderer.invoke(IPC.UPDATE_SET_BETA_CHANNEL, { enabled }),
     onProgress: (handler: (ev: { jobId: string; bytesReceived: number; bytesTotal: number; percent: number }) => void) => {
       const wrap = (_event: unknown, ev: any) => handler(ev);
       ipcRenderer.on(IPC.UPDATE_PROGRESS, wrap);
@@ -1006,8 +1007,8 @@ contextBridge.exposeInMainWorld('claude', {
     },
     devices: {
       list: () => ipcRenderer.invoke(IPC.REMOTE_DEVICES_LIST),
-      rename: (deviceId: string, name: string) => ipcRenderer.invoke(IPC.REMOTE_DEVICES_RENAME, deviceId, name),
-      unpair: (deviceId: string) => ipcRenderer.invoke(IPC.REMOTE_DEVICES_UNPAIR, deviceId),
+      rename: (deviceId: string, name: string) => ipcRenderer.invoke(IPC.REMOTE_DEVICES_RENAME, { deviceId, name }),
+      unpair: (deviceId: string) => ipcRenderer.invoke(IPC.REMOTE_DEVICES_UNPAIR, { deviceId }),
     },
     installTailscale: () => ipcRenderer.invoke(IPC.REMOTE_INSTALL_TAILSCALE),
     authTailscale: () => ipcRenderer.invoke(IPC.REMOTE_AUTH_TAILSCALE),
@@ -1019,8 +1020,8 @@ contextBridge.exposeInMainWorld('claude', {
   },
   model: {
     getPreference: (): Promise<string> => ipcRenderer.invoke(IPC.MODEL_GET_PREFERENCE),
-    setPreference: (model: string): Promise<boolean> => ipcRenderer.invoke(IPC.MODEL_SET_PREFERENCE, model),
-    readLastModel: (transcriptPath: string): Promise<string | null> => ipcRenderer.invoke(IPC.MODEL_READ_LAST, transcriptPath),
+    setPreference: (model: string): Promise<boolean> => ipcRenderer.invoke(IPC.MODEL_SET_PREFERENCE, { model }),
+    readLastModel: (transcriptPath: string): Promise<string | null> => ipcRenderer.invoke(IPC.MODEL_READ_LAST, { transcriptPath }),
   },
   appearance: {
     get: (): Promise<{ theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; lookOverrides?: Record<string, unknown> } | null> =>
@@ -1039,7 +1040,7 @@ contextBridge.exposeInMainWorld('claude', {
       return () => ipcRenderer.removeListener(IPC.APPEARANCE_SYNC, h);
     },
     favoriteTheme: (slug: string, favorited: boolean): Promise<string[]> =>
-      ipcRenderer.invoke(IPC.APPEARANCE_FAVORITE_THEME, slug, favorited),
+      ipcRenderer.invoke(IPC.APPEARANCE_FAVORITE_THEME, { slug, favorited }),
     getFavoriteThemes: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC.APPEARANCE_GET_FAVORITE_THEMES),
   },
@@ -1054,13 +1055,13 @@ contextBridge.exposeInMainWorld('claude', {
   analytics: {
     getOptIn: (): Promise<boolean> => ipcRenderer.invoke(IPC.ANALYTICS_GET_OPT_IN),
     setOptIn: (enabled: boolean): Promise<void> =>
-      ipcRenderer.invoke(IPC.ANALYTICS_SET_OPT_IN, enabled),
+      ipcRenderer.invoke(IPC.ANALYTICS_SET_OPT_IN, { enabled }),
   },
   // Claude Code settings.json — used by Preferences panel (/config intercept).
   // Field names follow Claude Code's schema; dot-paths supported (e.g. 'permissions.defaultMode').
   settings: {
-    get: (field: string): Promise<unknown> => ipcRenderer.invoke(IPC.SETTINGS_GET, field),
-    set: (field: string, value: unknown): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS_SET, field, value),
+    get: (field: string): Promise<unknown> => ipcRenderer.invoke(IPC.SETTINGS_GET, { field }),
+    set: (field: string, value: unknown): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS_SET, { field, value }),
   },
   // Fast mode + effort level — local-only state for /fast and /effort UI.
   modes: {
@@ -1069,11 +1070,11 @@ contextBridge.exposeInMainWorld('claude', {
   },
   folders: {
     list: (): Promise<any[]> => ipcRenderer.invoke(IPC.FOLDERS_LIST),
-    add: (folderPath: string, nickname?: string): Promise<any> => ipcRenderer.invoke(IPC.FOLDERS_ADD, folderPath, nickname),
-    remove: (folderPath: string): Promise<boolean> => ipcRenderer.invoke(IPC.FOLDERS_REMOVE, folderPath),
-    rename: (folderPath: string, nickname: string): Promise<boolean> => ipcRenderer.invoke(IPC.FOLDERS_RENAME, folderPath, nickname),
+    add: (folderPath: string, nickname?: string): Promise<any> => ipcRenderer.invoke(IPC.FOLDERS_ADD, { folderPath, nickname }),
+    remove: (folderPath: string): Promise<boolean> => ipcRenderer.invoke(IPC.FOLDERS_REMOVE, { folderPath }),
+    rename: (folderPath: string, nickname: string): Promise<boolean> => ipcRenderer.invoke(IPC.FOLDERS_RENAME, { folderPath, nickname }),
     setDescription: (folderPath: string, description: string): Promise<boolean> =>
-      ipcRenderer.invoke(IPC.FOLDERS_SET_DESCRIPTION, folderPath, description),
+      ipcRenderer.invoke(IPC.FOLDERS_SET_DESCRIPTION, { folderPath, description }),
   },
   // Settings → Development feature (bug report, contribute, known issues)
   dev: {
@@ -1108,24 +1109,24 @@ contextBridge.exposeInMainWorld('claude', {
   sync: {
     getStatus: () => ipcRenderer.invoke(IPC.SYNC_GET_STATUS),
     getConfig: () => ipcRenderer.invoke(IPC.SYNC_GET_CONFIG),
-    setConfig: (updates: any) => ipcRenderer.invoke(IPC.SYNC_SET_CONFIG, updates),
+    setConfig: (updates: any) => ipcRenderer.invoke(IPC.SYNC_SET_CONFIG, { updates }),
     force: () => ipcRenderer.invoke(IPC.SYNC_FORCE),
-    getLog: (lines?: number) => ipcRenderer.invoke(IPC.SYNC_GET_LOG, lines),
-    dismissWarning: (warning: string) => ipcRenderer.invoke(IPC.SYNC_DISMISS_WARNING, warning),
+    getLog: (lines?: number) => ipcRenderer.invoke(IPC.SYNC_GET_LOG, { lines }),
+    dismissWarning: (warning: string) => ipcRenderer.invoke(IPC.SYNC_DISMISS_WARNING, { warning }),
     // V2: Per-instance backend management
     addBackend: (instance: any) => ipcRenderer.invoke('sync:add-backend', instance),
-    removeBackend: (id: string) => ipcRenderer.invoke('sync:remove-backend', id),
-    updateBackend: (id: string, updates: any) => ipcRenderer.invoke('sync:update-backend', id, updates),
-    pushBackend: (id: string) => ipcRenderer.invoke('sync:push-backend', id),
-    openFolder: (id: string) => ipcRenderer.invoke('sync:open-folder', id),
+    removeBackend: (id: string) => ipcRenderer.invoke('sync:remove-backend', { id }),
+    updateBackend: (id: string, updates: any) => ipcRenderer.invoke('sync:update-backend', { id, updates }),
+    pushBackend: (id: string) => ipcRenderer.invoke('sync:push-backend', { id }),
+    openFolder: (id: string) => ipcRenderer.invoke('sync:open-folder', { id }),
     // Guided setup wizard
     setup: {
-      checkPrereqs: (backend: string) => ipcRenderer.invoke('sync:setup:check-prereqs', backend),
+      checkPrereqs: (backend: string) => ipcRenderer.invoke('sync:setup:check-prereqs', { backend }),
       installRclone: () => ipcRenderer.invoke('sync:setup:install-rclone'),
       checkGdrive: () => ipcRenderer.invoke('sync:setup:check-gdrive'),
       authGdrive: () => ipcRenderer.invoke('sync:setup:auth-gdrive'),
       authGithub: () => ipcRenderer.invoke('sync:setup:auth-github'),
-      createRepo: (repoName: string) => ipcRenderer.invoke('sync:setup:create-repo', repoName),
+      createRepo: (repoName: string) => ipcRenderer.invoke('sync:setup:create-repo', { repoName }),
     },
   },
   // Cross-device sync spaces (spec 2026-07-03) — the new folder-based sync
@@ -1133,13 +1134,13 @@ contextBridge.exposeInMainWorld('claude', {
   // sync.* backup API above.
   syncSpaces: {
     status: () => ipcRenderer.invoke(IPC.SYNC_SPACES_STATUS),
-    enable: (enabled: boolean) => ipcRenderer.invoke(IPC.SYNC_SPACES_ENABLE, enabled),
+    enable: (enabled: boolean) => ipcRenderer.invoke(IPC.SYNC_SPACES_ENABLE, { enabled }),
     // Optional spaceId narrows to one space (Project View "Sync now"); omit for all.
-    syncNow: (spaceId?: string) => ipcRenderer.invoke(IPC.SYNC_SPACES_SYNC_NOW, spaceId),
-    createProject: (name: string) => ipcRenderer.invoke(IPC.SYNC_SPACES_CREATE_PROJECT, name),
+    syncNow: (spaceId?: string) => ipcRenderer.invoke(IPC.SYNC_SPACES_SYNC_NOW, { spaceId }),
+    createProject: (name: string) => ipcRenderer.invoke(IPC.SYNC_SPACES_CREATE_PROJECT, { name }),
     // Spec §3 import: move an existing folder into ~/YouCoded/Projects/<name>.
     importProject: (sourcePath: string, name: string) =>
-      ipcRenderer.invoke(IPC.SYNC_SPACES_IMPORT_PROJECT, sourcePath, name),
+      ipcRenderer.invoke(IPC.SYNC_SPACES_IMPORT_PROJECT, { sourcePath, name }),
     // Cross-device rename (display-name only) + stop-syncing (2026-07-12).
     renameProject: (name: string, displayName: string) =>
       ipcRenderer.invoke(IPC.SYNC_SPACES_RENAME_PROJECT, { name, displayName }),
@@ -1210,11 +1211,11 @@ contextBridge.exposeInMainWorld('claude', {
     // Hot-swaps the window + dock icon. Accepts a theme-asset:// URL or null
     // (null resets to the bundled default). Main validates the URL and silently
     // ignores anything outside the theme's own asset dir.
-    setIcon: (url: string | null) => ipcRenderer.invoke(IPC.WINDOW_SET_ICON, url),
+    setIcon: (url: string | null) => ipcRenderer.invoke(IPC.WINDOW_SET_ICON, { url }),
     // macOS-only: reposition the traffic lights so they sit inside the floating
     // header chrome. Pass null to restore the OS default. No-ops on Win/Linux.
     setTrafficLightPosition: (pos: { x: number; y: number } | null) =>
-      ipcRenderer.invoke(IPC.WINDOW_SET_TRAFFIC_LIGHT_POS, pos),
+      ipcRenderer.invoke(IPC.WINDOW_SET_TRAFFIC_LIGHT_POS, { pos }),
     // Fullscreen state relay — used by renderer to adjust macOS traffic light padding
     onFullscreenChanged: (handler: (isFullscreen: boolean) => void) => {
       const wrapped = (_event: IpcRendererEvent, isFullscreen: boolean) => handler(isFullscreen);
@@ -1335,8 +1336,8 @@ contextBridge.exposeInMainWorld('claude', {
   },
   theme: {
     list: () => ipcRenderer.invoke(IPC.THEME_LIST),
-    readFile: (slug: string) => ipcRenderer.invoke(IPC.THEME_READ_FILE, slug),
-    writeFile: (slug: string, content: string) => ipcRenderer.invoke(IPC.THEME_WRITE_FILE, slug, content),
+    readFile: (slug: string) => ipcRenderer.invoke(IPC.THEME_READ_FILE, { slug }),
+    writeFile: (slug: string, content: string) => ipcRenderer.invoke(IPC.THEME_WRITE_FILE, { slug, content }),
     onReload: (handler: (slug: string) => void) => {
       const wrapped = (_event: IpcRendererEvent, slug: string) => handler(slug);
       ipcRenderer.on(IPC.THEME_RELOAD, wrapped);
@@ -1344,16 +1345,16 @@ contextBridge.exposeInMainWorld('claude', {
     },
     marketplace: {
       list: (filters?: any): Promise<any[]> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_LIST, filters),
-      detail: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_DETAIL, slug),
-      install: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_INSTALL, slug),
-      uninstall: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_UNINSTALL, slug),
+      detail: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_DETAIL, { slug }),
+      install: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_INSTALL, { slug }),
+      uninstall: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_UNINSTALL, { slug }),
       // Phase 3b: re-install a theme at the same slug, overwriting files
-      update: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_UPDATE, slug),
-      publish: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_PUBLISH, slug),
-      generatePreview: (slug: string): Promise<string | null> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_GENERATE_PREVIEW, slug),
+      update: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_UPDATE, { slug }),
+      publish: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_PUBLISH, { slug }),
+      generatePreview: (slug: string): Promise<string | null> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_GENERATE_PREVIEW, { slug }),
       // Publish-lifecycle: derive button state from registry + gh PRs + local content hash
       resolvePublishState: (slug: string): Promise<any> =>
-        ipcRenderer.invoke(IPC.THEME_MARKETPLACE_RESOLVE_PUBLISH_STATE, slug),
+        ipcRenderer.invoke(IPC.THEME_MARKETPLACE_RESOLVE_PUBLISH_STATE, { slug }),
       // Manual "pull from GitHub now" — drops the 15-min cache and returns a fresh list
       refreshRegistry: (): Promise<any[]> =>
         ipcRenderer.invoke(IPC.THEME_MARKETPLACE_REFRESH_REGISTRY),
@@ -1368,17 +1369,20 @@ contextBridge.exposeInMainWorld('claude', {
     // the mode. 'none' is in the union only because it IS FirstRunState's; main
     // ignores it.
     startAuth: (mode: FirstRunState['authMode']): Promise<void> =>
-      ipcRenderer.invoke(IPC.FIRST_RUN_START_AUTH, mode),
+      ipcRenderer.invoke(IPC.FIRST_RUN_START_AUTH, { mode }),
     // `service` (first-run local models, F-1/F-2): which native provider the key
     // is for. Without it main keeps the old Claude Code path.
     submitApiKey: (key: string, service?: string): Promise<void> =>
-      ipcRenderer.invoke(IPC.FIRST_RUN_SUBMIT_API_KEY, key, service),
+      ipcRenderer.invoke(IPC.FIRST_RUN_SUBMIT_API_KEY, { key, service }),
     devModeDone: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_DEV_MODE_DONE),
     skip: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_SKIP),
     // First-run local models (2026-09-14).
     localSetup: (): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_SETUP),
     connectLocalApp: (baseUrl: string, name: string): Promise<{ ok: boolean; message?: string }> =>
-      ipcRenderer.invoke(IPC.FIRST_RUN_CONNECT_LOCAL_APP, baseUrl, name),
+      ipcRenderer.invoke(IPC.FIRST_RUN_CONNECT_LOCAL_APP, { baseUrl, name }),
+    // TODO(one-core R3): main's handler for both local-download channels takes NO argument, so the
+    // sessionId sent here is silently dropped. Left positional (behaviour unchanged) until the
+    // first-run family moves into the table and someone decides whether it should be used.
     localDownload: (sessionId?: string | null): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_DOWNLOAD, sessionId),
     resumeLocalDownload: (sessionId?: string | null): Promise<void> =>
       ipcRenderer.invoke(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD, sessionId),
@@ -1398,9 +1402,9 @@ contextBridge.exposeInMainWorld('claude', {
     show: () => ipcRenderer.invoke(IPC.BUDDY_SHOW),
     hide: () => ipcRenderer.invoke(IPC.BUDDY_HIDE),
     toggleChat: () => ipcRenderer.invoke(IPC.BUDDY_TOGGLE_CHAT),
-    setSession: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_SET_SESSION, sessionId),
-    subscribe: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_SUBSCRIBE, sessionId),
-    unsubscribe: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_UNSUBSCRIBE, sessionId),
+    setSession: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_SET_SESSION, { sessionId }),
+    subscribe: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_SUBSCRIBE, { sessionId }),
+    unsubscribe: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_UNSUBSCRIBE, { sessionId }),
     getViewedSession: () => ipcRenderer.invoke(IPC.BUDDY_GET_VIEWED_SESSION),
     // Fire-and-forget: pointer drag fires ~60 events/sec; invoke() round-trips
     // would starve the renderer. Main clamps target to visible workArea.
@@ -1507,7 +1511,7 @@ contextBridge.exposeInMainWorld('claude', {
     // tailRows: how many buffer rows to serialize (the classifier passes 40 —
     // audit W24); omitted = the handler's own default.
     getScreenText: (sessionId: string, tailRows?: number): Promise<string> =>
-      ipcRenderer.invoke('terminal:get-screen-text', sessionId, tailRows),
+      ipcRenderer.invoke('terminal:get-screen-text', { sessionId, tailRows }),
   },
   // GPU / performance preference — read and write the preferPowerSaving flag.
   // multiGpuDetected: false in the response means the UI section stays hidden.
@@ -1548,16 +1552,16 @@ contextBridge.exposeInMainWorld('claude', {
     clear: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_CLEAR, { sessionId }),
     invokeSkill: (sessionId: string, skill: string, args?: string) => ipcRenderer.invoke(IPC.NATIVE_INVOKE_SKILL, { sessionId, skill, args }),
     // Request-response: match the positional ipcMain.handle signatures.
-    setBinding: (sessionId: string, binding: unknown) => ipcRenderer.invoke(IPC.NATIVE_SET_BINDING, sessionId, binding),
+    setBinding: (sessionId: string, binding: unknown) => ipcRenderer.invoke(IPC.NATIVE_SET_BINDING, { sessionId, binding }),
     // U11: the picker's fit-checked switch; `summarize` answers the popup.
     switchModel: (sessionId: string, binding: unknown, summarize?: boolean) => ipcRenderer.invoke(IPC.NATIVE_SWITCH_MODEL, { sessionId, binding, summarize }),
-    setPermissionMode: (sessionId: string, mode: string) => ipcRenderer.invoke(IPC.NATIVE_SET_PERMISSION_MODE, sessionId, mode),
+    setPermissionMode: (sessionId: string, mode: string) => ipcRenderer.invoke(IPC.NATIVE_SET_PERMISSION_MODE, { sessionId, mode }),
     // Read the session's current permission mode — seeds the chip on create/resume.
-    getPermissionMode: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_GET_PERMISSION_MODE, sessionId),
+    getPermissionMode: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_GET_PERMISSION_MODE, { sessionId }),
     getContextPreferences: () => ipcRenderer.invoke(IPC.NATIVE_GET_CONTEXT_PREFERENCES),
-    setContextPreferences: (patch: unknown) => ipcRenderer.invoke(IPC.NATIVE_SET_CONTEXT_PREFERENCES, patch),
+    setContextPreferences: (patch: unknown) => ipcRenderer.invoke(IPC.NATIVE_SET_CONTEXT_PREFERENCES, { patch }),
     getStepGuard: () => ipcRenderer.invoke(IPC.NATIVE_GET_STEP_GUARD),
-    setStepGuard: (value: number | null) => ipcRenderer.invoke(IPC.NATIVE_SET_STEP_GUARD, value),
+    setStepGuard: (value: number | null) => ipcRenderer.invoke(IPC.NATIVE_SET_STEP_GUARD, { value }),
     sessionsList: () => ipcRenderer.invoke(IPC.NATIVE_SESSIONS_LIST),
     // G-1: the Bash card's Stop button. Request-response — the card needs
     // {ok, reason} to stop showing "Stopping…" when nothing was stopped.
@@ -1600,11 +1604,11 @@ contextBridge.exposeInMainWorld('claude', {
   providers: {
     list: () => ipcRenderer.invoke(IPC.PROVIDER_LIST),
     upsert: (config: unknown) => ipcRenderer.invoke(IPC.PROVIDER_UPSERT, config),
-    remove: (id: string) => ipcRenderer.invoke(IPC.PROVIDER_REMOVE, id),
+    remove: (id: string) => ipcRenderer.invoke(IPC.PROVIDER_REMOVE, { id }),
     // `key`: an optional CANDIDATE key checked instead of the saved one, so the
     // Connect dialog can refuse a bad key before it replaces a working one.
-    test: (id: string, key?: string) => ipcRenderer.invoke(IPC.PROVIDER_TEST, id, key),
-    setKey: (id: string, key: string) => ipcRenderer.invoke(IPC.PROVIDER_SET_KEY, id, key),
+    test: (id: string, key?: string) => ipcRenderer.invoke(IPC.PROVIDER_TEST, { id, key }),
+    setKey: (id: string, key: string) => ipcRenderer.invoke(IPC.PROVIDER_SET_KEY, { id, key }),
     catalog: () => ipcRenderer.invoke(IPC.PROVIDER_CATALOG),
   },
   // Sign in with ChatGPT (backend design 2026-09-05 §5, §6). The account state
@@ -1654,9 +1658,9 @@ contextBridge.exposeInMainWorld('claude', {
   // test = never-throws connectivity check. Positional args match ipc-handlers.
   search: {
     list: () => ipcRenderer.invoke('search:list'),
-    setKey: (backend: string, key: string) => ipcRenderer.invoke('search:set-key', backend, key),
-    removeKey: (backend: string) => ipcRenderer.invoke('search:remove-key', backend),
-    test: (backend: string, key: string) => ipcRenderer.invoke('search:test', backend, key),
+    setKey: (backend: string, key: string) => ipcRenderer.invoke('search:set-key', { backend, key }),
+    removeKey: (backend: string) => ipcRenderer.invoke('search:remove-key', { backend }),
+    test: (backend: string, key: string) => ipcRenderer.invoke('search:test', { backend, key }),
   },
   // Remembered "Always allow" rules (Settings → Permissions, M5 2a). Keyed by
   // PROJECT SLUG, not cwd — the cwd is not recoverable from the lossy slug, so
@@ -1667,7 +1671,7 @@ contextBridge.exposeInMainWorld('claude', {
   // Positional args like every other namespace here; main clamps maxBytes to
   // READ_HEAD_MAX_BYTES (shared/read-head.ts) and refuses sensitive paths.
   fs: {
-    readHead: (filePath: string, maxBytes?: number) => ipcRenderer.invoke('fs:read-head', filePath, maxBytes),
+    readHead: (filePath: string, maxBytes?: number) => ipcRenderer.invoke('fs:read-head', { filePath, maxBytes }),
   },
   // Games arcade scores (spec §6.1). Positional args like every other namespace
   // here. Scores cross as raw NUMBERS — how a game WORDS its score ("31 pipes")
@@ -1675,15 +1679,15 @@ contextBridge.exposeInMainWorld('claude', {
   // this file, main, or the Worker.
   arcade: {
     status: () => ipcRenderer.invoke('arcade:status'),
-    leaderboard: (game: string) => ipcRenderer.invoke('arcade:leaderboard', game),
-    submitScore: (game: string, score: number) => ipcRenderer.invoke('arcade:submit-score', game, score),
+    leaderboard: (game: string) => ipcRenderer.invoke('arcade:leaderboard', { game }),
+    submitScore: (game: string, score: number) => ipcRenderer.invoke('arcade:submit-score', { game, score }),
     // Head-to-head records. `game` is optional — omitted means every game.
-    records: (game?: string) => ipcRenderer.invoke('arcade:records', game),
+    records: (game?: string) => ipcRenderer.invoke('arcade:records', { game }),
   },
   permissions: {
     list: () => ipcRenderer.invoke('permissions:list'),
-    remove: (slug: string, rule: unknown) => ipcRenderer.invoke('permissions:remove', slug, rule),
-    removeProject: (slug: string) => ipcRenderer.invoke('permissions:remove-project', slug),
+    remove: (slug: string, rule: unknown) => ipcRenderer.invoke('permissions:remove', { slug, rule }),
+    removeProject: (slug: string) => ipcRenderer.invoke('permissions:remove-project', { slug }),
   },
   // Specialists 1c (Task 8) — roster + tier reads/writes + card actions.
   // Positional args, matching every other request-response namespace above
@@ -1693,9 +1697,9 @@ contextBridge.exposeInMainWorld('claude', {
     list: (opts?: { cwd?: string; ensurePersonalFolder?: boolean }) => ipcRenderer.invoke('specialists:list', opts),
     getDelegatedModels: () => ipcRenderer.invoke('specialists:delegated-get'),
     setDelegatedModel: (tier: 'budget' | 'frontier', binding: { providerId: string; modelId: string } | null) =>
-      ipcRenderer.invoke('specialists:delegated-set', tier, binding),
-    steer: (sessionId: string, childId: string, text: string) => ipcRenderer.invoke('specialists:steer', sessionId, childId, text),
-    interrupt: (sessionId: string, childId: string) => ipcRenderer.invoke('specialists:interrupt', sessionId, childId),
+      ipcRenderer.invoke('specialists:delegated-set', { tier, binding }),
+    steer: (sessionId: string, childId: string, text: string) => ipcRenderer.invoke('specialists:steer', { sessionId, childId, text }),
+    interrupt: (sessionId: string, childId: string) => ipcRenderer.invoke('specialists:interrupt', { sessionId, childId }),
   },
   // Local llama.cpp engine (Plan B). Progress/status pushes return an
   // unsubscribe, matching every other on* subscription in this file.
@@ -1704,7 +1708,7 @@ contextBridge.exposeInMainWorld('claude', {
     install: (): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_INSTALL),
     restart: (): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_RESTART),
     // Plan C context-length knob. Now a thin alias for setConfig({contextSize}).
-    setContext: (contextSize: number): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_SET_CONTEXT, contextSize),
+    setContext: (contextSize: number): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_SET_CONTEXT, { contextSize }),
     // Every engine-wide setting in one write. The value saves at once; it
     // reaches the engine after the reply that is streaming right now.
     setConfig: (patch: { contextSize?: number; speed?: { speculative?: boolean; compressCache?: boolean } }): Promise<unknown> =>
@@ -1713,10 +1717,10 @@ contextBridge.exposeInMainWorld('claude', {
     // types `command` onto its prompt. It is NOT run — the user presses Enter.
     // The returned id is the session the caller then selects.
     runInTerminal: (command: string): Promise<{ sessionId: string }> =>
-      ipcRenderer.invoke(IPC.ENGINE_RUN_IN_TERMINAL, command),
+      ipcRenderer.invoke(IPC.ENGINE_RUN_IN_TERMINAL, { command }),
     // What a faster engine build needs on this machine before it can be
     // installed (Linux ROCm). The card's "Check again" re-invokes this.
-    prereqs: (backend: string): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_PREREQS, backend),
+    prereqs: (backend: string): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_PREREQS, { backend }),
     onInstallProgress: (cb: (p: unknown) => void) => {
       const listener = (_e: unknown, p: unknown) => cb(p);
       ipcRenderer.on(IPC.ENGINE_INSTALL_PROGRESS, listener);
@@ -1740,34 +1744,34 @@ contextBridge.exposeInMainWorld('claude', {
   // unsubscribe, matching engine.onInstallProgress above.
   models: {
     curated: () => ipcRenderer.invoke(IPC.MODELS_CURATED),
-    search: (query: string) => ipcRenderer.invoke(IPC.MODELS_SEARCH, query),
-    quants: (repo: string) => ipcRenderer.invoke(IPC.MODELS_QUANTS, repo),
-    download: (repo: string, quant: unknown) => ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, repo, quant),
-    downloadCancel: (downloadId: string) => ipcRenderer.invoke(IPC.MODELS_DOWNLOAD_CANCEL, downloadId),
-    delete: (id: string) => ipcRenderer.invoke(IPC.MODELS_DELETE, id),
+    search: (query: string) => ipcRenderer.invoke(IPC.MODELS_SEARCH, { query }),
+    quants: (repo: string) => ipcRenderer.invoke(IPC.MODELS_QUANTS, { repo }),
+    download: (repo: string, quant: unknown) => ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, { repo, quant }),
+    downloadCancel: (downloadId: string) => ipcRenderer.invoke(IPC.MODELS_DOWNLOAD_CANCEL, { downloadId }),
+    delete: (id: string) => ipcRenderer.invoke(IPC.MODELS_DELETE, { id }),
     installed: () => ipcRenderer.invoke(IPC.MODELS_INSTALLED),
     // Resume an interrupted download from the manifest beside its .partial
     // (2026-08-26) — no Hugging Face round trip, so it works when the network
     // is the reason the download stopped.
-    resume: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_RESUME, modelId),
+    resume: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_RESUME, { modelId }),
     // One model's stored settings (2026-09-05). The answer is the STORED shape,
     // which carries two things the user never sets: whether the last save is
     // still waiting on the reply that is streaming, and why the model last
     // failed to load.
-    settings: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_SETTINGS, modelId),
+    settings: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_SETTINGS, { modelId }),
     // Save one model's settings. The patch holds the four fields the dialog
     // owns, plus `dismissMemoryWarning: true|false` — a signal, not a value:
     // main works out the context length to remember it against, because only
     // main knows how this model's setting and the engine-wide default combine.
-    setSettings: (modelId: string, patch: unknown) => ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, modelId, patch),
+    setSettings: (modelId: string, patch: unknown) => ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, { modelId, patch }),
     // Give a downloaded model its eye: fetch the vision file and move the model
     // into a folder of its own. Progress rides the ordinary download stream.
-    addVision: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_ADD_VISION, modelId),
+    addVision: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_ADD_VISION, { modelId }),
     detectEndpoints: () => ipcRenderer.invoke(IPC.ENDPOINTS_DETECT),
-    setBackend: (backend: string) => ipcRenderer.invoke(IPC.ENGINE_SET_BACKEND, backend),
+    setBackend: (backend: string) => ipcRenderer.invoke(IPC.ENGINE_SET_BACKEND, { backend }),
     // Create-time / swap memory guard + [Reload Model] (2026-07-14).
-    memoryCheck: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_MEMORY_CHECK, modelId),
-    load: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_LOAD, modelId),
+    memoryCheck: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_MEMORY_CHECK, { modelId }),
+    load: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_LOAD, { modelId }),
     onDownloadProgress: (cb: (p: unknown) => void) => {
       const listener = (_e: unknown, p: unknown) => cb(p);
       ipcRenderer.on(IPC.MODELS_DOWNLOAD_PROGRESS, listener);
@@ -1794,7 +1798,7 @@ contextBridge.exposeInMainWorld('claude', {
     // already measured for it. The loudness travels with the audio because the
     // main process owns the two-second silence stop and must not re-measure
     // what the worklet already knows.
-    sendAudio: (chunk: ArrayBuffer, rms: number) => ipcRenderer.send(IPC.VOICE_AUDIO, chunk, rms),
+    sendAudio: (chunk: ArrayBuffer, rms: number) => ipcRenderer.send(IPC.VOICE_AUDIO, { chunk, rms }),
     onEvent: (cb: (e: unknown) => void) => {
       const listener = (_e: unknown, payload: unknown) => cb(payload);
       ipcRenderer.on(IPC.VOICE_EVENT, listener);
@@ -1813,47 +1817,47 @@ contextBridge.exposeInMainWorld('claude', {
   },
   artifacts: {
     listSession: (sessionId: string, projectRoot: string) =>
-      ipcRenderer.invoke('artifacts:list-session', sessionId, projectRoot),
+      ipcRenderer.invoke('artifacts:list-session', { sessionId, projectRoot }),
     listProject: (projectId: string, opts?: { withCount?: boolean }) =>
-      ipcRenderer.invoke('artifacts:list-project', projectId, opts),
+      ipcRenderer.invoke('artifacts:list-project', { projectId, opts }),
     listAllFiles: (projectId: string, opts?: { force?: boolean }) =>
-      ipcRenderer.invoke('artifacts:list-all-files', projectId, opts),
+      ipcRenderer.invoke('artifacts:list-all-files', { projectId, opts }),
     // One folder of Project Files, a page at a time, from disk (folder-listing.ts).
     // relDir is project-relative ('' = the project folder). Answers
     // { ok:true, files, folders, total, offset, hasMore } or { ok:false, error }.
     listFolder: (projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean }) =>
-      ipcRenderer.invoke('artifacts:list-folder', projectId, relDir, opts),
+      ipcRenderer.invoke('artifacts:list-folder', { projectId, relDir, opts }),
     // Resolve ONE file path tapped in chat to the record the drawer opens — a
     // tracked record, or the on-disk file inside the folder. Replaces
     // downloading the whole project list to find one file (read-service.ts
     // resolveArtifactPath). Answers { ok:true, artifact } or { ok:false, error }.
     resolvePath: (projectRoot: string, filePath: string) =>
-      ipcRenderer.invoke('artifacts:resolve-path', projectRoot, filePath),
+      ipcRenderer.invoke('artifacts:resolve-path', { projectRoot, path: filePath }),
     listProjectsIndex: (opts?: { withCounts?: boolean }) =>
       ipcRenderer.invoke('artifacts:list-projects-index', opts),
     // opts: { full? } — full opts into reading up to FULL_READ_MAX_BYTES for a
     // file the pane is currently showing as a prefix.
     get: (projectRoot: string, artifactId: string, opts?: { full?: boolean }) =>
-      ipcRenderer.invoke('artifacts:get', projectRoot, artifactId, opts),
+      ipcRenderer.invoke('artifacts:get', { projectRoot, artifactId, full: opts?.full }),
     // Read a file as base64 — binary viewers (xlsx/docx/pdf/image) decode this
     // to bytes (renderer can't fetch a file:// URL from the http/app origin).
     readBinary: (absolutePath: string) =>
-      ipcRenderer.invoke('artifacts:read-binary', absolutePath),
+      ipcRenderer.invoke('artifacts:read-binary', { absolutePath }),
     // Save a copy to THIS device — a remote-access channel (batch 3). The
     // desktop answers { ok:false, code:'not-remote' }: a file on this computer
     // is opened or revealed, never downloaded to itself. Declared so the shared
     // renderer has one shape on both transports.
     download: (absolutePath: string, opts?: { projectRoot?: string; artifactId?: string }) =>
-      ipcRenderer.invoke('artifacts:download', absolutePath, opts),
+      ipcRenderer.invoke('artifacts:download', { absolutePath, ...opts }),
     // opts: { baseMtimeMs?, confirmed? } — concurrency token + confirm-tier ack
     save: (projectRoot: string, projectId: string, projectName: string,
            artifactId: string, content: string, sessionId: string,
            opts?: { baseMtimeMs?: number; confirmed?: boolean }) =>
-      ipcRenderer.invoke('artifacts:save', projectRoot, projectId, projectName, artifactId, content, sessionId, opts),
+      ipcRenderer.invoke('artifacts:save', { projectRoot, projectId, projectName, artifactId, content, sessionId, ...opts }),
     // Fix: data-flow gap — renderer Tracker calls this on Write/Edit/MultiEdit
     // transcript events so the central index is populated automatically.
     appendVersion: (projectRoot: string, sessionId: string, args: any) =>
-      ipcRenderer.invoke('artifacts:append-version', projectRoot, sessionId, args),
+      ipcRenderer.invoke('artifacts:append-version', { projectRoot, sessionId, args }),
     // Copy or move a picked file INTO the project folder — see
     // artifacts/import-file.ts for the traversal/collision/protected-path policy.
     importFile: (projectRoot: string, sourcePath: string, destDir: string,
@@ -1865,33 +1869,33 @@ contextBridge.exposeInMainWorld('claude', {
                    // can never be overwritten. See artifacts/import-file.ts.
                    disclosedCollisions?: string[];
                  }) =>
-      ipcRenderer.invoke('artifacts:import-file', projectRoot, sourcePath, destDir, opts),
+      ipcRenderer.invoke('artifacts:import-file', { projectRoot, sourcePath, destDir, opts }),
     includeExternal: (projectRoot: string, absolutePath: string) =>
-      ipcRenderer.invoke('artifacts:include-external', projectRoot, absolutePath),
+      ipcRenderer.invoke('artifacts:include-external', { projectRoot, absolutePath }),
     exclude: (projectRoot: string, canonicalPath: string) =>
-      ipcRenderer.invoke('artifacts:exclude', projectRoot, canonicalPath),
+      ipcRenderer.invoke('artifacts:exclude', { projectRoot, canonicalPath }),
     // Task 7.3: remove a project from the central index (files untouched)
     deleteProject: (projectId: string, deleteSidecar: boolean) =>
-      ipcRenderer.invoke('artifacts:delete-project', projectId, deleteSidecar),
+      ipcRenderer.invoke('artifacts:delete-project', { projectId, deleteSidecar }),
     // Returns the subset of artifactIds whose underlying file is missing from
     // disk. Used to fold "file not on disk" into the deleted UI state.
     checkExistence: (projectRoot: string, artifactIds: string[]) =>
-      ipcRenderer.invoke('artifacts:check-existence', projectRoot, artifactIds),
+      ipcRenderer.invoke('artifacts:check-existence', { projectRoot, artifactIds }),
     // Rename an artifact's file on disk; newName is the basename without extension.
     rename: (projectRoot: string, artifactId: string, newName: string) =>
-      ipcRenderer.invoke('artifacts:rename', projectRoot, artifactId, newName),
+      ipcRenderer.invoke('artifacts:rename', { projectRoot, artifactId, newName }),
     // Remove a tracking RECORD from the sidecar (never the file on disk).
     removeRecord: (projectRoot: string, artifactId: string) =>
-      ipcRenderer.invoke('artifacts:remove-record', projectRoot, artifactId),
+      ipcRenderer.invoke('artifacts:remove-record', { projectRoot, artifactId }),
     // Subscribe/unsubscribe this renderer to external file-change events for a
     // project root — events arrive via onChanged with by:'external'.
     watchProject: (projectRoot: string) =>
-      ipcRenderer.invoke('artifacts:watch-project', projectRoot),
+      ipcRenderer.invoke('artifacts:watch-project', { projectRoot }),
     unwatchProject: (projectRoot: string) =>
-      ipcRenderer.invoke('artifacts:unwatch-project', projectRoot),
+      ipcRenderer.invoke('artifacts:unwatch-project', { projectRoot }),
     // Project-wide content search (ripgrep in main; desktop-only).
     searchContent: (projectRoot: string, query: string) =>
-      ipcRenderer.invoke('artifacts:search-content', projectRoot, query),
+      ipcRenderer.invoke('artifacts:search-content', { projectRoot, query }),
     onChanged: (cb: (event: any) => void) => {
       const handler = (_e: any, payload: any) => cb(payload);
       ipcRenderer.on('artifacts:changed', handler);
@@ -1902,9 +1906,9 @@ contextBridge.exposeInMainWorld('claude', {
   // and the change push. Shape: shared/pages-types.ts PagesBridge.
   pages: {
     list: () => ipcRenderer.invoke(IPC.PAGES_LIST),
-    get: (id: string) => ipcRenderer.invoke(IPC.PAGES_GET, id),
-    setPinned: (id: string, pinned: boolean) => ipcRenderer.invoke(IPC.PAGES_SET_PINNED, id, pinned),
-    setData: (id: string, data: unknown) => ipcRenderer.invoke(IPC.PAGES_SET_DATA, id, data),
+    get: (id: string) => ipcRenderer.invoke(IPC.PAGES_GET, { id }),
+    setPinned: (id: string, pinned: boolean) => ipcRenderer.invoke(IPC.PAGES_SET_PINNED, { id, pinned }),
+    setData: (id: string, data: unknown) => ipcRenderer.invoke(IPC.PAGES_SET_DATA, { id, data }),
     onChanged: (cb: (pages: any[]) => void) => {
       const handler = (_e: any, pages: any[]) => cb(pages);
       ipcRenderer.on(IPC.PAGES_CHANGED, handler);
@@ -1913,13 +1917,13 @@ contextBridge.exposeInMainWorld('claude', {
     // Phase 2. `keys` carries a pasted key per key-connection id, or 'saved' to
     // reuse the one already kept; main is the side that decides, so a pasted
     // key from a phone is refused there rather than here.
-    approve: (id: string, keys: Record<string, string>) => ipcRenderer.invoke(IPC.PAGES_APPROVE, id, keys),
-    removeConnection: (id: string, connectionId: string) => ipcRenderer.invoke(IPC.PAGES_REMOVE_CONNECTION, id, connectionId),
-    refresh: (id: string) => ipcRenderer.invoke(IPC.PAGES_REFRESH, id),
+    approve: (id: string, keys: Record<string, string>) => ipcRenderer.invoke(IPC.PAGES_APPROVE, { id, keys }),
+    removeConnection: (id: string, connectionId: string) => ipcRenderer.invoke(IPC.PAGES_REMOVE_CONNECTION, { id, connectionId }),
+    refresh: (id: string) => ipcRenderer.invoke(IPC.PAGES_REFRESH, { id }),
     savedKeys: () => ipcRenderer.invoke(IPC.PAGES_SAVED_KEYS),
     // Both parts: a key is identified by service AND address.
-    deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, service, address),
-    fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, id, req),
+    deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, { service, address }),
+    fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, { id, request: req }),
   },
   // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
   // build-design.md §1.6). Channel strings are inlined (preload cannot import
@@ -1978,24 +1982,24 @@ contextBridge.exposeInMainWorld('claude', {
   },
   git: {
     fileStatus: (projectRoot: string, relPath: string) =>
-      ipcRenderer.invoke('git:file-status', projectRoot, relPath),
+      ipcRenderer.invoke('git:file-status', { projectRoot, relPath }),
     fileReview: (projectRoot: string, relPath: string, opts?: { logSkip?: number }) =>
-      ipcRenderer.invoke('git:file-review', projectRoot, relPath, opts),
+      ipcRenderer.invoke('git:file-review', { projectRoot, relPath, ...opts }),
     // prevPath (project-root-relative old name) is passed for the rename
     // commit itself so the main-process handler can pair the rename with -M
     // instead of rendering the add-side full-file wall.
     commitFileDiff: (projectRoot: string, sha: string, relPath: string, prevPath?: string) =>
-      ipcRenderer.invoke('git:commit-file-diff', projectRoot, sha, relPath, prevPath),
+      ipcRenderer.invoke('git:commit-file-diff', { projectRoot, sha, relPath, prevPath }),
     stage: (projectRoot: string, relPath: string) =>
-      ipcRenderer.invoke('git:stage', projectRoot, relPath),
+      ipcRenderer.invoke('git:stage', { projectRoot, relPath }),
     unstage: (projectRoot: string, relPath: string) =>
-      ipcRenderer.invoke('git:unstage', projectRoot, relPath),
+      ipcRenderer.invoke('git:unstage', { projectRoot, relPath }),
     commit: (projectRoot: string, message: string) =>
-      ipcRenderer.invoke('git:commit', projectRoot, message),
+      ipcRenderer.invoke('git:commit', { projectRoot, message }),
     discard: (projectRoot: string, relPath: string) =>
-      ipcRenderer.invoke('git:discard', projectRoot, relPath),
-    watch: (projectRoot: string) => ipcRenderer.invoke('git:watch', projectRoot),
-    unwatch: (projectRoot: string) => ipcRenderer.invoke('git:unwatch', projectRoot),
+      ipcRenderer.invoke('git:discard', { projectRoot, relPath }),
+    watch: (projectRoot: string) => ipcRenderer.invoke('git:watch', { projectRoot }),
+    unwatch: (projectRoot: string) => ipcRenderer.invoke('git:unwatch', { projectRoot }),
     onChanged: (cb: (event: any) => void) => {
       const handler = (_e: any, payload: any) => cb(payload);
       ipcRenderer.on('git:changed', handler);
@@ -2006,20 +2010,20 @@ contextBridge.exposeInMainWorld('claude', {
   // conversations / repo / context tabs.
   project: {
     listConversations: (projectPath: string) =>
-      ipcRenderer.invoke('project:list-conversations', projectPath),
+      ipcRenderer.invoke('project:list-conversations', { projectPath }),
     repoInfo: (projectPath: string) =>
-      ipcRenderer.invoke('project:repo-info', projectPath),
+      ipcRenderer.invoke('project:repo-info', { projectPath }),
     listContext: (projectPath: string) =>
-      ipcRenderer.invoke('project:list-context', projectPath),
+      ipcRenderer.invoke('project:list-context', { projectPath }),
     readContextFile: (projectPath: string, absolutePath: string) =>
-      ipcRenderer.invoke('project:read-context-file', projectPath, absolutePath),
+      ipcRenderer.invoke('project:read-context-file', { projectPath, absolutePath }),
     writeContextFile: (projectPath: string, absolutePath: string, content: string) =>
-      ipcRenderer.invoke('project:write-context-file', projectPath, absolutePath, content),
+      ipcRenderer.invoke('project:write-context-file', { projectPath, absolutePath, content }),
   },
   // Session references: turn the short ids a chatsearch result printed back
   // into conversations, and read one page of one for the preview pane.
   chatsearch: {
-    resolve: (shortIds: string[]) => ipcRenderer.invoke('chatsearch:resolve', shortIds),
+    resolve: (shortIds: string[]) => ipcRenderer.invoke('chatsearch:resolve', { shortIds }),
     read: (req: { provider: string; id: string; before?: number; projectSlug?: string }) =>
       ipcRenderer.invoke('chatsearch:read', req),
   },

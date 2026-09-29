@@ -45,7 +45,7 @@ const skills = { getInstalled: async () => [{ id: 'superpowers' }, { id: 'superp
 describe('marketplace:install', () => {
   it('reports the full installed set after recording the clicked id', async () => {
     registerMarketplaceApiHandlers(store, skills);
-    const res = await handlers.get('marketplace:install')!({}, 'superpowers/brainstorming');
+    const res = await handlers.get('marketplace:install')!({}, { pluginId: 'superpowers/brainstorming' });
     expect(res).toEqual({ ok: true, value: undefined });
     expect(postInstall).toHaveBeenCalledWith('superpowers/brainstorming');
     expect(reconcileInstalls).toHaveBeenCalledWith(store, skills);

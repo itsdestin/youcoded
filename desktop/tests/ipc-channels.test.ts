@@ -313,7 +313,7 @@ describe('terminal:get-screen-text channel parity', () => {
   // CRLF-normalising reader so a Windows checkout matches the same regex.
   it('preload.ts forwards the tailRows argument', () => {
     const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    expect(src).toMatch(/ipcRenderer\.invoke\('terminal:get-screen-text',\s*sessionId,\s*tailRows\)/);
+    expect(src).toMatch(/ipcRenderer\.invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
   });
 
   it('remote-shim.ts forwards the tailRows argument', () => {
@@ -1302,8 +1302,9 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
   // calls contextBridge at load), so the call shape is pinned as text.
   it('preload forwards every argument of the two-argument channels', () => {
     const src = read('src', 'main', 'preload.ts');
-    expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, modelId, patch)');
-    expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, repo, quant)');
+    // One object per call since one-core R2 (same keys the phone shim sends).
+    expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, { modelId, patch })');
+    expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, { repo, quant })');
   });
   // Android NAMES these six — and only these six — as `unsupported` inside the
   // not-implemented list; every other desktop-only channel listed there sends the

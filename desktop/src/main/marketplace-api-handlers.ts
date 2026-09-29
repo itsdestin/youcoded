@@ -63,6 +63,7 @@ const CHANNELS = [
   "marketplace:report",
 ] as const;
 
+// WHY (2026-09-29 one-core R2): every request from a window is now ONE object ({ sessionId, text }, not (sessionId, text)) — the same object the phone sends, so one handler can serve both doors and two same-typed arguments can no longer be swapped unnoticed. tests/wire-shape-parity.test.ts checks these keys against preload's.
 export function registerMarketplaceApiHandlers(
   store: MarketplaceAuthStore,
   // Optional so existing callers/tests keep working; without it the sign-in
@@ -100,7 +101,7 @@ export function registerMarketplaceApiHandlers(
     })
   );
 
-  ipcMain.handle("account:poll", (_e, deviceCode: string): Promise<ApiResult<AuthPollResponse>> =>
+  ipcMain.handle("account:poll", (_e, { deviceCode }: { deviceCode: string }): Promise<ApiResult<AuthPollResponse>> =>
     wrap(async () => {
       const res = await client.authPoll(deviceCode);
       if (res.status === "complete") {
@@ -187,7 +188,7 @@ export function registerMarketplaceApiHandlers(
 
   // Update the account display name, then mirror the new value into the stored
   // profile so `account:user` reflects it without a round-trip to /auth/me.
-  ipcMain.handle("account:update-profile", (_e, displayName: string): Promise<ApiResult<{ display_name: string }>> =>
+  ipcMain.handle("account:update-profile", (_e, { displayName }: { displayName: string }): Promise<ApiResult<{ display_name: string }>> =>
     wrap(async () => {
       const out = await client.updateProfile(displayName);
       const user = store.getUser();
@@ -198,7 +199,7 @@ export function registerMarketplaceApiHandlers(
   );
 
   // Claim/change the unique @handle, then mirror it into the stored profile.
-  ipcMain.handle("account:set-handle", (_e, handle: string): Promise<ApiResult<{ handle: string }>> =>
+  ipcMain.handle("account:set-handle", (_e, { handle }: { handle: string }): Promise<ApiResult<{ handle: string }>> =>
     wrap(async () => {
       const out = await client.setHandle(handle);
       const user = store.getUser();
@@ -257,7 +258,7 @@ export function registerMarketplaceApiHandlers(
   // Wrapped in ApiResult so the renderer preserves HTTP status across the
   // contextBridge (structuredClone drops custom Error fields).
 
-  ipcMain.handle("marketplace:install", (_e, pluginId: string): Promise<ApiResult<void>> =>
+  ipcMain.handle("marketplace:install", (_e, { pluginId }: { pluginId: string }): Promise<ApiResult<void>> =>
     wrap(async () => {
       await client.postInstall(pluginId);
       // Marketplace overhaul Task 18: report what the machine ACTUALLY has now,
@@ -275,7 +276,7 @@ export function registerMarketplaceApiHandlers(
     wrap(() => client.postRating(input))
   );
 
-  ipcMain.handle("marketplace:rate:delete", (_e, pluginId: string): Promise<ApiResult<void>> =>
+  ipcMain.handle("marketplace:rate:delete", (_e, { pluginId }: { pluginId: string }): Promise<ApiResult<void>> =>
     wrap(() => client.deleteRating(pluginId))
   );
 
@@ -292,7 +293,7 @@ export function registerMarketplaceApiHandlers(
     })
   );
 
-  ipcMain.handle("marketplace:thumb:get", (_e, pluginId: string): Promise<ApiResult<Thumbs>> =>
+  ipcMain.handle("marketplace:thumb:get", (_e, { plugin_id: pluginId }: { plugin_id: string }): Promise<ApiResult<Thumbs>> =>
     wrap(async () => {
       const r = await client.getThumb(pluginId);
       // Totals come back WITH the vote. Returning only `vote` is what produced a
@@ -311,7 +312,7 @@ export function registerMarketplaceApiHandlers(
     })
   );
 
-  ipcMain.handle("marketplace:theme:like", (_e, themeId: string): Promise<ApiResult<{ liked: boolean }>> =>
+  ipcMain.handle("marketplace:theme:like", (_e, { themeId }: { themeId: string }): Promise<ApiResult<{ liked: boolean }>> =>
     wrap(() => client.toggleThemeLike(themeId))
   );
 

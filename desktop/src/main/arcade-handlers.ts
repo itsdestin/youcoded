@@ -131,6 +131,7 @@ export function createArcadeOps(store: MarketplaceAuthStore): ArcadeOps {
   };
 }
 
+// WHY (2026-09-29 one-core R2): every request from a window is now ONE object ({ sessionId, text }, not (sessionId, text)) — the same object the phone sends, so one handler can serve both doors and two same-typed arguments can no longer be swapped unnoticed. tests/wire-shape-parity.test.ts checks these keys against preload's.
 export function registerArcadeHandlers(store: MarketplaceAuthStore): void {
   // WHY: ipcMain.handle throws on re-registration. Clearing first keeps
   // hot-reload dev sessions (scripts/run-dev.sh) from crashing on reload.
@@ -140,10 +141,10 @@ export function registerArcadeHandlers(store: MarketplaceAuthStore): void {
   ops = instance;
 
   ipcMain.handle("arcade:status", () => instance.status());
-  ipcMain.handle("arcade:leaderboard", (_e, game: string) => instance.leaderboard(game));
-  ipcMain.handle("arcade:submit-score", (_e, game: string, score: number) =>
+  ipcMain.handle("arcade:leaderboard", (_e, { game }: { game: string }) => instance.leaderboard(game));
+  ipcMain.handle("arcade:submit-score", (_e, { game, score }: { game: string; score: number }) =>
     instance.submitScore(game, score));
-  ipcMain.handle("arcade:records", (_e, game?: string) => instance.records(game));
+  ipcMain.handle("arcade:records", (_e, { game }: { game?: string }) => instance.records(game));
 }
 
 /** The live instance, for remote-server.ts's WebSocket cases. `null` before

@@ -106,10 +106,12 @@ async function overRemote(type: string, payload: any, who = fakeClient('sock-a')
 }
 
 /** Drive the same channel over the Electron IPC transport. */
-function overIpc(channel: string, ...args: any[]) {
+// WHY (2026-09-29 one-core R2): the desktop wire is now ONE object per call, the same object the phone
+// sends, so both transports are driven with the same payload.
+function overIpc(channel: string, payload?: any) {
   const h = handlers.get(channel);
   if (!h) throw new Error(`no ipcMain.handle for ${channel}`);
-  return h({ sender: { id: 1, once: vi.fn() } }, ...args);
+  return h({ sender: { id: 1, once: vi.fn() } }, payload);
 }
 
 beforeAll(async () => {
@@ -203,7 +205,7 @@ afterAll(async () => {
 
 describe('the file lists answer the same on both transports', () => {
   it('artifacts:list-all-files — the project folder as it exists on disk', async () => {
-    const ipc = await overIpc('artifacts:list-all-files', root);
+    const ipc = await overIpc('artifacts:list-all-files', { projectId: root });
     const remote = await overRemote('artifacts:list-all-files', { projectId: root });
     expect(remote?.ok).toBe(true);
     expect(remote.unsupported).toBeUndefined();
@@ -213,7 +215,7 @@ describe('the file lists answer the same on both transports', () => {
   });
 
   it('artifacts:list-folder — one folder, the same page on both transports', async () => {
-    const ipc = await overIpc('artifacts:list-folder', root, '', { offset: 0 });
+    const ipc = await overIpc('artifacts:list-folder', { projectId: root, relDir: '', opts: { offset: 0 } });
     const remote = await overRemote('artifacts:list-folder', { projectId: root, relDir: '', opts: { offset: 0 } });
     expect(remote?.ok).toBe(true);
     // Each page-0 read hands back its own snapshot id; everything else matches.
@@ -226,16 +228,16 @@ describe('the file lists answer the same on both transports', () => {
   });
 
   it('artifacts:list-session and list-project answer with the same (empty) tracked lists', async () => {
-    const ipcS = await overIpc('artifacts:list-session', 'sess-1', root);
+    const ipcS = await overIpc('artifacts:list-session', { sessionId: 'sess-1', projectRoot: root });
     const remS = await overRemote('artifacts:list-session', { sessionId: 'sess-1', projectRoot: root });
     expect(remS).toEqual(ipcS);
-    const ipcP = await overIpc('artifacts:list-project', root, { withCount: true });
+    const ipcP = await overIpc('artifacts:list-project', { projectId: root, opts: { withCount: true } });
     const remP = await overRemote('artifacts:list-project', { projectId: root, opts: { withCount: true } });
     expect(remP).toEqual(ipcP);
   });
 
   it('artifacts:check-existence and search-content are bridged too', async () => {
-    const ipcE = await overIpc('artifacts:check-existence', root, ['nope']);
+    const ipcE = await overIpc('artifacts:check-existence', { projectRoot: root, artifactIds: ['nope'] });
     const remE = await overRemote('artifacts:check-existence', { projectRoot: root, artifactIds: ['nope'] });
     expect(remE).toEqual(ipcE);
     const remQ = await overRemote('artifacts:search-content', { projectRoot: root, query: 'hello from' });
@@ -259,7 +261,7 @@ describe('the file lists answer the same on both transports', () => {
 
 describe('reading a file: same answer, except the phone ceiling', () => {
   it('a small text file comes back identical', async () => {
-    const ipc = await overIpc('artifacts:get', root, 'notes.md');
+    const ipc = await overIpc('artifacts:get', { projectRoot: root, artifactId: 'notes.md' });
     const remote = await overRemote('artifacts:get', { projectRoot: root, artifactId: 'notes.md' });
     expect(remote.ok).toBe(true);
     expect(remote.content).toBe(ipc.content);
@@ -269,7 +271,7 @@ describe('reading a file: same answer, except the phone ceiling', () => {
   it('a 1.5 MB text file: content on IPC, too-large with its size over remote (R8, R19)', async () => {
     const size = fs.statSync(path.join(root, 'big.txt')).size;
     expect(size).toBeGreaterThan(REMOTE_TEXT_PREVIEW_MAX_BYTES);
-    const ipc = await overIpc('artifacts:get', root, 'big.txt');
+    const ipc = await overIpc('artifacts:get', { projectRoot: root, artifactId: 'big.txt' });
     expect(ipc.ok).toBe(true);
     expect(ipc.content.length).toBe(size);
     const remote = await overRemote('artifacts:get', { projectRoot: root, artifactId: 'big.txt' });
@@ -282,7 +284,7 @@ describe('reading a file: same answer, except the phone ceiling', () => {
     const abs = path.join(root, 'report.pdf');
     const size = fs.statSync(abs).size;
     expect(size).toBeGreaterThan(REMOTE_BINARY_PREVIEW_MAX_BYTES);
-    const ipc = await overIpc('artifacts:read-binary', abs);
+    const ipc = await overIpc('artifacts:read-binary', { absolutePath: abs });
     expect(ipc.ok).toBe(true);
     expect(typeof ipc.base64).toBe('string');
     const remote = await overRemote('artifacts:read-binary', { absolutePath: abs });
@@ -292,7 +294,7 @@ describe('reading a file: same answer, except the phone ceiling', () => {
 
   it('a sensitive path is refused on both transports', async () => {
     const abs = path.join(root, '.env');
-    expect(await overIpc('artifacts:read-binary', abs)).toMatchObject({ ok: false, error: 'not-allowed' });
+    expect(await overIpc('artifacts:read-binary', { absolutePath: abs })).toMatchObject({ ok: false, error: 'not-allowed' });
     expect(await overRemote('artifacts:read-binary', { absolutePath: abs })).toMatchObject({ ok: false, error: 'not-allowed' });
   });
 
@@ -300,7 +302,7 @@ describe('reading a file: same answer, except the phone ceiling', () => {
   // matches nothing in the denylist; only the RESOLVED path is a secret.
   it.skipIf(!canSymlink)('a symlink under the root to a secret is refused on both transports', async () => {
     const abs = path.join(root, 'innocent-link.txt');
-    expect(await overIpc('artifacts:read-binary', abs)).toMatchObject({ ok: false, error: 'not-allowed' });
+    expect(await overIpc('artifacts:read-binary', { absolutePath: abs })).toMatchObject({ ok: false, error: 'not-allowed' });
     expect(await overRemote('artifacts:read-binary', { absolutePath: abs })).toMatchObject({ ok: false, error: 'not-allowed' });
     // artifacts:get already resolved links; it must keep doing so.
     const viaGet = await overRemote('artifacts:get', { projectRoot: root, artifactId: 'innocent-link.txt' });
@@ -312,7 +314,7 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
   it('a root the desktop never showed is refused over remote, on every read; the desktop transport keeps its behaviour', async () => {
     fs.writeFileSync(path.join(outside, 'plain.md'), 'not a secret, just not yours\n');
     // The desktop's own transport is unchanged: its renderer only asks about roots it was given.
-    expect((await overIpc('artifacts:get', outside, 'plain.md')).ok).toBe(true);
+    expect((await overIpc('artifacts:get', { projectRoot: outside, artifactId: 'plain.md' })).ok).toBe(true);
     for (const [type, payload] of [
       ['artifacts:get', { projectRoot: outside, artifactId: 'plain.md' }],
       ['artifacts:list-session', { sessionId: 's', projectRoot: outside }],
@@ -358,7 +360,7 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
 
   it.skipIf(!canSymlink)('a root recorded through a symlink still reaches its own files, on both transports', async () => {
     const viaLink = path.join(alias, 'pic.png');
-    expect((await overIpc('artifacts:read-binary', viaLink)).ok).toBe(true);
+    expect((await overIpc('artifacts:read-binary', { absolutePath: viaLink })).ok).toBe(true);
     expect((await overRemote('artifacts:read-binary', { absolutePath: viaLink })).ok).toBe(true);
     // And the real path of the same file — recorded form and resolved form both count.
     expect((await overRemote('artifacts:read-binary', { absolutePath: path.join(aliasTarget, 'pic.png') })).ok).toBe(true);
@@ -402,7 +404,7 @@ describe('artifacts:resolve-path over remote', () => {
 
   it('a saved folder: an untracked file resolves to its discovered record, the same on both transports', async () => {
     const abs = path.join(root, 'notes.md');
-    const ipc = await overIpc('artifacts:resolve-path', root, abs);
+    const ipc = await overIpc('artifacts:resolve-path', { projectRoot: root, path: abs });
     const remote = await overRemote('artifacts:resolve-path', { projectRoot: root, path: abs });
     expect(remote).toMatchObject({ ok: true, artifact: { id: 'notes.md', path: 'notes.md', discovered: true } });
     expect(remote).toEqual(ipc);
@@ -524,19 +526,19 @@ describe('a ../ record through both transports', () => {
   });
 
   it('saves a trusted one at its real location', async () => {
-    const res = await overIpc('artifacts:save', proj, 'dotdot', 'proj', 'plan', 'new\n', 'sess-1', {});
+    const res = await overIpc('artifacts:save', { projectRoot: proj, projectId: 'dotdot', projectName: 'proj', artifactId: 'plan', content: 'new\n', sessionId: 'sess-1' });
     expect(res).toMatchObject({ ok: true });
     expect(fs.readFileSync(path.join(notes, 'plan.md'), 'utf8')).toBe('new\n');
   });
 
   it('refuses a planted credential on read and save', async () => {
-    expect(await overIpc('artifacts:get', proj, 'planted')).toEqual({ ok: false, error: 'protected-path' });
-    expect(await overIpc('artifacts:save', proj, 'dotdot', 'proj', 'planted', 'x', 'sess-1', {})).toEqual({ ok: false, error: 'protected-path' });
+    expect(await overIpc('artifacts:get', { projectRoot: proj, artifactId: 'planted' })).toEqual({ ok: false, error: 'protected-path' });
+    expect(await overIpc('artifacts:save', { projectRoot: proj, projectId: 'dotdot', projectName: 'proj', artifactId: 'planted', content: 'x', sessionId: 'sess-1' })).toEqual({ ok: false, error: 'protected-path' });
     expect(fs.readFileSync(path.join(process.env.HOME!, '.git-credentials'), 'utf8')).toContain('github.com');
   });
 
   it('refuses one outside every project without naming where it is, on both transports', async () => {
-    expect(await overIpc('artifacts:get', proj, 'loose')).toEqual({ ok: false, error: 'outside-projects' });
+    expect(await overIpc('artifacts:get', { projectRoot: proj, artifactId: 'loose' })).toEqual({ ok: false, error: 'outside-projects' });
     const remote = await overRemote('artifacts:get', { projectRoot: proj, artifactId: 'loose' });
     expect(remote).toEqual({ ok: false, error: 'outside-projects' });
   });

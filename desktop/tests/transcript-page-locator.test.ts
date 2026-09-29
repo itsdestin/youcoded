@@ -325,7 +325,7 @@ describe('transcript:page locator memory', () => {
     });
 
     const destroy = (mockIpcMain.handle as any).mock.calls.find((c: any) => c[0] === 'session:destroy')[1];
-    await destroy(evt, 'desktop-1');
+    await destroy(evt, { sessionId: 'desktop-1' }); // one object on the wire (one-core R2)
 
     const older = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null });
     expect(older.unresolved).toBe(true);

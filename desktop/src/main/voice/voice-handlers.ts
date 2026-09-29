@@ -132,7 +132,8 @@ export function registerVoiceHandlers(userDataPath: string): void {
 
   // Fire-and-forget: 10 slices a second while the mic is open. `ipcMain.on`,
   // not `handle`, because a reply per slice would cost more than the audio.
-  ipcMain.on(AUDIO_CHANNEL, (e, chunk: ArrayBuffer, rms: number) => {
+  // WHY (2026-09-29 one-core R2): one object on the wire like every other channel.
+  ipcMain.on(AUDIO_CHANNEL, (e, { chunk, rms }: { chunk: ArrayBuffer; rms: number }) => {
     instance.pushAudio(e.sender.id, chunk, rms);
   });
 }

@@ -91,6 +91,7 @@ const CHANNELS = [
   "social:presence-send",
 ] as const;
 
+// WHY (2026-09-29 one-core R2): every request from a window is now ONE object ({ sessionId, text }, not (sessionId, text)) — the same object the phone sends, so one handler can serve both doors and two same-typed arguments can no longer be swapped unnoticed. tests/wire-shape-parity.test.ts checks these keys against preload's.
 export function registerSocialHandlers(
   store: MarketplaceAuthStore,
   // Optional broadcast targets. windowRegistry mirrors ipc-handlers.ts's global
@@ -237,11 +238,11 @@ export function registerSocialHandlers(
   // preload.ts (which passes them positionally); remote-shim.ts object-wraps them
   // for the Android SessionService, which reads them via optString.
 
-  ipcMain.handle("social:lookup-handle", (_e, handle: string): Promise<ApiResult<SocialUserCard>> =>
+  ipcMain.handle("social:lookup-handle", (_e, { handle }: { handle: string }): Promise<ApiResult<SocialUserCard>> =>
     wrap(() => client.lookupHandle(handle)).then(clearSessionOn401)
   );
 
-  ipcMain.handle("social:send-request", (_e, handle: string): Promise<ApiResult<{ status: "pending" | "friends" }>> =>
+  ipcMain.handle("social:send-request", (_e, { handle }: { handle: string }): Promise<ApiResult<{ status: "pending" | "friends" }>> =>
     wrap(() => client.sendRequest(handle)).then(clearSessionOn401)
   );
 
@@ -249,15 +250,15 @@ export function registerSocialHandlers(
     wrap(() => client.listRequests()).then(clearSessionOn401)
   );
 
-  ipcMain.handle("social:accept-request", (_e, id: string): Promise<ApiResult<void>> =>
+  ipcMain.handle("social:accept-request", (_e, { id }: { id: string }): Promise<ApiResult<void>> =>
     wrap(() => client.acceptRequest(id)).then(clearSessionOn401)
   );
 
-  ipcMain.handle("social:decline-request", (_e, id: string): Promise<ApiResult<void>> =>
+  ipcMain.handle("social:decline-request", (_e, { id }: { id: string }): Promise<ApiResult<void>> =>
     wrap(() => client.declineRequest(id)).then(clearSessionOn401)
   );
 
-  ipcMain.handle("social:cancel-request", (_e, id: string): Promise<ApiResult<void>> =>
+  ipcMain.handle("social:cancel-request", (_e, { id }: { id: string }): Promise<ApiResult<void>> =>
     wrap(() => client.cancelRequest(id)).then(clearSessionOn401)
   );
 
@@ -265,15 +266,15 @@ export function registerSocialHandlers(
     wrap(() => client.listFriends()).then(clearSessionOn401)
   );
 
-  ipcMain.handle("social:unfriend", (_e, userId: string): Promise<ApiResult<void>> =>
+  ipcMain.handle("social:unfriend", (_e, { userId }: { userId: string }): Promise<ApiResult<void>> =>
     wrap(() => client.unfriend(userId)).then(clearSessionOn401)
   );
 
-  ipcMain.handle("social:block", (_e, userId: string): Promise<ApiResult<void>> =>
+  ipcMain.handle("social:block", (_e, { userId }: { userId: string }): Promise<ApiResult<void>> =>
     wrap(() => client.block(userId)).then(clearSessionOn401)
   );
 
-  ipcMain.handle("social:unblock", (_e, userId: string): Promise<ApiResult<void>> =>
+  ipcMain.handle("social:unblock", (_e, { userId }: { userId: string }): Promise<ApiResult<void>> =>
     wrap(() => client.unblock(userId)).then(clearSessionOn401)
   );
 
@@ -302,7 +303,7 @@ export function registerSocialHandlers(
   // Honest receipt: sending with no OPEN socket would silently drop the frame,
   // so report a failure (ApiResult-style error shape, status:0 = local/non-API)
   // instead of returning a success the renderer would trust.
-  ipcMain.handle("social:presence-send", (_e, message: Record<string, unknown>): { ok: true } | { ok: false; status: number; message: string } => {
+  ipcMain.handle("social:presence-send", (_e, { message }: { message: Record<string, unknown> }): { ok: true } | { ok: false; status: number; message: string } => {
     if (!presence.isConnected()) return { ok: false, status: 0, message: "not connected" };
     presence.send(message);
     return { ok: true };

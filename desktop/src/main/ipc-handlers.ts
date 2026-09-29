@@ -379,6 +379,7 @@ export function registerIpcHandlers(
   // pass four), and TypeScript will not let a required one follow them. A missing runtime is a
   // programming error, so fail loudly at registration rather than at the first handler call.
   if (!runtime) throw new Error('registerIpcHandlers needs the runtime built by createRuntime()');
+  // WHY (2026-09-29 one-core R2): every request from a window is now ONE object ({ sessionId, text }, not (sessionId, text)) — the same object the phone sends, so one handler can serve both doors and two same-typed arguments can no longer be swapped unnoticed. tests/wire-shape-parity.test.ts checks these keys against preload's.
   // The per-session maps every handler group shares. WHY (2026-09-29 one-core R1): ONE copy,
   // owned by the runtime (ipc/session-state.ts) — never re-declared per file or per group.
   const { sessionIdMap, lastModelSeen, topicWatchers, lastTopics, provisionalResumeTitles } = runtime.sessionState;
@@ -493,14 +494,14 @@ export function registerIpcHandlers(
   // Allow leading underscore for reserved internal slugs (e.g. _preview used by theme-builder).
   const SAFE_SLUG_RE = /^[a-z0-9_]+(?:-[a-z0-9_]+)*$/;
 
-  ipcMain.handle(IPC.THEME_READ_FILE, async (_event, slug: string) => {
+  ipcMain.handle(IPC.THEME_READ_FILE, async (_event, { slug }: { slug: string }) => {
     if (!SAFE_SLUG_RE.test(slug)) throw new Error('Invalid theme slug');
     const manifestPath = path.resolve(userThemeManifest(slug));
     if (!manifestPath.startsWith(THEMES_DIR + path.sep)) throw new Error('Invalid theme slug');
     return fs.promises.readFile(manifestPath, 'utf-8');
   });
 
-  ipcMain.handle(IPC.THEME_WRITE_FILE, async (_event, slug: string, content: string) => {
+  ipcMain.handle(IPC.THEME_WRITE_FILE, async (_event, { slug, content }: { slug: string; content: string }) => {
     if (!SAFE_SLUG_RE.test(slug)) throw new Error('Invalid theme slug');
     const themeDir = path.resolve(userThemeDir(slug));
     if (!themeDir.startsWith(THEMES_DIR + path.sep)) throw new Error('Invalid theme slug');
@@ -530,7 +531,7 @@ export function registerIpcHandlers(
   // traffic lights, so this is a no-op there. Called from theme-engine when
   // chrome-style changes — floating chrome's rounded header would otherwise
   // leave the OS-default (8,12) lights stranded over empty space.
-  ipcMain.handle(IPC.WINDOW_SET_TRAFFIC_LIGHT_POS, (event, pos: { x: number; y: number } | null) => {
+  ipcMain.handle(IPC.WINDOW_SET_TRAFFIC_LIGHT_POS, (event, { pos }: { pos: { x: number; y: number } | null }) => {
     if (process.platform !== 'darwin') return;
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return;
@@ -552,7 +553,7 @@ export function registerIpcHandlers(
   const ASSETS_DIR = path.join(__dirname, '../../assets');
   const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'wecoded-themes');
   const MAX_DATA_ICON_BYTES = 1024 * 1024; // 1 MB — a 256px PNG is typically <100KB
-  ipcMain.handle(IPC.WINDOW_SET_ICON, (_e, url: string | null) => {
+  ipcMain.handle(IPC.WINDOW_SET_ICON, (_e, { url }: { url: string | null }) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     let iconImg = loadDefaultAppIcon(ASSETS_DIR);
     if (url && typeof url === 'string') {
@@ -701,25 +702,25 @@ export function registerIpcHandlers(
     return themeMarketplace.listThemes(filters);
   });
 
-  ipcMain.handle(IPC.THEME_MARKETPLACE_DETAIL, async (_event, slug: string) => {
+  ipcMain.handle(IPC.THEME_MARKETPLACE_DETAIL, async (_event, { slug }: { slug: string }) => {
     return themeMarketplace.getThemeDetail(slug);
   });
 
-  ipcMain.handle(IPC.THEME_MARKETPLACE_INSTALL, async (_event, slug: string) => {
+  ipcMain.handle(IPC.THEME_MARKETPLACE_INSTALL, async (_event, { slug }: { slug: string }) => {
     return themeMarketplace.installTheme(slug);
   });
 
-  ipcMain.handle(IPC.THEME_MARKETPLACE_UNINSTALL, async (_event, slug: string) => {
+  ipcMain.handle(IPC.THEME_MARKETPLACE_UNINSTALL, async (_event, { slug }: { slug: string }) => {
     return themeMarketplace.uninstallTheme(slug);
   });
 
-  ipcMain.handle(IPC.THEME_MARKETPLACE_PUBLISH, async (_event, slug: string) => {
+  ipcMain.handle(IPC.THEME_MARKETPLACE_PUBLISH, async (_event, { slug }: { slug: string }) => {
     return themeMarketplace.publishTheme(slug);
   });
 
   // Publish-lifecycle: resolve button state (draft / in-review / published-current /
   // published-drift / unknown) for a user-authored theme on each detail open.
-  ipcMain.handle(IPC.THEME_MARKETPLACE_RESOLVE_PUBLISH_STATE, async (_event, slug: string) => {
+  ipcMain.handle(IPC.THEME_MARKETPLACE_RESOLVE_PUBLISH_STATE, async (_event, { slug }: { slug: string }) => {
     return themeMarketplace.resolvePublishStateForSlug(slug);
   });
 
@@ -729,7 +730,7 @@ export function registerIpcHandlers(
     return themeMarketplace.listThemes();
   });
 
-  ipcMain.handle(IPC.THEME_MARKETPLACE_GENERATE_PREVIEW, async (_event, slug: string) => {
+  ipcMain.handle(IPC.THEME_MARKETPLACE_GENERATE_PREVIEW, async (_event, { slug }: { slug: string }) => {
     try {
       const manifestPath = path.resolve(userThemeManifest(slug));
       if (!manifestPath.startsWith(THEMES_DIR + path.sep)) throw new Error('Invalid theme slug');
@@ -774,7 +775,7 @@ export function registerIpcHandlers(
   // for the given session. The actual read happens in the renderer (xterm
   // lives there), so main calls back via executeJavaScript. ~1s cadence
   // under the classifier; round-trip overhead is negligible.
-  ipcMain.handle('terminal:get-screen-text', async (event, sessionId: string, tailRows?: number) => {
+  ipcMain.handle('terminal:get-screen-text', async (event, { sessionId, tailRows }: { sessionId: string; tailRows?: number }) => {
     try {
       // Tail read: serializing the full 1000+-row scrollback every second was
       // pure waste. The caller says how many buffer rows it wants (the
@@ -1110,7 +1111,7 @@ export function registerIpcHandlers(
     });
   }
 
-  ipcMain.handle(IPC.SESSION_DESTROY, async (_event, sessionId: string) => {
+  ipcMain.handle(IPC.SESSION_DESTROY, async (_event, { sessionId }: { sessionId: string }) => {
     // WHY: admission is keyed by CONVERSATION id; a Claude session's desktop id
     // differs. Capture it before teardown can drop the mapping.
     const conversationId = sessionIdMap.get(sessionId) ?? sessionId;
@@ -1191,11 +1192,11 @@ export function registerIpcHandlers(
   // caches it per window (WindowRegistry) so the remote snapshot and
   // session:destroyed can tell a phone what the desktop is showing. Fire-and-forget:
   // nothing on the desktop reads it back.
-  ipcMain.on(IPC.SESSION_SELECTED, (evt, sessionId: unknown) => {
+  ipcMain.on(IPC.SESSION_SELECTED, (evt, { sessionId }: { sessionId: unknown }) => {
     windowRegistry?.setSelectedSession(evt.sender.id, typeof sessionId === 'string' ? sessionId : null);
   });
 
-  ipcMain.handle(IPC.SESSION_SWITCH, async (_event, _sessionId: string) => {
+  ipcMain.handle(IPC.SESSION_SWITCH, async (_event, { sessionId: _sessionId }: { sessionId: string }) => {
     // Switch is a client-side concern on desktop — the renderer manages active session.
     // This handler exists for protocol parity with Android/remote.
     return { ok: true };
@@ -1299,7 +1300,7 @@ export function registerIpcHandlers(
   // scheme is the boundary; any HOST is fine, because the model legitimately
   // hands the user localhost/LAN dev-server links via SendUserLink and the
   // user clicks them explicitly. Never file:, javascript:, etc.
-  ipcMain.handle(IPC.OPEN_EXTERNAL, async (_event, url: string) => {
+  ipcMain.handle(IPC.OPEN_EXTERNAL, async (_event, { url }: { url: string }) => {
     if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
       await shell.openExternal(url);
     }
@@ -1307,7 +1308,7 @@ export function registerIpcHandlers(
 
   // Reveal a local file in the OS file manager. Used by the artifact panel's
   // "Reveal in folder" action. No-op for empty / non-string paths.
-  ipcMain.handle(IPC.SHOW_ITEM_IN_FOLDER, async (_event, filePath: string) => {
+  ipcMain.handle(IPC.SHOW_ITEM_IN_FOLDER, async (_event, { filePath }: { filePath: string }) => {
     if (typeof filePath === 'string' && filePath.length > 0) {
       shell.showItemInFolder(filePath);
     }
@@ -1315,13 +1316,13 @@ export function registerIpcHandlers(
 
   // Open a local file with the OS default app (HTML→browser, .docx→Word, etc.).
   // shell.openPath resolves with '' on success or an error string on failure.
-  ipcMain.handle(IPC.OPEN_PATH, async (_event, filePath: string) => {
+  ipcMain.handle(IPC.OPEN_PATH, async (_event, { filePath }: { filePath: string }) => {
     if (typeof filePath !== 'string' || filePath.length === 0) return 'no path';
     return shell.openPath(filePath);
   });
 
   // Read model + context from a transcript JSONL file (async, first/last byte-range reads)
-  ipcMain.handle(IPC.READ_TRANSCRIPT_META, async (_event, transcriptPath: string) => {
+  ipcMain.handle(IPC.READ_TRANSCRIPT_META, async (_event, { path: transcriptPath }: { path: string }) => {
     try {
       const claudeProjects = path.join(os.homedir(), '.claude', 'projects');
       const resolved = path.resolve(transcriptPath);
@@ -1344,7 +1345,7 @@ export function registerIpcHandlers(
     }
   });
 
-  ipcMain.handle('model:set-preference', async (_event, model: string) => {
+  ipcMain.handle('model:set-preference', async (_event, { model }: { model: string }) => {
     try {
       fs.mkdirSync(path.dirname(modelPrefPath), { recursive: true });
       fs.writeFileSync(modelPrefPath, JSON.stringify({ model }));
@@ -1388,7 +1389,7 @@ export function registerIpcHandlers(
   // the dot-path walker with its prototype-pollution refusal, the atomic
   // locked write and the "back up a corrupt file, then write fresh" rule all
   // live in that one module now, shared with the remote-server twin.
-  ipcMain.handle('settings:get', async (_event, field: string) => {
+  ipcMain.handle('settings:get', async (_event, { field }: { field: string }) => {
     try {
       return getField(field);
     } catch {
@@ -1396,7 +1397,7 @@ export function registerIpcHandlers(
     }
   });
 
-  ipcMain.handle('settings:set', async (_event, field: string, value: unknown) => setField(field, value));
+  ipcMain.handle('settings:set', async (_event, { field, value }: { field: string; value: unknown }) => setField(field, value));
 
   // --- Appearance preference persistence ---
   ipcMain.handle('appearance:get', async () => {
@@ -1424,7 +1425,7 @@ export function registerIpcHandlers(
   });
 
   // --- Transcript model verification ---
-  ipcMain.handle('model:read-last', async (_event, transcriptPath: string) => {
+  ipcMain.handle('model:read-last', async (_event, { transcriptPath }: { transcriptPath: string }) => {
     try {
       // Security: validate path stays within Claude projects directory (prevents arbitrary file read)
       const claudeProjects = path.join(os.homedir(), '.claude', 'projects');
@@ -1463,7 +1464,7 @@ export function registerIpcHandlers(
   // optimistic flip with revert-on-failure, so we don't need to return a bool
   // from the setter.
   ipcMain.handle('analytics:get-opt-in', () => getAnalyticsOptIn());
-  ipcMain.handle('analytics:set-opt-in', (_event, enabled: boolean) => {
+  ipcMain.handle('analytics:set-opt-in', (_event, { enabled }: { enabled: boolean }) => {
     setAnalyticsOptIn(Boolean(enabled));
   });
 
@@ -1476,10 +1477,10 @@ export function registerIpcHandlers(
   // so a phone lists and edits folders exactly as this window does (a hand-copied remote version
   // had stopped listing synced projects — Destin, 2026-09-11).
   ipcMain.handle(IPC.FOLDERS_LIST, async () => listPickerFolders());
-  ipcMain.handle(IPC.FOLDERS_ADD, async (_event, folderPath: string, nickname?: string) => addFolder(folderPath, nickname));
-  ipcMain.handle(IPC.FOLDERS_REMOVE, async (_event, folderPath: string) => removeFolder(folderPath));
-  ipcMain.handle(IPC.FOLDERS_RENAME, async (_event, folderPath: string, nickname: string) => renameFolder(folderPath, nickname));
-  ipcMain.handle(IPC.FOLDERS_SET_DESCRIPTION, async (_event, folderPath: string, description: string) => setFolderDescription(folderPath, description));
+  ipcMain.handle(IPC.FOLDERS_ADD, async (_event, { folderPath, nickname }: { folderPath: string; nickname?: string }) => addFolder(folderPath, nickname));
+  ipcMain.handle(IPC.FOLDERS_REMOVE, async (_event, { folderPath }: { folderPath: string }) => removeFolder(folderPath));
+  ipcMain.handle(IPC.FOLDERS_RENAME, async (_event, { folderPath, nickname }: { folderPath: string; nickname: string }) => renameFolder(folderPath, nickname));
+  ipcMain.handle(IPC.FOLDERS_SET_DESCRIPTION, async (_event, { folderPath, description }: { folderPath: string; description: string }) => setFolderDescription(folderPath, description));
 
   // --- Skills discovery & marketplace ---
   ipcMain.handle(IPC.SKILLS_LIST, async () => {
@@ -1494,15 +1495,15 @@ export function registerIpcHandlers(
     return skillProvider.listMarketplace(filters);
   });
 
-  ipcMain.handle(IPC.SKILLS_GET_DETAIL, async (_event, id: string) => {
+  ipcMain.handle(IPC.SKILLS_GET_DETAIL, async (_event, { id }: { id: string }) => {
     return skillProvider.getSkillDetail(id);
   });
 
-  ipcMain.handle(IPC.SKILLS_SEARCH, async (_event, query: string) => {
+  ipcMain.handle(IPC.SKILLS_SEARCH, async (_event, { query }: { query: string }) => {
     return skillProvider.search(query);
   });
 
-  ipcMain.handle(IPC.SKILLS_INSTALL, async (_event, id: string) => {
+  ipcMain.handle(IPC.SKILLS_INSTALL, async (_event, { id }: { id: string }) => {
     const result = await skillProvider.install(id);
     // Reload plugins so Claude Code discovers the new plugin. Uses a
     // short delay because firing immediately races the prompt-ready state
@@ -1514,7 +1515,7 @@ export function registerIpcHandlers(
     return result;
   });
 
-  ipcMain.handle(IPC.SKILLS_UNINSTALL, async (_event, id: string) => {
+  ipcMain.handle(IPC.SKILLS_UNINSTALL, async (_event, { id }: { id: string }) => {
     // Defense-in-depth: UI disables the uninstall button for bundled
     // plugins; reject here too so a stale client or direct IPC call can't
     // bypass it.
@@ -1534,7 +1535,7 @@ export function registerIpcHandlers(
     return skillProvider.getFavorites();
   });
 
-  ipcMain.handle(IPC.SKILLS_SET_FAVORITE, async (_event, id: string, favorited: boolean) => {
+  ipcMain.handle(IPC.SKILLS_SET_FAVORITE, async (_event, { id, favorited }: { id: string; favorited: boolean }) => {
     return skillProvider.setFavorite(id, favorited);
   });
 
@@ -1544,7 +1545,7 @@ export function registerIpcHandlers(
     return skillProvider.configStore.getThemeFavorites();
   });
 
-  ipcMain.handle(IPC.APPEARANCE_FAVORITE_THEME, async (_event, slug: string, favorited: boolean) => {
+  ipcMain.handle(IPC.APPEARANCE_FAVORITE_THEME, async (_event, { slug, favorited }: { slug: string; favorited: boolean }) => {
     skillProvider.configStore.setThemeFavorite(slug, favorited);
     // Broadcast to peer windows so ThemeContext re-reads without requiring a
     // polled IPC fetch. Reuses the existing appearance broadcast pipe.
@@ -1561,15 +1562,15 @@ export function registerIpcHandlers(
     return skillProvider.getChips();
   });
 
-  ipcMain.handle(IPC.SKILLS_SET_CHIPS, async (_event, chips) => {
+  ipcMain.handle(IPC.SKILLS_SET_CHIPS, async (_event, { chips }) => {
     return skillProvider.setChips(chips);
   });
 
-  ipcMain.handle(IPC.SKILLS_GET_OVERRIDE, async (_event, id: string) => {
+  ipcMain.handle(IPC.SKILLS_GET_OVERRIDE, async (_event, { id }: { id: string }) => {
     return skillProvider.getOverrides().then(o => o[id] || null);
   });
 
-  ipcMain.handle(IPC.SKILLS_SET_OVERRIDE, async (_event, id: string, override) => {
+  ipcMain.handle(IPC.SKILLS_SET_OVERRIDE, async (_event, { id, override }: { id: string; override: any }) => {
     return skillProvider.setOverride(id, override);
   });
 
@@ -1577,19 +1578,19 @@ export function registerIpcHandlers(
     return skillProvider.createPromptSkill(skill);
   });
 
-  ipcMain.handle(IPC.SKILLS_DELETE_PROMPT, async (_event, id: string) => {
+  ipcMain.handle(IPC.SKILLS_DELETE_PROMPT, async (_event, { id }: { id: string }) => {
     return skillProvider.deletePromptSkill(id);
   });
 
-  ipcMain.handle(IPC.SKILLS_PUBLISH, async (_event, id: string) => {
+  ipcMain.handle(IPC.SKILLS_PUBLISH, async (_event, { id }: { id: string }) => {
     return skillProvider.publish(id);
   });
 
-  ipcMain.handle(IPC.SKILLS_GET_SHARE_LINK, async (_event, id: string) => {
+  ipcMain.handle(IPC.SKILLS_GET_SHARE_LINK, async (_event, { id }: { id: string }) => {
     return skillProvider.generateShareLink(id);
   });
 
-  ipcMain.handle(IPC.SKILLS_IMPORT_FROM_LINK, async (_event, encoded: string) => {
+  ipcMain.handle(IPC.SKILLS_IMPORT_FROM_LINK, async (_event, { encoded }: { encoded: string }) => {
     return skillProvider.importFromLink(encoded);
   });
 
@@ -1607,19 +1608,19 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.INTEGRATIONS_LIST, async () => {
     return listWithState(integrationInstaller);
   });
-  ipcMain.handle(IPC.INTEGRATIONS_STATUS, async (_e, slug: string) => {
+  ipcMain.handle(IPC.INTEGRATIONS_STATUS, async (_e, { slug }: { slug: string }) => {
     return integrationInstaller.status(slug);
   });
-  ipcMain.handle(IPC.INTEGRATIONS_INSTALL, async (_e, slug: string) => {
+  ipcMain.handle(IPC.INTEGRATIONS_INSTALL, async (_e, { slug }: { slug: string }) => {
     return integrationInstaller.install(slug);
   });
-  ipcMain.handle(IPC.INTEGRATIONS_UNINSTALL, async (_e, slug: string) => {
+  ipcMain.handle(IPC.INTEGRATIONS_UNINSTALL, async (_e, { slug }: { slug: string }) => {
     return integrationInstaller.uninstall(slug);
   });
-  ipcMain.handle(IPC.INTEGRATIONS_CONFIGURE, async (_e, slug: string, settings: Record<string, unknown>) => {
+  ipcMain.handle(IPC.INTEGRATIONS_CONFIGURE, async (_e, { slug, settings }: { slug: string; settings: Record<string, unknown> }) => {
     return integrationInstaller.configure(slug, settings);
   });
-  ipcMain.handle(IPC.INTEGRATIONS_CONNECT, async (_e, slug: string) => {
+  ipcMain.handle(IPC.INTEGRATIONS_CONNECT, async (_e, { slug }: { slug: string }) => {
     return integrationInstaller.connect(slug);
   });
 
@@ -1636,17 +1637,17 @@ export function registerIpcHandlers(
   });
 
   // Decomposition v3 §9.9: surface integration info for the detail view badges
-  ipcMain.handle(IPC.SKILLS_GET_INTEGRATION_INFO, async (_event, id: string) => {
+  ipcMain.handle(IPC.SKILLS_GET_INTEGRATION_INFO, async (_event, { id }: { id: string }) => {
     return skillProvider.getIntegrationInfo(id);
   });
 
   // Decomposition v3 §9.10: onboarding bulk-install curated packages
-  ipcMain.handle(IPC.SKILLS_INSTALL_MANY, async (_event, ids: string[]) => {
+  ipcMain.handle(IPC.SKILLS_INSTALL_MANY, async (_event, { ids }: { ids: string[] }) => {
     return skillProvider.installMany(ids);
   });
 
   // Decomposition v3 §9.10: onboarding picks an output style
-  ipcMain.handle(IPC.SKILLS_APPLY_OUTPUT_STYLE, async (_event, styleId: string) => {
+  ipcMain.handle(IPC.SKILLS_APPLY_OUTPUT_STYLE, async (_event, { styleId }: { styleId: string }) => {
     skillProvider.applyOutputStyle(styleId);
     return { ok: true };
   });
@@ -1661,7 +1662,7 @@ export function registerIpcHandlers(
   // Phase 3b: update an installed plugin/prompt to the latest marketplace
   // version. Re-downloads files, overwrites at the same path, and bumps the
   // version in youcoded-skills.json. Config is NOT touched.
-  ipcMain.handle(IPC.SKILLS_UPDATE, async (_event, id: string) => {
+  ipcMain.handle(IPC.SKILLS_UPDATE, async (_event, { id }: { id: string }) => {
     const result = await skillProvider.update(id);
     // Reload plugins in active sessions so Claude Code picks up updated code
     if (result.ok) {
@@ -1672,17 +1673,17 @@ export function registerIpcHandlers(
 
   // Phase 3b: update an installed theme to the latest registry version.
   // Re-downloads theme files at the same slug path and bumps the version.
-  ipcMain.handle(IPC.THEME_MARKETPLACE_UPDATE, async (_event, slug: string) => {
+  ipcMain.handle(IPC.THEME_MARKETPLACE_UPDATE, async (_event, { slug }: { slug: string }) => {
     return themeMarketplace.updateTheme(slug);
   });
 
   // Phase 3c: per-entry config — reads/writes ~/.claude/youcoded-config/<id>.json.
   // Only entries that declare configSchema in their marketplace JSON use this.
-  ipcMain.handle(IPC.MARKETPLACE_GET_CONFIG, async (_event, id: string) => {
+  ipcMain.handle(IPC.MARKETPLACE_GET_CONFIG, async (_event, { id }: { id: string }) => {
     return getMarketplaceConfig(id);
   });
 
-  ipcMain.handle(IPC.MARKETPLACE_SET_CONFIG, async (_event, id: string, values: Record<string, unknown>) => {
+  ipcMain.handle(IPC.MARKETPLACE_SET_CONFIG, async (_event, { id, values }: { id: string; values: Record<string, unknown> }) => {
     setMarketplaceConfig(id, values);
     return { ok: true };
   });
@@ -1819,11 +1820,11 @@ export function registerIpcHandlers(
       return remoteServer?.getDeviceList() ?? [];
     });
 
-    ipcMain.handle(IPC.REMOTE_DEVICES_RENAME, async (_event, deviceId: string, name: string) => {
+    ipcMain.handle(IPC.REMOTE_DEVICES_RENAME, async (_event, { deviceId, name }: { deviceId: string; name: string }) => {
       return remoteServer?.renameDevice(deviceId, name) ?? false;
     });
 
-    ipcMain.handle(IPC.REMOTE_DEVICES_UNPAIR, async (_event, deviceId: string) => {
+    ipcMain.handle(IPC.REMOTE_DEVICES_UNPAIR, async (_event, { deviceId }: { deviceId: string }) => {
       return remoteServer?.unpairDevice(deviceId) ?? false;
     });
 
@@ -1887,22 +1888,19 @@ export function registerIpcHandlers(
 
   ipcMain.handle(IPC.SESSION_HISTORY, async (
     _event,
-    sessionId: string,
-    projectSlug: string,
-    count: number,
-    all: boolean,
+    { sessionId, projectSlug, count, all }: { sessionId: string; projectSlug: string; count: number; all: boolean },
   ) => {
     return loadHistory(sessionId, projectSlug, count, all);
   });
 
 
   // PTY input (fire-and-forget, not request-response)
-  ipcMain.on(IPC.SESSION_INPUT, (_event, sessionId: string, text: string) => {
+  ipcMain.on(IPC.SESSION_INPUT, (_event, { sessionId, text }: { sessionId: string; text: string }) => {
     sessionManager.sendInput(sessionId, text);
   });
 
   // PTY resize (fire-and-forget)
-  ipcMain.on(IPC.SESSION_RESIZE, (_event, sessionId: string, cols: number, rows: number) => {
+  ipcMain.on(IPC.SESSION_RESIZE, (_event, { sessionId, cols, rows }: { sessionId: string; cols: number; rows: number }) => {
     sessionManager.resizeSession(sessionId, cols, rows);
   });
 
@@ -1935,7 +1933,7 @@ export function registerIpcHandlers(
   });
 
   // Renderer signals terminal is mounted and listening
-  ipcMain.on(IPC.TERMINAL_READY, (_event, sessionId: string) => {
+  ipcMain.on(IPC.TERMINAL_READY, (_event, { sessionId }: { sessionId: string }) => {
     readySessions.add(sessionId);
     const buffered = pendingOutput.get(sessionId);
     if (buffered) {
@@ -2107,7 +2105,7 @@ export function registerIpcHandlers(
   // Registered here rather than beside the other update:* handlers so they sit
   // in the same scope as updateSettings and the cache they have to invalidate.
   ipcMain.handle('update:get-beta-channel', () => betaChannelState());
-  ipcMain.handle('update:set-beta-channel', async (_event, enabled: unknown) => {
+  ipcMain.handle('update:set-beta-channel', async (_event, { enabled }: { enabled: unknown }) => {
     await updateSettings.setBetaChannel(enabled);
     // WHY re-check immediately: the status cache holds one answer for 30 minutes,
     // and it was computed against the OTHER channel. Without this, turning the
@@ -3142,7 +3140,7 @@ export function registerIpcHandlers(
       return { status: 'failed', reason: 'error', detail: err?.message ?? String(err) };
     }
   });
-  ipcMain.handle(IPC.NATIVE_SET_BINDING, async (_e, sessionId: string, binding: any) => {
+  ipcMain.handle(IPC.NATIVE_SET_BINDING, async (_e, { sessionId, binding }: { sessionId: string; binding: any }) => {
     const ok = await nativeHost.setBinding(sessionId, binding);
     // Task 4: a successful mid-session model swap is exactly the "model may
     // have changed" case noteModelUsed exists for — write it through so the
@@ -3157,12 +3155,12 @@ export function registerIpcHandlers(
   // unknown mode string — the reject surfaces to the renderer invoke() so the
   // chip sees the failure instead of a false "applied"; on success it returns the
   // applied mode as the authoritative value.
-  ipcMain.handle(IPC.NATIVE_SET_PERMISSION_MODE, async (_e, sessionId: string, mode: NativePermissionMode) =>
+  ipcMain.handle(IPC.NATIVE_SET_PERMISSION_MODE, async (_e, { sessionId, mode }: { sessionId: string; mode: NativePermissionMode }) =>
     nativeHost.setPermissionMode(sessionId, mode));
   // Read-only mode fetch — seeds the renderer chip on create/resume so a fresh
   // Coder session shows AUTO EDIT rather than the default ASK. Never throws
   // (getPermissionMode falls back to 'ask' for an unknown/non-live id).
-  ipcMain.handle(IPC.NATIVE_GET_PERMISSION_MODE, async (_e, sessionId: string) =>
+  ipcMain.handle(IPC.NATIVE_GET_PERMISSION_MODE, async (_e, { sessionId }: { sessionId: string }) =>
     nativeHost.getPermissionMode(sessionId));
   // Push every seeded or changed mode to each window showing the session AND
   // every phone. WHY: the get above can answer before a starting session has
@@ -3178,12 +3176,12 @@ export function registerIpcHandlers(
     if (process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
     return contextSettings.read();
   });
-  ipcMain.handle(IPC.NATIVE_SET_CONTEXT_PREFERENCES, async (_e, patch: unknown) => {
+  ipcMain.handle(IPC.NATIVE_SET_CONTEXT_PREFERENCES, async (_e, { patch }: { patch: unknown }) => {
     if (process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
     return contextSettings.update(patch);
   });
   ipcMain.handle(IPC.NATIVE_GET_STEP_GUARD, () => stepGuardSettings.read());
-  ipcMain.handle(IPC.NATIVE_SET_STEP_GUARD, async (_e, value: number | null) => stepGuardSettings.update(value));
+  ipcMain.handle(IPC.NATIVE_SET_STEP_GUARD, async (_e, { value }: { value: number | null }) => stepGuardSettings.update(value));
   ipcMain.handle(IPC.NATIVE_SESSIONS_LIST, async () => nativeHost.listAsync());
   // G-1: the Bash card's Stop button, on every surface.
   ipcMain.handle(IPC.NATIVE_KILL_SHELL, (_e, { sessionId, shellId }: { sessionId: string; shellId: string }) => nativeHost.killShell(sessionId, shellId));
@@ -3205,12 +3203,12 @@ export function registerIpcHandlers(
   // Provider management (Settings → Providers).
   ipcMain.handle(IPC.PROVIDER_LIST, async () => providerRegistry.list());
   ipcMain.handle(IPC.PROVIDER_UPSERT, async (_e, config: any) => providerRegistry.upsert(config));
-  ipcMain.handle(IPC.PROVIDER_REMOVE, async (_e, id: string) => { await providerRegistry.remove(id); return true; });
+  ipcMain.handle(IPC.PROVIDER_REMOVE, async (_e, { id }: { id: string }) => { await providerRegistry.remove(id); return true; });
   // `key`: an optional candidate checked instead of the saved key (the Connect
   // dialog refuses a bad key before it can replace a working one).
-  ipcMain.handle(IPC.PROVIDER_TEST, async (_e, id: string, key?: unknown) =>
+  ipcMain.handle(IPC.PROVIDER_TEST, async (_e, { id, key }: { id: string; key?: unknown }) =>
     providerRegistry.testConnection(id, typeof key === 'string' ? key : undefined));
-  ipcMain.handle(IPC.PROVIDER_SET_KEY, async (_e, id: string, key: string) => { await providerRegistry.setKey(id, key); return true; });
+  ipcMain.handle(IPC.PROVIDER_SET_KEY, async (_e, { id, key }: { id: string; key: string }) => { await providerRegistry.setKey(id, key); return true; });
   ipcMain.handle(IPC.PROVIDER_CATALOG, async () => modelCatalog.get(await providerRegistry.list()));
   // Sign in with ChatGPT (backend design 2026-09-05 §3, §5, §6). status is a
   // cheap sync read (the card polls it every second while waiting). The verbs
@@ -3250,9 +3248,9 @@ export function registerIpcHandlers(
   // fixed Tavily/Exa rows with hasKey flags; set/remove manage the encrypted key;
   // test is never-throws ({ ok, message } is the result, not an exception).
   ipcMain.handle(IPC.SEARCH_LIST, async () => searchKeyStore.list());
-  ipcMain.handle(IPC.SEARCH_SET_KEY, async (_e, backend: 'tavily' | 'exa', key: string) => { await searchKeyStore.setKey(backend, key); return true; });
-  ipcMain.handle(IPC.SEARCH_REMOVE_KEY, async (_e, backend: 'tavily' | 'exa') => { await searchKeyStore.removeKey(backend); return true; });
-  ipcMain.handle(IPC.SEARCH_TEST, async (_e, backend: 'tavily' | 'exa', key: string) => searchService.testBackend(backend, key));
+  ipcMain.handle(IPC.SEARCH_SET_KEY, async (_e, { backend, key }: { backend: 'tavily' | 'exa'; key: string }) => { await searchKeyStore.setKey(backend, key); return true; });
+  ipcMain.handle(IPC.SEARCH_REMOVE_KEY, async (_e, { backend }: { backend: 'tavily' | 'exa' }) => { await searchKeyStore.removeKey(backend); return true; });
+  ipcMain.handle(IPC.SEARCH_TEST, async (_e, { backend, key }: { backend: 'tavily' | 'exa'; key: string }) => searchService.testBackend(backend, key));
   // Remembered "Always allow" rules (Settings → Permissions, M5 2a).
   // list READS the store directly — it only reports what is on disk.
   // remove / remove-project go through nativeHost.revokeRule / revokeProject and
@@ -3264,8 +3262,8 @@ export function registerIpcHandlers(
   // Both revokes return true only when something actually matched; false means
   // the renderer's list was stale, and it says so instead of claiming success.
   ipcMain.handle(IPC.PERMISSIONS_LIST, async () => permissionStore.list());
-  ipcMain.handle(IPC.PERMISSIONS_REMOVE, async (_e, slug: string, rule: PermissionRule) => nativeHost.revokeRule(slug, rule));
-  ipcMain.handle(IPC.PERMISSIONS_REMOVE_PROJECT, async (_e, slug: string) => nativeHost.revokeProject(slug));
+  ipcMain.handle(IPC.PERMISSIONS_REMOVE, async (_e, { slug, rule }: { slug: string; rule: PermissionRule }) => nativeHost.revokeRule(slug, rule));
+  ipcMain.handle(IPC.PERMISSIONS_REMOVE_PROJECT, async (_e, { slug }: { slug: string }) => nativeHost.revokeProject(slug));
   // Specialists 1c (Task 8) — roster + tier reads/writes + card actions.
   // list ALWAYS re-reads (catalog.reload) so a file dropped into a specialists
   // folder a moment ago shows up without a separate "did it change" check;
@@ -3277,11 +3275,11 @@ export function registerIpcHandlers(
     return toListResult(specialistCatalog.snapshot(opts?.cwd));
   });
   ipcMain.handle(IPC.SPECIALISTS_DELEGATED_GET, async () => nativeHost.getDelegatedModels());
-  ipcMain.handle(IPC.SPECIALISTS_DELEGATED_SET, async (_e, tier: 'budget' | 'frontier', binding: { providerId: string; modelId: string } | null) =>
+  ipcMain.handle(IPC.SPECIALISTS_DELEGATED_SET, async (_e, { tier, binding }: { tier: 'budget' | 'frontier'; binding: { providerId: string; modelId: string } | null }) =>
     nativeHost.setDelegatedModel(tier, binding));
-  ipcMain.handle(IPC.SPECIALISTS_STEER, async (_e, sessionId: string, childId: string, text: string) =>
+  ipcMain.handle(IPC.SPECIALISTS_STEER, async (_e, { sessionId, childId, text }: { sessionId: string; childId: string; text: string }) =>
     nativeHost.steerFromUser(sessionId, childId, text));
-  ipcMain.handle(IPC.SPECIALISTS_INTERRUPT, async (_e, sessionId: string, childId: string) =>
+  ipcMain.handle(IPC.SPECIALISTS_INTERRUPT, async (_e, { sessionId, childId }: { sessionId: string; childId: string }) =>
     nativeHost.interruptFromUser(sessionId, childId));
   // --- Local engine IPC (Plan B) ---
   // install/restart resolve to a fresh status() so the caller doesn't need a
@@ -3327,8 +3325,8 @@ export function registerIpcHandlers(
   // Whole live per-model state (initial fetch for the coordinator's consumers).
   ipcMain.handle(IPC.ENGINE_MODELS, async () => engineManager.liveModels());
   // #2 create-time / swap-time memory guard; #4 [Reload Model].
-  ipcMain.handle(IPC.MODELS_MEMORY_CHECK, async (_e, modelId: string) => modelManager.memoryCheck(modelId));
-  ipcMain.handle(IPC.MODELS_LOAD, async (_e, modelId: string) => { await engineManager.loadModel(modelId); return true; });
+  ipcMain.handle(IPC.MODELS_MEMORY_CHECK, async (_e, { modelId }: { modelId: string }) => modelManager.memoryCheck(modelId));
+  ipcMain.handle(IPC.MODELS_LOAD, async (_e, { modelId }: { modelId: string }) => { await engineManager.loadModel(modelId); return true; });
   // --- Model manager IPC (Plan C) ---
   // Download progress fans out to every window + remotes on one push channel,
   // mirroring the engine install-progress emitter above.
@@ -3386,8 +3384,8 @@ export function registerIpcHandlers(
       .find((m) => m.repo === record.repo && m.quant === record.quant && m.status === 'unfinished');
     if (row) await modelManager.resume(row.id);
   });
-  ipcMain.handle(IPC.ENGINE_SET_BACKEND, async (_e, backend: string) => { await engineManager.setBackend(backend as any); return engineManager.status(); });
-  ipcMain.handle(IPC.ENGINE_SET_CONTEXT, async (_e, contextSize: number) => { await engineManager.setContext(contextSize); return engineManager.status(); });
+  ipcMain.handle(IPC.ENGINE_SET_BACKEND, async (_e, { backend }: { backend: string }) => { await engineManager.setBackend(backend as any); return engineManager.status(); });
+  ipcMain.handle(IPC.ENGINE_SET_CONTEXT, async (_e, { contextSize }: { contextSize: number }) => { await engineManager.setContext(contextSize); return engineManager.status(); });
   // Engine-wide settings (2026-09-05 §B). The answer is the status the moment
   // the value was SAVED — `configApplyPending` on it says whether the engine has
   // picked it up yet, and a 'status-changed' push follows when it has.
@@ -3399,7 +3397,7 @@ export function registerIpcHandlers(
   // command onto its prompt. Nothing runs — the user presses Enter, and the
   // password an installer asks for is typed into their own terminal, not into
   // a dialog of ours.
-  ipcMain.handle(IPC.ENGINE_RUN_IN_TERMINAL, async (event, command: string) => {
+  ipcMain.handle(IPC.ENGINE_RUN_IN_TERMINAL, async (event, { command }: { command: string }) => {
     // Refuses an empty command, a command carrying a control character (a `\r`
     // inside the string runs it with nobody pressing Enter), and a $SHELL that
     // is not installed. Throws with the real reason, which reaches EngineCard's
@@ -3445,34 +3443,34 @@ export function registerIpcHandlers(
   // this channel is only ever called by the card, including its "Check again"
   // button AFTER the user has run the install command — a cached answer there
   // would report the software still missing and strand them in the set-up box.
-  ipcMain.handle(IPC.ENGINE_PREREQS, async (_e, backend: string) => enginePrereqs(backend, { refresh: true }));
+  ipcMain.handle(IPC.ENGINE_PREREQS, async (_e, { backend }: { backend: string }) => enginePrereqs(backend, { refresh: true }));
   ipcMain.handle(IPC.MODELS_CURATED, async () => modelManager.curatedList());
-  ipcMain.handle(IPC.MODELS_SEARCH, async (_e, query: string) => modelManager.search(query));
-  ipcMain.handle(IPC.MODELS_QUANTS, async (_e, repo: string) => modelManager.quants(repo));
-  ipcMain.handle(IPC.MODELS_DOWNLOAD, async (_e, repo: string, quant: any) => modelManager.download(repo, quant));
-  ipcMain.handle(IPC.MODELS_DOWNLOAD_CANCEL, async (_e, downloadId: string) => { modelManager.cancel(downloadId); return true; });
-  ipcMain.handle(IPC.MODELS_DELETE, async (_e, id: string) => { await engineManager.deleteModel(id); return true; });
+  ipcMain.handle(IPC.MODELS_SEARCH, async (_e, { query }: { query: string }) => modelManager.search(query));
+  ipcMain.handle(IPC.MODELS_QUANTS, async (_e, { repo }: { repo: string }) => modelManager.quants(repo));
+  ipcMain.handle(IPC.MODELS_DOWNLOAD, async (_e, { repo, quant }: { repo: string; quant: any }) => modelManager.download(repo, quant));
+  ipcMain.handle(IPC.MODELS_DOWNLOAD_CANCEL, async (_e, { downloadId }: { downloadId: string }) => { modelManager.cancel(downloadId); return true; });
+  ipcMain.handle(IPC.MODELS_DELETE, async (_e, { id }: { id: string }) => { await engineManager.deleteModel(id); return true; });
   ipcMain.handle(IPC.MODELS_INSTALLED, async () => engineManager.installedModels());
   // Resume an interrupted download (2026-08-26). Reads the manifest written
   // beside the .partial — no Hugging Face round trip, so it works when the
   // network is the reason the download stopped.
-  ipcMain.handle(IPC.MODELS_RESUME, async (_e, modelId: string) => modelManager.resume(modelId));
+  ipcMain.handle(IPC.MODELS_RESUME, async (_e, { modelId }: { modelId: string }) => modelManager.resume(modelId));
   // --- Per-model settings + vision (2026-09-05 local-engine upgrades §C/§E4) ---
   // Read: the STORED settings, so the dialog can also show "Applies after the
   // current reply" and the model's last load error, neither of which the user
   // sets. A model nobody has touched reads as every default.
-  ipcMain.handle(IPC.MODELS_SETTINGS, async (_e, modelId: string) => engineManager.modelSettings(modelId));
+  ipcMain.handle(IPC.MODELS_SETTINGS, async (_e, { modelId }: { modelId: string }) => engineManager.modelSettings(modelId));
   // Write: the value saves at once and the ENGINE is left alone — rewriting the
   // preset file here would make the router unload the model mid-reply, which is
   // the one thing this feature promises will not happen. Every rejection
   // (context too small, an engine option the binary does not know, a bad
   // toggle) throws with the reason the user needs, and the dialog shows it.
-  ipcMain.handle(IPC.MODELS_SET_SETTINGS, async (_e, modelId: string, patch: ModelSettingsWrite) =>
+  ipcMain.handle(IPC.MODELS_SET_SETTINGS, async (_e, { modelId, patch }: { modelId: string; patch: ModelSettingsWrite }) =>
     engineManager.setModelSettings(modelId, patch ?? {}));
   // Add vision to a model already on disk. Returns the download id straight
   // away; the bytes report on the ordinary models:download-progress stream, so
   // the row's existing progress bar covers it with no second channel.
-  ipcMain.handle(IPC.MODELS_ADD_VISION, async (_e, modelId: string) => modelManager.addVision(modelId));
+  ipcMain.handle(IPC.MODELS_ADD_VISION, async (_e, { modelId }: { modelId: string }) => modelManager.addVision(modelId));
   ipcMain.handle(IPC.ENDPOINTS_DETECT, async () =>
     detectEndpoints(fetch, ((await providerRegistry.list()) as any[])));
   // /clear and /compact both truncate or rewrite the JSONL. App.tsx listens
@@ -3903,8 +3901,8 @@ export function registerIpcHandlers(
     catch { return 'claude'; }
   };
 
-  ipcMain.handle(IPC.SESSION_MENU_LOCK, (_e, sid: string, holder: string, action: string) => menuAnswerLock.handle(sid, holder, action));
-  ipcMain.handle(IPC.SESSION_SET_FLAG, async (_event, sessionId: string, flag: string, value: boolean) => {
+  ipcMain.handle(IPC.SESSION_MENU_LOCK, (_e, { sessionId: sid, holder, action }: { sessionId: string; holder: string; action: string }) => menuAnswerLock.handle(sid, holder, action));
+  ipcMain.handle(IPC.SESSION_SET_FLAG, async (_event, { sessionId, flag, value }: { sessionId: string; flag: string; value: boolean }) => {
     if (!SESSION_FLAG_NAMES.includes(flag as SessionFlagName)) {
       return { ok: false, error: `unknown flag: ${flag}` };
     }
@@ -3957,7 +3955,7 @@ export function registerIpcHandlers(
   // A failed read answers { ok: false, error }, never [] — see listTagsForHost for why.
   ipcMain.handle(IPC.TAGS_LIST, () => listTagsForHost());
 
-  ipcMain.handle(IPC.TAGS_CREATE, async (_e, label: string, color: string) => {
+  ipcMain.handle(IPC.TAGS_CREATE, async (_e, { label, color }: { label: string; color: string }) => {
     const reg = getTagRegistry();
     if (!reg) return { ok: false, error: 'tag registry unavailable' };
     const c: TagColor = isTagColor(color) ? color : 'tag-gray';
@@ -3970,7 +3968,7 @@ export function registerIpcHandlers(
     } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
   });
 
-  ipcMain.handle(IPC.TAGS_UPDATE, async (_e, id: string, patch: { label?: string; color?: string; archived?: boolean }) => {
+  ipcMain.handle(IPC.TAGS_UPDATE, async (_e, { id, patch }: { id: string; patch: { label?: string; color?: string; archived?: boolean } }) => {
     const reg = getTagRegistry();
     if (!reg) return { ok: false, error: 'tag registry unavailable' };
     const clean: { label?: string; color?: TagColor; archived?: boolean } = {};
@@ -3991,7 +3989,7 @@ export function registerIpcHandlers(
     } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
   });
 
-  ipcMain.handle(IPC.TAGS_DELETE, async (_e, id: string) => {
+  ipcMain.handle(IPC.TAGS_DELETE, async (_e, { id }: { id: string }) => {
     const reg = getTagRegistry();
     if (!reg) return { ok: false, error: 'tag registry unavailable' };
     try {
@@ -4006,7 +4004,7 @@ export function registerIpcHandlers(
   });
 
   // --- Apply/remove a tag on a session (writes tag:<id> into the store flag map) ---
-  ipcMain.handle(IPC.SESSION_SET_TAG, async (_e, sessionId: string, tagId: string, value: boolean) => {
+  ipcMain.handle(IPC.SESSION_SET_TAG, async (_e, { sessionId, tagId, value }: { sessionId: string; tagId: string; value: boolean }) => {
     if (typeof tagId !== 'string' || !tagId.startsWith('tag_')) {
       return { ok: false, error: `invalid tag id: ${tagId}` };
     }
@@ -4124,9 +4122,9 @@ export function registerIpcHandlers(
   };
 
   ipcMain.handle(IPC.SESSION_NAMING_GET, () => namingGet());
-  ipcMain.handle(IPC.SESSION_NAMING_SET, (_e, value: unknown) => namingSet(value));
-  ipcMain.handle(IPC.SESSION_NAMING_TITLE, (_e, sessionId: string, fallback: string) => namingTitle(sessionId, fallback));
-  ipcMain.handle(IPC.SESSION_NAMING_RENAME, (_e, sessionId: string, title: string) => namingRename(sessionId, title));
+  ipcMain.handle(IPC.SESSION_NAMING_SET, (_e, { value }: { value: unknown }) => namingSet(value));
+  ipcMain.handle(IPC.SESSION_NAMING_TITLE, (_e, { sessionId, fallback }: { sessionId: string; fallback: string }) => namingTitle(sessionId, fallback));
+  ipcMain.handle(IPC.SESSION_NAMING_RENAME, (_e, { sessionId, title }: { sessionId: string; title: string }) => namingRename(sessionId, title));
 
   // Same four, for a phone or browser driving THIS desktop. One implementation,
   // so a remote rename cannot bypass a gate the local path enforces — the
@@ -4139,7 +4137,7 @@ export function registerIpcHandlers(
     rename: namingRename,
   });
 
-  ipcMain.handle(IPC.SESSION_SET_NOTE, async (_e, sessionId: string, note: string) => {
+  ipcMain.handle(IPC.SESSION_SET_NOTE, async (_e, { sessionId, note }: { sessionId: string; note: string }) => {
     const resolved = sessionIdMap.get(sessionId) || sessionId;
     const text = String(note ?? '');
     if (text.length > 8000) return { ok: false, error: 'note exceeds 8000 characters' };
@@ -4162,7 +4160,7 @@ export function registerIpcHandlers(
 
   // --- Read a live/past session's applied tags + note (session:browse excludes
   // live sessions, so Plan B's in-session StatusBar element reads meta here) ---
-  ipcMain.handle(IPC.SESSION_GET_META, async (_e, sessionId: string) => {
+  ipcMain.handle(IPC.SESSION_GET_META, async (_e, { sessionId }: { sessionId: string }) => {
     const store = getConversationStore();
     const resolved = sessionIdMap.get(sessionId) || sessionId;
     // Task 5: read from whichever provider bucket this session actually writes
@@ -4200,7 +4198,7 @@ export function registerIpcHandlers(
     return welcomeBackStore.offerIds();
   });
 
-  ipcMain.handle(IPC.SESSION_FORGET_REOPEN, async (_e, ids: string[]): Promise<{ ok: boolean }> => {
+  ipcMain.handle(IPC.SESSION_FORGET_REOPEN, async (_e, { ids }: { ids: string[] }): Promise<{ ok: boolean }> => {
     if (!welcomeBackStore) return { ok: true };
     await welcomeBackStore.ready;
     welcomeBackStore.forget(Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : []);
@@ -4212,22 +4210,22 @@ export function registerIpcHandlers(
   // by sync.sh / session-start.sh and triggers sync via the existing scripts.
   ipcMain.handle(IPC.SYNC_GET_STATUS, () => getSyncStatus());
   ipcMain.handle(IPC.SYNC_GET_CONFIG, () => getSyncConfig());
-  ipcMain.handle(IPC.SYNC_SET_CONFIG, (_e, updates) => setSyncConfig(updates));
+  ipcMain.handle(IPC.SYNC_SET_CONFIG, (_e, { updates }) => setSyncConfig(updates));
   ipcMain.handle(IPC.SYNC_FORCE, () => forceSync());
-  ipcMain.handle(IPC.SYNC_GET_LOG, (_e, lines) => getSyncLog(lines));
-  ipcMain.handle(IPC.SYNC_DISMISS_WARNING, (_e, warning) => dismissWarning(warning));
+  ipcMain.handle(IPC.SYNC_GET_LOG, (_e, { lines }) => getSyncLog(lines));
+  ipcMain.handle(IPC.SYNC_DISMISS_WARNING, (_e, { warning }) => dismissWarning(warning));
 
   // Cross-device sync spaces (spec 2026-07-03) — folder-based sync engine,
   // distinct from the legacy sync:* backup control plane above. The service
   // module owns the singleton engine/manager/roots.
   ipcMain.handle(IPC.SYNC_SPACES_STATUS, () => syncSpacesStatus());
-  ipcMain.handle(IPC.SYNC_SPACES_ENABLE, (_e, enabled: boolean) => syncSpacesEnable(!!enabled));
+  ipcMain.handle(IPC.SYNC_SPACES_ENABLE, (_e, { enabled }: { enabled: boolean }) => syncSpacesEnable(!!enabled));
   // spaceId (optional) narrows the sync to one space for the Project View
   // "Sync now" button; SyncPanel calls with no arg = sync everything.
-  ipcMain.handle(IPC.SYNC_SPACES_SYNC_NOW, (_e, spaceId?: string) =>
+  ipcMain.handle(IPC.SYNC_SPACES_SYNC_NOW, (_e, { spaceId }: { spaceId?: string }) =>
     syncSpacesSyncNow(spaceId ? String(spaceId) : undefined));
-  ipcMain.handle(IPC.SYNC_SPACES_CREATE_PROJECT, (_e, name: string) => syncSpacesCreateProject(String(name ?? '')));
-  ipcMain.handle(IPC.SYNC_SPACES_IMPORT_PROJECT, (_e, sourcePath: string, name: string) =>
+  ipcMain.handle(IPC.SYNC_SPACES_CREATE_PROJECT, (_e, { name }: { name: string }) => syncSpacesCreateProject(String(name ?? '')));
+  ipcMain.handle(IPC.SYNC_SPACES_IMPORT_PROJECT, (_e, { sourcePath, name }: { sourcePath: string; name: string }) =>
     // Live-cwd guard input: the folder must not move under a running session.
     syncSpacesImportProject(String(sourcePath ?? ''), String(name ?? ''),
       sessionManager.listSessions().filter(s => s.status !== 'destroyed').map(s => s.cwd)));
@@ -4302,13 +4300,13 @@ export function registerIpcHandlers(
 
   // V2: Per-instance backend management (storage backends + multi-instance support)
   ipcMain.handle('sync:add-backend', (_e, instance) => addBackend(instance));
-  ipcMain.handle('sync:remove-backend', (_e, id) => removeBackend(id));
-  ipcMain.handle('sync:update-backend', (_e, id, updates) => updateBackend(id, updates));
-  ipcMain.handle('sync:push-backend', (_e, id) => pushBackend(id));
+  ipcMain.handle('sync:remove-backend', (_e, { id }) => removeBackend(id));
+  ipcMain.handle('sync:update-backend', (_e, { id, updates }) => updateBackend(id, updates));
+  ipcMain.handle('sync:push-backend', (_e, { id }) => pushBackend(id));
   // sync:pull-backend ("Download now") was removed in sync-legacy-demolition.
 
   // Open a backend's remote location in the default browser/file explorer
-  ipcMain.handle('sync:open-folder', async (_e, id: string) => {
+  ipcMain.handle('sync:open-folder', async (_e, { id }: { id: string }) => {
     const { shell } = require('electron');
     const config = await getSyncConfig();
     const backend = config.backends.find((b: any) => b.id === id);
@@ -4360,18 +4358,18 @@ export function registerIpcHandlers(
 
   // Guided setup wizard: prerequisite detection, tool installation, OAuth, repo creation.
   // Each handler runs one specific command — no generic shell exec.
-  ipcMain.handle('sync:setup:check-prereqs', (_e, backend) => checkSyncPrereqs(backend));
+  ipcMain.handle('sync:setup:check-prereqs', (_e, { backend }) => checkSyncPrereqs(backend));
   ipcMain.handle('sync:setup:install-rclone', () => installRclone());
   ipcMain.handle('sync:setup:check-gdrive', () => checkGdriveRemote());
   ipcMain.handle('sync:setup:auth-gdrive', () => authGdrive());
   ipcMain.handle('sync:setup:auth-github', () => authGithub());
-  ipcMain.handle('sync:setup:create-repo', (_e, repoName) => createGithubRepo(repoName));
+  ipcMain.handle('sync:setup:create-repo', (_e, { repoName }) => createGithubRepo(repoName));
 
   // --- Permission response (blocking hooks + native asks) ---
   // Native asks share the channel; ids are 'native-'-prefixed so routing is
   // exact — try the native broker first, then fall through to hookRelay (which
   // may be absent in native-only sessions).
-  ipcMain.handle(IPC.PERMISSION_RESPOND, async (_event, requestId: string, decision: object) => {
+  ipcMain.handle(IPC.PERMISSION_RESPOND, async (_event, { requestId, decision }: { requestId: string; decision: object }) => {
     if (nativeHost.respondPermission(requestId, decision as Record<string, unknown>)) return true;
     return hookRelay ? hookRelay.respond(requestId, decision) : false;
   });
@@ -4500,16 +4498,14 @@ export function registerIpcHandlers(
   const conversationIdFor = (id: string): string | undefined => [sessionIdMap.get(id)].find((c) => c && c !== id);
   ipcMain.handle(ARTIFACT_IPC.APPEND_VERSION, async (
     _e,
-    projectRoot: string,
-    sessionId: string,
-    args: {
+    { projectRoot, sessionId, args }: { projectRoot: string; sessionId: string; args: {
       path: string;
       kind: 'internal' | 'external';
       absolutePath: string | null;
       type: 'create' | 'edit' | 'delete' | 'read' | 'delivered';
       author: 'agent' | 'user';
       toolUseId?: string;
-    }
+    } }
   ) => {
     const { project } = await ensureProjectCoalesced(CLAUDE_DIR, projectRoot, sessionId);
     await applyGitTreatmentCoalesced(projectRoot);
@@ -4556,9 +4552,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle(ARTIFACT_IPC.RENAME, async (
     _e,
-    projectRoot: string,
-    artifactId: string,
-    newName: string
+    { projectRoot, artifactId, newName }: { projectRoot: string; artifactId: string; newName: string }
   ) => {
     const result = await renameArtifact(projectRoot, artifactId, newName);
     invalidateSidecarIdCache(projectRoot); // watcher path-to-id map is stale
@@ -4575,8 +4569,7 @@ export function registerIpcHandlers(
   // semantics — Session Drawer per-row remove.
   ipcMain.handle(ARTIFACT_IPC.REMOVE_RECORD, async (
     _e,
-    projectRoot: string,
-    artifactId: string
+    { projectRoot, artifactId }: { projectRoot: string; artifactId: string }
   ) => {
     const result = await removeArtifactRecord(projectRoot, artifactId);
     invalidateSidecarIdCache(projectRoot); // watcher path-to-id map is stale
@@ -4592,7 +4585,7 @@ export function registerIpcHandlers(
   // batch 3): remote-server.ts calls the same functions for a phone, so the two
   // transports cannot drift on roots, denylist or shape. The legacy-record
   // repair each listing runs is inside the service.
-  ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, sessionId: string, projectRoot: string) =>
+  ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, { sessionId, projectRoot }: { sessionId: string; projectRoot: string }) =>
     listSessionFiles(sessionId, projectRoot, conversationIdFor(sessionId)));
 
   // Project View IPC — list project-scoped conversations, git repo info, and
@@ -4600,13 +4593,13 @@ export function registerIpcHandlers(
   // through project-read-service.ts (shared with the remote host); the context
   // WRITE stays desktop-only. A conversation's messages are read through
   // chatsearch:read (below), the one preview reader.
-  ipcMain.handle(PROJECT_IPC.LIST_CONVERSATIONS, (_e, projectPath: string) =>
+  ipcMain.handle(PROJECT_IPC.LIST_CONVERSATIONS, (_e, { projectPath }: { projectPath: string }) =>
     listConversations(projectPath));
-  ipcMain.handle(PROJECT_IPC.REPO_INFO, (_e, projectPath: string) => repoInfo(projectPath));
-  ipcMain.handle(PROJECT_IPC.LIST_CONTEXT, (_e, projectPath: string) => listContextFiles(projectPath));
-  ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, (_e, projectPath: string, absolutePath: string) =>
+  ipcMain.handle(PROJECT_IPC.REPO_INFO, (_e, { projectPath }: { projectPath: string }) => repoInfo(projectPath));
+  ipcMain.handle(PROJECT_IPC.LIST_CONTEXT, (_e, { projectPath }: { projectPath: string }) => listContextFiles(projectPath));
+  ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, (_e, { projectPath, absolutePath }: { projectPath: string; absolutePath: string }) =>
     readContext(projectPath, absolutePath));
-  ipcMain.handle(PROJECT_IPC.WRITE_CONTEXT_FILE, async (_e, projectPath: string, absolutePath: string, content: string) => {
+  ipcMain.handle(PROJECT_IPC.WRITE_CONTEXT_FILE, async (_e, { projectPath, absolutePath, content }: { projectPath: string; absolutePath: string; content: string }) => {
     return writeContextFile(projectPath, absolutePath, content);
   });
 
@@ -4614,7 +4607,7 @@ export function registerIpcHandlers(
   // search printed against the index the app writes, and read bounded
   // transcript slices by id. Both go through refs-service so this handler and
   // the remote WebSocket case cannot assemble paths differently.
-  ipcMain.handle(CHATSEARCH_IPC.RESOLVE, async (_e, shortIds: string[]) => resolveConversations(shortIds));
+  ipcMain.handle(CHATSEARCH_IPC.RESOLVE, async (_e, { shortIds }: { shortIds: string[] }) => resolveConversations(shortIds));
   ipcMain.handle(CHATSEARCH_IPC.READ, async (_e, req: ChatsearchReadRequest) => readConversation(req));
 
   // Project counting/discovery helpers moved to ./artifacts/projects-index so
@@ -4645,12 +4638,12 @@ export function registerIpcHandlers(
   //
   // visibleCount (withCount) is a separate, independently-computed count from
   // countArtifacts — non-deleted and on-disk — shared with the hero + switcher.
-  ipcMain.handle(ARTIFACT_IPC.LIST_PROJECT, (_e, projectId: string, opts?: { withCount?: boolean }) =>
+  ipcMain.handle(ARTIFACT_IPC.LIST_PROJECT, (_e, { projectId, opts }: { projectId: string; opts?: { withCount?: boolean } }) =>
     listProjectFiles(projectId, opts));
 
   // LIST_ALL_FILES → the Project Files section: the folder as it exists on
   // disk, unioned with tracked internals discovery missed (read-service.ts).
-  ipcMain.handle(ARTIFACT_IPC.LIST_ALL_FILES, (_e, projectId: string, opts?: { force?: boolean }) =>
+  ipcMain.handle(ARTIFACT_IPC.LIST_ALL_FILES, (_e, { projectId, opts }: { projectId: string; opts?: { force?: boolean } }) =>
     listAllFiles(projectId, opts));
 
   // RESOLVE_PATH → ONE file path tapped in chat, answered with the record the
@@ -4658,48 +4651,49 @@ export function registerIpcHandlers(
   // measured 3,090 records / ~1 MB for a single tap). The desktop's own
   // renderer only names the folder of the chat it is showing, so no root gate
   // here; the remote host adds one (remote-server.ts fileReads).
-  ipcMain.handle(ARTIFACT_IPC.RESOLVE_PATH, (_e, projectRoot: string, filePath: string) =>
+  ipcMain.handle(ARTIFACT_IPC.RESOLVE_PATH, (_e, { projectRoot, path: filePath }: { projectRoot: string; path: string }) =>
     resolveArtifactPath(projectRoot, filePath));
 
   // LIST_FOLDER → one folder of Project Files, a page at a time, straight from
   // disk (folder-listing.ts). No depth cap and no home-folder gate.
-  ipcMain.handle(ARTIFACT_IPC.LIST_FOLDER, (_e, projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean }) =>
+  ipcMain.handle(ARTIFACT_IPC.LIST_FOLDER, (_e, { projectId, relDir, opts }: { projectId: string; relDir: string; opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean } }) =>
     listFolder(projectId, relDir, opts));
 
   // full: the user clicked "Load the whole file" on the partial-view bar. Still
   // refused above FULL_READ_MAX_BYTES — the flag opts into a BIGGER read, not an
   // unbounded one. No `maxBytes` here: the desktop's own limits are untouched.
-  ipcMain.handle(ARTIFACT_IPC.GET, (_e, projectRoot: string, artifactId: string, opts?: { full?: boolean }) =>
-    readArtifactText(projectRoot, artifactId, opts));
+  // WHY (2026-09-29 one-core R2): one object on the wire, the same one the phone sends
+  // (`full` flat, not nested in `opts`).
+  ipcMain.handle(ARTIFACT_IPC.GET, (_e, { projectRoot, artifactId, full }: { projectRoot: string; artifactId: string; full?: boolean }) =>
+    readArtifactText(projectRoot, artifactId, { full }));
 
   // Read a file as base64 for the binary viewers (xlsx/docx/pdf/image).
   // SECURITY: this IPC RETURNS file contents, and over remote access it is
   // reachable from a phone. read-service.ts resolves symlinks FIRST, then
   // restricts reads to the user's project roots and tracked artifacts, refusing
   // well-known secret locations even inside those roots.
-  ipcMain.handle(ARTIFACT_IPC.READ_BINARY, (_e, absolutePath: string) => readArtifactBytes(absolutePath));
+  ipcMain.handle(ARTIFACT_IPC.READ_BINARY, (_e, { absolutePath }: { absolutePath: string }) => readArtifactBytes(absolutePath));
 
   // First bytes of a user-chosen file, for the composer's attachment cards
   // (rendered markdown / mono text preview). The cap, the deny list and the
   // reasoning for NOT roots-gating it live in main/fs-read-head.ts +
   // shared/read-head.ts; remote-server.ts calls the same function.
-  ipcMain.handle(IPC.FS_READ_HEAD, (_e, filePath: string, maxBytes?: number) =>
+  ipcMain.handle(IPC.FS_READ_HEAD, (_e, { filePath, maxBytes }: { filePath: string; maxBytes?: number }) =>
     readFileHead(filePath, maxBytes));
 
   ipcMain.handle(ARTIFACT_IPC.SAVE, async (
     _e,
-    projectRoot: string,
-    projectId: string,
-    projectName: string,
-    artifactId: string,
-    newContent: string,
-    sessionId: string,
+    // WHY (2026-09-29 one-core R2): one object on the wire, the phone's shape — the old
+    // `opts` bag is flattened into it, so `opts` below is whatever is left after the named fields.
     // baseMtimeMs: optimistic-concurrency token from artifacts:get — the save is
     // rejected ('conflict') when the file changed underneath (spec §12.9).
     // confirmed: the user clicked through the confirm-tier dialog; main REQUIRES
     // it for needs-confirm paths so the policy decision cannot be skipped by a
     // caller that never showed the dialog (D5 — mistake-prevention tier).
-    opts?: { baseMtimeMs?: number; confirmed?: boolean }
+    { projectRoot, projectId, projectName, artifactId, content: newContent, sessionId, ...opts }: {
+      projectRoot: string; projectId: string; projectName: string; artifactId: string;
+      content: string; sessionId: string; baseMtimeMs?: number; confirmed?: boolean;
+    },
   ) => {
     const sidecar = await readSidecarShared(projectRoot);
     const artifact = (sidecar && !('corrupted' in sidecar))
@@ -4843,21 +4837,21 @@ export function registerIpcHandlers(
     },
   });
   ipcMain.handle(IPC.PAGES_LIST, async () => { pagesService.ensureWatching(); return pagesService.listAndWatch(); });
-  ipcMain.handle(IPC.PAGES_GET, async (_e, id: string) => pagesService.store.get(String(id ?? '')));
-  ipcMain.handle(IPC.PAGES_SET_PINNED, async (_e, id: string, pinned: boolean) => pagesService.store.setPinned(String(id ?? ''), !!pinned));
-  ipcMain.handle(IPC.PAGES_SET_DATA, async (_e, id: string, data: unknown) => pagesService.store.setData(String(id ?? ''), data));
+  ipcMain.handle(IPC.PAGES_GET, async (_e, { id }: { id: string }) => pagesService.store.get(String(id ?? '')));
+  ipcMain.handle(IPC.PAGES_SET_PINNED, async (_e, { id, pinned }: { id: string; pinned: boolean }) => pagesService.store.setPinned(String(id ?? ''), !!pinned));
+  ipcMain.handle(IPC.PAGES_SET_DATA, async (_e, { id, data }: { id: string; data: unknown }) => pagesService.store.setData(String(id ?? ''), data));
   // Phase 2. `remote: false` here and `true` in remote-server.ts is the whole
   // of "no keys on the phone" (design review 1, finding 13): a desktop window
   // may paste a key, a remote caller may only reuse one already saved.
-  ipcMain.handle(IPC.PAGES_APPROVE, async (_e, id: string, keys: Record<string, string>) =>
+  ipcMain.handle(IPC.PAGES_APPROVE, async (_e, { id, keys }: { id: string; keys: Record<string, string> }) =>
     pagesService.approve(String(id ?? ''), keys ?? {}, { remote: false }));
-  ipcMain.handle(IPC.PAGES_REMOVE_CONNECTION, async (_e, id: string, connectionId: string) =>
+  ipcMain.handle(IPC.PAGES_REMOVE_CONNECTION, async (_e, { id, connectionId }: { id: string; connectionId: string }) =>
     pagesService.removeConnection(String(id ?? ''), String(connectionId ?? '')));
-  ipcMain.handle(IPC.PAGES_REFRESH, async (_e, id: string) => pagesService.refresh(String(id ?? '')));
+  ipcMain.handle(IPC.PAGES_REFRESH, async (_e, { id }: { id: string }) => pagesService.refresh(String(id ?? '')));
   ipcMain.handle(IPC.PAGES_SAVED_KEYS, async () => pagesService.savedKeys());
-  ipcMain.handle(IPC.PAGES_DELETE_SAVED_KEY, async (_e, service: string, address: string) =>
+  ipcMain.handle(IPC.PAGES_DELETE_SAVED_KEY, async (_e, { service, address }: { service: string; address: string }) =>
     pagesService.deleteSavedKey(String(service ?? ''), String(address ?? '')));
-  ipcMain.handle(IPC.PAGES_FETCH, async (_e, id: string, req: PageFetchRequest) =>
+  ipcMain.handle(IPC.PAGES_FETCH, async (_e, { id, request: req }: { id: string; request: PageFetchRequest }) =>
     pagesService.fetch(String(id ?? ''), req ?? { url: '' }));
 
   // ── Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
@@ -4879,7 +4873,7 @@ export function registerIpcHandlers(
   // it cannot pin a watcher forever. One listener per webContents, attached on
   // its first subscribe.
   const watchedSenders = new Set<number>();
-  ipcMain.handle(ARTIFACT_IPC.WATCH_PROJECT, async (e, projectRoot: string) => {
+  ipcMain.handle(ARTIFACT_IPC.WATCH_PROJECT, async (e, { projectRoot }: { projectRoot: string }) => {
     if (typeof projectRoot !== 'string' || projectRoot.length === 0) return { ok: false };
     const senderId = e.sender.id;
     if (!watchedSenders.has(senderId)) {
@@ -4891,7 +4885,7 @@ export function registerIpcHandlers(
     }
     return watchProject(projectRoot, senderId);
   });
-  ipcMain.handle(ARTIFACT_IPC.UNWATCH_PROJECT, async (e, projectRoot: string) => {
+  ipcMain.handle(ARTIFACT_IPC.UNWATCH_PROJECT, async (e, { projectRoot }: { projectRoot: string }) => {
     if (typeof projectRoot !== 'string' || projectRoot.length === 0) return { ok: false };
     unwatchProject(projectRoot, e.sender.id);
     return { ok: true };
@@ -4922,15 +4916,15 @@ export function registerIpcHandlers(
 
   initGitWatchers((evt) => broadcastGitChanged(evt.repoRoot));
 
-  ipcMain.handle(GIT_IPC.FILE_STATUS, (_e, projectRoot: string, relPath: string) =>
+  ipcMain.handle(GIT_IPC.FILE_STATUS, (_e, { projectRoot, relPath }: { projectRoot: string; relPath: string }) =>
     gitGate(projectRoot, { ok: false, error: 'unknown-project-root', isRepo: false, branch: null, counts: null, hasHistory: false, staged: false, conflicted: false },
       () => gitFileStatus(projectRoot, relPath)));
 
-  ipcMain.handle(GIT_IPC.FILE_REVIEW, (_e, projectRoot: string, relPath: string, opts?: { logSkip?: number }) =>
+  ipcMain.handle(GIT_IPC.FILE_REVIEW, (_e, { projectRoot, relPath, ...opts }: { projectRoot: string; relPath: string; logSkip?: number }) =>
     gitGate(projectRoot, { ok: false, error: 'unknown-project-root', isRepo: false, branch: null, uncommitted: null, log: [], hasMore: false, stagedCount: 0 },
       () => gitFileReview(projectRoot, relPath, opts)));
 
-  ipcMain.handle(GIT_IPC.COMMIT_FILE_DIFF, (_e, projectRoot: string, sha: string, relPath: string, prevPath?: string) =>
+  ipcMain.handle(GIT_IPC.COMMIT_FILE_DIFF, (_e, { projectRoot, sha, relPath, prevPath }: { projectRoot: string; sha: string; relPath: string; prevPath?: string }) =>
     gitGate(projectRoot, { ok: false, error: 'unknown-project-root', hunks: [], binary: false },
       () => gitCommitFileDiff(projectRoot, sha, relPath, prevPath)));
 
@@ -4944,17 +4938,17 @@ export function registerIpcHandlers(
       return result;
     });
 
-  ipcMain.handle(GIT_IPC.STAGE, (_e, projectRoot: string, relPath: string) =>
+  ipcMain.handle(GIT_IPC.STAGE, (_e, { projectRoot, relPath }: { projectRoot: string; relPath: string }) =>
     mutating(projectRoot, () => gitStage(projectRoot, relPath)));
-  ipcMain.handle(GIT_IPC.UNSTAGE, (_e, projectRoot: string, relPath: string) =>
+  ipcMain.handle(GIT_IPC.UNSTAGE, (_e, { projectRoot, relPath }: { projectRoot: string; relPath: string }) =>
     mutating(projectRoot, () => gitUnstage(projectRoot, relPath)));
-  ipcMain.handle(GIT_IPC.COMMIT, (_e, projectRoot: string, message: string) =>
+  ipcMain.handle(GIT_IPC.COMMIT, (_e, { projectRoot, message }: { projectRoot: string; message: string }) =>
     mutating(projectRoot, () => gitCommit(projectRoot, message)));
-  ipcMain.handle(GIT_IPC.DISCARD, (_e, projectRoot: string, relPath: string) =>
+  ipcMain.handle(GIT_IPC.DISCARD, (_e, { projectRoot, relPath }: { projectRoot: string; relPath: string }) =>
     mutating(projectRoot, () => gitDiscard(projectRoot, relPath)));
 
   const gitWatchedSenders = new Set<number>();
-  ipcMain.handle(GIT_IPC.WATCH, (e, projectRoot: string) =>
+  ipcMain.handle(GIT_IPC.WATCH, (e, { projectRoot }: { projectRoot: string }) =>
     gitGate(projectRoot, { ok: false }, async () => {
       const repoRoot = await resolveRepoRoot(projectRoot);
       if (!repoRoot) return { ok: false };
@@ -4967,14 +4961,14 @@ export function registerIpcHandlers(
     }));
   // Gated like every other git channel — unwatch shells rev-parse, and the
   // known-roots gate should be uniform even for read-only paths.
-  ipcMain.handle(GIT_IPC.UNWATCH, (e, projectRoot: string) =>
+  ipcMain.handle(GIT_IPC.UNWATCH, (e, { projectRoot }: { projectRoot: string }) =>
     gitGate(projectRoot, { ok: false }, async () => {
       const repoRoot = await resolveRepoRoot(projectRoot);
       if (repoRoot) unwatchGit(repoRoot, e.sender.id);
       return { ok: true };
     }));
 
-  ipcMain.handle(ARTIFACT_IPC.SEARCH_CONTENT, (_e, projectRoot: string, query: string) =>
+  ipcMain.handle(ARTIFACT_IPC.SEARCH_CONTENT, (_e, { projectRoot, query }: { projectRoot: string; query: string }) =>
     searchArtifactContent(projectRoot, query));
 
   // Normalize an include/exclude entry to a canonical ABSOLUTE path. FilesTab
@@ -4994,14 +4988,11 @@ export function registerIpcHandlers(
   // 'replace' can only overwrite files the user was shown (see that module).
   ipcMain.handle(ARTIFACT_IPC.IMPORT_FILE, async (
     _e,
-    projectRoot: string,
-    sourcePath: string,
-    destDir: string,
-    opts: {
+    { projectRoot, sourcePath, destDir, opts }: { projectRoot: string; sourcePath: string; destDir: string; opts: {
       mode: 'move' | 'copy';
       onCollision: 'replace' | 'keep-both' | 'skip';
       disclosedCollisions?: string[];
-    },
+    } },
   ) => importFile({
     projectRoot, sourcePath, destDir,
     mode: opts.mode,
@@ -5028,7 +5019,7 @@ export function registerIpcHandlers(
   //   3. Remove from manualExcludes (includes also win over excludes in
   //      trackedArtifacts, so this is belt-and-suspenders).
   ipcMain.handle(ARTIFACT_IPC.INCLUDE_EXTERNAL, async (
-    _e, projectRoot: string, absolutePath: string
+    _e, { projectRoot, absolutePath }: { projectRoot: string; absolutePath: string }
   ) => {
     const canonical = toCanonicalAbs(projectRoot, absolutePath);
     const rootCanon = canonicalize(projectRoot, null);
@@ -5083,7 +5074,7 @@ export function registerIpcHandlers(
   // made sense for externals — an in-folder file cannot be hidden from a live
   // disk walk without lying about the folder's contents.
   ipcMain.handle(ARTIFACT_IPC.EXCLUDE, async (
-    _e, projectRoot: string, canonicalPath: string
+    _e, { projectRoot, canonicalPath }: { projectRoot: string; canonicalPath: string }
   ) => {
     const canonical = toCanonicalAbs(projectRoot, canonicalPath);
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -5130,7 +5121,7 @@ export function registerIpcHandlers(
   // When deleteSidecar is true, also removes .youcoded/artifacts.json from the
   // project folder so artifact history starts fresh on next session.
   ipcMain.handle(ARTIFACT_IPC.DELETE_PROJECT, async (
-    _e, projectId: string, deleteSidecar: boolean
+    _e, { projectId, deleteSidecar }: { projectId: string; deleteSidecar: boolean }
   ) => {
     const projects = await listProjects(CLAUDE_DIR);
     const p = projects.find((x) => x.id === projectId);
@@ -5152,7 +5143,7 @@ export function registerIpcHandlers(
   // artifacts as deleted in the UI without mutating the sidecar. Internal
   // artifacts resolve to projectRoot/path; external artifacts resolve to
   // absolutePath. Parallel fs.access keeps this cheap even for hundreds of IDs.
-  ipcMain.handle(ARTIFACT_IPC.CHECK_EXISTENCE, (_e, projectRoot: string, artifactIds: string[]) =>
+  ipcMain.handle(ARTIFACT_IPC.CHECK_EXISTENCE, (_e, { projectRoot, artifactIds }: { projectRoot: string; artifactIds: string[] }) =>
     checkArtifactExistence(projectRoot, artifactIds));
 
   // Return shape (Sign in with ChatGPT, backend design 2026-09-05 §5 / review

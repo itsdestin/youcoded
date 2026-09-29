@@ -127,7 +127,7 @@ describe('skills:uninstall bundled-plugin rejection', () => {
     const handler = (mockIpcMain.handle as any).mock.calls.find(
       (c: any) => c[0] === 'skills:uninstall',
     )[1];
-    const result = await handler({}, 'wecoded-themes-plugin');
+    const result = await handler({}, { id: 'wecoded-themes-plugin' });
     expect(result).toEqual({ ok: false, error: 'bundled', type: 'plugin' });
     expect(uninstall).not.toHaveBeenCalled();
   });
@@ -151,7 +151,7 @@ describe('skills:uninstall bundled-plugin rejection', () => {
     const handler = (mockIpcMain.handle as any).mock.calls.find(
       (c: any) => c[0] === 'skills:uninstall',
     )[1];
-    await handler({}, 'some-other-plugin');
+    await handler({}, { id: 'some-other-plugin' });
     expect(uninstall).toHaveBeenCalledWith('some-other-plugin');
   });
 });
@@ -604,9 +604,9 @@ describe('tags:update / tags:delete signal chatsearch', () => {
     const spy = vi.spyOn(conversationsService, 'emitConversationMetaChanged');
     const update = handlerFor('tags:update');
     const create = handlerFor('tags:create');
-    const created = await create({}, 'Old Label', 'tag-gray');
+    const created = await create({}, { label: 'Old Label', color: 'tag-gray' });
 
-    const result = await update({}, created.tag.id, { label: 'New Label' });
+    const result = await update({}, { id: created.tag.id, patch: { label: 'New Label' } });
 
     expect(result.ok).toBe(true);
     expect(spy).toHaveBeenCalledTimes(1);
@@ -617,7 +617,7 @@ describe('tags:update / tags:delete signal chatsearch', () => {
     const spy = vi.spyOn(conversationsService, 'emitConversationMetaChanged');
     const update = handlerFor('tags:update');
 
-    const result = await update({}, 'tag_does_not_exist', { label: 'New Label' });
+    const result = await update({}, { id: 'tag_does_not_exist', patch: { label: 'New Label' } });
 
     expect(result.ok).toBe(false);
     expect(spy).not.toHaveBeenCalled();
@@ -628,9 +628,9 @@ describe('tags:update / tags:delete signal chatsearch', () => {
     const spy = vi.spyOn(conversationsService, 'emitConversationMetaChanged');
     const del = handlerFor('tags:delete');
     const create = handlerFor('tags:create');
-    const created = await create({}, 'Doomed Tag', 'tag-gray');
+    const created = await create({}, { label: 'Doomed Tag', color: 'tag-gray' });
 
-    const result = await del({}, created.tag.id);
+    const result = await del({}, { id: created.tag.id });
 
     expect(result.ok).toBe(true);
     expect(spy).toHaveBeenCalledTimes(1);
@@ -684,7 +684,7 @@ describe('transcript:read-meta path containment', () => {
     fs.writeFileSync(evilFile, JSON.stringify({ model: 'leaked-model' }) + '\n');
 
     const handler = handlerFor('transcript:read-meta');
-    expect(await handler({}, evilFile)).toBeNull();
+    expect(await handler({}, { path: evilFile })).toBeNull();
   });
 
   it('still reads a transcript inside ~/.claude/projects', async () => {
@@ -694,7 +694,7 @@ describe('transcript:read-meta path containment', () => {
     fs.writeFileSync(okFile, JSON.stringify({ model: 'test-model' }) + '\n');
 
     const handler = handlerFor('transcript:read-meta');
-    const meta = await handler({}, okFile);
+    const meta = await handler({}, { path: okFile });
     expect(meta?.model).toBe('test-model');
   });
 });
@@ -1197,10 +1197,10 @@ describe('native session meta through the real store', () => {
     it('tag → persist → get-meta and browse both return it for a native session', async () => {
       const { handler } = setup();
 
-      const setRes = await handler('session:set-tag')({ sender: { id: 1 } }, NATIVE_ID, 'tag_physics', true);
+      const setRes = await handler('session:set-tag')({ sender: { id: 1 } }, { sessionId: NATIVE_ID, tagId: 'tag_physics', value: true });
       expect(setRes).toEqual({ ok: true });
 
-      const meta = await handler('session:get-meta')({ sender: { id: 1 } }, NATIVE_ID);
+      const meta = await handler('session:get-meta')({ sender: { id: 1 } }, { sessionId: NATIVE_ID });
       expect(meta).toMatchObject({ tags: ['tag_physics'], note: '', supported: true });
 
       const rows = await handler('session:browse')();
@@ -1213,17 +1213,17 @@ describe('native session meta through the real store', () => {
     it('note → persist → get-meta returns it for a native session', async () => {
       const { handler } = setup();
 
-      const setRes = await handler('session:set-note')({ sender: { id: 1 } }, NATIVE_ID, 'debugging the spinner regex');
+      const setRes = await handler('session:set-note')({ sender: { id: 1 } }, { sessionId: NATIVE_ID, note: 'debugging the spinner regex' });
       expect(setRes).toEqual({ ok: true });
 
-      const meta = await handler('session:get-meta')({ sender: { id: 1 } }, NATIVE_ID);
+      const meta = await handler('session:get-meta')({ sender: { id: 1 } }, { sessionId: NATIVE_ID });
       expect(meta).toMatchObject({ note: 'debugging the spinner regex', supported: true });
     });
 
     it('a reserved flag round-trips for a native session (previously refused outright)', async () => {
       const { handler } = setup();
 
-      const setRes = await handler('session:set-flag')({ sender: { id: 1 } }, NATIVE_ID, 'priority', true);
+      const setRes = await handler('session:set-flag')({ sender: { id: 1 } }, { sessionId: NATIVE_ID, flag: 'priority', value: true });
       expect(setRes).toEqual({ ok: true });
 
       const rows = await handler('session:browse')();
@@ -1252,7 +1252,7 @@ describe('native session meta through the real store', () => {
         }
       });
 
-      const res = await handler('session:set-tag')({ sender: { id: 1 } }, NATIVE_ID, 'tag_physics', true);
+      const res = await handler('session:set-tag')({ sender: { id: 1 } }, { sessionId: NATIVE_ID, tagId: 'tag_physics', value: true });
       expect(res.ok).toBe(true);
       expect(sawTagAtBroadcastTime).toBe(true);
     });
@@ -1293,7 +1293,7 @@ describe('native session meta through the real store', () => {
       const sessionsFile = path.join(tmpHome, '.youcoded', 'sessions', 'test-project', `${STORE_ONLY_ID}.jsonl`);
       expect(fs.existsSync(sessionsFile)).toBe(false);
 
-      const res = await handler('session:set-tag')({ sender: { id: 1 } }, STORE_ONLY_ID, 'tag_physics', true);
+      const res = await handler('session:set-tag')({ sender: { id: 1 } }, { sessionId: STORE_ONLY_ID, tagId: 'tag_physics', value: true });
       expect(res).toEqual({ ok: true });
 
       // The tag landed in the NATIVE bucket...
@@ -1305,7 +1305,7 @@ describe('native session meta through the real store', () => {
       expect(fs.existsSync(claudePath)).toBe(false);
 
       // get-meta reads it back from the native bucket (same routing on the read).
-      const meta = await handler('session:get-meta')({ sender: { id: 1 } }, STORE_ONLY_ID);
+      const meta = await handler('session:get-meta')({ sender: { id: 1 } }, { sessionId: STORE_ONLY_ID });
       expect(meta).toMatchObject({ tags: ['tag_physics'], supported: true });
 
       // pruneNativePhantomRecords (which only ever touches the claude bucket)
@@ -1320,7 +1320,7 @@ describe('native session meta through the real store', () => {
     it('set-note routes to the native bucket too', async () => {
       const { handler } = setup();
       await seedStoreOnlyNative();
-      const res = await handler('session:set-note')({ sender: { id: 1 } }, STORE_ONLY_ID, 'peer-synced note');
+      const res = await handler('session:set-note')({ sender: { id: 1 } }, { sessionId: STORE_ONLY_ID, note: 'peer-synced note' });
       expect(res).toEqual({ ok: true });
       const nativeRec = JSON.parse(fs.readFileSync(path.join(tmpConvRoot, 'native', `${STORE_ONLY_ID}.json`), 'utf8'));
       expect(nativeRec.note).toBe('peer-synced note');
@@ -1331,7 +1331,7 @@ describe('native session meta through the real store', () => {
   describe('Claude Code sessions — unaffected by the native unlock (regression)', () => {
     it('set-flag on a CC id still succeeds', async () => {
       const { handler } = setup();
-      const res = await handler('session:set-flag')({ sender: { id: 1 } }, CC_ID, 'complete', true);
+      const res = await handler('session:set-flag')({ sender: { id: 1 } }, { sessionId: CC_ID, flag: 'complete', value: true });
       expect(res.ok).toBe(true);
     });
 
@@ -1345,14 +1345,14 @@ describe('native session meta through the real store', () => {
       const { handler } = setup({
         getSession: vi.fn(() => ({ id: CC_ID, name: 'live', cwd: '/tmp', status: 'active' })),
       });
-      const res = await handler('session:set-flag')({ sender: { id: 1 } }, CC_ID, 'priority', true);
+      const res = await handler('session:set-flag')({ sender: { id: 1 } }, { sessionId: CC_ID, flag: 'priority', value: true });
       expect(res.ok).toBe(true);
       expect(res.unsupported).toBeUndefined();
     });
 
     it('get-meta on a CC id reports supported:true', async () => {
       const { handler } = setup();
-      const meta = await handler('session:get-meta')({ sender: { id: 1 } }, CC_ID);
+      const meta = await handler('session:get-meta')({ sender: { id: 1 } }, { sessionId: CC_ID });
       expect(meta.supported).toBe(true);
     });
 
@@ -1360,7 +1360,7 @@ describe('native session meta through the real store', () => {
       // Validation error, not a provider-derived path — ordering matters so a
       // typo surfaces as a typo even on a native session id.
       const { handler } = setup();
-      const res = await handler('session:set-flag')({ sender: { id: 1 } }, NATIVE_ID, 'bogus', true);
+      const res = await handler('session:set-flag')({ sender: { id: 1 } }, { sessionId: NATIVE_ID, flag: 'bogus', value: true });
       expect(res.ok).toBe(false);
       expect(res.unsupported).toBeUndefined();
       expect(res.error).toContain('bogus');
@@ -1417,7 +1417,7 @@ describe('Welcome back tracking hooks', () => {
 
     // The user's own X goes through the SESSION_DESTROY IPC handler instead.
     const destroy = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:destroy')[1];
-    await destroy({}, 'desktop-d1');
+    await destroy({}, { sessionId: 'desktop-d1' });
     expect(store.untrack).toHaveBeenCalledWith('desktop-d1');
   });
 

@@ -15,7 +15,7 @@ import type { RemoteNativeRuntime } from '../create-runtime';
 /** What a table handler is given besides its payload. Typed with the slice of the runtime the
  *  PHONE door can also reach (RemoteNativeRuntime), because a handler both doors run may only
  *  lean on what both doors have. R3 widens it when a family needs more. */
-export type MainChannelCtx = ChannelCtx<RemoteNativeRuntime>;
+type MainChannelCtx = ChannelCtx<RemoteNativeRuntime>;
 export type MainChannelDef<Payload = any, Result = any> = ChannelDef<MainChannelCtx, Payload, Result>;
 
 /** EMPTY on purpose (R2). Mutable so a test can place a test-only entry and remove it again. */
@@ -34,7 +34,7 @@ export function findChannel(name: string): MainChannelDef | undefined {
 // ── Desktop door ───────────────────────────────────────────────────────────────
 
 /** The two Electron registration calls the desktop door needs (a fake stands in for tests). */
-export interface IpcMainLike {
+interface IpcMainLike {
   handle(channel: string, listener: (event: any, ...args: any[]) => unknown): void;
   on(channel: string, listener: (event: any, ...args: any[]) => void): void;
 }
@@ -64,7 +64,7 @@ export function registerDesktopChannels(ipc: IpcMainLike, getRuntime: () => Remo
 // ── Phone door ─────────────────────────────────────────────────────────────────
 
 /** What the phone door should send back for one message. `reply: false` = send nothing. */
-export type RemoteOutcome = { reply: false } | { reply: true; payload: unknown };
+type RemoteOutcome = { reply: false } | { reply: true; payload: unknown };
 
 /** Runs one table entry for a phone. The single place a phone's policy is applied, so a family
  *  moved into the table cannot forget it: desktop-only and phone-refused channels answer their

@@ -473,7 +473,7 @@ function registerFirstRunLocalIpc(getManager: () => FirstRunManager | null, deps
       return null;
     }
   });
-  ipcMain.handle(IPC.FIRST_RUN_CONNECT_LOCAL_APP, async (_event, baseUrl: string, name: string) => {
+  ipcMain.handle(IPC.FIRST_RUN_CONNECT_LOCAL_APP, async (_event, { baseUrl, name }: { baseUrl: string; name: string }) => {
     const manager = getManager();
     if (!manager) return { ok: false, message: 'Setup is not running.' };
     return manager.handleConnectLocalApp(baseUrl, name, deps);
@@ -523,7 +523,7 @@ function registerFirstRunIpc(
     catch (e) { log('ERROR', 'FirstRun', 'Retry failed', { error: String(e) }); }
   });
 
-  ipcMain.handle(IPC.FIRST_RUN_START_AUTH, async (_event, mode: FirstRunState['authMode']) => {
+  ipcMain.handle(IPC.FIRST_RUN_START_AUTH, async (_event, { mode }: { mode: FirstRunState['authMode'] }) => {
     try {
       if (mode === 'oauth') {
         // claude auth login opens the browser itself — don't double-open
@@ -543,7 +543,7 @@ function registerFirstRunIpc(
     } catch (e) { log('ERROR', 'FirstRun', 'Auth failed', { error: String(e) }); }
   });
 
-  ipcMain.handle(IPC.FIRST_RUN_SUBMIT_API_KEY, async (_event, key: string, service?: NativeKeyService) => {
+  ipcMain.handle(IPC.FIRST_RUN_SUBMIT_API_KEY, async (_event, { key, service }: { key: string; service?: NativeKeyService }) => {
     // With a service (F-2) the key runs on YouCoded's own assistant; without one
     // it is the old Claude Code key path.
     try {
@@ -1215,7 +1215,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
             // Same three arms as registerFirstRunIpc above (ChatGPT / OpenRouter
             // per backend design 2026-09-05 §5); swallowed throws are the last
             // resort only — handleChatGptLogin writes its own lastError.
-            ipcMain.handle(IPC.FIRST_RUN_START_AUTH, async (_event, mode: FirstRunState['authMode']) => {
+            ipcMain.handle(IPC.FIRST_RUN_START_AUTH, async (_event, { mode }: { mode: FirstRunState['authMode'] }) => {
               try {
                 if (mode === 'oauth') await lateFirstRunManager!.handleOAuthLogin();
                 // Gated on the switch as well as on the renderer's hidden button:
@@ -1224,7 +1224,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
                 else if (mode === 'chatgpt' && chatgptEnabled) await lateFirstRunManager!.handleChatGptLogin(chatgptAuth!);
                 else if (mode === 'openrouter') await lateFirstRunManager!.handleOpenRouterLogin(ipcWiring.openRouterSignIn);
               } catch {} });
-            ipcMain.handle(IPC.FIRST_RUN_SUBMIT_API_KEY, async (_event, key: string, service?: NativeKeyService) => {
+            ipcMain.handle(IPC.FIRST_RUN_SUBMIT_API_KEY, async (_event, { key, service }: { key: string; service?: NativeKeyService }) => {
               try {
                 if (service) await lateFirstRunManager!.handleNativeApiKey(key, service, ipcWiring.firstRunDeps);
                 else await lateFirstRunManager!.handleApiKeySubmit(key);
@@ -2190,10 +2190,10 @@ void app.whenReady().then(async () => {
   });
   ipcMain.handle(IPC.BUDDY_HIDE, () => buddyManager.hide());
   ipcMain.handle(IPC.BUDDY_TOGGLE_CHAT, () => buddyManager.toggleChat());
-  ipcMain.handle(IPC.BUDDY_SET_SESSION, (_evt, sessionId: string) => {
+  ipcMain.handle(IPC.BUDDY_SET_SESSION, (_evt, { sessionId }: { sessionId: string }) => {
     buddyManager.setViewedSession(sessionId);
   });
-  ipcMain.handle(IPC.BUDDY_SUBSCRIBE, (evt, sessionId: string) => {
+  ipcMain.handle(IPC.BUDDY_SUBSCRIBE, (evt, { sessionId }: { sessionId: string }) => {
     windowRegistry.subscribe(sessionId, evt.sender.id);
     // No replay kick is needed here — the renderer calls
     // window.claude.detach.requestTranscriptReplay(sessionId) right after
@@ -2201,7 +2201,7 @@ void app.whenReady().then(async () => {
     // streams back via the normal TRANSCRIPT_EVENT channel, which reaches
     // owner ∪ subscribers (including this new subscription) thanks to A2.
   });
-  ipcMain.handle(IPC.BUDDY_UNSUBSCRIBE, (evt, sessionId: string) => {
+  ipcMain.handle(IPC.BUDDY_UNSUBSCRIBE, (evt, { sessionId }: { sessionId: string }) => {
     windowRegistry.unsubscribe(sessionId, evt.sender.id);
   });
   ipcMain.handle(IPC.BUDDY_GET_VIEWED_SESSION, () => buddyManager.getViewedSession());

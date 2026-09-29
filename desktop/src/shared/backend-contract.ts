@@ -746,9 +746,6 @@ export const IPC = {
 
 // ── The channel table's entry shape ────────────────────────────────────────────
 
-/** Every channel name, as a string-literal union. */
-export type ChannelName = (typeof IPC)[keyof typeof IPC];
-
 /** handle = request/response; on = fire-and-forget request; push = main → renderer event (no handler). */
 type ChannelKind = 'handle' | 'on' | 'push';
 
@@ -918,7 +915,7 @@ type ApiResult<T> =
 // Most namespaces keep their previous loose types on purpose: R3 tightens them
 // one family at a time, together with the channel-table entries that own them.
 // `session` and `on` come from the checked bridge types above.
-export interface ClaudeApi {
+interface ClaudeApi {
   /** Dev-instance label (run-dev.sh --label). null in the built app and on remote. */
   devLabel?: string | null;
   session: SessionBridge;

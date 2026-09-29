@@ -1773,17 +1773,15 @@ export class RemoteServer {
 
     const { type, id, payload } = msg;
 
-    // WHY (2026-09-29 one-core R2): the channel table is consulted BEFORE the switch below. It is
-    // EMPTY today, so findChannel always answers undefined and nothing here changes; R3 moves a
-    // family's `case` bodies into the table one run at a time. The table entry — not a case — then
-    // carries that channel's phone policy (desktop-only, refused, session-scoped), so a phone
-    // cannot reach a handler the desktop's own table entry says it must not.
+    // WHY (2026-09-29 one-core R2): the channel table is consulted BEFORE the switch. It is EMPTY
+    // today, so nothing here changes; R3 moves a family's cases into it, and the entry's policy
+    // (desktop-only, refused) then applies to the phone from one place.
     const tableDef = findChannel(type);
     if (tableDef) {
       const outcome = await serveRemoteChannel(tableDef, payload, {
         door: 'remote', runtime: this.nativeRuntime, deviceId: client.deviceId,
       });
-      // Only an awaited request (it has an id) gets an answer; a fire-and-forget push never does.
+      // Only an awaited request (it has an id) is answered.
       if (outcome.reply && id) this.respond(client.ws, type, id, outcome.payload);
       return;
     }
