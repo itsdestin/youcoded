@@ -518,7 +518,8 @@ export function createOfficeCommands(deps: {
 }
 
 // Private save folders are named `.<file><SAVE_DIR_MARK><random>` beside the file.
-const SAVE_DIR_MARK = '.office-save-';
+// Exported for versions.ts (Task 7): a restore writes the file back through the same kind of folder.
+export const SAVE_DIR_MARK = '.office-save-';
 // Same rule as cas-write's stale-tmp sweep: an hour is far longer than any real save, so a
 // folder that old was left by a crash and a live save's folder is never touched.
 const STALE_SAVE_DIR_MS = 60 * 60 * 1000;
@@ -543,7 +544,8 @@ async function sweepStaleSaveDirs(dir: string, base: string): Promise<void> {
 // WHY: docx, xlsx and pptx are all zip files, which start with "PK\x03\x04". A translation
 // that wrote something else must not replace the user's working document. The same handle
 // then carries the original's permissions over and flushes the copy to disk.
-async function finishCopy(file: string, orig: { mode: number; uid: number; gid: number } | null): Promise<void> {
+// Exported for versions.ts (Task 7): a restore must keep the file's mode and group exactly as a save does.
+export async function finishCopy(file: string, orig: { mode: number; uid: number; gid: number } | null): Promise<void> {
   const fh = await fsp.open(file, 'r+');
   try {
     const head = Buffer.alloc(4);
