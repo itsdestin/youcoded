@@ -48,6 +48,7 @@ vi.mock('../src/main/artifacts/read-service', async (importOriginal) => {
 
 import * as readService from '../src/main/artifacts/read-service';
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
+import { registerWithRuntime } from './helpers/register-ipc';
 import { RemoteServer } from '../src/main/remote-server';
 import { __resetProjectWatchersForTest, __setWatchGraceMsForTest, __watchersStartedForTest } from '../src/main/artifacts/project-watcher';
 import { REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../src/shared/remote-file-limits';
@@ -186,7 +187,7 @@ beforeAll(async () => {
     install: vi.fn(), installMany: vi.fn(),
     ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn(),
   };
-  const wiring = registerIpcHandlers(mockIpcMain, sessionManager, mockWindow, mockSkillProvider, undefined as any, hookRelay, config, server);
+  const wiring = registerWithRuntime(registerIpcHandlers, mockIpcMain, sessionManager, mockWindow, mockSkillProvider, undefined as any, hookRelay, config, server);
   cleanup = wiring.cleanup;
   handlers = new Map(mockIpcMain.handle.mock.calls.map((c: any) => [c[0], c[1]]));
 });

@@ -23,6 +23,7 @@ vi.mock('electron', () => {
 });
 
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
+import { registerWithRuntime } from './helpers/register-ipc';
 import { WindowRegistry } from '../src/main/window-registry';
 import { TranscriptWatcher } from '../src/main/transcript-watcher';
 import { NativeSessionHost } from '../src/main/harness/native-session-host';
@@ -109,7 +110,7 @@ describe('transcript:page locator memory', () => {
       ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn(),
     };
     const mockCommandProvider: any = { list: vi.fn(() => []), refresh: vi.fn() };
-    registerIpcHandlers(
+    registerWithRuntime(registerIpcHandlers, 
       mockIpcMain as any, sessionManagerOverride ?? mockSessionManager, mockWindow, mockSkillProvider, mockCommandProvider,
       undefined, undefined, remoteServer, windowRegistry,
     );
@@ -207,7 +208,7 @@ describe('transcript:page locator memory', () => {
     };
     let createFromPhone: ((opts: any) => Promise<any>) | null = null;
     const remote = {
-      broadcast: vi.fn(), setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(),
+      broadcast: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(),
       setLastTopic: vi.fn(), getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
       setSessionCreate: vi.fn((fn: any) => { createFromPhone = fn; }),
     };

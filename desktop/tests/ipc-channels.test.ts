@@ -2434,7 +2434,9 @@ describe('Sign in with ChatGPT - the wiring that has no other guard', () => {
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('the kill switch reaches the handlers, the background poll and the first-run arm', () => {
-    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    // The switch is applied where the runtime is built (create-runtime.ts, since the 2026-09-29
+    // one-core R1 hoist moved it out of ipc-handlers.ts); both doors read the switched value.
+    const handlers = read('src', 'main', 'create-runtime.ts');
     const main = read('src', 'main', 'main.ts');
     // 1. The handlers, the provider row and the catalog.
     expect(handlers, 'the kill switch no longer gates the user-facing handle')

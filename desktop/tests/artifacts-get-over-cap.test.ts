@@ -27,6 +27,7 @@ vi.mock('electron', () => {
 });
 
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
+import { registerWithRuntime } from './helpers/register-ipc';
 import { EDIT_MAX_BYTES, FULL_READ_MAX_BYTES } from '../src/shared/artifacts/editable-path-policy';
 
 let root: string;
@@ -43,7 +44,7 @@ function getHandler() {
     install: vi.fn(), installMany: vi.fn(),
     ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn(),
   };
-  registerIpcHandlers(mockIpcMain, mockSessionManager, mockWindow, mockSkillProvider);
+  registerWithRuntime(registerIpcHandlers, mockIpcMain, mockSessionManager, mockWindow, mockSkillProvider);
   return mockIpcMain.handle.mock.calls.find((c: any) => c[0] === 'artifacts:get')[1];
 }
 

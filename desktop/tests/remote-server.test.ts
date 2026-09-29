@@ -111,6 +111,11 @@ async function restore(server: any, ws: any) {
   await server.restoreClient(client, { reconnect: false, replayBuffers: true });
 }
 
+// WHY (2026-09-29 one-core R1): RemoteServer no longer has a setNativeRuntime() setter; it reads the
+// runtime through the `getNativeRuntime` accessor main.ts gives it. Tests hand it a (partial) fake
+// by replacing that accessor on the instance — evaluated once, so a fake keeps its identity.
+function giveRuntime(server: any, runtime: any): void { server.getNativeRuntime = () => runtime; }
+
 describe('RemoteServer', () => {
   let mockSessionManager: any;
   let mockHookRelay: any;
@@ -153,7 +158,7 @@ describe('RemoteServer', () => {
       read: vi.fn(() => ({ openrouter: 'long', chatgpt: 'standard' })),
       update: vi.fn(async () => ({ openrouter: 'long', chatgpt: 'long' })),
     };
-    server.setNativeRuntime({ contextSettings });
+    giveRuntime(server, { contextSettings });
     expect(await request('native:get-context-preferences')).toEqual({ openrouter: 'long', chatgpt: 'standard' });
     expect(await request('native:set-context-preferences', { patch: { chatgpt: 'long' } })).toEqual({ openrouter: 'long', chatgpt: 'long' });
     expect(contextSettings.update).toHaveBeenCalledWith({ chatgpt: 'long' });
@@ -348,7 +353,7 @@ describe('RemoteServer and the shell provider', () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
     const send = vi.fn(() => ({ status: 'sent' }));
-    server.setNativeRuntime({ nativeHost: { send } });
+    giveRuntime(server, { nativeHost: { send } });
     await drive(server, { type: 'native:send', id: 'n1', payload: { sessionId: 's1', text: 'look /up/a.png', attachments: ['/up/a.png', 42] } });
     expect(send).toHaveBeenCalledWith('s1', 'look /up/a.png', ['/up/a.png']);
     await drive(server, { type: 'native:send', id: 'n2', payload: { sessionId: 's1', text: 'no files' } });
@@ -447,7 +452,7 @@ describe('RemoteServer carries a per-model settings save end to end', () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(sm, hr, cfg);
     const setModelSettings = vi.fn(async () => ({ contextLength: null, keepLoaded: true, gpuLayers: 'auto', extraFlags: '', memoryWarningDismissed: null }));
-    server.setNativeRuntime(fakeRuntime({ setModelSettings }));
+    giveRuntime(server, fakeRuntime({ setModelSettings }));
 
     const sent = await drive(server, {
       type: 'models:set-settings', id: 's1',
@@ -465,7 +470,7 @@ describe('RemoteServer carries a per-model settings save end to end', () => {
       contextLength: 8_192, keepLoaded: false, gpuLayers: 'auto', extraFlags: '',
       memoryWarningDismissed: null, pendingApply: true, lastLoadError: 'out of device memory',
     }));
-    server.setNativeRuntime(fakeRuntime({ modelSettings }));
+    giveRuntime(server, fakeRuntime({ modelSettings }));
 
     const sent = await drive(server, { type: 'models:settings', id: 's2', payload: { modelId: 'alpha' } });
 
@@ -477,7 +482,7 @@ describe('RemoteServer carries a per-model settings save end to end', () => {
   it('answers a REFUSED save as a failure, which the shim re-throws', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(sm, hr, cfg);
-    server.setNativeRuntime(fakeRuntime({
+    giveRuntime(server, fakeRuntime({
       setModelSettings: vi.fn(async () => { throw new Error('Context length must be at least 1024 tokens.'); }),
     }));
 
@@ -828,7 +833,7 @@ describe('RemoteServer session meta + browse', () => {
   }
 
   /** Minimal native runtime stub — only isNativeSessionId/list matter for these
-   *  cases; the rest of the setNativeRuntime shape is asserted by other tests
+   *  cases; the rest of the native-runtime shape is asserted by other tests
    *  (native:* / provider:* suites), not this one. */
   function fakeNativeRuntime(nativeIds: Set<string>, listEntries: any[] = []) {
     return {
@@ -845,7 +850,7 @@ describe('RemoteServer session meta + browse', () => {
     it('resolves a native id through sessionMetaWiring and reads the store with provider "native"', async () => {
       const { RemoteServer } = await import('../src/main/remote-server');
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-      server.setNativeRuntime(fakeNativeRuntime(new Set(['native-1'])));
+      giveRuntime(server, fakeNativeRuntime(new Set(['native-1'])));
       server.setSessionMetaWiring({
         resolve: (id: string) => (id === 'desktop-1' ? 'native-1' : id),
         canWrite: () => true,
@@ -869,7 +874,7 @@ describe('RemoteServer session meta + browse', () => {
     it('resolves a non-native id and reads the store with provider "claude"', async () => {
       const { RemoteServer } = await import('../src/main/remote-server');
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-      server.setNativeRuntime(fakeNativeRuntime(new Set())); // nothing is native
+      giveRuntime(server, fakeNativeRuntime(new Set())); // nothing is native
       server.setSessionMetaWiring({ resolve: (id: string) => id, canWrite: () => true });
       const storeGet = vi.fn(async () => null);
       mockConversationsService.getConversationStore.mockReturnValue({ get: storeGet });
@@ -889,7 +894,7 @@ describe('RemoteServer session meta + browse', () => {
     it('resolves a store-only native id (not live/on-disk) to the "native" bucket by probing the store', async () => {
       const { RemoteServer } = await import('../src/main/remote-server');
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-      server.setNativeRuntime(fakeNativeRuntime(new Set())); // nothing is live/on-disk native
+      giveRuntime(server, fakeNativeRuntime(new Set())); // nothing is live/on-disk native
       server.setSessionMetaWiring({ resolve: (id: string) => id, canWrite: () => true });
       // A native record exists in the store for this id; the claude bucket is empty.
       const storeGet = vi.fn(async (provider: string) =>
@@ -1020,7 +1025,7 @@ describe('RemoteServer session meta + browse', () => {
     it('derives the write provider via nativeHost.isNativeSessionId on the RESOLVED id', async () => {
       const { RemoteServer } = await import('../src/main/remote-server');
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-      server.setNativeRuntime(fakeNativeRuntime(new Set(['native-1'])));
+      giveRuntime(server, fakeNativeRuntime(new Set(['native-1'])));
       server.setSessionMetaWiring({ resolve: () => 'native-1', canWrite: () => true });
 
       await sendAndCollect(server, msg({ sessionId: 'desktop-1' }));
@@ -1049,7 +1054,7 @@ describe('RemoteServer session meta + browse', () => {
     it('broadcasts session:meta-changed after a successful write (parity with ipcMain SESSION_SET_TAG)', async () => {
       const { RemoteServer } = await import('../src/main/remote-server');
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-      server.setNativeRuntime(fakeNativeRuntime(new Set()));
+      giveRuntime(server, fakeNativeRuntime(new Set()));
       server.setSessionMetaWiring({ resolve: (id: string) => id, canWrite: () => true });
       const bSpy = vi.spyOn(server, 'broadcast');
 
@@ -1143,7 +1148,7 @@ describe('RemoteServer session meta + browse', () => {
     it('derives the write provider via nativeHost.isNativeSessionId on the RESOLVED id', async () => {
       const { RemoteServer } = await import('../src/main/remote-server');
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-      server.setNativeRuntime(fakeNativeRuntime(new Set(['native-1'])));
+      giveRuntime(server, fakeNativeRuntime(new Set(['native-1'])));
       server.setSessionMetaWiring({ resolve: () => 'native-1', canWrite: () => true });
 
       await sendAndCollect(server, msg({ sessionId: 'desktop-1', note: 'note text' }));
@@ -1155,7 +1160,7 @@ describe('RemoteServer session meta + browse', () => {
     it('broadcasts session:meta-changed after a successful write (parity with ipcMain SESSION_SET_NOTE)', async () => {
       const { RemoteServer } = await import('../src/main/remote-server');
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-      server.setNativeRuntime(fakeNativeRuntime(new Set()));
+      giveRuntime(server, fakeNativeRuntime(new Set()));
       server.setSessionMetaWiring({ resolve: (id: string) => id, canWrite: () => true });
       const bSpy = vi.spyOn(server, 'broadcast');
 
@@ -1174,7 +1179,7 @@ describe('RemoteServer session meta + browse', () => {
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
       mockSessionManager.listSessions = vi.fn(() => [{ id: 'live-1' }]);
       const nativeEntries = [{ id: 'native-9', provider: 'native' as const, slug: 'foo' }];
-      server.setNativeRuntime(fakeNativeRuntime(new Set(), nativeEntries));
+      giveRuntime(server, fakeNativeRuntime(new Set(), nativeEntries));
       const pastRows = [{ id: 'past-1' }];
       mockSessionBrowser.listPastSessions.mockResolvedValue(pastRows);
 
@@ -1373,7 +1378,7 @@ describe('RemoteServer specialist run + native hook replay', () => {
     const { frames, ws } = fakeWs();
     await server.handleMessage({ ws, authenticated: true }, JSON.stringify({ type: 'native:kill-shell', id: 'r1', payload: { sessionId: 's1', shellId: 'sh-1' } }));
     expect(frames.find((m) => m.id === 'r1')?.payload).toEqual({ ok: false, reason: 'not-live' });
-    server.setNativeRuntime({ nativeHost: { killShell: vi.fn(async () => ({ ok: true })) } });
+    giveRuntime(server, { nativeHost: { killShell: vi.fn(async () => ({ ok: true })) } });
     await server.handleMessage({ ws, authenticated: true }, JSON.stringify({ type: 'native:kill-shell', id: 'r2', payload: { sessionId: 's1', shellId: 'sh-1' } }));
     expect(frames.find((m) => m.id === 'r2')?.payload).toEqual({ ok: true });
   });
@@ -1390,7 +1395,7 @@ describe('RemoteServer specialist run + native hook replay', () => {
     };
     expect(await send('no-runtime', 'keep corrections')).toEqual({ ok: false, reason: 'not-live' });
     const compact = vi.fn(async () => ({ ok: true }));
-    server.setNativeRuntime({ nativeHost: { compact } });
+    giveRuntime(server, { nativeHost: { compact } });
     expect(await send('focused', 'keep corrections')).toEqual({ ok: true });
     expect(compact).toHaveBeenCalledWith('s1', 'keep corrections');
     expect(await send('plain')).toEqual({ ok: true });
@@ -1519,7 +1524,7 @@ describe('RemoteServer specialist run + native hook replay', () => {
       expect(frames.find((m: any) => m.id === 'r1')?.payload).toBe(false);
 
       const submitAdminPassword = vi.fn(() => true);
-      server.setNativeRuntime({ nativeHost: { submitAdminPassword } });
+      giveRuntime(server, { nativeHost: { submitAdminPassword } });
       await server.handleMessage({ ws, authenticated: true }, JSON.stringify({
         type: 'native:submit-admin-password', id: 'r2', payload: { requestId: 'req-1', password: SENTINEL },
       }));
@@ -1532,7 +1537,7 @@ describe('RemoteServer specialist run + native hook replay', () => {
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
       const { ws } = fakeWs();
       const submitAdminPassword = vi.fn(() => true);
-      server.setNativeRuntime({ nativeHost: { submitAdminPassword } });
+      giveRuntime(server, { nativeHost: { submitAdminPassword } });
 
       const spies = [
         vi.spyOn(console, 'log').mockImplementation(() => {}),
@@ -1566,7 +1571,7 @@ describe('RemoteServer specialist run + native hook replay', () => {
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
       const { frames, ws } = fakeWs();
       const submitAdminPassword = vi.fn(() => true);
-      server.setNativeRuntime({ nativeHost: { submitAdminPassword } });
+      giveRuntime(server, { nativeHost: { submitAdminPassword } });
 
       for (const [id, password] of [['r1', 12345], ['r2', null], ['r3', undefined], ['r4', {}], ['r5', '']] as const) {
         // No matcher needed to prove "does not throw" — an unhandled throw

@@ -91,7 +91,7 @@ import type { PermissionRule } from '../shared/permission-types';
 import type { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { OpenRouterSignIn } from './providers/openrouter-oauth';
-import type { ClaudeAccount } from './providers/claude-account';
+import type { RemoteNativeRuntime } from './create-runtime';
 import { installClaude } from './prerequisite-installer';
 import { toListResult } from './harness/specialists/catalog';
 import { detectEndpoints } from './models/endpoint-detectors';
@@ -373,15 +373,13 @@ export class RemoteServer {
   // Provider injected at construction — called when new clients connect to get the full chat state.
   // restoreClient() calls it once per restore; declared here so the field exists before that step.
   private requestSnapshot: () => Promise<SerializedChatState>;
-  // Native runtime stack — injected by ipc-handlers via setNativeRuntime() AFTER
-  // it constructs the instances (they can't be built at RemoteServer construction
-  // time because they live in the ipc-handlers scope). Null until wired; the
-  // native:* / provider:* WS cases no-op until then.
-  // Merge note: nativeRuntime carries modelManager (Plan C) AND the leaseWiring
-  // field (Plan 2b) — both were added independently on master and this branch.
-  // permissionStore (M5 2a) is carried for the READ side only — permissions:list.
-  // The two revokes go through nativeHost, which also clears live in-memory state.
-  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null; openRouterSignIn?: OpenRouterSignIn | null } | null = null;
+  // WHY (2026-09-29 one-core R1): the SAME runtime the desktop door uses, from createRuntime() in
+  // main.ts (was pushed in by ipc-handlers via a setter). Read-only accessor because this server
+  // is built at module load and started BEFORE createWindow builds the runtime; no message can
+  // arrive in between (no await). Null answers the native:*/provider:* cases' no-runtime fallbacks.
+  // permissionStore is for permissions:list only; revokes go through nativeHost.
+  private getNativeRuntime: () => RemoteNativeRuntime | null = () => null;
+  private get nativeRuntime(): RemoteNativeRuntime | null { return this.getNativeRuntime(); }
   // Plan 2b Task 11: conversation-lease + device wiring, injected by ipc-handlers
   // via setLeaseWiring() AFTER main.ts builds the lease client/requester (they
   // live in the whenReady scope, not reachable at RemoteServer construction).
@@ -425,6 +423,9 @@ export class RemoteServer {
        *  closure-over-a-module-var pattern as `prepareCreate` above. Absent in
        *  tests that don't care — every call site is optional-chained. */
       untrackWelcomeBack?: (desktopId: string) => void;
+      /** The native runtime, read on every request (see the `nativeRuntime` field for why it is
+       *  an accessor). main.ts returns the runtime createWindow built; tests return a partial fake. */
+      getNativeRuntime?: () => RemoteNativeRuntime | null;
     },
   ) {
     this.devices = new RemoteDeviceStore();
@@ -438,6 +439,7 @@ export class RemoteServer {
     this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
     this.serveBuiltPage = opts?.serveBuiltPage ?? true;
     this.untrackWelcomeBack = opts?.untrackWelcomeBack;
+    if (opts?.getNativeRuntime) this.getNativeRuntime = opts.getNativeRuntime;
   }
   private serveBuiltPage: boolean;
   private listCommands: (() => Promise<unknown[]>) | null;
@@ -480,13 +482,6 @@ export class RemoteServer {
   }
   private accountStore?: { getToken(): string | null; getUser(): any };
 
-  /** Injected by ipc-handlers after it constructs the native stack, so remote
-   *  WS clients reach the SAME nativeHost / providerRegistry / modelCatalog the
-   *  Electron IPC handlers use (mirrors setLastTopic / broadcastStatusData). */
-  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null; openRouterSignIn?: OpenRouterSignIn | null }): void {
-    this.nativeRuntime = rt;
-  }
-
   /** Task 5: which Conversation Store bucket a session's meta reads/writes
    *  belong to. 'native' when NativeSessionHost recognizes the id (live now,
    *  or a persisted ~/.youcoded/sessions file); 'claude' otherwise, including
@@ -520,7 +515,7 @@ export class RemoteServer {
 
   /** Injected by ipc-handlers after main.ts builds the lease client/requester,
    *  so remote WS clients reach the SAME lease state the Electron IPC handlers
-   *  use (mirrors setNativeRuntime). machineId marks self in list-devices —
+   *  use machineId marks self in list-devices —
    *  deviceId is the per-INSTALL lease id and must NOT be used for that. */
   setLeaseWiring(w: {
     client: import('./conversations/lease-client').LeaseClient;

@@ -17,7 +17,6 @@ import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-
 import { HookRelay } from './hook-relay';
 import { IPC, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
-import { hasRealTitle } from '../shared/session-title';
 import { setPermissionOverrides, forgetSessionAttention } from './main';
 import { LocalSkillProvider } from './skill-provider';
 import { getField, setField } from './claude-settings';
@@ -32,13 +31,11 @@ import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 // stack: provider CRUD + key management, model catalog, and the live-session
 // registry that owns HarnessSessions and their persistence.
 import { NativeHome } from './native-home';
-import { SecretsStore } from './providers/secrets-store';
+import type { NativeRuntime } from './create-runtime';
+import type { OutboxBroadcast } from './chatsearch-index/outbox-drain';
 import { ProviderRegistry } from './providers/provider-registry';
-import { OpenRouterHealth } from './providers/openrouter-health';
-import { OpenRouterSignIn } from './providers/openrouter-oauth';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
 // (it needs the post-dev-profile userData) and passed IN; this file only wires it.
-import type { ChatGptAuth } from './providers/chatgpt-auth';
 import { ClaudeAccount } from './providers/claude-account';
 // Welcome back (design 2026-09-24 §1-3): the per-install "open at last
 // shutdown" store, constructed in main.ts and passed in (T1 built the store
@@ -47,12 +44,8 @@ import type { WelcomeBackStore, WelcomeBackProvider } from './welcome-back-store
 // Task 7: native auto-title generation over the AI SDK — the SAME `ai`
 // package harness-session.ts already depends on (never through
 // HarnessSession.send(), which hard-throws on re-entrancy).
-import { generateText } from 'ai';
 import type { ModelBinding } from '../shared/provider-types';
-import { createSessionNamer } from './session-namer';
-import { NamingSettings } from './naming-settings';
-import { reapplyStoredTitle, createProvisionalTitles, type ResumeTitleDeps } from './native-resume-title';
-import { ModelCatalog } from './providers/model-catalog';
+import { reapplyStoredTitle, type ResumeTitleDeps } from './native-resume-title';
 import { EngineManager } from './engine/engine-manager';
 // Faster-engine prerequisites (2026-09-05 §A5) — a pure-ish read of this
 // machine, so it needs no manager instance.
@@ -64,33 +57,18 @@ import { installClaude } from './prerequisite-installer';
 import { firstRunStateDir, type FirstRunNativeDeps } from './first-run';
 import { clearSetupDownload, computeSetupDownloadStatus, readSetupDownload } from './first-run-local';
 import { detectEndpoints } from './models/endpoint-detectors';
-import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
 import { adminCapabilityReady } from './harness/admin-capability';
-import { startAdminPassword } from './harness/admin-password-startup';
-import { AcceptedHistoryStore } from './harness/accepted-history-store';
-import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
-import type { ProfileProviderType } from './harness/capability-profile';
-import { PermissionStore } from './harness/permission-store';
-import { StepGuardSettings } from './harness/step-guard-settings';
-import { ContextSettingsStore } from './harness/context-settings-store';
+import { toListResult } from './harness/specialists/catalog';
 // Type-only: the payload the permissions:remove handler forwards to the host.
 import type { PermissionRule } from '../shared/permission-types';
 // Task 7b: the MCP registry (WHICH servers ~/.youcoded/mcp.json configures)
 // and the pooled connection manager that acquire()s them per session. See the
 // construction site below for the eager-vs-lazy invariant this must preserve.
-import { McpRegistry } from './harness/mcp/mcp-registry';
-import { McpManager } from './harness/mcp/mcp-manager';
-import { createConnection } from './harness/mcp/mcp-client';
 // WebSearch provider stack (Phase 2 Plan B): keyed Tavily/Exa upgrades + the
 // chain-walking SearchService injected into the native tool framework.
-import { SearchKeyStore } from './harness/search/search-key-store';
 import { SearchService } from './harness/search/search-service';
-import { SearchChain } from './harness/search/search-chain';
-import { exaBackend } from './harness/search/backends/exa';
-import { ddgBackend } from './harness/search/backends/ddg';
-import { tavilyBackend } from './harness/search/backends/tavily';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
 import { listPastSessions, loadHistory, readSessionTranscriptMeta } from './session-browser';
@@ -193,23 +171,20 @@ import { listConversations, repoInfo, listContextFiles, readContext } from './pr
 // Conversation Store (Phase 2a): live intake of transcript activity, session
 // cwd, title and flag changes. Keyed by CLAUDE session id (resolved from the
 // desktop id via sessionIdMap below), matching the store's record id.
-import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded, noteTitleChanged,
+import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded,
   noteFlagChanged, noteSessionNote, noteModelUsed, getConversationStore, flushSessionToSpace,
   buildLocalProjectResolver, emitConversationMetaChanged,
   pinHandoffDestination, publishStoppedHandoff, syncPublishedHandoff,
   importConfirmedHandoff, resolveHandoffProject, resolveSavedHandoffProject, HANDOFF_SYNC_TIMEOUT_MS,
-  getNamingRecord,
   mutateNamingRecord,
   resolveSessionName,
   setManualSessionName,
 } from './conversations/service';
-import { createTitleQueue, mayPublishAutomaticName } from './conversations/naming-store';
 import { requestChatsearchRefresh } from './chatsearch-index/index-service';
 // Task 4: resolves a native session's live model binding into the store's
 // portable {modelId, providerType, providerLabel} shape — see
 // portable-model.ts's WHY comment for why the lookup itself is split out.
 import { bindingToPortableModel } from './conversations/portable-model';
-import type { PortableModelRef } from './conversations/store-core';
 // Plan 2b Task 8: holder-side takeover — when another device requests a session
 // this device holds, cleanly interrupt/flush/release/move/destroy it.
 import { createHolderTakeover } from './conversations/takeover';
@@ -222,29 +197,6 @@ import type { RequesterTakeoverType } from './conversations/takeover';
 import { getTagRegistry, listTagsForHost } from './conversations/tag-registry-service';
 import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
 import { writeContextFile } from './project-context';
-
-// WHY: the chatsearch outbox drainer lives outside registerIpcHandlers but must
-// fire the SAME renderer + remote broadcast the IPC tag/flag/note handlers fire,
-// or the conversation list won't repaint when the CLI changes something.
-// sendForSession and remoteServer are function-local, so the handler registers
-// this bridge at startup — same hand-out pattern as setSessionMetaWiring.
-type MetaBroadcaster = (sessionId: string, payload: Record<string, unknown>) => void;
-let metaBroadcaster: MetaBroadcaster | null = null;
-export function broadcastSessionMeta(sessionId: string, payload: { flag: string; value: boolean } | { note: string }): void {
-  metaBroadcaster?.(sessionId, payload);
-}
-
-// WHY: same rationale as broadcastSessionMeta above — the outbox drainer
-// creates tags directly via getTagRegistry().create(), bypassing the
-// TAGS_CREATE handler below (the only other place a new tag reaches a
-// renderer/remote broadcast), so without this hand-out a tag the drainer
-// creates is invisible to an open window's tag registry and filter list
-// until a restart, even though the conversation it tagged already shows it.
-type TagsBroadcaster = () => void;
-let tagsBroadcaster: TagsBroadcaster | null = null;
-export function broadcastTagsChanged(): void {
-  tagsBroadcaster?.();
-}
 
 // Max age for clipboard paste images (1 hour)
 const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
@@ -375,44 +327,9 @@ export function buddyShowRefusal(status: HelperStatus | null): string | null {
   return status.reason ?? 'The buddy needs its KDE helper on this desktop, and the helper is not running.';
 }
 
-/** admin-password design §2.1/§11 tasks 5+review: the ONE resolver for both
- *  askpass paths, so `SUDO_ASKPASS` (the wrapper) and `helperScriptRealpath`
- *  (the verifier's argv[1] check, `askpass.cjs`) can never drift apart —
- *  T5-1 shipped with SUDO_ASKPASS pointed at `askpass.cjs` directly (no
- *  execute bit, no shebang: sudo's execve() of it fails outright, and even
- *  fixing that by making askpass.cjs itself executable would silently
- *  delete the wrapper's `env -i` scrub, the actual control against a
- *  command-supplied `NODE_OPTIONS` reaching the verified helper — design
- *  review 1, D1). `wrapperRealpath` is resolved as a SIBLING of
- *  `helperScriptRealpath`'s own real directory (never re-derived from `base`
- *  independently), so the two can never name files in different directories.
- *  dev is the worktree files under `desktop/scripts/askpass/`
- *  (`app.getAppPath()` is `desktop/` itself in dev, where `package.json`
- *  lives); packaged is `process.resourcesPath/app.asar.unpacked/scripts/
- *  askpass/` (electron-builder.yml's `asarUnpack: scripts/**\/*`). Returns
- *  null (never throws) when either file genuinely isn't there — the caller
- *  logs plainly and skips the whole feature, exactly like a failed
- *  self-test (design §2.2: "no fallback to a self-reported pid").
- *
- *  T5-3: async (`fs.promises.realpath`) — a startup-only `fs.*Sync` call
- *  needs no `main-blocking-calls.allowlist.json` entry (that list may only
- *  shrink, `.claude/rules/performance.md` rule 1) when the async form is
- *  just as easy at this one call site. */
-export async function resolveAskpassPaths(): Promise<{ helperScriptRealpath: string; wrapperRealpath: string } | null> {
-  const rel = path.join('scripts', 'askpass', 'askpass.cjs');
-  try {
-    // Test doubles for `app` (many suites construct a minimal fake) may
-    // lack `getAppPath`/`isPackaged` entirely — never let that throw before
-    // this feature has a chance to be genuinely unavailable, exactly like a
-    // missing file below.
-    const base = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', rel) : path.join(app.getAppPath(), rel);
-    const helperScriptRealpath = await fs.promises.realpath(base);
-    const wrapperRealpath = await fs.promises.realpath(path.join(path.dirname(helperScriptRealpath), 'youcoded-askpass'));
-    return { helperScriptRealpath, wrapperRealpath };
-  } catch {
-    return null;
-  }
-}
+// Moved to electron-platform.ts (2026-09-29 one-core R1): it is the desktop Platform's answer to
+// "where are the sudo-password helper scripts". Re-exported so existing importers keep working.
+export { resolveAskpassPaths } from './electron-platform';
 
 export function registerIpcHandlers(
   ipcMain: IpcMain,
@@ -447,19 +364,24 @@ export function registerIpcHandlers(
     /** Test override; production uses the sync-space service flag. */
     syncEnabled?: () => boolean;
   },
-  // Sign in with ChatGPT (backend design 2026-09-05 §1, §6): the account object
-  // main.ts built inside createWindow. Optional so the tests that call this with
-  // four args keep working. It is ALWAYS handed over when it exists — the kill
-  // switch (YOUCODED_CHATGPT=0) is applied HERE, not by omitting the argument:
-  // under the switch the registry, the catalog and the four handlers get null
-  // (no virtual row, no models, answers signed-out/false) while the object
-  // itself stays alive as the file reader main.ts's launch check needs.
-  chatgptAuth?: ChatGptAuth | null,
+  // The native runtime, built once by createRuntime() in main.ts and shared with RemoteServer
+  // (WHY, 2026-09-29 one-core R1: this used to be constructed in the middle of this function and
+  // pushed to the phone door afterwards through a setter). It also carries Sign in with ChatGPT
+  // with the YOUCODED_CHATGPT=0 kill switch already applied (create-runtime.ts).
+  runtime?: NativeRuntime,
   // Welcome back (design §1-3): absent only in tests that don't care about it —
   // every call site below is optional-chained, so the feature is silently
   // inert (no offer, no tracking) rather than throwing when it's omitted.
   welcomeBackStore?: WelcomeBackStore,
 ) {
+  // WHY optional in the signature but required here: the params before it are optional (tests
+  // pass four), and TypeScript will not let a required one follow them. A missing runtime is a
+  // programming error, so fail loudly at registration rather than at the first handler call.
+  if (!runtime) throw new Error('registerIpcHandlers needs the runtime built by createRuntime()');
+  // The per-session maps every handler group shares. WHY (2026-09-29 one-core R1): ONE copy,
+  // owned by the runtime (ipc/session-state.ts) — never re-declared per file or per group.
+  const { sessionIdMap, lastModelSeen, topicWatchers, lastTopics, provisionalResumeTitles } = runtime.sessionState;
+
   // Broadcast a non-session-scoped event to every renderer. Status data, UI
   // actions, and similar globals must reach every window — not just window 1.
   // Session-scoped events should use sendForSession instead.
@@ -509,7 +431,11 @@ export function registerIpcHandlers(
     if (!mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
   };
 
-  metaBroadcaster = (sessionId, payload) => {
+  // WHY (2026-09-29 one-core R1): returned from registerIpcHandlers as plain values (was two
+  // module-level `let`s assigned here as a side effect, so a caller that ran first silently
+  // did nothing). main.ts hands them to the chatsearch outbox drainer, which changes flags,
+  // notes and tags outside any window's handler and must still repaint every window and phone.
+  const broadcastSessionMeta = (sessionId: string, payload: { flag: string; value: boolean } | { note: string }): void => {
     sendForSession(sessionId, IPC.SESSION_META_CHANGED, sessionId, payload);
     remoteServer?.broadcast({ type: IPC.SESSION_META_CHANGED, payload: { sessionId, ...payload } });
   };
@@ -546,11 +472,11 @@ export function registerIpcHandlers(
     }
   };
 
-  // WHY defined here (not next to metaBroadcaster above): it needs
+  // WHY defined here (not next to broadcastSessionMeta above): it needs
   // broadcastToAllWindows, which doesn't exist yet at that point in the
   // function — same hand-out pattern, just wired where its dependency is
   // available. Fires the identical pair the TAGS_CREATE handler below fires.
-  tagsBroadcaster = () => {
+  const broadcastTagsChanged = (): void => {
     remoteServer?.broadcast({ type: IPC.TAGS_CHANGED, payload: {} });
     broadcastToAllWindows(IPC.TAGS_CHANGED, {});
   };
@@ -871,11 +797,8 @@ export function registerIpcHandlers(
   // Opening-words names planted on a resumed, never-titled native session's pill
   // (native-resume-title.ts), keyed by session id. They are there so the pill
   // matches the Resume Browser row — NOT a title: both `hasTitle` checks below
-  // look through them via liveNameForTitleCheck, or the namer would read the
+  // look through them via liveNameForTitleCheck (create-runtime.ts), or the namer would read the
   // raw first message as a real name and never generate one.
-  const provisionalResumeTitles = createProvisionalTitles();
-  const liveNameForTitleCheck = (desktopId: string): string | undefined =>
-    provisionalResumeTitles.forTitleCheck(desktopId, sessionManager.getSession(desktopId)?.name);
   const resumeTitleDeps: ResumeTitleDeps = {
     // NOTE: getConversationStore() is null for the whole launch when the managed
     // roots are unavailable (conversations/service.ts sets storePhase
@@ -2576,8 +2499,8 @@ export function registerIpcHandlers(
   // We discover the mapping from hook events (which contain both IDs)
   // and watch the correct file.
   const topicDir = path.join(os.homedir(), '.claude', 'topics');
-  // Maps desktop session ID → Claude Code session ID
-  const sessionIdMap = new Map<string, string>();
+  // (sessionIdMap — desktop session ID → Claude Code session ID — now lives in the runtime's
+  // session-state.ts, shared by every handler group; see the destructure at the top.)
   const nativeStarting = new Set<string>();
   const nativeExited = new Set<string>();
   const admittedResumes = new Set<string>();
@@ -2777,10 +2700,7 @@ export function registerIpcHandlers(
     }
   });
 
-  // Last model id written to the store per CLAUDE session id, so a repeat is
-  // never re-written. Unbounded in principle but bounded in practice by
-  // sessions opened this run, and one short string each.
-  const lastModelSeen = new Map<string, string>();
+  // (lastModelSeen — last model id written per CLAUDE session id — lives in session-state.ts.)
 
   transcriptWatcher.on('transcript-event', (event: any) => {
     sendForSession(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
@@ -2840,466 +2760,24 @@ export function registerIpcHandlers(
     }
   });
 
-  // --- Native runtime stack (Phase 1 Plan A, Task 9) ---
-  // NativeHome is the single writer for ~/.youcoded/; SecretsStore keeps API
-  // keys in Electron's safeStorage-encrypted userData (NOT in the syncable home
-  // dir). ProviderRegistry.init() seeds the built-in providers under the file
-  // lock (fire-and-forget — list/languageModel read on demand). The catalog's
-  // contextLengthFor feeds HarnessSession's context-window sizing.
-  const nativeHome = new NativeHome();
-  // Hoisted out of the NativeSessionHost constructor call below (M5 2a): the
-  // permissions:list handler and the remote-server WS case both need to READ the
-  // same store the host writes through. Constructing a second one would still
-  // work (they share one file under NativeHome's lock) but would make the
-  // "one store" invariant a coincidence rather than a fact.
-  const permissionStore = new PermissionStore(nativeHome);
-  const stepGuardSettings = new StepGuardSettings(nativeHome);
-  const contextSettings = new ContextSettingsStore(nativeHome);
-  const secretsStore = new SecretsStore(app.getPath('userData'));
-  // Plan B: the local engine. EngineManager owns acquisition + supervision; its
-  // hook makes the 'local' provider real and its listModels feeds the model
-  // picker. ENGINE_PORT rides the shifted-port scheme so the dev instance and
-  // the built app never fight over one llama-server.
-  const engineManager = new EngineManager(nativeHome, app.getPath('userData'), ENGINE_PORT);
-  // Bring an already-installed engine up to the pinned version, in the background.
-  // Fire-and-forget by design — it never throws, never blocks startup, and skips
-  // itself entirely when nothing is installed yet (a first install stays the user's
-  // call). Without this a pin bump reaches nobody: EngineAcquisition.installed()
-  // keeps serving whatever version is on disk, so a model needing a newer llama.cpp
-  // just looks like a broken app.
-  void engineManager.autoUpdateOnLaunch();
-  // Sign in with ChatGPT — the kill switch (§6). `chatgptForUi` is what the
-  // registry, the catalog, the four handlers and the remote WS cases see: null
-  // under YOUCODED_CHATGPT=0 so the plan's row and models vanish and every
-  // surface answers signed-out, while `chatgptAuth` itself (main.ts's file
-  // reader) is untouched. Stored tokens are left alone — the flag is a fast
-  // revert, not a sign-out.
-  const chatgptForUi: ChatGptAuth | null = process.env.YOUCODED_CHATGPT !== '0' ? (chatgptAuth ?? null) : null;
-  // Connection trust (§3.1): what OpenRouter last said about THIS profile's
-  // key, stored beside its secrets (userData), never in shared ~/.youcoded.
-  const openRouterHealth = new OpenRouterHealth({ dir: app.getPath('userData') });
-  const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook(), chatgptForUi, openRouterHealth);
-  void providerRegistry.init();
-  // Re-check the OpenRouter key shortly after launch and every 5 minutes, so a
-  // key that died while the app sat idle reads as dead before anyone sends a
-  // message. refreshOpenRouter asks nothing unless OpenRouter is on with a key.
-  // (The ChatGPT usage poll's cadence — providers/chatgpt-auth.ts USAGE_POLL_MS.)
-  setTimeout(() => { void providerRegistry.refreshOpenRouter(); }, 5_000).unref?.();
-  setInterval(() => { void providerRegistry.refreshOpenRouter(); }, 5 * 60_000).unref?.();
-  // Sign in with OpenRouter (§3.5). The key it brings back takes the paste
-  // path: checked first, and saved only if OpenRouter didn't refuse it.
-  const openRouterSignIn = new OpenRouterSignIn({
-    openExternal: (url) => shell.openExternal(url),
-    acceptKey: async (key) => {
-      const check = await providerRegistry.testConnection('openrouter', key);
-      if (check.verdict !== 'rejected') await providerRegistry.setKey('openrouter', key);
-      return check;
-    },
-  });
-  const modelCatalog = new ModelCatalog(app.getPath('userData'), undefined, {
-    // WHY read defaults at resolution time, never mutate budgets of active sessions.
-    contextPreferences: () => contextSettings.read(),
-    localModels: () => engineManager.catalogModels(),
-    // The plan's models come from ChatGptAuth's manifest cache (§4.2); absent
-    // under the kill switch so the catalog contributes nothing for 'chatgpt'.
-    ...(chatgptForUi ? { chatgptModels: () => chatgptForUi.models() } : {}),
-  });
-  // WebSearch stack (Phase 2 Plan B): keys live in SecretsStore, the ref map in
-  // ~/.youcoded/search-providers.json (via NativeHome). SearchChain caches the
-  // patchable backend chain under userData — the SAME cache-dir convention as
-  // ModelCatalog/CuratedCatalog (both take app.getPath('userData')). The
-  // SearchService is injected into the native tool framework as `toolServices`
-  // so the WebSearch tool can reach it (see NativeSessionHost.toolWiring).
-  // Claude Code's live sign-in probe (2026-09-09). ONE instance for the whole
-  // process, because the cache is the point: the model menu, the Cloud
-  // providers card and the new-session form all ask, and a second instance
-  // would mean a second `claude auth status` spawn for the same answer.
-  // Shared with the remote server below so a paired browser gets the desktop's
-  // real answer rather than its own guess.
-  const claudeAccount = new ClaudeAccount();
-  const searchKeyStore = new SearchKeyStore(nativeHome, secretsStore);
-  const searchService = new SearchService(
-    new SearchChain(app.getPath('userData')),
-    searchKeyStore,
-    { exa: exaBackend, ddg: ddgBackend, tavily: tavilyBackend },
-  );
-  // Task 7b: this is the ONLY production construction site for both classes —
-  // without it every piece of the native-MCP stack (registry, client, pooled
-  // manager, tool adapter) is unreachable dead code (see task-7b-brief.md).
-  // Registry rides the SAME nativeHome/secretsStore instances as everything
-  // else above (never a duplicate) — same precedent as SearchKeyStore just
-  // above. connectionFactory is mcp-client's real createConnection, unwrapped
-  // (no fake, no override) — every server it pools is a real subprocess/HTTP
-  // client once acquired.
-  //
-  // Construction itself is side-effect-free: McpRegistry.list()/
-  // resolveAllEnabled() only READ ~/.youcoded/mcp.json (NativeHome.readJson
-  // never creates the directory — see native-home.ts's lazy-creation
-  // invariant), and McpManager's constructor does no I/O at all. Nothing here
-  // connects to a server or spawns a subprocess: that only happens inside
-  // acquire(), called per-session by NativeSessionHost (Task 6's wiring)
-  // below. A user with no ~/.youcoded/mcp.json configured gets zero
-  // directory creation, zero subprocesses, and zero log output from this
-  // line — the normal case for almost every install.
-  const mcpRegistry = new McpRegistry(nativeHome, secretsStore);
-  const mcpManager = new McpManager({ registry: mcpRegistry, connectionFactory: createConnection });
-  // Task 4 (plan 1c) — the real per-cwd specialist catalog: reads personal
-  // (~/.youcoded/specialists/), Claude-Code user-level (~/.claude/agents/),
-  // and each project's own .claude/agents/, merged with the four built-ins.
-  // ONE instance for the app's whole life, shared by every project folder —
-  // its in-memory per-source state is what makes re-reading only a CHANGED
-  // folder work across turns and across conversations sharing one project.
-  const specialistCatalog = new SpecialistCatalog({ home: nativeHome });
-  // Durable accepted-history continuation (cache Stage 4). Profile-PRIVATE
-  // state: it lives under Electron's userData, never under NativeHome (which
-  // syncs) and never beside the transcripts it describes. One sweep at startup
-  // drops sidecars whose transcript is gone — the only lifecycle boundary the
-  // app has, since there is no native transcript-deletion UI today.
-  const acceptedHistory = new AcceptedHistoryStore(app.getPath('userData'));
-  void acceptedHistory.cleanupOrphans().catch(() => { /* best-effort cleanup */ });
-  const nativeHost = new NativeSessionHost(
-    new SessionStore(nativeHome),
-    // Pass the per-turn opts (e.g. serialToolCalls for small local models) straight through.
-    (binding, opts) => providerRegistry.languageModel(binding, opts),
-    // Context-window sizing AND the engine's real parallel-slot count, from
-    // ONE closure. Fix pass 2 (Task 13): the first fix threaded contextLength
-    // and totalSlots through two SEPARATE closures that shared one /props
-    // reading via a module-scoped `lastLocalSlotReading` variable — correct
-    // only if native-session-host.ts always awaited them back-to-back for the
-    // same binding with nothing else able to run in between. It doesn't hold:
-    // two local-engine sessions starting concurrently, or a cloud binding's
-    // resolution landing between the two awaits (which reset the shared
-    // variable to null), could read another binding's slot count or a wrong
-    // null — silently, with no throw. Returning both values from this single
-    // call removes the shared state entirely, so there is no ordering left to
-    // break. For LOCAL models this still costs exactly ONE /props round trip
-    // (effectiveContextWindow reads context AND slots from the same response);
-    // remote/API models keep the catalog's context number and report
-    // totalSlots: null (hosted concurrency is a flat constant, not
-    // engine-measured — see capability-profile.ts's CLOUD_DEFAULT).
-    async (binding) => {
-      const providers = await providerRegistry.list();
-      const p = providers.find((x) => x.id === binding.providerId);
-      if (p?.type === 'local-engine') return engineManager.effectiveContextWindow(binding.modelId);
-      return { contextLength: await modelCatalog.contextLengthFor(binding, providers), totalSlots: null };
-    },
-    // Provider TYPE resolver (Task 5): the host picks a CapabilityProfile from
-    // this. Unknown provider → null, so the host falls back to a cloud-safe
-    // default. ProviderType and ProfileProviderType are the same union today.
-    async (binding) => {
-      const p = (await providerRegistry.list()).find((x) => x.id === binding.providerId);
-      return (p?.type as ProfileProviderType) ?? null;
-    },
-    // Vision-support resolver (Task 6c; local models added by T18, design §E5).
-    // TWO provider types can answer "does THIS model accept images" from real
-    // per-model data rather than a hand-maintained guess, and both answer it
-    // through the SAME catalog field — so there is ONE lookup here, not two
-    // mechanisms:
-    //   - OpenRouter, from `architecture.input_modalities` on its /models rows
-    //     (parsed in model-catalog.ts's openrouterModels());
-    //   - the LOCAL engine, from the identically-named field on llama-server's
-    //     own `GET /models` (kept by EngineSupervisor.listModels, turned into
-    //     CatalogModel.supportsVision by EngineManager.catalogModels) — which
-    //     is `["text","image"]` exactly when the router paired an mmproj
-    //     projector beside the model.
-    // Every OTHER provider type has no such signal, so this still returns null
-    // for them and lets resolveProfile fall back to the registry/provider-type
-    // default. That short-circuit mirrors the context/slots closure above (same
-    // `providers`/`p` lookup, just gated on provider type) and is what keeps
-    // this closure off a session start it does not apply to: a direct-key or
-    // openai-compatible binding never touches modelCatalog at all.
-    // A local binding DOES now pay a catalog read, and this closure is the
-    // FIRST AND ONLY modelCatalog.get() on a local session start — the
-    // context/slots closure above asks the ENGINE, and the price closure below
-    // short-circuits local before the catalog. What keeps that read cheap is
-    // ModelCatalog.get()'s own network gate — it skips its two upstream fetches
-    // when no provider in the list can consume them — plus the fact that we
-    // hand it ONLY the binding's own provider (see below). Together those make
-    // a purely local, OFFLINE session start cost nothing. Without that gate this cost 4 fetches and
-    // 15.1 s on every create/resume/swap, with no memoization (measured
-    // 2026-09-05) — see the WHY at model-catalog.ts's get(). What is left is
-    // the engine's own listModels: a localhost GET while the engine runs (it
-    // does by now — the context closure above booted it), a disk scan
-    // otherwise.
-    // modelCatalog.get() never throws (its own contract — a dead network
-    // degrades to stale cache or an empty list, and an unavailable engine
-    // degrades to no local rows), so there is nothing to catch here; a cache
-    // miss, an unknown model, or a router that reported no modalities all fall
-    // through the `?.supportsVision` chain to null, which means "don't know".
-    // Be aware where that honesty ends: capability-profile's visionFor() turns
-    // an undiscovered answer into a hard `false` at the profile layer, because
-    // there is no third state for the harness to act on. That is the safe
-    // direction — a wrong false means the model is told the picture cannot be
-    // delivered, a wrong true fails the whole turn with a provider error.
-    async (binding) => {
-      const providers = await providerRegistry.list();
-      const p = providers.find((x) => x.id === binding.providerId);
-      if (p?.type !== 'openrouter' && p?.type !== 'local-engine') return null;
-      // `[p]`, not the whole list: the lookup below only ever inspects rows of
-      // the BINDING'S OWN provider, so every other provider's rows are built
-      // and discarded. Narrowing is what makes the network gate in
-      // ModelCatalog.get() actually reach the offline local user — 'openrouter'
-      // ships ENABLED by default (provider-registry's BUILT_INS), so handing
-      // over the full list would drag its fetch in on every local session start
-      // even for someone who has never touched it. Same rows out, since get()
-      // is scoped to the providers it is handed.
-      const models = await modelCatalog.get([p]);
-      const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
-      return hit?.supportsVision ?? null;
-    },
-    // Price resolver (Task 11, spec §5): reads the SAME catalog the model
-    // picker shows, so the price the user sees when choosing a model is the
-    // price the session-cost chip charges. Short-circuits local-engine before
-    // touching the catalog — a model running on this machine costs nothing to
-    // run and its rows carry no price anyway; the host stamps those turns
-    // `free` instead. modelCatalog.get() never throws (its own contract: a
-    // dead network degrades to stale cache or an empty list), and a model
-    // that isn't in the catalog falls through to null, which means "no
-    // published price" — never a guessed zero.
-    async (binding) => {
-      const providers = await providerRegistry.list();
-      const p = providers.find((x) => x.id === binding.providerId);
-      if (p?.type === 'local-engine') return null;
-      // `[p]`, not `providers` — the same narrowing the vision closure above
-      // already has, for the same reason: this lookup only ever reads the
-      // binding's own provider's rows, so handing over the whole list built
-      // and threw away every OTHER provider's catalog on every hosted
-      // create/resume/swap (measured 2026-09-05 while fixing the local half).
-      // A provider missing from the registry is caught below: `p` undefined
-      // means no rows, and the lookup falls through to null as before.
-      const models = await modelCatalog.get(p ? [p] : []);
-      const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
-      return hit?.pricing ?? null;
-    },
-    // Remembered "Always allow" rules (per-project, ~/.youcoded/permissions.json)
-    // + the injected app version for the once-per-session assembled system prompt
-    // (electron `app` isn't importable in the host's own test env — inject here).
-    permissionStore,
-    app.getVersion(),
-    // Runtime services threaded into every native tool's ToolContext — WebSearch
-    // reads services.search (the chain-walking SearchService).
-    {
-      search: searchService,
-      // Task 14 fix pass: same shape as the context/slots (~2295) and
-      // vision-support (~2324) closures above — providers first, then the
-      // catalog rows for those providers. NativeSessionHost.toolWiring()
-      // recombines this with its own host-internal DelegatedModels store into
-      // services.models, so ModelSearch and a per-hire specific-model-id
-      // override can actually confirm a real id instead of always seeing
-      // "catalog not loaded" (the null default this closure replaces).
-      modelCatalog: async () => modelCatalog.get(await providerRegistry.list()),
-    },
-    // skillCatalog (9th param, shifted from 10th by fix pass 2 collapsing the
-    // context and slot-count closures back into one): NOT wired yet — a
-    // different task's scope (see task-7b-brief.md "Explicitly NOT in
-    // scope"). Passed explicitly so mcpManager lands in the 10th positional
-    // slot instead of silently taking skillCatalog's place.
-    undefined,
-    // mcpManager (10th param, Task 7b — shifted from 11th by the same
-    // collapse): makes the whole native-MCP stack reachable — see the
-    // construction comment above.
-    mcpManager,
-    // nativeHome (11th param, plan 1b Task 2): backs the DelegationLedger the
-    // host constructs internally (see delegation-ledger.ts) — the SAME
-    // nativeHome instance every other ~/.youcoded/ writer above shares, never
-    // a second one.
-    nativeHome,
-    // specialistCatalog (12th param, Task 4 plan 1c; the ask-hold parameter
-    // that sat before it was removed 2026-09-16): the real catalog built
-    // above, sharing nativeHome with every other ~/.youcoded/ writer here.
-    specialistCatalog,
-    () => stepGuardSettings.read(),
-    // Continuation (15th param): the private store above, plus the registry's
-    // SINGLE continuation-identity method — the same one the ChatGPT model's
-    // owner closure calls, so what the harness accepts and what a resume looks
-    // up can never disagree. It throws when ChatGPT is signed out; the host
-    // treats that as a fallback to ordinary reconstruction.
-    { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
-  );
-
-  // admin-password: the password card's app-start wiring and its quit teardown
-  // (harness/admin-password-startup.ts). Always settles this machine's capability,
-  // which session creation below awaits.
-  const stopAdminPassword = startAdminPassword(nativeHost, resolveAskpassPaths);
-
-  // Task 4: resolves sessionId's CURRENT model binding into the portable ref
-  // noteModelUsed persists — thin async wrapper around bindingToPortableModel
-  // (portable-model.ts) closed over the live nativeHost/providerRegistry.
-  // Returns null (write nothing) when the session has no live binding or its
-  // provider has vanished from the registry — never guess.
-  const resolvePortableModel = async (sessionId: string): Promise<PortableModelRef | null> =>
-    bindingToPortableModel(nativeHost.getBinding(sessionId), await providerRegistry.list());
-
-  // One registry read for a whole listing (§4.9, review T6 F1). Returns copies:
-  // SessionInfo objects are owned by SessionManager and must not be mutated here.
-  const stampProviderTypes = async (rows: SessionInfo[]): Promise<SessionInfo[]> => {
-    if (!rows.some((s) => s.provider === 'native')) return rows;
-    const providers = await providerRegistry.list();
-    return rows.map((s) => {
-      if (s.provider !== 'native') return s;
-      const ref = bindingToPortableModel(nativeHost.getBinding(s.id), providers);
-      return ref ? { ...s, providerType: ref.providerType } : s;
-    });
-  };
-
-  // Session naming (2026-09-09 contract). ONE policy for both lanes: Off,
-  // Basic (quote the opening request, no model call) and AI (review at
-  // completed replies 1, 3, then every 25). It replaces the old
-  // native-title-feeder, whose rule was "one bound-model call at the first
-  // turn-complete, native only". See session-namer.ts for the schedule, the
-  // ownership guard and the commit-time re-checks.
-  const namingSettings = new NamingSettings(nativeHome);
-
-  /**
-   * Publish the current mode where the bundled Auto-Title hook can read it.
-   * The hook runs inside the Claude Code process and cannot ask the app
-   * anything, so this one-word file is the whole protocol: it is what makes Off
-   * and Basic stop the hook from interrupting a reply to request a title, and
-   * what switches AI onto the app's review schedule instead of the hook's old
-   * 120s/600s timer. Written at startup and after every settings change.
-   *
-   * WHY it lives under userData and travels by ENV rather than sitting at a
-   * fixed path in ~/.claude/topics: that directory is shared by every YouCoded
-   * process on the machine, so a dev instance set to Off would silently switch
-   * off auto-titling in Destin's installed app. run-dev.sh isolates userData,
-   * so one file per instance is one setting per instance. The env var is set on
-   * the MAIN process before any session spawns, and the pty worker passes its
-   * whole environment down, so every Claude Code session inherits it. A session
-   * that somehow has neither falls back to the hook's own timer.
-   */
-  const namingModeFile = path.join(app.getPath('userData'), 'naming-mode');
-  const publishNamingMode = () => {
-    try {
-      fs.mkdirSync(path.dirname(namingModeFile), { recursive: true });
-      fs.writeFileSync(namingModeFile, `${namingSettings.read().mode}\n`);
-      process.env.YOUCODED_NAMING_MODE_FILE = namingModeFile;
-    } catch { /* best-effort: the hook falls back to its own timer */ }
-  };
-
-  // Store identity for a live session, or null when it is not knowable yet.
-  // Native ids are identity-mapped into sessionIdMap; a CC session only
-  // becomes identifiable once a hook event has told us its Claude id.
-  const namingIdentity = (sessionId: string): { provider: string; storeId: string } | null => {
-    const resolved = sessionIdMap.get(sessionId) || sessionId;
-    if (nativeHost.isNativeSessionId(resolved)) return { provider: 'native', storeId: resolved };
-    if (sessionIdMap.has(sessionId)) return { provider: 'claude', storeId: resolved };
-    return null;
-  };
-
-  // Serialize local title projections with manual renames. This is NOT the
-  // cross-process sidecar lock: no filesystem lock is held across store awaits.
-  const queueTitle = createTitleQueue();
-
-  /**
-   * Publish an AUTOMATIC name: persist, then paint. Every generated title in
-   * the app goes through here — the topic watcher below included — so the
-   * ownership check and the persist-before-broadcast order exist in exactly
-   * one place. Returns false when the user owns the name, so a caller that
-   * caches "the last topic I applied" does not record one it did not apply.
-   */
-  const applyAutomaticTitle = async (
-    desktopId: string, storeId: string, provider: SessionProvider, title: string,
-    expectedAutoAt?: string, opening = false,
-  ): Promise<boolean> => queueTitle(`${provider}/${storeId}`, async () => {
-    const eligible = () => namingSettings.read().mode !== 'off';
-    const read = () => getNamingRecord(provider, storeId);
-    const hasTitle = async () => {
-      const rec = await getConversationStore()?.get(provider, storeId);
-      return hasRealTitle(rec?.title, liveNameForTitleCheck(desktopId));
-    };
-    if (!await mayPublishAutomaticName({ read, hasTitle, name: title, expectedAutoAt, opening, enabled: eligible })) return false;
-    let publicationStamp = expectedAutoAt;
-    if (publicationStamp === undefined) {
-      // The CC hook has not yet written its sidecar. Refuse a newer review
-      // that wins the lock after our read rather than rolling it back.
-      const before = await read();
-      let wrote = false;
-      const at = new Date().toISOString();
-      const written = await mutateNamingRecord(provider, storeId, (cur) => {
-        if (cur.manual || cur.auto !== (before?.auto ?? '') ||
-            cur.autoAt !== (before?.autoAt ?? cur.autoAt)) return cur;
-        wrote = true;
-        return { ...cur, auto: title, autoAt: at };
-      });
-      if (!written || !wrote) return false;
-      publicationStamp = at;
-    }
-    // Namer writes already went through the sidecar lock; do NOT call
-    // noteAutomaticTitle again: it would re-write an older opening title over
-    // a newer AI review between the first write and this projection.
-    if (!await mayPublishAutomaticName({ read, hasTitle, name: title,
-      expectedAutoAt: publicationStamp, opening, enabled: eligible })) return false;
-    const previousTitle = (await getConversationStore()?.get(provider, storeId))?.title ?? '';
-    const result = await noteTitleChanged(storeId, title, provider);
-    if (!result.ok) return false;
-    if (!await mayPublishAutomaticName({ read, hasTitle: async () => false,
-      name: title, expectedAutoAt: publicationStamp, enabled: eligible })) {
-      // A rename/Off may have landed during the projection await. Restore the
-      // authority's name (or the prior title when Off) instead of leaving a
-      // stale compatibility projection for older readers. A queued local manual
-      // rename will subsequently make its own projection and broadcast.
-      const current = await read();
-      const restored = current?.manual || (eligible() ? current?.auto : previousTitle);
-      if (restored !== undefined && restored !== title) await noteTitleChanged(storeId, restored, provider);
-      return false;
-    }
+  // --- Native runtime stack ---
+  // WHY (2026-09-29 one-core R1): the whole native runtime (NativeHome, ProviderRegistry,
+  // EngineManager, NativeSessionHost, ModelManager, the session namer, …) is now built ONCE
+  // by createRuntime() in main.ts and handed to this door AND to RemoteServer, so both reach
+  // the same instances by construction. This block only unpacks what the handlers below use.
+  const {
+    permissionStore, stepGuardSettings, contextSettings, secretsStore, engineManager,
+    chatgptAuth: chatgptForUi, providerRegistry, openRouterSignIn, modelCatalog, claudeAccount,
+    searchKeyStore, searchService, specialistCatalog, nativeHost, modelManager, namingSettings,
+    sessionNamer, applyAutomaticTitle, queueTitle, publishNamingMode, resolvePortableModel,
+    stampProviderTypes,
+  } = runtime;
+  // The core announces an automatic title; this door paints it: the owning window (and
+  // buddy subscribers) plus phones and the window directory — the same two calls the
+  // inline applyAutomaticTitle made before the hoist.
+  runtime.onTitleApplied((desktopId, title) => {
     sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, title);
     broadcastRename(desktopId, title);
-    return true;
-  });
-
-  const sessionNamer = createSessionNamer({
-    settings: () => namingSettings.read(),
-    identify: namingIdentity,
-    readNaming: (provider, storeId) => getNamingRecord(provider as SessionProvider, storeId),
-    mutateNaming: async (provider, storeId, fn) => {
-      const rec = await mutateNamingRecord(provider, storeId, fn);
-      // A null store (no managed roots this launch) must not look like a
-      // successful write — the namer treats a throw as "skip this reply".
-      if (!rec) throw new Error('conversation storage is not available');
-      return rec;
-    },
-    getBinding: (sessionId: string) => nativeHost.getBinding(sessionId),
-    // Bounded with a 15s abort — a bare unbounded generateText await would
-    // hang the namer (same hazard class as the compaction-hang rule).
-    // providerRegistry.languageModel() throws for an unconfigured/disabled/
-    // removed provider; that rejection is the namer's "stay silent, retry"
-    // path, which is why nothing is caught here.
-    generate: async (binding: ModelBinding, prompt: string) => {
-      const model = await providerRegistry.languageModel(binding);
-      const { text } = await generateText({ model, prompt, abortSignal: AbortSignal.timeout(15_000) });
-      return text;
-    },
-    // The free lane for a Claude Code session with no separately chosen naming
-    // model: its model lives inside the CLI, so the bundled Auto-Title hook
-    // asks it, in-session, at no extra cost. This file is the whole protocol —
-    // the hook writes a topic only when it finds one (hook-scripts/
-    // title-update.sh), which is what turned ~6 unsolicited title requests per
-    // conversation into exactly the scheduled ones.
-    askInSessionModel: (_sessionId: string, storeId: string) => {
-      try {
-        fs.mkdirSync(topicDir, { recursive: true });
-        fs.writeFileSync(path.join(topicDir, `ask-${storeId}`), '');
-      } catch { /* best-effort: a missed ask retries at the next review */ }
-    },
-    // A resumed chat's provisional opening words are not a name to "keep", or
-    // the review would echo them back as the title (createProvisionalTitles).
-    currentName: (sessionId: string) => provisionalResumeTitles.forNamer(sessionId, sessionManager.getSession(sessionId)?.name),
-    // Store title wins; the live session name covers the boot window before
-    // the store's first upsert. BOTH halves go through the shared placeholder
-    // predicate — the 2026-08-06 lesson: a check that only excluded 'New
-    // Session' read a resumed session's 'Resuming…' as a real title.
-    hasTitle: async (sessionId: string) => {
-      const ident = namingIdentity(sessionId);
-      if (!ident) return true; // unknown identity: assume named rather than overwrite
-      const rec = await getConversationStore()?.get(ident.provider, ident.storeId);
-      return hasRealTitle(rec?.title, liveNameForTitleCheck(sessionId));
-    },
-    publish: async (sessionId: string, name: string, expectedAutoAt: string, opening: boolean) => {
-      const ident = namingIdentity(sessionId);
-      if (!ident) return;
-      await applyAutomaticTitle(sessionId, ident.storeId, ident.provider as SessionProvider, name, expectedAutoAt, opening);
-    },
   });
 
   // Native transcript events ride the SAME channel as CC's — the reducer
@@ -3400,28 +2878,9 @@ export function registerIpcHandlers(
     }
   });
 
-  // Plan C: model manager (curated catalog, HF search, downloads, detectors).
-  // Constructed here — BEFORE setNativeRuntime — so remote WS clients reach the
-  // SAME instance via the native-runtime injection below (the models:* handlers
-  // themselves are registered further down, next to the engine block).
-  const modelManager = new ModelManager(nativeHome, engineManager, app.getPath('userData'));
-
-  // Give the remote server access to the native stack so its WS clients reach
-  // the SAME instances (mirrors how setLastTopic / broadcastStatusData push
-  // ipc-handler-owned state into remoteServer — no global needed).
-  // permissionStore rides along for the remote permissions:list case (M5 2a) —
-  // the WS revokes go through nativeHost, which is already here.
-  // specialistCatalog (Task 8): the remote specialists:list WS case needs the
-  // SAME catalog instance the desktop handler below reads — a second instance
-  // would fingerprint-cache independently and could answer a re-read with
-  // stale data relative to whichever surface wrote last.
-  // chatgptAuth (Sign in with ChatGPT §5): the remote chatgpt:* WS cases read
-  // the SAME account object, already kill-switched (null → signed-out/false).
-  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount, openRouterSignIn });
-
   // Plan 2b Task 11: give the remote server the SAME lease client/requester +
   // deviceId so its WS clients reach the identical lease/device state the
-  // Electron IPC handlers use (mirrors setNativeRuntime). Absent when sync is off.
+  // Electron IPC handlers use (same lease state as the phone door). Absent when sync is off.
   if (leaseWiring && remoteServer) {
     remoteServer.setLeaseWiring({ client: leaseWiring.client, requester: leaseWiring.requester, deviceId: leaseWiring.deviceId, machineId: leaseWiring.machineId });
   }
@@ -4023,8 +3482,6 @@ export function registerIpcHandlers(
       remoteServer.broadcast({ type: 'transcript:shrink', payload });
     }
   });
-  const topicWatchers = new Map<string, fs.FSWatcher | NodeJS.Timeout>();
-  const lastTopics = new Map<string, string>();
 
   // Broadcast session rename to remote WebSocket clients + update SessionInfo
   function broadcastRename(desktopId: string, name: string) {
@@ -5716,28 +5173,12 @@ export function registerIpcHandlers(
   };
   const cleanup = function cleanup(): Promise<void> {
     stopThemeWatcher();
-    openRouterSignIn.dispose();
     statusPush.stop();
     transcriptWatcher.stopAll();
-    // Flush + tear down every live native session on quit (best-effort, bounded
-    // to one in-flight streaming part). Fire-and-forget with .catch — cleanup()
-    // is synchronous and callers don't await it, so this mirrors the async
-    // stopSyncSpaces() teardown pattern in main.ts window-all-closed.
-    void nativeHost.destroyAll().catch(() => {});
-    stopAdminPassword(); // refuse open password asks; final forget sweep
-    // Awaited by the caller: never leave an orphaned llama-server on quit.
-    const engineStopped = engineManager.stopAll().catch(() => {});
-    for (const watcher of topicWatchers.values()) {
-      if (typeof (watcher as fs.FSWatcher).close === 'function') {
-        (watcher as fs.FSWatcher).close();
-      } else {
-        clearInterval(watcher as NodeJS.Timeout);
-      }
-    }
-    topicWatchers.clear();
-    lastTopics.clear();
-    sessionIdMap.clear();
-    return engineStopped;
+    // The runtime's half of quit (sign-in listener, native sessions, admin-password asks,
+    // the llama-server, and session-state's topic watchers + maps) lives with the runtime
+    // (create-runtime.ts). It returns the engine-stop promise so quit can AWAIT it.
+    return runtime.cleanup();
   };
   // firstRunDeps (first-run local models, 2026-09-14): the native objects setup
   // reaches for an API key, a model app or a local download. Built here because
@@ -5750,5 +5191,8 @@ export function registerIpcHandlers(
     engine: { installed: () => engineManager.registryHook().installed(), install: () => engineManager.install() },
     models: modelManager,
   };
-  return { cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn, handoffAttempts };
+  return {
+    cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn, handoffAttempts,
+    outboxBroadcast: { sessionMeta: broadcastSessionMeta, tagsChanged: broadcastTagsChanged } satisfies OutboxBroadcast,
+  };
 }

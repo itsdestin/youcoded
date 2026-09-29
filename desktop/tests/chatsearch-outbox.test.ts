@@ -32,11 +32,12 @@ vi.mock('../src/main/conversations/tag-registry-service', () => ({
     create: async (label: string, color: string) => { const t = { id: `tag_${label}`, label, color, archived: false, createdAt: '' }; tags.push(t); created.push(t); return t; },
   }),
 }));
-// Finding 3: extend the mock to also capture broadcastTagsChanged() calls.
-vi.mock('../src/main/ipc-handlers', () => ({
-  broadcastSessionMeta: (id: string, p: any) => { broadcasts.push([id, p]); },
-  broadcastTagsChanged: () => { tagsChanged++; },
-}));
+// Finding 3: capture the tags-changed push too. WHY (2026-09-29 one-core R1): the drainer no longer
+// imports the broadcasters from ipc-handlers; the caller (main.ts) hands them in, so the test does too.
+const testBroadcast = {
+  sessionMeta: (id: string, p: any) => { broadcasts.push([id, p]); },
+  tagsChanged: () => { tagsChanged++; },
+};
 // Finding 4: capture log() calls so a test can assert the foreign-store
 // message is logged once per file, not once per poll pass.
 const logCalls: any[] = [];
@@ -105,7 +106,7 @@ describe('hasDatedLine', () => {
 });
 
 describe('applyOutboxRequest', () => {
-  const deps = { appVersion: '9.9.9', today: () => '2026-08-27' };
+  const deps = { appVersion: '9.9.9', today: () => '2026-08-27', broadcast: testBroadcast };
   it('flag applies through noteFlagChanged and broadcasts', async () => {
     const rc = await applyOutboxRequest(req([{ op: 'flag', targets: T, flag: 'complete', value: true }]) as any, deps);
     expect(rc.results).toEqual([{ provider: 'claude', id: 'c1', op: 'flag', status: 'applied' }]);
@@ -202,7 +203,7 @@ describe('drainOutboxOnce', () => {
     const dir = outboxDir(home); fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, name), typeof body === 'string' ? body : JSON.stringify(body));
   };
-  const opts = () => ({ homeRoot: home, storeRoot: '/store/A', isDevInstance: false, appVersion: '9.9.9', today: () => '2026-08-27' });
+  const opts = () => ({ homeRoot: home, storeRoot: '/store/A', isDevInstance: false, appVersion: '9.9.9', today: () => '2026-08-27', broadcast: testBroadcast });
   it('applies a request and writes a receipt; processing is emptied', async () => {
     write('11111111-2222-3333-4444-555555555555.json', req([{ op: 'flag', targets: T, flag: 'complete', value: true }]));
     expect(await drainOutboxOnce(opts())).toBe(1);
@@ -436,7 +437,7 @@ describe('startOutboxDrain timers', () => {
 
   it('off Windows a healthy watch means no 5 s poll: the only interval is the hourly sweep', () => {
     setPlatform('linux');
-    startOutboxDrain();
+    startOutboxDrain(testBroadcast);
     // fake setTimeout too, so the count is exact: 1 hourly sweep interval, and no
     // store-wait timer because the (mocked) store is already up.
     expect(intervals()).toBe(1);
@@ -446,14 +447,14 @@ describe('startOutboxDrain timers', () => {
 
   it('on Windows the 5 s poll runs beside the watch', () => {
     setPlatform('win32');
-    startOutboxDrain();
+    startOutboxDrain(testBroadcast);
     expect(intervals()).toBe(2);
   });
 
   it('a watch that cannot be attached falls back to the 5 s poll everywhere', () => {
     setPlatform('linux');
     vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('EMFILE'); });
-    startOutboxDrain();
+    startOutboxDrain(testBroadcast);
     expect(intervals()).toBe(2);
   });
 
@@ -466,7 +467,7 @@ describe('startOutboxDrain timers', () => {
       return p;
     };
     const first = stale('first.ack.json');
-    startOutboxDrain();
+    startOutboxDrain(testBroadcast);
     expect(fs.existsSync(first)).toBe(false); // swept at start
     const second = stale('second.ack.json');
     await drainSerialized();
@@ -482,7 +483,7 @@ describe('startOutboxDrain timers', () => {
     vi.spyOn(fs, 'watch').mockImplementation((() => ({ on() { /* inert */ }, close() { /* inert */ } })) as any);
     fs.mkdirSync(sandboxOutbox, { recursive: true });
     storeAvailable = false;
-    startOutboxDrain();
+    startOutboxDrain(testBroadcast);
     await vi.advanceTimersByTimeAsync(130_000); // the start-up wait (120 tries) has given up
     storeAvailable = true;
     fs.writeFileSync(
@@ -503,7 +504,7 @@ describe('startOutboxDrain timers', () => {
       JSON.stringify(req([{ op: 'flag', targets: T, flag: 'complete', value: true }])),
     );
     storeAvailable = false; // main.ts starts the drain before the store has finished starting
-    startOutboxDrain();
+    startOutboxDrain(testBroadcast);
     await vi.advanceTimersByTimeAsync(3_000);
     expect(flagCalls).toEqual([]);
     storeAvailable = true;

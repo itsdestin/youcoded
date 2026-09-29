@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { safeStorage } from 'electron';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { PageConnectionsStore, CONNECTIONS_FILE } from '../src/main/pages/connections-store';
 import { initPagesService } from '../src/main/pages/pages-service';
 import type { PageSummary } from '../src/shared/pages-types';
@@ -42,7 +43,7 @@ function start() {
     listProjects: async () => [],
     deviceId: () => 'dev-1',
     localFallbackDir: () => path.join(root, 'local'),
-    connections: new PageConnectionsStore(userData, new SecretsStore(userData)),
+    connections: new PageConnectionsStore(userData, new SecretsStore(userData, getSecretStorage())),
     broadcast: (pages) => { broadcasts.push(pages); },
     fetchImpl: fetchMock as unknown as typeof fetch,
     lookup: async () => [{ address: '93.184.216.34', family: 4 }],

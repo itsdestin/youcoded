@@ -272,7 +272,8 @@ describe('native:submit-admin-password (IPC) — rejects a non-string/empty pass
       // even though the module itself (with its module-scope side effects) is
       // only ever evaluated once, on the first import.
       const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-      registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+      registerWithRuntime(registerIpcHandlers, 
         mockIpcMain as any,
         sessionManager as any,
         mainWindow as any,

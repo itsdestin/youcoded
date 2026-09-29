@@ -35,6 +35,7 @@ vi.mock('electron', () => {
 });
 
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
+import { registerWithRuntime } from './helpers/register-ipc';
 import * as conversationsService from '../src/main/conversations/service';
 import { startConversationStore, stopConversationStore, getConversationStore, pruneNativePhantomRecords } from '../src/main/conversations/service';
 import { startTagRegistry } from '../src/main/conversations/tag-registry-service';
@@ -77,7 +78,7 @@ describe('IPC Handlers', () => {
       getCuratedDefaults: vi.fn(() => []),
     };
 
-    registerIpcHandlers(mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any);
+    registerWithRuntime(registerIpcHandlers, mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any);
 
     const registeredChannels = mockIpcMain.handle.mock.calls.map((c: any) => c[0]);
     expect(registeredChannels).toContain('session:create');
@@ -117,7 +118,7 @@ describe('skills:uninstall bundled-plugin rejection', () => {
       ensureBundledPluginsInstalled: vi.fn(),
       ensureMigrated: vi.fn(),
     };
-    registerIpcHandlers(
+    registerWithRuntime(registerIpcHandlers, 
       mockIpcMain as any,
       mockSessionManager as any,
       mockWindow as any,
@@ -141,7 +142,7 @@ describe('skills:uninstall bundled-plugin rejection', () => {
       ensureBundledPluginsInstalled: vi.fn(),
       ensureMigrated: vi.fn(),
     };
-    registerIpcHandlers(
+    registerWithRuntime(registerIpcHandlers, 
       mockIpcMain as any,
       mockSessionManager as any,
       mockWindow as any,
@@ -177,7 +178,7 @@ describe('registered holder handoff', () => {
       };
       const release = vi.fn(async () => {});
       const setHolderTakeover = vi.fn();
-      registerIpcHandlers(ipc as any, manager as any,
+      registerWithRuntime(registerIpcHandlers, ipc as any, manager as any,
         { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
         { configStore: { getPackages: vi.fn(() => ({})) } } as any,
         undefined as any, undefined, undefined, undefined, undefined,
@@ -212,7 +213,7 @@ describe('session:create resumed admission', () => {
       };
       const acquire = vi.fn(async () => ({ ok: true }));
       const release = vi.fn(async () => {});
-      registerIpcHandlers(ipc as any, manager as any,
+      registerWithRuntime(registerIpcHandlers, ipc as any, manager as any,
         { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
         { configStore: { getPackages: vi.fn(() => ({})) } } as any,
         undefined as any, undefined, undefined, undefined, undefined,
@@ -255,7 +256,7 @@ describe('session:create resumed admission', () => {
       destroySession: vi.fn(() => true), on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
     };
     const release = vi.fn(async () => {});
-    registerIpcHandlers(ipc as any, manager as any,
+    registerWithRuntime(registerIpcHandlers, ipc as any, manager as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
       { configStore: { getPackages: vi.fn(() => ({})) } } as any,
       undefined as any, undefined, undefined, undefined, undefined,
@@ -283,7 +284,7 @@ describe('session:create resumed admission', () => {
         on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
       };
       const release = vi.fn(async () => {});
-      registerIpcHandlers(ipc as any, manager as any,
+      registerWithRuntime(registerIpcHandlers, ipc as any, manager as any,
         { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
         { configStore: { getPackages: vi.fn(() => ({})) } } as any,
         undefined as any, undefined, undefined, undefined, undefined,
@@ -317,7 +318,7 @@ describe('session:create resumed admission', () => {
     };
     const acquire = vi.fn(async () => ({ ok: false, holder: { device: 'Other computer' } }));
     const release = vi.fn(async () => {});
-    registerIpcHandlers(ipc as any, manager as any,
+    registerWithRuntime(registerIpcHandlers, ipc as any, manager as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
       { configStore: { getPackages: vi.fn(() => ({})) } } as any,
       undefined as any, undefined, undefined, undefined, undefined,
@@ -340,7 +341,7 @@ describe('session:create resumed admission', () => {
     let closed = false;
     const acquire = vi.fn(async () => { closed = true; return { ok: true }; });
     const release = vi.fn(async () => {});
-    registerIpcHandlers(ipc as any, manager as any,
+    registerWithRuntime(registerIpcHandlers, ipc as any, manager as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
       { configStore: { getPackages: vi.fn(() => ({})) } } as any,
       undefined as any, undefined, undefined, undefined, undefined,
@@ -365,7 +366,7 @@ describe('session:create resumed admission', () => {
       on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
     };
     const registry = { assignSession: vi.fn(), getOwner: vi.fn(() => 1), getKind: vi.fn(() => kind), getLeaderId: vi.fn(() => 1) };
-    registerIpcHandlers(ipc as any, manager as any,
+    registerWithRuntime(registerIpcHandlers, ipc as any, manager as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
       { configStore: { getPackages: vi.fn(() => ({})) } } as any,
       undefined as any, undefined, undefined, undefined, registry as any);
@@ -396,7 +397,7 @@ describe('session:create resumed admission', () => {
     });
     const server: any = new RemoteServer(manager as any, Object.assign(new EventEmitter(), { respond: vi.fn(() => true) }) as any,
       { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) } as any);
-    registerIpcHandlers(ipc as any, manager as any,
+    registerWithRuntime(registerIpcHandlers, ipc as any, manager as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
       { configStore: { getPackages: vi.fn(() => ({})) } } as any,
       undefined as any, undefined, undefined, server);
@@ -433,12 +434,12 @@ describe('session:create resumed admission', () => {
     const registry = { assignSession: vi.fn(), getOwner: vi.fn(() => undefined), getKind: vi.fn(() => 'main'), getLeaderId: vi.fn(() => 7) };
     let fromPhone: ((opts: any) => Promise<any>) | null = null;
     const remoteServer = {
-      broadcast: vi.fn(), setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
+      broadcast: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
       setSessionCreate: vi.fn((fn: any) => { fromPhone = fn; }),
       getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
     };
     const mainSend = vi.fn();
-    registerIpcHandlers(ipc as any, manager as any,
+    registerWithRuntime(registerIpcHandlers, ipc as any, manager as any,
       { webContents: { send: mainSend }, isDestroyed: () => mainClosed } as any,
       { configStore: { getPackages: vi.fn(() => ({})) } } as any,
       undefined as any, undefined, undefined, remoteServer as any, registry as any);
@@ -496,7 +497,7 @@ describe('session:create native resume — missing stored header', () => {
       flush: vi.fn(async () => {}), startup: vi.fn(async () => {}),
     };
 
-    registerIpcHandlers(
+    registerWithRuntime(registerIpcHandlers, 
       mockIpcMain as any,
       mockSessionManager as any,
       mockWindow as any,
@@ -532,11 +533,11 @@ describe('session:create native resume — missing stored header', () => {
     let creator: ((opts: any) => Promise<any>) | null = null;
     const remoteServer = {
       broadcast: vi.fn(),
-      setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
+      setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
       setSessionCreate: vi.fn((fn: any) => { creator = fn; }),
       getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
     };
-    registerIpcHandlers(
+    registerWithRuntime(registerIpcHandlers, 
       mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any,
       undefined as any, undefined, undefined, remoteServer as any,
     );
@@ -595,7 +596,7 @@ describe('tags:update / tags:delete signal chatsearch', () => {
   });
 
   function handlerFor(channel: string) {
-    registerIpcHandlers(mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any);
+    registerWithRuntime(registerIpcHandlers, mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any);
     return (mockIpcMain.handle as any).mock.calls.find((c: any) => c[0] === channel)[1];
   }
 
@@ -672,7 +673,7 @@ describe('transcript:read-meta path containment', () => {
       install: vi.fn(), installMany: vi.fn(),
       ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn(),
     };
-    registerIpcHandlers(mockIpcMain as any, mockSessionManager, mockWindow, mockSkillProvider);
+    registerWithRuntime(registerIpcHandlers, mockIpcMain as any, mockSessionManager, mockWindow, mockSkillProvider);
     return (mockIpcMain.handle as any).mock.calls.find((c: any) => c[0] === channel)[1];
   }
 
@@ -716,7 +717,7 @@ describe('dialog:open-file attachment picker filters', () => {
     };
     const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: () => false };
     const mockSkillProvider = { configStore: { getPackages: vi.fn(() => ({})) } };
-    registerIpcHandlers(
+    registerWithRuntime(registerIpcHandlers, 
       mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any,
     );
     const { dialog } = await import('electron');
@@ -797,11 +798,11 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
       onStatusChange: vi.fn((cb: (s: any) => void) => { statusListener = cb; return () => {}; }),
       broadcast: vi.fn(),
       // Wiring the handlers hand a real server at boot; inert here.
-      setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
+      setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
       setSessionCreate: vi.fn(),
     } : undefined;
     const mockSkillProvider = { configStore: { getPackages: vi.fn(() => ({})) }, getInstalled: vi.fn(() => []) };
-    registerIpcHandlers(
+    registerWithRuntime(registerIpcHandlers, 
       { handle: vi.fn(), on: vi.fn() } as any,
       { createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []), sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn() } as any,
       win as any,
@@ -848,7 +849,7 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
   it('remote:status over desktop IPC carries clientCount as a number, with or without a server', async () => {
     const remoteConfig = { keepAwakeHours: 0, port: 9900, toSafeObject: () => ({}) };
     const ipcMain = { handle: vi.fn(), on: vi.fn() };
-    registerIpcHandlers(
+    registerWithRuntime(registerIpcHandlers, 
       ipcMain as any,
       { createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []), sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn() } as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
@@ -900,7 +901,7 @@ function setup(sessionManagerOverrides: Record<string, unknown> = {}, welcomeBac
     ensureBundledPluginsInstalled: vi.fn(),
     ensureMigrated: vi.fn(),
   };
-  registerIpcHandlers(
+  registerWithRuntime(registerIpcHandlers, 
     mockIpcMain as any,
     mockSessionManager as any,
     mockWindow as any,
@@ -1391,7 +1392,7 @@ describe('Welcome back tracking hooks', () => {
       destroySession: vi.fn(() => true), on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
     };
     const store = makeFakeStore();
-    registerIpcHandlers(ipc as any, manager, mainWindow(), skillProvider(),
+    registerWithRuntime(registerIpcHandlers, ipc as any, manager, mainWindow(), skillProvider(),
       undefined as any, undefined, undefined, undefined, undefined, undefined, undefined, store as any);
     const open = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
     await open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'conv-1' });
@@ -1405,7 +1406,7 @@ describe('Welcome back tracking hooks', () => {
       destroySession: vi.fn(() => true), on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
     };
     const store = makeFakeStore();
-    registerIpcHandlers(ipc as any, manager, mainWindow(), skillProvider(),
+    registerWithRuntime(registerIpcHandlers, ipc as any, manager, mainWindow(), skillProvider(),
       undefined as any, undefined, undefined, undefined, undefined, undefined, undefined, store as any);
 
     // An ordinary process exit calls sessionManager.destroySession directly —
@@ -1436,7 +1437,7 @@ describe('Welcome back tracking hooks', () => {
         destroySession: vi.fn(() => true), on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
       };
       const store = makeFakeStore();
-      registerIpcHandlers(ipc as any, manager, mainWindow(), skillProvider(),
+      registerWithRuntime(registerIpcHandlers, ipc as any, manager, mainWindow(), skillProvider(),
         undefined as any, hookRelay as any, undefined, undefined, undefined, undefined, undefined, store as any);
 
       // A brand-new (non-resume) session gets its sessionIdMap entry from CC's
@@ -1467,7 +1468,7 @@ describe('Welcome back tracking hooks', () => {
       destroySession: vi.fn(() => true), on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
     };
     const store = makeFakeStore();
-    registerIpcHandlers(ipc as any, manager, mainWindow(), skillProvider(),
+    registerWithRuntime(registerIpcHandlers, ipc as any, manager, mainWindow(), skillProvider(),
       undefined as any, hookRelay as any, undefined, undefined, undefined, undefined, undefined, store as any);
     const open = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
     await open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'conv-old' });

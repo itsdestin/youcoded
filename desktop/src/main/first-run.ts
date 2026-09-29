@@ -2,6 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
+// WHY (2026-09-29 one-core R1): startOAuthLogin used to read Electron's `app` itself; it now takes
+// the flag so prerequisite-installer.ts (also loaded by the native runtime) needs no Electron.
+import { app } from 'electron';
 import { log } from './logger';
 import {
   FirstRunState,
@@ -475,7 +478,7 @@ export class FirstRunManager extends EventEmitter {
     }
 
     // Spawn the login process — it outputs the auth URL then waits for callback
-    const oauth = startOAuthLogin();
+    const oauth = startOAuthLogin(app?.isPackaged);
 
     // Wait briefly for the URL to be captured from stdout
     await new Promise(r => setTimeout(r, 1500));

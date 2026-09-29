@@ -196,6 +196,7 @@ vi.mock('../src/main/harness/native-session-host', () => {
 
 import { EventEmitter } from 'node:events';
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
+import { registerWithRuntime } from './helpers/register-ipc';
 import { IPC } from '../src/shared/types';
 
 /** One CC-shaped turn: a user prompt line and an assistant reply line. */
@@ -255,7 +256,7 @@ function buildHandlers() {
   registry.registerWindow(1, Date.now());
   registry.registerWindow(2, Date.now() + 1);
 
-  registerIpcHandlers(
+  registerWithRuntime(registerIpcHandlers, 
     mockIpcMain as any,
     sessionManager as any,
     mainWindow as any,

@@ -146,6 +146,7 @@ vi.mock('../src/main/harness/native-session-host', () => {
 
 import { EventEmitter } from 'node:events';
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
+import { registerWithRuntime } from './helpers/register-ipc';
 import { IPC } from '../src/shared/types';
 
 /**
@@ -236,7 +237,7 @@ async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any
     removeAllListeners: vi.fn(),
   };
 
-  registerIpcHandlers(
+  registerWithRuntime(registerIpcHandlers, 
     mockIpcMain as any,
     mockSessionManager as any,
     mainWindow as any,

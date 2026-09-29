@@ -28,6 +28,8 @@ import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
 import { registerIpcHandlers, buddyShowRefusal, cachedBuddyHelperStatus, refreshBuddyHelperStatus, setBuddyHelperLostHandler } from './ipc-handlers';
 import { RemoteServer } from './remote-server';
+import { createRuntime, type NativeRuntime } from './create-runtime';
+import { createElectronPlatform, sendSyncEventToWindows } from './electron-platform';
 import { getFavorites as getGameFavorites, setFavorites as setGameFavorites, getIncognito as getGameIncognito, setIncognito as setGameIncognito } from './prefs-service';
 import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
@@ -56,7 +58,7 @@ import { SecretsStore } from './providers/secrets-store';
 import { SyncService } from './sync-service';
 import { setSyncService, getSyncConfig } from './sync-state';
 // Cross-device sync spaces (spec 2026-07-03) — folder-based sync engine.
-import { startSyncSpaces, stopSyncSpaces, setSyncSpacesRemoteBroadcaster, setSyncSpacesAuthStore, hubLeaseRequest, setSyncSpacesLeaseEventListener, getManagedRoots, syncSpacesSyncNowAwaited } from './sync-spaces/service';
+import { startSyncSpaces, stopSyncSpaces, setSyncSpacesRemoteBroadcaster, setSyncSpacesWindowBroadcaster, setSyncSpacesAuthStore, hubLeaseRequest, setSyncSpacesLeaseEventListener, getManagedRoots, syncSpacesSyncNowAwaited } from './sync-spaces/service';
 import { loadSpaceBackupTargets } from './sync-spaces/backup-targets';
 import { createGithubClient, setGithubClient } from './github-client';
 // Plan 2b Task 8: conversation-lease lifecycle. The lease client coordinates
@@ -75,7 +77,7 @@ import { upsertSelf } from './sync-spaces/device-registry';
 import { startConversationStore, stopConversationStore, materializeOne, resumeSweeps, HANDOFF_SYNC_TIMEOUT_MS } from './conversations/service';
 import { runSlugRepair } from './conversations/slug-repair';
 import { startChatsearchIndex, stopChatsearchIndex } from './chatsearch-index/index-service';
-import { startOutboxDrain, stopOutboxDrain } from './chatsearch-index/outbox-drain';
+import { startOutboxDrain, stopOutboxDrain, type OutboxBroadcast } from './chatsearch-index/outbox-drain';
 import { stopProjectWatchers } from './artifacts/project-watcher';
 // One-time cleanup of the legacy sync-service's slug-symlink aggregation (Plan 2c).
 import { sweepProjectSymlinks } from './conversations/symlink-sweep';
@@ -320,7 +322,12 @@ skillProvider.setCacheInvalidationListener(() => commandProvider.invalidateCache
 // remote client restores. Batch 2 (§2): from EVERY main window, each session from its
 // owner — see requestMergedChatSnapshot. The closures read mainWindow by reference; it
 // is null here and set before any client can connect.
+// WHY (2026-09-29 one-core R1): built once in createWindow, read by RemoteServer through an accessor
+// (module order: see remote-server.ts).
+let nativeRuntime: NativeRuntime | null = null;
+const platform = createElectronPlatform();
 const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, skillProvider, {
+  getNativeRuntime: () => nativeRuntime,
   // The installed app serves the phone its built copy; a dev window serves live code unless
   // run-dev.sh --phone-build made a fresh copy (see choosePhonePageSource).
   serveBuiltPage: app.isPackaged || process.env.YOUCODED_REMOTE_BUILT === '1',
@@ -365,6 +372,8 @@ remoteServer.onStatusChange((status) => {
     if (!win.isDestroyed()) win.webContents.send(IPC.REMOTE_STATUS, status);
   }
 });
+
+setSyncSpacesWindowBroadcaster(sendSyncEventToWindows); // module load: no sync event can precede it
 
 // Dev server URL — env override wins; otherwise compute from YOUCODED_PORT_OFFSET
 // (via shared/ports.ts) so Vite and main stay in sync without a second env var.
@@ -1029,7 +1038,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   return win;
 }
 
-function createWindow(firstRunManager?: FirstRunManager) {
+function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   mainWindow = createAppWindow({ maximize: true });
   // Perf lab: the renderer bundle has finished loading (not yet mounted).
   // Registered HERE, not in createAppWindow: createAppWindow also builds the
@@ -1103,20 +1112,17 @@ function createWindow(firstRunManager?: FirstRunManager) {
     delay: (ms) => new Promise((r) => setTimeout(r, ms)),
   });
 
-  // Sign in with ChatGPT (backend design 2026-09-05 §1, §6). Built HERE, right
-  // before registerIpcHandlers — i.e. AFTER the dev-profile userData override
-  // near the top of this file — and never beside `remoteServer`, which is
-  // The kill switch, read once: YOUCODED_CHATGPT=0 turns the whole feature off.
+  // Sign in with ChatGPT (backend design 2026-09-05 §1, §6). The kill switch, read once:
+  // YOUCODED_CHATGPT=0 turns the whole feature off. Built HERE, after the dev-profile userData
+  // override near the top of this file and never beside `remoteServer` (built before that override:
+  // an instance there would read/write the BUILT app's native-secrets.json and chatgpt-account.json
+  // from a dev instance). Constructed even under the switch: it is the file reader the launch-time
+  // auth check needs, so a ChatGPT-only install is not locked out; createRuntime applies the
+  // switch to everything user-facing.
   const chatgptEnabled = process.env.YOUCODED_CHATGPT !== '0';
-  // constructed before that override: an instance built there would read and
-  // write the BUILT app's native-secrets.json and chatgpt-account.json from a
-  // dev instance (the live-app rule broken through a file). Constructed even
-  // under the kill switch (YOUCODED_CHATGPT=0): it is the file reader the
-  // launch-time auth check below needs, so a ChatGPT-only install is not locked
-  // out by the switch; ipc-handlers applies the switch to everything user-facing.
   chatgptAuth = new ChatGptAuth({
     userDataDir: app.getPath('userData'),
-    secrets: new SecretsStore(app.getPath('userData')),
+    secrets: new SecretsStore(app.getPath('userData'), platform.secretStorage),
     appVersion: app.getVersion(),
     // WHY: this isolated experiment's request ceiling must refuse a model
     // dispatch before the provider fetch; never enable it in the built app.
@@ -1129,10 +1135,12 @@ function createWindow(firstRunManager?: FirstRunManager) {
     pollUsage: chatgptEnabled,
   });
 
+  // One-core R1: the runtime is built where registerIpcHandlers used to build it inline; both doors get this one.
+  nativeRuntime = createRuntime({ userDataDir: app.getPath('userData'), appVersion: app.getVersion(), platform, chatgptAuth, sessionManager });
   const ipcWiring = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, commandProvider, hookRelay, remoteConfig, remoteServer, windowRegistry,
     { client: leaseClient, setHolderTakeover: (fn) => { holderTakeoverRef.fn = fn; }, requester,
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
-    chatgptAuth, welcomeBackStore);
+    nativeRuntime, welcomeBackStore);
   cleanupIpcHandlers = ipcWiring.cleanup;
   cancelWindowHandoffs = (id) => ipcWiring.handoffAttempts?.cancelOwner(`window:${id}`);
   const hasUsableProvider = ipcWiring.hasUsableProvider;
@@ -1349,6 +1357,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
       mainWindow.webContents.send(IPC.HOOK_EVENT, evt);
     }
   });
+  return ipcWiring.outboxBroadcast; // for startOutboxDrain (chatsearch): its flag/note/tag pushes
 }
 
 // Welcome back (design §4, plan T3): the renderer's answer to a
@@ -2006,7 +2015,7 @@ void app.whenReady().then(async () => {
   void welcomeBackStore.startup();
 
   perfMark('main:create-window:start');
-  createWindow(isFirstRun ? firstRunManager : undefined);
+  const outboxBroadcast = createWindow(isFirstRun ? firstRunManager : undefined);
   perfMark('main:create-window:done');
   registerDetachIpc();
   registerCloseRequestIpc();
@@ -2499,7 +2508,7 @@ void app.whenReady().then(async () => {
   startChatsearchIndex();
   // WHY after the index: the drainer reads the same store root; requests it
   // applies trigger the index rebuild through emitConversationMetaChanged.
-  startOutboxDrain();
+  startOutboxDrain(outboxBroadcast);
 
   // The legacy session-end backup push (SyncService.pushSession) was removed in
   // sync-legacy-demolition. Conversations now travel via the sync-spaces
