@@ -165,10 +165,11 @@ const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
   },
   // 3 -> 2 (fix batch 2, 2026-09-26): the Remote Access setup banner lost its
   // outer box — the intro is plain text and the status strip stands alone.
+  // 2 -> 1 (2026-09-28): Package Tier's options are the shared radio rows now.
   'SettingsPanel.tsx': {
-    count: 2,
+    count: 1,
     why: 'the phone\'s "Connected to X" banner (green, with a Disconnect button — not yet moved onto '
-      + '<Callout actions>, outside fix batch 2\'s screens) and the Package Tier option selected state',
+      + '<Callout actions>, outside fix batch 2\'s screens)',
   },
   // SyncPanel.tsx: 4 -> 2 (fix batch 2) -> 0 (2026-09-28, nothing-bare-3#N3-2): the
   // backend rows are the plain nested box in every state now; the status light

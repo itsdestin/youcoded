@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { versionLine } from '../../app-version';
 import { plainMessage } from '../../utils/ipc-error';
-import { AnchorTip, Button, Callout, Checkbox, Dialog, ErrorState, LoadingState, SectionLabel, SegmentedTabs, SettingRow, Textarea, TextInput } from '../ui';
+import { AnchorTip, Button, Callout, CARD_LEVEL_1, Checkbox, Dialog, ErrorState, LoadingState, SectionLabel, SegmentedTabs, SettingRow, Textarea, TextInput } from '../ui';
 import { useEscClose } from '../../hooks/use-esc-close';
 
 // WHY a phase rather than a boolean: the flow stopped at draft -> review, so
@@ -174,7 +174,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
   };
 
   return <Dialog screen="settings/development/bug-report" open={open} onClose={onClose} size="document" title="Submit a ticket">
-    <div className="p-4 space-y-4">
+    <div className="space-y-4">{/* WHY no p-4: the Dialog body already pads 16px (doubled margins, 2026-09-28) */}
 
       {phase === 'sending' && <LoadingState verb="Sending" what="your ticket" />}
 
@@ -225,31 +225,45 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
           explainer={error}
           onRetry={send}
         />}
-        <p className="text-sm text-fg-2">Tickets are public on GitHub. Review details before sharing.</p>
-        {!review && <SegmentedTabs aria-label="Report type" variant="contained" value={kind} onChange={setKind} tabs={[{ id: 'bug', label: 'Bug' }, { id: 'feature', label: 'Feature' }]} />}
+        {/* WHY a labelled card for the ticket itself (Destin, surface-levels#SL-12: "some
+            of these should maybe be grouped/arranged/displayed differently"; nothing-bare
+            rules): the public-ticket note, the Bug/Feature switch and the two fields are
+            one idea, so one card, instead of loose lines on the popup. */}
         {/* WHY: one noun for one object. The flow previously said ticket, report, bug report and
             issue for the same thing across four controls, which reads as four different actions. */}
-        {review && <SectionLabel>Review your ticket</SectionLabel>}
-        <div className="space-y-2">
-          <label htmlFor="report-title" className="block text-xs text-fg-2">Title</label>
-          <TextInput id="report-title" className="w-full" value={title} onChange={e => setTitle(e.target.value)} placeholder="A short summary" />
-          <label htmlFor="report-description" className="block text-xs text-fg-2">Description</label>
-          <Textarea id="report-description" className="w-full h-28" value={description} onChange={e => setDescription(e.target.value)} placeholder={kind === 'bug' ? 'What happened? What did you expect? What steps caused it?' : 'What would you like to do, and how would it help?'} />
-        </div>
+        <section>
+          <SectionLabel className="mb-2">{review ? 'Review your ticket' : 'Your ticket'}</SectionLabel>
+          <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+            <p className="text-2xs text-fg-muted leading-relaxed">Tickets are public on GitHub. Review details before sharing.</p>
+            {!review && <SegmentedTabs aria-label="Report type" variant="contained" value={kind} onChange={setKind} tabs={[{ id: 'bug', label: 'Bug' }, { id: 'feature', label: 'Feature' }]} />}
+            <div className="space-y-2">
+              <label htmlFor="report-title" className="block text-xs text-fg-2">Title</label>
+              <TextInput id="report-title" className="w-full" value={title} onChange={e => setTitle(e.target.value)} placeholder="A short summary" />
+              <label htmlFor="report-description" className="block text-xs text-fg-2">Description</label>
+              <Textarea id="report-description" className="w-full h-28" value={description} onChange={e => setDescription(e.target.value)} placeholder={kind === 'bug' ? 'What happened? What did you expect? What steps caused it?' : 'What would you like to do, and how would it help?'} />
+            </div>
+          </div>
+        </section>
         {/* WHY: separate choosing evidence from reviewing its content; don't stack a full
             editor and explanatory paragraphs between every compact selection row. */}
-        {!review ? <section className="space-y-2">
-          <SectionLabel>Include with ticket</SectionLabel>
+        {/* WHY the three choices share one labelled card (nested rows re-level
+            themselves): they sat as loose rows under a bare label. */}
+        {!review ? <section>
+          <SectionLabel className="mb-2">Include with ticket</SectionLabel>
+          {/* variant="item": these are choices, so the list size, like Sound's (not the
+              larger size for rows that open another screen). */}
+          <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
           {kind === 'bug' && <>
-            <SettingRow title="Error details and version" control={<Checkbox aria-label="Include error details and YouCoded version" checked={includeContext} onChange={setIncludeContext} />} accessory={<AnchorTip label="About error details">Only the originating error and app version, not your conversation. You’ll review these before sharing.</AnchorTip>} />
-            <SettingRow title="Recent logs" control={<Checkbox aria-label="Include recent logs" checked={logs} onChange={chooseLogs} />} accessory={<AnchorTip label="About recent logs">Logs record app activity and errors. They may contain private information. Review and remove private details before sharing.</AnchorTip>} />
+            <SettingRow variant="item" title="Error details and version" control={<Checkbox aria-label="Include error details and YouCoded version" checked={includeContext} onChange={setIncludeContext} />} accessory={<AnchorTip label="About error details">Only the originating error and app version, not your conversation. You’ll review these before sharing.</AnchorTip>} />
+            <SettingRow variant="item" title="Recent logs" control={<Checkbox aria-label="Include recent logs" checked={logs} onChange={chooseLogs} />} accessory={<AnchorTip label="About recent logs">Logs record app activity and errors. They may contain private information. Review and remove private details before sharing.</AnchorTip>} />
           </>}
           {/* WHY the row says where it ends up (UX review U4): ticking it opened no
               file picker, and quietly changed the send button from "Submit public
               ticket" to "Continue in GitHub" — a tester could not tell what had
               happened or why. Files cannot be attached here at all: GitHub uploads a
               file the moment it is attached, so that step is theirs. */}
-          <SettingRow title="Screenshots or files" control={<Checkbox aria-label="Finish with attachments in GitHub" checked={attachments} onChange={setAttachments} />} accessory={<AnchorTip label="About attachments">Ticking this finishes your ticket in your browser, where you attach the files yourself. They cannot be attached here: GitHub uploads a file the moment it is attached, so it has to happen where you can see it.</AnchorTip>} />
+          <SettingRow variant="item" title="Screenshots or files" control={<Checkbox aria-label="Finish with attachments in GitHub" checked={attachments} onChange={setAttachments} />} accessory={<AnchorTip label="About attachments">Ticking this finishes your ticket in your browser, where you attach the files yourself. They cannot be attached here: GitHub uploads a file the moment it is attached, so it has to happen where you can see it.</AnchorTip>} />
+          </div>
         </section> : <section className="space-y-3">
           {kind === 'bug' && includeContext && <div className="space-y-1">
             <SectionLabel>Error details and version</SectionLabel>

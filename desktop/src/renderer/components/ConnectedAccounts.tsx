@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Button, CARD_LEVEL_1, FieldError } from './ui';
+import { Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, FieldError, SectionLabel } from './ui';
 import ConnectGithubModal from './ConnectGithubModal';
 import { SavedPageKeys } from './pages/SavedPageKeys';
 
@@ -60,79 +60,87 @@ export function ConnectedAccountsBody({ status, refresh }: {
 
   return (
     <div className="space-y-4">
-      {/* How this page relates to the YouCoded sign-in the user just came from —
-          the exact confusion this layout exists to prevent: both use GitHub,
-          for two different jobs. */}
-      <p className="text-2xs text-fg-dim leading-relaxed">
-        Services YouCoded connects to on your behalf. These are separate from
-        your YouCoded account sign-in.
-      </p>
-
-      {/* ── GitHub ── (list layout: future providers append below) */}
-      {/* Card-levels sweep (2026-09-27): LEVEL-1 (was a one-off border-edge/
-          bg-inset-40 recipe shared with nothing else). */}
-      <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-        <div className="flex items-center gap-3">
-          <GitHubMarkIcon className="w-6 h-6 text-fg shrink-0" />
-          <div className="flex-1 min-w-0">
-            <div className="text-xs text-fg font-medium">
-              GitHub{connected && status?.login ? ` · @${status.login}` : ''}
-            </div>
-            <div className="text-3xs text-fg-muted">
-              {connected
-                ? 'Stores your synced data and publishes your themes, skills, and bug reports.'
-                : 'Needed for cross-device sync and publishing themes & skills.'}
-            </div>
-          </div>
-          {!connected && (
-            <Button size="sm" className="shrink-0" onClick={() => setShowConnect(true)}>
-              Connect…
-            </Button>
-          )}
-          {connected && !viaGhCli && !confirming && (
-            <Button variant="secondary" size="sm" className="shrink-0" onClick={() => setConfirming(true)}>
-              Disconnect
-            </Button>
-          )}
-        </div>
-
-        {/* Keychain-less Linux stores the token as a plain 0600 file — the
-            degraded policy is explicit everywhere, including here. */}
-        {connected && status?.degradedStorage && (
-          <p className="text-2xs text-amber-700 leading-relaxed">
-            Your sign-in is stored without system-keychain encryption on this
-            computer (no keychain service was available). It is protected only
-            by file permissions.
-          </p>
-        )}
-
-        {viaGhCli && (
+      {/* WHY a label, then one card holding the explanation and the GitHub row
+          (nothing-bare rules, 2026-09-28): the intro sentence sat bare on the popup
+          and the page opened straight into a card. The provider row is a nested box
+          inside it, so future providers stack as more nested boxes, not new cards. */}
+      <section>
+        <SectionLabel className="mb-2">Accounts</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+          {/* How this page relates to the YouCoded sign-in the user just came from —
+              the exact confusion this layout exists to prevent: both use GitHub,
+              for two different jobs. */}
           <p className="text-2xs text-fg-muted leading-relaxed">
-            Connected through the GitHub CLI installed on this computer, so
-            there's nothing for YouCoded to disconnect here — to sign out, run{' '}
-            <code className="font-mono">gh auth logout</code> in a terminal.
+            Services YouCoded connects to on your behalf. These are separate from
+            your YouCoded account sign-in.
           </p>
-        )}
-
-        {confirming && (
-          <div className="space-y-2">
-            <p className="text-2xs text-fg-2 leading-relaxed">
-              This removes the saved GitHub sign-in from this device. Sync will
-              pause until you reconnect; your data on GitHub is not deleted.
-            </p>
-            <div className="flex items-center gap-2">
-              <Button variant="danger" size="sm" disabled={busy} onClick={() => { void handleDisconnect(); }}>
-                {busy ? 'Disconnecting…' : 'Disconnect'}
-              </Button>
-              <Button variant="secondary" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
-                Never mind
-              </Button>
+          <div className={`${CARD_LEVEL_2} p-3 space-y-3`}>
+            <div className="flex items-center gap-3">
+              <GitHubMarkIcon className="w-6 h-6 text-fg shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-fg font-medium">
+                  GitHub{connected && status?.login ? ` · @${status.login}` : ''}
+                </div>
+                <div className="text-3xs text-fg-muted">
+                  {connected
+                    ? 'Stores your synced data and publishes your themes, skills, and bug reports.'
+                    : 'Needed for cross-device sync and publishing themes & skills.'}
+                </div>
+              </div>
+              {!connected && (
+                <Button size="sm" className="shrink-0" onClick={() => setShowConnect(true)}>
+                  Connect…
+                </Button>
+              )}
+              {connected && !viaGhCli && !confirming && (
+                <Button variant="secondary" size="sm" className="shrink-0" onClick={() => setConfirming(true)}>
+                  Disconnect
+                </Button>
+              )}
             </div>
-          </div>
-        )}
 
-        {error && <FieldError as="p" size="2xs">{error}</FieldError>}
-      </div>
+            {/* Keychain-less Linux stores the token as a plain 0600 file — the
+                degraded policy is explicit everywhere, including here. WHY a warning
+                Callout, not amber text: the guide's one notice box, never coloured body text. */}
+            {connected && status?.degradedStorage && (
+              <Callout tone="warning">
+                Your sign-in is stored without system-keychain encryption on this
+                computer (no keychain service was available). It is protected only
+                by file permissions.
+              </Callout>
+            )}
+
+            {viaGhCli && (
+              <p className="text-2xs text-fg-muted leading-relaxed">
+                Connected through the GitHub CLI installed on this computer, so
+                there's nothing for YouCoded to disconnect here — to sign out, run{' '}
+                <code className="font-mono">gh auth logout</code> in a terminal.
+              </p>
+            )}
+
+            {confirming && (
+              <div className="space-y-2">
+                <p className="text-2xs text-fg-2 leading-relaxed">
+                  This removes the saved GitHub sign-in from this device. Sync will
+                  pause until you reconnect; your data on GitHub is not deleted.
+                </p>
+                {/* WHY this order: the red confirm takes the main action's place, on
+                    the right; the way back sits directly left of it (guide, Buttons). */}
+                <div className="flex items-center justify-end gap-2">
+                  <Button variant="secondary" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
+                    Never mind
+                  </Button>
+                  <Button variant="danger" size="sm" disabled={busy} onClick={() => { void handleDisconnect(); }}>
+                    {busy ? 'Disconnecting…' : 'Disconnect'}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {error && <FieldError as="p" size="2xs">{error}</FieldError>}
+          </div>
+        </div>
+      </section>
 
       {/* Keys pasted for pages live beside the other things YouCoded holds on
           the person's behalf (Pages Phase 2, deck Q-manage). Renders nothing

@@ -2254,29 +2254,16 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
         panelRef={popupRef}
         screen="settings/android/tier"
       >
-              {TIER_OPTIONS.map(t => {
-                const isActive = tier === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => { onSetTier(t.id); setOpen(false); }}
-                    className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-colors ${
-                      isActive ? 'border-accent bg-accent/10' : 'border-edge-dim hover:border-edge'
-                    }`}
-                  >
-                    <span className={`text-sm shrink-0 mt-0.5 ${isActive ? 'text-accent' : 'text-fg-faint'}`}>
-                      {isActive ? '●' : '○'}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-xs font-medium ${isActive ? 'text-fg' : 'text-fg-2'}`}>{t.name}</span>
-                        {isActive && <span className="text-4xs font-medium px-1.5 py-0.5 rounded-sm bg-accent text-on-accent">Active</span>}
-                      </div>
-                      <p className="text-3xs text-fg-muted mt-0.5">{t.desc}</p>
-                    </div>
-                  </button>
-                );
-              })}
+              {/* WHY the shared radio rows (2026-09-28): the hand-drawn ● / ○ boxes, the
+                  accent-tinted selected box and the 9px "Active" tag were a one-off look;
+                  this is the same choice list Sound uses, and the filled radio already
+                  says which one is active. */}
+              <RadioGroup options={TIER_OPTIONS.map(t => t.id)} value={tier} onChange={(id) => { onSetTier(id); setOpen(false); }} aria-label="Package tier" className="space-y-2">
+                {TIER_OPTIONS.map(t => (
+                  <SettingRow key={t.id} variant="item" title={t.name} description={t.desc} selected={tier === t.id}
+                    onSelect={() => { onSetTier(t.id); setOpen(false); }} radioTabIndex={tier === t.id ? 0 : -1} />
+                ))}
+              </RadioGroup>
       </Dialog>
     </>
   );

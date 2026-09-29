@@ -6,7 +6,7 @@
 // with the model-provider keys, and nothing in the renderer can read it back.
 import React, { useEffect, useState } from 'react';
 import type { PagesBridge, SavedPageKey } from '../../../shared/pages-types';
-import { Button } from '../ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, SectionLabel } from '../ui';
 
 function bridge(): PagesBridge | undefined {
   return (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
@@ -36,10 +36,14 @@ export function SavedPageKeys() {
   };
 
   return (
-    <div className="space-y-2" data-saved-page-keys>
-      <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase">Keys saved for pages</div>
+    // WHY one labelled card holding a nested box per key (nothing-bare rules,
+    // 2026-09-28): the label was spaced-out capitals, and each key was its own
+    // hand-styled box; a list of like things shares ONE container (card levels).
+    <section data-saved-page-keys>
+      <SectionLabel className="mb-2">Keys saved for Pages</SectionLabel>
+      <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
       {keys.map((k) => (
-        <div key={rowId(k)} className="rounded-lg border border-edge bg-inset/40 p-3 space-y-3">
+        <div key={rowId(k)} className={`${CARD_LEVEL_2} p-3 space-y-3`}>
           <div className="flex items-center gap-3">
             <div className="flex-1 min-w-0">
               <div className="text-xs text-fg font-medium">{k.service} <span className="text-fg-muted font-normal">· {k.address}</span></div>
@@ -56,14 +60,16 @@ export function SavedPageKeys() {
               <p className="text-2xs text-fg-2 leading-relaxed">
                 This deletes the key from this computer and stops {k.usedBy.length === 1 ? 'that page' : 'those pages'} using it. It does not cancel the key with {k.service}; do that on their website if you need to.
               </p>
-              <div className="flex items-center gap-2">
-                <Button variant="danger" size="sm" onClick={() => { void remove(k); }}>Delete key</Button>
+              {/* WHY this order: the red confirm on the right, the way back left of it (guide, Buttons). */}
+              <div className="flex items-center justify-end gap-2">
                 <Button variant="secondary" size="sm" onClick={() => setConfirming(null)}>Never mind</Button>
+                <Button variant="danger" size="sm" onClick={() => { void remove(k); }}>Delete key</Button>
               </div>
             </div>
           )}
         </div>
       ))}
-    </div>
+      </div>
+    </section>
   );
 }

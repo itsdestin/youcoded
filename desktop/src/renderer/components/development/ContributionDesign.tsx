@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Dialog, ErrorState, LoadingState } from '../ui';
+import { Button, CARD_LEVEL_1, Dialog, ErrorState, LoadingState } from '../ui';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { plainMessage } from '../../utils/ipc-error';
 import { ContributionWalkthrough } from './ContributionWalkthrough';
@@ -90,15 +90,17 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
   };
 
   return <Dialog screen="settings/development/contribute" open={open} onClose={onClose} size="panel" title="Contribute to YouCoded">
-    <div className="p-4 space-y-4">
+    <div className="space-y-4">{/* WHY no p-4: the Dialog body already pads 16px (doubled margins, 2026-09-28) */}
 
-      {phase === 'idle' && <>
-        <p className="text-sm text-fg-2">You don’t need to know how to code. Describe a change to your assistant and try it in a separate project. Your installed app and existing folders stay untouched.</p>
+      {/* WHY one card (nothing-bare rules, 2026-09-28): the explanation sat bare on the
+          popup. A small popup holding a single card needs no label above it. */}
+      {phase === 'idle' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+        <p className="text-xs text-fg-2 leading-relaxed">You don’t need to know how to code. Describe a change to your assistant and try it in a separate project. Your installed app and existing folders stay untouched.</p>
         <ContributionWalkthrough />
         {/* WHY: match the app's own dialog action — full width, primary, no prototype caption.
             It must never reach the legacy installer; that is pinned by DevelopmentDesign.test.tsx. */}
         <Button className="w-full py-2.5" onClick={setup}>Set up development workspace</Button>
-      </>}
+      </div>}
 
       {phase === 'setting-up' && <>
         <LoadingState verb="Setting up" what="your development workspace" />
