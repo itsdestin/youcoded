@@ -79,7 +79,7 @@ describe('SettingsPanel — remote access panel', () => {
     expect(screen.getByText(/disconnects every device/)).toBeTruthy();
   });
 
-  it('preserves the panel: enabled, password, keep awake, full-width Add Device and Info', () => {
+  it('preserves the panel: enabled, password, keep awake, full-width Add device and Info', () => {
     mount('ready');
     expect(screen.getByRole('switch', { name: 'Remote access server enabled' })).toBeTruthy();
     const password = screen.getByLabelText('Remote access password');
@@ -89,10 +89,10 @@ describe('SettingsPanel — remote access panel', () => {
     for (const name of ['Off', '1h', '4h', '8h', '24h']) expect(screen.getByRole('tab', { name })).toBeTruthy();
     fireEvent.click(screen.getByRole('tab', { name: '8h' }));
     expect(screen.getByRole('tab', { name: '8h' }).getAttribute('aria-selected')).toBe('true');
-    const add = screen.getByRole('button', { name: 'Add Device' });
+    const add = screen.getByRole('button', { name: 'Add device' });
     expect(add.className).toContain('w-full');
     fireEvent.click(add);
-    // The address appears in the Tailscale section AND in the Add Device panel, and the two
+    // The address appears in the Tailscale section AND in the Add device panel, and the two
     // must be the same string. A tester was shown a bare IP in one place and a tailnet
     // hostname in the other, with nothing saying they were the same machine.
     const shown = screen.getAllByText(address);

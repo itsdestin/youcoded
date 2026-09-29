@@ -2807,7 +2807,7 @@ export function installShim(): void {
     })(),
     // Multi-window detach is desktop-Electron only. Browser/Android renderers
     // get no-op stubs so SessionStrip's drag handlers, App.tsx's ownership
-    // effect, and the 'Launch in New Window' toggle all degrade cleanly
+    // effect, and the 'Launch in new window' toggle all degrade cleanly
     // without runtime errors. dropResolve resolves to null (no hit) so the
     // source's pointerUp falls through to the local reorder path.
     detach: {

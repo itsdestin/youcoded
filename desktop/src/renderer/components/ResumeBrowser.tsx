@@ -210,7 +210,7 @@ interface PastSession {
   projectPath: string;
   lastModified: number;
   size: number;
-  // Reserved flags — multiple allowed. `complete` hides unless Show Complete
+  // Reserved flags — multiple allowed. `complete` hides unless Show complete
   // is on; `priority` pins the session to the top of its project group.
   flags?: Partial<Record<FlagName, boolean>>;
   tags?: string[];   // applied custom-tag ids
@@ -598,10 +598,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   //    makes hiding it legitimate rather than a narrow "fix" that removes the
   //    only route to something.
   const previewOn = !narrowViewport && !isAndroid();
-  // Model, Skip Permissions, new window and the in-flight resume — shared with
+  // Model, Skip permissions, new window and the in-flight resume — shared with
   // the Projects page's preview (ResumeOptions.tsx).
   const resumeOptions = useResumeOptions(defaultModel, defaultSkipPermissions);
-  // Show Complete: when off, sessions marked complete are hidden (default).
+  // Show complete: when off, sessions marked complete are hidden (default).
   // Deliberately NOT persisted — it resets to off on every open, same as the
   // project/tag filter pills below. Destin's ruling: a browser that reopens
   // still showing completed work hides the list he actually came for.
@@ -609,7 +609,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
   // Sessions the user flagged Complete during the current open. They stay
   // visible until the menu is closed and reopened, so the row doesn't vanish
-  // mid-interaction when Show Complete is off. Reset on every open.
+  // mid-interaction when Show complete is off. Reset on every open.
   const [stickyComplete, setStickyComplete] = useState<Set<string>>(new Set());
   /** Non-null when the last load FAILED. Empty string = it failed and said no reason. */
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -709,7 +709,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       setTagManagerOpen(false);
       // Reset the sticky-visible set each open — previously kept rows drop out.
       setStickyComplete(new Set());
-      // Show Complete resets to off each open — the component stays mounted
+      // Show complete resets to off each open — the component stays mounted
       // across opens, so the useState initializer alone would never re-run.
       setShowComplete(false);
       // Reset filter pills each open — current spec: no persistence.
@@ -821,7 +821,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     // mid-choice — minus any already resumed from this screen.
     if (wb) return sessions.filter((s) => wb.ids.includes(s.sessionId) && !launched.has(s.sessionId));
     // Filter pipeline lives in resume-browser-filters.ts so it can be unit tested.
-    // Order: Show Complete + sticky → project → tag → search.
+    // Order: Show complete + sticky → project → tag → search.
     const state: FilterState = {
       search,
       showComplete,
@@ -988,7 +988,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Distinct projects with counts — what the Projects pill dropdown displays.
   // Derived from the unfiltered session list so the dropdown always shows
   // every known project, even when the user has narrowed the visible list.
-  // Counts and rows reflect what the list can actually show: with Show Complete
+  // Counts and rows reflect what the list can actually show: with Show complete
   // off, a finished conversation is not counted and a project with only finished
   // conversations is not offered (UX review U6: "youcoded 2" then showed one row).
   const countable = useMemo(
@@ -1007,7 +1007,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // parentheses). The old 2–3 → comma-joined names made one chip as wide as the
   // whole row on a phone.
   // A picked project that the menu no longer offers (all its conversations are
-  // finished and Show Complete is off) still names itself from its path.
+  // finished and Show complete is off) still names itself from its path.
   const projectsLabel = useMemo((): React.ReactNode => {
     const picked = [...selectedProjects].map((path) => availableProjects.find((p) => p.path === path)?.label ?? path.split(/[\\/]/).filter(Boolean).pop() ?? path);
     return <PickLabel {...pickLabel('Projects', picked)} />;
@@ -1817,23 +1817,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
             ) : (<>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-base font-medium text-fg">Resume Session</h2>
-              {/* Show Complete — same toggle pattern as Skip Permissions
+              {/* Show complete — same toggle pattern as Skip permissions
                   in SessionStrip, but accent-colored to signal "on" rather than "danger". */}
               <div className="flex items-center gap-2">
                 {/* WHY: field caption drops the spaced-caps eyebrow (labels
-                    batch, guide: no spaced capitals). Kept "Show Complete"
-                    (not sentence-cased) — it's this toggle's established name,
-                    quoted the same way in its aria-label, hint text
-                    (CloseSessionPrompt, SessionCardDetails) and comments
-                    across ResumeBrowser/BuddyResumeList. */}
-                <label className="text-xs font-medium text-fg-muted">Show Complete</label>
+                    batch, guide: no spaced capitals). "Show complete" is in
+                    sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
+                <label className="text-xs font-medium text-fg-muted">Show complete</label>
                 {/* Shared Toggle (change 15). role="switch" + aria-checked comes
                     from the primitive, which is strictly better than the
                     aria-pressed this used to carry. */}
                 <Toggle
                   checked={showComplete}
                   onChange={setShowComplete}
-                  aria-label="Show Complete"
+                  aria-label="Show complete"
                 />
               </div>
             </div>

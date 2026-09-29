@@ -486,7 +486,7 @@ describe('native resume', () => {
       fireEvent.change(field, { target: { value: 'Claude X' } });
       expect(await screen.findByText(/Claude X/)).toBeInTheDocument();
       // CC-only controls must NOT appear for a native row.
-      expect(screen.queryByText('Skip Permissions')).not.toBeInTheDocument();
+      expect(screen.queryByText('Skip permissions')).not.toBeInTheDocument();
     });
 
     it('prefill match auto-selects the matching model and enables Resume without any click', async () => {
@@ -547,7 +547,7 @@ describe('native resume', () => {
       render(<ResumeBrowser open={true} onClose={() => {}} onResume={() => {}} />);
       await expandRow('CC Chat');
 
-      expect(await screen.findByText('Skip Permissions')).toBeInTheDocument();
+      expect(await screen.findByText('Skip permissions')).toBeInTheDocument();
       // The picker is closed by default, so its search field is absent until opened.
       expect(screen.queryByPlaceholderText('Search all models…')).not.toBeInTheDocument();
       // CC Resume never gates on a native binding.
@@ -721,9 +721,9 @@ describe('organizing', () => {
     it('offers to undo once complete', async () => {
       mockWindowClaude([row({ flags: { complete: true } })]);
       mount();
-      // Complete rows are filtered out by default — turn Show Complete on so the
+      // Complete rows are filtered out by default — turn Show complete on so the
       // row is listed, then assert the icon has flipped to its undo affordance.
-      fireEvent.click(await screen.findByRole('switch', { name: 'Show Complete' }));
+      fireEvent.click(await screen.findByRole('switch', { name: 'Show complete' }));
       fireEvent.click(await screen.findByRole('button', { name: 'Mark CC Chat not complete' }));
       expect((window as any).claude.session.setFlag).toHaveBeenCalledWith('cc-1', 'complete', false);
     });

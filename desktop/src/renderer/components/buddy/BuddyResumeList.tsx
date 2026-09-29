@@ -100,7 +100,7 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
   }, []);
 
   // Newest first, completed ones hidden. `complete` is the flag the main browser
-  // hides behind its "Show Complete" switch; with no room for that switch here,
+  // hides behind its "Show complete" switch; with no room for that switch here,
   // honour the flag's intent rather than showing conversations the user filed away.
   const visible = useMemo(() => (rows ?? [])
     .filter((s) => !s.flags?.complete)

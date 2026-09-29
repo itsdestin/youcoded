@@ -410,7 +410,7 @@ export default function SessionStrip({
   const [binding, setBinding] = useState<Binding | null>(() => loadLastBinding());
   const nb = useNativeBinding({ active: showNewForm, runtime, binding, setBinding });
 
-  // First-time warnings (spec §5): Skip Permissions on its toggle, small model
+  // First-time warnings (spec §5): Skip permissions on its toggle, small model
   // on Create. The popover at z-9000 would sit ABOVE the warning and its
   // outside-click closer would read a click in the dialog as "outside", so the
   // popover hides while the warning is up and returns after. Only `menuOpen`
@@ -2692,7 +2692,7 @@ export default function SessionStrip({
               {runtime === 'native' && nb.nativeSupported && (
                 <NativeExtras nb={nb} preset={preset} onPreset={setPreset} />
               )}
-              {/* Skip Permissions is CLAUDE-CODE ONLY. It works by starting the
+              {/* Skip permissions is CLAUDE-CODE ONLY. It works by starting the
                   CLI with permissions bypassed, and a native session has no PTY
                   and no CC permission flow for it to affect — so on a native
                   model the control did nothing at all. The Resume Browser
@@ -2702,11 +2702,9 @@ export default function SessionStrip({
               {runtime !== 'native' && (
                 <>
                   <div className="flex items-center justify-between">
-                    {/* WHY still "Skip Permissions" (labels batch): kept like
-                        a proper noun, matching its dialog titles/tooltip/
-                        aria-label elsewhere; only the spaced-caps CSS drops. */}
+                    {/* WHY "Skip permissions": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
                     <label className="text-xs font-medium text-fg-muted inline-flex items-center">
-                      Skip Permissions
+                      Skip permissions
                       <SkipPermissionsInfoTooltip />
                     </label>
                     {/* Shared Toggle (change 15). The "danger" tone replaces the raw
@@ -2719,7 +2717,7 @@ export default function SessionStrip({
                       // there leaves it off. Turning off never asks.
                       onChange={(next) => (next ? gateSkipPermissions(() => setDangerous(true)) : setDangerous(false))}
                       tone="danger"
-                      aria-label="Skip Permissions"
+                      aria-label="Skip permissions"
                     />
                   </div>
                   {/* Warning text was a raw text-[#DD4444] hex. Change 17 moves it onto
@@ -2733,15 +2731,13 @@ export default function SessionStrip({
               {/* Launch in new window — hidden on platforms without multi-window support */}
               {detachAvailable && (
                 <div className="flex items-center justify-between">
-                  {/* WHY still "Launch in New Window" (labels batch): matches
-                      its aria-label below and its quoted name in remote-shim/
-                      mock-shim comments; only the spaced-caps CSS drops. */}
-                  <label className="text-xs font-medium text-fg-muted">Launch in New Window</label>
+                  {/* WHY "Launch in new window": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
+                  <label className="text-xs font-medium text-fg-muted">Launch in new window</label>
                   {/* Shared Toggle (change 15) — same accent on-state as before. */}
                   <Toggle
                     checked={launchInNewWindow}
                     onChange={setLaunchInNewWindow}
-                    aria-label="Launch in New Window"
+                    aria-label="Launch in new window"
                   />
                 </div>
               )}

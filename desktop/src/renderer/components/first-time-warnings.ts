@@ -2,7 +2,7 @@
 //
 // Spec: docs/active/specs/2026-09-10-first-run-guide-design.md §1 item 7, §4
 // (`youcoded-warned-<kind>`), §5 "Warnings". Three gates, each shown ONCE per
-// install: turning on Skip Permissions, picking Full auto, and starting a
+// install: turning on Skip permissions, picking Full auto, and starting a
 // session on a small model. The dialog lives in FirstTimeWarning.tsx; this
 // module holds the copy, the acknowledgement flag and the small-model test so
 // they can be unit-tested without a DOM.
@@ -34,9 +34,9 @@ const I_UNDERSTAND = 'I understand the assistant can change or delete files with
 
 export const WARNING_COPY: Record<WarningKind, WarningCopy> = {
   'skip-permissions': {
-    title: 'Before you turn on Skip Permissions',
+    title: 'Before you turn on Skip permissions',
     body: [
-      'Skip Permissions lets the assistant run commands and change files without asking you first.',
+      'Skip permissions lets the assistant run commands and change files without asking you first.',
       'That is faster. It also means a mistake reaches your files before you see it.',
       'Keep your own backups of anything you cannot replace.',
     ],

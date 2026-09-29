@@ -72,7 +72,7 @@ describe('SettingRow structure', () => {
   it('the description sits under the title, in the same column', () => {
     // THE one rule that retires all five shapes. The five were about placement,
     // not size: below the whole row (Sound), after the row (Buddy), as a K1
-    // section label (Session Defaults, Skip Permissions), and as a stray <p>
+    // section label (Session Defaults, Skip permissions), and as a stray <p>
     // outside the container (Buddy again — two placements in ONE popup).
     render(<SettingRow variant="item" title="Show buddy floater" description="A small mascot" control={<span />} />);
     const title = screen.getByText('Show buddy floater');
@@ -166,7 +166,7 @@ describe('setting row adoption', () => {
     'ProvidersSection.tsx': { count: 1, why: 'K6 provider list row' },
     'SyncSetupWizard.tsx': { count: 1, why: 'a wizard step, not a settings menu' },
     'ResumeBrowser.tsx': { count: 1, why: 'L1 drawer — out of the dialog family entirely' },
-    // The Resume browser's Skip Permissions / new-window switches, moved into a
+    // The Resume browser's Skip permissions / new-window switches, moved into a
     // shared file (2026-09-16) so the Projects preview draws the same block.
     'ResumeOptions.tsx': { count: 2, why: 'the Resume browser\'s launch switches, shared with the Projects preview — same drawer styling, not a settings menu' },
     'CloseSessionPrompt.tsx': { count: 1, why: 'dialog footer: "Don\'t show again" beside the confirm button — a footer convention, not a settings row (P-15, 2026-08-26)' },

@@ -22,7 +22,7 @@ type FlagName = 'priority' | 'complete';
 const FLAG_ORDER: FlagName[] = ['priority', 'complete'];
 
 const COMPLETE_TITLE = 'Mark complete';
-const COMPLETE_HINT = 'Hides it from the resume list unless you turn on Show Complete.';
+const COMPLETE_HINT = 'Hides it from the resume list unless you turn on Show complete.';
 
 /** The check-in-a-circle from the Resume Browser card, so the same act looks the
  *  same in both places. Filled when set; the check knocks out with var(--canvas)
@@ -42,7 +42,7 @@ function CompleteGlyph({ done, className = '' }: { done: boolean; className?: st
 // unused-code sweep. The collapsed summary has no save control of its own.
 
 /** Chosen from four candidates in the workbench, 2026-07-31: a Toggle rather
- *  than a card or a checkbox, because it is the shape Skip Permissions and Show
+ *  than a card or a checkbox, because it is the shape Skip permissions and Show
  *  Complete already use and the app should have one way of asking a yes/no.
  *
  *  Built on SettingRow, not hand-rolled. The ast-grep rule

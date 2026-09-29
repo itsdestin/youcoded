@@ -1,6 +1,6 @@
 import { AnchorTip } from './ui';
 
-// Info tooltip for the "Skip Permissions" toggle: a plain-language explanation of
+// Info tooltip for the "Skip permissions" toggle: a plain-language explanation of
 // Claude Code's native permission system and the tradeoffs of turning prompts off
 // for a whole session.
 //

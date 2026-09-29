@@ -1606,7 +1606,7 @@ function RemoteButton(props: RemoteButtonProps) {
   // No scroll ref here any more — Dialog owns the scroll region and its edge
   // fades for both views.
 
-  // WHY Add Device scrolls itself into view: it is appended at the BOTTOM of a panel
+  // WHY Add device scrolls itself into view: it is appended at the BOTTOM of a panel
   // taller than the dialog, so on a normal window pressing it changed nothing you could
   // see. A tester pressed it, saw no result, and only found the QR code by scrolling.
   const addDeviceRef = useRef<HTMLElement>(null);
@@ -1666,7 +1666,7 @@ function RemoteButton(props: RemoteButtonProps) {
         : previewView.prerequisite === 'sign-in-required' ? 'signed-out'
           : 'running',
       // No address until the network is actually up, and ONE address throughout: the mock
-      // used to answer a bare IP here and a different tailnet hostname in Add Device, with
+      // used to answer a bare IP here and a different tailnet hostname in Add device, with
       // nothing saying they were the same machine.
       ip: ready ? '100.82.14.7' : null,
       hostname: ready ? 'home-laptop' : null,
@@ -1822,7 +1822,7 @@ function RemoteButton(props: RemoteButtonProps) {
                   </Button>
                 )}
               </div>
-            ) : showInfo ? (previewView ? <p className="text-xs text-fg-2">On your phone: install Tailscale and sign in to the same account. Then tap Add Device here and scan the code. A paired phone can use the assistant, not just read conversations — so keep this computer awake while you are away from it.</p> : (
+            ) : showInfo ? (previewView ? <p className="text-xs text-fg-2">On your phone: install Tailscale and sign in to the same account. Then tap Add device here and scan the code. A paired phone can use the assistant, not just read conversations — so keep this computer awake while you are away from it.</p> : (
               <SettingsExplainer
                 intro={REMOTE_ACCESS_EXPLAINER.intro}
                 sections={REMOTE_ACCESS_EXPLAINER.sections}
@@ -2005,7 +2005,7 @@ function RemoteButton(props: RemoteButtonProps) {
                       </div>
                     </section>
 
-                    {/* Add Device — requires Tailscale running, otherwise tailscale.url is null.
+                    {/* Add device — requires Tailscale running, otherwise tailscale.url is null.
                         Was a soft-blue tinted outline (bg-blue-500/10 + text-blue-400) that matched
                         no variant. Destin's call (spec §11.8 A): plain `secondary`. Unlike the
                         orange billing button, nothing here is a warning — the blue was decorative,
@@ -2026,7 +2026,7 @@ function RemoteButton(props: RemoteButtonProps) {
                         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
                         </svg>
-                        Add Device
+                        Add device
                       </Button>
                     )}
 
@@ -2067,15 +2067,15 @@ function RemoteButton(props: RemoteButtonProps) {
                       </section>
                     )}
 
-                    {/* Add Device overlay — LEVEL-1 (card-levels sweep). */}
+                    {/* Add device overlay — LEVEL-1 (card-levels sweep). */}
                     {showAddDevice && tailscale?.url && (
                       <section ref={addDeviceRef} className={`${CARD_LEVEL_1} p-3`}>
                         <div className="flex items-center justify-between mb-2">
-                          <h3 className="text-xs font-medium text-fg-2">Add Device</h3>
+                          <h3 className="text-xs font-medium text-fg-2">Add device</h3>
                           {/* NOT a K6 action — this dismisses the whole
                               sub-panel, so it is a CloseButton, which already
                               carries a label and a focus ring. */}
-                          <CloseButton onClick={() => onSetShowAddDevice(false)} label="Close Add Device" />
+                          <CloseButton onClick={() => onSetShowAddDevice(false)} label="Close Add device" />
                         </div>
                         {/* Remind users that Tailscale must be installed + running on the receiving device too */}
                         <Callout tone="warning" title="Before scanning:" className="mb-2">
@@ -2140,7 +2140,7 @@ function RemoteButton(props: RemoteButtonProps) {
                               )
                             }
                           />
-                          {/* WHY the address lives here and not only behind Add Device: it
+                          {/* WHY the address lives here and not only behind Add device: it
                               appeared during setup and then disappeared the moment setup
                               finished, so at the one point a user wants to type it into a
                               phone there was nowhere to look it up. An IP on its own is not
@@ -2542,12 +2542,9 @@ export function ConnectToDesktopButton() {
               {/* Add new device */}
               {!remoteConnected && !connecting && (
                 <section>
-                  {/* WHY still "Add Device" (labels batch): its established
-                      name elsewhere in this same panel — the button, the
-                      overlay title, "Close Add Device", and its hint text —
-                      kept like a proper noun; only the spaced-caps CSS drops. */}
+                  {/* WHY "Add device": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
                   {pairedDevices.length > 0 && (
-                    <SectionLabel className="mb-2">Add Device</SectionLabel>
+                    <SectionLabel className="mb-2">Add device</SectionLabel>
                   )}
                   {!showConnectForm ? (
                     <div className="space-y-2">

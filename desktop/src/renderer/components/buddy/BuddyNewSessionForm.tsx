@@ -40,7 +40,7 @@ interface Props {
  * drifted ~2,000 lines. In the gap the main form replaced its four-alias button
  * row with <ModelPicker>, its hand-rolled 32x18 red track with <Toggle
  * tone="danger">, and its inline-styled buttons with <Button>. The buddy kept
- * all three hand-rolled, so its Skip Permissions track was a literal #DD4444
+ * all three hand-rolled, so its Skip permissions track was a literal #DD4444
  * that no theme pack could restyle — and, worse, it hardcoded provider
  * 'claude'. ChatGPT and local models were unreachable from the floater, and a
  * saved non-Claude default was silently swapped for Claude Sonnet with nothing
@@ -151,7 +151,7 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
     }
   }, [creating, cwd, dangerous, model, runtime, nb.effectiveBinding, preset, onCreated, initialInput]);
 
-  // Skip Permissions is CLAUDE-CODE ONLY — it bypasses the CLI's permission
+  // Skip permissions is CLAUDE-CODE ONLY — it bypasses the CLI's permission
   // flow, and a native session has neither a PTY nor that flow. Same gate as
   // the welcome form, SessionStrip's form and the Resume Browser's per-row one.
   const showSkipPermissions = runtime !== 'native';
@@ -185,11 +185,9 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
       {showSkipPermissions && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            {/* WHY still "Skip Permissions" (labels batch): kept like a
-                proper noun, matching its dialog titles/tooltip/aria-label
-                elsewhere; only the spaced-caps CSS drops. */}
+            {/* WHY "Skip permissions": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
             <label className="text-xs font-medium text-fg-muted">
-              Skip Permissions
+              Skip permissions
             </label>
             {/* Was a hand-rolled 32x18 track with a raw #DD4444 on-state and a
                 literal #fff knob. The shared Toggle on the danger tone lets
@@ -200,7 +198,7 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
               checked={dangerous}
               onChange={setDangerous}
               tone="danger"
-              aria-label="Skip Permissions"
+              aria-label="Skip permissions"
             />
           </div>
           {dangerous && <SkipPermissionsCaption />}

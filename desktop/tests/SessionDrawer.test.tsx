@@ -514,7 +514,7 @@ describe('SessionDrawer previewing a past conversation', () => {
       expect(screen.getByText('Model')).toBeTruthy();
       // A resume from here always opens a tab (chat search's path), so there is
       // no new-window switch.
-      expect(screen.queryByRole('switch', { name: 'Launch in New Window' })).toBeNull();
+      expect(screen.queryByRole('switch', { name: 'Launch in new window' })).toBeNull();
       // The old top-bar button is gone.
       expect(screen.queryByRole('button', { name: COPY.resume })).toBeNull();
     });
@@ -538,8 +538,8 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview({ ...PREVIEW, provider: 'native' });
       await waitFor(() => expect(resumeButton()).toBeTruthy());
       expect(resumeButton()).toBeDisabled();
-      // Skip Permissions is Claude-Code-only.
-      expect(screen.queryByRole('switch', { name: 'Skip Permissions' })).toBeNull();
+      // Skip permissions is Claude-Code-only.
+      expect(screen.queryByRole('switch', { name: 'Skip permissions' })).toBeNull();
     });
 
     it('Resume Session dispatches youcoded:resume-session with the conversation and the picked options', async () => {

@@ -29,7 +29,7 @@ export interface FilterState {
   tagLabelById: Record<string, string>; // id → label, for search
 }
 
-// Apply Show Complete + sticky + project + custom-tag + search, in that order.
+// Apply Show complete + sticky + project + custom-tag + search, in that order.
 // Order matches the existing inline pipeline in ResumeBrowser.tsx so the
 // refactor is a behaviour-preserving lift. Search matches name, projectPath,
 // the session note, and any applied-tag label (resolved via tagLabelById).

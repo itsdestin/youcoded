@@ -203,7 +203,7 @@ describe('Toggle', () => {
   });
 
   it('uses the destructive token for danger toggles, not a raw hex', () => {
-    // Skip Permissions / approve-all were a literal bg-[#DD4444] (change 17).
+    // Skip permissions / approve-all were a literal bg-[#DD4444] (change 17).
     render(<Toggle checked tone="danger" onChange={() => {}} />);
     const cls = screen.getByRole('switch').className;
     expect(cls).toContain('bg-destructive');

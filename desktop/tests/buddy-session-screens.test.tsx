@@ -169,8 +169,8 @@ describe('the buddy floater empty screen', () => {
     });
     render(<BuddyWelcome onSessionCreated={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /New Session/i }));
-    // Skip Permissions is Claude-Code-only, so its disappearance is the visible
+    // Skip permissions is Claude-Code-only, so its disappearance is the visible
     // proof the form switched runtimes off the saved default.
-    await waitFor(() => expect(screen.queryByLabelText('Skip Permissions')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByLabelText('Skip permissions')).not.toBeInTheDocument());
   });
 });

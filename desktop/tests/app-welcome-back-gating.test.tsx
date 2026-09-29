@@ -203,7 +203,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     await waitFor(() => expect(store.getState().reopen).toEqual([]));
   });
 
-  // The screen shows no Skip Permissions switch, so Resume all must never
+  // The screen shows no Skip permissions switch, so Resume all must never
   // carry a "skip" default into every reopened session unseen.
   it('Resume all reopens sessions with approvals on even when the default is to skip them', async () => {
     await mountApp({ overrideDefaults: { skipPermissions: true } });

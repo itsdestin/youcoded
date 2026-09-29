@@ -1,4 +1,4 @@
-// The one sentence under a Skip Permissions toggle.
+// The one sentence under a Skip permissions toggle.
 //
 // WHY IT IS A COMPONENT (2026-09-10). This markup existed five times, byte for
 // byte, across every form that can start a conversation: the welcome form,

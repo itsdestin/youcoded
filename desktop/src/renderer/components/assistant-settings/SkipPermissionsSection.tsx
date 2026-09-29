@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Button, ConsentRow, Dialog, SettingRow, Toggle } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
 
-// Claude Code's one permission setting: the Skip Permissions switch. It lived
+// Claude Code's one permission setting: the Skip permissions switch. It lived
 // in SettingsPanel.tsx's Session Defaults popup; it is now the first block of
 // Assistant settings → Permissions (review round 1, 2026-09-05, P-5 note:
 // "the permissions stuff from claude can move to permissions").
@@ -46,7 +46,7 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
     <section>
       <SettingRow
         variant="item"
-        title="Enable Skip Permissions Mode?"
+        title="Enable skip permissions mode?"
         description="Allows you to toggle claude code's --dangerously-skip-permissions flag when creating a session. Claude won't ask before taking action"
         control={
           <Toggle
@@ -56,14 +56,14 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
               setConfirming(true);
             }}
             tone="danger"
-            aria-label="Enable Skip Permissions Mode?"
+            aria-label="Enable skip permissions mode?"
           />
         }
       />
 
       {/* layer 3 + destructive: this is the app's shape for a confirmation
           that must not be lost behind the thing it is confirming. */}
-      <Dialog open={confirming} onClose={close} title="Skip Permissions Mode" size="prompt" layer={3} destructive screen="settings/assistant/permissions/skip-confirm">
+      <Dialog open={confirming} onClose={close} title="Skip permissions mode" size="prompt" layer={3} destructive screen="settings/assistant/permissions/skip-confirm">
         <div className="space-y-3 text-xs text-fg leading-relaxed">
           {/* Destin's copy (round 4, R4-3) — the three measured paragraphs it
               replaced read as a wall of grey. */}
@@ -78,7 +78,7 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
               bare 14px square beside the sentence — Destin: "the vibe is off"
               (fix batch 1, B1-2). "Turn it on" below still waits for the tick. */}
           <ConsentRow checked={accepted} onChange={setAccepted}>
-            I understand, and I use Skip Permissions at my own risk.
+            I understand, and I use Skip permissions at my own risk.
           </ConsentRow>
           {/* WHY stacked, danger on top (fix batch 1, 2026-09-24): this is a
               `size="prompt"` (340px) dialog — a NARROW popup, so two buttons

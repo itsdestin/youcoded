@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // resume-browser-filters.test.ts
 // Pure-function tests for the Resume Browser filter pipeline:
-// applyFilters (search + Show Complete + project + tag),
+// applyFilters (search + Show complete + project + tag),
 // sortSessions (priority pin + asc/desc),
 // groupSessions (within-group + between-group ordering),
 // getAvailableProjects (distinct paths + counts).

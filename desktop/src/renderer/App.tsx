@@ -158,7 +158,7 @@ import { findGuideAnchor } from './components/guide/GuideRing';
 import { requestGuideAdvance, requestGuideReset } from './components/guide/guide-events';
 import { armGuideForFreshInstall, bumpCounter, guideDoneAt, isGuidePending, markGuideDone } from './components/guide/guide-state';
 import { triggerTip } from './components/guide/tips';
-// --- First-time warnings: Skip Permissions, Full auto, a small model ---
+// --- First-time warnings: Skip permissions, Full auto, a small model ---
 import { useFirstTimeGate } from './components/FirstTimeWarning';
 import { isSmallModel } from './components/first-time-warnings';
 import { SkipPermissionsInfoTooltip } from './components/SkipPermissionsInfoTooltip';
@@ -3330,7 +3330,7 @@ function AppInner() {
   // Task 12 IPC (NOT a PTY Shift+Tab — native sessions have no PTY). The IPC
   // returns the APPLIED mode, which is authoritative — state updates from the
   // return value, not the optimistic `next` (no screen-scrape correction path).
-  // First-time warnings (Destin, 2026-09-10): the first time Skip Permissions
+  // First-time warnings (Destin, 2026-09-10): the first time Skip permissions
   // or Full auto is switched on, and the first session on a small model, a
   // plain explainer with an "I understand" checkbox for the two dangerous
   // ones. `gate(proceed)` runs proceed at once when already acknowledged.
@@ -3408,7 +3408,7 @@ function AppInner() {
       // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
       window.claude.session.sendInput(sessionId, '\x1b[Z');
     };
-    // 'bypass' IS Skip Permissions, reached by cycling: the first time, the
+    // 'bypass' IS Skip permissions, reached by cycling: the first time, the
     // same warning the form's toggle shows.
     if (next === 'bypass') { gateSkip(apply); return; }
     apply();
@@ -3524,7 +3524,7 @@ function AppInner() {
       const ok = await handleResumeSession(
         r.sessionId, r.projectSlug, r.projectPath,
         claudeModelFor(r.provider === 'native' ? undefined : r.lastUsedModel, sessionDefaults.model),
-        // WHY always false: this screen shows no Skip Permissions switch, so a
+        // WHY always false: this screen shows no Skip permissions switch, so a
         // default of "skip" would have reopened every session with approvals off,
         // unseen. Resuming one row through its own card still shows the switch.
         false, false, r.provider, binding, r.name,
@@ -4147,7 +4147,7 @@ function AppInner() {
                   {welcomeRuntime === 'native' && welcomeNb.nativeSupported && (
                     <NativeExtras nb={welcomeNb} preset={welcomePreset} onPreset={setWelcomePreset} />
                   )}
-                  {/* Skip Permissions is CLAUDE-CODE ONLY — it bypasses the CLI's
+                  {/* Skip permissions is CLAUDE-CODE ONLY — it bypasses the CLI's
                       permission flow, and a native session has neither a PTY nor
                       that flow, so on a native runtime the control did nothing.
                       Same gate as SessionStrip's create form and the Resume
@@ -4157,12 +4157,9 @@ function AppInner() {
                       <div className="flex items-center justify-between">
                         {/* The same (i) explainer the strip form carries — the
                             welcome form had none (UX tester run 1, U10).
-                            WHY still "Skip Permissions" (labels batch): only
-                            the spaced-caps CSS is dropped — the words stay,
-                            same as its dialog titles/tooltip/aria-label
-                            elsewhere in the app (kept like a proper noun). */}
+                            WHY "Skip permissions": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
                         <label className="text-xs font-medium text-fg-muted inline-flex items-center">
-                          Skip Permissions
+                          Skip permissions
                           <SkipPermissionsInfoTooltip />
                         </label>
                         {/* Was a hand-rolled 32x18 track with a raw #DD4444 on-state; now
@@ -4174,7 +4171,7 @@ function AppInner() {
                           // On goes through the first-time warning; off never does.
                           onChange={(next) => (next ? gateSkip(() => setWelcomeDangerous(true)) : setWelcomeDangerous(false))}
                           tone="danger"
-                          aria-label="Skip Permissions"
+                          aria-label="Skip permissions"
                         />
                       </div>
                       {/* Warning text was a raw text-[#DD4444] hex — the THIRD copy of

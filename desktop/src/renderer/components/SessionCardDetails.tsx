@@ -167,14 +167,14 @@ export function CompleteToggle({ done, name, onToggle, className = '' }: {
       type="button"
       onClick={(e) => { e.stopPropagation(); onToggle(!done); }}
       aria-pressed={done}
-      title={done ? 'Marked complete — hidden unless Show Complete is on. Click to undo.' : 'Mark this session complete?'}
+      title={done ? 'Marked complete — hidden unless Show complete is on. Click to undo.' : 'Mark this session complete?'}
       aria-label={done ? `Mark ${name} not complete` : `Mark ${name} complete`}
       className={`rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
         done ? 'text-accent' : 'text-fg-faint hover:text-fg-2'
       } ${className}`}
     >
       {/* Check-in-a-circle: "done" is what the user is saying; hiding the row is
-          a consequence the Show Complete toggle already explains. Filled when
+          a consequence the Show complete toggle already explains. Filled when
           set so the state reads at a glance. */}
       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <circle cx="12" cy="12" r="9" fill={done ? 'currentColor' : 'none'} />

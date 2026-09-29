@@ -2966,7 +2966,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     onCloseRequestCancelled: (_cb: (payload: { requestId: string }) => void) => () => {},
   };
   const detach: Ns<'detach'> & { openDetached: (payload: { sessionId: string }) => void } = {
-    // Present so `detachAvailable` is true and the "Launch in New Window"
+    // Present so `detachAvailable` is true and the "Launch in new window"
     // toggle renders (SessionStrip.tsx:191, ResumeBrowser.tsx:242 both test
     // `typeof ... === 'function'`). A browser tab cannot actually detach — say
     // so loudly rather than pretending it worked.

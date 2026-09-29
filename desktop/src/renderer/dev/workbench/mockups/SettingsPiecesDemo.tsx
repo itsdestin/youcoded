@@ -244,7 +244,7 @@ export type ConsentStyle = 'today' | 'boxed-left' | 'boxed-right' | 'switch';
 
 export function ConsentDemo({ style }: { style: ConsentStyle }) {
   const [ok, setOk] = React.useState(false);
-  const text = 'I understand, and I use Skip Permissions at my own risk.';
+  const text = 'I understand, and I use Skip permissions at my own risk.';
   let row: React.ReactNode;
   if (style === 'today') {
     row = <label className="flex items-start gap-2 text-xs text-fg-2"><Checkbox checked={ok} onChange={setOk} aria-label={text} className="mt-0.5" />{text}</label>;
@@ -259,7 +259,7 @@ export function ConsentDemo({ style }: { style: ConsentStyle }) {
     );
   }
   return (
-    <Popup title="Skip Permissions Mode" height={400}>
+    <Popup title="Skip permissions mode" height={400}>
       <p className="text-xs text-fg-2">The assistant will not ask before taking actions or running commands. Be careful with smaller models.</p>
       {row}
       <div className="flex flex-col gap-2">

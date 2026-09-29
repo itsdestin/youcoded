@@ -44,7 +44,7 @@ export function FirstTimeWarning({ kind, open, onCancel, onContinue }: FirstTime
 
   return (
     // "panel", not "prompt": at prompt width (340px) the header truncates
-    // "Before you turn on Skip Permissions" to "…Permissi…" beside its close
+    // "Before you turn on Skip permissions" to "…Permissi…" beside its close
     // button (seen in the workbench 2026-09-10), and the design guide calls a
     // truncated title a bug. 420px fits every title and keeps the three
     // paragraphs at a comfortable measure.

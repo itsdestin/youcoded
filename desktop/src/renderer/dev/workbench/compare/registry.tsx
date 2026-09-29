@@ -419,7 +419,7 @@ function SummaryMerged() {
         <CompleteGlyph done={done} className={`w-5 h-5 shrink-0 transition-colors ${done ? 'text-accent' : 'text-fg-faint'}`} />
         <span className="min-w-0 flex-1">
           <span className="block text-xs text-fg">Mark complete</span>
-          <span className="block text-3xs text-fg-muted leading-snug">Hides it from the resume list unless you turn on Show Complete.</span>
+          <span className="block text-3xs text-fg-muted leading-snug">Hides it from the resume list unless you turn on Show complete.</span>
         </span>
         <Toggle checked={done} onChange={setDone} aria-label="Mark complete" />
       </div>
@@ -434,7 +434,7 @@ function CompleteRow({ done, onChange }: { done: boolean; onChange: (v: boolean)
       <CompleteGlyph done={done} className={`w-5 h-5 shrink-0 transition-colors ${done ? 'text-accent' : 'text-fg-faint'}`} />
       <span className="min-w-0 flex-1">
         <span className="block text-xs text-fg">Mark complete</span>
-        <span className="block text-3xs text-fg-muted leading-snug">Hides it from the resume list unless you turn on Show Complete.</span>
+        <span className="block text-3xs text-fg-muted leading-snug">Hides it from the resume list unless you turn on Show complete.</span>
       </span>
       <Toggle checked={done} onChange={onChange} aria-label="Mark complete" />
     </div>
