@@ -62,6 +62,22 @@ export function readOfficeTheme(root: HTMLElement = document.documentElement): O
   };
 }
 
+/** The theme's Google stylesheets as the editor loads them: through its own origin's font
+ *  route (office://<token>/yc-fonts/css?u=…), which main serves from Google's font hosts.
+ *  WHY: the editor's CSP (font-src/style-src 'self') keeps it offline, so a direct Google link
+ *  is blocked and its menus fell back to monospace (Task 6). Only css2 links on
+ *  fonts.googleapis.com are passed — main's route would refuse any other with a 404. */
+export function editorFontLinks(links: string[], origin: string): string[] {
+  return links
+    .filter((l) => {
+      try {
+        const u = new URL(l);
+        return u.protocol === 'https:' && u.hostname === 'fonts.googleapis.com' && u.pathname === '/css2' && !u.username && !u.password && !u.port;
+      } catch { return false; }
+    })
+    .map((l) => `${origin}/yc-fonts/css?u=${encodeURIComponent(l)}`);
+}
+
 /** Calls back with a fresh theme whenever the app's theme changes. */
 export function watchOfficeTheme(onChange: (theme: OfficeTheme) => void): () => void {
   return watchThemeCss(() => onChange(readOfficeTheme()));

@@ -14,7 +14,7 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
-import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
+import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, editorFontLinks, readOfficeTheme, watchOfficeTheme } from './office-theme';
 import { markChanged, markFailed, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, onDocumentReplaced, registerFlush, withdrawUnloadApproval } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
@@ -52,10 +52,13 @@ const REQUESTED_SAVE_LIMIT_MS = 60_000;
 const REPLACED_WHILE_EDITING = 'This file was restored while you had unsaved changes here. Save a copy to keep them.';
 
 
-/** The theme as the editor gets it. WHY no fontLinks (build plan Task 6): the editor's CSP
- *  (font-src 'self' data:) blocks the Google stylesheets they point at; Task 9 serves the
- *  theme's font from the editor's own origin instead. */
-const editorTheme = () => ({ ...readOfficeTheme(), fontLinks: [] });
+/** The theme as the editor gets it. WHY fontLinks are rewritten (Task 9): the editor's CSP
+ *  (font-src 'self') blocks the Google stylesheets the theme links, so each one goes through
+ *  the editor's own origin's font route instead, which main fetches from Google's font hosts. */
+const editorTheme = (origin: string) => {
+  const theme = readOfficeTheme();
+  return { ...theme, fontLinks: editorFontLinks(theme.fontLinks, origin) };
+};
 
 function officeBridge(): OfficeBridge | undefined {
   return window.claude?.office;
@@ -610,7 +613,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (e.origin !== opened.origin || e.source !== ref.current?.contentWindow) return;
       const d = e.data as { yc?: string; type?: string; state?: OfficeCommandState } | null;
       if (d?.yc === 'ready') {
-        post({ type: OFFICE_THEME_MESSAGE, theme: editorTheme() });
+        post({ type: OFFICE_THEME_MESSAGE, theme: editorTheme(opened.origin) });
         post({ type: OFFICE_MODE_MESSAGE, slim });
         post({ yc: 'event', name: 'open-file', payload: file.path });
       }
@@ -621,7 +624,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (d?.type === 'yc:office-esc') dismissRef.current();
     };
     window.addEventListener('message', onMessage);
-    const stopTheme = watchOfficeTheme(() => post({ type: OFFICE_THEME_MESSAGE, theme: editorTheme() }));
+    const stopTheme = watchOfficeTheme(() => post({ type: OFFICE_THEME_MESSAGE, theme: editorTheme(opened.origin) }));
     return () => { window.removeEventListener('message', onMessage); stopTheme(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- post/save read refs; slim is fixed per frame
   }, [file.path, opened]);

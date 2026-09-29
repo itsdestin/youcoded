@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, protocol, safeStorage, screen, shell, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, net, protocol, safeStorage, screen, shell, webContents } from 'electron';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
 // an uncaught exception that kills the whole main process — the app dies with
@@ -42,6 +42,7 @@ import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
 import { registerOfficeProtocol } from './office/office-protocol';
+import { createThemeFonts } from './office/theme-fonts';
 import { registerOfficeIpc } from './office/office-ipc';
 import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
@@ -1929,7 +1930,14 @@ void app.whenReady().then(async () => {
   // mkdtemp (full/unwritable/policy-blocked temp dir) must degrade Office to unavailable, not
   // abort the rest of startup and leave the app with no window.
   const officeSessions = await initOfficeSessionsSafely();
-  if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions });
+  // WHY fonts here (Task 9): the editor's menus wear the theme's web font, which main fetches
+  // from Google's font hosts only (theme-fonts.ts) — net.fetch so the system proxy applies —
+  // and caches under userData so a later open works offline.
+  if (officeSessions) registerOfficeProtocol({
+    root: officeRoot(),
+    sessions: officeSessions,
+    fonts: createThemeFonts({ cacheDir: path.join(app.getPath('userData'), 'office-font-cache'), fetch: (u, init) => net.fetch(u, init) }),
+  });
   // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
   // handler. WHY the getter: the registry goes away at quit, and each request must see that.
   registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData'), documents: app.getPath('documents'), pruneVersionsAfterMs: 30_000 });

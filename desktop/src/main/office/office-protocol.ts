@@ -2,6 +2,7 @@ import { protocol } from 'electron';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { createSessions } from './office-sessions';
+import type { ThemeFonts } from './theme-fonts';
 
 // WHY not exported: nothing outside this file needs the literal today — main.ts's scheme
 // registration and the pin test that checks it both spell 'office' themselves, deliberately,
@@ -65,7 +66,23 @@ async function serveConfined(base: string, rel: string): Promise<Response> {
   });
 }
 
-export function officeRequestHandler(deps: { root: string; sessions: ReturnType<typeof createSessions> }) {
+/** The theme-font route (Task 9): office://<token>/yc-fonts/css?u=<Google css2 url> and
+ *  …/yc-fonts/file?u=<fonts.gstatic.com url>. WHY here, on the editor's own origin: its CSP
+ *  allows fonts from 'self' only, so the theme font must arrive as if it were the editor's own
+ *  file. Main fetches (theme-fonts.ts, Google's two font hosts only); the editor never does. */
+async function serveFont(fonts: ThemeFonts | undefined, kind: string, u: string | null): Promise<Response> {
+  if (!fonts || !u) return notFound();
+  if (kind === 'css') {
+    const css = await fonts.fetchFontCss(u);
+    return css === null ? notFound() : new Response(css, { headers: { 'content-type': 'text/css' } });
+  }
+  const file = kind === 'file' ? await fonts.fetchFontFile(u) : null;
+  return file ? new Response(file.data, { headers: { 'content-type': file.type } }) : notFound();
+}
+
+type HandlerDeps = { root: string; sessions: ReturnType<typeof createSessions>; fonts?: ThemeFonts };
+
+export function officeRequestHandler(deps: HandlerDeps) {
   return async (req: Request): Promise<Response> => {
     const u = new URL(req.url);
     // WHY the token is the hostname, not a path segment: it makes the token part of the
@@ -80,7 +97,8 @@ export function officeRequestHandler(deps: { root: string; sessions: ReturnType<
         // (an incomplete sequence like "%E0%A4%A"). A malformed request is refused the same
         // way an absent file is, not turned into an uncaught exception in the main process.
         const rel = decodeURIComponent(u.pathname).replace(/^\/+/, '') || 'index.html';
-        if (rel.startsWith('asc/docmedia/')) res = await serveConfined(s.temp, rel.slice('asc/docmedia/'.length));
+        if (rel === 'yc-fonts/css' || rel === 'yc-fonts/file') res = await serveFont(deps.fonts, rel.slice('yc-fonts/'.length), u.searchParams.get('u'));
+        else if (rel.startsWith('asc/docmedia/')) res = await serveConfined(s.temp, rel.slice('asc/docmedia/'.length));
         else if (rel.startsWith('asc/dictionaries/'))
           res = await serveConfined(path.join(deps.root, 'editors', 'dictionaries'), rel.slice('asc/dictionaries/'.length));
         else res = await serveConfined(path.join(deps.root, 'editors'), rel);
@@ -101,6 +119,6 @@ export function officeRequestHandler(deps: { root: string; sessions: ReturnType<
   };
 }
 
-export function registerOfficeProtocol(deps: { root: string; sessions: ReturnType<typeof createSessions> }): void {
+export function registerOfficeProtocol(deps: HandlerDeps): void {
   protocol.handle(OFFICE_SCHEME, officeRequestHandler(deps));
 }
