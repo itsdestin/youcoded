@@ -63,6 +63,9 @@ export interface OfficeBridge {
   versions(path: string): Promise<OfficeVersion[]>;
   /** Replace the file with a kept copy; the current file is kept first. */
   restore(path: string, versionId: string): Promise<{ ok: true } | { ok: false; message: string }>;
+  /** Main replaced a document this window has open (a restore): the editor holding `token` must
+   *  reopen the file — main refuses its saves until it does. Optional: only hosts that restore send it. */
+  onChanged?(cb: (p: { path: string; token: string }) => void): () => void;
   /** "Save a copy…" for a document whose save failed: `check` says whether a copy can succeed
    *  (hide the button when not); `save` asks where and writes it, never touching the original;
    *  `again` re-writes that same copy if the editor's bytes changed since (typing meanwhile). */

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { copyFile, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,7 +58,7 @@ beforeEach(async () => {
   registry = sessions;
   available = true;
   ipc = fakeIpcMain();
-  registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon') });
+  registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData') });
 });
 afterEach(async () => {
   win1.removeAllListeners();
@@ -78,7 +78,7 @@ describe('office IPC channels', () => {
     // office:lost-saves is desktop only (not in the four-surface list) but cleared the same way.
     expect([...ipc.handlers.keys()].sort()).toEqual([...all, 'office:lost-saves'].sort());
     expect([...ipc.removed].sort()).toEqual([...all, 'office:lost-saves'].sort());
-    expect(() => registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: dir })).not.toThrow();
+    expect(() => registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: dir, userData: dir })).not.toThrow();
   });
 
   it('says a file that no longer exists cannot be opened', async () => {
@@ -222,12 +222,10 @@ describe('office IPC channels', () => {
     await expect(call('office:status', win1, null)).resolves.toMatchObject({ available: false });
   });
 
-  it('answers the start-screen channels with their placeholders until versions and files land', async () => {
+  it('answers the start-screen channels with their placeholders until the start screen lands', async () => {
     await expect(call('office:status', win1, null)).resolves.toEqual({ available: true, recent: [], project: null });
     await expect(call('office:create', win1, 'document', null)).resolves.toEqual({ ok: false, message: 'Not available yet.' });
     await expect(call('office:pick', win1)).resolves.toBeNull();
-    await expect(call('office:versions', win1, '/x.docx')).resolves.toEqual([]);
-    await expect(call('office:restore', win1, '/x.docx', 'v1')).resolves.toEqual({ ok: false, message: 'Not available yet.' });
   });
 });
 
@@ -236,7 +234,7 @@ describe('office:save-copy', () => {
   function withDialog(target: string | null) {
     const pick = vi.fn(async () => target);
     ipc = fakeIpcMain();
-    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), pickCopyTarget: pick });
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickCopyTarget: pick });
     return pick;
   }
 
@@ -291,5 +289,103 @@ describe('a save that fails after its page was reloaded', () => {
     expect(w.send).not.toHaveBeenCalled();
     await expect(call('office:lost-saves', w)).resolves.toEqual([]);
     w.removeAllListeners();
+  });
+});
+
+// Kept versions, through the channels: taken on open and every 10 minutes of saving, listed, and
+// restored — also under an open editor, whose later saves must never land on the restored file.
+describe('office versions and restore', () => {
+  // WHY a copying translator: the real x2t is not in the test tree. Opening copies the file to
+  // Editor.bin and saving copies Editor.bin back, so every byte is traceable.
+  const copying = vi.fn(async (_root: string, input: string, output: string) => { await copyFile(input, output); });
+  const doc = (text: string) => Buffer.concat([Buffer.from('PK\x03\x04', 'latin1'), Buffer.from(text)]);
+  const userData = () => path.join(dir, 'userData');
+  beforeEach(() => {
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: userData(), convert: copying as never });
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  async function openedIn(sender: ReturnType<typeof fakeSender>) {
+    const file = await aDocx();
+    const r = (await call('office:open', sender, file)) as { ok: true; token: string };
+    await call('office:invoke', sender, r.token, 'open_file', {});
+    return { file, token: r.token };
+  }
+  const saveAs = async (sender: ReturnType<typeof fakeSender>, token: string, bytes: Buffer) => {
+    await call('office:invoke', sender, token, 'write_editor_bin', { data: bytes.toString('base64') });
+    return call('office:invoke', sender, token, 'save_file', {});
+  };
+
+  it('keeps the file as it was opened, and lists it', async () => {
+    const { file } = await openedIn(win1);
+    const list = (await call('office:versions', win1, file)) as { reason: string; bytes: number }[];
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ reason: 'opened', bytes: (await readFile(MEMO)).length });
+  });
+
+  it('keeps one more version per 10 minutes of saving — the file as it was before that save', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = new Date(2026, 8, 28, 9, 0).getTime();
+    vi.setSystemTime(t0);
+    const { file, token } = await openedIn(win1);
+    await saveAs(win1, token, doc('first'));   // the file before it is the opened one: nothing new
+    vi.setSystemTime(t0 + 60_000);
+    await saveAs(win1, token, doc('second'));  // within 10 minutes: nothing kept
+    vi.setSystemTime(t0 + 11 * 60_000);
+    await saveAs(win1, token, doc('third'));   // keeps 'second', the file as this save found it
+    const list = (await call('office:versions', win1, file)) as { reason: string; bytes: number }[];
+    expect(list.map((v) => v.reason)).toEqual(['autosave', 'opened']);
+    expect(list[0].bytes).toBe(doc('second').length);
+  });
+
+  it('shows the same versions for a file named through a link', async () => {
+    const { file } = await openedIn(win1);
+    const link = path.join(dir, 'link.docx');
+    await symlink(file, link);
+    await expect(call('office:versions', win1, link)).resolves.toHaveLength(1);
+  });
+
+  it('restores under an open editor, tells its window, and refuses the old editor\'s saves until it reloads', async () => {
+    const w = Object.assign(fakeSender(7), { send: vi.fn() });
+    const { file, token } = await openedIn(w);
+    const [opened] = (await call('office:versions', w, file)) as { id: string }[];
+    await saveAs(w, token, doc('edited'));
+    await expect(call('office:restore', w, file, opened.id)).resolves.toEqual({ ok: true });
+    expect((await readFile(file)).equals(await readFile(MEMO))).toBe(true);
+    expect(w.send).toHaveBeenCalledWith('office:changed', { path: file, token });
+    // The editor still holds 'edited': its save must not put it back over the restored file.
+    await expect(saveAs(w, token, doc('stale'))).rejects.toThrow('This file was restored from a kept version, so Office is reloading it.');
+    expect((await readFile(file)).equals(await readFile(MEMO))).toBe(true);
+    // The edited file was kept first, so the restore itself can be taken back.
+    const list = (await call('office:versions', w, file)) as { reason: string }[];
+    expect(list[0].reason).toBe('before-restore');
+    // Once the editor has reloaded the file, it saves again.
+    await call('office:invoke', w, token, 'open_file', {});
+    await saveAs(w, token, doc('after reload'));
+    expect((await readFile(file)).equals(doc('after reload'))).toBe(true);
+    w.removeAllListeners();
+  });
+
+  it('refuses to restore a file another window is editing, and changes nothing', async () => {
+    const { file } = await openedIn(win1);
+    const [opened] = (await call('office:versions', win1, file)) as { id: string }[];
+    await writeFile(file, doc('newer'));
+    await expect(call('office:restore', win2, file, opened.id)).resolves.toEqual({ ok: false, message: 'This file is already open in another window.' });
+    expect((await readFile(file)).equals(doc('newer'))).toBe(true);
+  });
+
+  it('restores a file no editor has open', async () => {
+    const { file, token } = await openedIn(win1);
+    const [opened] = (await call('office:versions', win1, file)) as { id: string }[];
+    await call('office:close', win1, token);
+    await writeFile(file, doc('changed elsewhere'));
+    await expect(call('office:restore', win1, file, opened.id)).resolves.toEqual({ ok: true });
+    expect((await readFile(file)).equals(await readFile(MEMO))).toBe(true);
+  });
+
+  it('says so when the version is no longer kept', async () => {
+    const { file } = await openedIn(win1);
+    await expect(call('office:restore', win1, file, '2020-01-01T000000.000Z-abcd')).resolves.toEqual({ ok: false, message: 'That version is no longer kept.' });
   });
 });

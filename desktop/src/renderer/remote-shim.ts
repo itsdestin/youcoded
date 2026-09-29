@@ -2600,6 +2600,12 @@ export function installShim(): void {
       close: (token: string) => invoke('office:close', { token }),
       versions: (filePath: string) => invoke('office:versions', { path: filePath }),
       restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
+      // The host refuses restore, so this push never comes; subscribing is harmless and keeps the shape.
+      onChanged: (cb: (p: { path: string; token: string }) => void) => {
+        const handler: Callback = (p: any) => cb(p);
+        addListener('office:changed', handler);
+        return () => removeListener('office:changed', handler);
+      },
       saveCopy: (token: string, mode: string) => invoke('office:save-copy', { token, mode }),
     },
     // Project View IPC — sibling to artifacts. Object-payload invoke style

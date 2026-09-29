@@ -4171,11 +4171,13 @@ class SessionService : Service() {
             }
 
             "office:status", "office:create", "office:pick", "office:open",
-            "office:invoke", "office:close", "office:versions", "office:restore", "office:save-copy" -> {
+            "office:invoke", "office:close", "office:versions", "office:restore", "office:save-copy",
+            "office:changed" -> {
                 // Office editing is desktop only for now (R28, build plan Task 5): the phone
                 // keeps the quick preview. unsupported=true makes the shared renderer reject
                 // the call and name the feature ("Office isn't available on the phone yet.")
-                // instead of treating the refusal as an answer.
+                // instead of treating the refusal as an answer. office:changed is desktop main's
+                // push after a restore; the phone never sends it, and a request for it is refused alike.
                 val payload = org.json.JSONObject()
                     .put("ok", false)
                     .put("unsupported", true)

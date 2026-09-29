@@ -28,6 +28,7 @@ const MSG = {
   notADocument: "Office couldn't save this file.",
   binTooLarge: 'This document has grown too large for Office to save.',
   closing: 'Office is closing.',
+  restored: 'This file was restored from a kept version, so Office is reloading it.',
   copyRefused: "Office can't save a copy there. Choose another folder.",
   copyNothing: 'There are no changes to save a copy of yet.',
   copyOpen: 'That file is open in Office. Close it or choose another name.',
@@ -73,6 +74,13 @@ function abortOf(s: OfficeSession): AbortController {
   return a;
 }
 const isClosing = (s: OfficeSession) => closing || closedSessions.has(s);
+
+// ── A restore replaced the file under an open editor (Task 7) ──
+// WHY: after a restore, the editor still holds the OLD document. Until it has reloaded the file
+// (its next open_file), any save it sends would translate that old content straight back over
+// the restored file. So a replaced session refuses write_editor_bin and save_file — quietly: the
+// renderer is already remounting the editor on office:changed — and open_file lifts it.
+const replaced = new WeakSet<OfficeSession>();
 
 /**
  * Wait (at most `capMs`) until every command already queued for this document has finished,
@@ -188,7 +196,14 @@ export interface OfficeCopyRunner {
   /** Re-translate into the last copy's target if Editor.bin changed since. null: no copy yet. */
   saveCopyAgain(token: string): Promise<{ target: string; unchanged: boolean } | null>;
 }
-type OfficeRunner = ((token: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>) & OfficeCopyRunner;
+/** Work that must not interleave with the document's saves (a restore, Task 7). */
+export interface OfficeExclusiveRunner {
+  /** Run `work` in the document's queue — after every save already asked for, before any asked
+   *  for later. When `replacesFile(result)` is true, the editor's saves are refused until it has
+   *  reloaded the file (open_file). */
+  exclusive<T>(token: string, work: () => Promise<T>, replacesFile: (result: T) => boolean): Promise<T>;
+}
+type OfficeRunner = ((token: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>) & OfficeCopyRunner & OfficeExclusiveRunner;
 
 // Per document: whether the editor has handed over an edited Editor.bin, and whether the last
 // save failed while translating. WHY a WeakMap: the same private-bookkeeping reason as queues.
@@ -250,6 +265,8 @@ export function createOfficeCommands(deps: {
     await fsp.rm(editorBin(s), { force: true });
     await convert(deps.root, s.path, editorBin(s), FORMAT.bin, jobsBase(s), abortOf(s).signal);
     const b64 = (await fsp.readFile(editorBin(s))).toString('base64');
+    // The editor now holds the file as it is on disk (a restored one included): saves may resume.
+    replaced.delete(s);
     if (deps.onOpened) {
       // WHY caught: the file opened fine; a failure to keep its "opened" version (Task 7) must
       // not stop the user from seeing it.
@@ -361,6 +378,9 @@ export function createOfficeCommands(deps: {
     if (q.pendingSave) return q.pendingSave;
     const p: Promise<unknown> = enqueue(s, () => {
       if (q.pendingSave === p) q.pendingSave = null;
+      // Checked when its turn comes, not when asked: a save queued BEFORE a restore ran before it
+      // (the restore keeps its result as 'before-restore'); one queued after must not land.
+      if (replaced.has(s)) return Promise.reject(userError(MSG.restored, true));
       return saveFile(s);
     });
     q.pendingSave = p;
@@ -382,7 +402,7 @@ export function createOfficeCommands(deps: {
         // WHY checked on the string's length, before decoding (review P1-3): decoding a huge
         // string would allocate the whole buffer first. base64 decodes to 3/4 of its length.
         if ((data.length * 3) / 4 > binMax) throw userError(MSG.binTooLarge);
-        return enqueueOther(s, () => writeEditorBin(s, data));
+        return enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : writeEditorBin(s, data)));
       }
       case 'save_file':
         return save(s);
@@ -478,6 +498,15 @@ export function createOfficeCommands(deps: {
     }
   };
   return Object.assign(run, {
+    async exclusive<T>(token: string, work: () => Promise<T>, replacesFile: (result: T) => boolean): Promise<T> {
+      const s = deps.sessions.get(token);
+      if (!s) throw new Error(MSG.refused);
+      return enqueueOther(s, async () => {
+        const r = await work();
+        if (replacesFile(r)) replaced.add(s);
+        return r;
+      });
+    },
     canCopy(token: string): boolean {
       const s = deps.sessions.get(token);
       if (!s) return false;

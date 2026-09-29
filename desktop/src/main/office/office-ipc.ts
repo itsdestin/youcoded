@@ -18,6 +18,7 @@ import { log } from '../logger';
 import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
 import type { createSessions, OfficeSession } from './office-sessions';
 import { formatFor } from './x2t';
+import * as versions from './versions';
 
 type Sessions = ReturnType<typeof createSessions>;
 
@@ -53,7 +54,16 @@ const MSG = {
   couldNotCopy: "Office couldn't save a copy of this file.",
   refused: 'refused',
   notYet: 'Not available yet.',
+  changeProtected: "Office can't change files in this protected folder.",
+  changeNeedsConfirm: "Office can't change settings files like this one yet.",
+  folderGone: "This file's folder no longer exists.",
+  stillSaving: 'This file is still being saved. Try again in a moment.',
+  couldNotRestore: "Office couldn't restore this version.",
 } as const;
+
+/** WHY 10 minutes (design section 3): while a file keeps changing, one extra kept version per
+ *  10 minutes of work — autosave itself writes every few seconds, far too often to keep each. */
+const AUTOSAVE_SNAPSHOT_MS = 10 * 60 * 1000;
 
 /** The part of Electron's ipcMain these handlers use. */
 export interface OfficeIpcMain {
@@ -67,7 +77,7 @@ interface OfficeSender {
   once(event: 'destroyed', listener: () => void): unknown;
   isDestroyed?(): boolean;
   on?(event: 'did-start-navigation', listener: (details: { isMainFrame?: boolean; isSameDocument?: boolean }) => void): unknown;
-  send?(channel: string): void;
+  send?(channel: string, ...args: unknown[]): void;
 }
 
 export interface OfficeIpcDeps {
@@ -79,10 +89,14 @@ export interface OfficeIpcDeps {
   available(): Promise<boolean>;
   /** The add-on folder, for the translator (officeRoot()). */
   root: string;
+  /** Where kept versions live (app.getPath('userData'), read after the dev-profile override). */
+  userData: string;
   /** Where "Save a copy…" goes (the system save dialog); null when cancelled. Tests pass a fake.
    *  WHY optional: main.ts does not pass it — the real one lives in office-dialogs.ts, loaded
    *  only when a copy is asked for, so this file itself never imports electron. */
   pickCopyTarget?(sender: unknown, filePath: string): Promise<string | null | { refused: string }>;
+  /** Test seam: the translator (a fake that copies). Production uses x2t. */
+  convert?: Parameters<typeof createOfficeCommands>[0]['convert'];
 }
 
 
@@ -100,10 +114,21 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // document goes through the same instance. Rebuilt only if the registry itself changes.
   let commands: { reg: Sessions; run: ReturnType<typeof createOfficeCommands> } | null = null;
   const commandsFor = (reg: Sessions) => {
-    // onOpened/onSaved (version history) are wired in Task 7.
-    if (commands?.reg !== reg) commands = { reg, run: createOfficeCommands({ root: deps.root, sessions: reg }) };
+    if (commands?.reg !== reg) commands = { reg, run: createOfficeCommands({ root: deps.root, sessions: reg, onOpened, onSaved, convert: deps.convert }) };
     return commands.run;
   };
+
+  // ── Kept versions (Task 7): both run inside the document's command queue, and a failure is
+  // only logged there — the open or save itself has already succeeded. ──
+  async function onOpened(s: OfficeSession): Promise<void> {
+    await versions.snapshot(deps.userData, s.path, 'opened', await fsp.readFile(s.path));
+  }
+  async function onSaved(s: OfficeSession, before: Buffer | null): Promise<void> {
+    // `before` is the file as it was just before this save — the state worth keeping.
+    if (!before || Date.now() - s.lastSnapshotAt <= AUTOSAVE_SNAPSHOT_MS) return;
+    await versions.snapshot(deps.userData, s.path, 'autosave', before);
+    s.lastSnapshotAt = Date.now();
+  }
 
   const isReady = async (): Promise<Sessions | null> => {
     const reg = deps.getSessions();
@@ -275,7 +300,61 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     }
   }
 
+  // The versions of a file, newest first. WHY the real path: versions are keyed on it (the
+  // session's path), so a file named through a link shows the same list.
+  async function listVersions(filePath: unknown): Promise<OfficeVersion[]> {
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return [];
+    const real = await fsp.realpath(filePath).catch(() => filePath);
+    return versions.list(deps.userData, real);
+  }
+
+  // Put a kept version back (design section 3; restore-while-open in versions.ts's caller here).
+  // WHY through the document's queue when it is open: a save already asked for lands first (and
+  // is kept as 'before-restore'); the editor's later saves are refused until it reloads — main
+  // then tells its window (office:changed), whose editor reopens the restored file.
+  async function restoreVersion(sender: OfficeSender, filePath: unknown, id: unknown): Promise<{ ok: true } | { ok: false; message: string }> {
+    const reg = await isReady();
+    if (!reg) return { ok: false, message: MSG.unavailable };
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || typeof id !== 'string') return { ok: false, message: MSG.couldNotRestore };
+    let realPath: string;
+    try {
+      const auth = await authorizeArtifactWrite({ projectRoot: path.dirname(filePath), fullPath: filePath, mustStayInRoot: false });
+      if (!auth.ok) {
+        if (auth.error === 'protected-path') return { ok: false, message: MSG.changeProtected };
+        if (auth.error === 'needs-confirm') return { ok: false, message: MSG.changeNeedsConfirm };
+        // A missing FILE is fine (restoring brings it back); this is its folder.
+        return { ok: false, message: MSG.folderGone };
+      }
+      realPath = auth.realPath;
+    } catch (e) {
+      log('ERROR', 'Office', 'office:restore could not check the file', { error: String(e) });
+      return { ok: false, message: MSG.couldNotRestore };
+    }
+    if (formatFor(realPath) === null) return { ok: false, message: MSG.unsupported };
+    const s = reg.byPath(realPath);
+    // Another window's editor holds it: that window would keep editing the old document.
+    if (s && s.senderId !== sender.id) return { ok: false, message: MSG.openElsewhere };
+    // Closing (its last save may still land after ours) or about to open: not now.
+    if (!s && reg.inUse(realPath)) return { ok: false, message: MSG.stillSaving };
+    const work = () => versions.restore(deps.userData, realPath, id);
+    if (!s) return work();
+    let r: { ok: true } | { ok: false; message: string };
+    try {
+      r = await commandsFor(reg).exclusive(s.token, work, (x) => x.ok);
+    } catch (e) {
+      // The document closed (or quit began) while the restore waited its turn: nothing was done.
+      log('WARN', 'Office', 'office:restore did not run', { error: String(e) });
+      return { ok: false, message: MSG.couldNotRestore };
+    }
+    if (r.ok) {
+      try { sender.send?.('office:changed', { path: realPath, token: s.token }); } catch { /* the window is going */ }
+    }
+    return r;
+  }
+
   ipcMain.handle('office:open', (e, filePath) => open(e.sender, filePath));
+  ipcMain.handle('office:versions', (_e, filePath) => listVersions(filePath));
+  ipcMain.handle('office:restore', (e, filePath, id) => restoreVersion(e.sender, filePath, id));
   ipcMain.handle('office:save-copy', (e, token, mode) => saveCopy(e.sender, token, mode));
   ipcMain.handle('office:invoke', (e, token, cmd, args) => invoke(e.sender, token, cmd, args));
   ipcMain.handle('office:close', (e, token) => close(e.sender, token));
@@ -288,11 +367,9 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   });
 
   // ── Pending: placeholders until the start screen's backend lands ──
-  // Task 7 (versions, restore) and Task 8 (the start screen's lists, new files, the picker)
-  // replace each of these. Until then they answer the empty shape, never a pretend success.
+  // Task 8 (the start screen's lists, new files, the picker) replaces each of these. Until then
+  // they answer the empty shape, never a pretend success.
   ipcMain.handle('office:status', async (): Promise<OfficeStatus> => ({ available: (await isReady()) !== null, recent: [], project: null }));
   ipcMain.handle('office:create', async (): Promise<{ ok: false; message: string }> => ({ ok: false, message: MSG.notYet }));
   ipcMain.handle('office:pick', async (): Promise<OfficeFile | null> => null);
-  ipcMain.handle('office:versions', async (): Promise<OfficeVersion[]> => []);
-  ipcMain.handle('office:restore', async (): Promise<{ ok: false; message: string }> => ({ ok: false, message: MSG.notYet }));
 }
