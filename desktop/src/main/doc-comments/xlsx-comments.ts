@@ -1030,14 +1030,10 @@ function extractPartNumber(partPath: string): number {
 
 /** Creates a brand-new comments{N}.xml/vmlDrawing{N}.vml pair, wires the
  *  worksheet's own rels (comments relationship THEN vmlDrawing relationship)
- *  and `[Content_Types].xml`, and inserts `<legacyDrawing r:id="...">` as the
- *  worksheet's OWN LAST child element — restated explicitly (design review
- *  round 2, F4 — High): this exact rule was found and fixed once already for
- *  the retired legacy-Notes design and neither real reference fixture has a
- *  worksheet-level `<extLst>` to force a regression here to surface during
- *  ordinary testing (`synthetic-worksheet-with-extlst.xlsx` is the required
- *  fixture that does). `appendChild` satisfies this unconditionally
- *  regardless of whether an `<extLst>` is already the current last child. */
+ *  and `[Content_Types].xml`, and inserts `<legacyDrawing r:id="...">` at its
+ *  schema position: before the first of `LEGACY_DRAWING_SUCCESSORS` the sheet
+ *  already has, else last (see that constant for why "always last" was
+ *  wrong). `synthetic-worksheet-with-extlst.xlsx` pins the `<extLst>` case. */
 function createLegacyPair(archive: XlsxArchive, ctx: WorksheetContext, n: number): void {
   ctx.commentsPartPath = `xl/comments${n}.xml`;
   ctx.vmlPartPath = `xl/drawings/vmlDrawing${n}.vml`;
@@ -1083,9 +1079,20 @@ function createLegacyPair(archive: XlsxArchive, ctx: WorksheetContext, n: number
   }
   const legacyDrawing = ctx.worksheetDoc.createElement('legacyDrawing');
   legacyDrawing.setAttribute('r:id', vmlRelId);
-  ctx.worksheetDoc.documentElement.appendChild(legacyDrawing);
+  const root = ctx.worksheetDoc.documentElement;
+  const successor = Array.from(root.childNodes).find(
+    (node) => node.nodeType === 1 && LEGACY_DRAWING_SUCCESSORS.has(localNameOf(node as unknown as Element))
+  );
+  root.insertBefore(legacyDrawing as unknown as Node, (successor as unknown as Node) ?? null);
   ctx.worksheetChanged = true;
 }
+
+/** Worksheet children that the OOXML schema (`CT_Worksheet`, a strict
+ *  sequence) puts AFTER `<legacyDrawing>`. WHY (2026-09-28 PR review, replaces
+ *  design review 2 F4's backwards "always last" rule): appending it after a
+ *  Table's `<tableParts>` or an `<extLst>` made Excel report "We found a
+ *  problem with some content" and drop the comment. */
+const LEGACY_DRAWING_SUCCESSORS = new Set(['legacyDrawingHF', 'drawingHF', 'picture', 'oleObjects', 'controls', 'webPublishItems', 'tableParts', 'extLst']);
 
 /** §4.2: the threadedComment/person relationships are BOTH "implicit" — no
  *  `r:id` anywhere in worksheet/workbook CONTENT ever points at either, so
@@ -1609,12 +1616,12 @@ function serializeXlsxArchive(archive: XlsxArchive): Promise<Buffer> {
       writeXlsxPart(archive.zip, ctx.threadedPartPath, true, ctx.threadedDoc, ctx.threadedXmlOriginal);
     }
   }
-  // Every OTHER part in the archive — styles, shared strings, other
-  // worksheets, docProps/*, xl/externalLinks/*, images, a genuine Note
-  // elsewhere in the same file, everything — was never read into a Document
-  // at all and is never `zip.file()`d again here, so JSZip's own
-  // generateAsync passthrough emits its ORIGINAL bytes unchanged.
-  return archive.zip.generateAsync({ type: 'nodebuffer' });
+  // Every OTHER part (styles, other sheets, images, a genuine Note…) is never
+  // re-`zip.file()`d. WHY 'DEFLATE' (2026-09-28 PR review): with JSZip's
+  // default STORE every part was written back uncompressed (a 6 KB file grew
+  // to 3 MB); with DEFLATE, untouched parts' original compressed bytes are
+  // copied straight through, byte-identical.
+  return archive.zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
 // -----------------------------------------------------------------------

@@ -139,9 +139,27 @@ private const val BOUNDED_READ_CHUNK_BYTES = 8192
  * production ceiling, without a test having to actually allocate/inflate
  * anywhere near that much data itself.
  */
-fun readEntryBounded(zip: ZipFile, entry: ZipEntry, ceilingBytes: Long = MAX_DECLARED_UNCOMPRESSED_BYTES): ByteArray {
+/** The most one part may decompress to IN MEMORY on a phone.
+ *
+ *  WHY lower than the 200MB archive ceiling (2026-09-28 PR review): this
+ *  reader holds the whole part in RAM (and a growing buffer briefly needs
+ *  about twice that), then parses it into a DOM several times larger again.
+ *  A phone app's heap is typically 256–512MB, so a part near 200MB crashed
+ *  the app with OutOfMemoryError before the 200MB refusal could fire — the
+ *  exact crash a hostile or merely huge file must not cause. The test that
+ *  proves the refusal hit that OutOfMemoryError on GitHub's test machines.
+ *  32MB is still several times the largest real Word/Excel part this feature
+ *  touches (a 500-page Word body is ~5–10MB). Above it Android refuses with
+ *  the same honest "too large" error desktop gives past its own ceiling;
+ *  desktop's Node process keeps the higher limit. */
+internal const val MAX_IN_MEMORY_PART_BYTES: Long = 32L * 1024 * 1024
+
+fun readEntryBounded(zip: ZipFile, entry: ZipEntry, ceilingBytes: Long = MAX_IN_MEMORY_PART_BYTES): ByteArray {
     zip.getInputStream(entry).use { input ->
-        val out = java.io.ByteArrayOutputStream()
+        // Pre-size from the declared size (never trusted beyond the ceiling)
+        // so an honest large part doesn't pay for repeated buffer doubling.
+        val sizeHint = entry.size.coerceIn(0L, ceilingBytes).toInt()
+        val out = java.io.ByteArrayOutputStream(maxOf(sizeHint, BOUNDED_READ_CHUNK_BYTES))
         val chunk = ByteArray(BOUNDED_READ_CHUNK_BYTES)
         var total = 0L
         while (true) {

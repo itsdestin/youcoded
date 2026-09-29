@@ -912,3 +912,121 @@ class DocxCommentsWriteTest {
         assertTrue(result is DocxWriteResult.Ok)
     }
 }
+
+// ── 2026-09-28 PR review fixes (mirrors desktop's docx-comments.test.ts) ──
+
+/** A one-paragraph docx whose body is exactly `paragraphInner`, like
+ *  desktop's `buildDocxWithParagraph`. `commentsRootAttrs` lets a test give
+ *  comments.xml a root WITHOUT `xmlns:w14`, as Word 2007/LibreOffice write it. */
+private fun buildDocxWithParagraph(paragraphInner: String, commentsRootAttrs: String = "$W_NS_ATTR $W14_NS_ATTR", fileName: String = "built.docx"): File {
+    val dir = Files.createTempDirectory("ycd-docx-review-").toFile()
+    dir.deleteOnExit()
+    val target = File(dir, fileName)
+    java.util.zip.ZipOutputStream(target.outputStream()).use { zos ->
+        fun entry(name: String, content: String) {
+            zos.putNextEntry(java.util.zip.ZipEntry(name))
+            zos.write(content.toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+        }
+        entry(
+            "[Content_Types].xml",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>""",
+        )
+        entry(
+            "_rels/.rels",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>""",
+        )
+        entry(
+            "word/_rels/document.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>""",
+        )
+        entry("word/document.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document $W_NS_ATTR><w:body><w:p>$paragraphInner</w:p></w:body></w:document>""")
+        entry("word/comments.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments $commentsRootAttrs></w:comments>""")
+    }
+    return target
+}
+
+private val TOKEN_RE = Regex("""<w:t[^>]*>([^<]*)</w:t>|<w:(tab|br|drawing|commentRangeStart|commentRangeEnd|commentReference)\b""")
+
+/** The paragraph's content in document order as readable tokens, like
+ *  desktop's `paragraphTokens`. */
+private fun paragraphTokens(file: File): List<String> =
+    TOKEN_RE.findAll(partText(file, "word/document.xml")!!).map { m ->
+        if (m.groups[1] != null) "\"${m.groupValues[1]}\"" else m.groupValues[2]
+    }.toList()
+
+class DocxCommentsReviewFixesTest {
+    @Test
+    fun `a comment inside text that follows a tab in the same run keeps the tab`() = runTest {
+        val target = buildDocxWithParagraph("<w:r><w:tab/><w:t>Alpha beta</w:t></w:r>")
+        val result = addDocxComment(target.absolutePath, "built.docx", textSelector("lph"), "x", "user", scratchHomeDir())
+        assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
+        assertEquals(
+            listOf("tab", "\"A\"", "commentRangeStart", "\"lph\"", "commentRangeEnd", "commentReference", "\"a beta\""),
+            paragraphTokens(target),
+        )
+        assertPartsWellFormed(target)
+    }
+
+    @Test
+    fun `a quote spanning a tab inside ONE run succeeds and keeps text, tab and order intact`() = runTest {
+        val target = buildDocxWithParagraph("<w:r><w:t>Hello</w:t><w:tab/><w:t>World</w:t></w:r>")
+        val result = addDocxComment(target.absolutePath, "built.docx", textSelector("llo\tWo"), "x", "user", scratchHomeDir())
+        assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
+        assertEquals(
+            listOf("\"He\"", "commentRangeStart", "\"llo\"", "tab", "\"Wo\"", "commentRangeEnd", "commentReference", "\"rld\""),
+            paragraphTokens(target),
+        )
+        val read = readDocxComments(target, "built.docx") as DocxReadResult.Ok
+        assertEquals(listOf("llo\tWo"), read.comments.map { (it.selector as CommentSelector.Text).selector.exact })
+    }
+
+    @Test
+    fun `a line break and an inline image in the split run both survive`() = runTest {
+        val target = buildDocxWithParagraph("<w:r><w:t>Before</w:t><w:br/><w:drawing/><w:t>After text</w:t></w:r>")
+        val result = addDocxComment(target.absolutePath, "built.docx", textSelector("ter te"), "x", "user", scratchHomeDir())
+        assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
+        assertEquals(
+            listOf("\"Before\"", "br", "drawing", "\"Af\"", "commentRangeStart", "\"ter te\"", "commentRangeEnd", "commentReference", "\"xt\""),
+            paragraphTokens(target),
+        )
+    }
+
+    @Test
+    fun `a tab-stop definition in the paragraph properties is not counted as a tab character`() = runTest {
+        val target = buildDocxWithParagraph("""<w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r><w:t>Plain words</w:t></w:r>""")
+        val result = addDocxComment(target.absolutePath, "built.docx", textSelector("Plain"), "x", "user", scratchHomeDir())
+        assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
+        assertTrue(Regex("""</w:pPr><w:commentRangeStart w:id="0"/>""").containsMatchIn(partText(target, "word/document.xml")!!))
+    }
+
+    @Test
+    fun `declares xmlns w14 on a comments xml that never had it before writing w14 paraId`() = runTest {
+        val target = buildDocxWithParagraph("<w:r><w:t>Some text here</w:t></w:r>", commentsRootAttrs = W_NS_ATTR)
+        val result = addDocxComment(target.absolutePath, "built.docx", textSelector("text"), "x", "user", scratchHomeDir())
+        assertTrue(result is DocxWriteResult.Ok, "expected Ok, got $result")
+        val commentsXml = partText(target, "word/comments.xml")!!
+        assertTrue(Regex("""<w:comments\b[^>]*xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"""").containsMatchIn(commentsXml), commentsXml)
+        assertTrue(undeclaredPrefixes(commentsXml).isEmpty())
+    }
+
+    @Test
+    fun `the strict prefix check flags an undeclared prefix and ignores comment text`() {
+        assertEquals(setOf("w14"), undeclaredPrefixes("""<w:comments xmlns:w="a"><w:p w14:paraId="1">ratio:1=2</w:p></w:comments>"""))
+        assertTrue(undeclaredPrefixes("""<w:c xmlns:w="a" xmlns:w14="b"><w:p w14:paraId="1" xml:space="preserve"/></w:c>""").isEmpty())
+    }
+
+    // Word shortens its owner file's name: 8+ characters before the extension
+    // drop the first two, exactly 7 drop the first one.
+    @Test
+    fun `refuses long Word names while Word's shortened owner file sits beside them`() = runTest {
+        for ((name, owner) in listOf("Report2024.docx" to "~\$port2024.docx", "Minutes.docx" to "~\$nutes.docx", "Budget.docx" to "~\$Budget.docx")) {
+            val target = buildDocxWithParagraph("<w:r><w:t>Some text here</w:t></w:r>", fileName = name)
+            File(target.parentFile, owner).writeText("destin")
+            val before = target.readBytes()
+            val result = addDocxComment(target.absolutePath, name, textSelector("text"), "x", "user", scratchHomeDir())
+            assertEquals(DocxWriteResult.Err(DocxWriteError.FILE_OPEN_ELSEWHERE), result, name)
+            assertTrue(target.readBytes().contentEquals(before), name)
+        }
+    }
+}

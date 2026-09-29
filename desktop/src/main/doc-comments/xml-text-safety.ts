@@ -40,3 +40,45 @@ const ILLEGAL_XML_CHAR_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F]/g;
 export function stripIllegalXmlChars(text: string): string {
   return text.replace(ILLEGAL_XML_CHAR_RE, '');
 }
+
+// WHY (2026-09-28 PR review): linkedom — the DOM both write modules parse and
+// serialize with — happily writes an element or attribute whose namespace
+// prefix was never declared (`<w:p w14:paraId="…">` inside a comments.xml
+// with no `xmlns:w14`). That output is not well-formed XML: Word and Excel
+// refuse or "repair" the file. The after-save verify re-reads with the same
+// lenient linkedom, so it could not notice. This is the missing strict check:
+// every prefix a part USES must be DECLARED somewhere in it. It is judged
+// against the part's own original text (see `introducesUndeclaredPrefix`), so
+// a file that already arrived broken never blocks an unrelated write.
+// Only markup is scanned (text between tags is skipped), so a comment that
+// happens to read "ratio:1=2" can never look like an attribute.
+const TAG_RE = /<[^!?][^>]*>/g;
+const TAG_NAME_PREFIX_RE = /^<\/?([A-Za-z_][\w.-]*):/;
+const ATTR_PREFIX_RE = /\s([A-Za-z_][\w.-]*):[\w.-]+\s*=/g;
+const DECLARED_PREFIX_RE = /\sxmlns:([A-Za-z_][\w.-]*)\s*=/g;
+
+/** Prefixes `xml` uses on an element or attribute but never declares with
+ *  `xmlns:<prefix>` (the reserved `xml`/`xmlns` prefixes excepted). A
+ *  declaration anywhere in the part counts — a deliberately lenient reading,
+ *  since this only has to catch prefixes that are declared NOWHERE. */
+function undeclaredPrefixes(xml: string): Set<string> {
+  const declared = new Set<string>(['xml', 'xmlns']);
+  const used = new Set<string>();
+  for (const [tag] of xml.matchAll(TAG_RE)) {
+    for (const m of tag.matchAll(DECLARED_PREFIX_RE)) declared.add(m[1]);
+    const name = TAG_NAME_PREFIX_RE.exec(tag);
+    if (name) used.add(name[1]);
+    for (const m of tag.matchAll(ATTR_PREFIX_RE)) used.add(m[1]);
+  }
+  return new Set([...used].filter((prefix) => !declared.has(prefix)));
+}
+
+/** True when `after` leaves a prefix undeclared that `before` (the same
+ *  part's text before this write, or `null` for a brand-new part) did not. */
+export function introducesUndeclaredPrefix(before: string | null, after: string): boolean {
+  const already = before === null ? new Set<string>() : undeclaredPrefixes(before);
+  for (const prefix of undeclaredPrefixes(after)) {
+    if (!already.has(prefix)) return true;
+  }
+  return false;
+}

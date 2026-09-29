@@ -26,7 +26,7 @@
     "main/preload.ts": 2018,
     "renderer/components/StatusBar.tsx": 1809,
     "renderer/components/ToolCard.tsx": 1606,
-    "main/doc-comments/docx-comments.ts": 2037,
-    "main/doc-comments/xlsx-comments.ts": 2310
+    "main/doc-comments/docx-comments.ts": 2031,
+    "main/doc-comments/xlsx-comments.ts": 2317
   }
 }

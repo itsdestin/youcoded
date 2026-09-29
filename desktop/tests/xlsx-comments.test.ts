@@ -549,7 +549,11 @@ describe('xlsx-comments — add a comment to a brand-new cell', () => {
     });
   });
 
-  it('lands `<legacyDrawing>` AFTER a pre-existing worksheet-level `<extLst>`, never before it', async () => {
+  // 2026-09-28 PR review: the schema puts `<legacyDrawing>` BEFORE
+  // `<tableParts>` and `<extLst>`. This test used to pin the opposite
+  // ("after extLst"), and Excel reported "We found a problem with some
+  // content" for exactly those files.
+  it('lands `<legacyDrawing>` BEFORE a pre-existing worksheet-level `<extLst>`, where the schema puts it', async () => {
     await withScratchCopy(EXTLST_FIXTURE, async (target) => {
       const result = await addXlsxComment({
         absolutePath: target,
@@ -564,8 +568,48 @@ describe('xlsx-comments — add a comment to a brand-new cell', () => {
       const sheetXml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
       const extLstIdx = sheetXml.indexOf('<extLst>');
       const legacyDrawingIdx = sheetXml.indexOf('<legacyDrawing');
-      expect(extLstIdx).toBeGreaterThan(-1);
-      expect(legacyDrawingIdx).toBeGreaterThan(extLstIdx);
+      expect(legacyDrawingIdx).toBeGreaterThan(-1);
+      expect(extLstIdx).toBeGreaterThan(legacyDrawingIdx);
+    });
+  });
+
+  it('lands `<legacyDrawing>` BEFORE `<tableParts>` on a sheet that holds an Excel Table', async () => {
+    await withScratchCopy(EXTLST_FIXTURE, async (target) => {
+      // Give the synthetic sheet a <tableParts> right before its <extLst>,
+      // the shape every sheet with an Excel Table has.
+      const zip = await JSZip.loadAsync(await readFile(target));
+      const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+      zip.file('xl/worksheets/sheet1.xml', sheet.replace('<extLst>', '<tableParts count="0"/><extLst>'));
+      await writeFile(target, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'synthetic.xlsx',
+        selector: cellSelector('A1'),
+        text: 'first comment on a sheet with a table',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+      const sheetXml = await (await JSZip.loadAsync(await readFile(target))).file('xl/worksheets/sheet1.xml')!.async('string');
+      const order = ['<legacyDrawing', '<tableParts', '<extLst>'].map((tag) => sheetXml.indexOf(tag));
+      expect(order.every((idx) => idx > -1)).toBe(true);
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+    });
+  });
+
+  it('the saved workbook stays compressed — adding one comment does not re-store every part uncompressed', async () => {
+    await withScratchCopy(ELDEN_FIXTURE, async (target) => {
+      const before = await readFile(target);
+      const result = await addXlsxComment({
+        absolutePath: target,
+        path: 'elden.xlsx',
+        selector: cellSelector('ZZ999', 'Sorceries & Incantations List'),
+        text: 'Brand new.',
+        author: 'user',
+      });
+      expect(result.ok).toBe(true);
+      // 266 KB compressed; stored uncompressed it was several MB.
+      expect((await readFile(target)).length).toBeLessThan(before.length * 1.1);
     });
   });
 });

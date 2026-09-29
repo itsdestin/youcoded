@@ -38,6 +38,26 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
+/** The zone `generate-xlsx-golden.mjs` pins while writing the goldens.
+ *
+ *  WHY (2026-09-28 PR review): a threaded comment's `dT` carries no time zone,
+ *  and both readers treat it as LOCAL time (the design's deliberate choice), so
+ *  a golden `createdAt` is only correct in the zone it was generated in. These
+ *  two tests passed on the author's Arizona machine and failed on GitHub's UTC
+ *  runners. Running them in the generator's own zone makes them pass anywhere
+ *  while still checking every value exactly. */
+private const val GOLDEN_TIME_ZONE = "America/Phoenix"
+
+private fun inGoldenTimeZone(block: () -> Unit) {
+    val previous = java.util.TimeZone.getDefault()
+    java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone(GOLDEN_TIME_ZONE))
+    try {
+        block()
+    } finally {
+        java.util.TimeZone.setDefault(previous)
+    }
+}
+
 private fun fixtureFile(name: String): File {
     val resourceStream = object {}.javaClass.getResourceAsStream("/doc-comments/$name")
         ?: fail("missing test resource doc-comments/$name")
@@ -233,14 +253,14 @@ class XlsxCommentsTest {
     // Notes-only workbook now correctly reads back as zero comments) — see
     // `generate-xlsx-golden.mjs`'s own updated header for the full story.
     @Test
-    fun doclingXlsxCommentsMatchesTheDesktopReaderFieldForField() {
+    fun doclingXlsxCommentsMatchesTheDesktopReaderFieldForField() = inGoldenTimeZone {
         val result = readXlsxComments(fixtureFile("docling-xlsx-comments.xlsx"), "reports/docling-xlsx-comments.xlsx")
         assertTrue(result is XlsxReadResult.Ok, "expected Ok, got $result")
         assertMatchesGoldenXlsx("docling-xlsx-comments", (result as XlsxReadResult.Ok).comments)
     }
 
     @Test
-    fun eldenRingCompletionistChecklistMatchesTheDesktopReaderFieldForField() {
+    fun eldenRingCompletionistChecklistMatchesTheDesktopReaderFieldForField() = inGoldenTimeZone {
         val result = readXlsxComments(fixtureFile("elden-ring-completionist-checklist.xlsx"), "reports/elden-ring-completionist-checklist.xlsx")
         assertTrue(result is XlsxReadResult.Ok, "expected Ok, got $result")
         val comments = (result as XlsxReadResult.Ok).comments
@@ -617,7 +637,10 @@ class XlsxCommentsTest {
     // ── legacyDrawing-after-extLst ordering (synthetic fixture) ──────────
 
     @Test
-    fun `lands legacyDrawing AFTER a pre-existing worksheet-level extLst, never before it`() = runTest {
+    // 2026-09-28 PR review: the schema puts legacyDrawing BEFORE tableParts
+    // and extLst; this test used to pin the opposite, and Excel reported "We
+    // found a problem with some content" for exactly those files.
+    fun `lands legacyDrawing BEFORE a pre-existing worksheet-level extLst, where the schema puts it`() = runTest {
         val xlsx = fixtureFile("synthetic-worksheet-with-extlst.xlsx")
         val home = tempHome()
         // Discover the single real sheet's own part path so this test doesn't
@@ -632,7 +655,32 @@ class XlsxCommentsTest {
         val extLstIdx = worksheetXml.indexOf("<extLst")
         val legacyDrawingIdx = worksheetXml.indexOf("<legacyDrawing")
         assertTrue(extLstIdx >= 0, "the synthetic fixture must already have an extLst — the whole point of this test")
-        assertTrue(legacyDrawingIdx > extLstIdx, "legacyDrawing must land AFTER extLst, never before it")
+        assertTrue(legacyDrawingIdx in 0 until extLstIdx, "legacyDrawing must land BEFORE extLst")
+    }
+
+    @Test
+    fun `lands legacyDrawing BEFORE tableParts on a sheet that holds an Excel Table`() = runTest {
+        val xlsx = fixtureFile("synthetic-worksheet-with-extlst.xlsx")
+        // Rewrite the synthetic sheet with a <tableParts> right before its
+        // <extLst>, the shape every sheet with an Excel Table has.
+        val entries = java.util.zip.ZipFile(xlsx).use { zip ->
+            zip.entries().toList().map { e -> e.name to zip.getInputStream(e).use { it.readBytes() } }
+        }
+        java.util.zip.ZipOutputStream(xlsx.outputStream()).use { zos ->
+            for ((name, bytes) in entries) {
+                zos.putNextEntry(java.util.zip.ZipEntry(name))
+                val out = if (name == "xl/worksheets/sheet1.xml") {
+                    bytes.toString(Charsets.UTF_8).replace("<extLst>", """<tableParts count="0"/><extLst>""").toByteArray(Charsets.UTF_8)
+                } else bytes
+                zos.write(out)
+                zos.closeEntry()
+            }
+        }
+        val result = addXlsxComment(xlsx.absolutePath, "reports/synthetic.xlsx", cellSelector("A1"), "first comment", "user", tempHome())
+        assertTrue(result is XlsxWriteResult.Ok, "expected Ok, got $result")
+        val sheet = readZipEntryText(xlsx, "xl/worksheets/sheet1.xml") ?: fail("expected xl/worksheets/sheet1.xml")
+        val order = listOf("<legacyDrawing", "<tableParts", "<extLst").map { sheet.indexOf(it) }
+        assertTrue(order.all { it >= 0 } && order == order.sorted(), "expected legacyDrawing < tableParts < extLst, got $order")
     }
 
     // ── The record-count ceiling (design review 1, F3) ───────────────────

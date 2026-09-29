@@ -22,6 +22,8 @@ import { promises as fs } from 'fs';
 import { createHash } from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
+import JSZip from 'jszip';
+import { introducesUndeclaredPrefix } from './xml-text-safety';
 
 export type PipelineError = 'read-failed' | 'backup-failed' | 'write-failed' | 'verify-failed' | 'file-open-elsewhere';
 
@@ -37,8 +39,22 @@ export type PipelineError = 'read-failed' | 'backup-failed' | 'write-failed' | '
 // LibreOffice/OpenOffice community documentation). Either app's own save
 // could otherwise silently overwrite this write with a stale in-memory copy,
 // with no warning in either program.
-function officeOwnerFilePath(absolutePath: string): string {
-  return path.join(path.dirname(absolutePath), `~$${path.basename(absolutePath)}`);
+/** Every name Word/Excel may give the owner file for `absolutePath`.
+ *
+ *  WHY three candidates (2026-09-28 PR review): the owner file is NOT always
+ *  `~$` + the full name. Word keeps the whole name only when the name part
+ *  (before the extension) is 6 characters or fewer; at 7 it drops the first
+ *  character, and at 8 or more it drops the first TWO — `Report2024.docx` is
+ *  guarded by `~$port2024.docx`. Checking only the full-name form missed
+ *  nearly every real Word document. Excel uses the full name. Checking all
+ *  three forms can at worst match another open file whose name differs only
+ *  in its first one or two characters, which just asks the user to close a
+ *  file — never a silent overwrite. */
+function officeOwnerFilePaths(absolutePath: string): string[] {
+  const dir = path.dirname(absolutePath);
+  const name = path.basename(absolutePath);
+  const forms = new Set([name, name.slice(1), name.slice(2)].filter((n) => n.length > 0));
+  return [...forms].map((n) => path.join(dir, `~$${n}`));
 }
 function libreOfficeLockFilePath(absolutePath: string): string {
   return path.join(path.dirname(absolutePath), `.~lock.${path.basename(absolutePath)}#`);
@@ -57,7 +73,7 @@ function libreOfficeLockFilePath(absolutePath: string): string {
  *  crash, or a program that holds the file open without either convention,
  *  are both out of this check's reach). */
 async function isFileOpenElsewhere(absolutePath: string): Promise<boolean> {
-  for (const candidate of [officeOwnerFilePath(absolutePath), libreOfficeLockFilePath(absolutePath)]) {
+  for (const candidate of [...officeOwnerFilePaths(absolutePath), libreOfficeLockFilePath(absolutePath)]) {
     try {
       await fs.access(candidate);
       return true;
@@ -203,54 +219,11 @@ export async function writeFileMutation<Extra extends Record<string, unknown>, E
       return { ok: false, error: 'backup-failed' };
     }
 
-    // Atomic replace: tmp-write then rename, never a direct overwrite —
-    // matches artifacts/cas-write.ts's own atomicWrite shape (and
-    // docx-comments.ts's own `writeDocxMutation`).
-    const tmpPath = `${absolutePath}.${process.pid}.${Date.now()}.tmp`;
+    // Atomic replace: tmp-write, fsync, then rename — never a direct
+    // overwrite (see `atomicReplace`).
     try {
-      await fs.writeFile(tmpPath, newBytes);
-      // F1 (T17 implementation review, major/durability): fsync the tmp
-      // file's bytes to disk BEFORE the rename that makes them visible as
-      // the real target — same idiom as artifacts/cas-write.ts's own
-      // `atomicWrite` (`fh.sync()`). A bare `fs.rename` only reorders a
-      // directory entry; it says nothing about whether the bytes the new
-      // name points at are durable yet, so a crash between the rename
-      // returning and the OS's own lazy flush could leave the real document
-      // TRUNCATED — the failure mode this finding names. A throw here (the
-      // open, or the sync itself) falls into the same catch below as a
-      // failed write: the tmp file and the not-yet-needed backup are both
-      // cleaned up, and the real target is left exactly as untouched as any
-      // other write-failed path leaves it.
-      const fh = await fs.open(tmpPath, 'r+');
-      try {
-        await fh.sync();
-      } finally {
-        await fh.close();
-      }
-      await fs.rename(tmpPath, absolutePath);
-      // F1: best-effort fsync of the PARENT DIRECTORY too, so the rename's
-      // own directory-entry update is itself durable, not just the file's
-      // bytes (already covered above) — "where supported" per the finding:
-      // opening a directory as a file handle and syncing it is POSIX-only
-      // (fails on Windows), so this is wrapped in its own try/catch and
-      // never allowed to fail a write that has already fully succeeded.
-      try {
-        const dirHandle = await fs.open(path.dirname(absolutePath), 'r');
-        try {
-          await dirHandle.sync();
-        } finally {
-          await dirHandle.close();
-        }
-      } catch {
-        /* not supported on this platform/filesystem — the file-level fsync
-           above already guarantees the CONTENT survives a crash */
-      }
+      await atomicReplace(absolutePath, newBytes);
     } catch {
-      try {
-        await fs.unlink(tmpPath);
-      } catch {
-        /* already gone */
-      }
       try {
         await fs.unlink(backupPath);
       } catch {
@@ -262,12 +235,26 @@ export async function writeFileMutation<Extra extends Record<string, unknown>, E
     // Verify, with AUTOMATIC ROLLBACK on failure.
     let verified: boolean;
     try {
-      verified = await verify(newBytes, extra, originalBytes);
+      verified = (await xmlPartsStayWellFormed(newBytes, originalBytes)) && (await verify(newBytes, extra, originalBytes));
     } catch {
       verified = false;
     }
     if (!verified) {
-      await fs.rename(backupPath, absolutePath);
+      // WHY the original bytes are written back from memory, not the backup
+      // renamed into place (2026-09-28 PR review): the backup lives under
+      // `~/.claude`, and a rename cannot cross drives. For a document on D:,
+      // a USB stick or a network share the old `fs.rename` threw EXDEV, the
+      // caller got an exception, and the file the verify step had just
+      // rejected STAYED. `originalBytes` is exactly what the backup holds,
+      // and `atomicReplace` writes it beside the target, so the restore works
+      // on any drive. The backup is kept as the standing safety copy (it
+      // still holds the original). If even the restore fails, the error is
+      // still the honest 'verify-failed' and the backup is still there.
+      try {
+        await atomicReplace(absolutePath, originalBytes);
+      } catch {
+        /* backup at backupPath still holds the original bytes */
+      }
       return { ok: false, error: 'verify-failed' };
     }
     // F5: the backup is KEPT, not deleted, on success — "one rolling backup
@@ -277,4 +264,99 @@ export async function writeFileMutation<Extra extends Record<string, unknown>, E
     // exactly one backup ever exists per source file.
     return { ok: true, ...extra };
   });
+}
+
+/** Writes `bytes` over `absolutePath` atomically: a temp file in the SAME
+ *  folder (so the final rename never crosses drives), fsync'd before the
+ *  rename, then a best-effort fsync of the folder. On failure the temp file
+ *  is removed and the error re-thrown; the target is untouched. */
+async function atomicReplace(absolutePath: string, bytes: Buffer): Promise<void> {
+  const tmpPath = `${absolutePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fs.writeFile(tmpPath, bytes);
+    // F1 (T17 implementation review, major/durability): fsync the tmp
+    // file's bytes to disk BEFORE the rename that makes them visible as
+    // the real target — same idiom as artifacts/cas-write.ts's own
+    // `atomicWrite` (`fh.sync()`). A bare `fs.rename` only reorders a
+    // directory entry; it says nothing about whether the bytes the new
+    // name points at are durable yet, so a crash between the rename
+    // returning and the OS's own lazy flush could leave the real document
+    // TRUNCATED.
+    const fh = await fs.open(tmpPath, 'r+');
+    try {
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+    await fs.rename(tmpPath, absolutePath);
+  } catch (err) {
+    try {
+      await fs.unlink(tmpPath);
+    } catch {
+      /* already gone */
+    }
+    throw err;
+  }
+  // F1: best-effort fsync of the PARENT DIRECTORY too, so the rename's own
+  // directory-entry update is durable — POSIX-only (fails on Windows), so
+  // it is never allowed to fail a write that has already succeeded.
+  try {
+    const dirHandle = await fs.open(path.dirname(absolutePath), 'r');
+    try {
+      await dirHandle.sync();
+    } finally {
+      await dirHandle.close();
+    }
+  } catch {
+    /* not supported on this platform/filesystem */
+  }
+}
+
+/** JSZip's internal per-entry record for an archive it LOADED — the same
+ *  internal zip-size-guard.ts already relies on for `uncompressedSize`. */
+interface LoadedEntryData {
+  _data?: { crc32?: number; uncompressedSize?: number };
+}
+
+const XML_PART_RE = /\.(xml|rels|vml)$/i;
+
+/** WHY (2026-09-28 PR review): the strict XML check both formats were
+ *  missing. linkedom writes a namespace prefix that was never declared
+ *  without complaint, and every format-specific verify re-reads with the
+ *  same lenient linkedom — so a Word or Excel file that Word/Excel call
+ *  damaged passed verification and was kept. This runs for EVERY write
+ *  through this pipeline, before the format's own verify: any XML part the
+ *  write changed (judged by checksum and size, so untouched parts are never
+ *  even decompressed) must not newly use an undeclared prefix. A file that
+ *  already arrived with that damage is judged against its own original, so
+ *  it never blocks an unrelated write. */
+async function xmlPartsStayWellFormed(newBytes: Buffer, originalBytes: Buffer): Promise<boolean> {
+  let after: JSZip;
+  try {
+    after = await JSZip.loadAsync(newBytes);
+  } catch {
+    // Not an archive at all: nothing here to judge. Each format's own verify
+    // already refuses bytes it cannot open.
+    return true;
+  }
+  let before: JSZip | null;
+  try {
+    before = await JSZip.loadAsync(originalBytes);
+  } catch {
+    before = null;
+  }
+  for (const name of Object.keys(after.files)) {
+    const entry = after.files[name];
+    if (entry.dir || !XML_PART_RE.test(name)) continue;
+    const original = before?.file(name) ?? null;
+    const a = (entry as unknown as LoadedEntryData)._data;
+    const b = original ? (original as unknown as LoadedEntryData)._data : undefined;
+    if (a && b && a.crc32 !== undefined && a.crc32 === b.crc32 && a.uncompressedSize === b.uncompressedSize) continue;
+    const [afterXml, beforeXml] = await Promise.all([
+      entry.async('string'),
+      original ? original.async('string') : Promise.resolve(null),
+    ]);
+    if (introducesUndeclaredPrefix(beforeXml, afterXml)) return false;
+  }
+  return true;
 }

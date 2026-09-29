@@ -151,16 +151,20 @@ function elementChildren(el: Element): Element[] {
  * (§3.3) — something T10's read-only `ranges` map never needed, since the
  * read path only ever looks up an id Word ALREADY marked, never inserts one.
  *
- * `textEl` (the `<w:t>` node itself, not just its ancestor `<w:r>`) is kept
- * alongside `run` so a mid-run split (`splitRunAtOffsets`) never has to
- * GUESS which of a run's children to split when a run unusually holds more
- * than one `<w:t>` — a shape no fixture here exercises, but one this design
- * can rule out cheaply just by keeping the exact reference instead of
- * re-deriving it later.
+ * WHY a leaf keeps its own `<w:t>`/`<w:tab>`/`<w:br>` NODE and never a cached
+ * `<w:r>` (2026-09-28 PR review): a run commonly holds several content
+ * children (`<w:tab/><w:t>…</w:t>`, `<w:t>…</w:t><w:br/><w:t>…</w:t>`). The
+ * old code cached each leaf's run, rebuilt a split run from only the one
+ * `<w:t>` being cut — silently deleting every tab, break, image and second
+ * text node in it — and then reused cached runs that the split had already
+ * removed from the tree (a crash). Splitting now MOVES the real child nodes
+ * into the new run (`splitRunBeforeNode`), so a leaf's node is always still
+ * in the document and its current run is simply its nearest `<w:r>`
+ * ancestor, looked up at the moment it's needed (`runOf`).
  */
 type WriteLeaf =
-  | { kind: 'text'; start: number; end: number; run: Element; textEl: Element }
-  | { kind: 'atom'; start: number; end: number; run: Element }
+  | { kind: 'text'; start: number; end: number; textEl: Element }
+  | { kind: 'atom'; start: number; end: number; node: Element }
   | { kind: 'parabreak'; start: number; end: number; paragraph: Element };
 
 /** Walks up from `el` (inclusive) for the nearest ancestor with `tagName`,
@@ -248,15 +252,19 @@ function walkDocument(
       // An empty <w:t> contributes zero characters — no leaf needed (and
       // none would be addressable by any offset anyway).
       if (leaves && text.length > 0) {
-        const run = nearestAncestor(el, 'w:r') ?? el;
-        leaves.push({ kind: 'text', start: fullText.length, end: fullText.length + text.length, run, textEl: el });
+        leaves.push({ kind: 'text', start: fullText.length, end: fullText.length + text.length, textEl: el });
       }
       fullText += text;
-    } else if (tag === 'w:tab') {
-      if (leaves) leaves.push({ kind: 'atom', start: fullText.length, end: fullText.length + 1, run: nearestAncestor(el, 'w:r') ?? el });
+    } else if (tag === 'w:tab' && frame.el.tagName === 'w:r') {
+      // WHY the parent check (2026-09-28 PR review): `<w:tab>` also names a
+      // tab-STOP definition inside a paragraph's `<w:pPr><w:tabs>` — layout
+      // settings, not a character. Counting those added phantom tabs to the
+      // text and gave the write path an insertion point inside `<w:pPr>`.
+      // Only a tab that is a run's own child is real text.
+      if (leaves) leaves.push({ kind: 'atom', start: fullText.length, end: fullText.length + 1, node: el });
       fullText += '\t';
-    } else if (tag === 'w:br' || tag === 'w:cr') {
-      if (leaves) leaves.push({ kind: 'atom', start: fullText.length, end: fullText.length + 1, run: nearestAncestor(el, 'w:r') ?? el });
+    } else if ((tag === 'w:br' || tag === 'w:cr') && frame.el.tagName === 'w:r') {
+      if (leaves) leaves.push({ kind: 'atom', start: fullText.length, end: fullText.length + 1, node: el });
       fullText += '\n';
     } else if (tag === 'w:commentRangeStart') {
       const id = el.getAttribute('w:id');
@@ -847,10 +855,23 @@ function ensureExtendedPart(archive: LoadedArchive): void {
   archive.relsChanged = true;
 }
 
+/** WHY (2026-09-28 PR review): every comment this module writes carries a
+ *  `w14:paraId`, but a comments.xml saved by Word 2007, LibreOffice or a
+ *  Google Docs export never declares the `w14` prefix. Writing the attribute
+ *  anyway produced XML that is not well-formed, and Word refused or
+ *  "repaired" the file. Declaring it on the root (a no-op when already
+ *  there) keeps the part valid for every producer. */
+function ensureW14NamespaceDeclared(doc: Document): void {
+  if (!doc.documentElement.getAttribute('xmlns:w14')) {
+    doc.documentElement.setAttribute('xmlns:w14', W14_NS);
+  }
+}
+
 function appendCommentEntry(
   commentsDoc: Document,
   entry: { id: number; author: string; date: string; paraId: string; text: string }
 ): void {
+  ensureW14NamespaceDeclared(commentsDoc);
   const commentEl = commentsDoc.createElement('w:comment');
   commentEl.setAttribute('w:id', String(entry.id));
   commentEl.setAttribute('w:author', entry.author);
@@ -883,52 +904,12 @@ function upsertExtendedEntry(extendedDoc: Document, paraId: string, fields: { do
   if (!existing) extendedDoc.documentElement.appendChild(el);
 }
 
-/**
- * Splits `run` (whose text lives in its child `textEl`) at every offset in
- * `offsetsInRun` (each strictly between 0 and the text's length; boundary
- * values are filtered out by the caller since they need no split at all),
- * replacing `run` in the tree with the resulting pieces — clones of `run`'s
- * own `w:rPr` (so formatting survives the split) each holding one slice of
- * the original text. Returns the pieces AND the full cut-point list
- * (`[0, ...offsetsInRun, len]`) so the caller can look up "the piece that
- * starts/ends at exactly offset X" without recomputing anything.
- *
- * A no-op (`offsetsInRun` empty) returns `[run]` unchanged — this is what
- * makes `insertMarkerRelativeToRun` below correct for BOTH a boundary
- * position (no split needed) and a strictly-interior one (split needed)
- * through the exact same code path.
- */
-function splitRunAtOffsets(
-  doc: Document,
-  run: Element,
-  textEl: Element,
-  offsetsInRun: number[]
-): { pieces: Element[]; cuts: number[] } {
-  const text = textEl.textContent ?? '';
-  const cuts = Array.from(new Set([0, ...offsetsInRun.filter((o) => o > 0 && o < text.length), text.length])).sort(
-    (a, b) => a - b
-  );
-  if (cuts.length <= 2) return { pieces: [run], cuts: [0, text.length] };
-
-  const rPr = elementsByTag(run as unknown as Document, 'w:rPr')[0] ?? null;
-  const pieces: Element[] = [];
-  for (let i = 0; i < cuts.length - 1; i++) {
-    const newRun = doc.createElement('w:r');
-    // F3 (T11 review — major): every piece gets the ORIGINAL run's own
-    // attributes (w:rsidR, w:rsidRPr, w:rsidDel, ...), not just its w:rPr
-    // child — see `copyAttributes`'s own doc comment.
-    copyAttributes(run, newRun);
-    if (rPr) newRun.appendChild(rPr.cloneNode(true) as unknown as Element);
-    const newT = doc.createElement('w:t');
-    newT.setAttribute('xml:space', 'preserve');
-    newT.textContent = text.slice(cuts[i], cuts[i + 1]);
-    newRun.appendChild(newT);
-    pieces.push(newRun);
-  }
-  const parent = run.parentNode as unknown as Element;
-  for (const piece of pieces) parent.insertBefore(piece as unknown as Node, run as unknown as Node);
-  parent.removeChild(run as unknown as Node);
-  return { pieces, cuts };
+/** The `<w:r>` that currently holds `node` (a leaf's `<w:t>`/`<w:tab>`/
+ *  `<w:br>`), looked up fresh — see `WriteLeaf`'s doc comment for why a leaf
+ *  never caches this. `null` only for a malformed document whose text sits
+ *  outside any run. */
+function runOf(node: Element): Element | null {
+  return nearestAncestor(node, 'w:r');
 }
 
 interface InsertionAnchor {
@@ -936,23 +917,75 @@ interface InsertionAnchor {
   before: Element | null;
 }
 
-/** Resolves WHERE (as a DOM `parent`/`before` pair — `parent.insertBefore(
- *  newNode, before)`, `before === null` meaning "append") to place a marker
- *  for character offset `offset`, splitting a run when the offset falls
- *  strictly inside one. `edge` distinguishes "the marker goes right BEFORE
- *  whatever starts at this offset" (a range's own start, or the piece a
- *  split produces) from "right AFTER whatever ends at this offset" (a
- *  range's end) — for a boundary offset (no split needed) the two coincide
- *  at the same DOM position; they only diverge meaningfully once a split
- *  happens, which is exactly the case `splitRunAtOffsets`'s `cuts` array
- *  exists to look back up. */
-function anchorForOffset(
-  doc: Document,
-  leaves: WriteLeaf[],
-  fullText: string,
-  offset: number,
-  edge: 'start' | 'end'
-): InsertionAnchor {
+/**
+ * Returns the DOM position (`parent.insertBefore(marker, before)`) that sits
+ * immediately BEFORE `child`, a content child of a `<w:r>`. Comment markers
+ * must be siblings of runs, never inside one, so when `child` is not the
+ * run's first content child the run is split in two right there:
+ *
+ *   <w:r><w:rPr/><w:tab/><w:t>Hello</w:t></w:r>   split before <w:t>
+ *   → <w:r><w:rPr/><w:tab/></w:r>  ◀here▶  <w:r><w:rPr/><w:t>Hello</w:t></w:r>
+ *
+ * WHY moving, never rebuilding (2026-09-28 PR review): the second run gets a
+ * copy of the original run's attributes (rsids — F3) and `w:rPr`
+ * (formatting), then `child` and every node after it are MOVED into it. Tabs,
+ * breaks, images, field codes and further text nodes all survive untouched,
+ * and every other leaf's node stays in the document.
+ */
+function splitRunBeforeNode(doc: Document, child: Element): InsertionAnchor {
+  const run = runOf(child);
+  if (!run || child.parentNode !== (run as unknown as Node)) {
+    // Not a direct run child (malformed input) — the node itself is the best
+    // position available, rather than guessing at a split.
+    return { parent: child.parentNode as unknown as Element, before: child };
+  }
+  const parent = run.parentNode as unknown as Element;
+  let hasContentBefore = false;
+  for (let sib = child.previousSibling; sib; sib = sib.previousSibling) {
+    if (sib.nodeType === 1 && (sib as unknown as Element).tagName !== 'w:rPr') {
+      hasContentBefore = true;
+      break;
+    }
+  }
+  if (!hasContentBefore) return { parent, before: run };
+
+  const newRun = doc.createElement('w:r');
+  copyAttributes(run, newRun);
+  const rPr = elementChildren(run).find((el) => el.tagName === 'w:rPr');
+  if (rPr) newRun.appendChild(rPr.cloneNode(true) as unknown as Element);
+  let cur: Node | null = child as unknown as Node;
+  while (cur) {
+    const next: Node | null = cur.nextSibling;
+    newRun.appendChild(cur as unknown as Element);
+    cur = next;
+  }
+  parent.insertBefore(newRun as unknown as Node, (run.nextSibling as unknown as Node) ?? null);
+  return { parent, before: newRun };
+}
+
+/** Cuts a `<w:t>`'s text at `offset` (strictly inside it): the original node
+ *  keeps the text BEFORE the cut, and a new `<w:t>` holding the rest is
+ *  inserted right after it inside the same run. Returns the new node. The
+ *  original keeping the prefix is what lets `insertCommentRangeMarkers` place
+ *  the END marker first and the START marker second against the same leaf
+ *  table: every offset before the cut still means the same character. */
+function cutTextNode(doc: Document, textEl: Element, offset: number): Element {
+  const text = textEl.textContent ?? '';
+  const tail = doc.createElement('w:t');
+  tail.setAttribute('xml:space', 'preserve');
+  tail.textContent = text.slice(offset);
+  textEl.textContent = text.slice(0, offset);
+  textEl.setAttribute('xml:space', 'preserve');
+  textEl.parentNode!.insertBefore(tail as unknown as Node, (textEl.nextSibling as unknown as Node) ?? null);
+  return tail;
+}
+
+/** Resolves WHERE (as a DOM `parent`/`before` pair, `before === null`
+ *  meaning "append") a comment marker for character `offset` goes: right
+ *  before the character at `offset`, which is the same place as right after
+ *  the character at `offset - 1`. Runs are split as needed via
+ *  `splitRunBeforeNode`; nothing but the marker's own position changes. */
+function anchorForOffset(doc: Document, leaves: WriteLeaf[], offset: number): InsertionAnchor {
   const idx = leaves.findIndex((l) => offset >= l.start && offset < l.end);
   if (idx === -1) {
     // offset === fullText.length (or the document has no leaves at all,
@@ -960,7 +993,9 @@ function anchorForOffset(
     const last = leaves[leaves.length - 1];
     if (!last) throw new Error('docx-comments: no leaves to anchor an insertion against');
     if (last.kind === 'parabreak') return { parent: last.paragraph, before: null };
-    return { parent: last.run.parentNode as unknown as Element, before: (last.run.nextSibling as unknown as Element) ?? null };
+    const node = last.kind === 'text' ? last.textEl : last.node;
+    const run = runOf(node) ?? node;
+    return { parent: run.parentNode as unknown as Element, before: (run.nextSibling as unknown as Element) ?? null };
   }
   const leaf = leaves[idx];
   if (leaf.kind === 'parabreak') {
@@ -969,32 +1004,10 @@ function anchorForOffset(
     // closed, before the implicit paragraph break".
     return { parent: leaf.paragraph, before: null };
   }
-  const offsetInRun = offset - leaf.start;
-  const runLen = leaf.end - leaf.start;
-  // A BOUNDARY position (offset 0 or runLen) never needs a split, regardless
-  // of `edge` — "insert before this run" and "insert after the PREVIOUS
-  // run" are the same DOM position when offsetInRun is 0, and likewise at
-  // runLen. Checking this FIRST (before ever calling `splitRunAtOffsets`)
-  // matters for `edge === 'end'` specifically: `end` landing exactly at
-  // offsetInRun === 0 means the true "last included character" belongs to
-  // the PREVIOUS leaf, not this one — treating it as "the piece ending at
-  // cut 0" (via `cuts.indexOf(0) - 1`) would look up a piece at index -1,
-  // which is undefined (confirmed by this exact crash during this module's
-  // own implementation, on a MOVE whose new range's end fell precisely on a
-  // run boundary already created by an earlier ADD's own split).
-  if (leaf.kind === 'atom' || offsetInRun === 0) {
-    return { parent: leaf.run.parentNode as unknown as Element, before: leaf.run };
-  }
-  if (offsetInRun === runLen) {
-    return { parent: leaf.run.parentNode as unknown as Element, before: (leaf.run.nextSibling as unknown as Element) ?? null };
-  }
-  const { pieces, cuts } = splitRunAtOffsets(doc, leaf.run, leaf.textEl, [offsetInRun]);
-  if (edge === 'start') {
-    const piece = pieces[cuts.indexOf(offsetInRun)];
-    return { parent: piece.parentNode as unknown as Element, before: piece };
-  }
-  const piece = pieces[cuts.indexOf(offsetInRun) - 1];
-  return { parent: piece.parentNode as unknown as Element, before: (piece.nextSibling as unknown as Element) ?? null };
+  if (leaf.kind === 'atom') return splitRunBeforeNode(doc, leaf.node);
+  const offsetInText = offset - leaf.start;
+  if (offsetInText === 0) return splitRunBeforeNode(doc, leaf.textEl);
+  return splitRunBeforeNode(doc, cutTextNode(doc, leaf.textEl, offsetInText));
 }
 
 function buildCommentReferenceRun(doc: Document, id: string): Element {
@@ -1016,58 +1029,29 @@ function buildCommentReferenceRun(doc: Document, id: string): Element {
  * end marker (§3.2's own read-path shape: "the reference run goes right
  * after commentRangeEnd" — every fixture confirms this ordering).
  *
- * When `start` and `end` fall in the SAME original text leaf, both cuts are
- * made in ONE `splitRunAtOffsets` call (up to three resulting pieces: before
- * the quote, the quote itself, after the quote) — never two independent
- * calls, which would each try to split what is, by the second call, already
- * a stale/removed node reference. When they fall in DIFFERENT leaves, the
- * two ends are resolved independently (safe: splitting the run at `start`
- * never touches the run at `end`, and vice versa).
+ * WHY the END is placed first (2026-09-28 PR review): placing a marker can
+ * cut a `<w:t>` in two, and `cutTextNode` keeps the text BEFORE the cut in
+ * the original node. Working from the later offset to the earlier one means
+ * the leaf table built before any edit still describes every character the
+ * second placement looks up — the same guarantee the old "one combined
+ * split" special case gave, now for every shape (same text node, same run,
+ * different runs, tabs and breaks between).
  */
-function insertCommentRangeMarkers(
-  doc: Document,
-  leaves: WriteLeaf[],
-  fullText: string,
-  start: number,
-  end: number,
-  id: string
-): void {
+function insertCommentRangeMarkers(doc: Document, leaves: WriteLeaf[], start: number, end: number, id: string): void {
   const startMarker = doc.createElement('w:commentRangeStart');
   startMarker.setAttribute('w:id', id);
   const endMarker = doc.createElement('w:commentRangeEnd');
   endMarker.setAttribute('w:id', id);
   const refRun = buildCommentReferenceRun(doc, id);
 
-  const startIdx = leaves.findIndex((l) => start >= l.start && start < l.end);
-  const endIdx = leaves.findIndex((l) => end >= l.start && end < l.end);
-
-  if (startIdx !== -1 && startIdx === endIdx && leaves[startIdx].kind === 'text') {
-    const leaf = leaves[startIdx] as Extract<WriteLeaf, { kind: 'text' }>;
-    const so = start - leaf.start;
-    const eo = end - leaf.start;
-    const { pieces, cuts } = splitRunAtOffsets(doc, leaf.run, leaf.textEl, [so, eo]);
-    const startPiece = pieces[cuts.indexOf(so)];
-    const endPiece = pieces[cuts.indexOf(eo) - 1];
-    (startPiece.parentNode as unknown as Element).insertBefore(startMarker as unknown as Node, startPiece as unknown as Node);
-    (endPiece.parentNode as unknown as Element).insertBefore(
-      endMarker as unknown as Node,
-      (endPiece.nextSibling as unknown as Node) ?? null
-    );
-    (endMarker.parentNode as unknown as Element).insertBefore(
-      refRun as unknown as Node,
-      (endMarker.nextSibling as unknown as Node) ?? null
-    );
-    return;
-  }
-
-  const startAnchor = anchorForOffset(doc, leaves, fullText, start, 'start');
-  startAnchor.parent.insertBefore(startMarker as unknown as Node, startAnchor.before as unknown as Node);
-  const endAnchor = anchorForOffset(doc, leaves, fullText, end, 'end');
+  const endAnchor = anchorForOffset(doc, leaves, end);
   endAnchor.parent.insertBefore(endMarker as unknown as Node, endAnchor.before as unknown as Node);
   (endMarker.parentNode as unknown as Element).insertBefore(
     refRun as unknown as Node,
     (endMarker.nextSibling as unknown as Node) ?? null
   );
+  const startAnchor = anchorForOffset(doc, leaves, start);
+  startAnchor.parent.insertBefore(startMarker as unknown as Node, startAnchor.before as unknown as Node);
 }
 
 /** §3.3 step 5 (Move, review 3 F2): removes the CURRENT
@@ -1122,7 +1106,10 @@ function replaceCommentParagraphText(commentsDoc: Document, commentEl: Element, 
     (p.parentNode as unknown as Element)?.removeChild(p as unknown as Node);
   }
   const pEl = commentsDoc.createElement('w:p');
-  if (paraId) pEl.setAttribute('w14:paraId', paraId);
+  if (paraId) {
+    ensureW14NamespaceDeclared(commentsDoc);
+    pEl.setAttribute('w14:paraId', paraId);
+  }
   const rEl = commentsDoc.createElement('w:r');
   const tEl = commentsDoc.createElement('w:t');
   tEl.setAttribute('xml:space', 'preserve');
@@ -1361,7 +1348,14 @@ async function serializeArchive(archive: LoadedArchive): Promise<Buffer> {
       archive.commentsExtensibleXmlOriginal
     );
   }
-  return archive.zip.generateAsync({ type: 'nodebuffer' });
+  // WHY 'DEFLATE' (2026-09-28 PR review): JSZip's default is STORE (no
+  // compression). With it, every part was decompressed and written back
+  // uncompressed, so one comment grew a 6 KB test file to 3 MB and a real
+  // report several-fold. With DEFLATE, JSZip copies each untouched part's
+  // ORIGINAL compressed bytes straight through (it only recompresses when
+  // the method differs), which is also what makes "untouched parts are
+  // byte-identical" true of the archive and not just of the text.
+  return archive.zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
 // -----------------------------------------------------------------------
@@ -1396,7 +1390,7 @@ async function mutateAddComment(
   const paraId = generateParaId(collectAllParaIds(archive));
 
   if (archive.commentsIsNew) ensureCommentsPart(archive);
-  insertCommentRangeMarkers(archive.documentDoc, leaves!, fullText, resolved.start, resolved.end, String(newId));
+  insertCommentRangeMarkers(archive.documentDoc, leaves!, resolved.start, resolved.end, String(newId));
   archive.documentChanged = true; // F2: this operation touched document.xml
   appendCommentEntry(archive.commentsDoc, {
     id: newId,
@@ -1527,7 +1521,7 @@ async function mutateMoveComment(
   const resolved = resolveSelector(fullText, args.newSelector.selector);
   if (resolved === 'detached') return { ok: false, error: 'selector-not-found' };
 
-  insertCommentRangeMarkers(archive.documentDoc, leaves!, fullText, resolved.start, resolved.end, rawId);
+  insertCommentRangeMarkers(archive.documentDoc, leaves!, resolved.start, resolved.end, rawId);
 
   const bytes = await serializeArchive(archive);
   return { ok: true, bytes };

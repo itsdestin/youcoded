@@ -159,9 +159,15 @@ private class RangeInfo(var start: Int, var end: Int)
  *  concrete leaf kinds extend rather than a Kotlin `sealed` hierarchy, purely
  *  so `start`/`end` can live once in the base rather than being repeated in
  *  every subclass constructor. */
+// WHY a leaf keeps its own node and never a cached `<w:r>` (2026-09-28 PR
+// review, mirrors docx-comments.ts's `WriteLeaf`): splitting a run used to
+// rebuild it from the one `<w:t>` being cut, deleting every tab, break and
+// image beside it, and then reused runs the split had removed. Splits now
+// MOVE the real child nodes (`splitRunBeforeNode`), so a leaf's node is always
+// still in the document and its current run is looked up when needed (`runOf`).
 private open class WriteLeaf(val start: Int, val end: Int) {
-    class Text(start: Int, end: Int, val run: Element, val textEl: Element) : WriteLeaf(start, end)
-    class Atom(start: Int, end: Int, val run: Element) : WriteLeaf(start, end)
+    class Text(start: Int, end: Int, val textEl: Element) : WriteLeaf(start, end)
+    class Atom(start: Int, end: Int, val node: Element) : WriteLeaf(start, end)
     class ParaBreak(start: Int, end: Int, val paragraph: Element) : WriteLeaf(start, end)
 }
 
@@ -243,17 +249,19 @@ private fun walkDocument(doc: Document, collectLeaves: Boolean = false): WalkRes
                 // An empty <w:t> contributes zero characters — no leaf needed
                 // (and none would be addressable by any offset anyway).
                 if (leaves != null && text.isNotEmpty()) {
-                    val run = nearestAncestor(el, "w:r") ?: el
-                    leaves.add(WriteLeaf.Text(fullText.length, fullText.length + text.length, run, el))
+                    leaves.add(WriteLeaf.Text(fullText.length, fullText.length + text.length, el))
                 }
                 fullText.append(text)
             }
-            "w:tab" -> {
-                if (leaves != null) leaves.add(WriteLeaf.Atom(fullText.length, fullText.length + 1, nearestAncestor(el, "w:r") ?: el))
+            // WHY the parent check (2026-09-28 PR review, mirrors desktop):
+            // `<w:tab>` also names a tab-STOP definition inside `<w:pPr><w:tabs>`,
+            // which is layout, not a character. Only a run's own child is text.
+            "w:tab" -> if (frame.el.tagName == "w:r") {
+                if (leaves != null) leaves.add(WriteLeaf.Atom(fullText.length, fullText.length + 1, el))
                 fullText.append('\t')
             }
-            "w:br", "w:cr" -> {
-                if (leaves != null) leaves.add(WriteLeaf.Atom(fullText.length, fullText.length + 1, nearestAncestor(el, "w:r") ?: el))
+            "w:br", "w:cr" -> if (frame.el.tagName == "w:r") {
+                if (leaves != null) leaves.add(WriteLeaf.Atom(fullText.length, fullText.length + 1, el))
                 fullText.append('\n')
             }
             "w:commentRangeStart" -> {
@@ -700,7 +708,7 @@ sealed class DocxWriteResult<out T> {
 }
 
 /** Copies every ATTRIBUTE (not child element) from `from` onto `to` — used by
- *  `splitRunAtOffsets` so a run's own `<w:r w:rsidR="..." w:rsidRPr="...">`
+ *  `splitRunBeforeNode` so a run's own `<w:r w:rsidR="..." w:rsidRPr="...">`
  *  attributes survive a split, not just its `w:rPr` CHILD (a real Word 365
  *  file always carries rsid attributes on its runs). Mirrors docx-comments.ts's
  *  `copyAttributes` (T11 review, F3). */
@@ -951,7 +959,18 @@ private fun ensureExtendedPart(archive: LoadedArchive) {
     archive.relsChanged = true
 }
 
+/** WHY (2026-09-28 PR review, mirrors docx-comments.ts): a comments.xml from
+ *  Word 2007, LibreOffice or a Google Docs export never declares `w14`, and
+ *  writing `w14:paraId` without it made XML Word calls damaged. A no-op when
+ *  already declared. */
+private fun ensureW14NamespaceDeclared(doc: Document) {
+    if (!doc.documentElement.hasAttribute("xmlns:w14")) {
+        doc.documentElement.setAttribute("xmlns:w14", W14_NS)
+    }
+}
+
 private fun appendCommentEntry(commentsDoc: Document, id: Int, author: String, date: String, paraId: String, text: String) {
+    ensureW14NamespaceDeclared(commentsDoc)
     val commentEl = commentsDoc.createElement("w:comment")
     commentEl.setAttribute("w:id", id.toString())
     commentEl.setAttribute("w:author", author)
@@ -981,90 +1000,93 @@ private fun upsertExtendedEntry(extendedDoc: Document, paraId: String, done: Boo
     if (existing == null) extendedDoc.documentElement.appendChild(el)
 }
 
-/**
- * Splits `run` (whose text lives in its child `textEl`) at every offset in
- * `offsetsInRun`, replacing `run` in the tree with the resulting pieces —
- * clones of `run`'s own `w:rPr` (so formatting survives) PLUS every
- * ATTRIBUTE `run` itself carries (rsids etc. — `copyAttributes`), each
- * holding one slice of the original text. Returns the pieces AND the full
- * cut-point list so the caller can look up "the piece that starts/ends at
- * exactly offset X". A no-op (`offsetsInRun` has nothing strictly interior)
- * returns `[run]` unchanged. Mirrors `splitRunAtOffsets` (docx-comments.ts).
- */
-private fun splitRunAtOffsets(doc: Document, run: Element, textEl: Element, offsetsInRun: List<Int>): Pair<List<Element>, List<Int>> {
-    val text = textEl.textContent ?: ""
-    val cutsSet = sortedSetOf(0, text.length)
-    for (o in offsetsInRun) if (o > 0 && o < text.length) cutsSet.add(o)
-    val cuts = cutsSet.toList()
-    if (cuts.size <= 2) return Pair(listOf(run), listOf(0, text.length))
-
-    val rPr = elementsByTag(run, "w:rPr").firstOrNull()
-    val pieces = mutableListOf<Element>()
-    for (i in 0 until cuts.size - 1) {
-        val newRun = doc.createElement("w:r")
-        copyAttributes(run, newRun)
-        if (rPr != null) newRun.appendChild(rPr.cloneNode(true))
-        val newT = doc.createElement("w:t")
-        newT.setAttribute("xml:space", "preserve")
-        newT.textContent = text.substring(cuts[i], cuts[i + 1])
-        newRun.appendChild(newT)
-        pieces.add(newRun)
-    }
-    val parent = run.parentNode as Element
-    for (piece in pieces) parent.insertBefore(piece, run)
-    parent.removeChild(run)
-    return Pair(pieces, cuts)
-}
+/** The `<w:r>` currently holding `node`, looked up fresh (see `WriteLeaf`).
+ *  Mirrors `runOf` (docx-comments.ts). */
+private fun runOf(node: Element): Element? = nearestAncestor(node, "w:r")
 
 private class InsertionAnchor(val parent: Element, val before: Node?)
 
-/** Resolves WHERE (a DOM `parent`/`before` pair — `parent.insertBefore(new,
- *  before)`, `before === null` meaning "append") to place a marker for
- *  character offset `offset`, splitting a run when the offset falls strictly
- *  inside one. Mirrors `anchorForOffset` (docx-comments.ts). */
-private fun anchorForOffset(doc: Document, leaves: List<WriteLeaf>, offset: Int, edge: String): InsertionAnchor {
+/**
+ * The DOM position immediately BEFORE `child`, a content child of a `<w:r>`,
+ * splitting the run there when `child` isn't its first content child. The new
+ * second run copies the original's attributes (rsids — F3) and `w:rPr`, then
+ * `child` and every node after it are MOVED into it — tabs, breaks, images
+ * and further text all survive (2026-09-28 PR review). Mirrors
+ * `splitRunBeforeNode` (docx-comments.ts).
+ */
+private fun splitRunBeforeNode(doc: Document, child: Element): InsertionAnchor {
+    val run = runOf(child)
+    if (run == null || child.parentNode !== run) {
+        return InsertionAnchor(child.parentNode as Element, child)
+    }
+    val parent = run.parentNode as Element
+    var hasContentBefore = false
+    var sib = child.previousSibling
+    while (sib != null) {
+        if (sib.nodeType == Node.ELEMENT_NODE && (sib as Element).tagName != "w:rPr") {
+            hasContentBefore = true
+            break
+        }
+        sib = sib.previousSibling
+    }
+    if (!hasContentBefore) return InsertionAnchor(parent, run)
+
+    val newRun = doc.createElement("w:r")
+    copyAttributes(run, newRun)
+    val rPr = elementChildren(run).firstOrNull { it.tagName == "w:rPr" }
+    if (rPr != null) newRun.appendChild(rPr.cloneNode(true))
+    var cur: Node? = child
+    while (cur != null) {
+        val next = cur.nextSibling
+        newRun.appendChild(cur)
+        cur = next
+    }
+    parent.insertBefore(newRun, run.nextSibling)
+    return InsertionAnchor(parent, newRun)
+}
+
+/** Cuts a `<w:t>` at `offset` (strictly inside it): the original keeps the
+ *  text BEFORE the cut; a new `<w:t>` with the rest follows it in the same
+ *  run. Mirrors `cutTextNode` (docx-comments.ts). */
+private fun cutTextNode(doc: Document, textEl: Element, offset: Int): Element {
+    val text = textEl.textContent ?: ""
+    val tail = doc.createElement("w:t")
+    tail.setAttribute("xml:space", "preserve")
+    tail.textContent = text.substring(offset)
+    textEl.textContent = text.substring(0, offset)
+    textEl.setAttribute("xml:space", "preserve")
+    textEl.parentNode.insertBefore(tail, textEl.nextSibling)
+    return tail
+}
+
+/** Where a marker for character `offset` goes: right before the character at
+ *  `offset`. Mirrors `anchorForOffset` (docx-comments.ts). */
+private fun anchorForOffset(doc: Document, leaves: List<WriteLeaf>, offset: Int): InsertionAnchor {
     val idx = leaves.indexOfFirst { offset >= it.start && offset < it.end }
     if (idx == -1) {
         // offset === fullText.length (or the document has no leaves at all,
         // which resolveSelector already ruled out by finding a match).
         val last = leaves.lastOrNull() ?: throw IllegalStateException("docx-comments: no leaves to anchor an insertion against")
-        return when (last) {
-            is WriteLeaf.ParaBreak -> InsertionAnchor(last.paragraph, null)
-            is WriteLeaf.Text -> InsertionAnchor(last.run.parentNode as Element, last.run.nextSibling)
-            is WriteLeaf.Atom -> InsertionAnchor(last.run.parentNode as Element, last.run.nextSibling)
+        if (last is WriteLeaf.ParaBreak) return InsertionAnchor(last.paragraph, null)
+        val node = when (last) {
+            is WriteLeaf.Text -> last.textEl
+            is WriteLeaf.Atom -> last.node
             else -> throw IllegalStateException("docx-comments: unreachable leaf kind")
         }
-    }
-    val leaf = leaves[idx]
-    if (leaf is WriteLeaf.ParaBreak) {
-        // The only reachable offset here is leaf.start — "immediately after
-        // the last real content of the paragraph that just closed, before
-        // the implicit paragraph break".
-        return InsertionAnchor(leaf.paragraph, null)
-    }
-    val run = when (leaf) {
-        is WriteLeaf.Text -> leaf.run
-        is WriteLeaf.Atom -> leaf.run
-        else -> throw IllegalStateException("docx-comments: unreachable leaf kind")
-    }
-    val offsetInRun = offset - leaf.start
-    val runLen = leaf.end - leaf.start
-    // A BOUNDARY position never needs a split — see docx-comments.ts's own
-    // doc comment for why this is checked FIRST, before ever splitting.
-    if (leaf is WriteLeaf.Atom || offsetInRun == 0) {
-        return InsertionAnchor(run.parentNode as Element, run)
-    }
-    if (offsetInRun == runLen) {
+        val run = runOf(node) ?: node
         return InsertionAnchor(run.parentNode as Element, run.nextSibling)
     }
-    val textEl = (leaf as WriteLeaf.Text).textEl
-    val (pieces, cuts) = splitRunAtOffsets(doc, run, textEl, listOf(offsetInRun))
-    return if (edge == "start") {
-        val piece = pieces[cuts.indexOf(offsetInRun)]
-        InsertionAnchor(piece.parentNode as Element, piece)
-    } else {
-        val piece = pieces[cuts.indexOf(offsetInRun) - 1]
-        InsertionAnchor(piece.parentNode as Element, piece.nextSibling)
+    return when (val leaf = leaves[idx]) {
+        // The only reachable offset here is leaf.start — "immediately after
+        // the last real content of the paragraph that just closed".
+        is WriteLeaf.ParaBreak -> InsertionAnchor(leaf.paragraph, null)
+        is WriteLeaf.Atom -> splitRunBeforeNode(doc, leaf.node)
+        is WriteLeaf.Text -> {
+            val offsetInText = offset - leaf.start
+            if (offsetInText == 0) splitRunBeforeNode(doc, leaf.textEl)
+            else splitRunBeforeNode(doc, cutTextNode(doc, leaf.textEl, offsetInText))
+        }
+        else -> throw IllegalStateException("docx-comments: unreachable leaf kind")
     }
 }
 
@@ -1083,10 +1105,10 @@ private fun buildCommentReferenceRun(doc: Document, id: String): Element {
 
 /**
  * Inserts a `w:commentRangeStart`/`w:commentRangeEnd` pair for `id` at
- * `[start, end)`, plus the `w:commentReference` run immediately after the end
- * marker. When `start` and `end` fall in the SAME original text leaf, both
- * cuts are made in ONE `splitRunAtOffsets` call; when they fall in different
- * leaves, the two ends are resolved independently. Mirrors
+ * `[start, end)`, plus the `w:commentReference` run right after the end
+ * marker. The END is placed first: `cutTextNode` keeps the text before a cut
+ * in the original node, so the leaf table built before any edit still
+ * describes every character the start placement looks up. Mirrors
  * `insertCommentRangeMarkers` (docx-comments.ts).
  */
 private fun insertCommentRangeMarkers(doc: Document, leaves: List<WriteLeaf>, start: Int, end: Int, id: String) {
@@ -1096,27 +1118,11 @@ private fun insertCommentRangeMarkers(doc: Document, leaves: List<WriteLeaf>, st
     endMarker.setAttribute("w:id", id)
     val refRun = buildCommentReferenceRun(doc, id)
 
-    val startIdx = leaves.indexOfFirst { start >= it.start && start < it.end }
-    val endIdx = leaves.indexOfFirst { end >= it.start && end < it.end }
-
-    if (startIdx != -1 && startIdx == endIdx && leaves[startIdx] is WriteLeaf.Text) {
-        val leaf = leaves[startIdx] as WriteLeaf.Text
-        val so = start - leaf.start
-        val eo = end - leaf.start
-        val (pieces, cuts) = splitRunAtOffsets(doc, leaf.run, leaf.textEl, listOf(so, eo))
-        val startPiece = pieces[cuts.indexOf(so)]
-        val endPiece = pieces[cuts.indexOf(eo) - 1]
-        (startPiece.parentNode as Element).insertBefore(startMarker, startPiece)
-        (endPiece.parentNode as Element).insertBefore(endMarker, endPiece.nextSibling)
-        (endMarker.parentNode as Element).insertBefore(refRun, endMarker.nextSibling)
-        return
-    }
-
-    val startAnchor = anchorForOffset(doc, leaves, start, "start")
-    startAnchor.parent.insertBefore(startMarker, startAnchor.before)
-    val endAnchor = anchorForOffset(doc, leaves, end, "end")
+    val endAnchor = anchorForOffset(doc, leaves, end)
     endAnchor.parent.insertBefore(endMarker, endAnchor.before)
     (endMarker.parentNode as Element).insertBefore(refRun, endMarker.nextSibling)
+    val startAnchor = anchorForOffset(doc, leaves, start)
+    startAnchor.parent.insertBefore(startMarker, startAnchor.before)
 }
 
 /** §3.3 step 5 (Move, review 3 F2): removes the CURRENT
@@ -1166,7 +1172,10 @@ private fun replaceCommentParagraphText(commentsDoc: Document, commentEl: Elemen
         (p.parentNode as? Element)?.removeChild(p)
     }
     val pEl = commentsDoc.createElement("w:p")
-    if (paraId != null) pEl.setAttribute("w14:paraId", paraId)
+    if (paraId != null) {
+        ensureW14NamespaceDeclared(commentsDoc)
+        pEl.setAttribute("w14:paraId", paraId)
+    }
     val rEl = commentsDoc.createElement("w:r")
     val tEl = commentsDoc.createElement("w:t")
     tEl.setAttribute("xml:space", "preserve")
@@ -1799,9 +1808,14 @@ fun docxBackupPathFor(homeDir: File, absolutePath: String): File {
 internal fun isFileOpenElsewhere(target: File): Boolean {
     val dir = target.parentFile ?: return false
     val name = target.name
-    val ownerFile = File(dir, "~\$$name")
+    // WHY three owner-file forms (2026-09-28 PR review, mirrors
+    // write-pipeline.ts): Word keeps the whole name only up to 6 characters
+    // before the extension; at 7 it drops the first character and at 8+ the
+    // first two (`Report2024.docx` → `~$port2024.docx`). Excel uses the full
+    // name. Checking only the full form missed most real documents.
+    val ownerForms = linkedSetOf(name, name.drop(1), name.drop(2)).filter { it.isNotEmpty() }
     val lockFile = File(dir, ".~lock.$name#")
-    return ownerFile.exists() || lockFile.exists()
+    return ownerForms.any { File(dir, "~\$$it").exists() } || lockFile.exists()
 }
 
 /**
@@ -1864,7 +1878,9 @@ internal suspend fun <T> writeDocxMutation(
             // Verify-by-reread BEFORE the real target is ever touched — see
             // this section's own header for why a failure here needs no
             // separate "restore the backup" step: `target` was never written.
-            val verified = try { verify(outFile, value, target) } catch (_: Exception) { false }
+            // xmlPartsStayWellFormed: the strict namespace check the lenient DOM
+            // can't do (DocCommentsXmlSafety.kt, 2026-09-28 PR review).
+            val verified = try { xmlPartsStayWellFormed(outFile, target) && verify(outFile, value, target) } catch (_: Exception) { false }
             if (!verified) return@withLock DocxWriteResult.Err(DocxWriteError.VERIFY_FAILED)
 
             // F1 (T17 implementation review, major/durability): fsync the

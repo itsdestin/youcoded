@@ -40,7 +40,7 @@ async function exists(path: string): Promise<boolean> {
 // backups/` (`backupPathFor`), kept after a successful write rather than
 // deleted. These tests were rewritten against that location and lifecycle.
 describe('write-pipeline — verify-after-write with automatic rollback', () => {
-  it('a failed verification restores the original bytes exactly, and clears the backup it consumed', async () => {
+  it('a failed verification restores the original bytes exactly, and keeps the backup copy', async () => {
     await withScratchFile('original bytes', async (target) => {
       const before = await readFile(target);
       const backupPath = backupPathFor(target, '.xlsx.bak');
@@ -52,9 +52,9 @@ describe('write-pipeline — verify-after-write with automatic rollback', () => 
       );
       expect(result).toEqual({ ok: false, error: 'verify-failed' });
       expect(await readFile(target)).toEqual(before); // restored byte-for-byte
-      // Rolled back means RENAMED back over the target — the backup no
-      // longer exists afterward (it now IS the live file again).
-      expect(await exists(backupPath)).toBe(false);
+      // 2026-09-28: restored by writing the original back beside the target
+      // (a rename from ~/.claude cannot cross drives), so the backup stays.
+      expect(await readFile(backupPath)).toEqual(before);
     });
   });
 

@@ -914,7 +914,7 @@ describe('docx-comments write — verify-after-write with automatic rollback', (
   // `backupPathFor`), kept after a successful write rather than deleted. These
   // two tests were rewritten against that new location and lifecycle; see
   // `write-pipeline.ts` for the actual behaviour they pin.
-  it('a failed verification restores the original bytes exactly, and clears the backup it consumed', async () => {
+  it('a failed verification restores the original bytes exactly, and keeps the backup copy', async () => {
     await withScratchCopy('launch-brief.docx', async (target) => {
       const before = await readFile(target);
       const backupPath = backupPathFor(target, DOCX_BACKUP_SUFFIX);
@@ -925,9 +925,31 @@ describe('docx-comments write — verify-after-write with automatic rollback', (
       );
       expect(result).toEqual({ ok: false, error: 'verify-failed' });
       expect(await readFile(target)).toEqual(before); // restored byte-for-byte
-      // Rolled back means RENAMED back over the target — the backup file
-      // itself no longer exists afterward (it now IS the live file again).
-      expect(await exists(backupPath)).toBe(false);
+      // 2026-09-28: the restore writes the original back beside the target
+      // instead of renaming the backup over it (a rename cannot cross
+      // drives), so the backup stays as the standing safety copy.
+      expect(await readFile(backupPath)).toEqual(before);
+    });
+  });
+
+  it('the restore does not depend on the backup file, so it also works when the backup is on another drive', async () => {
+    // A backup under ~/.claude cannot be RENAMED onto a document on D:, a
+    // USB stick or a network share (EXDEV). Before the fix that rename was
+    // the whole restore: it threw and the rejected file stayed. Removing the
+    // backup mid-verify stands in for "the backup cannot be moved there".
+    await withScratchCopy('launch-brief.docx', async (target) => {
+      const before = await readFile(target);
+      const backupPath = backupPathFor(target, DOCX_BACKUP_SUFFIX);
+      const result = await writeDocxMutation(
+        target,
+        async (bytes) => ({ ok: true, bytes: Buffer.concat([bytes, Buffer.from([0])]) }),
+        async () => {
+          await rm(backupPath, { force: true });
+          return false;
+        }
+      );
+      expect(result).toEqual({ ok: false, error: 'verify-failed' });
+      expect(await readFile(target)).toEqual(before);
     });
   });
 
@@ -1294,5 +1316,193 @@ describe('docx-comments write — F4: commentsIds.xml/commentsExtensible.xml sta
       expect(zip.file('word/commentsIds.xml')).toBeNull();
       expect(zip.file('word/commentsExtensible.xml')).toBeNull();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-09-28 PR review fixes. Each shape below is one real Word files carry
+// that the fixtures above never did, and each produced a damaged or
+// silently-changed document before the fix.
+// ---------------------------------------------------------------------------
+
+/** A one-paragraph docx whose body is exactly `paragraphInner`. Built in
+ *  memory like `buildGappedIdsDocx`. `commentsRootAttrs` lets a test give
+ *  comments.xml a root WITHOUT `xmlns:w14`, the way Word 2007, LibreOffice
+ *  and Google Docs exports write it. */
+async function buildDocxWithParagraph(
+  paragraphInner: string,
+  opts: { commentsRootAttrs?: string; extraEntry?: { name: string; body: string } } = {}
+): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>`
+  );
+  zip.file(
+    '_rels/.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`
+  );
+  zip.file(
+    'word/_rels/document.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>`
+  );
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body><w:p>${paragraphInner}</w:p></w:body></w:document>`
+  );
+  zip.file(
+    'word/comments.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${opts.commentsRootAttrs ?? `${W} ${W14}`}></w:comments>`
+  );
+  if (opts.extraEntry) zip.file(opts.extraEntry.name, opts.extraEntry.body);
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+async function withBuiltDocx<T>(bytes: Buffer, fn: (target: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), 'ycd-docx-review-'));
+  const target = join(dir, 'built.docx');
+  await writeFile(target, bytes);
+  try {
+    return await fn(target);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function documentXmlOf(target: string): Promise<string> {
+  return (await JSZip.loadAsync(await readFile(target))).file('word/document.xml')!.async('string');
+}
+
+/** The paragraph's content in document order, markers and runs flattened to
+ *  a readable token list — what a user would "see" plus where the comment
+ *  markers sit. */
+function paragraphTokens(documentXml: string): string[] {
+  const tokens: string[] = [];
+  const re = /<w:t[^>]*>([^<]*)<\/w:t>|<w:(tab|br|drawing|commentRangeStart|commentRangeEnd|commentReference)\b/g;
+  for (const m of documentXml.matchAll(re)) tokens.push(m[1] !== undefined ? `"${m[1]}"` : m[2]);
+  return tokens;
+}
+
+describe('docx-comments write — splitting a run keeps every tab, break and image in it', () => {
+  it('a comment inside text that follows a tab in the same run keeps the tab', async () => {
+    const bytes = await buildDocxWithParagraph('<w:r><w:tab/><w:t>Alpha beta</w:t></w:r>');
+    await withBuiltDocx(bytes, async (target) => {
+      const result = await addDocxComment({ absolutePath: target, path: 'built.docx', selector: textSelector('lph'), text: 'x', author: 'user' });
+      expect(result.ok).toBe(true);
+      // Before the fix the tab was deleted: ["A", start, "lph", ..., "a beta"].
+      expect(paragraphTokens(await documentXmlOf(target))).toEqual([
+        'tab', '"A"', 'commentRangeStart', '"lph"', 'commentRangeEnd', 'commentReference', '"a beta"',
+      ]);
+    });
+  });
+
+  it('a quote spanning a tab inside ONE run succeeds and keeps text, tab and order intact', async () => {
+    // Before the fix this threw "Cannot read properties of null" — the
+    // second marker reused a run the first split had already removed.
+    const bytes = await buildDocxWithParagraph('<w:r><w:t>Hello</w:t><w:tab/><w:t>World</w:t></w:r>');
+    await withBuiltDocx(bytes, async (target) => {
+      const result = await addDocxComment({ absolutePath: target, path: 'built.docx', selector: textSelector('llo\tWo'), text: 'x', author: 'user' });
+      expect(result.ok).toBe(true);
+      expect(paragraphTokens(await documentXmlOf(target))).toEqual([
+        '"He"', 'commentRangeStart', '"llo"', 'tab', '"Wo"', 'commentRangeEnd', 'commentReference', '"rld"',
+      ]);
+      const read = await readDocxComments(await readFile(target), 'built.docx');
+      expect(read.ok && read.comments.map((c) => (c.selector.kind === 'text' ? c.selector.selector.exact : null))).toEqual(['llo\tWo']);
+    });
+  });
+
+  it('a line break and an inline image in the split run both survive', async () => {
+    const bytes = await buildDocxWithParagraph('<w:r><w:t>Before</w:t><w:br/><w:drawing/><w:t>After text</w:t></w:r>');
+    await withBuiltDocx(bytes, async (target) => {
+      const result = await addDocxComment({ absolutePath: target, path: 'built.docx', selector: textSelector('ter te'), text: 'x', author: 'user' });
+      expect(result.ok).toBe(true);
+      expect(paragraphTokens(await documentXmlOf(target))).toEqual([
+        '"Before"', 'br', 'drawing', '"Af"', 'commentRangeStart', '"ter te"', 'commentRangeEnd', 'commentReference', '"xt"',
+      ]);
+    });
+  });
+
+  it('a tab-stop definition in the paragraph properties is not counted as a tab character', async () => {
+    const bytes = await buildDocxWithParagraph('<w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r><w:t>Plain words</w:t></w:r>');
+    await withBuiltDocx(bytes, async (target) => {
+      const result = await addDocxComment({ absolutePath: target, path: 'built.docx', selector: textSelector('Plain'), text: 'x', author: 'user' });
+      expect(result.ok).toBe(true);
+      const xml = await documentXmlOf(target);
+      // The marker sits in the paragraph, never inside <w:pPr>.
+      expect(xml).toMatch(/<\/w:pPr><w:commentRangeStart w:id="0"\/>/);
+      const read = await readDocxComments(await readFile(target), 'built.docx');
+      expect(read.ok && read.comments[0].selector.kind === 'text' && read.comments[0].selector.selector.prefix).toBe('');
+    });
+  });
+});
+
+describe('docx-comments write — a comments part from another producer stays well-formed', () => {
+  it('declares xmlns:w14 on a comments.xml that never had it before writing w14:paraId', async () => {
+    const bytes = await buildDocxWithParagraph('<w:r><w:t>Some text here</w:t></w:r>', { commentsRootAttrs: W });
+    await withBuiltDocx(bytes, async (target) => {
+      const result = await addDocxComment({ absolutePath: target, path: 'built.docx', selector: textSelector('text'), text: 'x', author: 'user' });
+      expect(result.ok).toBe(true);
+      const commentsXml = await (await JSZip.loadAsync(await readFile(target))).file('word/comments.xml')!.async('string');
+      expect(commentsXml).toMatch(/<w:comments\b[^>]*xmlns:w14="http:\/\/schemas.microsoft.com\/office\/word\/2010\/wordml"/);
+      expect(commentsXml).toContain('w14:paraId=');
+    });
+  });
+
+  it('a write whose output would use an undeclared namespace prefix is rolled back, never kept', async () => {
+    const bytes = await buildDocxWithParagraph('<w:r><w:t>Some text here</w:t></w:r>');
+    await withBuiltDocx(bytes, async (target) => {
+      const before = await readFile(target);
+      const result = await writeDocxMutation(
+        target,
+        async (current) => {
+          const zip = await JSZip.loadAsync(current);
+          const xml = await zip.file('word/comments.xml')!.async('string');
+          zip.file('word/comments.xml', xml.replace('</w:comments>', '<w:comment w:id="0"><w:p w99:paraId="1"/></w:comment></w:comments>'));
+          return { ok: true, bytes: await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }) };
+        },
+        async () => true // the format's own check would have passed it
+      );
+      expect(result).toEqual({ ok: false, error: 'verify-failed' });
+      expect(await readFile(target)).toEqual(before);
+    });
+  });
+});
+
+describe('docx-comments write — the saved file stays compressed', () => {
+  it('adding one comment does not inflate a large compressible part the write never touched', async () => {
+    const media = 'lorem ipsum dolor sit amet '.repeat(100_000); // ~2.7 MB, compresses to a few KB
+    const bytes = await buildDocxWithParagraph('<w:r><w:t>Some text here</w:t></w:r>', { extraEntry: { name: 'word/media/big.txt', body: media } });
+    await withBuiltDocx(bytes, async (target) => {
+      const result = await addDocxComment({ absolutePath: target, path: 'built.docx', selector: textSelector('text'), text: 'x', author: 'user' });
+      expect(result.ok).toBe(true);
+      const after = await readFile(target);
+      // Before the fix the part was re-stored uncompressed (~2.7 MB).
+      expect(after.length).toBeLessThan(bytes.length + 4096);
+    });
+  });
+});
+
+describe('docx-comments write — Word owner files for long names', () => {
+  // Word shortens its owner file's name: 8+ characters before the extension
+  // drop the first two (Report2024.docx → ~$port2024.docx), exactly 7 drop
+  // the first one. Before the fix only the full-name form was checked, so
+  // most real documents open in Word were written over.
+  it.each([
+    ['Report2024.docx', '~$port2024.docx'],
+    ['Minutes.docx', '~$nutes.docx'],
+    ['Budget.docx', '~$Budget.docx'],
+  ])('refuses %s while %s sits beside it', async (name, owner) => {
+    const bytes = await buildDocxWithParagraph('<w:r><w:t>Some text here</w:t></w:r>');
+    const dir = await mkdtemp(join(tmpdir(), 'ycd-docx-owner-'));
+    try {
+      const target = join(dir, name);
+      await writeFile(target, bytes);
+      await writeFile(join(dir, owner), 'destin');
+      const result = await addDocxComment({ absolutePath: target, path: name, selector: textSelector('text'), text: 'x', author: 'user' });
+      expect(result).toEqual({ ok: false, error: 'file-open-elsewhere' });
+      expect(await readFile(target)).toEqual(bytes);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

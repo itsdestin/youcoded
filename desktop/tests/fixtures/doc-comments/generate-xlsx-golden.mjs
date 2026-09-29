@@ -40,6 +40,13 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
+// WHY (2026-09-28 PR review): a threaded comment's `dT` has no time zone and
+// the reader treats it as local time, so the goldens' `createdAt` values
+// depend on the zone this runs in. Pinned to the zone the committed goldens
+// were made in; XlsxCommentsTest.kt pins the same zone (GOLDEN_TIME_ZONE).
+// Node re-reads TZ on every Date operation, so setting it here takes effect.
+process.env.TZ = 'America/Phoenix';
+
 const FIXTURES_DIR = dirname(fileURLToPath(import.meta.url));
 const DESKTOP_ROOT = join(FIXTURES_DIR, '..', '..', '..'); // desktop/tests/fixtures/doc-comments -> desktop/
 const GOLDEN_DIR = join(FIXTURES_DIR, 'golden');

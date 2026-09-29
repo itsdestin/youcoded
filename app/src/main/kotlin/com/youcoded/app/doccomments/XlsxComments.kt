@@ -814,11 +814,10 @@ private fun addContentTypeOverride(contentTypesDoc: Document, partName: String, 
 
 /** Creates a brand-new comments{N}.xml/vmlDrawing{N}.vml pair, wires the
  *  worksheet's own rels and `[Content_Types].xml`, and inserts
- *  `<legacyDrawing r:id="...">` as the worksheet's OWN LAST child element —
- *  design review round 2, F4 (High): this exact rule was found and fixed once
- *  already for the retired legacy-Notes design, and must land AFTER a
- *  pre-existing `<extLst>` if one exists, never before it. `appendChild`
- *  satisfies this unconditionally. Also review F5 (Low): declares `xmlns:r`
+ *  `<legacyDrawing r:id="...">` at its schema position: before the first of
+ *  `LEGACY_DRAWING_SUCCESSORS` the sheet already has, else last (see that
+ *  constant for why the earlier "always last" rule was wrong). Also review
+ *  F5 (Low): declares `xmlns:r`
  *  on the worksheet root defensively before ever setting `r:id`. */
 private fun createLegacyPair(archive: WriteArchive, ctx: WorksheetCtx, n: Int) {
     ctx.commentsPartPath = "xl/comments$n.xml"
@@ -853,9 +852,26 @@ private fun createLegacyPair(archive: WriteArchive, ctx: WorksheetCtx, n: Int) {
     }
     val legacyDrawing = ctx.worksheetDoc.createElement("legacyDrawing")
     legacyDrawing.setAttribute("r:id", vmlRelId)
-    ctx.worksheetDoc.documentElement.appendChild(legacyDrawing)
+    val root = ctx.worksheetDoc.documentElement
+    val children = root.childNodes
+    var successor: org.w3c.dom.Node? = null
+    for (i in 0 until children.length) {
+        val node = children.item(i)
+        if (node.nodeType == org.w3c.dom.Node.ELEMENT_NODE && localName((node as Element).tagName) in LEGACY_DRAWING_SUCCESSORS) {
+            successor = node
+            break
+        }
+    }
+    root.insertBefore(legacyDrawing, successor)
     ctx.worksheetChanged = true
 }
+
+/** Worksheet children the OOXML schema (`CT_Worksheet`, a strict sequence)
+ *  puts AFTER `<legacyDrawing>`. WHY (2026-09-28 PR review, mirrors
+ *  xlsx-comments.ts): appending it after a Table's `<tableParts>` or an
+ *  `<extLst>` made Excel report "We found a problem with some content" and
+ *  drop the comment. */
+private val LEGACY_DRAWING_SUCCESSORS = setOf("legacyDrawingHF", "drawingHF", "picture", "oleObjects", "controls", "webPublishItems", "tableParts", "extLst")
 
 /** §4.2: both relationships are "implicit" — creating the threaded part needs
  *  only a rels entry + content-types Override, never any worksheet-content
@@ -1485,13 +1501,11 @@ private fun loadArchiveForWrite(zip: ZipFile): XlsxWriteResult<WriteArchive> {
     }
 }
 
-// Same ceiling `DocCommentsZipSizeGuard.kt`'s own `readEntryBounded` uses,
-// duplicated here (not exported from that file) so a STREAMED copy of an
-// untouched, still-compressed entry gets the identical real-byte-counted
-// zip-bomb backstop a fully-buffered `readEntryBounded` call already gives
-// every part this module actually parses — kept in sync by convention, the
-// same "not enforced at compile time, but named" precedent that file's own
-// header already accepts for the desktop/Android 200MB constant.
+// The 200MB ARCHIVE ceiling (DocCommentsZipSizeGuard.kt's declared-size
+// checks), applied to real bytes as a STREAMED copy of an untouched entry
+// runs. Deliberately higher than `MAX_IN_MEMORY_PART_BYTES` (32MB, the limit
+// for a part `readEntryBounded` loads into memory): a streamed copy only ever
+// holds one small buffer, so a large image or untouched sheet is fine here.
 private const val MAX_STREAMED_ENTRY_BYTES = 200L * 1024 * 1024
 private const val STREAM_COPY_BUFFER_BYTES = 8192
 
@@ -1941,7 +1955,9 @@ internal suspend fun <T> writeXlsxMutation(
             val value = (mutated as XlsxWriteResult.Ok).value
 
             // Verify-by-reread BEFORE the real target is ever touched.
-            val verified = try { verify(outFile, value, target) } catch (_: Exception) { false }
+            // xmlPartsStayWellFormed: the strict namespace check the lenient DOM
+            // can't do (DocCommentsXmlSafety.kt, 2026-09-28 PR review).
+            val verified = try { xmlPartsStayWellFormed(outFile, target) && verify(outFile, value, target) } catch (_: Exception) { false }
             if (!verified) return@withLock XlsxWriteResult.Err(XlsxWriteError.VERIFY_FAILED)
 
             try {
