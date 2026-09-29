@@ -273,6 +273,10 @@ export function createOfficeCommands(deps: {
     if (deps.onOpened) {
       // WHY caught: the file opened fine; a failure to keep its "opened" version (Task 7) must
       // not stop the user from seeing it.
+      // WHY awaited here, inside the document's queue and before the reply (accepted cost): the
+      // "opened" copy must be written (whole, fsync'd) before any save of this document can run,
+      // or the first save could replace the file before its opened state was kept. So a first
+      // open waits for one full copy write.
       await deps.onOpened(s).catch((e) => log('WARN', 'Office', 'onOpened failed', { error: String(e) }));
     }
     return b64;
@@ -365,6 +369,9 @@ export function createOfficeCommands(deps: {
     if (deps.onSaved) {
       // WHY caught: the file IS saved at this point; failing to keep a version must not make
       // the editor report the save itself as failed (it would retry and save again).
+      // WHY awaited inside the queue, before the reply (accepted cost): the kept copy of the
+      // previous state must land before the next save replaces the file again. So a save on
+      // which a version is due (at most one per 10 minutes) waits for one full copy write.
       await deps.onSaved(s, before).catch((e) => log('WARN', 'Office', 'onSaved failed', { error: String(e) }));
     }
     return 'ok';
