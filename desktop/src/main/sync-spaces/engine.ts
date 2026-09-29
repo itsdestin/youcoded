@@ -272,13 +272,18 @@ export class SpaceSyncEngine {
     if (nextSet.size === st.ignoredDirs.size && next.every(d => st.ignoredDirs.has(d))) return;
     st.ignoredDirs = nextSet;
     const old = st.watcher;
-    if (!old || this.stopped || this.states.get(st.space.id) !== st) return; // poll-only or detached: nothing to rebuild
+    if (this.stopped || this.states.get(st.space.id) !== st) return; // detached: nothing to rebuild
     // Rebuild rather than patch the live watcher: chokidar's unwatch(dir)
     // closes only that folder's own handle and leaves every handle beneath it
     // open, and a path it unwatched stays ignored even after a later add(). A
     // fresh scan of the (now smaller) tree is exact.
+    // A poll-only space (old === null) is re-armed too: a big folder only the
+    // project's .gitignore knows (a `.venv-rocm`) can flood past the budget
+    // before this refresh learns to skip it — without this the space stayed on
+    // the poll until restart (review, 2026-09-29). startWatcher re-checks the
+    // budget, so a space that is genuinely too big just stays poll-only.
     st.watcher = null;
-    await old.close();
+    if (old) await old.close();
     await this.startWatcher(st);
     // startWatcher set it; TS still holds the `= null` narrowing from above.
     const rebuilt = st.watcher as FSWatcher | null;

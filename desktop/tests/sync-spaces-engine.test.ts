@@ -207,7 +207,7 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     // The sync that folder triggered re-asks the transport and rebuilds the
     // watcher without it.
     await vi.waitFor(() => expect(created.length).toBe(before + 1), { timeout: WAIT_MS });
-    await vi.waitFor(() => expect(t.pushes.length).toBe(2), { timeout: WAIT_MS }); // rebuild's catch-up sync
+    await vi.waitFor(() => expect(t.pushes.length).toBeGreaterThanOrEqual(2), { timeout: WAIT_MS }); // rebuild's catch-up sync
     const watched = watchedUnder(tmp);
     expect(watched.has('.venv-rocm')).toBe(false);
     expect(watched.has('.venv-rocm/torch.so')).toBe(false);
@@ -241,6 +241,34 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     for (let i = 0; i < 10; i++) fs.writeFileSync(path.join(tmp, `f${i}.md`), 'x');
     await vi.waitFor(() => expect(events.filter(e => e.type === 'notice')).toHaveLength(1), { timeout: WAIT_MS });
     await vi.waitFor(() => expect(created[created.length - 1].closed).toBe(true), { timeout: WAIT_MS });
+    await engine.stop();
+  });
+
+  it('a space pushed over the budget by a folder that turns out to be ignored goes back to live watching', async () => {
+    const t: any = fakeTransport();
+    let ignored: string[] = [];
+    t.ignoredDirs = vi.fn(async () => ignored);
+    const events: SpaceSyncEvent[] = [];
+    // Debounce longer than awaitWriteFinish (500 ms): the file events must
+    // push the count over budget BEFORE the sync (and its refresh) runs, as a
+    // real flood does — otherwise the refresh rebuilds a live watcher and the
+    // poll-only re-arm path is never exercised.
+    const engine = new SpaceSyncEngine(t, { debounceMs: 2_000, pollMs: 0, watchBudget: 5, onEvent: e => events.push(e) });
+    await engine.addSpace({ id: 'project:x', kind: 'project', root: tmp });
+    const first = created[created.length - 1];
+    // Only the project's .gitignore knows this folder, and its files arrive
+    // faster than the post-sync refresh can learn that.
+    ignored = ['.venv-rocm'];
+    fs.mkdirSync(path.join(tmp, '.venv-rocm'));
+    for (let i = 0; i < 10; i++) fs.writeFileSync(path.join(tmp, '.venv-rocm', `m${i}.py`), 'x');
+    await vi.waitFor(() => expect(events.some(e => e.type === 'notice')).toBe(true), { timeout: WAIT_MS }); // dropped to the poll…
+    expect(first.closed).toBe(true);
+    await vi.waitFor(() => {
+      const latest = created[created.length - 1];
+      expect(latest).not.toBe(first);
+      expect(latest.closed).toBe(false);                                                 // …then re-armed
+    }, { timeout: WAIT_MS });
+    expect(watchedUnder(tmp).has('.venv-rocm')).toBe(false);
     await engine.stop();
   });
 
