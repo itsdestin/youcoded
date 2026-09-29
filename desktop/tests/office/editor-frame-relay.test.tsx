@@ -85,7 +85,16 @@ describe('EditorFrame hosting the editor', () => {
     fromEditor({ yc: 'ready' });
     const kinds = sent().map((m) => m.type ?? m.yc);
     expect(kinds).toEqual(['yc:office-theme', 'yc:office-mode', 'event']);
-    expect(sent()[2]).toEqual({ yc: 'event', name: 'open-file', payload: FILE.path });
+    expect(sent()[2]).toEqual({ yc: 'event', name: 'open-file', payload: FILE.name });
+  });
+
+  it('never tells the editor which folder the file is in', async () => {
+    fakeBridge();
+    const { fromEditor, sent } = await mountFrame();
+    fromEditor({ yc: 'ready' });
+    const folder = FILE.path.slice(0, FILE.path.lastIndexOf('/'));
+    expect(folder.length).toBeGreaterThan(0);
+    for (const m of sent()) expect(JSON.stringify(m)).not.toContain(folder);
   });
 
   it("relays an editor request to main and posts main's answer back under the same id", async () => {

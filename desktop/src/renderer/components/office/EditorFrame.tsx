@@ -615,7 +615,12 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (d?.yc === 'ready') {
         post({ type: OFFICE_THEME_MESSAGE, theme: editorTheme(opened.origin) });
         post({ type: OFFICE_MODE_MESSAGE, slim });
-        post({ yc: 'event', name: 'open-file', payload: file.path });
+        // WHY the name, never the path (final review, finding 3): bridge.js uses the payload
+        // only for the document's name and extension (the tab title, the Save As filters,
+        // recovery's format) — open_file ignores it and main always opens the session's own
+        // file. The folder would tell the sealed frame where the file lives; get_current_path
+        // answers with the name for the same reason.
+        post({ yc: 'event', name: 'open-file', payload: file.name });
       }
       if (d?.yc === 'rpc' && typeof (d as RpcMessage).cmd === 'string') relay(d as RpcMessage);
       // The bridge says when the document is really drawn — "opened" only means accepted.
