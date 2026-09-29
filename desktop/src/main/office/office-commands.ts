@@ -271,7 +271,7 @@ export function createOfficeCommands(deps: {
     const r = await authorizeArtifactWrite({ projectRoot: path.dirname(s.path), fullPath: s.path, mustStayInRoot: false });
     if (r.ok) return;
     if (r.error === 'protected-path') throw userError(MSG.protected);
-    // A confirm step for settings-like files is design task 8's; until then, refuse.
+    // Settings-like files would need a confirm step first, which Office doesn't have yet; refuse.
     if (r.error === 'needs-confirm') throw userError(MSG.needsConfirm);
     throw userError(MSG.notFound);
   }

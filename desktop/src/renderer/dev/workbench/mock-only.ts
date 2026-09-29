@@ -96,8 +96,8 @@
 // (build plan Task 5: main/office/office-ipc.ts, preload, remote-shim, SessionService.kt).
 // office.source did not survive the move: the v2 bridge opens a document with office.open
 // and relays the editor's own requests through office.invoke. status, create, pick,
-// versions and restore answer placeholders in main until Tasks 7 and 8 fill them; the
-// fake in mock-shim.ts stays so the workbench can still show the start screen and history.
+// versions and restore are all real in main now; the fake in mock-shim.ts stays so the
+// workbench can still show the start screen and history without a desktop backend.
 //
 // Add a row the moment you design a channel ahead of its backend; delete the row, never the
 // guard, when it ships. An empty list is the healthy state.

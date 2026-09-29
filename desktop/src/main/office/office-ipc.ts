@@ -231,7 +231,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       const auth = await authorizeArtifactWrite({ projectRoot: path.dirname(filePath), fullPath: filePath, mustStayInRoot: false });
       if (!auth.ok) {
         if (auth.error === 'protected-path') return fail(MSG.protected);
-        // A confirm step for settings-like files is design task 8's; until then, refuse.
+        // Settings-like files would need a confirm step first, which Office doesn't have yet; refuse.
         if (auth.error === 'needs-confirm') return fail(MSG.needsConfirm);
         return fail(MSG.missing);
       }
