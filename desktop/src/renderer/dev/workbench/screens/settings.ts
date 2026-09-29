@@ -6,6 +6,9 @@ const settings = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags
 export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings', 'drawer'),
   settings('settings/account', 'dialog'),
+  // WHY (2026-09-29): the signed-in Account view was never photographed, so it
+  // missed the card sweep — Destin found it bare in the live app.
+  { ...settings('settings/account#signed-in', 'dialog'), params: { signedIn: '1' } },
   settings('settings/account/connections', 'dialog'),
   { ...settings('settings/assistant', 'dialog'), sameAs: { name: 'settings/assistant/general', why: 'the panel opens on its General page' } },
   settings('settings/assistant/general', 'dialog'),
