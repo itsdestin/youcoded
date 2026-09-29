@@ -2259,7 +2259,11 @@ export default function SessionStrip({
               // scripts/ast-grep/rules/shortcuts-dialog-keeps-scroll-body-session-menu-height.yml
               // pins (retired tests/menu-row-reachability.test.ts, Plan B 2026-09-16).
               style={{
-                maxHeight: 'min(432px, 55vh)',
+                // WHY 316px (quick-fix batch, 2026-09-29; ui-quick-fixes#QF-1: "reduce
+                // the number of sessions shown by default to like 6.5"): six rows of
+                // ~48px plus half of a seventh, so the cut-off row says "scroll for
+                // more". 55vh still wins on short windows.
+                maxHeight: 'min(316px, 55vh)',
                 background: peerDropActive ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : undefined,
               }}
               onDragOver={(e) => {

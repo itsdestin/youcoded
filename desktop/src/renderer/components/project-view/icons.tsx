@@ -107,6 +107,14 @@ export function CodeGlyphIcon({ size = 15, strokeWidth = 2 }: IconProps) {
   );
 }
 
+export function CheckIcon({ size = 15, strokeWidth = 2 }: IconProps) {
+  return (
+    <svg {...base(size, strokeWidth)}>
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
 export function PlusIcon({ size = 15, strokeWidth = 2 }: IconProps) {
   return (
     <svg {...base(size, strokeWidth)}>

@@ -1,7 +1,7 @@
 // ProjectSwitcher — command-palette project jumper (Task 2.3).
 // Opened from the ProjectHero name button. A centered popup (L2) with a search
 // field, a filtered "Recent" list of projects (avatar + name + repo glyph +
-// mono path + files·chats hint), and an "Add a project" footer.
+// mono path + files·chats hint + active check), and an "Add a project" footer.
 //
 // Layout/visuals mirror docs/superpowers/prototypes/2026-06-14-project-view-redesign.html
 // (switcherPaletteEl). Icon style matches ProjectHero — inline lucide SVG,
@@ -29,8 +29,9 @@ interface ProjectSwitcherProps {
   syncStatus?: SyncStatusData | null;
 }
 
-// Shared glyphs — see ./icons.tsx.
-import { SearchIcon, PlusIcon } from './icons';
+// Shared glyphs — see ./icons.tsx. (The check is the active-project indicator,
+// NOT a status glyph.)
+import { SearchIcon, CheckIcon, PlusIcon } from './icons';
 import { CloseButton, SectionLabel } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
 
@@ -180,21 +181,23 @@ export function ProjectSwitcher({
               <div key={p.id} className="group relative">
                 <button
                   type="button"
-                  // pr-9 reserves room for the hover × when delete is available.
-                  // WHY the session switcher's row states (quick-fix batch,
-                  // 2026-09-29; LB-11: "the checkmarks and such are odd here"):
-                  // the highlighted row was an accent-outlined box AND the
-                  // current project carried a check — two extra marks no other
-                  // pick-one menu uses. Now, like the session list: the
-                  // highlighted row (mouse or ↑/↓) is a stronger accent fill,
-                  // the current project a light one, no outline, no check.
-                  // Current and hovered still never look alike (fix batch 1).
-                  className={`w-full flex items-center gap-2.5 px-2 py-2 ${onDeleteProject ? 'pr-9' : ''} rounded-md text-left transition-colors ${
+                  // Keyboard highlight is outline-not-fill (border-accent); the
+                  // active project gets a subtle bg-inset fill instead. pr-9
+                  // reserves room for the hover × when delete is available.
+                  // WHY bg-accent/10 for the active project, not bg-inset (fix
+                  // batch 1, 2026-09-24): isActive and the default hover both
+                  // used the SAME token, so a hovered-but-not-active row was
+                  // indistinguishable from the actually-active one (job D's
+                  // hover/selected collision). Hover only applies unselected.
+                  // (The session-switcher row states were tried 2026-09-29 and
+                  // declined — ui-quick-fixes#QF-2: "don't like the row change";
+                  // the rows get their own rethink.)
+                  className={`w-full flex items-center gap-2.5 px-2 py-2 ${onDeleteProject ? 'pr-9' : ''} rounded-md text-left transition-colors border ${
                     isHighlighted
-                      ? 'bg-accent/20'
+                      ? 'border-accent bg-inset'
                       : isActive
-                        ? 'bg-accent/10'
-                        : 'hover:bg-inset'
+                        ? 'border-transparent bg-accent/10'
+                        : 'border-transparent hover:bg-inset'
                   }`}
                   onMouseEnter={() => setHighlightIndex(i)}
                   onClick={() => onSelect(p)}
@@ -262,6 +265,12 @@ export function ProjectSwitcher({
                       />
                     ) : null;
                   })()}
+                  {/* Active check (NOT a status glyph). */}
+                  {isActive && (
+                    <span className="text-fg shrink-0 ml-1">
+                      <CheckIcon size={15} />
+                    </span>
+                  )}
                 </button>
                 {/* Hover-revealed remove-from-YouCoded × (opens the confirm modal
                     in the parent). Does not delete files. Hidden for SYNCED rows —
