@@ -3,11 +3,15 @@ import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { FastIcon } from './Icons';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, CARD_LEVEL_1, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
+import { Button, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
+import { OverlayPanel } from './overlays/Overlay';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
 import type { NativeSwitchResult } from '../../shared/types';
-import { useScreenOpen } from '../shoot-mode';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
+
+// The popups' short tapered divider (ui/Dialog.css), drawn inline here.
+const TAPER = 'linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent)';
 
 // Model + effort + fast picker. Replaces the cycle-only status bar chip with
 // a full picker. Invoked by:
@@ -166,6 +170,23 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
   // Enabling fast mode is a paid action (API billing, not Pro/Max subscription) —
   // gate behind an explicit confirmation popup so it can't be flipped accidentally.
   const [fastConfirmOpen, setFastConfirmOpen] = useState(false);
+  // Trial B: the menu closes on a press outside it, like the sessions menu —
+  // except on the chip that opened it (its own click toggles), inside the
+  // filter popover (portaled out of the menu), or in a dialog this menu opened
+  // (the Fast mode confirmation, the switch question).
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: Event) => {
+      const t = e.target as Element | null;
+      if (!t || menuRef.current?.contains(t)) return;
+      if (t.closest?.('[data-model-chip],[data-model-picker-portal],[role=dialog],[role=alertdialog]')) return;
+      onClose();
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('touchstart', onDown); };
+  }, [open, onClose]);
 
   // Native-runtime picker state. For native sessions the popup shows a
   // provider-scoped model catalog (grouped by provider) instead of the Claude
@@ -433,111 +454,99 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
     return { runtime: 'native', providerId, modelId };
   })();
 
+  // Trial B: sit just above the status bar's model chip, left edges aligned;
+  // bottom-left of the window if the chip isn't on screen (e.g. /model typed
+  // with the status bar hidden). Measured once per open.
+  const chip = typeof document !== 'undefined' ? document.querySelector('[data-model-chip]')?.getBoundingClientRect() : undefined;
+  const menuPos: React.CSSProperties = chip
+    ? { left: Math.max(8, Math.min(chip.left, window.innerWidth - 392)), bottom: window.innerHeight - chip.top + 6, maxHeight: chip.top - 16 }
+    : { left: 12, bottom: 40 };
+
   // "max" effort is top-tier-only (Opus 1M + Fable); disable the button otherwise.
   const maxAllowed = currentModel != null && MAX_EFFORT_MODELS.includes(currentModel);
 
   return createPortal(
     // Overlay layer L2 — theme-driven scrim/surface via Scrim/OverlayPanel.
     <>
-      <Dialog screen="chat/model-picker" open onClose={onClose} title={isNative ? "Model" : "Model & Effort"} size="panel" scrollBody={false}>
-
+      {/* Trial B (model picker redesign; LB-7: "a lot of wasted space"): a menu
+          anchored just above the status bar's model chip, like the sessions menu
+          hangs from its pill — not a centred popup. An outside press closes it
+          (effect above); nothing dims. */}
+      <OverlayPanel
+        ref={menuRef}
+        layer={2}
+        role="dialog"
+        aria-modal={true}
+        aria-label={isNative ? 'Model' : 'Model and effort'}
+        className="fixed flex flex-col rounded-lg"
+        style={{ ...menuPos, width: 'min(24rem, 92vw)' }}
+      >
+        <ScreenMark name="chat/model-picker" />
         {!loaded ? (
           <LoadingState what="models" />
         ) : (
-          // WHY p-4 space-y-4 (model picker redesign A): the popups' standard
-          // edge and 16px group gap; p-5/space-y-5 was part of the "wasted space".
-          <div className="p-4 space-y-4">
-            {/* Model — the SHARED picker, scoped to this session's runtime. A
-                live session cannot move between runtimes (a CC session has a PTY
-                and no binding; a native one has a binding and no PTY), so the
-                other runtime's models are filtered out rather than offered and
-                then refused. */}
-            {/* No section label here — the dialog's own title ("Model" or
-                "Model & Effort") already says it, and repeating it as a
-                sub-header directly under a modal titled "Model" read as
-                duplicated text once the picker opens straight into view. */}
-            <section>
+          <>
+            <div className="p-3 pb-2">
               <ModelPicker
                 key={pickerEpoch}
                 value={isNative ? nativeValue : (currentModel ? { runtime: 'claude', alias: currentModel } : null)}
                 onSelect={(c) => { void applyChoice(c); }}
                 includeClaude={!isNative}
                 includeNative={isNative}
-                // This dialog's whole job is "change the model" — the picker IS
-                // the surface, so open straight to the favourites+search list
-                // instead of making the status-bar chip cost two clicks.
-                // 'inline' because the list must push Effort/Fast down rather
-                // than the shared component's default float-over-everything
-                // behaviour (built for a picker that's normally closed).
                 defaultOpen
                 layout="flat"
-                // Lead with what's actually running, not just favourites — the
-                // dialog opens with no click to get here, so a model you picked
-                // once but never starred should still be the first thing you see.
                 pinSelectedToTop
-                onManageModels={() => window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))}
               />
               {nativeError && <p className="text-xs text-destructive-fg mt-2">{nativeError}</p>}
               {nativeSwapping && <p className="text-xs text-fg-muted mt-2">Switching…</p>}
-            </section>
+            </div>
 
-            {/* Effort */}
-            {/* Effort and Fast are Claude Code concepts — the native harness
-                implements neither, so for a native session they are not
-                rendered at all rather than shown inert. A control that does
-                nothing is worse than a control that isn't there. */}
-            {!isNative && (<>
-              {/* WHY a card with a segmented bar (model picker redesign A;
-                  LB-7: "the effort level thing looks dated and inconsistent"):
-                  the same shape as Remote Access's Keep awake — title, then the
-                  app's segmented control, with the hint inside the card it
-                  describes. Max stays visible but greyed off Opus/Fable. */}
-              <section className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2`}>
-                <span className="block text-xs text-fg-2">Effort</span>
-                <SegmentedTabs
-                  variant="nested"
-                  aria-label="Effort"
-                  value={effort}
-                  onChange={(id) => updateEffort(id as EffortLevel)}
-                  tabs={EFFORT_LEVELS.map((level) => ({
-                    id: level,
-                    label: level.charAt(0).toUpperCase() + level.slice(1),
-                    disabled: level === 'max' && !maxAllowed,
-                    title: level === 'max' && !maxAllowed ? 'Max effort requires Opus or Fable' : undefined,
-                  }))}
-                />
-                <p className="text-2xs text-fg-muted">
-                  How hard Claude thinks before responding. Higher is slower but smarter.
-                </p>
-              </section>
-
-              {/* Fast mode toggle */}
-              <section>
-                {/* K2: the icon moves out of the title and into the icon slot,
-                    which is what that slot is for — inline, it was pushing the
-                    title text off the alignment every other row shares. */}
+            {/* Effort and Fast: Claude Code only (see above). Plain menu rows, no
+                cards — a menu's rows sit straight on it, like the sessions menu. */}
+            {!isNative && (
+              <div className="relative px-3 pt-2.5 pb-2 space-y-2">
+                <div aria-hidden className="absolute inset-x-4 top-0 h-px" style={{ background: TAPER }} />
+                <div className="space-y-1.5">
+                  <span className="block text-xs text-fg-2" title="How hard Claude thinks before responding. Higher is slower but smarter.">Effort</span>
+                  <SegmentedTabs
+                    variant="nested"
+                    aria-label="Effort"
+                    value={effort}
+                    onChange={(id) => updateEffort(id as EffortLevel)}
+                    tabs={EFFORT_LEVELS.map((level) => ({
+                      id: level,
+                      label: level.charAt(0).toUpperCase() + level.slice(1),
+                      disabled: level === 'max' && !maxAllowed,
+                      title: level === 'max' && !maxAllowed ? 'Max effort requires Opus or Fable' : undefined,
+                    }))}
+                  />
+                </div>
+                {/* SettingRow's plain `header` form: the shared switch row, without
+                    a card, since a menu's rows sit straight on it. */}
                 <SettingRow
-                  variant="item"
+                  header
                   icon={<FastIcon className="w-3.5 h-3.5 text-amber-700" />}
                   title="Fast mode"
-                  description="Same model, faster output streaming"
-                  control={
-                    // Was a fifth hand-rolled toggle geometry (32x16) with a
-                    // hardcoded green-600 on-state. One geometry now, and the
-                    // on-state is the theme's accent (changes 15/16). It already
-                    // had role="switch" but no accessible name.
-                    <Toggle
-                      checked={fast}
-                      onChange={handleFastToggle}
-                      aria-label="Fast mode"
-                    />
-                  }
+                  description="Same model, faster output"
+                  control={<Toggle checked={fast} onChange={handleFastToggle} aria-label="Fast mode" />}
                 />
-              </section>
-            </>)}
-          </div>
+              </div>
+            )}
+
+            {/* Footer: the sessions menu's footer row (Resume · New Session). */}
+            <div className="relative">
+              <div aria-hidden className="absolute inset-x-4 top-0 h-px" style={{ background: TAPER }} />
+              <button
+                type="button"
+                onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('youcoded:open-model-providers')); }}
+                className="w-full px-3 py-2.5 text-xs text-fg-2 hover:bg-inset hover:text-fg transition-colors rounded-b-lg"
+              >
+                Manage models
+              </button>
+            </div>
+          </>
         )}
-      </Dialog>
+      </OverlayPanel>
 
       {switchPrompt && (
         <ModelSwitchPrompt

@@ -1127,7 +1127,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           return (
             <Tooltip text={`${model.modelId} — click to change model`}>
             <button
-              onClick={onOpenModelPicker}
+              onClick={onOpenModelPicker} data-model-chip=""
               className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors max-w-[14rem] truncate"
               style={{ color: nStyle.color, borderColor: nStyle.borderColor }}
             >
@@ -1150,7 +1150,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
               ? "YouCoded couldn't confirm which model this session is using — click to set one explicitly"
               : 'Click to change model and effort (Shift+Space cycles model)'}>
             <button
-              onClick={onOpenModelPicker}
+              onClick={onOpenModelPicker} data-model-chip=""
               className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors"
               style={{ color: display.color, borderColor: display.border }}
             >
@@ -1175,7 +1175,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {fast && runtime === 'claude' && (
         <Tooltip text="Fast mode on — click to configure">
         <button
-          onClick={onOpenModelPicker}
+          onClick={onOpenModelPicker} data-model-chip=""
           className="flex items-center px-1.5 py-0.5 rounded-sm border border-amber-700/40 bg-amber-700/15 text-amber-700 cursor-pointer hover:brightness-125 transition-colors"
           aria-label="Fast mode on"
         >

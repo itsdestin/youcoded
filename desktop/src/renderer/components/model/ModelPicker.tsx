@@ -833,7 +833,7 @@ export default function ModelPicker({
                 so an unrecognised model's name still lines up with its neighbours'
                 instead of hanging one glyph-width to the left. */}
             <span
-              className={`w-[13px] shrink-0 inline-flex items-center justify-center ${e.unavailable ? 'opacity-45' : ''}`}
+              className={`w-3.25 shrink-0 inline-flex items-center justify-center ${e.unavailable ? 'opacity-45' : ''}`}
               style={markColor ? { color: markColor } : undefined}
             >
               {brand?.icon
@@ -1041,7 +1041,7 @@ export default function ModelPicker({
                           aria-pressed={!value}
                           className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex items-center gap-2 ${!value ? 'text-on-accent font-medium' : 'text-fg-2 hover:bg-inset'}`}
                         >
-                          <span className="w-[13px] shrink-0" />
+                          <span className="w-3.25 shrink-0" />
                           <span className="truncate block min-w-0">{clearLabel}</span>
                         </button>
                       </div>
