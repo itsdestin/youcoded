@@ -750,14 +750,15 @@ function KindGroup({
         {visible.map((rule) => (
           <RuleRow key={ruleKey(rule)} slug={slug} rule={rule} onChanged={onChanged} />
         ))}
+        {/* WHY outlined (guide: secondary actions are outlined, never bare
+            text — "Show more" is named explicitly): was a hand-rolled
+            underline-on-hover text button. */}
         {visible.length < rules.length && (
-          <button
-            type="button"
-            onClick={() => setShowAll(true)}
-            className="text-3xs text-fg-2 hover:underline px-3"
-          >
-            Show all {rules.length}
-          </button>
+          <div className="px-3">
+            <Button variant="secondary" size="sm" onClick={() => setShowAll(true)}>
+              Show all {rules.length}
+            </Button>
+          </div>
         )}
       </div>
     </div>

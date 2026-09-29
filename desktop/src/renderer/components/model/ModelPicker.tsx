@@ -1225,11 +1225,16 @@ export default function ModelPicker({
             </Chip>
           </Group>
           {activeFilters > 0 && (
-            <button
-              type="button"
+            // WHY outlined (guide: secondary actions are outlined, never bare
+            // text): was a hand-rolled text-fg-muted button.
+            <Button
+              variant="secondary"
+              size="sm"
+              className="self-start"
               onClick={() => { setSources(new Set()); setLocalOnly(false); }}
-              className="self-start text-3xs text-fg-muted hover:text-fg"
-            >Clear filters</button>
+            >
+              Clear filters
+            </Button>
           )}
         </div>,
         document.body,

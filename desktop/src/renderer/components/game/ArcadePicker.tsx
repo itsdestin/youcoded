@@ -11,7 +11,7 @@
 // unavailable, and when they do they say WHY rather than disappearing.
 
 import { GAMES, type GameDefinition } from './game-registry';
-import { CARD_LEVEL_1 } from '../ui';
+import { Button, CARD_LEVEL_1 } from '../ui';
 
 /** What the shell knows about a game right now. Deliberately flat and dumb —
  *  Step 2 fills it from the reducer + leaderboard; Step 1 fills it from a
@@ -123,14 +123,12 @@ export default function ArcadePicker({ statuses, onPick, signedIn, onSignIn }: P
             Flappy and 2048 play without an account. Sign in to play friends and
             to put your scores on the board.
           </p>
-          {/* G-4: the only primary on this screen. */}
-          <button
-            type="button"
-            onClick={onSignIn}
-            className="self-start text-2xs font-medium text-link hover:text-link-hover transition-colors"
-          >
+          {/* WHY outlined, not the old "G-4: the only primary" text-link
+              (guide: secondary actions are outlined, never bare text —
+              "Sign in links that are really actions" is named explicitly). */}
+          <Button variant="secondary" size="sm" className="self-start" onClick={onSignIn}>
             Sign in
-          </button>
+          </Button>
         </div>
       )}
     </div>

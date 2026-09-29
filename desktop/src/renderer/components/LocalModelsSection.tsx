@@ -553,10 +553,13 @@ export function RepoCard({
               {visible.map((qq) => (
                 <QuantDownloadRow key={qq.quant} repo={repo} q={qq} downloads={downloads} />
               ))}
+              {/* WHY outlined (guide: secondary actions are outlined, never
+                  bare text — "Show more" is named explicitly): was a
+                  hand-rolled underline-on-hover text button. */}
               {!showAll && hiddenCount > 0 && (
-                <button onClick={() => setShowAll(true)} className="text-3xs text-fg-2 hover:underline px-1">
+                <Button variant="secondary" size="sm" onClick={() => setShowAll(true)}>
                   Show all {(quants ?? []).length}
-                </button>
+                </Button>
               )}
             </div>
           )}

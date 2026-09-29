@@ -163,24 +163,30 @@ function ManagedTagRow({ tag, registry }: { tag: TagRecord; registry: TagRegistr
           onBlur={commit}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
         />
-        <button
-          type="button"
+        {/* WHY outlined (guide: secondary actions are outlined, never bare
+            text): both were hand-rolled text-fg-muted buttons in a dense row. */}
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => registry.update(tag.id, { archived: !tag.archived })}
-          className="text-3xs text-fg-muted hover:text-fg shrink-0"
+          className="shrink-0"
         >
           {tag.archived ? 'Unarchive' : 'Archive'}
-        </button>
+        </Button>
         {/* Two-step delete: a tag can be applied to conversations this list
             doesn't show, so the first click has to say what's about to happen
-            rather than just doing it. */}
-        <button
-          type="button"
+            rather than just doing it. The confirm step swaps to the guide's
+            "destructive confirm: the red button takes the main action's
+            place" instead of colouring the label text red. */}
+        <Button
+          variant={confirmDelete ? 'danger' : 'secondary'}
+          size="sm"
           onClick={() => { if (confirmDelete) registry.remove(tag.id); else setConfirmDelete(true); }}
           onBlur={() => setConfirmDelete(false)}
-          className={`text-3xs shrink-0 ${confirmDelete ? 'text-destructive-fg font-medium' : 'text-fg-muted hover:text-fg'}`}
+          className="shrink-0"
         >
           {confirmDelete ? 'Delete?' : 'Delete'}
-        </button>
+        </Button>
       </div>
       {paletteOpen && (
         <div className="flex flex-wrap gap-1 pl-6">

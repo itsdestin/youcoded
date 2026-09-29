@@ -12,7 +12,7 @@
 //    leaderboard being down must never look like the game being down (§4.2).
 
 import type { GameDefinition } from './game-registry';
-import { SectionLabel } from '../ui';
+import { Button, SectionLabel } from '../ui';
 
 export interface LeaderboardRow {
   accountId: string;
@@ -61,14 +61,13 @@ export default function Leaderboard({ game, rows, staleNote, unpublishedBest, on
             ? 'Saved on this device. Sign in to rank it against your friends.'
             : 'Play a round and your best shows up here.'}
         </p>
+        {/* WHY outlined (guide: secondary actions are outlined, never bare
+            text — "Sign in links that are really actions" is named
+            explicitly): was a hand-rolled text-link button. */}
         {onSignIn && unpublishedBest && (
-          <button
-            type="button"
-            onClick={onSignIn}
-            className="self-start text-2xs font-medium text-link hover:text-link-hover transition-colors"
-          >
+          <Button variant="secondary" size="sm" className="self-start" onClick={onSignIn}>
             Sign in
-          </button>
+          </Button>
         )}
       </div>
     );
