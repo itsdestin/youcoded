@@ -195,7 +195,7 @@ function answerFlushRequests(): void {
   });
   office.onUnsavedPrompt?.((p) => {
     // A quit refused for an unsaved text file (fix rounds 9–10) is its own message.
-    if (p.other === true) { setAlerts({ ...alerts, quitRefused: true }); return; }
+    if (p.other === true) { setAlerts({ ...alerts, quitRefused: { mode: p.mode ?? 'quit', afterTeardown: p.afterTeardown === true, restartDropped: p.restartDropped === true, confirming: false } }); return; }
     heldReload = null;
     setAlerts({ ...alerts, unsaved: { count: p.count, firstPath: p.firstPath } });
   });
@@ -221,20 +221,28 @@ export function closeAnyway(): void {
 interface OfficeAlertsState {
   /** reload: the prompt is a reload's (fix round 6, M3), so it says "Reload anyway". */
   unsaved: { count: number; firstPath: string; reload?: boolean } | null;
-  /** A quit was refused because a text file has unsaved edits (fix rounds 9–10): OK only. */
-  quitRefused: boolean;
+  /** A quit (or the last window's close) was refused for unsaved non-Office edits (fix rounds
+   *  9–11); `confirming` = the in-place "Discard unsaved changes…?" step is showing. */
+  quitRefused: QuitRefused | null;
   closeFailed: string | null;
 }
-let alerts: OfficeAlertsState = { unsaved: null, closeFailed: null, quitRefused: false };
+export interface QuitRefused { mode: 'quit' | 'close'; afterTeardown: boolean; restartDropped: boolean; confirming: boolean }
+let alerts: OfficeAlertsState = { unsaved: null, closeFailed: null, quitRefused: null };
 const alertListeners = new Set<() => void>();
 function setAlerts(next: OfficeAlertsState) { alerts = next; alertListeners.forEach((l) => l()); }
 export function useOfficeAlerts(): OfficeAlertsState {
   return useSyncExternalStore((l) => { alertListeners.add(l); return () => { alertListeners.delete(l); }; }, () => alerts, () => alerts);
 }
 export function clearUnsavedPrompt(): void { heldReload = null; setAlerts({ ...alerts, unsaved: null }); }
-export function clearQuitRefused(): void { setAlerts({ ...alerts, quitRefused: false }); }
-/** Photo-only (`shoot`): a quit refused for an unsaved text file. */
-export function previewQuitRefused(): void { setAlerts({ ...alerts, quitRefused: true }); }
+export function clearQuitRefused(): void { setAlerts({ ...alerts, quitRefused: null }); }
+export function confirmDiscardForQuit(confirming: boolean): void {
+  if (alerts.quitRefused) setAlerts({ ...alerts, quitRefused: { ...alerts.quitRefused, confirming } });
+}
+/** Photo-only (`shoot`): a refused quit — before teardown, after it (a restart), or at the
+ *  discard step. The files are placed by the screen (UnsavedBeforeQuit's preview). */
+export function previewQuitRefused(v: Partial<QuitRefused> = {}): void {
+  setAlerts({ ...alerts, quitRefused: { mode: 'quit', afterTeardown: false, restartDropped: false, confirming: false, ...(alerts.quitRefused ?? {}), ...v } });
+}
 /** Photo-only (`shoot`): the prompt as a window close with two unsaved documents shows it. */
 export function previewUnsavedPrompt(): void {
   setAlerts({ ...alerts, unsaved: { count: 2, firstPath: state.docs[0]?.file.path ?? '' } });
@@ -450,7 +458,7 @@ export function resetOfficeStoreForTests(): void {
   heldReload = null;
   copyingPaths = new Set();
   if (unloadGuarded) { window.removeEventListener('beforeunload', onBeforeUnload); unloadGuarded = false; }
-  alerts = { unsaved: null, closeFailed: null, quitRefused: false };
+  alerts = { unsaved: null, closeFailed: null, quitRefused: null };
   listeners.forEach((l) => l());
   saveListeners.forEach((l) => l());
 }

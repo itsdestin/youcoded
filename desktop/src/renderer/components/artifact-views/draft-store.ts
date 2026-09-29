@@ -14,6 +14,12 @@
 // Renderer-module state, per window. Cleared on save / cancel / discard /
 // use-disk-version — the stash only ever holds drafts the user has neither
 // kept nor thrown away.
+//
+// WHY each parked draft holds an unsaved mark (Task 6 fix rounds 10–11): a parked draft is
+// unsaved work with no editor on screen — nothing vetoes a quit or the window's close for it, so
+// it was lost without a word. Its mark lists it in the refused-quit prompt (with "Open it"), and
+// it stays marked until the restored draft is back in an editor (settleDraft) — a restore that
+// fails leaves the draft parked, never dropped.
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import { holdUnsavedEditor } from '../../state/unsaved-editors';
 
@@ -22,37 +28,55 @@ export interface StashedDraft {
   /** The optimistic-concurrency token captured when editing began — restoring
    * it means a save after restore still conflicts if the disk moved. */
   mtimeMs: number | null;
+  /** The file's name (no folder), for the refused-quit prompt. */
+  name?: string;
+  /** Open the file again in this window's viewer (which restores the draft). */
+  open?: () => void;
+  /** Whether the file can still be opened. */
+  available?: () => Promise<boolean>;
 }
 
-const stash = new Map<string, StashedDraft>();
-// WHY (Task 6 fix round 10): a stashed draft is unsaved work with no editor on screen — nothing
-// vetoes the window's unload for it, so a quit dropped it without a word. While the stash holds
-// anything, it holds the same "unsaved editor" mark a dirty editor does, so a quit asks first.
-let release: (() => void) | null = null;
-function markWhileStashed(): void {
-  if (stash.size > 0 && !release) release = holdUnsavedEditor();
-  else if (stash.size === 0 && release) { release(); release = null; }
-}
+interface Parked { entry: StashedDraft; taken: boolean; release: () => void }
+const stash = new Map<string, Parked>();
 
 export function draftKey(projectRoot: string, artifactId: string): string {
   return canonicalize(projectRoot, null) + '|' + artifactId;
 }
 
 export function stashDraft(key: string, entry: StashedDraft): void {
-  stash.set(key, entry);
-  markWhileStashed();
+  const had = stash.get(key);
+  if (had) { had.entry = entry; had.taken = false; return; }
+  const release = holdUnsavedEditor({
+    name: entry.name ?? 'A file',
+    parked: {
+      open: () => stash.get(key)?.entry.open?.(),
+      available: () => stash.get(key)?.entry.available?.() ?? Promise.resolve(false),
+    },
+    discard: () => clearDraft(key),
+  });
+  stash.set(key, { entry, taken: false, release });
 }
 
-/** Read-and-remove: restoration consumes the entry (the live editor owns the
- * draft again; a second consumer must not resurrect a stale copy). */
+/** Hand the parked draft to the editor that opened its file. It stays parked (and marked)
+ *  until settleDraft says whether it was applied; a second consumer meanwhile gets nothing. */
 export function takeDraft(key: string): StashedDraft | undefined {
-  const entry = stash.get(key);
+  const p = stash.get(key);
+  if (!p || p.taken) return undefined;
+  p.taken = true;
+  return p.entry;
+}
+
+/** The editor applied the taken draft (drop it) — or could not (keep it parked). */
+export function settleDraft(key: string, applied: boolean): void {
+  const p = stash.get(key);
+  if (!p || !p.taken) return;
+  if (!applied) { p.taken = false; return; }
   stash.delete(key);
-  markWhileStashed();
-  return entry;
+  p.release();
 }
 
 export function clearDraft(key: string): void {
+  const p = stash.get(key);
   stash.delete(key);
-  markWhileStashed();
+  p?.release();
 }

@@ -1,10 +1,10 @@
 // A restart goes through the ordinary quit: the Office gate saves (or asks) first, and the app
 // starts again only once the quit is really happening — Review cancels it, Close anyway
-// restarts, and a cancelled quit never relaunches later. After teardown (which only starts once
-// no window has an unsaved text file — the quit gate refuses first), a window still open 10 s
-// later can only be hung, and is let go of.
+// restarts, and a cancelled quit never relaunches later. Every quit after teardown is refused
+// on the spot if a responsive window has unsaved text edits (and says so each time); otherwise
+// it arms a 10 s watchdog that lets a still-open (hung) window go.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { QUIT_WATCHDOG_MS, gatedQuit, onWillQuit, requestRestart, resetRestartForTests } from '../src/main/app-restart';
+import { QUIT_WATCHDOG_MS, gatedQuit, onWillQuit, quitAfterTeardown, requestRestart, resetRestartForTests } from '../src/main/app-restart';
 
 function deps(go: boolean, open = 0) {
   let proceed!: () => void;
@@ -16,15 +16,17 @@ function deps(go: boolean, open = 0) {
     quit: vi.fn(),
     openWindows: vi.fn(() => open),
     exit: vi.fn(),
-    setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); },
+    refuseForUnsaved: vi.fn((_o: { afterTeardown: boolean; restartDropped: boolean }) => false),
+    setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return null; },
+    clearTimer: vi.fn(),
   };
-  return { d, proceed: () => proceed(), fire: () => timers.forEach((t) => t.fn()), timers };
+  return { d, proceed: () => proceed(), fire: () => timers.splice(0).forEach((t) => t.fn()), timers };
 }
 
 beforeEach(() => resetRestartForTests());
 
 describe('restart and quit', () => {
-  it('a restart quits through the gate, tears down, and relaunches when the quit really happens', async () => {
+  it('a restart quits through the gate, tears down, quits again, and relaunches when the quit happens', async () => {
     const quit = vi.fn();
     requestRestart(quit);
     expect(quit).toHaveBeenCalledTimes(1); // app.quit(), never app.exit()
@@ -55,65 +57,64 @@ describe('restart and quit', () => {
 
   it('after Review cancelled a restart, a later ordinary quit does not restart the app', async () => {
     requestRestart(() => {});
-    await gatedQuit(deps(false).d); // Review: nothing else happens
+    await gatedQuit(deps(false).d);
     await gatedQuit(deps(true).d);
-    const relaunch = vi.fn();
-    onWillQuit(relaunch);
-    expect(relaunch).not.toHaveBeenCalled();
-  });
-
-  it('an ordinary quit never relaunches', async () => {
-    const { d } = deps(true);
-    await gatedQuit(d);
     const relaunch = vi.fn();
     onWillQuit(relaunch);
     expect(relaunch).not.toHaveBeenCalled();
   });
 });
 
-describe('the quit watchdog', () => {
-  it('exits 10 s after teardown when a window is still open', async () => {
+describe('a quit after teardown', () => {
+  it('goes on and arms a 10 s watchdog that exits if a window is still open', () => {
     const t = deps(true, 2);
-    await gatedQuit(t.d);
+    expect(quitAfterTeardown(t.d)).toBe(true);
     expect(t.timers.map((x) => x.ms)).toEqual([QUIT_WATCHDOG_MS]);
-    expect(t.d.exit).not.toHaveBeenCalled();
     t.fire();
     expect(t.d.exit).toHaveBeenCalledTimes(1);
-    expect(t.d.relaunch).not.toHaveBeenCalled();
   });
 
   it('relaunches first for a restart (exit skips will-quit)', async () => {
     requestRestart(() => {});
     const t = deps(true, 1);
     await gatedQuit(t.d);
+    quitAfterTeardown(t.d);
     t.fire();
     expect(t.d.relaunch).toHaveBeenCalledTimes(1);
     expect(t.d.exit).toHaveBeenCalledTimes(1);
   });
 
-  it('never forces a window that got unsaved edits after the check, and drops the restart', async () => {
+  it('is refused while a responsive window has unsaved text edits — every time, saying a restart became a quit', async () => {
     requestRestart(() => {});
     const t = deps(true, 1);
-    const refuse = vi.fn(() => true);
-    await gatedQuit({ ...t.d, refuseForUnsaved: refuse });
-    t.fire();
-    expect(refuse).toHaveBeenCalled();
-    expect(t.d.exit).not.toHaveBeenCalled();
+    await gatedQuit(t.d);
+    t.d.refuseForUnsaved.mockReturnValue(true);
+    expect(quitAfterTeardown(t.d)).toBe(false);
+    expect(t.d.refuseForUnsaved).toHaveBeenLastCalledWith({ afterTeardown: true, restartDropped: true });
+    expect(t.timers).toEqual([]);
+    expect(quitAfterTeardown(t.d)).toBe(false); // the person quits again without saving: told again
+    expect(t.d.refuseForUnsaved).toHaveBeenCalledTimes(2);
+    expect(t.d.refuseForUnsaved).toHaveBeenLastCalledWith({ afterTeardown: true, restartDropped: true });
     const relaunch = vi.fn();
     onWillQuit(relaunch);
-    expect(relaunch).not.toHaveBeenCalled();
+    expect(relaunch).not.toHaveBeenCalled(); // it quits instead of restarting
+    t.d.refuseForUnsaved.mockReturnValue(false); // saved: the next quit goes on, watchdog armed
+    expect(quitAfterTeardown(t.d)).toBe(true);
+    expect(t.timers).toHaveLength(1);
   });
 
-  it('does nothing when every window already closed', async () => {
-    const t = deps(true, 0);
-    await gatedQuit(t.d);
+  it('a file edited while the quit was finishing holds it at the watchdog: told, not exited', () => {
+    const t = deps(true, 1);
+    quitAfterTeardown(t.d);
+    t.d.refuseForUnsaved.mockReturnValue(true);
     t.fire();
     expect(t.d.exit).not.toHaveBeenCalled();
   });
 
-  it('is never armed for a quit the gate held', async () => {
-    const t = deps(false, 1);
-    await gatedQuit(t.d);
-    expect(t.timers).toEqual([]);
+  it('does nothing when every window already closed', () => {
+    const t = deps(true, 0);
+    quitAfterTeardown(t.d);
+    t.fire();
+    expect(t.d.exit).not.toHaveBeenCalled();
   });
 });

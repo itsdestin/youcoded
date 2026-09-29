@@ -47,6 +47,9 @@ export interface CloseGateDeps<Answer> {
   buddy: boolean;
   /** Whole-app quit already saved and settled everything; the window just goes. */
   shuttingDown(): boolean;
+  /** The LAST window has unsaved non-Office edits (a text editor, a parked draft): it was just
+   *  shown their list instead of closing (fix round 11). */
+  refuseForUnsaved?(): boolean;
   /** Office: holds the close (preventDefault) to save first; false when nothing to save or on
    *  the close it re-issued itself (holdCloseForOfficeSave). */
   holdForOffice(ev: CloseEvent, cb: OfficeHoldCallbacks): boolean;
@@ -102,6 +105,12 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
         }
         return;
       }
+      // Unsaved text edits in the last window: say so before anything else (fix round 11).
+      // WHY only the last window: closing it ends the app, and a parked draft (no editor on
+      // screen, so no unload veto) would go with it unasked. Another window's close keeps its
+      // behaviour for now: an open editor still vetoes that window's unload; a draft parked in it
+      // is lost with it — accepted by the controller for this round, not solved.
+      if (d.refuseForUnsaved?.()) { ev.preventDefault(); return; }
       // Office first, every time — even after the sessions prompt was answered (see above).
       const held = d.holdForOffice(ev, {
         onFailed: () => { forProceed = confirmed; confirmed = null; },

@@ -38,6 +38,7 @@ import {
   choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
 } from './state/remote-place';
 import { ArtifactProvider, createArtifactStore } from './state/ArtifactContext';
+import { useParkedDraftOpener } from './state/parked-draft-opener';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
@@ -3682,6 +3683,7 @@ function AppInner() {
       (window as any).claude?.session?.switch?.(id);
     });
   }, []);
+  useParkedDraftOpener(dispatchArtifact, handleSelectSession, sessionId); // "Open it" for a parked draft (fix round 11)
   const handleCloseSession = useCallback((id: string, name?: string) => {
     // WHY: a pending tab is not a writer. Closing it invalidates admission
     // synchronously; session:destroy and the ordinary close prompt are wrong here.

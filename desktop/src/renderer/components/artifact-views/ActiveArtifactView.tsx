@@ -23,7 +23,8 @@ function absoluteArtifactPath(projectRoot: string, a: ArtifactRecord): string {
     : (a.absolutePath ?? a.path);
 }
 import { openEditorSearch, revealLineIn } from './cm/editor-registry';
-import { draftKey, stashDraft, takeDraft, clearDraft } from './draft-store';
+import { draftKey, stashDraft, takeDraft, clearDraft, settleDraft } from './draft-store';
+import { openParkedDraft } from '../../state/parked-draft-opener';
 import { ScreenMark } from '../../shoot-mode';
 import { isOfficeEditable } from '../office/office-files';
 import { useOfficeAvailable } from '../office/office-availability';
@@ -234,6 +235,11 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       setDraft(pending.draft);
       mtimeRef.current = pending.mtimeMs;
       setEditing(true);
+      settleDraft(draftKey(projectRoot, artifact.id), true); // back in the editor (fix round 11)
+    } else if (pending && content !== null) {
+      // Can't be edited any more: the draft stays parked (and listed), never dropped.
+      pendingRestoreRef.current = undefined;
+      settleDraft(draftKey(projectRoot, artifact.id), false);
     }
   }, [content, artifact.id]);
 
@@ -263,16 +269,26 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         setDraft(pending.draft);
         mtimeRef.current = pending.mtimeMs;
         setEditing(true);
+        settleDraft(key, true);
       }
     }
     return () => {
+      // Switched away (or unmounted) before a taken draft could be applied: it stays parked.
+      if (pendingRestoreRef.current) { pendingRestoreRef.current = undefined; settleDraft(key, false); }
       // THE SAFETY NET: unmounting (or switching away) while dirty stashes
       // the draft instead of discarding it. Guarded paths never reach here
       // dirty — Discard runs cancelEdit first; unguarded paths (any layout
       // change that unmounts the drawer) degrade to draft-survives.
       const cur = stateRef.current;
       if (cur.editing && cur.content !== null && cur.draft !== cur.content) {
-        stashDraft(key, { draft: cur.draft, mtimeMs: mtimeRef.current });
+        // Named and openable for the refused-quit prompt (fix round 11): the file name only.
+        const target = { sessionId, artifact };
+        stashDraft(key, {
+          draft: cur.draft, mtimeMs: mtimeRef.current, name: artifact.path.split(/[\\/]/).pop() || artifact.path,
+          open: () => openParkedDraft(target),
+          available: () => (window.claude as any)?.artifacts?.get(projectRoot, artifact.id)
+            .then((res: any) => !!res && res.ok === true && !res.orphan && typeof res.content === 'string', () => false) ?? Promise.resolve(false),
+        });
       }
     };
   }, [artifact.id, projectRoot]);
@@ -448,6 +464,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     setConflict(null);
     setSaveError(null);
   }, [content, projectRoot, artifact.id]);
+  // The refused-quit prompt's discard reaches the latest cancel (the effect below holds it).
+  const cancelRef = useRef(handleCancel);
+  cancelRef.current = handleCancel;
 
   // ── Conflict resolution actions ──
   const resolveKeepMine = useCallback(() => {
@@ -521,7 +540,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     if (!dirty) return;
     const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
     window.addEventListener('beforeunload', handler);
-    const release = holdUnsavedEditor();
+    // Named (file name only) and discardable from the refused-quit prompt (fix round 11).
+    const release = holdUnsavedEditor({ name: artifact.path.split(/[\\/]/).pop() || artifact.path, discard: () => cancelRef.current() });
     return () => { window.removeEventListener('beforeunload', handler); release(); };
   }, [dirty]);
 

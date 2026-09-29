@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
   OFFICE_FLUSH_DONE, OFFICE_FLUSH_REQUEST, OFFICE_OTHER_UNSAVED, OFFICE_PROCEED, OFFICE_UNSAVED_PROMPT,
-  askToFlush, flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, refuseQuitForOtherUnsaved, watchOtherUnsaved,
+  askToFlush, flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, refuseCloseForOtherUnsaved, refuseQuitForOtherUnsaved, watchOtherUnsaved,
 } from '../../src/main/office/office-flush';
-import { gatedQuit, onWillQuit, requestRestart, resetRestartForTests } from '../../src/main/app-restart';
+import { gatedQuit, onWillQuit, quitAfterTeardown, requestRestart, resetRestartForTests } from '../../src/main/app-restart';
 
 /** A fake ipcMain, shared by every window of one test. */
 const newIpc = () => new EventEmitter();
@@ -238,7 +238,7 @@ describe('quitting while a text file has unsaved edits', () => {
     t.report(true);
     await expect(officeQuitGate([t.win], depsFor(t.ipc, [21]))).resolves.toBe(false);
     expect(t.requests).toHaveLength(0); // not even the Office save pass
-    expect(t.pushes).toEqual([{ count: 0, firstPath: '', other: true }]);
+    expect(t.pushes).toEqual([{ count: 0, firstPath: '', other: true, mode: 'quit', afterTeardown: false, restartDropped: false }]);
     expect(t.focus).toHaveBeenCalled();
     t.report(false); // saved: the next quit goes ahead
     await expect(officeQuitGate([t.win], depsFor(t.ipc, [21]))).resolves.toBe(true);
@@ -262,26 +262,44 @@ describe('quitting while a text file has unsaved edits', () => {
     t.sender.emit('destroyed');
   });
 
-  it('a file edited during teardown holds the quit: the watchdog tells that window and does not exit', async () => {
+  it('a file edited during teardown: the quit that follows is refused in that window, not forced', async () => {
     resetRestartForTests();
     const t = editing(24);
     requestRestart(() => {});
-    let fire!: () => void;
     const d = {
       gate: (onProceed: () => void) => officeQuitGate([t.win], depsFor(t.ipc, [24]), onProceed),
       shutdown: vi.fn(async () => { t.report(true); }), // typed into a text file while teardown ran
-      relaunch: vi.fn(), quit: vi.fn(), openWindows: () => 1, exit: vi.fn(),
-      refuseForUnsaved: () => refuseQuitForOtherUnsaved([t.win], () => false),
-      setTimer: (fn: () => void) => { fire = fn; },
+      relaunch: vi.fn(), quit: vi.fn(), openWindows: () => 1, exit: vi.fn(), setTimer: vi.fn(), clearTimer: vi.fn(),
+      refuseForUnsaved: (o: { afterTeardown: boolean; restartDropped: boolean }) => refuseQuitForOtherUnsaved([t.win], () => false, { ...o, ipc: t.ipc as never }),
     };
     await gatedQuit(d);
     expect(d.shutdown).toHaveBeenCalled();
-    fire();
+    expect(quitAfterTeardown(d)).toBe(false); // the quit gatedQuit re-issued
     expect(d.exit).not.toHaveBeenCalled();
-    expect(t.pushes).toEqual([{ count: 0, firstPath: '', other: true }]);
+    expect(t.pushes).toEqual([{ count: 0, firstPath: '', other: true, mode: 'quit', afterTeardown: true, restartDropped: true }]);
+    // "Discard and quit" goes on: main quits again (the prompt's proceed).
+    const quits = vi.fn();
+    const refused = refuseQuitForOtherUnsaved([t.win], () => false, { ipc: t.ipc as never, act: quits });
+    expect(refused).toBe(true);
+    t.ipc.emit(OFFICE_PROCEED, { sender: { id: 24 } });
+    expect(quits).toHaveBeenCalledTimes(1);
     const relaunch = vi.fn();
     onWillQuit(relaunch); // the restart was dropped
     expect(relaunch).not.toHaveBeenCalled();
+    t.sender.emit('destroyed');
+  });
+
+  it("the last window's close is refused while it has unsaved edits; Discard closes it; another window's is not", () => {
+    const t = editing(27);
+    t.report(true);
+    const other = aWindow(t.ipc, 28);
+    const floater = aWindow(t.ipc, 29);
+    const isFloater = (w: unknown) => w === floater.win;
+    expect(refuseCloseForOtherUnsaved(t.win, isFloater, { ipc: t.ipc as never, windows: [t.win, other.win, floater.win] })).toBe(false);
+    expect(refuseCloseForOtherUnsaved(t.win, isFloater, { ipc: t.ipc as never, windows: [t.win, floater.win] })).toBe(true);
+    expect(t.pushes).toEqual([{ count: 0, firstPath: '', other: true, mode: 'close', afterTeardown: false, restartDropped: false }]);
+    t.ipc.emit(OFFICE_PROCEED, { sender: { id: 27 } }); // Discard and close
+    expect(t.win.close).toHaveBeenCalledTimes(1);
     t.sender.emit('destroyed');
   });
 

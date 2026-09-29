@@ -7,12 +7,12 @@
 import React, { useEffect } from 'react';
 import { Button, Dialog, Toast } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
-import { clearCloseFailed, clearQuitRefused, clearUnsavedPrompt, closeAnyway, previewQuitRefused, previewUnsavedPrompt, useOfficeAlerts, watchLostSaves } from './office-store';
+import { clearCloseFailed, clearUnsavedPrompt, closeAnyway, previewUnsavedPrompt, useOfficeAlerts, watchLostSaves } from './office-store';
+import { UnsavedBeforeQuit } from '../UnsavedBeforeQuit';
 
 export function OfficeAlerts({ onReview }: { onReview: (path: string) => void }) {
-  const { unsaved, closeFailed, quitRefused } = useOfficeAlerts();
+  const { unsaved, closeFailed } = useOfficeAlerts();
   useScreenOpen('office/unsaved-on-close', () => previewUnsavedPrompt());
-  useScreenOpen('app/unsaved-before-quit', () => previewQuitRefused());
   // A save the last page let go of (a reload) that then failed in main is said here (M4).
   useEffect(() => watchLostSaves(), []);
   const review = () => {
@@ -39,14 +39,7 @@ export function OfficeAlerts({ onReview }: { onReview: (path: string) => void })
           <Button variant="primary" onClick={review}>Review</Button>
         </div>
       </Dialog>
-      {/* A quit refused before any teardown: a text file has unsaved edits (fix rounds 9–10).
-          Its own Save is the way on; nothing here can save it for the person. */}
-      <Dialog open={quitRefused} onClose={clearQuitRefused} title="A file has unsaved changes." size="prompt" layer={3} screen="app/unsaved-before-quit">
-        <p className="text-sm text-fg-2 pb-4">Save it, then quit again.</p>
-        <div className="flex gap-2 justify-end">
-          <Button variant="primary" onClick={clearQuitRefused}>OK</Button>
-        </div>
-      </Dialog>
+      <UnsavedBeforeQuit />
       {closeFailed && (
         <Toast
           tone="error"

@@ -72,7 +72,7 @@ export interface OfficeBridge {
   onFlushRequest?(cb: (id: string, reason: 'close' | 'quit' | 'final') => void): () => void;
   /** Main held a close or quit because documents could not be saved: ask the person. The count
    *  covers every window (quit); firstPath is this window's first such document. */
-  onUnsavedPrompt?(cb: (p: { count: number; firstPath: string; other?: boolean }) => void): () => void;
+  onUnsavedPrompt?(cb: (p: OfficeUnsavedPrompt) => void): () => void;
   /** failed: how many documents could not be saved — main then keeps the window (or quit)
    *  waiting for the person's choice instead of closing. */
   flushDone?(id: string, result: { failed: number; firstPath?: string }): void;
@@ -83,9 +83,22 @@ export interface OfficeBridge {
   lostSaves?(): Promise<string[]>;
   /** Main recorded such a failure while this page is up: take them (lostSaves). */
   onSavesLost?(cb: () => void): () => void;
-  /** Whether a non-Office editor in this window has unsaved edits (fix round 9): the quit gate
-   *  refuses to start while any window says yes. Desktop only. */
-  setOtherUnsaved?(unsaved: boolean): void;
+  /** The names (never folders) of this window's unsaved non-Office edits — open editors and
+   *  parked drafts (fix rounds 9–11): the quit gate refuses while any window has one. Desktop only. */
+  setOtherUnsaved?(names: string[]): void;
+}
+
+/** main → renderer: Office documents that couldn't be saved (count), or — `other` — a quit or the
+ *  last window's close refused for unsaved non-Office edits (fix rounds 9–11). */
+export interface OfficeUnsavedPrompt {
+  count: number;
+  firstPath: string;
+  other?: boolean;
+  /** other: what was refused ('quit', default) or the last window's close. */
+  mode?: 'quit' | 'close';
+  /** other: teardown already ran (the chats have stopped); restartDropped: a restart became a quit. */
+  afterTeardown?: boolean;
+  restartDropped?: boolean;
 }
 
 export type OfficeSaveCopyResult =

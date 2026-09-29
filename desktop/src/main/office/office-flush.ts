@@ -17,6 +17,7 @@
 // renderer's own Office veto (office-store) holds only while a document has unsaved work and no
 // close was approved; answering this request approves it. Every veto that remains (an unsaved
 // text-file edit, typing after the approval) is legitimate and must keep the window open.
+import path from 'node:path';
 import { BrowserWindow, app, ipcMain } from 'electron';
 import { getOfficeSessions, quitOfficeSessions } from './office-session-registry';
 import { isUnresponsive } from '../crash-diagnostics';
@@ -85,7 +86,7 @@ interface ClosingWindow {
 // that veto only AFTER teardown, with every session already stopped. Each window now tells main
 // whether it has such an editor (renderer state/unsaved-editors.ts), and the quit gate refuses
 // to begin while any window does. A page load or a gone window clears its entry.
-const otherUnsaved = new Set<number>();
+const otherUnsaved = new Map<number, string[]>(); // window → file names (never folders)
 interface ReportingSender {
   id: number;
   once?(event: 'destroyed', l: () => void): unknown;
@@ -99,7 +100,9 @@ export function watchOtherUnsaved(ipc: FlushIpc = ipcMain): void {
     const s = (e as { sender?: ReportingSender } | null)?.sender;
     if (!s || typeof s.id !== 'number') return;
     const id = s.id;
-    if (unsaved === true) otherUnsaved.add(id); else otherUnsaved.delete(id);
+    // Names only, whatever arrives: a path's folders are cut off (they are logged, never shown).
+    const names = Array.isArray(unsaved) ? unsaved.filter((n): n is string => typeof n === 'string').map((n) => path.basename(n)) : unsaved === true ? ['a file'] : [];
+    if (names.length > 0) otherUnsaved.set(id, names); else otherUnsaved.delete(id);
     if (watchedSenders.has(id)) return;
     watchedSenders.add(id);
     s.once?.('destroyed', () => { otherUnsaved.delete(id); watchedSenders.delete(id); });
@@ -110,20 +113,48 @@ export function watchOtherUnsaved(ipc: FlushIpc = ipcMain): void {
 }
 
 /**
- * If a window that is still responding has an unsaved text editor, refuse the quit in it: focus
- * it and show "A file has unsaved changes. Save it, then quit again." Returns whether it did.
+ * If a window that is still responding has unsaved non-Office edits (an open text editor, a
+ * parked draft), refuse the quit in it: focus it and show its list (OfficeAlerts), where the
+ * person can open each parked draft, or discard them all and go on (office:proceed → `act`).
+ * Returns whether it refused.
  * WHY a hung window is skipped (fix round 10): its editor can neither be saved nor answer, so
  * it could only block the quit forever — the hang question (close it anyway) covers it instead.
- * Used by the quit gate before teardown and by the quit watchdog after it.
+ * Used by the quit gate before teardown, by a quit repeated after teardown, and by the quit
+ * watchdog; `afterTeardown`/`restartDropped` make the prompt say the chats have stopped and
+ * that a restart became a quit (fix round 11).
  */
 export function refuseQuitForOtherUnsaved(
   windows: ClosingWindow[] = BrowserWindow.getAllWindows() as unknown as ClosingWindow[],
   hung: (w: ClosingWindow) => boolean = (w) => isUnresponsive(w as unknown as BrowserWindow),
+  opts: { afterTeardown?: boolean; restartDropped?: boolean; ipc?: FlushIpc; act?: () => void } = {},
 ): boolean {
   const editing = windows.find((w) => !w.isDestroyed() && otherUnsaved.has(w.webContents.id) && !hung(w));
   if (!editing) return false;
-  editing.focus?.();
-  if (!editing.webContents.isDestroyed()) editing.webContents.send(OFFICE_UNSAVED_PROMPT, { count: 0, firstPath: '', other: true });
+  return refuseIn(editing, 'quit', opts.act ?? (() => app.quit()), opts);
+}
+
+/**
+ * The last window closing while it has unsaved non-Office edits (fix round 11): the same list,
+ * before it closes; discarding closes it (and so quits). `isFloater` names windows that don't
+ * count against "the last" — the buddy floaters. Returns whether it refused.
+ */
+export function refuseCloseForOtherUnsaved(
+  win: ClosingWindow, isFloater: (w: ClosingWindow) => boolean,
+  opts: { ipc?: FlushIpc; windows?: ClosingWindow[] } = {},
+): boolean {
+  if (win.isDestroyed() || !otherUnsaved.has(win.webContents.id)) return false;
+  const all = opts.windows ?? (BrowserWindow.getAllWindows() as unknown as ClosingWindow[]);
+  if (all.some((w) => w !== win && !w.isDestroyed() && !isFloater(w))) return false;
+  return refuseIn(win, 'close', () => { if (!win.isDestroyed()) win.close(); }, { ipc: opts.ipc });
+}
+
+function refuseIn(w: ClosingWindow, mode: 'quit' | 'close', act: () => void, opts: { afterTeardown?: boolean; restartDropped?: boolean; ipc?: FlushIpc }): boolean {
+  listenForProceed(opts.ipc ?? ipcMain);
+  held.set(w.webContents.id, { kind: 'refused', act });
+  w.focus?.();
+  if (!w.webContents.isDestroyed()) {
+    w.webContents.send(OFFICE_UNSAVED_PROMPT, { count: 0, firstPath: '', other: true, mode, afterTeardown: opts.afterTeardown === true, restartDropped: opts.restartDropped === true });
+  }
   return true;
 }
 interface GateDeps { hasDocuments(senderId: number): boolean; ipc?: FlushIpc; capMs?: number; quitApp?: () => void; hung?: (w: ClosingWindow) => boolean }
@@ -135,7 +166,12 @@ const realDeps = (): GateDeps => ({ hasDocuments: (id) => getOfficeSessions()?.h
 const flushedForClose = new WeakSet<object>();
 // What "Close anyway" goes ahead with, keyed by the webContents id of the window that shows the
 // prompt (ids, not objects — see askToFlush).
-const held = new Map<number, { kind: 'close'; win: ClosingWindow; onProceed?: () => void } | { kind: 'quit'; quitApp: () => void }>();
+const held = new Map<number,
+  | { kind: 'close'; win: ClosingWindow; onProceed?: () => void }
+  | { kind: 'quit'; quitApp: () => void }
+  // Refused for unsaved non-Office edits: "Discard and quit/close" goes ahead — a fresh quit
+  // (through the gate: Office still saves) or the window's close (fix round 11).
+  | { kind: 'refused'; act: () => void }>();
 let skipQuitGate = false;
 
 // "Close anyway" (the renderer's office:proceed) — registered once, on first use.
@@ -148,6 +184,7 @@ function listenForProceed(ipc: FlushIpc): void {
     const h = typeof id === 'number' ? held.get(id) : undefined;
     if (!h || typeof id !== 'number') return;
     held.delete(id);
+    if (h.kind === 'refused') { h.act(); return; }
     if (h.kind === 'close') {
       h.onProceed?.(); // Close anyway, said explicitly to the close gate (fix round 8)
       flushedForClose.add(h.win);
@@ -203,7 +240,7 @@ export async function officeQuitGate(
 ): Promise<boolean> {
   // First, before anything (even a Close anyway's re-issued quit): a window with an unsaved text
   // file would veto the unload after teardown — refuse the quit now, in that window (fix round 9).
-  if (refuseQuitForOtherUnsaved(windows, deps.hung)) { skipQuitGate = false; return false; }
+  if (refuseQuitForOtherUnsaved(windows, deps.hung, { ipc: deps.ipc })) { skipQuitGate = false; return false; }
   if (skipQuitGate) { skipQuitGate = false; return true; }
   const ipc = deps.ipc ?? ipcMain;
   listenForProceed(ipc);

@@ -13,19 +13,25 @@
 // only marks the restart; `onWillQuit` (Electron's will-quit, which fires only when the quit is
 // really happening) relaunches.
 //
-// WHY a watchdog (fix rounds 7–9): once teardown has run, a window whose renderer hangs would
+// WHY a watchdog (fix rounds 7–11): once teardown has run, a window whose renderer hangs would
 // keep the app alive forever, with every session already stopped: a quit (or restart) that never
-// finishes. So 10 s after teardown, any window still open is let go of: app.exit (relaunching
-// first for a restart, since exit skips will-quit). That is safe then: teardown is done, the
-// Office 'final' pass already saved what could be saved and released the documents, and a page
-// with a legitimate reason to veto — a text file with unsaved edits — was already asked about
-// BEFORE teardown (the quit gate refuses while any window reports one, fix round 9). So a window
-// still open here is hung, or vetoed for a reason nothing could act on any more; it is logged.
+// finishes. So every quit that goes on after teardown — the one gatedQuit itself re-issues, and
+// any the person repeats — arms a 10 s watchdog: if a window is still open then, the app exits
+// (relaunching first for a restart, since exit skips will-quit). That is safe then: teardown is
+// done, and the Office 'final' pass already saved what could be saved and released the documents.
+// The one exception is a RESPONSIVE window with unsaved non-Office edits (a text file edited, or a
+// draft parked, after the gate's check): it is never forced. Such a quit is refused on the spot —
+// "Your chats have stopped. Save the file, then quit again." (plus "YouCoded will quit instead of
+// restarting." when it was a restart, which it no longer is) — and every repeat without saving
+// shows that again, never nothing. Once the file is saved (or discarded) the next quit finishes.
 import { app, BrowserWindow } from 'electron';
 import { log } from './logger';
+import { refuseQuitForOtherUnsaved } from './office/office-flush';
 
 let restartRequested = false;
 let relaunchOnQuit = false;
+let restartDropped = false; // a restart that became a quit after teardown (for the prompt's wording)
+let watchdog: ReturnType<typeof setTimeout> | null = null;
 
 /** How long after teardown a window may still hold the quit open. */
 export const QUIT_WATCHDOG_MS = 10_000;
@@ -54,31 +60,33 @@ interface GatedQuitDeps {
   quit?(): void;
   /** How many windows are still open. */
   openWindows?(): number;
-  /** A responsive window got an unsaved text editor after teardown began: it was just told
-   *  "Save it, then quit again" (true) and must not be forced (fix round 10). */
-  refuseForUnsaved?(): boolean;
   exit?(): void;
-  setTimer?(fn: () => void, ms: number): void;
+  /** Refuse for unsaved non-Office edits in a responsive window (it is shown the list); true if so. */
+  refuseForUnsaved?(o: { afterTeardown: boolean; restartDropped: boolean }): boolean;
+  setTimer?(fn: () => void, ms: number): ReturnType<typeof setTimeout> | null;
+  clearTimer?(t: ReturnType<typeof setTimeout>): void;
 }
+type Deps = Required<Omit<GatedQuitDeps, 'gate' | 'shutdown'>>;
 
-function electronDefaults() {
+function electronDefaults(): Deps {
   return {
     relaunch: () => app.relaunch(),
     quit: () => app.quit(),
     openWindows: () => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
-    refuseForUnsaved: () => false,
     exit: () => app.exit(0),
-    setTimer: (fn: () => void, ms: number) => { setTimeout(fn, ms).unref?.(); },
+    refuseForUnsaved: (o) => refuseQuitForOtherUnsaved(undefined, undefined, o),
+    setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
+    clearTimer: (t) => clearTimeout(t),
   };
 }
 
 /**
  * before-quit's first pass: the Office gate decides; on go, mark a restart (if one was asked
- * for), tear down, quit, and arm the watchdog. A held quit forgets the restart request here —
- * only Close anyway (onProceed) marks it again.
+ * for), tear down, and quit again (that quit comes back through quitAfterTeardown). A held quit
+ * forgets the restart request here — only Close anyway (onProceed) marks it again.
  */
 export async function gatedQuit(deps: GatedQuitDeps): Promise<void> {
-  const d = { ...electronDefaults(), ...deps } as Required<GatedQuitDeps>;
+  const d = { ...electronDefaults(), ...deps };
   const restart = restartRequested;
   restartRequested = false;
   const go = await d.gate(() => {
@@ -87,27 +95,46 @@ export async function gatedQuit(deps: GatedQuitDeps): Promise<void> {
   });
   if (!go) return;
   if (restart) relaunchOnQuit = true;
-  await d.shutdown().finally(() => {
-    d.quit();
-    d.setTimer(() => {
-      const open = d.openWindows();
-      if (open === 0) return;
-      // Edited AFTER the gate's check (typing during teardown): never forced. The person was just
-      // told to save; the next quit passes straight through (teardown is done) and finishes then.
-      if (d.refuseForUnsaved()) {
-        relaunchOnQuit = false;
-        log('WARN', 'quit', 'quit held after teardown by a window with unsaved edits', { windows: open });
-        return;
-      }
-      log('WARN', 'quit', 'windows still open 10 s after teardown; exiting', { windows: open });
-      onWillQuit(d.relaunch); // exit() skips will-quit, so a restart relaunches here
-      d.exit();
-    }, QUIT_WATCHDOG_MS);
-  });
+  await d.shutdown().finally(() => d.quit());
+}
+
+/** A refusal after teardown: the restart (if any) becomes a quit, and the prompt says so. */
+function refusedAfterTeardown(d: Deps): boolean {
+  const refused = d.refuseForUnsaved({ afterTeardown: true, restartDropped: restartDropped || relaunchOnQuit });
+  if (!refused) return false;
+  if (relaunchOnQuit) { relaunchOnQuit = false; restartDropped = true; }
+  return true;
+}
+
+/**
+ * before-quit once teardown has run (main.ts's `shuttingDown` pass-through): false = refuse this
+ * quit (a responsive window has unsaved non-Office edits and was just told so); true = let it go
+ * on, with the watchdog (re-)armed.
+ */
+export function quitAfterTeardown(deps: Partial<Deps> = {}): boolean {
+  const d = { ...electronDefaults(), ...deps };
+  if (refusedAfterTeardown(d)) return false;
+  if (watchdog) d.clearTimer(watchdog);
+  watchdog = d.setTimer(() => {
+    watchdog = null;
+    const open = d.openWindows();
+    if (open === 0) return;
+    // Edited after this quit began (typing during teardown): never forced — told, not exited.
+    if (refusedAfterTeardown(d)) {
+      log('WARN', 'quit', 'quit held after teardown by a window with unsaved edits', { windows: open });
+      return;
+    }
+    log('WARN', 'quit', 'windows still open 10 s after teardown; exiting', { windows: open });
+    onWillQuit(d.relaunch); // exit() skips will-quit, so a restart relaunches here
+    d.exit();
+  }, QUIT_WATCHDOG_MS);
+  return true;
 }
 
 /** Tests only. */
 export function resetRestartForTests(): void {
   restartRequested = false;
   relaunchOnQuit = false;
+  restartDropped = false;
+  watchdog = null;
 }

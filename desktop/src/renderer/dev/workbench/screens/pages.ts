@@ -28,8 +28,6 @@ export const PAGES: readonly ScreenEntry[] = [
   pg('office/versions', 'dialog', 'office'),
   // A window close or quit found documents whose save failed (Task 6 fix round 2).
   pg('office/unsaved-on-close', 'dialog', 'office'),
-  // A quit refused before teardown: a text file has unsaved edits (Task 6 fix rounds 9–10).
-  { name: 'app/unsaved-before-quit', tags: ['app', 'dialog'] },
   pg('pages/library', 'view'),
   pg('pages/library/connections', 'dialog'),
   pg('pages/library/edit', 'dialog'),

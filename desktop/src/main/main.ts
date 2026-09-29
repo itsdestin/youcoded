@@ -45,9 +45,9 @@ import { registerOfficeProtocol } from './office/office-protocol';
 import { registerOfficeIpc } from './office/office-ipc';
 import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
-import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, refuseQuitForOtherUnsaved, watchOtherUnsaved } from './office/office-flush';
+import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, refuseCloseForOtherUnsaved, watchOtherUnsaved } from './office/office-flush';
 import { createCloseGate } from './window-close-gate';
-import { gatedQuit, onWillQuit } from './app-restart';
+import { gatedQuit, onWillQuit, quitAfterTeardown } from './app-restart';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
 import { pickSuggestedModel } from './first-run-local';
@@ -1006,6 +1006,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     // about to tear down every session anyway — a close event reaching here
     // once shuttingDown is set must ask nothing and let the window close.
     shuttingDown: () => !!shuttingDown,
+    refuseForUnsaved: () => refuseCloseForOtherUnsaved(win, (w) => !!buddyManagerRef?.isBuddyWindow(w as never)),
     holdForOffice: (ev, cb) => holdCloseForOfficeSave(win, ev, undefined, cb), // Office docs save first (≤5 s, design §4)
     sessionIds: () => windowRegistry.sessionsForWindow(wid),
     ask: (count) => closeRequests.request(wid, count, (push) => {
@@ -2603,14 +2604,13 @@ app.on('window-all-closed', () => {
 // async teardown finish before the process goes away; `quit`/`will-quit` are
 // not reliably awaitable.
 app.on('before-quit', (e) => {
-  // Second pass: shutdownApp() already ran (or is running) and re-issued the
-  // quit below — let it proceed rather than cancelling forever.
-  if (shuttingDown) return;
+  // Second pass: shutdownApp() already ran (or is running) and re-issued the quit below — let it
+  // proceed (watchdog armed), unless a window has unsaved text edits (app-restart.ts, fix round 11).
+  if (shuttingDown) { if (!quitAfterTeardown()) e.preventDefault(); return; }
   e.preventDefault(); // Office first: an unsaved document asks the person before any teardown (office-flush.ts).
   void gatedQuit({ // app-restart.ts: also carries a pending restart through the gate (fix round 6, I-B)
     gate: (onProceed) => officeQuitGate(undefined, undefined, onProceed),
     shutdown: () => shutdownApp(),
-    refuseForUnsaved: () => refuseQuitForOtherUnsaved(),
   }).catch(() => {});
 });
 app.on('will-quit', () => onWillQuit(() => app.relaunch())); // a restart relaunches only now (app-restart.ts)

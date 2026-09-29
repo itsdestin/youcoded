@@ -110,6 +110,22 @@ describe('the window close gate', () => {
     expect(deps.close).toHaveBeenCalledTimes(1);
   });
 
+  it("the last window's unsaved text edits are asked about before anything else", async () => {
+    const { g, deps, ev } = gate();
+    let refuse = true;
+    const withRefuse = createCloseGate<boolean>({ ...deps, refuseForUnsaved: () => refuse });
+    const e = ev();
+    await withRefuse.onClose(e);
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(deps.holdForOffice).not.toHaveBeenCalled();
+    expect(deps.ask).not.toHaveBeenCalled();
+    refuse = false; // discarded: the close goes on through Office and the sessions prompt
+    await withRefuse.onClose(ev());
+    expect(deps.holdForOffice).toHaveBeenCalledTimes(1);
+    expect(deps.ask).toHaveBeenCalledTimes(1);
+    void g;
+  });
+
   it('closes freely with no sessions, and never for a Cancel', async () => {
     const free = gate({ sessions: 0 });
     const e = free.ev();
