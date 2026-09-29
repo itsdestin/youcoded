@@ -15,9 +15,9 @@
 // use-disk-version — the stash only ever holds drafts the user has neither
 // kept nor thrown away.
 //
-// WHY each parked draft holds an unsaved mark (Task 6 fix rounds 10–11): a parked draft is
+// WHY each parked draft holds an unsaved mark (Task 6 fix rounds 10–13): a parked draft is
 // unsaved work with no editor on screen — nothing vetoes a quit or the window's close for it, so
-// it was lost without a word. Its mark lists it in the refused-quit prompt (with "Open it"), and
+// it was lost without a word. Its mark lists it in the refused-quit prompt (with Save), and
 // it stays marked until the restored draft is back in an editor (settleDraft) — a restore that
 // fails leaves the draft parked, never dropped.
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
@@ -30,10 +30,10 @@ export interface StashedDraft {
   mtimeMs: number | null;
   /** The file's name (no folder), for the refused-quit prompt. */
   name?: string;
-  /** Open the file again in this window's viewer (which restores the draft). */
-  open?: () => void;
-  /** Whether the file can still be opened. */
+  /** Whether the file could still take the draft (the editor's own edit rules). */
   available?: () => Promise<boolean>;
+  /** Save the draft to its file from the refused-quit prompt (force = Save anyway). */
+  save?: (force?: boolean) => Promise<import('../../state/unsaved-editors').ParkedSaveResult>;
 }
 
 interface Parked { entry: StashedDraft; taken: boolean; release: () => void }
@@ -49,8 +49,8 @@ export function stashDraft(key: string, entry: StashedDraft): void {
   const release = holdUnsavedEditor({
     name: entry.name ?? 'A file',
     parked: {
-      open: () => stash.get(key)?.entry.open?.(),
       available: () => stash.get(key)?.entry.available?.() ?? Promise.resolve(false),
+      save: (force) => stash.get(key)?.entry.save?.(force) ?? Promise.resolve({ error: "YouCoded couldn't save this file." }),
     },
     discard: () => clearDraft(key),
   });

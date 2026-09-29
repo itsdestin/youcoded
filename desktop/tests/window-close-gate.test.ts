@@ -141,6 +141,22 @@ describe('the window close gate', () => {
     expect(e.preventDefault).toHaveBeenCalled();
   });
 
+  it('a refusal uses up a Close anyway: the next close does not carry out the old answer', async () => {
+    const { deps, state, ev, closeAnyway } = gate();
+    let refuse = false;
+    const g = createCloseGate<boolean>({ ...deps, refuseForUnsaved: () => refuse });
+    await g.onClose(ev()); // sessions prompt answered
+    state.office = 'hold-fail';
+    await g.onClose(ev()); // Office save failed…
+    closeAnyway(); // …Close anyway
+    refuse = true;
+    await g.onClose(ev()); // its re-issued close is refused for unsaved text
+    refuse = false;
+    await g.onClose(ev()); // a fresh X later
+    expect(deps.apply).not.toHaveBeenCalled();
+    expect(deps.ask).toHaveBeenCalledTimes(2);
+  });
+
   it('closes freely with no sessions, and never for a Cancel', async () => {
     const free = gate({ sessions: 0 });
     const e = free.ev();

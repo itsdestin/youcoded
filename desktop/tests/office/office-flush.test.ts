@@ -303,6 +303,23 @@ describe('quitting while a text file has unsaved edits', () => {
     t.sender.emit('destroyed');
   });
 
+  it('a refusal on the close Close anyway re-issued uses that pass up: the next X saves Office again', async () => {
+    const t = editing(32);
+    const failing = aWindow(t.ipc, 32, { failed: 1 }); // this window's Office save fails…
+    const win = Object.assign(failing.win, { focus: vi.fn() });
+    const deps = depsFor(t.ipc, [32]);
+    holdCloseForOfficeSave(win, { preventDefault() {} }, deps);
+    await vi.waitFor(() => expect(failing.pushes).toHaveLength(1));
+    t.ipc.emit(OFFICE_PROCEED, { sender: { id: 32 } }); // …Close anyway: main re-issues the close
+    expect(win.close).toHaveBeenCalledTimes(1);
+    t.report(true); // a text file is unsaved in the last window
+    expect(refuseCloseForOtherUnsaved(win, () => false, { ipc: t.ipc as never, windows: [win], hung: () => false })).toBe(true);
+    const ev = { preventDefault: vi.fn() };
+    expect(holdCloseForOfficeSave(win, ev, deps)).toBe(true); // the next X: Office asked again
+    expect(ev.preventDefault).toHaveBeenCalled();
+    t.sender.emit('destroyed');
+  });
+
   it('a dismissed refusal is forgotten: a later proceed does not quit', () => {
     const t = editing(31);
     t.report(true);

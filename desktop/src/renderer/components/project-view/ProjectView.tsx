@@ -15,7 +15,6 @@
 // tabs are filled by later tasks. The project-deletion modal + project list stay
 // here (project-scoped). The "+ Add external file" affordance moved into
 // FilesTab (artifact-scoped) since it operates on the active project's artifacts.
-import { useProjectViewRequest } from '../../state/parked-draft-opener';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -188,11 +187,6 @@ export function ProjectView(props: ProjectViewProps) {
   // view is open, yanking the project out from under the user mid-browse.
   const activeCwdRef = useRef(props.activeSessionCwd);
   activeCwdRef.current = props.activeSessionCwd;
-  // "Open it" for a parked draft (fix round 12): its folder, and the Files tab, even if Project
-  // View was already open.
-  const draftRequest = useProjectViewRequest();
-  const draftRequestRef = useRef(draftRequest);
-  draftRequestRef.current = draftRequest;
   const [tab, setTab] = useState<TabId>('files');
   // Artifacts search query (lifted out of FilesTab so it can sit on the
   // shared seg-row next to the segmented control, matching the design).
@@ -362,8 +356,7 @@ export function ProjectView(props: ProjectViewProps) {
       // time. Previously this kept `prev` (the last selection) across
       // close/reopen, because the component never unmounts.
       // Fallback order: focused conversation's project → first in the list.
-      // A parked draft's "Open it" asks for ITS folder instead (fix round 12).
-      setActiveProject(matchProjectByPath(res.projects, draftRequestRef.current?.projectPath ?? activeCwdRef.current)
+      setActiveProject(matchProjectByPath(res.projects, activeCwdRef.current)
         ?? (res.projects.length > 0 ? res.projects[0] : null));
       // Phase 2: real file + conversation counts (on-disk discovery + a global
       // session scan) merged in when ready — progressively enhances the switcher's
@@ -375,15 +368,6 @@ export function ProjectView(props: ProjectViewProps) {
     }).catch(() => { /* reopening the view, or a remote reconnect (below), asks again */ });
     return () => { cancelled = true; };
   }, [projectViewOpen]);
-
-  // A parked draft's "Open it" while Project View is open (or once its list arrives): move to the
-  // draft's folder and the Files tab, which opens the file (fix round 12).
-  useEffect(() => {
-    if (!draftRequest || !projectViewOpen) return;
-    const p = matchProjectByPath(projects, draftRequest.projectPath);
-    if (p) setActiveProject(p);
-    setTab('files');
-  }, [draftRequest, projectViewOpen, projects]);
 
   // After a remote reconnect, an open Project View asks again for its project list and
   // the chosen project's conversations and counts. WHY: each was read once per open, so a

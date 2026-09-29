@@ -24,7 +24,6 @@ function absoluteArtifactPath(projectRoot: string, a: ArtifactRecord): string {
 }
 import { openEditorSearch, revealLineIn } from './cm/editor-registry';
 import { draftKey, stashDraft, takeDraft, clearDraft, settleDraft } from './draft-store';
-import { openParkedDraft } from '../../state/parked-draft-opener';
 import { ScreenMark } from '../../shoot-mode';
 import { isOfficeEditable } from '../office/office-files';
 import { useOfficeAvailable } from '../office/office-availability';
@@ -60,6 +59,36 @@ function saveErrorMessage(res: any): string {
   // A `../` record refused at save time says the same as when it is opened.
   if (err === 'outside-projects' || err === 'not-in-home-project' || err === 'record-unreadable') return describeReadError(err, res?.code);
   return `Save failed: ${String(err ?? 'unknown error')}`;
+}
+
+/**
+ * Save a parked draft from the refused-quit prompt (Task 6 fix round 13) — the editor's own save
+ * path (artifacts:save: the same write authorization, temp file + rename and changed-on-disk
+ * check in main), with the draft's own base token. Without a token nothing can tell whether the
+ * file changed since, so that is reported as a possible conflict, never saved blind; `force`
+ * (Save anyway, confirmed) overwrites. On success the draft is cleared (its mark with it).
+ */
+export async function saveParkedDraft(p: {
+  projectRoot: string; projectId: string; projectName: string; artifact: ArtifactRecord; sessionId: string;
+  draft: string; baseMtimeMs: number | null; force?: boolean;
+}): Promise<import('../../state/unsaved-editors').ParkedSaveResult> {
+  if (!p.force && p.baseMtimeMs === null) return { conflict: true, unknown: true };
+  const opts: { baseMtimeMs?: number; confirmed?: boolean } = {};
+  if (!p.force && p.baseMtimeMs !== null) opts.baseMtimeMs = p.baseMtimeMs;
+  // The person confirmed editing this file when they started (startEdit asks for such files).
+  const abs = p.artifact.kind === 'internal'
+    ? `${p.projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${p.artifact.path.replace(/\\/g, '/')}`
+    : (p.artifact.absolutePath ?? p.artifact.path);
+  if (editTier(canonicalize(abs, null)) === 'needs-confirm') opts.confirmed = true;
+  let res: any;
+  try {
+    res = await (window.claude as any).artifacts.save(p.projectRoot, p.projectId, p.projectName, p.artifact.id, p.draft, p.sessionId, opts);
+  } catch (e) {
+    return { error: `Save failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (res && res.ok) { clearDraft(draftKey(p.projectRoot, p.artifact.id)); return { ok: true }; }
+  if (res && res.error === 'conflict') return { conflict: true };
+  return { error: saveErrorMessage(res) };
 }
 
 // Imperative handle so an external chrome (the SessionDrawer header toolbar) can
@@ -281,12 +310,13 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       // change that unmounts the drawer) degrade to draft-survives.
       const cur = stateRef.current;
       if (cur.editing && cur.content !== null && cur.draft !== cur.content) {
-        // Named and openable for the refused-quit prompt (fix round 11): the file name only.
-        const target = { sessionId, artifact, projectRoot };
+        // Named and savable from the refused-quit prompt (fix rounds 11–13): the file name only.
+        const draftText = cur.draft;
+        const baseMtimeMs = mtimeRef.current;
         stashDraft(key, {
-          draft: cur.draft, mtimeMs: mtimeRef.current, name: artifact.path.split(/[\\/]/).pop() || artifact.path,
-          open: () => openParkedDraft(target),
+          draft: draftText, mtimeMs: baseMtimeMs, name: artifact.path.split(/[\\/]/).pop() || artifact.path,
           available: () => draftFileEditable(projectRoot, artifact),
+          save: (force) => saveParkedDraft({ projectRoot, projectId, projectName, artifact, sessionId, draft: draftText, baseMtimeMs, force }),
         });
       }
     };

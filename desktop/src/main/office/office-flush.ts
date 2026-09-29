@@ -119,7 +119,7 @@ export function watchOtherUnsaved(ipc: FlushIpc = ipcMain): void {
  * person can open each parked draft, or discard them all and go on (office:proceed → `act`).
  * Returns whether it refused.
  * WHY a hung window is skipped (fix round 10): its editor can neither be saved nor answer, so
- * it could only block the quit forever — the hang question (close it anyway) covers it instead.
+ * it could only block the quit forever — after teardown the quit watchdog lets a hung window go.
  * Used by the quit gate before teardown, by a quit repeated after teardown, and by the quit
  * watchdog; `afterTeardown`/`restartDropped` make the prompt say the chats have stopped and
  * that a restart became a quit (fix round 11).
@@ -144,11 +144,15 @@ export function refuseCloseForOtherUnsaved(
   opts: { ipc?: FlushIpc; windows?: ClosingWindow[]; hung?: (w: ClosingWindow) => boolean } = {},
 ): boolean {
   if (win.isDestroyed() || !otherUnsaved.has(win.webContents.id)) return false;
-  // A hung window is not asked (fix round 12): it could not show the list — the close gate's
-  // "not responding, close it anyway?" question must be reachable instead.
+  // A hung window is not asked (fix round 12): it could not show the list, and a refusal would only
+  // hold its close. (The close gate's "not responding, close it anyway?" question follows only a
+  // close main re-issued — after an Office save or the sessions prompt; see window-close-gate.)
   if ((opts.hung ?? ((w: ClosingWindow) => isUnresponsive(w as unknown as BrowserWindow)))(win)) return false;
   const all = opts.windows ?? (BrowserWindow.getAllWindows() as unknown as ClosingWindow[]);
   if (all.some((w) => w !== win && !w.isDestroyed() && !isFloater(w))) return false;
+  // Refused — even on the close Close anyway re-issued: that pass-through is used up here, so the
+  // next X runs the Office save again rather than slipping past it (fix round 13).
+  flushedForClose.delete(win);
   return refuseIn(win, 'close', () => { if (!win.isDestroyed()) win.close(); }, { ipc: opts.ipc });
 }
 

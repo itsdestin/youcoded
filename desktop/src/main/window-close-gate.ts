@@ -116,6 +116,7 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
         // out later by some other close (fix round 12).
         confirmed = null;
         forProceed = null;
+        proceeding = false; // a Close anyway it refused is used up too (fix round 13)
         return;
       }
       // Office first, every time — even after the sessions prompt was answered (see above).

@@ -12,12 +12,16 @@
 // draft and a way to discard them all.
 import { useSyncExternalStore } from 'react';
 
+/** How a parked draft's Save ended: saved, the file changed on disk since (or that can't be
+ *  told — `unknown`), or a specific failure message. */
+export type ParkedSaveResult = { ok: true } | { conflict: true; unknown?: boolean } | { error: string };
+
 export interface UnsavedEdit {
   /** The file's name only — never its folder (it is shown on screen and sent to main). */
   name: string;
-  /** A parked draft: how to open its file again (the editor restores the draft), and whether
-   *  that file can still be opened. Absent for an editor that is on screen. */
-  parked?: { open(): void; available(): Promise<boolean> };
+  /** A parked draft (no editor on screen): whether its file could still take it, and saving it
+   *  there from the prompt (fix round 13). Absent for an editor that is on screen. */
+  parked?: { available(): Promise<boolean>; save(force?: boolean): Promise<ParkedSaveResult> };
   /** Throw these edits away (the discard choice in the refused prompt). */
   discard(): void;
 }
@@ -46,6 +50,9 @@ export function holdUnsavedEditor(edit: UnsavedEdit): () => void {
   changed();
   return () => { if (holders.delete(key)) changed(); };
 }
+
+/** The same list, outside a render (the prompt's photo preview). */
+export function unsavedEditsNow(): readonly UnsavedEdit[] { return snapshot; }
 
 /** Every unsaved edit in this window, for the refused prompt's list. */
 export function useUnsavedEdits(): UnsavedEdit[] {
