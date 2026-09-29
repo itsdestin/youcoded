@@ -11,6 +11,7 @@
 // unavailable, and when they do they say WHY rather than disappearing.
 
 import { GAMES, type GameDefinition } from './game-registry';
+import { CARD_LEVEL_1 } from '../ui';
 
 /** What the shell knows about a game right now. Deliberately flat and dumb —
  *  Step 2 fills it from the reducer + leaderboard; Step 1 fills it from a
@@ -77,7 +78,12 @@ function GameCard({
       // all six themes. `well` is the next step DOWN the depth ladder (§2.1)
       // from the pane, and the hairline gives the card an edge on the themes
       // where well and inset sit close together.
-      className="group flex flex-col gap-2 rounded-lg bg-well border border-edge-dim p-3 text-left transition-colors hover:border-edge hover:bg-well/70 disabled:opacity-50 disabled:hover:border-edge-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      //
+      // WHY CARD_LEVEL_1 (quick-fix batch, 2026-09-29; ui-labels-batch#LB-16):
+      // the app's one first-level card — outline-led, so it reads on the
+      // bg-inset pane in every theme without the darker `well` fill. Hover
+      // deepens the fill like a clickable Settings row (SettingRow).
+      className={`group ${CARD_LEVEL_1} flex flex-col gap-2 p-3 text-left transition-colors hover:bg-inset disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
     >
       <game.Tile />
       <div className="flex flex-col gap-0.5 min-w-0">
@@ -112,7 +118,7 @@ export default function ArcadePicker({ statuses, onPick, signedIn, onSignIn }: P
           the old panel's gate is the point of §4.2: Flappy and 2048 are
           playable right now, and the account only buys the ranking. */}
       {!signedIn && (
-        <div className="rounded-lg bg-well border border-edge-dim px-3 py-2.5 flex flex-col gap-2">
+        <div className={`${CARD_LEVEL_1} px-3 py-2.5 flex flex-col gap-2`}>
           <p className="text-2xs text-fg-muted leading-relaxed">
             Flappy and 2048 play without an account. Sign in to play friends and
             to put your scores on the board.

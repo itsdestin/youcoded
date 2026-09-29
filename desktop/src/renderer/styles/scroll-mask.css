@@ -20,3 +20,29 @@
 .scroll-mask::-webkit-scrollbar { display: none; }
 .scroll-mask[data-fade-top="true"] { --scroll-mask-top: 40px; }
 .scroll-mask[data-fade-bottom="true"] { --scroll-mask-bottom: 40px; }
+
+/* The session list's edge fade. The painted band above read as a dark strip
+   over the rows' ends, so here the rows themselves fade to clear, like messages
+   under the controls (R7-1: "make this fade/scroll effect match the new effect
+   we're using elsewhere"). WHY every chrome style, not just 'float' (quick-fix
+   batch, 2026-09-29; ui-labels-batch#LB-5: "this screenshot looks like it still
+   has the old paint fade in the sesion switcher"): the rule used to be scoped to
+   the float style, so the standard style kept the painted band. The painted
+   pseudos carry matching negative margins, so hiding them moves nothing. No row
+   in this list has a blur of its own, so masking the list costs no glass. */
+.session-menu .scroll-fade::before,
+.session-menu .scroll-fade::after {
+  display: none;
+}
+.session-menu .scroll-fade[data-fade-top='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 28px);
+}
+.session-menu .scroll-fade[data-fade-bottom='true'] {
+  -webkit-mask-image: linear-gradient(to top, transparent 0, black 28px);
+  mask-image: linear-gradient(to top, transparent 0, black 28px);
+}
+.session-menu .scroll-fade[data-fade-top='true'][data-fade-bottom='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
+}

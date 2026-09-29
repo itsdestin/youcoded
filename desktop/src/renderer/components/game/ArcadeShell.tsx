@@ -25,7 +25,8 @@ import GameLobby from './GameLobby';
 import ConnectFourBoard from './ConnectFourBoard';
 import GameChat from './GameChat';
 import GameOverlay from './GameOverlay';
-import { Button, LoadingState } from '../ui';
+import '../ui/Dialog.css';
+import { Button, CloseButton, LoadingState } from '../ui';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface Props {
@@ -360,7 +361,9 @@ function chessTreatment(): PieceTreatment {
 
 function ArcadeHeader({ title, onBack, onClose }: { title: string; onBack?: () => void; onClose: () => void }) {
   return (
-    <div className="flex items-center gap-1 px-2 py-2 border-b border-edge shrink-0">
+    // WHY dialog-header, not border-b (quick-fix batch, LB-16: "not the fulll
+    // horizontal lines"): the popups' short tapered divider (ui/Dialog.css).
+    <div className="dialog-header flex items-center gap-1 px-2 py-2 shrink-0">
       {onBack && (
         <button
           type="button"
@@ -376,16 +379,9 @@ function ArcadeHeader({ title, onBack, onClose }: { title: string; onBack?: () =
         </button>
       )}
       <span className={`text-sm font-semibold text-fg flex-1 min-w-0 truncate ${onBack ? '' : 'pl-1'}`}>{title}</span>
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close games"
-        className="w-7 h-7 flex items-center justify-center rounded-md text-fg-muted hover:text-fg-2 hover:bg-inset transition-colors"
-      >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        </svg>
-      </button>
+      {/* WHY the shared ✕ (decisions B-1): every popup and side panel closes
+          with the same drawn button; this was a hand-drawn copy. */}
+      <CloseButton label="Close games" onClick={onClose} />
     </div>
   );
 }

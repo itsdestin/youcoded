@@ -4,7 +4,7 @@ import { useAccount } from '../../state/account-context';
 import BrailleSpinner from '../BrailleSpinner';
 import { GameConnection } from '../../state/game-types';
 import { mergeFriends, statusLabel } from './friends-data';
-import { Badge, Button, InputGroup, SectionLabel } from '../ui';
+import { Badge, Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, InputGroup, SectionLabel } from '../ui';
 import type { FriendRow, HeadToHead, RequestsPayload } from '../../state/marketplace-api-client';
 import { recordAria, recordLabel, recordsByOpponent } from './head-to-head';
 // Task 7c, workbench-only auto-play — see the effect below and
@@ -360,9 +360,16 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
   const isEmpty = loaded && merged.length === 0 && incoming.length === 0 && outgoing.length === 0;
 
   return (
-    <div className="flex flex-col gap-0">
-      {/* Player info bar */}
-      <div className="px-3 py-2 border-b border-edge flex items-center justify-between">
+    // WHY labelled cards, not full-width ruled strips (quick-fix batch,
+    // 2026-09-29; ui-labels-batch#LB-16: "this needs the card styling and such
+    // established earlier for other similar menus. not the fulll horizontal
+    // lines"): the Settings recipe — a small label over each card, 16px
+    // between groups, people as nested (level-2) rows 8px apart inside it.
+    <div className="flex flex-col gap-4 p-3">
+      {/* Player info */}
+      <div>
+      <SectionLabel className="mb-2">Your profile</SectionLabel>
+      <div className={`${CARD_LEVEL_1} px-3 py-2 flex items-center justify-between`}>
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-medium text-fg truncate">{state.username}</span>
           {/* Plain-word status, never a glyph (Destin's standing rule — the old
@@ -385,6 +392,7 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
           </button>
         )}
       </div>
+      </div>
 
       {/* Incoming challenge — challengeFrom is account identity: .id is the
           stable key passed to respondToChallenge, .name the visible tag, and
@@ -395,7 +403,10 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
           (Destin: friends/handles cover the real use case); challenges are the
           only way into a game now. */}
       {state.challengeFrom && (
-        <div className="px-3 py-2 border-b border-edge bg-inset">
+        // WHY a Callout, not a tinted full-width strip (quick-fix batch): the
+        // guide's one notice box. Buttons stay stacked under the words, each
+        // half-width — the pane can be narrow.
+        <Callout>
           <p className="text-sm text-fg mb-2">
             <span className="font-medium text-link">{state.challengeFrom.name}</span>
             {state.challengeFrom.handle && (
@@ -433,29 +444,29 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
               Decline
             </Button>
           </div>
-        </div>
+        </Callout>
       )}
 
-      {/* Challenge declined notification */}
+      {/* Challenge declined notification — the same notice box. */}
       {state.challengeDeclinedBy && (
-        <div className="px-3 py-2 border-b border-edge">
+        <Callout>
           <p className="text-xs text-fg-dim">
             <span className="text-fg-2">{state.challengeDeclinedBy.name}</span> declined your challenge.
             <button onClick={() => dispatch({ type: 'CLEAR_CHALLENGE' })} className="text-link hover:text-link-hover ml-1">Dismiss</button>
           </p>
-        </div>
+        </Callout>
       )}
 
       {/* Incoming friend requests */}
       {incoming.length > 0 && (
-        <div className="px-3 py-2 border-b border-edge">
+        <div>
           {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
               guide: no spaced capitals — decisions H-3/L-1…L-4). The arcade
               lobby is NOT exempt from the guide (only game boards are). */}
           <SectionLabel className="mb-2">Friend requests</SectionLabel>
-          <ul className="flex flex-col gap-2">
+          <ul className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
             {incoming.map((req) => (
-              <li key={req.id} className="flex flex-col gap-1">
+              <li key={req.id} className={`${CARD_LEVEL_2} px-3 py-2 flex flex-col gap-1`}>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-fg-2 truncate flex-1 min-w-0">
                     {req.from.display_name}
@@ -497,8 +508,9 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
       )}
 
       {/* Add a friend by handle */}
-      <div className="px-3 py-3 border-b border-edge flex flex-col gap-2">
-        <SectionLabel>Add a friend</SectionLabel>
+      <div>
+        <SectionLabel className="mb-2">Add a friend</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
         {/* Change 77: "Send request" moves INSIDE the field. It was left
             `variant="secondary" size="lg"` purely so it would height-match the
             input sitting beside it — inside the field there is nothing to
@@ -528,15 +540,16 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
         {addFeedback && (
           <p className={`text-xs ${addFeedback.ok ? 'text-green-400' : 'text-destructive-fg'}`}>{addFeedback.text}</p>
         )}
+        </div>
       </div>
 
       {/* Friends list */}
       {merged.length > 0 && (
-        <div className="px-3 py-2 border-b border-edge">
+        <div>
           <SectionLabel className="mb-2">Friends ({merged.length})</SectionLabel>
-          <ul className="flex flex-col gap-2">
+          <ul className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
             {merged.map((row) => (
-              <li key={row.id} className="flex flex-col gap-0.5">
+              <li key={row.id} className={`${CARD_LEVEL_2} px-3 py-2 flex flex-col gap-0.5`}>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-fg-2 truncate flex-1 min-w-0">
                     {row.name}
@@ -588,11 +601,11 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
 
       {/* Sent (outgoing) requests — dim, collapsed-feeling */}
       {outgoing.length > 0 && (
-        <div className="px-3 py-2 border-b border-edge">
+        <div>
           <SectionLabel className="mb-2">Sent requests</SectionLabel>
-          <ul className="flex flex-col gap-1">
+          <ul className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
             {outgoing.map((req) => (
-              <li key={req.id} className="flex flex-col gap-1">
+              <li key={req.id} className={`${CARD_LEVEL_2} px-3 py-2 flex flex-col gap-1`}>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-fg-dim truncate flex-1 min-w-0">
                     @{req.to.handle ?? req.to.display_name}
@@ -615,7 +628,7 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
 
       {/* Empty state — no friends and no requests in either direction */}
       {isEmpty && (
-        <div className="px-3 py-6">
+        <div className="py-3">
           <p className="text-xs text-fg-muted text-center leading-relaxed">
             No friends yet. Ask a friend for their handle and add them above.
           </p>

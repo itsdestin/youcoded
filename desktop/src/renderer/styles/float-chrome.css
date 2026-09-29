@@ -405,30 +405,6 @@
    from theme-engine.ts (FLOAT_CHROME_GLASS): without a blur — a flat theme,
    "Reduced effects", a zero blur slider — a 24% fill left the chat behind it
    sharp through the rows, so the menu keeps the app's normal overlay there. */
-/* The session list's edge fade. .scroll-fade paints a solid --panel gradient
-   over the rows' ends, which on this see-through menu read as a dark band.
-   Here the rows themselves fade to clear, like messages under the controls
-   (R7-1: "make this fade/scroll effect match the new effect we're using
-   elsewhere"). The painted pseudos carry matching negative margins, so hiding
-   them moves nothing. No row in this list has a blur of its own, so masking
-   the list costs no glass. */
-[data-chrome-style='float'] .session-menu .scroll-fade::before,
-[data-chrome-style='float'] .session-menu .scroll-fade::after {
-  display: none;
-}
-[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-top='true'] {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px);
-  mask-image: linear-gradient(to bottom, transparent 0, black 28px);
-}
-[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-bottom='true'] {
-  -webkit-mask-image: linear-gradient(to top, transparent 0, black 28px);
-  mask-image: linear-gradient(to top, transparent 0, black 28px);
-}
-[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-top='true'][data-fade-bottom='true'] {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
-}
-
 /* Scroll bars: the same light see-through fill with a hairline edge, instead of
    the theme's solid grey bar. Tokens, so every scroll bar (including the
    terminal's drawn thumb) follows. */

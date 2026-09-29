@@ -1,11 +1,13 @@
 // ProjectSwitcher — command-palette project jumper (Task 2.3).
 // Opened from the ProjectHero name button. A centered popup (L2) with a search
 // field, a filtered "Recent" list of projects (avatar + name + repo glyph +
-// mono path + files·chats hint + active check), and an "Add a project" footer.
+// mono path + files·chats hint), and an "Add a project" footer.
 //
 // Layout/visuals mirror docs/superpowers/prototypes/2026-06-14-project-view-redesign.html
 // (switcherPaletteEl). Icon style matches ProjectHero — inline lucide SVG,
 // stroke currentColor.
+// WHY: the search row borrows the popups' tapered divider (.dialog-header).
+import '../ui/Dialog.css';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -27,9 +29,8 @@ interface ProjectSwitcherProps {
   syncStatus?: SyncStatusData | null;
 }
 
-// Shared glyphs — see ./icons.tsx. (The check is the active-project indicator,
-// NOT a status glyph.)
-import { SearchIcon, CheckIcon, PlusIcon } from './icons';
+// Shared glyphs — see ./icons.tsx.
+import { SearchIcon, PlusIcon } from './icons';
 import { CloseButton, SectionLabel } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
 
@@ -116,8 +117,10 @@ export function ProjectSwitcher({
         className="fixed left-1/2 top-[15%] -translate-x-1/2 w-[min(640px,92vw)] flex flex-col"
       >
         <ScreenMark name="projects/switcher" />
-        {/* Search row */}
-        <div className="p-2.5 border-b border-edge-dim flex items-center gap-2">
+        {/* Search row. WHY dialog-header, not border-b (quick-fix batch,
+            2026-09-29; ui-labels-batch#LB-11): the popups' approved short,
+            tapered divider (ui/Dialog.css) instead of a full-width line. */}
+        <div className="dialog-header p-2.5 flex items-center gap-2">
           <span className="text-fg-muted pl-1">
             <SearchIcon size={17} />
           </span>
@@ -133,9 +136,10 @@ export function ProjectSwitcher({
             onKeyDown={handleKeyDown}
             className="flex-1 bg-transparent outline-none text-base text-fg placeholder:text-fg-muted"
           />
-          <span className="text-3xs text-fg-muted border border-edge-dim rounded px-1.5 py-0.5">
-            esc
-          </span>
+          {/* WHY the drawn ✕, not an "esc" key chip (decisions Q-2; LB-11: "want
+              to replace esc with our X"): every popup closes the same way. Esc
+              still closes it (useEscClose above). */}
+          <CloseButton label="Close project switcher" onClick={onClose} />
         </div>
 
         {/* Recent micro-label */}
@@ -176,20 +180,21 @@ export function ProjectSwitcher({
               <div key={p.id} className="group relative">
                 <button
                   type="button"
-                  // Keyboard highlight is outline-not-fill (border-accent); the
-                  // active project gets a subtle bg-inset fill instead. pr-9
-                  // reserves room for the hover × when delete is available.
-                  // WHY bg-accent/10 for the active project, not bg-inset (fix
-                  // batch 1, 2026-09-24): isActive and the default hover both
-                  // used the SAME token, so a hovered-but-not-active row was
-                  // indistinguishable from the actually-active one (job D's
-                  // hover/selected collision). Hover only applies unselected.
-                  className={`w-full flex items-center gap-2.5 px-2 py-2 ${onDeleteProject ? 'pr-9' : ''} rounded-md text-left transition-colors border ${
+                  // pr-9 reserves room for the hover × when delete is available.
+                  // WHY the session switcher's row states (quick-fix batch,
+                  // 2026-09-29; LB-11: "the checkmarks and such are odd here"):
+                  // the highlighted row was an accent-outlined box AND the
+                  // current project carried a check — two extra marks no other
+                  // pick-one menu uses. Now, like the session list: the
+                  // highlighted row (mouse or ↑/↓) is a stronger accent fill,
+                  // the current project a light one, no outline, no check.
+                  // Current and hovered still never look alike (fix batch 1).
+                  className={`w-full flex items-center gap-2.5 px-2 py-2 ${onDeleteProject ? 'pr-9' : ''} rounded-md text-left transition-colors ${
                     isHighlighted
-                      ? 'border-accent bg-inset'
+                      ? 'bg-accent/20'
                       : isActive
-                        ? 'border-transparent bg-accent/10'
-                        : 'border-transparent hover:bg-inset'
+                        ? 'bg-accent/10'
+                        : 'hover:bg-inset'
                   }`}
                   onMouseEnter={() => setHighlightIndex(i)}
                   onClick={() => onSelect(p)}
@@ -257,12 +262,6 @@ export function ProjectSwitcher({
                       />
                     ) : null;
                   })()}
-                  {/* Active check (NOT a status glyph). */}
-                  {isActive && (
-                    <span className="text-fg shrink-0 ml-1">
-                      <CheckIcon size={15} />
-                    </span>
-                  )}
                 </button>
                 {/* Hover-revealed remove-from-YouCoded × (opens the confirm modal
                     in the parent). Does not delete files. Hidden for SYNCED rows —
@@ -289,11 +288,18 @@ export function ProjectSwitcher({
         </div>
 
         {/* Footer: Add a project (opens the OS folder picker via the parent). */}
+        {/* WHY the tapered line, not border-t (quick-fix batch): same divider
+            as the header above and Resume's footer. */}
         <button
           type="button"
-          className="flex items-center gap-2 px-4 py-3 border-t border-edge-dim text-sm-tight text-fg-2 hover:bg-inset hover:text-fg transition-colors rounded-b-[inherit]"
+          className="relative flex items-center gap-2 px-4 py-3 text-sm-tight text-fg-2 hover:bg-inset hover:text-fg transition-colors rounded-b-[inherit]"
           onClick={handleAdd}
         >
+          <span
+            aria-hidden
+            className="absolute inset-x-4 top-0 h-px"
+            style={{ background: 'linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent)' }}
+          />
           <PlusIcon size={15} />
           Add a project
         </button>
