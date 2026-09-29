@@ -532,14 +532,14 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
     widgets: [
       {
         id: 'usage-5h',
-        label: '5h Usage',
+        label: '5h usage',
         defaultVisible: true,
         description: 'Shows how much of your 5-hour rate limit you\'ve used. Resets on a rolling window.',
         bestFor: 'Everyone. Helps you pace usage and avoid hitting rate limits during heavy sessions.',
       },
       {
         id: 'usage-7d',
-        label: '7d Usage',
+        label: '7d usage',
         defaultVisible: true,
         description: 'Shows how much of your 7-day rate limit you\'ve used. Resets on a rolling window.',
         bestFor: 'Everyone. Track your weekly usage pattern so you don\'t run out mid-week.',
@@ -1243,8 +1243,8 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           reset={format7dReset(usage.seven_day.resets_at)} onClick={openUsage} title={usageTitle} />
       )}
       {/* Odd-length windows ride on the Customize toggle of the approved chip
-          they most resemble: a multi-day window follows "7d Usage", a
-          sub-day one follows "5h Usage" — there is no per-length toggle. */}
+          they most resemble: a multi-day window follows "7d usage", a
+          sub-day one follows "5h usage" — there is no per-length toggle. */}
       {usableOtherWindows(usage?.other).map((w, i) => (
         show(w.minutes >= 1440 ? 'usage-7d' : 'usage-5h') ? (
           <UsageChip key={`${w.minutes}-${i}`} label={windowLengthLabel(w.minutes)} utilization={w.utilization}

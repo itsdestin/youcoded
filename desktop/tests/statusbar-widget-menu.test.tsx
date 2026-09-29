@@ -178,17 +178,17 @@ describe('Customize status bar menu', () => {
     window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['usage-5h', 'usage-7d']));
     await openMenu('native', undefined, undefined, 'chatgpt');
     expect(screen.queryByText('Claude Code sessions only')).toBeNull();
-    expect(screen.getByText('5h Usage').closest('button')).toBeTruthy();
-    expect(screen.getByText('7d Usage').closest('button')).toBeTruthy();
+    expect(screen.getByText('5h usage').closest('button')).toBeTruthy();
+    expect(screen.getByText('7d usage').closest('button')).toBeTruthy();
   });
 
   it('explains nothing in a Claude Code session', async () => {
     await openMenu('claude');
     // Positive control FIRST: the two assertions below are absence checks, and
     // an absence check passes just as happily against a menu that never opened.
-    // The 5h Usage row is the row those reasons would attach to, so finding it
+    // The 5h usage row is the row those reasons would attach to, so finding it
     // proves the menu is open AND that this row carries no reason line.
-    expect(screen.getByText('5h Usage')).toBeTruthy();
+    expect(screen.getByText('5h usage')).toBeTruthy();
     expect(screen.queryByText(/Claude Code sessions only/)).toBeNull();
     expect(screen.queryByText(/Not available in this kind/)).toBeNull();
   });
@@ -234,7 +234,7 @@ describe('Customize status bar menu', () => {
     // reason must not be a direct child of the row that holds the checkbox
     // spacer, and must share a two-child wrapper with the label.
     await openMenu('native');
-    const label = screen.getByText('5h Usage');
+    const label = screen.getByText('5h usage');
     const reason = screen.getAllByText('Claude Code sessions only')[0];
     const stack = label.parentElement!;
     expect(reason.parentElement).toBe(stack);
@@ -247,7 +247,7 @@ describe('Customize status bar menu', () => {
 
   it('leaves a dimmed row with zero focusable elements', async () => {
     await openMenu('native');
-    const row = rowAround(screen.getByText('5h Usage'), 'Claude Code sessions only');
+    const row = rowAround(screen.getByText('5h usage'), 'Claude Code sessions only');
     expect(row.querySelectorAll('button, a, input, select, textarea, [tabindex]').length).toBe(0);
   });
 
