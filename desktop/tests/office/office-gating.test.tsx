@@ -11,6 +11,7 @@ import { officeHeaderAction, useOfficeHeaderAction } from '../../src/renderer/co
 import { resetOfficeAvailabilityForTests, useOfficeAvailable } from '../../src/renderer/components/office/office-availability';
 import { markFailed, openDoc, resetOfficeStoreForTests } from '../../src/renderer/components/office/office-store';
 import { usePages } from '../../src/renderer/components/pages/use-pages';
+import { ActiveArtifactView, type ActiveArtifactHandle } from '../../src/renderer/components/artifact-views/ActiveArtifactView';
 import { OFFICE_PAGE_SUMMARY } from '../../src/shared/pages-types';
 import type { OfficeBridge, OfficeFile, OfficeStatus } from '../../src/shared/office-types';
 
@@ -200,6 +201,28 @@ describe('Office entry points', () => {
     withOffice({ status: async () => READY });
     const { result } = renderHook(() => useOfficeHeaderAction('/home/you/notes.md', vi.fn()));
     await waitFor(() => expect(result.current).toBeNull());
+  });
+
+  // Final review, finding 1: main only translates docx/xlsx/pptx, so an older .doc must keep
+  // the default-app button and must not offer an Edit that ends in a refusal.
+  it('leave an old .doc its default-app button and offer no Office edit for it', async () => {
+    const status = vi.fn(async () => READY);
+    (window as unknown as { claude: unknown }).claude = {
+      office: { status },
+      artifacts: { get: vi.fn(), save: vi.fn(), onChanged: () => () => {} },
+    };
+    const { result } = renderHook(() => useOfficeHeaderAction('/home/you/old.doc', vi.fn()));
+    const docx = renderHook(() => useOfficeHeaderAction('/home/you/plan.docx', vi.fn()));
+    // The same answer that makes the .docx offer Office leaves the .doc alone.
+    await waitFor(() => expect(docx.result.current?.title).toBe('Open in Office'));
+    expect(result.current).toBeNull();
+    const ref = React.createRef<ActiveArtifactHandle>();
+    render(<ActiveArtifactView ref={ref} {...({
+      artifact: { id: 'd1', kind: 'external', path: '/home/you/old.doc', absolutePath: '/home/you/old.doc' },
+      content: null, contentInfo: { binary: true }, projectRoot: '/home/you', projectId: 'p', projectName: 'you',
+      sessionId: 's', onContentChange: vi.fn(),
+    } as any)} />);
+    expect(ref.current!.isEditable).toBe(false);
   });
 
   it("keep the Office page out of the pages list until the desktop says it can run it", async () => {

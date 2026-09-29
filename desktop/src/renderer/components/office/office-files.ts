@@ -9,9 +9,16 @@ const KIND_BY_EXT: Record<string, OfficeKind> = {
   pptx: 'presentation', ppt: 'presentation', odp: 'presentation',
 };
 
-/** Files the file viewers edit in Office instead of as text. */
+/** The formats main's translator and version history accept (x2t.ts, versions.ts). */
+const EDITABLE_EXT = new Set(['docx', 'xlsx', 'pptx']);
+
+/** Files the file viewers edit in Office instead of as text.
+ *  WHY only docx/xlsx/pptx (final review, finding 1): main refuses the older and
+ *  OpenDocument formats, so offering Office for a .doc hid its "Open with the default
+ *  app" button and showed an Edit that dead-ended. KIND_BY_EXT stays wider because
+ *  officeFileFor still names the kind of any Office-family file it is handed. */
 export function isOfficeEditable(path: string): boolean {
-  return (path.split('.').pop()?.toLowerCase() ?? '') in KIND_BY_EXT;
+  return EDITABLE_EXT.has(path.split('.').pop()?.toLowerCase() ?? '');
 }
 
 export function officeFileFor(absolutePath: string): OfficeFile {
