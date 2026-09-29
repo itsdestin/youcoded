@@ -15,7 +15,7 @@
 
 import React, { useState } from "react";
 import { useMarketplace } from "../../state/marketplace-context";
-import { Button } from "../ui";
+import { Button, FieldError } from "../ui";
 
 // Used only when the updater failed WITHOUT saying why. Deliberately states
 // what happened and guesses no cause — see docs/error-message-standards.md.
@@ -86,13 +86,11 @@ export default function UpdateButton({ id, kind, variant = "pill" }: Props) {
           {label}
         </button>
       )}
+      {/* WHY FieldError (guide: no red/coloured body text for messages) */}
       {error && (
-        <span
-          role="status"
-          className="text-2xs text-destructive-fg text-right leading-snug max-w-[16rem] break-words"
-        >
+        <FieldError as="span" size="2xs" className="text-right max-w-[16rem] break-words">
           {error}
-        </span>
+        </FieldError>
       )}
     </span>
   );

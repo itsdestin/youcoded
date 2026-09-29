@@ -4,7 +4,7 @@ import { useAccount } from '../../state/account-context';
 import BrailleSpinner from '../BrailleSpinner';
 import { GameConnection } from '../../state/game-types';
 import { mergeFriends, statusLabel } from './friends-data';
-import { Badge, Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, InputGroup, SectionLabel } from '../ui';
+import { Badge, Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, FieldError, InputGroup, SectionLabel } from '../ui';
 import type { FriendRow, HeadToHead, RequestsPayload } from '../../state/marketplace-api-client';
 import { recordAria, recordLabel, recordsByOpponent } from './head-to-head';
 // Task 7c, workbench-only auto-play — see the effect below and
@@ -81,35 +81,31 @@ function ErrorScreen({ connection }: { connection: GameConnection }) {
       <div className="w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center">
         <span className="text-2xl text-destructive-fg" aria-hidden="true">!</span>
       </div>
-      <p className="text-sm text-destructive-fg text-center">{state.partyError}</p>
+      {/* WHY FieldError, not a hand-rolled text-destructive-fg line (guide:
+          "no red/coloured body text for messages"): the box above already
+          carries the failure mark, so the line itself is the shared
+          component, not a second red signal. */}
+      <FieldError as="p" size="2xs" className="text-center">{state.partyError}</FieldError>
       <p className="text-xs text-fg-muted text-center max-w-xs">{hint}</p>
+      {/* WHY outlined (guide: secondary actions are outlined, never bare text):
+          all three were hand-rolled text-link/text-fg-2/text-fg-muted buttons. */}
       <div className="flex gap-2 mt-1 items-center">
-        <button
-          onClick={handleRetry}
-          disabled={retrying}
-          className="text-xs text-link hover:text-link-hover transition-colors disabled:opacity-50"
-        >
+        <Button variant="secondary" size="sm" onClick={handleRetry} disabled={retrying}>
           {retrying ? 'Retrying…' : 'Retry'}
-        </button>
+        </Button>
         {retryCount >= 2 && (
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => window.location.reload()}
-            // G-2: `amber` is not in the app's token set, and this is not a
-            // status indicator (the one documented exception) — it is a
-            // secondary action inside an error screen, so it uses the same
-            // quiet foreground every other secondary action here does.
-            className="text-xs text-fg-2 hover:text-fg transition-colors"
             title="Hard reload the renderer — drops all in-memory state"
           >
             Reload app
-          </button>
+          </Button>
         )}
-        <button
-          onClick={() => dispatch({ type: 'CLEAR_CHALLENGE' })}
-          className="text-xs text-fg-muted hover:text-fg-2 transition-colors"
-        >
+        <Button variant="secondary" size="sm" onClick={() => dispatch({ type: 'CLEAR_CHALLENGE' })}>
           Dismiss
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -379,17 +375,17 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
           <span className="text-3xs text-fg-muted shrink-0">{incognito ? 'Incognito' : 'Online'}</span>
         </div>
         {onToggleIncognito && (
-          <button
+          // WHY outlined (guide: secondary actions are outlined, never bare
+          // text; "Go incognito" is named explicitly): was a hand-rolled
+          // text button whose only "state" cue was a background tint.
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={onToggleIncognito}
-            className={`text-3xs px-1.5 py-0.5 rounded-sm transition-colors ${
-              incognito
-                ? 'bg-inset text-fg-2 hover:bg-edge'
-                : 'text-fg-muted hover:text-fg-2'
-            }`}
             title={incognito ? 'Go online — appear to friends' : 'Go incognito — hide from friends'}
           >
             {incognito ? 'Go Online' : 'Go Incognito'}
-          </button>
+          </Button>
         )}
       </div>
       </div>
@@ -447,12 +443,15 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
         </Callout>
       )}
 
-      {/* Challenge declined notification — the same notice box. */}
+      {/* Challenge declined notification — the same notice box. WHY the
+          `actions` prop, not an inline text-link button (guide: secondary
+          actions are outlined, never bare text; a notice's own buttons go
+          inside it, at the right): Dismiss used to be a link stitched into
+          the sentence. */}
       {state.challengeDeclinedBy && (
-        <Callout>
+        <Callout actions={<Button variant="secondary" size="sm" onClick={() => dispatch({ type: 'CLEAR_CHALLENGE' })}>Dismiss</Button>}>
           <p className="text-xs text-fg-dim">
             <span className="text-fg-2">{state.challengeDeclinedBy.name}</span> declined your challenge.
-            <button onClick={() => dispatch({ type: 'CLEAR_CHALLENGE' })} className="text-link hover:text-link-hover ml-1">Dismiss</button>
           </p>
         </Callout>
       )}
@@ -500,7 +499,8 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
                     Decline
                   </Button>
                 </div>
-                {rowError[req.id] && <p className="text-xs text-destructive-fg">{rowError[req.id]}</p>}
+                {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+                {rowError[req.id] && <FieldError as="p" size="2xs">{rowError[req.id]}</FieldError>}
               </li>
             ))}
           </ul>
@@ -537,8 +537,13 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
             Send request
           </Button>
         </InputGroup>
+        {/* WHY (guide: no red/coloured body text for messages) — the success
+            line drops its green for the plain muted text every other success
+            line uses; the failure line goes through FieldError. */}
         {addFeedback && (
-          <p className={`text-xs ${addFeedback.ok ? 'text-green-400' : 'text-destructive-fg'}`}>{addFeedback.text}</p>
+          addFeedback.ok
+            ? <p className="text-xs text-fg-muted">{addFeedback.text}</p>
+            : <FieldError as="p" size="2xs">{addFeedback.text}</FieldError>
         )}
         </div>
       </div>
@@ -592,7 +597,8 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
                 </div>
                 {/* Plain-word status — never glyphs (workspace rule). */}
                 <span className="text-3xs text-fg-muted">{statusLabel(row, Date.now())}</span>
-                {rowError[row.id] && <p className="text-xs text-destructive-fg">{rowError[row.id]}</p>}
+                {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+                {rowError[row.id] && <FieldError as="p" size="2xs">{rowError[row.id]}</FieldError>}
               </li>
             ))}
           </ul>
@@ -610,16 +616,21 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
                   <span className="text-sm text-fg-dim truncate flex-1 min-w-0">
                     @{req.to.handle ?? req.to.display_name}
                   </span>
-                  <button
+                  {/* WHY outlined (guide: secondary actions are outlined,
+                      never bare text — "Cancel" is named explicitly): was a
+                      hand-rolled text-fg-muted button. */}
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => runMutation(() => window.claude.social.cancelRequest(req.id), req.id, "Couldn't cancel — try again")}
                     disabled={pendingRows.has(req.id)}
-                    // px/py-1.5 = touch-target padding (see the Accept button note).
-                    className="text-3xs px-1.5 py-1.5 text-fg-muted hover:text-fg-2 disabled:opacity-40 transition-colors shrink-0"
+                    className="shrink-0"
                   >
                     Cancel
-                  </button>
+                  </Button>
                 </div>
-                {rowError[req.id] && <p className="text-xs text-destructive-fg">{rowError[req.id]}</p>}
+                {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+                {rowError[req.id] && <FieldError as="p" size="2xs">{rowError[req.id]}</FieldError>}
               </li>
             ))}
           </ul>
@@ -726,9 +737,11 @@ function SignInScreen() {
       >
         {signInPending ? 'Signing in…' : 'Sign in to YouCoded'}
       </Button>
-      {/* knowledge-debt #6: surface a failed sign-in instead of silently swallowing it. */}
+      {/* knowledge-debt #6: surface a failed sign-in instead of silently
+          swallowing it. WHY FieldError (guide: no red/coloured body text
+          for messages). */}
       {signInError && !signInPending && (
-        <p className="text-xs text-destructive-fg text-center max-w-xs">Sign-in failed: {signInError}. Try again.</p>
+        <FieldError as="p" size="2xs" className="text-center max-w-xs">Sign-in failed: {signInError}. Try again.</FieldError>
       )}
     </div>
   );

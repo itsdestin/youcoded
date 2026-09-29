@@ -194,13 +194,11 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
         {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
             guide: no spaced capitals — decisions H-3/L-1…L-4). */}
         <SectionLabel>Recent</SectionLabel>
-        <button
-          onClick={onCancel}
-          className="text-3xs text-fg-muted hover:text-fg transition-colors"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-        >
+        {/* WHY outlined (guide: secondary actions are outlined, never bare
+            text): was a hand-rolled borderless text button. */}
+        <Button variant="secondary" size="sm" onClick={onCancel}>
           Back
-        </button>
+        </Button>
       </div>
 
       {rows === null ? (

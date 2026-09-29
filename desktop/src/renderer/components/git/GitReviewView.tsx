@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { formatRelativeTime } from '../../utils/format-time';
-import { Button, Textarea, Tooltip } from '../ui';
+import { Button, Pill, Textarea, Tooltip } from '../ui';
 import { GitReviewCard } from './GitReviewCard';
 import type { GitFileReviewResult, GitLogEntry } from '../../../shared/git-types';
 import type { StructuredPatchHunk } from '../../../shared/types';
@@ -208,15 +208,16 @@ export function GitReviewView({
                 <span className="text-xs font-semibold text-fg">Uncommitted changes</span>
                 {/* Honest mid-merge marker (2026-07-22 bug: conflicted files
                     read as clean). Viewing only — resolution happens in the
-                    editor/terminal, so this is a badge, not a workflow. Amber
-                    = the app-wide warn tone (Callout/ToolBody convention);
-                    copy says "Conflict", not git's "unmerged path". */}
+                    editor/terminal, so this is a badge, not a workflow. WHY
+                    the shared Pill, not a hand-rolled coloured-word badge
+                    (guide: a status label is a small tinted pill, normal
+                    case, and the colour lives in the tint, never the word). */}
                 {uncommitted.conflicted && (
                   <Tooltip text="This file has merge conflicts. Edit the file to fix the marked sections, then commit.">
-                  <span
-                    className="text-3xs font-medium text-amber-700 bg-amber-700/10 border border-amber-700/25 rounded px-1 py-px shrink-0"
-                  >
-                    Conflict
+                  {/* Tooltip clones a real DOM node, and Pill doesn't forward
+                      a ref — the wrapping span is that node. */}
+                  <span className="shrink-0">
+                    <Pill tone="warning">Conflict</Pill>
                   </span>
                   </Tooltip>
                 )}
@@ -280,13 +281,11 @@ export function GitReviewView({
               </button>
               </Tooltip>
               <div className="flex-1" />
-              <button
-                type="button"
-                onClick={() => onRequestDiscard(!uncommitted.inHead)}
-                className="px-2 py-1 rounded-md text-2xs text-destructive-fg hover:bg-destructive/10 transition-colors"
-              >
+              {/* WHY outlined (guide: secondary actions are outlined, never
+                  bare text): was a hand-rolled text-destructive-fg button. */}
+              <Button variant="danger-outline" size="sm" onClick={() => onRequestDiscard(!uncommitted.inHead)}>
                 Revert changes…
-              </button>
+              </Button>
             </div>
           </GitReviewCard>
         )}
@@ -343,16 +342,13 @@ export function GitReviewView({
           );
         })}
 
+        {/* WHY outlined (guide: secondary actions are outlined, never bare
+            text — "Show more" is named explicitly): was a hand-rolled
+            text-fg-muted button. */}
         {review?.hasMore && (
-          <button
-            type="button"
-            onClick={showMore}
-            // WHY: drop the spaced-caps eyebrow (labels batch, guide: no
-            // spaced capitals), matching UnifiedDiff's own toggle.
-            className="text-xs text-fg-muted hover:text-fg-2 py-1"
-          >
+          <Button variant="secondary" size="sm" onClick={showMore}>
             Show more
-          </button>
+          </Button>
         )}
       </div>
 
