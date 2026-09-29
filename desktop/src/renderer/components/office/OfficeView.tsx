@@ -146,6 +146,9 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
         <DocumentTabs label="Open documents" tabs={tabs} activeId={active} onSelect={selectTab} onClose={closeDoc} className="flex-1" />
         {front && (
           <div className="shrink-0 flex items-center gap-2 pl-2">
+            {/* Save As / Export (finish plan Task 2): its own slot beside the save status, so it
+                never hides "Saving…" (fix round 1). Where the copy went, or why it could not. */}
+            {saveState.phase !== 'failed' && saveState.note && <span className="text-2xs text-fg-muted" role="status">{saveState.note}</span>}
             {/* Saving is automatic (Q-save), so this only confirms it happened — or, when a save
                 failed, says main's own reason with Retry (design §4; error-message-standards). */}
             {saveState.phase === 'failed'
@@ -229,8 +232,6 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
 }
 
 function saveLabel(s: OfficeSaveState): string {
-  // A Save As note wins while it lasts: it is the answer to what the person just did.
-  if (s.note) return s.note;
   if (s.phase !== 'saved') return 'Saving…';
   // After "Save a copy…", say where it went — the folder's name only, never a full path.
   return s.copiedTo ? `Saved a copy to ${s.copiedTo} — now editing the copy.` : 'Saved';

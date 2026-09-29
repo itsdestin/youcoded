@@ -434,6 +434,8 @@ describe('the start screen: Recent, the project list, New and Open', () => {
 });
 
 describe('the editor asks for a file dialog (Insert → Picture)', () => {
+  // bridge.js's own picture filter, plus its "All files".
+  const PICS = [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'ico', 'tif', 'tiff', 'webp'] }, { name: 'All files', extensions: ['*'] }];
   /** Re-registers with a fake open dialog that answers `paths`. */
   function withPicker(paths: string[] | null) {
     const pick = vi.fn(async () => paths);
@@ -453,14 +455,15 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
     expect(many[1].endsWith('/dog.jpg')).toBe(true);
     expect(JSON.stringify(many)).not.toContain(dir);
     // one file, as Tauri's dialog answers when multiple is off
-    const one = await call('office:invoke', win1, token, 'open_dialog', { multiple: false });
+    const one = await call('office:invoke', win1, token, 'open_dialog', { multiple: false, filters: PICS });
     expect(typeof one).toBe('string');
   });
 
   it('answers null when the dialog is cancelled', async () => {
-    withPicker(null);
+    const pick = withPicker(null);
     const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
-    await expect(call('office:invoke', win1, token, 'open_dialog', {})).resolves.toBeNull();
+    await expect(call('office:invoke', win1, token, 'open_dialog', { filters: PICS })).resolves.toBeNull();
+    expect(pick).toHaveBeenCalledTimes(1);
   });
 
   it('a dialog that fails answers null and keeps its error out of the frame', async () => {
@@ -468,7 +471,7 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
     ipc = fakeIpcMain();
     registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickEditorFiles: pick });
     const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
-    await expect(call('office:invoke', win1, token, 'open_dialog', {})).resolves.toBeNull();
+    await expect(call('office:invoke', win1, token, 'open_dialog', { filters: PICS })).resolves.toBeNull();
     // the log gets a reason, never the error's text (it named a folder)
     const logged = vi.mocked(log).mock.calls.filter((c) => c[2] === 'editor file dialog failed');
     expect(logged).toHaveLength(1);
@@ -480,7 +483,20 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
   it("never shows a dialog for another window's document", async () => {
     const pick = withPicker(['/p/a.png']);
     const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
-    await expect(call('office:invoke', win2, token, 'open_dialog', {})).rejects.toThrow('refused');
+    await expect(call('office:invoke', win2, token, 'open_dialog', { filters: PICS })).rejects.toThrow('refused');
+    expect(pick).not.toHaveBeenCalled();
+  });
+
+  // Task 2 fix round 1: Ctrl+O (the editor's own Open) asks this same dialog for documents; its
+  // answer made the editor reload the file and drop unsaved edits. Only pictures are answered.
+  it('shows no dialog for anything but pictures (the editor\'s own Open asks for documents)', async () => {
+    const pick = withPicker([path.join(dir, 'other.docx')]);
+    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    const docs = [{ name: 'Documents', extensions: ['docx', 'xlsx', 'pptx', 'pdf'] }, { name: 'All files', extensions: ['*'] }];
+    await expect(call('office:invoke', win1, token, 'open_dialog', { multiple: false, filters: docs })).resolves.toBeNull();
+    await expect(call('office:invoke', win1, token, 'open_dialog', { filters: [{ name: 'All files', extensions: ['*'] }] })).resolves.toBeNull();
+    await expect(call('office:invoke', win1, token, 'open_dialog', { filters: [{ name: 'Mixed', extensions: ['png', 'docx'] }] })).resolves.toBeNull();
+    await expect(call('office:invoke', win1, token, 'open_dialog', {})).resolves.toBeNull();
     expect(pick).not.toHaveBeenCalled();
   });
 });

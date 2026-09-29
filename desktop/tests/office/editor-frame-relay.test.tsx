@@ -496,6 +496,59 @@ describe('EditorFrame and Save As', () => {
     expect(saves()).toBe(1);
   });
 
+  // The documented limit: the editor's trailing "not modified" is ignored for 2 s after the Save
+  // As ends (measured: it arrives within milliseconds). One later than that is the editor's own
+  // again and drops the pending save, as any "not modified" does.
+  it('a trailing "not modified" past the 2 s window is taken as the editor\'s own (the limit)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'save_file_as' ? { name: 'x.pdf', folder: 'out' } : cmd === 'save_dialog' ? 'yc-save/abc/x.pdf' : 'ok')) as never });
+    const { fromEditor, saves } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'set_document_modified', args: { modified: false } });
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_dialog', args: {} });
+    await settle();
+    fromEditor({ yc: 'rpc', id: 5, cmd: 'save_file_as', args: { path: 'yc-save/abc/x.pdf' } });
+    await settle();
+    expect(saveStateFor(FILE.path).phase).toBe('unsaved');
+    await act(async () => { vi.advanceTimersByTime(2_100); });
+    fromEditor({ yc: 'rpc', id: 6, cmd: 'set_document_modified', args: { modified: false } });
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+    await act(async () => { vi.advanceTimersByTime(3_100); });
+    expect(saves()).toBe(0);
+  });
+
+  it('typing after a Save As ends its hold on "not modified" at once', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'save_file_as' ? { name: 'x.pdf', folder: 'out' } : cmd === 'save_dialog' ? 'yc-save/abc/x.pdf' : 'ok')) as never });
+    const { fromEditor } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_dialog', args: {} });
+    await settle();
+    fromEditor({ yc: 'rpc', id: 5, cmd: 'save_file_as', args: { path: 'yc-save/abc/x.pdf' } });
+    await settle();
+    // An edit and its undo straight after: the undo's "not modified" is the editor's own.
+    fromEditor({ yc: 'rpc', id: 6, cmd: 'set_document_modified', args: { modified: true } });
+    expect(saveStateFor(FILE.path).phase).toBe('unsaved');
+    fromEditor({ yc: 'rpc', id: 7, cmd: 'set_document_modified', args: { modified: false } });
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
+  it('a Save As that ends after the frame has gone writes no save state', async () => {
+    let finish: (v: unknown) => void = () => {};
+    fakeBridge({ invoke: vi.fn((_t: string, cmd: string) => (cmd === 'save_file_as' ? new Promise((r) => { finish = r; }) : Promise.resolve(cmd === 'save_dialog' ? 'yc-save/abc/x.pdf' : 'ok'))) as never });
+    const { fromEditor, unmount } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'set_document_modified', args: { modified: false } });
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'save_dialog', args: {} });
+    await settle();
+    fromEditor({ yc: 'rpc', id: 5, cmd: 'save_file_as', args: { path: 'yc-save/abc/x.pdf' } });
+    await settle();
+    const before = saveStateFor(FILE.path);
+    unmount();
+    await act(async () => { finish({ name: 'x.pdf', folder: 'out' }); await Promise.resolve(); await Promise.resolve(); });
+    expect(saveStateFor(FILE.path).phase).toBe(before.phase);
+    expect(saveStateFor(FILE.path).note).toBeUndefined();
+  });
+
   it('a Save As of a document with nothing unsaved asks for no save', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'save_file_as' ? { name: 'x.pdf', folder: 'out' } : cmd === 'save_dialog' ? 'yc-save/abc/x.pdf' : 'ok')) as never });
@@ -521,5 +574,20 @@ describe('EditorFrame and Save As', () => {
     fromEditor({ yc: 'rpc', id: 6, cmd: 'set_document_modified', args: { modified: false } });
     await act(async () => { vi.advanceTimersByTime(3_100); });
     expect(saves()).toBe(1);
+  });
+});
+
+// Task 2 fix round 1: a second note with the same text keeps its own full time.
+describe('the Save As note', () => {
+  it('a second identical note is not cleared by the first one\'s timer', async () => {
+    vi.useFakeTimers();
+    const { markNote } = await import('../../src/renderer/components/office/office-store');
+    markNote(FILE.path, 'Saved a copy as x.pdf in out.');
+    vi.advanceTimersByTime(5_000);
+    markNote(FILE.path, 'Saved a copy as x.pdf in out.');
+    vi.advanceTimersByTime(4_000); // the first note's 8 s are over, the second's are not
+    expect(saveStateFor(FILE.path).note).toBe('Saved a copy as x.pdf in out.');
+    vi.advanceTimersByTime(4_500);
+    expect(saveStateFor(FILE.path).note).toBeUndefined();
   });
 });

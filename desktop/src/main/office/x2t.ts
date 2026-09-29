@@ -74,6 +74,42 @@ function xmlEscape(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** Run the bundled x2t once with `args`, rejecting with an X2tError whose code says why.
+ *  WHY one helper (Task 2 fix round 1): the translation and the PDF font list are both x2t runs,
+ *  and both must report a timeout as 'timeout' (the only code callers call "took too long"), be
+ *  stoppable, and be killed at quit. */
+function runX2t(bin: string, args: string[], signal?: AbortSignal): Promise<void> {
+  // WHY the library path: x2t loads its shared libraries from its own folder. On macOS the
+  // DYLD_ variable is the equivalent — unverified there, noted for design task 9.
+  // Each variable is set only on the platform that reads it (fix round 1).
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (process.platform === 'linux') env.LD_LIBRARY_PATH = bin;
+  if (process.platform === 'darwin') env.DYLD_LIBRARY_PATH = bin;
+  return new Promise<void>((resolve, reject) => {
+    // WHY SIGKILL on timeout: a wedged converter may ignore SIGTERM and linger holding the
+    // file. WHY a large maxBuffer: x2t can be chatty on stdout for a big document, and hitting
+    // the default 1 MB limit would kill a translation that was working.
+    // WHY `signal` (Task 5 fix round 2): execFile kills the child with killSignal when it
+    // aborts, so one document's translation can be stopped without touching the others'.
+    const opts = { cwd: bin, env, timeout: X2T_TIMEOUT_MS, killSignal: 'SIGKILL' as const, maxBuffer: 64 * 1024 * 1024, signal };
+    const child = execFile(path.join(bin, 'x2t'), args, opts, (err, _stdout, stderr) => {
+      running.delete(child);
+      if (!err) return resolve();
+      const e = err as NodeJS.ErrnoException & { signal?: string | null; killed?: boolean };
+      // WHY three distinct codes (fix round 2): callers tell the user "took too long" ONLY for
+      // a real timeout. Node reports an output overflow with its own code, and our own kill
+      // at quit also arrives as killed+SIGKILL, so each is told apart before the timeout test.
+      let code: string | number;
+      if (stoppedAtQuit.has(child) || signal?.aborted) code = 'stopped';
+      else if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') code = e.code;
+      else if (e.killed && e.signal === 'SIGKILL') code = 'timeout';
+      else code = e.code ?? e.signal ?? 'unknown';
+      reject(new X2tError(`x2t failed (${code})`, code, String(stderr ?? '')));
+    });
+    running.add(child);
+  });
+}
+
 /**
  * Translate `from` into `to` with the bundled native x2t. Rejects with X2tError when x2t
  * fails, times out, or finishes without writing a non-empty `to`.
@@ -86,8 +122,9 @@ export async function convert(
   root: string, from: string, to: string, formatTo: number, tempBase: string,
   /** Aborting it kills this translation (a closed document whose close stopped waiting). */
   signal?: AbortSignal,
-  /** The font list to use instead of the bundled one — a PDF needs pdfFontData()'s. */
-  allFontsPath?: string,
+  /** What Save As / Export adds (finish plan Task 2): the font list a PDF needs (pdfFontData),
+   *  and the editor's export choices, already checked by exportParams(). */
+  extra: { allFontsPath?: string; params?: ExportParams } = {},
 ): Promise<void> {
   if (signal?.aborted) throw new X2tError('x2t failed (stopped)', 'stopped', '');
   const bin = path.join(root, 'converter');
@@ -108,38 +145,11 @@ export async function convert(
       `<m_nFormatTo>${formatTo}</m_nFormatTo>` +
       `<m_sTempDir>${xmlEscape(job)}</m_sTempDir>` +
       `<m_sFontDir>${xmlEscape(path.join(bin, 'fonts'))}</m_sFontDir>` +
-      `<m_sAllFontsPath>${xmlEscape(allFontsPath ?? path.join(bin, 'AllFonts.js'))}</m_sAllFontsPath>` +
+      `<m_sAllFontsPath>${xmlEscape(extra.allFontsPath ?? path.join(bin, 'AllFonts.js'))}</m_sAllFontsPath>` +
+      paramsXml(extra.params) +
       '</TaskQueueDataConvert>';
     await fsp.writeFile(params, xml, 'utf8');
-    // WHY the library path: x2t loads its shared libraries from its own folder. On macOS the
-    // DYLD_ variable is the equivalent — unverified there, noted for design task 9.
-    // Each variable is set only on the platform that reads it (fix round 1).
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    if (process.platform === 'linux') env.LD_LIBRARY_PATH = bin;
-    if (process.platform === 'darwin') env.DYLD_LIBRARY_PATH = bin;
-    await new Promise<void>((resolve, reject) => {
-      // WHY SIGKILL on timeout: a wedged converter may ignore SIGTERM and linger holding the
-      // file. WHY a large maxBuffer: x2t can be chatty on stdout for a big document, and hitting
-      // the default 1 MB limit would kill a translation that was working.
-      // WHY `signal` (Task 5 fix round 2): execFile kills the child with killSignal when it
-      // aborts, so one document's translation can be stopped without touching the others'.
-      const opts = { cwd: bin, env, timeout: X2T_TIMEOUT_MS, killSignal: 'SIGKILL' as const, maxBuffer: 64 * 1024 * 1024, signal };
-      const child = execFile(path.join(bin, 'x2t'), [params], opts, (err, _stdout, stderr) => {
-        running.delete(child);
-        if (!err) return resolve();
-        const e = err as NodeJS.ErrnoException & { signal?: string | null; killed?: boolean };
-        // WHY three distinct codes (fix round 2): callers tell the user "took too long" ONLY for
-        // a real timeout. Node reports an output overflow with its own code, and our own kill
-        // at quit also arrives as killed+SIGKILL, so each is told apart before the timeout test.
-        let code: string | number;
-        if (stoppedAtQuit.has(child) || signal?.aborted) code = 'stopped';
-        else if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') code = e.code;
-        else if (e.killed && e.signal === 'SIGKILL') code = 'timeout';
-        else code = e.code ?? e.signal ?? 'unknown';
-        reject(new X2tError(`x2t failed (${code})`, code, String(stderr ?? '')));
-      });
-      running.add(child);
-    });
+    await runX2t(bin, [params], signal);
     // WHY check the output: a translator that exits "successfully" without writing anything
     // must never be treated as a finished save — the caller would then replace the user's file
     // with nothing.
@@ -176,22 +186,78 @@ async function makeFontData(root: string, tempBase: string): Promise<string> {
   const out = path.join(tempBase, 'fontdata');
   // WHY not recursive: as convert's job folders — a temp base removed at quit is not recreated.
   await fsp.mkdir(out).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'EEXIST') throw e; });
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if (process.platform === 'linux') env.LD_LIBRARY_PATH = bin;
-  if (process.platform === 'darwin') env.DYLD_LIBRARY_PATH = bin;
-  await new Promise<void>((resolve, reject) => {
-    const child = execFile(path.join(bin, 'x2t'), ['-create-allfonts', out, path.join(bin, 'fonts')],
-      { cwd: bin, env, timeout: X2T_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024 }, (err, _o, stderr) => {
-        running.delete(child);
-        if (!err) return resolve();
-        const e = err as NodeJS.ErrnoException & { signal?: string | null };
-        const code = stoppedAtQuit.has(child) ? 'stopped' : (e.code ?? e.signal ?? 'unknown');
-        reject(new X2tError(`x2t font list failed (${code})`, code, String(stderr ?? '')));
-      });
-    running.add(child);
-  });
+  await runX2t(bin, ['-create-allfonts', out, path.join(bin, 'fonts')]);
   const list = path.join(out, 'AllFonts.js');
   const st = await fsp.stat(list).catch(() => null);
   if (!st || st.size === 0) throw new X2tError('x2t made no font list', 'no-output', '');
   return list;
+}
+
+// ── The editor's export choices (Task 2 fix round 1) ──
+// WHY here, checked: they come from the editor frame (bridge.js's save options), so only
+// well-formed values of the kinds x2t was measured to honour (2026-09-29) reach its task file.
+export interface ExportParams {
+  /** CSV encoding: an index into sdkjs's encoding table (c_oAscEncodings), which is what both the
+   *  editor sends and x2t reads (measured: 44 wrote windows-1252, 46 UTF-8, 48 UTF-16LE). */
+  csvEncoding?: number;
+  /** CSV delimiter: 1 tab, 2 semicolon, 3 colon, 4 comma, 5 space (x2t's numbering, measured). */
+  csvDelimiter?: number;
+  /** CSV "Other" delimiter: one character, written as is (measured: '|' honoured). */
+  csvDelimiterChar?: string;
+  /** Spreadsheet PDF: the print range the editor's PDF dialog chose, as sdkjs's own native print
+   *  reads it (m_sJsonParams → asc_nativePrint; measured: page range and orientation honoured). */
+  json?: string;
+}
+const MAX_ENCODING_INDEX = 52; // c_oAscEncodings runs 0..52 (52: EUC-JP)
+const isInt = (v: unknown, lo: number, hi: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
+
+/** The checked x2t additions for writing `formatTo` from the editor's options, or {} when there
+ *  is nothing (or nothing valid) to add. `text`: the TXT/CSV dialog's choice; `json`: bridge.js's
+ *  jsonOptions string. Anything malformed is dropped, never passed on. */
+export function exportParams(formatTo: number, sourceExt: string, text: unknown, json: unknown): ExportParams {
+  const out: ExportParams = {};
+  if (formatTo === FORMAT.csv && text && typeof text === 'object') {
+    const t = text as { codePage?: unknown; delimiter?: unknown; delimiterChar?: unknown };
+    if (isInt(t.codePage, 0, MAX_ENCODING_INDEX)) out.csvEncoding = t.codePage;
+    // The editor sends the delimiter as a list ([2]) or, for "Other", an empty list and a character.
+    const d = Array.isArray(t.delimiter) ? t.delimiter[0] : t.delimiter;
+    if (isInt(d, 1, 5)) out.csvDelimiter = d;
+    else if (typeof t.delimiterChar === 'string' && t.delimiterChar.length === 1 && !/["\r\n\0-\x1f]/.test(t.delimiterChar)) {
+      out.csvDelimiterChar = t.delimiterChar;
+    }
+  }
+  if (formatTo === FORMAT.pdf && sourceExt === 'xlsx' && typeof json === 'string' && json.length <= 4 * 1024 * 1024) {
+    let raw: unknown;
+    try { raw = JSON.parse(json); } catch { raw = null; }
+    const j = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+    const adj = j.adjustOptions && typeof j.adjustOptions === 'object' ? (j.adjustOptions as Record<string, unknown>) : null;
+    const layout = j.spreadsheetLayout && typeof j.spreadsheetLayout === 'object' ? (j.spreadsheetLayout as Record<string, unknown>) : null;
+    const clean: { spreadsheetLayout?: { ignorePrintArea: boolean }; adjustOptions?: Record<string, unknown> } = {};
+    if (layout && typeof layout.ignorePrintArea === 'boolean') clean.spreadsheetLayout = { ignorePrintArea: layout.ignorePrintArea };
+    if (adj) {
+      const a: Record<string, unknown> = {};
+      // printType: 0 active sheets, 1 whole workbook, 2 selection (Asc.c_oAscPrintType).
+      if (isInt(adj.printType, 0, 2)) a.printType = adj.printType;
+      if (isInt(adj.startPageIndex, 0, 100_000)) a.startPageIndex = adj.startPageIndex;
+      if (isInt(adj.endPageIndex, 0, 100_000)) a.endPageIndex = adj.endPageIndex;
+      if (Array.isArray(adj.activeSheetsArray) && adj.activeSheetsArray.length <= 1000 && adj.activeSheetsArray.every((n) => isInt(n, 0, 10_000))) {
+        a.activeSheetsArray = adj.activeSheetsArray;
+      }
+      if (Object.keys(a).length) clean.adjustOptions = a;
+    }
+    // WHY only when the editor sent its print type: sdkjs's native print prints the WHOLE
+    // workbook whenever options are passed without one — more than the person asked for.
+    if (clean.adjustOptions && 'printType' in clean.adjustOptions) out.json = JSON.stringify(clean);
+  }
+  return out;
+}
+
+function paramsXml(p: ExportParams | undefined): string {
+  if (!p) return '';
+  let x = '';
+  if (p.csvEncoding !== undefined) x += `<m_nCsvTxtEncoding>${p.csvEncoding}</m_nCsvTxtEncoding>`;
+  if (p.csvDelimiter !== undefined) x += `<m_nCsvDelimiter>${p.csvDelimiter}</m_nCsvDelimiter>`;
+  if (p.csvDelimiterChar !== undefined) x += `<m_nCsvDelimiterChar>${xmlEscape(p.csvDelimiterChar)}</m_nCsvDelimiterChar>`;
+  if (p.json !== undefined) x += `<m_sJsonParams>${xmlEscape(p.json)}</m_sJsonParams>`;
+  return x;
 }

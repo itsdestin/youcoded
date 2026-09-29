@@ -151,6 +151,25 @@ const errorKind = (e: unknown) => ({
 });
 let activePruner: PruneScheduler | null = null;
 
+// The picture types the editor's Insert → Picture dialog asks for (bridge.js's 'images' filter).
+const PICTURE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'ico', 'tif', 'tiff', 'webp']);
+/** Whether an open_dialog request's filters are pictures only (plus "All files"): true for
+ *  Insert → Picture, false for the editor's own Open, which asks for documents. */
+function picturesOnly(raw: unknown): boolean {
+  if (!Array.isArray(raw)) return false;
+  let pictures = false;
+  for (const f of raw) {
+    const exts = f && typeof f === 'object' && Array.isArray((f as { extensions?: unknown }).extensions) ? (f as { extensions: unknown[] }).extensions : null;
+    if (!exts) return false;
+    for (const e of exts) {
+      if (e === '*') continue;
+      if (typeof e !== 'string' || !PICTURE_EXTS.has(e.toLowerCase())) return false;
+      pictures = true;
+    }
+  }
+  return pictures;
+}
+
 // ── Save As targets (finish plan Task 2) ──
 // WHY handles: the editor's save-as hands dialog.save's answer straight to save_file_as, and the
 // frame must never learn a folder. So save_dialog answers `yc-save/<random>/<chosen name>` —
@@ -349,6 +368,10 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // the frame never sees a folder, and copy-to-media reads only what this dialog granted.
   async function openDialog(sender: OfficeSender, s: OfficeSession, a: Record<string, unknown>): Promise<string | string[] | null> {
     const multiple = a.multiple === true;
+    // WHY (Task 2 fix round 1): the only rightful caller is picture insert. The editor's own Open
+    // (Ctrl+O → LocalFileOpen) asks this dialog for documents, and its answer would have made
+    // the editor reload its file, dropping unsaved edits. Files open from the Office start screen.
+    if (!picturesOnly(a.filters)) return null;
     let paths: string[] | null;
     try {
       const pick = deps.pickEditorFiles ?? (await import('./office-dialogs')).pickEditorFiles;
@@ -399,7 +422,8 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     if (!target) throw new Error(MSG.refused);
     // One save per dialog: a handle the frame kept can't write there again later.
     saveTargets.get(s)?.delete(handle as string);
-    await commandsFor(reg).saveAs(s.token, target);
+    // The editor's export choices go along; main checks them before x2t sees any (exportParams).
+    await commandsFor(reg).saveAs(s.token, target, { text: a.text, json: a.json });
     return { name: path.basename(target), folder: path.basename(path.dirname(target)) };
   }
 

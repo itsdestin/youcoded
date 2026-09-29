@@ -438,9 +438,13 @@ export function markCopied(path: string, folder: string): void {
 const COPIED_NOTE_MS = 8_000;
 /** Save As wrote (or could not write) a separate file: say so briefly, keeping the document's own
  *  save state — a Save As never saves the document itself (finish plan Task 2). */
+const noteSeq: Record<string, number> = {};
 export function markNote(path: string, note: string): void {
+  // WHY a number per note (Task 2 fix round 1): two Save As with the same result in a row used to
+  // share one text, so the first note's timer cleared the second one early.
+  const seq = (noteSeq[path] = (noteSeq[path] ?? 0) + 1);
   setSave(path, { ...saveStateFor(path), note });
-  setTimeout(() => { if (saves[path]?.note === note) setSave(path, { ...saves[path], note: undefined }); }, COPIED_NOTE_MS);
+  setTimeout(() => { if (noteSeq[path] === seq && saves[path]?.note) setSave(path, { ...saves[path], note: undefined }); }, COPIED_NOTE_MS);
 }
 /** The editor says nothing is unsaved after all (see EditorFrame): back to the last save. */
 export function markUnchanged(path: string): void {

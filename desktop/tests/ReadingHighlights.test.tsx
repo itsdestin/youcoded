@@ -192,6 +192,14 @@ describe('ReadingHighlights — render cost at a realistic high comment count', 
     // 2026-09-29): normal 4.7-5.9x, but single runs alone also gave 13.4x and
     // 2.3x, while the planted change measured only 12.0-17.1x — no bound
     // separates them.
-    expect(large / Math.max(small, 1)).toBeLessThan(17);
+    //
+    // 24, not 17 (2026-09-29, Task 2 fix round 1 verify run): a full verify.sh
+    // run measured 18.2x. Eight parallel copies of this file alone stayed at
+    // 4.7-9.2x, so it is not CPU contention but the full suite's long-lived
+    // worker (a big heap makes the 1,000-comment mount's garbage collection
+    // cost more than the 100-comment one's) — +57% and +114% in the two full
+    // runs seen. 24 covers that; the planted per-pair change measured 26-30x
+    // ALONE and grows the same way in a full run, so it still fails.
+    expect(large / Math.max(small, 1)).toBeLessThan(24);
   }, STRESS_TEST_BUDGET_MS);
 });

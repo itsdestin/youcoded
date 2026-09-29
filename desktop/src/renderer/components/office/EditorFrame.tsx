@@ -51,8 +51,12 @@ const REQUESTED_SAVE_LIMIT_MS = 60_000;
 /** How recently a "not modified" may have dropped unsaved changes and still count as the start of
  *  a Save As (measured: the editor sends it milliseconds before the Save As dialog is asked for). */
 const SAVE_AS_START_MS = 5_000;
-/** How long after a Save As ends its trailing "not modified" is ignored (measured: milliseconds). */
+/** How long after a Save As ends its trailing "not modified" is ignored (measured: milliseconds).
+ *  A "not modified" later than this is taken as the editor's own again (a limit, pinned by a test). */
 const SAVE_AS_END_MS = 2_000;
+/** The longest a Save As's dialog may keep "not modified" from dropping changes (Task 2 fix
+ *  round 1): a dialog left open that long, or an editor that never answered, stops holding it. */
+const SAVE_AS_MAX_MS = 10 * 60_000;
 /** A restore landed while this editor still held unsaved typing (see onDocumentReplaced below). */
 const REPLACED_WHILE_EDITING = 'This file was restored while you had unsaved changes here. Save a copy to keep them.';
 
@@ -531,7 +535,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     const saveAsEnded = () => {
       const s = save.current;
       s.saveAsUntil = Date.now() + SAVE_AS_END_MS;
-      if (!s.saveAsDirty || !mountedRef.current) return;
+      // Same guard as every answer (fix round 1): not for a document this editor has let go of.
+      if (!mountedRef.current || replacedRef.current || keptRef.current || openedRef.current?.token !== opened.token) { s.saveAsDirty = false; return; }
+      if (!s.saveAsDirty) return;
       s.saveAsDirty = false;
       s.dirty = true;
       if (!s.failed) {
@@ -549,6 +555,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (m.cmd === 'set_document_modified' && args.modified === true) {
         const s = save.current;
         s.dirty = true;
+        // Typing again: any Save As is over, and "not modified" is the editor's own again.
+        s.saveAsUntil = 0;
         // Any change withdraws a close's pending approval of the unload — also while failed,
         // where markChanged below is skipped (fix round 6, M1). Accepted (fix round 7): the
         // editor's own late "modified" echo after a failed save can arrive just after Close
@@ -587,7 +595,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (m.cmd === 'save_dialog') {
         const s = save.current;
         s.saveAsDirty = s.dirty || Date.now() - s.droppedAt < SAVE_AS_START_MS;
-        s.saveAsUntil = Number.MAX_SAFE_INTEGER;
+        s.saveAsUntil = Date.now() + SAVE_AS_MAX_MS;
       }
       const saving = isSaveCmd(m.cmd);
       // The request this hand-over answers (see requestSeq): the one current when it arrived.
@@ -595,6 +603,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (saving) {
         const s = save.current;
         s.saving = true;
+        s.saveAsUntil = 0; // a real save of the document: no Save As is holding "not modified" now
         // A save is running now; a pending timer would only start a second one behind it.
         s.requested = false;
         if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }

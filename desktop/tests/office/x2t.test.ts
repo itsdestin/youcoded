@@ -5,10 +5,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { inflateSync } from 'node:zlib';
-import { convert, exportFormatFor, FORMAT, formatFor, killRunningConverters, pdfFontData, X2tError } from '../../src/main/office/x2t';
+import { convert, exportFormatFor, exportParams, FORMAT, formatFor, killRunningConverters, pdfFontData, X2tError } from '../../src/main/office/x2t';
 
 const ROOT = fileURLToPath(new URL('../../office-addon/', import.meta.url));
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
+// 201 rows (a city with an umlaut on every other row), made with LibreOffice so its strings are shared.
+const LEDGER = fileURLToPath(new URL('./fixtures/ledger.xlsx', import.meta.url));
 const HAS_ADDON = existsSync(path.join(ROOT, 'manifest.json'));
 if (!HAS_ADDON) console.warn('[x2t.test] skipping real-x2t tests: office-addon/manifest.json is missing (run scripts/fetch-office.mjs)');
 
@@ -50,6 +52,38 @@ describe('exportFormatFor', () => {
   });
 });
 
+// Task 2 fix round 1: the editor's export choices, checked before x2t sees them.
+describe('exportParams', () => {
+  it("passes a CSV's encoding index and delimiter, as the editor sends them", () => {
+    expect(exportParams(FORMAT.csv, 'xlsx', { codePage: 44, delimiter: [2], delimiterChar: null }, '')).toEqual({ csvEncoding: 44, csvDelimiter: 2 });
+    expect(exportParams(FORMAT.csv, 'xlsx', { codePage: 46, delimiter: [], delimiterChar: '|' }, '')).toEqual({ csvEncoding: 46, csvDelimiterChar: '|' });
+  });
+
+  it('drops anything malformed or unknown', () => {
+    expect(exportParams(FORMAT.csv, 'xlsx', { codePage: 999, delimiter: [9], delimiterChar: '"' }, '')).toEqual({});
+    expect(exportParams(FORMAT.csv, 'xlsx', { codePage: '44', delimiter: '2', delimiterChar: 'ab' }, '')).toEqual({});
+    expect(exportParams(FORMAT.csv, 'xlsx', { codePage: 1.5, delimiter: [], delimiterChar: '\n' }, '')).toEqual({});
+    expect(exportParams(FORMAT.csv, 'xlsx', 'junk', '')).toEqual({});
+    // Only a CSV takes text options; a TXT's encoding is one x2t ignores (the editor's dialog is hidden).
+    expect(exportParams(FORMAT.txt, 'docx', { codePage: 44 }, '')).toEqual({});
+  });
+
+  it("keeps only a spreadsheet PDF's print range, and only when its print type came with it", () => {
+    const json = JSON.stringify({
+      spreadsheetLayout: { ignorePrintArea: true, sheetsProps: [{ big: 'model copy' }] },
+      adjustOptions: { printType: 1, startPageIndex: 2, endPageIndex: 3, activeSheetsArray: [0, 2] },
+      translate: { lots: 'of strings' },
+    });
+    const out = exportParams(FORMAT.pdf, 'xlsx', null, json);
+    expect(JSON.parse(out.json!)).toEqual({ spreadsheetLayout: { ignorePrintArea: true }, adjustOptions: { printType: 1, startPageIndex: 2, endPageIndex: 3, activeSheetsArray: [0, 2] } });
+    // No print type: sdkjs would print the whole workbook, so nothing is passed.
+    expect(exportParams(FORMAT.pdf, 'xlsx', null, JSON.stringify({ adjustOptions: { startPageIndex: 1 } }))).toEqual({});
+    expect(exportParams(FORMAT.pdf, 'xlsx', null, JSON.stringify({ adjustOptions: { printType: 7, activeSheetsArray: ['x'] } }))).toEqual({});
+    expect(exportParams(FORMAT.pdf, 'xlsx', null, '{not json')).toEqual({});
+    expect(exportParams(FORMAT.pdf, 'docx', null, JSON.stringify({ adjustOptions: { printType: 0 } }))).toEqual({});
+  });
+});
+
 describe.skipIf(!HAS_ADDON)('convert with the bundled x2t', () => {
   let dir: string;
 
@@ -85,7 +119,7 @@ describe.skipIf(!HAS_ADDON)('convert with the bundled x2t', () => {
     const pdf = path.join(dir, 'out.pdf');
     await convert(ROOT, MEMO, bin, FORMAT.bin, dir);
     const fonts = await pdfFontData(ROOT, dir);
-    await convert(ROOT, bin, pdf, FORMAT.pdf, dir, undefined, fonts);
+    await convert(ROOT, bin, pdf, FORMAT.pdf, dir, undefined, { allFontsPath: fonts });
     const bytes = await readFile(pdf);
     expect(bytes.subarray(0, 5).toString('latin1')).toBe('%PDF-');
     const glyphs: string[] = [];
@@ -96,6 +130,33 @@ describe.skipIf(!HAS_ADDON)('convert with the bundled x2t', () => {
     }
     expect(glyphs.length).toBeGreaterThan(0);
     expect(glyphs.some((g) => g !== '0000')).toBe(true);
+  }, X2T_WARMUP_BUDGET_MS);
+
+  // Measured before this was written (2026-09-29): x2t reads these exactly so.
+  it("writes a CSV in the chosen encoding with the chosen delimiter", async () => {
+    const bin = path.join(dir, 'Editor.bin');
+    await convert(ROOT, LEDGER, bin, FORMAT.bin, dir);
+    const csv = path.join(dir, 'out.csv');
+    await convert(ROOT, bin, csv, FORMAT.csv, dir, undefined, { params: { csvEncoding: 44, csvDelimiter: 2 } });
+    const bytes = await readFile(csv);
+    expect(bytes.subarray(0, 12).toString('latin1')).toBe('City;Amount;');
+    expect(bytes.includes(Buffer.from('Z\xfcrich', 'latin1'))).toBe(true); // windows-1252, no BOM
+    await convert(ROOT, bin, csv, FORMAT.csv, dir, undefined, { params: { csvEncoding: 46, csvDelimiterChar: '|' } });
+    expect((await readFile(csv, 'utf8')).replace(/^\uFEFF/, '').startsWith('City|Amount|Note')).toBe(true);
+  }, X2T_WARMUP_BUDGET_MS);
+
+  it("prints only the spreadsheet PDF's chosen pages", async () => {
+    const bin = path.join(dir, 'Editor.bin');
+    await convert(ROOT, LEDGER, bin, FORMAT.bin, dir);
+    const fonts = await pdfFontData(ROOT, dir);
+    const pages = async (json?: string) => {
+      const pdf = path.join(dir, `p-${Math.random().toString(36).slice(2)}.pdf`);
+      await convert(ROOT, bin, pdf, FORMAT.pdf, dir, undefined, { allFontsPath: fonts, params: json ? { json } : undefined });
+      return [...(await readFile(pdf)).toString('latin1').matchAll(/\/Type\s*\/Page(?![s\w])/g)].length;
+    };
+    const all = await pages();
+    expect(all).toBeGreaterThan(1);
+    expect(await pages(JSON.stringify({ adjustOptions: { printType: 0, endPageIndex: 1 } }))).toBe(1);
   }, X2T_WARMUP_BUDGET_MS);
 
   it('makes the font data once per temp base and reuses it', async () => {
@@ -171,6 +232,17 @@ describe.skipIf(process.platform === 'win32')('convert failure shapes with a sta
     // Wait until it is really running (positive signal) before stopping it.
     await vi.waitFor(() => expect(existsSync(started)).toBe(true));
     stop.abort();
+    const err = await pending;
+    expect(err).toBeInstanceOf(X2tError);
+    expect((err as X2tError).code).toBe('stopped');
+  });
+
+  // Task 2 fix round 1: the PDF font list runs through the same spawn-and-classify helper as a
+  // translation, so it too is stopped at quit (and reports a timeout as 'timeout', same code path).
+  it('stops a running font-list job at quit and reports it as stopped', async () => {
+    await fakeX2t('echo started; exec sleep 30');
+    const pending = pdfFontData(root, root).catch((e) => e);
+    await vi.waitFor(() => expect(killRunningConverters()).toBeGreaterThan(0));
     const err = await pending;
     expect(err).toBeInstanceOf(X2tError);
     expect((err as X2tError).code).toBe('stopped');

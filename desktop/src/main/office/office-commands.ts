@@ -7,7 +7,7 @@ import { noteOwnWrite } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
 import type { createSessions, OfficeSession } from './office-sessions';
-import { convert as realConvert, exportFormatFor, FORMAT, formatFor, pdfFontData as realPdfFontData, X2T_TIMEOUT_MS, X2tError } from './x2t';
+import { convert as realConvert, exportFormatFor, exportParams, FORMAT, formatFor, pdfFontData as realPdfFontData, X2T_TIMEOUT_MS, X2tError } from './x2t';
 
 // The editor (Euro-Office's desktop bridge) asks its host for these by name. Exactly the set
 // the spike answered (main2.cjs); anything else is refused before it reaches a handler.
@@ -40,6 +40,8 @@ const MSG = {
   copyRefused: "Office can't save a copy there. Choose another folder.",
   copyNothing: 'There are no changes to save a copy of yet.',
   copyOpen: 'That file is open in Office. Close it or choose another name.',
+  // Save As onto the document itself (Task 2 fix round 1): the name is the problem, not the folder.
+  saveAsSelf: "That's the file you're editing. Choose another name.",
   refused: 'refused',
 } as const;
 
@@ -222,8 +224,11 @@ export interface OfficeCopyRunner {
   saveCopyAgain(token: string, bin?: string): Promise<{ target: string; unchanged: boolean } | null>;
   /** Save As / Download as / Export to PDF (finish plan Task 2): translate the document's current
    *  Editor.bin into `target`, in the format its name ends in. The document stays on its file. */
-  saveAs(token: string, target: string): Promise<void>;
+  saveAs(token: string, target: string, options?: SaveAsOptions): Promise<void>;
 }
+/** The editor's export choices for a Save As (bridge.js): its TXT/CSV dialog's `text`, and its
+ *  save options `json` (a spreadsheet PDF's print range). Checked by x2t.ts exportParams. */
+export interface SaveAsOptions { text?: unknown; json?: unknown }
 /** Work that must not interleave with the document's saves (a restore, Task 7). */
 export interface OfficeExclusiveRunner {
   /** Put the document's current pictures aside for an editor that keeps its typing after a
@@ -536,7 +541,7 @@ export function createOfficeCommands(deps: {
   // `exporting` (finish plan Task 2): Save As / Download as / Export to PDF — any format the
   // document's kind may be written as (x2t.ts exportFormatFor), not only its own, and no record
   // for "Save a copy again": that one keeps writing to the copy the failed-save flow made.
-  async function saveCopyFile(s: OfficeSession, target: string, bin: string = editorBin(s), exporting = false): Promise<void> {
+  async function saveCopyFile(s: OfficeSession, target: string, bin: string = editorBin(s), exporting: SaveAsOptions | false = false): Promise<void> {
     const fmt = exporting ? exportFormatFor(s.path, target) : formatFor(target);
     if (fmt === null || (!exporting && fmt !== formatFor(s.path))) throw userError(MSG.unsupportedSave);
     const auth = await authorizeArtifactWrite({ projectRoot: path.dirname(target), fullPath: target, mustStayInRoot: false });
@@ -544,7 +549,7 @@ export function createOfficeCommands(deps: {
     // WHY refuse the original itself: this path exists precisely because saving there failed,
     // and a copy must never be a back door around that file's read-only state.
     const real = await fsp.realpath(s.path).catch(() => s.path);
-    if (auth.realPath === real) throw userError(MSG.copyRefused);
+    if (auth.realPath === real) throw userError(exporting ? MSG.saveAsSelf : MSG.copyRefused);
     // C2 (fix round 4): never write over a file open in Office — in any tab, in any window. Its
     // own editor would later save over the copy (or the copy would pull the file from under it).
     // inUse (fix round 5) also counts a file still draining its close, or about to open.
@@ -558,14 +563,17 @@ export function createOfficeCommands(deps: {
       // WHY a font list for PDF only: x2t draws a PDF from real font files, which the bundled list
       // does not name (a blank page — see pdfFontData); every other format keeps the bundled list.
       const fonts = fmt === FORMAT.pdf ? await pdfFontData(deps.root, jobsBase(s)) : undefined;
-      await convert(deps.root, bin, tmp, fmt, jobsBase(s), abortOf(s).signal, fonts);
+      // The editor's choices (a CSV's encoding and delimiter, a spreadsheet PDF's range), checked.
+      const params = exporting ? exportParams(fmt, path.extname(s.path).slice(1).toLowerCase(), exporting.text, exporting.json) : undefined;
+      await convert(deps.root, bin, tmp, fmt, jobsBase(s), abortOf(s).signal, { allFontsPath: fonts, params });
       await finishCopy(tmp, null, path.extname(target).slice(1).toLowerCase());
       if (!exporting) copyStateOf(s).lastCopy = { target, hash };
       if (isClosing(s)) throw userError(MSG.closing, true);
       // Again right before the rename (fix round 2), as a save does: the translation takes time,
       // and the folder may have become protected, or a link swapped in, meanwhile.
       const again = await authorizeArtifactWrite({ projectRoot: path.dirname(target), fullPath: target, mustStayInRoot: false });
-      if (!again.ok || again.realPath === real) throw userError(MSG.copyRefused);
+      if (!again.ok) throw userError(MSG.copyRefused);
+      if (again.realPath === real) throw userError(exporting ? MSG.saveAsSelf : MSG.copyRefused);
       if (deps.sessions.inUse(again.realPath)) throw userError(MSG.copyOpen);
       noteOwnWrite(target);
       await renameReplacing(tmp, target, process.platform, () => isClosing(s));
@@ -640,7 +648,7 @@ export function createOfficeCommands(deps: {
         throw toEditorError(e, 'save_copy', last.target);
       }
     },
-    async saveAs(token: string, target: string): Promise<void> {
+    async saveAs(token: string, target: string, options: SaveAsOptions = {}): Promise<void> {
       const s = deps.sessions.get(token);
       if (!s) throw new Error(MSG.refused);
       if (closing) throw new Error(MSG.closing);
@@ -648,7 +656,7 @@ export function createOfficeCommands(deps: {
         // In the document's queue, right behind the write_editor_bin bridge.js sends first, so the
         // copy holds exactly the edits the editor handed over. Refused while a restore replaced
         // the file: the editor still holds the old document (see `replaced`).
-        await enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : saveCopyFile(s, target, editorBin(s), true)));
+        await enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : saveCopyFile(s, target, editorBin(s), options)));
       } catch (e) {
         throw toEditorError(e, 'save_file_as', target);
       }
@@ -697,18 +705,18 @@ async function sweepStaleSaveDirs(dir: string, base: string): Promise<void> {
 // then carries the original's permissions over and flushes the copy to disk.
 // Exported for versions.ts (Task 7): a restore must keep the file's mode and group exactly as a save does.
 // `ext` (finish plan Task 2): what Save As wrote. The OpenDocument formats are zips too; a PDF
-// starts "%PDF", an RTF "{\rtf"; text and CSV have no signature, so they must read as UTF-8
-// text (x2t writes them so, measured 2026-09-29) — never a zip or a PDF under a .txt name.
+// starts "%PDF", an RTF "{\rtf". Text and CSV have no signature and may be in any encoding the
+// person chose (windows-1252, UTF-16 — Task 2 fix round 1), so they must only be non-empty and
+// not some other kind of file under a .txt/.csv name (a zip or a PDF).
 const SIGNATURE: Record<string, string> = { pdf: '%PDF', rtf: '{\\rt' };
 export async function finishCopy(file: string, orig: { mode: number; uid: number; gid: number } | null, ext = 'zip'): Promise<void> {
   const fh = await fsp.open(file, 'r+');
   try {
     if (ext === 'txt' || ext === 'csv') {
-      const head = Buffer.alloc(64 * 1024);
-      const { bytesRead } = await fh.read(head, 0, head.length, 0);
-      // stream: true — a character cut at the end of the sample is not an error.
-      try { new TextDecoder('utf-8', { fatal: true }).decode(head.subarray(0, bytesRead), { stream: true }); } catch { throw userError(MSG.notADocument); }
-      if (bytesRead === 0 || head.subarray(0, bytesRead).includes(0)) throw userError(MSG.notADocument);
+      const head = Buffer.alloc(4);
+      const { bytesRead } = await fh.read(head, 0, 4, 0);
+      const sig = head.subarray(0, bytesRead).toString('latin1');
+      if (bytesRead === 0 || sig === 'PK\x03\x04' || sig === '%PDF') throw userError(MSG.notADocument);
     } else {
       const want = SIGNATURE[ext] ?? 'PK\x03\x04';
       const head = Buffer.alloc(4);

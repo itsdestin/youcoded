@@ -894,6 +894,19 @@ describe('Save As writes a separate file and leaves the document on its own', ()
     expect(existsSync(path.join(dir, 'bad.pdf'))).toBe(false);
   });
 
+  // Task 2 fix round 1: the editor's CSV and PDF choices reach x2t — checked (x2t.ts exportParams).
+  it("hands x2t the editor's checked export choices, and nothing for a format that takes none", async () => {
+    const seen: unknown[] = [];
+    const csvOut = async (_r: string, _f: string, to: string, _fmt: number, _t: string, _s?: AbortSignal, extra?: unknown) => { seen.push(extra); await writeFile(to, to.endsWith('.csv') ? 'a;b\n' : 'PK\x03\x04zip'); };
+    const s = await sessionFor(path.join(ROOT, 'templates', 'blank.xlsx'), 'docs/sheet.xlsx');
+    const run = createOfficeCommands({ root: ROOT, sessions, convert: csvOut as never });
+    await run(s.token, 'write_editor_bin', { data: Buffer.from('edited').toString('base64') });
+    await run.saveAs(s.token, path.join(dir, 'sheet.csv'), { text: { codePage: 44, delimiter: [2], delimiterChar: null } });
+    expect(seen[0]).toEqual({ allFontsPath: undefined, params: { csvEncoding: 44, csvDelimiter: 2 } });
+    await run.saveAs(s.token, path.join(dir, 'sheet.xlsx'), { text: { codePage: 44, delimiter: [2] } });
+    expect(seen[1]).toEqual({ allFontsPath: undefined, params: {} });
+  });
+
   it("refuses another kind's format, and a name without a format", async () => {
     const { s, run } = await editedSession();
     await expect(run.saveAs(s.token, path.join(dir, 'memo.xlsx'))).rejects.toThrow("Office can't save this kind of file.");
@@ -909,7 +922,7 @@ describe('Save As writes a separate file and leaves the document on its own', ()
 
   it('refuses the original itself and any file open in Office', async () => {
     const { s, run } = await editedSession();
-    await expect(run.saveAs(s.token, s.path)).rejects.toThrow("Office can't save a copy there. Choose another folder.");
+    await expect(run.saveAs(s.token, s.path)).rejects.toThrow("That's the file you're editing. Choose another name.");
     const other = await sessionFor(NOTICE, 'elsewhere/notice.docx');
     await expect(run.saveAs(s.token, other.path)).rejects.toThrow('That file is open in Office. Close it or choose another name.');
   });
@@ -958,6 +971,18 @@ describe.skipIf(!HAS_ADDON)('Save As with the bundled x2t, to every format each 
 
   it('a spreadsheet: xlsx, ods, csv and pdf', async () => {
     await exportAll(path.join(TEMPLATES, 'blank.xlsx'), 'docs/sheet.xlsx', ['xlsx', 'ods', 'csv', 'pdf']);
+  }, X2T_WARMUP_BUDGET_MS);
+
+  it('a CSV in the encoding and with the delimiter the editor chose', async () => {
+    const s = await sessionFor(fileURLToPath(new URL('./fixtures/ledger.xlsx', import.meta.url)), 'docs/ledger.xlsx');
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    await run(s.token, 'open_file', {});
+    await run(s.token, 'write_editor_bin', { data: (await readFile(path.join(s.temp, 'Editor.bin'))).toString('base64') });
+    const target = path.join(dir, 'ledger.csv');
+    await run.saveAs(s.token, target, { text: { codePage: 44, delimiter: [2], delimiterChar: null } });
+    const bytes = await readFile(target);
+    expect(bytes.subarray(0, 12).toString('latin1')).toBe('City;Amount;');
+    expect(bytes.includes(Buffer.from('Z\xfcrich', 'latin1'))).toBe(true);
   }, X2T_WARMUP_BUDGET_MS);
 
   it('a presentation: pptx, odp and pdf', async () => {
