@@ -25,6 +25,7 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('office/first-run', 'view', 'office', 'empty-state'), scenario: 'empty' },
   pg('office/document', 'view', 'office'),
   pg('office/spreadsheet', 'view', 'office'),
+  pg('office/presentation', 'view', 'office'),
   pg('office/versions', 'dialog', 'office'),
   // A window close or quit found documents whose save failed (Task 6 fix round 2).
   pg('office/unsaved-on-close', 'dialog', 'office'),

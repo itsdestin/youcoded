@@ -470,10 +470,12 @@ function setOfficeTabsForPreview(docs: OpenDoc[], active: string, versionsFor: O
 }
 
 /** Photo-only (`shoot`): three recent files open, the third asleep, the given
- *  one in front — optionally with its Versions window open. */
+ *  one in front — optionally with its Versions window open. WHY the third wakes when it is the
+ *  one in front (office/presentation, polish pass 2026-09-28): an asleep document is not mounted,
+ *  so the presentation editor could never be photographed. */
 export async function previewOfficeTabs(front: number, withVersions = false): Promise<void> {
   const recent = (await window.claude?.office?.status(null))?.recent ?? [];
-  const docs = recent.slice(0, 3).map((file, i) => ({ file, asleep: i === 2 }));
+  const docs = recent.slice(0, 3).map((file, i) => ({ file, asleep: i === 2 && front !== 2 }));
   const f = docs[front]?.file;
   setOfficeTabsForPreview(docs, f?.path ?? HOME_TAB, withVersions && f ? f : null);
 }

@@ -12,6 +12,9 @@ const TOKENS = [
   'canvas', 'panel', 'inset', 'well', 'accent', 'on-accent',
   'fg', 'fg-2', 'fg-dim', 'fg-muted', 'fg-faint', 'edge', 'edge-dim', 'link',
   'radius-sm', 'radius-md', 'radius-lg', 'radius-xl', 'font-sans',
+  // WHY (polish pass 2026-09-28, Destin: "all of the scrollbars are unstyled"): the editor's
+  // scrollbars wear the same thumb and hover colours as the app's own (globals.css).
+  'scrollbar-thumb', 'scrollbar-hover',
 ] as const;
 
 export const OFFICE_THEME_MESSAGE = 'yc:office-theme';

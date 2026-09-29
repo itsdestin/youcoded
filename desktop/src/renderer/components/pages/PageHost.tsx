@@ -120,6 +120,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   useScreenOpen('office/first-run', () => dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID }));
   useScreenOpen('office/document', () => { void previewOfficeTabs(0); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   useScreenOpen('office/spreadsheet', () => { void previewOfficeTabs(1); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
+  // WHY: the third editor (slides) needs its own picture too — the look is per editor.
+  useScreenOpen('office/presentation', () => { void previewOfficeTabs(2); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   useScreenOpen('office/versions', () => { void previewOfficeTabs(0, true); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   const summary = pages.find((p) => p.id === pageId) ?? null;
   // Office is built in (office-questions#Q-entry): it lists, pins and opens like
