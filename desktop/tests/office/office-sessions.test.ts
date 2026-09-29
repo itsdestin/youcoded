@@ -90,4 +90,18 @@ describe('office session registry', () => {
     await opening;
     expect(sessions.inUse('/docs/new.docx')).toBe(true);
   });
+
+  it('makes an open of a file wait while that file is held (a restore of it is running)', async () => {
+    let release!: () => void;
+    const held = sessions.holdWhile('/docs/report.docx', () => new Promise<string>((r) => { release = () => r('restored'); }));
+    expect(sessions.inUse('/docs/report.docx')).toBe(true);
+    let opened = false;
+    const opening = sessions.open('/docs/report.docx', 1).then((s) => { opened = true; return s; });
+    await new Promise((r) => setImmediate(r));
+    expect(opened).toBe(false);
+    release();
+    await expect(held).resolves.toBe('restored');
+    await opening;
+    expect(opened).toBe(true);
+  });
 });

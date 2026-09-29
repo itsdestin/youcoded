@@ -104,10 +104,24 @@ export function createSessions(tempBase: string, opts: { drain?: (s: OfficeSessi
     return !!byPath(filePath) || closing.has(filePath) || pendingOpens.has(filePath);
   }
 
+  /** Run `work` while `filePath` counts as in use: an open of it waits until `work` settles
+   *  (the same wait as for a closing document). WHY: a restore of a file no editor has open
+   *  must not race a new editor loading the old file (office-ipc restore). Starts `work` at
+   *  once, synchronously, so the caller's in-use check and this hold are one step. */
+  function holdWhile<T>(filePath: string, work: () => Promise<T>): Promise<T> {
+    const p = work();
+    const done = p.then(() => {}, () => {});
+    const prior = closing.get(filePath);
+    const all = prior ? Promise.all([prior, done]).then(() => {}) : done;
+    closing.set(filePath, all);
+    void all.then(() => { if (closing.get(filePath) === all) closing.delete(filePath); });
+    return p;
+  }
+
   /** Whether this window has any document open (the close/quit flush asks only those). */
   function hasFor(senderId: number): boolean {
     return [...sessions.values()].some((s) => s.senderId === senderId);
   }
 
-  return { open, get, close, closeAllFor, byPath, inUse, hasFor };
+  return { open, get, close, closeAllFor, byPath, inUse, hasFor, holdWhile };
 }

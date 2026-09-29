@@ -78,8 +78,9 @@ const isClosing = (s: OfficeSession) => closing || closedSessions.has(s);
 // ── A restore replaced the file under an open editor (Task 7) ──
 // WHY: after a restore, the editor still holds the OLD document. Until it has reloaded the file
 // (its next open_file), any save it sends would translate that old content straight back over
-// the restored file. So a replaced session refuses write_editor_bin and save_file — quietly: the
-// renderer is already remounting the editor on office:changed — and open_file lifts it.
+// the restored file. So a replaced session refuses save_file — quietly: the renderer is already
+// remounting the editor on office:changed — and open_file lifts it. write_editor_bin stays
+// allowed: it fills Office's own working copy, which "Save a copy…" may need.
 const replaced = new WeakSet<OfficeSession>();
 
 /**
@@ -222,6 +223,8 @@ export function createOfficeCommands(deps: {
   sessions: ReturnType<typeof createSessions>;
   onSaved?(s: OfficeSession, beforeBytes: Buffer | null): Promise<void>;
   onOpened?(s: OfficeSession): Promise<void>;
+  /** Whether onSaved will keep a version this time; the file as it was is read only then. */
+  wantsBefore?(s: OfficeSession): boolean;
   /** Test seam: swap the translator (a slow or failing fake). Production uses x2t. */
   convert?: typeof realConvert;
   /** Test seam: a small limit, so the size refusal is testable without a 1 GB string. */
@@ -316,7 +319,7 @@ export function createOfficeCommands(deps: {
     // WHY only when someone will use it: the previous bytes are for Task 7's version history;
     // reading up to 200 MB on every autosave for nobody would be pure waste.
     let before: Buffer | null = null;
-    if (deps.onSaved) {
+    if (deps.onSaved && (deps.wantsBefore?.(s) ?? true)) {
       before = await fsp.readFile(s.path).catch((e: NodeJS.ErrnoException) => {
         if (e.code === 'ENOENT') return null;
         throw e;
@@ -402,7 +405,10 @@ export function createOfficeCommands(deps: {
         // WHY checked on the string's length, before decoding (review P1-3): decoding a huge
         // string would allocate the whole buffer first. base64 decodes to 3/4 of its length.
         if ((data.length * 3) / 4 > binMax) throw userError(MSG.binTooLarge);
-        return enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : writeEditorBin(s, data)));
+        // WHY allowed while replaced: Editor.bin is Office's own working copy, never the person's
+        // file, and "Save a copy…" needs the editor's newest bytes if a restore landed on typing
+        // the editor still holds (EditorFrame then keeps those edits and offers the copy).
+        return enqueueOther(s, () => writeEditorBin(s, data));
       }
       case 'save_file':
         return save(s);

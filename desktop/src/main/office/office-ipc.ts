@@ -19,6 +19,7 @@ import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
 import type { createSessions, OfficeSession } from './office-sessions';
 import { formatFor } from './x2t';
 import * as versions from './versions';
+import { createPruneScheduler } from './prune-schedule';
 
 type Sessions = ReturnType<typeof createSessions>;
 
@@ -64,6 +65,9 @@ const MSG = {
 /** WHY 10 minutes (design section 3): while a file keeps changing, one extra kept version per
  *  10 minutes of work — autosave itself writes every few seconds, far too often to keep each. */
 const AUTOSAVE_SNAPSHOT_MS = 10 * 60 * 1000;
+/** WHY 5 minutes: the tidy-up reads every kept file's index; a burst of snapshots (many files
+ *  opened at once) runs it once, not once per file. */
+const PRUNE_MIN_GAP_MS = 5 * 60 * 1000;
 
 /** The part of Electron's ipcMain these handlers use. */
 export interface OfficeIpcMain {
@@ -96,8 +100,9 @@ export interface OfficeIpcDeps {
    *  only when a copy is asked for, so this file itself never imports electron. */
   pickCopyTarget?(sender: unknown, filePath: string): Promise<string | null | { refused: string }>;
   /** Tidy every kept version (each file's rules, then 1 GB across files) this long after
-   *  registering. WHY a delay (main.ts passes 30 s): it reads every kept file's index and may
-   *  delete copies — work that must never compete with the first window opening. Tests leave it
+   *  registering, and again this long after a new version is kept (at most once per 5 minutes).
+   *  WHY a delay (main.ts passes 30 s): it reads every kept file's index and may delete copies —
+   *  work that must never compete with the first window opening or with a save. Tests leave it
    *  out, so nothing is scheduled. */
   pruneVersionsAfterMs?: number;
   /** Test seam: the translator (a fake that copies). Production uses x2t. */
@@ -113,30 +118,37 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // sessions (scripts/run-dev.sh) from crashing on reload.
   for (const ch of CHANNELS) ipcMain.removeHandler(ch);
   ipcMain.removeHandler('office:lost-saves'); // desktop only, so not in CHANNELS (see below)
-  if (deps.pruneVersionsAfterMs !== undefined) {
-    // pruneAll never throws (it logs); the catch is belt and braces for a timer nobody awaits.
-    setTimeout(() => { void versions.pruneAll(deps.userData).catch(() => {}); }, deps.pruneVersionsAfterMs);
-  }
+  const pruner = deps.pruneVersionsAfterMs === undefined ? null
+    : createPruneScheduler(() => versions.pruneAll(deps.userData), { delayMs: deps.pruneVersionsAfterMs, minGapMs: PRUNE_MIN_GAP_MS });
+  pruner?.request(); // the startup pass
 
   // WHY one commands instance per registry, not one per request: the command runner keeps
   // each document's queue (one save at a time), which only works if every request for that
   // document goes through the same instance. Rebuilt only if the registry itself changes.
   let commands: { reg: Sessions; run: ReturnType<typeof createOfficeCommands> } | null = null;
   const commandsFor = (reg: Sessions) => {
-    if (commands?.reg !== reg) commands = { reg, run: createOfficeCommands({ root: deps.root, sessions: reg, onOpened, onSaved, convert: deps.convert }) };
+    if (commands?.reg !== reg) commands = { reg, run: createOfficeCommands({ root: deps.root, sessions: reg, onOpened, onSaved, wantsBefore: snapshotDue, convert: deps.convert }) };
     return commands.run;
   };
 
   // ── Kept versions (Task 7): both run inside the document's command queue, and a failure is
   // only logged there — the open or save itself has already succeeded. ──
   async function onOpened(s: OfficeSession): Promise<void> {
-    await versions.snapshot(deps.userData, s.path, 'opened', await fsp.readFile(s.path));
+    if (await versions.snapshot(deps.userData, s.path, 'opened', await fsp.readFile(s.path))) pruner?.request();
   }
+  // WHY asked before the save reads the file (M1): the file as it was is up to 200 MB, and is
+  // only needed when a kept version is due — not on every autosave.
+  const snapshotDue = (s: OfficeSession) => Date.now() - s.lastSnapshotAt > AUTOSAVE_SNAPSHOT_MS;
   async function onSaved(s: OfficeSession, before: Buffer | null): Promise<void> {
     // `before` is the file as it was just before this save — the state worth keeping.
-    if (!before || Date.now() - s.lastSnapshotAt <= AUTOSAVE_SNAPSHOT_MS) return;
-    await versions.snapshot(deps.userData, s.path, 'autosave', before);
-    s.lastSnapshotAt = Date.now();
+    if (!before || !snapshotDue(s)) return;
+    try {
+      if (await versions.snapshot(deps.userData, s.path, 'autosave', before)) pruner?.request();
+    } finally {
+      // WHY also after a failure: a full disk would otherwise be retried (and fail, reading and
+      // writing up to 200 MB) on every autosave. The next try comes 10 minutes later instead.
+      s.lastSnapshotAt = Date.now();
+    }
   }
 
   const isReady = async (): Promise<Sessions | null> => {
@@ -314,7 +326,13 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   async function listVersions(filePath: unknown): Promise<OfficeVersion[]> {
     if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return [];
     const real = await fsp.realpath(filePath).catch(() => filePath);
-    return versions.list(deps.userData, real);
+    try {
+      return await versions.list(deps.userData, real);
+    } catch (e) {
+      // Rejected on purpose: the window then says it couldn't load them, never "no versions".
+      log('ERROR', 'Office', 'office:versions could not read the kept versions', { error: String(e) });
+      throw new Error("Office couldn't load the versions of this file.");
+    }
   }
 
   // Put a kept version back (design section 3; restore-while-open in versions.ts's caller here).
@@ -346,7 +364,9 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     // Closing (its last save may still land after ours) or about to open: not now.
     if (!s && reg.inUse(realPath)) return { ok: false, message: MSG.stillSaving };
     const work = () => versions.restore(deps.userData, realPath, id);
-    if (!s) return work();
+    // WHY held (M4): an open of this file starting now waits for the restore, so its editor
+    // loads the restored file — never the old one, which its next save would write back.
+    if (!s) return reg.holdWhile(realPath, work);
     let r: { ok: true } | { ok: false; message: string };
     try {
       r = await commandsFor(reg).exclusive(s.token, work, (x) => x.ok);

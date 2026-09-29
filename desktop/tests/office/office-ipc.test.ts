@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
-import { copyFile, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { promises as fsp } from 'node:fs';
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +12,7 @@ vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn
 
 import { registerOfficeIpc } from '../../src/main/office/office-ipc';
 import { createSessions } from '../../src/main/office/office-sessions';
+import { versionsDir } from '../../src/main/office/versions';
 
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
 
@@ -387,5 +389,36 @@ describe('office versions and restore', () => {
   it('says so when the version is no longer kept', async () => {
     const { file } = await openedIn(win1);
     await expect(call('office:restore', win1, file, '2020-01-01T000000.000Z-abcd')).resolves.toEqual({ ok: false, message: 'That version is no longer kept.' });
+  });
+
+  it('after a version cannot be kept, waits 10 minutes before trying again instead of on every save', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = new Date(2026, 8, 28, 9, 0).getTime();
+    vi.setSystemTime(t0);
+    // The versions folder cannot be made: every snapshot fails.
+    await writeFile(path.join(dir, 'userData-blocker'), '');
+    ipc = fakeIpcMain();
+    const blocked = path.join(dir, 'userData-blocker');
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: blocked, convert: copying as never });
+    const { file, token } = await openedIn(win1);
+    const read = vi.spyOn(fsp, 'readFile');
+    const readsOfFile = () => read.mock.calls.filter((c) => c[0] === file).length;
+    await saveAs(win1, token, doc('first'));        // due: reads the file, the snapshot fails
+    expect(readsOfFile()).toBe(1);
+    vi.setSystemTime(t0 + 60_000);
+    await saveAs(win1, token, doc('second'));       // not due after the failure: the file is not even read
+    expect(readsOfFile()).toBe(1);
+    vi.setSystemTime(t0 + 11 * 60_000);
+    await saveAs(win1, token, doc('third'));        // due again
+    expect(readsOfFile()).toBe(2);
+    read.mockRestore();
+  });
+
+  it('says the versions could not be loaded when their index cannot be read, rather than listing none', async () => {
+    const { file } = await openedIn(win1);
+    const vdir = versionsDir(userData(), file);
+    await rm(path.join(vdir, 'index.json'));
+    await mkdir(path.join(vdir, 'index.json'));
+    await expect(call('office:versions', win1, file)).rejects.toThrow("Office couldn't load the versions of this file.");
   });
 });
