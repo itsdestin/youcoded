@@ -15,6 +15,7 @@ import path from 'node:path';
 import { OFFICE_MAX_BYTES, type OfficeFile, type OfficeOpen, type OfficeSaveCopyResult, type OfficeStatus, type OfficeVersion } from '../../shared/office-types';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
+import { keepAbandonedSavesIn, takeAbandonedSaves } from './abandoned-saves';
 import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
 import type { createSessions, OfficeSession } from './office-sessions';
 import { formatFor } from './x2t';
@@ -139,6 +140,10 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // sessions (scripts/run-dev.sh) from crashing on reload.
   for (const ch of CHANNELS) ipcMain.removeHandler(ch);
   ipcMain.removeHandler('office:lost-saves'); // desktop only, so not in CHANNELS (see below)
+  keepAbandonedSavesIn(deps.userData); // where quit records the saves it had to stop
+  // Whether a page has taken the last run's stopped saves yet. WHY a flag as well as the file's
+  // removal: two windows asking at the same moment would both read the file before either removed it.
+  let lastRunTaken = false;
   // WHY cancel the previous one: a re-register (a dev reload) must not leave two tidy-ups queued.
   activePruner?.cancel();
   const pruner = activePruner = deps.pruneVersionsAfterMs === undefined ? null
@@ -436,11 +441,15 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   ipcMain.handle('office:invoke', (e, token, cmd, args) => invoke(e.sender, token, cmd, args));
   ipcMain.handle('office:close', (e, token) => close(e.sender, token));
   // Desktop only, like the close/quit handshake: the remote client and the phone have no editors.
-  ipcMain.handle('office:lost-saves', (e): string[] => {
+  // The first page to ask also takes the saves the last quit had to stop (final review,
+  // finding 4): each is reported once, in one window, and then forgotten.
+  ipcMain.handle('office:lost-saves', async (e): Promise<string[]> => {
     const id = (e.sender as OfficeSender).id;
     const list = lost.get(id) ?? [];
     lost.delete(id);
-    return list;
+    const first = !lastRunTaken;
+    lastRunTaken = true;
+    return first ? [...(await takeAbandonedSaves(deps.userData)), ...list] : list;
   });
 
   // ── The start screen (Task 8): Recent, the focused project's files, New, Open ──

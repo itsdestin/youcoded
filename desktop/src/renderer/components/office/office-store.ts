@@ -248,18 +248,27 @@ export function previewUnsavedPrompt(): void {
   setAlerts({ ...alerts, unsaved: { count: 2, firstPath: state.docs[0]?.file.path ?? '' } });
 }
 export function noteCloseFailedWhileHidden(path: string): void { setAlerts({ ...alerts, closeFailed: path }); }
-export function clearCloseFailed(): void { setAlerts({ ...alerts, closeFailed: null }); }
+// Lost saves still to be said, one toast each (final review, finding 4): the last quit can have
+// stopped several documents' saves, and each file gets its own toast — the next shows when the
+// current one goes.
+const lostQueue: string[] = [];
+function sayLost(paths: string[]): void {
+  for (const p of paths) if (p !== alerts.closeFailed && !lostQueue.includes(p)) lostQueue.push(p);
+  if (!alerts.closeFailed && lostQueue.length > 0) noteCloseFailedWhileHidden(lostQueue.shift()!);
+}
+export function clearCloseFailed(): void { setAlerts({ ...alerts, closeFailed: lostQueue.shift() ?? null }); }
 
-/** Saves that failed after the page that asked for them was reloaded (fix round 6, M4): main
- *  keeps them; this page takes them on load, and again whenever main says there are more, and
- *  says so with the same toast a hidden close uses. Returns the unsubscribe. */
+/** Saves that failed after the page that asked for them was reloaded (fix round 6, M4), and —
+ *  on the first page after a launch — saves the last quit had to stop (final review, finding 4):
+ *  main keeps them; this page takes them on load, and again whenever main says there are more,
+ *  and says so with the same toast a hidden close uses, once per file. Returns the unsubscribe. */
 export function watchLostSaves(): () => void {
   // Also listen for main's prompts from the start (fix round 9): a quit refused for an unsaved
   // text file must show in a window that never opened an Office document.
   answerFlushRequests();
   const office = typeof window === 'undefined' ? undefined : window.claude?.office;
   if (!office?.lostSaves) return () => {};
-  const take = () => void office.lostSaves?.().then((paths) => { if (paths?.length) noteCloseFailedWhileHidden(paths[0]); }, () => {});
+  const take = () => void office.lostSaves?.().then((paths) => { if (paths?.length) sayLost(paths); }, () => {});
   const stop = office.onSavesLost?.(take) ?? (() => {});
   take();
   return stop;
@@ -487,6 +496,7 @@ export function resetOfficeStoreForTests(): void {
   copyingPaths = new Set();
   if (unloadGuarded) { window.removeEventListener('beforeunload', onBeforeUnload); unloadGuarded = false; }
   alerts = { unsaved: null, closeFailed: null, quitRefused: null };
+  lostQueue.length = 0;
   listeners.forEach((l) => l());
   saveListeners.forEach((l) => l());
 }

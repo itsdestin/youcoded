@@ -458,6 +458,21 @@ describe('office:save-copy', () => {
   });
 });
 
+// Final review, finding 4: quit stops a save still running after 5 s. The next launch's first
+// page is told about each such file once, through the same lost-saves list a reload uses.
+describe('saves the last quit had to stop', () => {
+  it('are handed to the first page that asks after a launch, once', async () => {
+    const earlier = path.join(dir, 'budget.xlsx');
+    await mkdir(path.join(dir, 'userData'), { recursive: true });
+    await writeFile(path.join(dir, 'userData', 'office-abandoned-saves.json'), JSON.stringify([earlier]));
+    // A fresh registration is a fresh launch; the one beforeEach made has not been asked yet.
+    await expect(call('office:lost-saves', win1)).resolves.toEqual([earlier]);
+    await expect(call('office:lost-saves', win1)).resolves.toEqual([]);
+    await expect(call('office:lost-saves', win2)).resolves.toEqual([]);
+    expect(existsSync(path.join(dir, 'userData', 'office-abandoned-saves.json'))).toBe(false);
+  });
+});
+
 // A reload lets go of a save still with main; if that save then fails, the new page is told.
 describe('a save that fails after its page was reloaded', () => {
   async function opened(sender: ReturnType<typeof fakeSender>) {

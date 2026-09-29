@@ -680,6 +680,23 @@ describe('the window unload guard', () => {
     expect(result.current.closeFailed).toBe('/home/you/notes.docx');
   });
 
+  // Final review, finding 4: the first page after a launch hears about every save the last quit
+  // had to stop — one toast per file, each once.
+  it('after a launch, each save the last quit had to stop gets its own toast, in turn', async () => {
+    (window as unknown as { claude: unknown }).claude = { office: { lostSaves: vi.fn(async () => ['/home/you/plan.docx', '/home/you/budget.xlsx']), onSavesLost: vi.fn(() => () => {}) } };
+    const store = await import('../../src/renderer/components/office/office-store');
+    const { result } = renderHook(() => store.useOfficeAlerts());
+    const { OfficeAlerts } = await import('../../src/renderer/components/office/OfficeAlerts');
+    render(<OfficeAlerts onReview={() => {}} />);
+    expect(await screen.findByText("An Office document couldn't be saved.")).toBeInTheDocument();
+    expect(result.current.closeFailed).toBe('/home/you/plan.docx');
+    act(() => store.clearCloseFailed());
+    expect(result.current.closeFailed).toBe('/home/you/budget.xlsx');
+    expect(screen.getByText("An Office document couldn't be saved.")).toBeInTheDocument();
+    act(() => store.clearCloseFailed());
+    expect(result.current.closeFailed).toBeNull();
+  });
+
   it('an open editor with a change blocks the unload', async () => {
     withOffice();
     act(() => openDoc(FILE));

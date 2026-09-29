@@ -18,6 +18,9 @@ export function formatFor(filePath: string): number | null {
 // stops waiting for a save, an x2t left running would keep writing into a folder that is being
 // removed, and outlive the app.
 const running = new Set<ChildProcess>();
+/** The longest one translation may run before x2t is killed and the save fails ("took too long").
+ *  Exported so a document's close can wait exactly this long for its last save (office-commands). */
+export const X2T_TIMEOUT_MS = 60_000;
 const stoppedAtQuit = new WeakSet<ChildProcess>();
 
 /** Kill every running converter (quit only). Returns how many were running. */
@@ -95,7 +98,7 @@ export async function convert(
       // the default 1 MB limit would kill a translation that was working.
       // WHY `signal` (Task 5 fix round 2): execFile kills the child with killSignal when it
       // aborts, so one document's translation can be stopped without touching the others'.
-      const opts = { cwd: bin, env, timeout: 60_000, killSignal: 'SIGKILL' as const, maxBuffer: 64 * 1024 * 1024, signal };
+      const opts = { cwd: bin, env, timeout: X2T_TIMEOUT_MS, killSignal: 'SIGKILL' as const, maxBuffer: 64 * 1024 * 1024, signal };
       const child = execFile(path.join(bin, 'x2t'), [params], opts, (err, _stdout, stderr) => {
         running.delete(child);
         if (!err) return resolve();

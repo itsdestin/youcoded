@@ -5,7 +5,8 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { log } from '../logger';
-import { awaitIdle, drainSession, stopOfficeCommands } from './office-commands';
+import { recordAbandonedSaves } from './abandoned-saves';
+import { awaitIdle, drainSession, pathsWithSaveInFlight, stopOfficeCommands } from './office-commands';
 import { createSessions } from './office-sessions';
 import { cancelAllPruning } from './prune-schedule';
 import { killRunningConverters } from './x2t';
@@ -86,10 +87,13 @@ export async function cleanupOfficeSessions(): Promise<void> {
 // a finished copy (kept beside the file, not in the temp base) over it. The removal itself is
 // still started, not awaited, for the reason given on cleanupOfficeSessions above. main.ts
 // starts this early in shutdown and awaits it last, so the wait overlaps the other teardown.
-export async function quitOfficeSessions(capMs = 5_000): Promise<void> {
+export async function quitOfficeSessions(capMs = 5_000, record: (paths: string[]) => Promise<void> = recordAbandonedSaves): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([awaitIdle(), new Promise<void>((r) => (timer = setTimeout(r, capMs)))]).catch(() => {});
+  const idle = await Promise.race([awaitIdle().then(() => true), new Promise<boolean>((r) => (timer = setTimeout(() => r(false), capMs)))]).catch(() => false);
   clearTimeout(timer);
+  // WHY recorded (final review, finding 4): every save still running now is about to be stopped,
+  // and its file stays as it was before it. The app will be gone, so the next launch says so.
+  if (!idle) await record(pathsWithSaveInFlight()).catch(() => {});
   // WHY before the removal (fix round 1): from here on every new command is refused, and a
   // save still translating (the cap was hit) abandons its copy instead of replacing the file.
   stopOfficeCommands();

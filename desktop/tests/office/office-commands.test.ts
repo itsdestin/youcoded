@@ -10,7 +10,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn() }));
 
 import { noteOwnWrite } from '../../src/main/artifacts/project-watcher';
-import { awaitIdle, createOfficeCommands, drainSession, OFFICE_COMMANDS } from '../../src/main/office/office-commands';
+import { awaitIdle, CLOSE_DRAIN_MS, createOfficeCommands, drainSession, OFFICE_COMMANDS } from '../../src/main/office/office-commands';
+import { X2T_TIMEOUT_MS } from '../../src/main/office/x2t';
 import { createSessions, type OfficeSession } from '../../src/main/office/office-sessions';
 import { convert, FORMAT, X2tError } from '../../src/main/office/x2t';
 import { OFFICE_MAX_BYTES } from '../../src/shared/office-types';
@@ -624,6 +625,45 @@ describe('closing a document while its save is translating', () => {
     await expect(saving).rejects.toThrow('Office is closing.');
     expect(await readFile(file)).toEqual(original);
     expect(await readdir(path.dirname(file))).toEqual(['close.docx']);
+  });
+});
+
+// Final review, finding 4: a window (or tab) that closes lets go of a save already with main —
+// the renderer counts it as saved. The close must then give that save as long as x2t itself
+// allows, not 5 s: nothing on screen waits for it, and stopping it would lose those edits.
+describe('closing a document whose save is slow (not a quit)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('waits as long as the translator is allowed to run, not just 5 s', () => {
+    expect(CLOSE_DRAIN_MS).toBeGreaterThanOrEqual(X2T_TIMEOUT_MS);
+  });
+
+  it('lets a save still translating after 10 s land in the file', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const closable = createSessions(path.join(dir, 'closable'), { drain: (x) => drainSession(x) });
+    const file = path.join(dir, 'docs/slow.docx');
+    await mkdir(path.dirname(file), { recursive: true });
+    await copyFile(MEMO, file);
+    const s = await closable.open(file, 1);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const translating = new Promise<void>((r) => (entered = r));
+    const slow = async (_r: string, from: string, to: string) => {
+      entered();
+      await gate;
+      await writeFile(to, Buffer.concat([Buffer.from('PK\x03\x04'), await readFile(from)]));
+    };
+    const run = createOfficeCommands({ root: ROOT, sessions: closable, convert: slow });
+    await writeBin(run, s.token);
+    const saving = run(s.token, 'save_file', {});
+    await translating;
+    const closing = closable.close(s.token);
+    await vi.advanceTimersByTimeAsync(10_000); // well past the old 5 s cap
+    release();
+    await expect(saving).resolves.toBe('ok');
+    await closing;
+    expect(await readFile(file)).toEqual(Buffer.from('PK\x03\x04bin'));
   });
 });
 

@@ -42,6 +42,8 @@ export function OfficeAlerts({ onReview }: { onReview: (path: string) => void })
       <UnsavedBeforeQuit />
       {closeFailed && (
         <Toast
+          // A new key per file restarts the toast's timer when the next lost save follows.
+          key={closeFailed}
           tone="error"
           message="An Office document couldn't be saved."
           durationMs={10_000}

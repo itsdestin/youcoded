@@ -7,7 +7,7 @@ import { noteOwnWrite } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
 import type { createSessions, OfficeSession } from './office-sessions';
-import { convert as realConvert, FORMAT, formatFor, X2tError } from './x2t';
+import { convert as realConvert, FORMAT, formatFor, X2T_TIMEOUT_MS, X2tError } from './x2t';
 
 // The editor (Euro-Office's desktop bridge) asks its host for these by name. Exactly the set
 // the spike answered (main2.cjs); anything else is refused before it reaches a handler.
@@ -82,13 +82,21 @@ const isClosing = (s: OfficeSession) => closing || closedSessions.has(s);
 // renderer is already remounting the editor on office:changed — and open_file lifts it.
 const replaced = new WeakSet<OfficeSession>();
 
+/** WHY as long as x2t's own limit, plus a moment for the rename (final review, finding 4): a
+ *  document closed with its window (or its tab) used to stop waiting after 5 s and kill a slow
+ *  save that would have finished — losing the edits the renderer had already counted as saved.
+ *  Nothing on screen waits for this (the window or tab is already gone), so the save gets the
+ *  whole time x2t allows it. Quit does not wait this long: quitOfficeSessions stops every
+ *  translator after 5 s, which ends this wait too, and records the saves it stopped. */
+export const CLOSE_DRAIN_MS = X2T_TIMEOUT_MS + 5_000;
+
 /**
  * Wait (at most `capMs`) until every command already queued for this document has finished,
  * then mark it closed: anything of it still queued or running is refused or abandoned from
  * here on. office-sessions.ts calls this after taking the session out of get(), so nothing
  * new can join the queue meanwhile, and before it removes the temp folder.
  */
-export async function drainSession(s: OfficeSession, capMs = 5_000): Promise<void> {
+export async function drainSession(s: OfficeSession, capMs = CLOSE_DRAIN_MS): Promise<void> {
   const q = queues.get(s);
   if (q) {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -115,6 +123,13 @@ interface SessionQueue {
   pendingSave: Promise<unknown> | null;
 }
 const queues = new WeakMap<OfficeSession, SessionQueue>();
+// Saves asked for and not yet settled, per document — what quit reports when it stops waiting
+// (quitOfficeSessions → abandoned-saves.ts). A plain Map: an entry lives only while its save does.
+const savesInFlight = new Map<OfficeSession, number>();
+/** The files with a save still queued or translating (quit asks, after its wait ran out). */
+export function pathsWithSaveInFlight(): string[] {
+  return [...new Set([...savesInFlight.keys()].map((s) => s.path))];
+}
 // Every queued command, across all sessions, until it settles — what awaitIdle() waits for.
 const inflight = new Set<Promise<unknown>>();
 
@@ -405,6 +420,12 @@ export function createOfficeCommands(deps: {
       return saveFile(s);
     });
     q.pendingSave = p;
+    savesInFlight.set(s, (savesInFlight.get(s) ?? 0) + 1);
+    const settled = () => {
+      const n = (savesInFlight.get(s) ?? 1) - 1;
+      if (n > 0) savesInFlight.set(s, n); else savesInFlight.delete(s);
+    };
+    p.then(settled, settled);
     return p;
   }
 

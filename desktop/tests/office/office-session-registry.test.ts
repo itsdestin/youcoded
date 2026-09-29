@@ -135,6 +135,42 @@ describe('office session registry lifecycle', () => {
     expect(mod.getOfficeSessions()).toBeNull();
   });
 
+  // Final review, finding 4: quit waits at most 5 s. A save still running then is stopped and its
+  // file stays as it was — so quit writes the file down for the next launch to report.
+  it('writes down each save it had to stop at quit', async () => {
+    const docs = await fsp.mkdtemp(path.join(tmpdir(), 'office-quit-docs-'));
+    createdBases.push(docs);
+    const file = path.join(docs, 'a.docx');
+    await fsp.writeFile(file, 'original');
+    const sessions = await mod.initOfficeSessions();
+    const s = await sessions.open(file, 1);
+    createdBases.push(path.dirname(s.temp));
+    const { createOfficeCommands } = await import('../../src/main/office/office-commands');
+    let entered!: () => void;
+    const translating = new Promise<void>((r) => (entered = r));
+    // A translator that never finishes on its own; `kill` stands in for quit's killRunningConverters
+    // (which only reaches real x2t processes).
+    let kill!: () => void;
+    const stuck = () => new Promise<void>((_res, rej) => { entered(); kill = () => rej(new Error('x2t failed (stopped)')); });
+    const run = createOfficeCommands({ root: '/unused', sessions, convert: stuck as never });
+    await run(s.token, 'write_editor_bin', { data: Buffer.from('bin').toString('base64') });
+    const saved = run(s.token, 'save_file', {}).catch((e: Error) => e);
+    await translating;
+    const record = vi.fn(async () => {});
+    await mod.quitOfficeSessions(50, record);
+    expect(record).toHaveBeenCalledWith([file]);
+    kill();
+    expect(await saved).toBeInstanceOf(Error);
+    expect(await fsp.readFile(file, 'utf8')).toBe('original');
+  });
+
+  it('writes nothing down when quit found every save finished', async () => {
+    await mod.initOfficeSessions();
+    const record = vi.fn(async () => {});
+    await mod.quitOfficeSessions(50, record);
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it('does nothing (not throw) if cleanup runs before any init', async () => {
     await expect(mod.cleanupOfficeSessions()).resolves.toBeUndefined();
   });
