@@ -95,6 +95,11 @@ export interface OfficeIpcDeps {
    *  WHY optional: main.ts does not pass it — the real one lives in office-dialogs.ts, loaded
    *  only when a copy is asked for, so this file itself never imports electron. */
   pickCopyTarget?(sender: unknown, filePath: string): Promise<string | null | { refused: string }>;
+  /** Tidy every kept version (each file's rules, then 1 GB across files) this long after
+   *  registering. WHY a delay (main.ts passes 30 s): it reads every kept file's index and may
+   *  delete copies — work that must never compete with the first window opening. Tests leave it
+   *  out, so nothing is scheduled. */
+  pruneVersionsAfterMs?: number;
   /** Test seam: the translator (a fake that copies). Production uses x2t. */
   convert?: Parameters<typeof createOfficeCommands>[0]['convert'];
 }
@@ -108,6 +113,10 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // sessions (scripts/run-dev.sh) from crashing on reload.
   for (const ch of CHANNELS) ipcMain.removeHandler(ch);
   ipcMain.removeHandler('office:lost-saves'); // desktop only, so not in CHANNELS (see below)
+  if (deps.pruneVersionsAfterMs !== undefined) {
+    // pruneAll never throws (it logs); the catch is belt and braces for a timer nobody awaits.
+    setTimeout(() => { void versions.pruneAll(deps.userData).catch(() => {}); }, deps.pruneVersionsAfterMs);
+  }
 
   // WHY one commands instance per registry, not one per request: the command runner keeps
   // each document's queue (one save at a time), which only works if every request for that

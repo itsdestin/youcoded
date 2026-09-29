@@ -2590,7 +2590,7 @@ export function installShim(): void {
     },
     // Office is desktop only (R28). WHY every member routes through invoke(): the host has no handler, so the
     // call is refused ("Office isn't available via remote access yet.") — not a "not a function" crash.
-    // No onFlushRequest/flushDone: close/quit saving is the desktop window's own (office-flush.ts).
+    // No onFlushRequest/flushDone: close/quit saving is the desktop window's own (office-flush.ts). onChanged never fires (restore is refused).
     office: {
       status: (projectRoot: string | null) => invoke('office:status', { projectRoot }),
       create: (kind: string, projectRoot: string | null) => invoke('office:create', { kind, projectRoot }),
@@ -2600,12 +2600,7 @@ export function installShim(): void {
       close: (token: string) => invoke('office:close', { token }),
       versions: (filePath: string) => invoke('office:versions', { path: filePath }),
       restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
-      // The host refuses restore, so this push never comes; subscribing is harmless and keeps the shape.
-      onChanged: (cb: (p: { path: string; token: string }) => void) => {
-        const handler: Callback = (p: any) => cb(p);
-        addListener('office:changed', handler);
-        return () => removeListener('office:changed', handler);
-      },
+      onChanged: (cb: (p: { path: string; token: string }) => void) => { const h: Callback = (p: any) => cb(p); addListener('office:changed', h); return () => removeListener('office:changed', h); },
       saveCopy: (token: string, mode: string) => invoke('office:save-copy', { token, mode }),
     },
     // Project View IPC — sibling to artifacts. Object-payload invoke style

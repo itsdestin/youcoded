@@ -15,7 +15,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, registerFlush, withdrawUnloadApproval } from './office-store';
+import { markChanged, markFailed, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, onDocumentReplaced, registerFlush, withdrawUnloadApproval } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -132,6 +132,10 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   switchToCb.current = onSwitchTo;
   const originRef = useRef<string | null>(null);
   originRef.current = origin;
+  // A restore replaced this document's file (Task 7): from that moment until the editor has
+  // reopened it, nothing this editor sends reaches main — its content is the OLD document, and a
+  // save of it would undo the restore. (Main refuses such saves too; this is the first line.)
+  const replacedRef = useRef(false);
   const post = (msg: unknown) => { const o = originRef.current; if (o) ref.current?.contentWindow?.postMessage(msg, o); };
 
   // ── Autosave (design §4), per document ──
@@ -269,6 +273,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (!r.ok) { failWith(r.message); return; }
       if (gone) { void b.close(r.token).catch(() => {}); return; }
       token = r.token;
+      replacedRef.current = false;
       setOpened({ token: r.token, origin: r.origin });
     }, (e: unknown) => {
       // WHY (Task 5 fix rounds 1-2): on the remote client and the phone the host refuses Office
@@ -294,6 +299,25 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   useEffect(() => registerFlush(file.path, (capMs) => flushRef.current(capMs), {
     unsaved: () => { const s = save.current; return s.dirty || s.requested || s.saving || s.failed || !!s.timer; },
   }), [file.path]);
+
+  // Restore (Task 7): main replaced the file under this editor. Reopen it from the start — close
+  // this token, open again, a fresh editor page on the restored file. WHY nothing unsaved is lost:
+  // the Versions window saved this document (flushOffice) before asking for the restore, and it
+  // stays open over the editor until the restore answers, so nothing can be typed in between.
+  // Any change the editor still reports now is the old document's, and is let go on purpose.
+  useEffect(() => {
+    const token = opened?.token;
+    if (!token) return;
+    return onDocumentReplaced(token, () => {
+      replacedRef.current = true;
+      discardPending();
+      markUnchanged(file.path);
+      setPhase('starting');
+      setOpened(null);
+      setAttempt((n) => n + 1);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- discardPending reads refs only
+  }, [opened?.token, file.path]);
 
   // The closed tab saves first, then lets go (design §4: "on tab close").
   useEffect(() => {
@@ -382,6 +406,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     const b = officeBridge();
     const relay = (m: RpcMessage) => {
       if (!b) return;
+      // The file was replaced under this editor (a restore): it is being reopened; answer, send nothing.
+      if (replacedRef.current) { post({ yc: 'rpc-result', id: m.id, error: 'This file was restored from a kept version, so Office is reloading it.' }); return; }
       const args = m.args && typeof m.args === 'object' ? m.args as Record<string, unknown> : {};
       // The editor says when the document changes; the host decides when to save (3 s later).
       if (m.cmd === 'set_document_modified' && args.modified === true) {

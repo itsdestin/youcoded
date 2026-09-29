@@ -43,7 +43,6 @@ import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHan
 import { registerThemeProtocol } from './theme-protocol';
 import { registerOfficeProtocol } from './office/office-protocol';
 import { registerOfficeIpc } from './office/office-ipc';
-import { pruneAll as pruneOfficeVersions } from './office/versions';
 import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
 import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, refuseCloseForOtherUnsaved, watchOtherUnsaved } from './office/office-flush';
@@ -1933,11 +1932,7 @@ void app.whenReady().then(async () => {
   if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions });
   // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
   // handler. WHY the getter: the registry goes away at quit, and each request must see that.
-  registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData') });
-  // Kept Office versions: each file's rules plus the 1 GB cap across all files (Task 7). WHY 30 s
-  // after startup: it reads every kept file's index and may delete copies — work that must never
-  // compete with the first window opening. pruneAll never throws; the catch is belt and braces.
-  setTimeout(() => { void pruneOfficeVersions(app.getPath('userData')).catch(() => {}); }, 30_000);
+  registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData'), pruneVersionsAfterMs: 30_000 });
   perfMark('main:chore:office-protocol:done');
 
   // Marketplace auth store — instantiated once at startup, passed to IPC handlers.

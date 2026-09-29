@@ -691,3 +691,67 @@ describe('the window unload guard', () => {
     });
   });
 });
+
+// A restore replaces the file under an open editor. The editor's unsaved typing is saved first
+// (kept by main as "Kept before a restore"), and the editor then reopens the restored file.
+describe('restoring a kept version of an open document', () => {
+  const V1 = { id: '2026-09-28T090000.000Z-abcd', at: '2026-09-28T09:00:00.000Z', reason: 'opened' as const, bytes: 37_000 };
+
+  async function editing(over: Partial<OfficeBridge> = {}) {
+    let pushChanged: ((p: { path: string; token: string }) => void) | null = null;
+    let opens = 0;
+    const office = withOffice({
+      open: vi.fn(async () => { opens += 1; return { ok: true as const, token: `t${opens}`, origin: `office://t${opens}` }; }),
+      invoke: vi.fn(async () => 'ok'),
+      versions: vi.fn(async () => [V1]),
+      onChanged: vi.fn((cb) => { pushChanged = cb; return () => {}; }),
+      restore: vi.fn(async () => { pushChanged?.({ path: FILE.path, token: 't1' }); return { ok: true as const }; }),
+      ...over,
+    });
+    act(() => openDoc(FILE));
+    const r = render(<OfficeView />);
+    const iframe = await waitFor(() => { const f = frameOf(r.container) as HTMLIFrameElement; expect(f?.getAttribute('src')).toBe('office://t1/index.html'); return f; });
+    const from = (data: unknown) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: iframe.contentWindow })); });
+    // The editor answers "save now" as it really does: its bytes, then save_file.
+    vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation((msg: unknown) => {
+      if ((msg as { type?: string }).type !== 'yc:office-save') return;
+      queueMicrotask(() => { for (const cmd of ['write_editor_bin', 'save_file']) from({ yc: 'rpc', id: Math.random(), cmd, args: {} }); });
+    });
+    const { saveStateFor, showVersions } = await import('../../src/renderer/components/office/office-store');
+    // Typing autosave has not written yet (resent until the frame's listener is attached).
+    await waitFor(() => { from({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } }); expect(saveStateFor(FILE.path).phase).toBe('unsaved'); });
+    act(() => showVersions(FILE));
+    await screen.findByText('When you opened it');
+    return { office, ...r };
+  }
+
+  it('saves the unsaved typing first, then restores, then reopens the editor on the restored file', async () => {
+    const { office, container } = await editing();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(office.restore).toHaveBeenCalledWith(FILE.path, V1.id));
+    const invoke = vi.mocked(office.invoke);
+    const saved = invoke.mock.calls.findIndex((c) => c[1] === 'save_file');
+    expect(saved).toBeGreaterThanOrEqual(0);
+    expect(invoke.mock.invocationCallOrder[saved]).toBeLessThan(vi.mocked(office.restore!).mock.invocationCallOrder[0]);
+    // The old editor lets go of its token and a fresh one opens the restored file.
+    await waitFor(() => expect(office.close).toHaveBeenCalledWith('t1'));
+    await waitFor(() => expect(frameOf(container)?.getAttribute('src')).toBe('office://t2/index.html'));
+    expect(office.open).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.queryByText('When you opened it')).toBeNull());
+  });
+
+  it('restores nothing when the unsaved typing cannot be saved, and says why', async () => {
+    const { office } = await editing({ invoke: vi.fn(async (_t: string, cmd: string) => { if (cmd === 'save_file') throw new Error("This file is on a read-only disk, so Office couldn't save it."); return 'ok'; }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(await screen.findByText("Your latest changes couldn't be saved, so nothing was restored.")).toBeInTheDocument();
+    expect(office.restore).not.toHaveBeenCalled();
+    expect(office.close).not.toHaveBeenCalled();
+  });
+
+  it("shows main's reason when a restore is refused, and keeps the editor as it is", async () => {
+    const { office } = await editing({ restore: vi.fn(async () => ({ ok: false as const, message: 'That version is no longer kept.' })) });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(await screen.findByText('That version is no longer kept.')).toBeInTheDocument();
+    expect(office.close).not.toHaveBeenCalled();
+  });
+});

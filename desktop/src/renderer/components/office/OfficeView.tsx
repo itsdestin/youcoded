@@ -19,7 +19,7 @@ import { Button, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState } fr
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
 import { HistoryGlyph, HomeGlyph, KIND_LABEL, OfficeKindGlyph } from './office-icons';
-import { HOME_TAB, cancelClose, closeDoc, finishClose, markCopied, noteCloseFailedWhileHidden, openDoc, replaceDoc, selectTab, showVersions, useCopying, useOfficeTabs, useSaveState } from './office-store';
+import { HOME_TAB, cancelClose, closeDoc, finishClose, flushOffice, markCopied, noteCloseFailedWhileHidden, openDoc, replaceDoc, selectTab, showVersions, useCopying, useOfficeTabs, useSaveState } from './office-store';
 import { officeFileFor } from './office-files';
 import type { OfficeSaveState } from './office-store';
 import { OfficeSaveFailed } from './OfficeSaveFailed';
@@ -271,23 +271,55 @@ const REASON: Record<OfficeVersion['reason'], string> = {
   'before-restore': 'Kept before a restore',
 };
 
+const RESTORE_FAILED = "Office couldn't restore this version.";
+
 function VersionsDialog({ file, onClose }: { file: OfficeFile | null; onClose: () => void }) {
   const [versions, setVersions] = useState<OfficeVersion[] | null>(null);
+  // The list could not be read (Retry asks again) — never shown as "no versions", which would
+  // tell the person their kept copies are gone.
+  const [listFailed, setListFailed] = useState(false);
+  // The version being restored (its button waits), and a restore's failure with what to retry.
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [failed, setFailed] = useState<{ message: string; version: OfficeVersion } | null>(null);
+  const [asked, setAsked] = useState(0);
   useEffect(() => {
     setVersions(null);
-    if (file) officeBridge()?.versions(file.path).then(setVersions, () => setVersions([]));
-  }, [file]);
-  const restore = async (v: OfficeVersion) => {
+    setListFailed(false);
+    setFailed(null);
     if (!file) return;
-    await officeBridge()?.restore(file.path, v.id);
-    onClose();
+    let current = true;
+    officeBridge()?.versions(file.path).then(
+      (list) => { if (current) setVersions(list); },
+      () => { if (current) setListFailed(true); },
+    );
+    return () => { current = false; };
+  }, [file, asked]);
+  // WHY save first (Task 7, no lost edits): the editor may hold typing autosave has not written
+  // yet. Saved now, it is in the file main keeps as "Kept before a restore" — so restoring never
+  // drops it. If it cannot be saved, nothing is restored: the person keeps their edits and sees why.
+  const restore = async (v: OfficeVersion) => {
+    if (!file || restoring) return;
+    setRestoring(v.id);
+    setFailed(null);
+    try {
+      const saved = await flushOffice(file.path);
+      if (!saved.ok) { setFailed({ message: "Your latest changes couldn't be saved, so nothing was restored.", version: v }); return; }
+      const r = await (officeBridge()?.restore(file.path, v.id) ?? Promise.resolve({ ok: false as const, message: RESTORE_FAILED }))
+        .catch(() => ({ ok: false as const, message: RESTORE_FAILED }));
+      if (r.ok) { onClose(); return; }
+      setFailed({ message: r.message, version: v });
+    } finally {
+      setRestoring(null);
+    }
   };
   return (
     <Dialog open={file !== null} onClose={onClose} title="Versions" subtitle={file?.name} size="panel" screen="office/versions">
       <p className="text-xs text-fg-muted pb-3">
         Office saves as you work and keeps a copy every few minutes. Restoring one keeps your current version too.
       </p>
-      {versions === null && <LoadingState what="versions" />}
+      {failed && <ErrorState className="mb-3" message={failed.message} onRetry={() => void restore(failed.version)} />}
+      {listFailed && <ErrorState message="Office couldn't load the versions of this file." onRetry={() => setAsked((n) => n + 1)} />}
+      {versions === null && !listFailed && <LoadingState what="versions" />}
       {versions && versions.length === 0 && <EmptyState message="No earlier versions yet." />}
       {versions && versions.length > 0 && (
         <div className="flex flex-col">
@@ -303,7 +335,9 @@ function VersionsDialog({ file, onClose }: { file: OfficeFile | null; onClose: (
                 <div className="text-sm text-fg">{when(v.at)}</div>
                 <div className="text-2xs text-fg-muted">{REASON[v.reason]}</div>
               </div>
-              <Button variant="secondary" size="sm" onClick={() => void restore(v)}>Restore</Button>
+              <Button variant="secondary" size="sm" onClick={() => void restore(v)} disabled={restoring !== null}>
+                {restoring === v.id ? 'Restoring…' : 'Restore'}
+              </Button>
             </div>
           ))}
         </div>

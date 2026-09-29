@@ -350,6 +350,26 @@ export function showVersions(file: OfficeFile | null): void {
   set({ ...state, versionsFor: file });
 }
 
+// ── A restore replaced an open document's file (Task 7) ──
+// Main pushes office:changed {path, token}; the editor holding that token reopens the file.
+// WHY one subscription here, fanned out by token, rather than one per editor: a kept-hidden
+// editor must not hold its own listener (performance rule 2), and the push names the document
+// by token — the one identity main and the frame share (the path the tab uses may be a link).
+const reloaders = new Map<string, Set<() => void>>();
+let changedSubscribed = false;
+/** Run `reload` when main replaces the file behind `token`. Returns the unsubscribe. */
+export function onDocumentReplaced(token: string, reload: () => void): () => void {
+  const office = typeof window === 'undefined' ? undefined : window.claude?.office;
+  if (!changedSubscribed && office?.onChanged) {
+    changedSubscribed = true;
+    office.onChanged((p) => { reloaders.get(p?.token)?.forEach((r) => r()); });
+  }
+  const group = reloaders.get(token) ?? new Set();
+  group.add(reload);
+  reloaders.set(token, group);
+  return () => { group.delete(reload); if (group.size === 0 && reloaders.get(token) === group) reloaders.delete(token); };
+}
+
 // ── Save state, per file (Task 6; design §4) ──
 // Autosave is the only save there is (office-questions#Q-save), so the strip only reports it:
 // the last save landed, one is pending or running, or one failed — with main's own reason.
@@ -453,6 +473,8 @@ export function resetOfficeStoreForTests(): void {
   inlineCopies.clear();
   inlineRevealers.clear();
   answering = false;
+  reloaders.clear();
+  changedSubscribed = false;
   unsavedChecks.clear();
   unloadApproval = 'none';
   heldReload = null;
