@@ -15,7 +15,7 @@ import path from 'node:path';
 import { OFFICE_MAX_BYTES, type OfficeFile, type OfficeOpen, type OfficeSaveCopyResult, type OfficeStatus, type OfficeVersion } from '../../shared/office-types';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
-import { keepAbandonedSavesIn, takeAbandonedSaves } from './abandoned-saves';
+import { keepAbandonedSavesIn, recordAbandonedSaves, takeAbandonedSaves } from './abandoned-saves';
 import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
 import type { createSessions, OfficeSession } from './office-sessions';
 import { formatFor } from './x2t';
@@ -307,6 +307,10 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
         lost.set(sender.id, [...(lost.get(sender.id) ?? []), s.path]);
         try { sender.send?.('office:saves-lost'); } catch { /* the window is going */ }
       }
+      // WHY (final review follow-up): the window that asked has closed (its close let go of this
+      // save, which main was still finishing), so no page of it can be told. The same record quit
+      // uses carries it to the next launch's toast. Not awaited: the caller is gone anyway.
+      if (cmd === 'save_file' && sender.isDestroyed?.()) void recordAbandonedSaves([s.path], deps.userData);
       throw e;
     }
   }

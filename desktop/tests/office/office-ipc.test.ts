@@ -471,6 +471,27 @@ describe('saves the last quit had to stop', () => {
     await expect(call('office:lost-saves', win2)).resolves.toEqual([]);
     expect(existsSync(path.join(dir, 'userData', 'office-abandoned-saves.json'))).toBe(false);
   });
+
+  it("include a save that failed after its window had closed, told on the next launch", async () => {
+    await mkdir(path.join(dir, 'userData'), { recursive: true });
+    let closed = false;
+    const w = Object.assign(fakeSender(7), { send: vi.fn(), isDestroyed: () => closed });
+    const file = await aDocx();
+    const { token } = (await call('office:open', w, file)) as { token: string };
+    const saving = call('office:invoke', w, token, 'save_file', {});
+    closed = true; // the window closes while main is still finishing the save
+    await expect(saving).rejects.toThrow();
+    await vi.waitFor(() => expect(existsSync(path.join(dir, 'userData', 'office-abandoned-saves.json'))).toBe(true));
+    await expect(call('office:lost-saves', win1)).resolves.toEqual([file]);
+    w.removeAllListeners();
+  });
+
+  it('do not include a failed save whose window is still open (it shows the failure itself)', async () => {
+    const file = await aDocx();
+    const { token } = (await call('office:open', win1, file)) as { token: string };
+    await expect(call('office:invoke', win1, token, 'save_file', {})).rejects.toThrow();
+    await expect(call('office:lost-saves', win1)).resolves.toEqual([]);
+  });
 });
 
 // A reload lets go of a save still with main; if that save then fails, the new page is told.
