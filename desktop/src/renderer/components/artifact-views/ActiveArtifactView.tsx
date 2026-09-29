@@ -4,7 +4,7 @@
 import { lazy, useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
 import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer } from './RendererRegistry';
 import { PartialFileBanner } from './PartialFileBanner';
-import { canEditArtifact } from './edit-permission';
+import { canEditArtifact, draftFileEditable } from './edit-permission';
 import { ViewerErrorBoundary } from './ViewerErrorBoundary';
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-path-policy';
@@ -282,12 +282,11 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       const cur = stateRef.current;
       if (cur.editing && cur.content !== null && cur.draft !== cur.content) {
         // Named and openable for the refused-quit prompt (fix round 11): the file name only.
-        const target = { sessionId, artifact };
+        const target = { sessionId, artifact, projectRoot };
         stashDraft(key, {
           draft: cur.draft, mtimeMs: mtimeRef.current, name: artifact.path.split(/[\\/]/).pop() || artifact.path,
           open: () => openParkedDraft(target),
-          available: () => (window.claude as any)?.artifacts?.get(projectRoot, artifact.id)
-            .then((res: any) => !!res && res.ok === true && !res.orphan && typeof res.content === 'string', () => false) ?? Promise.resolve(false),
+          available: () => draftFileEditable(projectRoot, artifact),
         });
       }
     };

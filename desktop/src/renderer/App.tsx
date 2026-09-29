@@ -3683,7 +3683,7 @@ function AppInner() {
       (window as any).claude?.session?.switch?.(id);
     });
   }, []);
-  useParkedDraftOpener(dispatchArtifact, handleSelectSession, sessionId); // "Open it" for a parked draft (fix round 11)
+  useParkedDraftOpener(dispatchArtifact, handleSelectSession, sessionId, sessions); // "Open it" for a parked draft (fix rounds 11–12)
   const handleCloseSession = useCallback((id: string, name?: string) => {
     // WHY: a pending tab is not a writer. Closing it invalidates admission
     // synchronously; session:destroy and the ordinary close prompt are wrong here.

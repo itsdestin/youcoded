@@ -81,7 +81,7 @@ describe('the refused-quit prompt', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard and quit' }));
     expect(screen.getByText('Discard unsaved changes to 2 files?')).toBeInTheDocument();
     expect(discardA).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and quit' })); // the confirm
     expect(discardA).toHaveBeenCalled();
     expect(discardB).toHaveBeenCalled();
     // main heard "nothing unsaved" BEFORE it was told to go on
@@ -105,5 +105,29 @@ describe('the refused-quit prompt', () => {
     prompt({ mode: 'close' });
     expect(screen.getByText('Save it, then close the window again.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Discard and close' })).toBeInTheDocument();
+  });
+
+  it('discards only what was listed when the person chose to; a newer edit stays', () => {
+    const { prompt } = bridge();
+    const listedDiscard = vi.fn();
+    const laterDiscard = vi.fn();
+    holdUnsavedEditor({ name: 'notes.md', discard: listedDiscard });
+    render(<OfficeAlerts onReview={() => {}} />);
+    prompt();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and quit' }));
+    act(() => { holdUnsavedEditor({ name: 'late.txt', discard: laterDiscard }); });
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and quit' }));
+    expect(listedDiscard).toHaveBeenCalled();
+    expect(laterDiscard).not.toHaveBeenCalled();
+  });
+
+  it('dismissing it (OK) tells main to forget what it held', () => {
+    const { office, prompt } = bridge();
+    (office as unknown as { dismissPrompt: () => void }).dismissPrompt = vi.fn();
+    holdUnsavedEditor({ name: 'notes.md', discard: () => {} });
+    render(<OfficeAlerts onReview={() => {}} />);
+    prompt();
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+    expect((office as unknown as { dismissPrompt: () => void }).dismissPrompt).toHaveBeenCalled();
   });
 });

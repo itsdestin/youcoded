@@ -15,6 +15,8 @@
 // Drawer (artifacts.listSession) — that stays their home.
 // Cards use .layer-surface; the deleted badge is a plain word "deleted" (the ●◐○ / ✕
 // glyph language is disliked — plain words instead).
+import { canonicalize } from '../../../../shared/artifacts/canonicalize';
+import { clearProjectViewRequest, useProjectViewRequest } from '../../../state/parked-draft-opener';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // WHY no useArtifact import: this file must not read ArtifactContext — see the
 // memo comment on FilesTab below. The one value it needs arrives as props.
@@ -590,6 +592,15 @@ function FilesTabImpl({
     setOpenedRecord(a);
     dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId: PV_SESSION, artifactId: a.id });
   };
+  // "Open it" for a parked draft of this folder (fix round 12): open its file here, where the
+  // editor (same draft key: this project's path + the file's id) restores the draft.
+  const draftRequest = useProjectViewRequest();
+  useEffect(() => {
+    if (hidden || !draftRequest || canonicalize(draftRequest.projectPath, null) !== canonicalize(project.path, null)) return;
+    openFile(draftRequest.artifact);
+    clearProjectViewRequest();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- openFile is recreated per render
+  }, [draftRequest, project.path, hidden]);
   const activeArtifact = pvActiveId
     ? (folderFiles.find((a) => a.id === pvActiveId)
       ?? artifacts.find((a) => a.id === pvActiveId)

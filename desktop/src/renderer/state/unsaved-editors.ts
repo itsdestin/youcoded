@@ -52,9 +52,11 @@ export function useUnsavedEdits(): UnsavedEdit[] {
   return useSyncExternalStore((l) => { listeners.add(l); return () => { listeners.delete(l); }; }, () => snapshot, () => snapshot);
 }
 
-/** "Discard and quit" / "Discard and close": throw every unsaved edit in this window away. */
-export function discardAllUnsaved(): void {
-  [...holders.values()].forEach((e) => e.discard());
+/** "Discard and quit" / "Discard and close": throw away the edits the person saw listed when
+ *  they chose to (fix round 12) — one that appeared since is kept, and main refuses again. */
+export function discardUnsaved(listed: readonly UnsavedEdit[]): void {
+  const current = new Set(holders.values());
+  listed.forEach((e) => { if (current.has(e)) e.discard(); });
 }
 
 /** Tests only. */

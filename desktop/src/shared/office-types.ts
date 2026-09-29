@@ -78,6 +78,9 @@ export interface OfficeBridge {
   flushDone?(id: string, result: { failed: number; firstPath?: string }): void;
   /** "Close anyway" on that prompt: main goes ahead with the close or quit it held. */
   proceedClose?(): void;
+  /** The refused-quit prompt was dismissed (OK, Esc, Open it): main forgets what it held for it
+   *  (fix round 12). Desktop only. */
+  dismissPrompt?(): void;
   /** Files whose save failed after the page that asked for it was reloaded (fix round 6, M4):
    *  main keeps them until this page takes them. Desktop only. */
   lostSaves?(): Promise<string[]>;

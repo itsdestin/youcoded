@@ -1511,7 +1511,7 @@ describe('office:* channel parity', () => {
   // remote client and the phone have no Office documents to save, so they carry neither.
   it('the close/quit save handshake is carried by preload and main, and by no other host', () => {
     const flush = readSourceFile(path.join(__dirname, '../src/main/office/office-flush.ts'));
-    for (const ch of ['office:flush-request', 'office:flush-done', 'office:unsaved-prompt', 'office:proceed', 'office:other-unsaved']) {
+    for (const ch of ['office:flush-request', 'office:flush-done', 'office:unsaved-prompt', 'office:proceed', 'office:other-unsaved', 'office:dismiss']) {
       expect(preload).toContain(`'${ch}'`);
       expect(flush).toContain(`'${ch}'`);
       expect(shim).not.toContain(`'${ch}'`);

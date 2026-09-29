@@ -110,7 +110,14 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
       // screen, so no unload veto) would go with it unasked. Another window's close keeps its
       // behaviour for now: an open editor still vetoes that window's unload; a draft parked in it
       // is lost with it — accepted by the controller for this round, not solved.
-      if (d.refuseForUnsaved?.()) { ev.preventDefault(); return; }
+      if (d.refuseForUnsaved?.()) {
+        ev.preventDefault();
+        // Even on the close re-issued after the sessions prompt: that answer must not be carried
+        // out later by some other close (fix round 12).
+        confirmed = null;
+        forProceed = null;
+        return;
+      }
       // Office first, every time — even after the sessions prompt was answered (see above).
       const held = d.holdForOffice(ev, {
         onFailed: () => { forProceed = confirmed; confirmed = null; },

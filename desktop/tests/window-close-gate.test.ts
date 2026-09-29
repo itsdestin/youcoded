@@ -126,6 +126,21 @@ describe('the window close gate', () => {
     void g;
   });
 
+  it('a refusal on the close re-issued after the sessions prompt drops that answer', async () => {
+    const { deps, ev } = gate();
+    let refuse = false;
+    const g = createCloseGate<boolean>({ ...deps, refuseForUnsaved: () => refuse });
+    await g.onClose(ev()); // sessions prompt: confirmed, close re-issued…
+    refuse = true;
+    await g.onClose(ev()); // …which the unsaved text edits refuse
+    refuse = false; // later (discarded or saved) a fresh X
+    const e = ev();
+    await g.onClose(e);
+    expect(deps.apply).not.toHaveBeenCalled(); // the old answer is not carried out
+    expect(deps.ask).toHaveBeenCalledTimes(2); // asked again
+    expect(e.preventDefault).toHaveBeenCalled();
+  });
+
   it('closes freely with no sessions, and never for a Cancel', async () => {
     const free = gate({ sessions: 0 });
     const e = free.ev();

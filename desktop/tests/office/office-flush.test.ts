@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
-  OFFICE_FLUSH_DONE, OFFICE_FLUSH_REQUEST, OFFICE_OTHER_UNSAVED, OFFICE_PROCEED, OFFICE_UNSAVED_PROMPT,
+  OFFICE_DISMISS, OFFICE_FLUSH_DONE, OFFICE_FLUSH_REQUEST, OFFICE_OTHER_UNSAVED, OFFICE_PROCEED, OFFICE_UNSAVED_PROMPT,
   askToFlush, flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, refuseCloseForOtherUnsaved, refuseQuitForOtherUnsaved, watchOtherUnsaved,
 } from '../../src/main/office/office-flush';
 import { gatedQuit, onWillQuit, quitAfterTeardown, requestRestart, resetRestartForTests } from '../../src/main/app-restart';
@@ -300,6 +300,26 @@ describe('quitting while a text file has unsaved edits', () => {
     expect(t.pushes).toEqual([{ count: 0, firstPath: '', other: true, mode: 'close', afterTeardown: false, restartDropped: false }]);
     t.ipc.emit(OFFICE_PROCEED, { sender: { id: 27 } }); // Discard and close
     expect(t.win.close).toHaveBeenCalledTimes(1);
+    t.sender.emit('destroyed');
+  });
+
+  it('a dismissed refusal is forgotten: a later proceed does not quit', () => {
+    const t = editing(31);
+    t.report(true);
+    const act = vi.fn();
+    refuseQuitForOtherUnsaved([t.win], () => false, { ipc: t.ipc as never, act });
+    t.ipc.emit(OFFICE_DISMISS, { sender: { id: 31 } });
+    t.ipc.emit(OFFICE_PROCEED, { sender: { id: 31 } });
+    expect(act).not.toHaveBeenCalled();
+    t.sender.emit('destroyed');
+  });
+
+  it("a hung last window is not asked about its edits (the hang question must be reachable)", () => {
+    const t = editing(30);
+    t.report(true);
+    expect(refuseCloseForOtherUnsaved(t.win, () => false, { ipc: t.ipc as never, windows: [t.win], hung: () => true })).toBe(false);
+    expect(t.pushes).toEqual([]);
+    expect(refuseCloseForOtherUnsaved(t.win, () => false, { ipc: t.ipc as never, windows: [t.win], hung: () => false })).toBe(true);
     t.sender.emit('destroyed');
   });
 

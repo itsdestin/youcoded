@@ -27,6 +27,7 @@ export const OFFICE_FLUSH_DONE = 'office:flush-done';
 export const OFFICE_PROCEED = 'office:proceed';
 export const OFFICE_UNSAVED_PROMPT = 'office:unsaved-prompt';
 export const OFFICE_OTHER_UNSAVED = 'office:other-unsaved';
+export const OFFICE_DISMISS = 'office:dismiss';
 const OFFICE_FLUSH_CAP_MS = 5_000;
 
 /** Why main asks: a window close, the quit gate, or quit's final save (which never prompts). */
@@ -140,9 +141,12 @@ export function refuseQuitForOtherUnsaved(
  */
 export function refuseCloseForOtherUnsaved(
   win: ClosingWindow, isFloater: (w: ClosingWindow) => boolean,
-  opts: { ipc?: FlushIpc; windows?: ClosingWindow[] } = {},
+  opts: { ipc?: FlushIpc; windows?: ClosingWindow[]; hung?: (w: ClosingWindow) => boolean } = {},
 ): boolean {
   if (win.isDestroyed() || !otherUnsaved.has(win.webContents.id)) return false;
+  // A hung window is not asked (fix round 12): it could not show the list — the close gate's
+  // "not responding, close it anyway?" question must be reachable instead.
+  if ((opts.hung ?? ((w: ClosingWindow) => isUnresponsive(w as unknown as BrowserWindow)))(win)) return false;
   const all = opts.windows ?? (BrowserWindow.getAllWindows() as unknown as ClosingWindow[]);
   if (all.some((w) => w !== win && !w.isDestroyed() && !isFloater(w))) return false;
   return refuseIn(win, 'close', () => { if (!win.isDestroyed()) win.close(); }, { ipc: opts.ipc });
@@ -179,6 +183,11 @@ const proceedListening = new WeakSet<object>();
 function listenForProceed(ipc: FlushIpc): void {
   if (proceedListening.has(ipc)) return;
   proceedListening.add(ipc);
+  // The refused prompt was dismissed: its held quit/close must not fire on a later proceed.
+  ipc.on(OFFICE_DISMISS, (e: unknown) => {
+    const id = (e as { sender?: { id?: unknown } } | null)?.sender?.id;
+    if (typeof id === 'number' && held.get(id)?.kind === 'refused') held.delete(id);
+  });
   ipc.on(OFFICE_PROCEED, (e: unknown) => {
     const id = (e as { sender?: { id?: unknown } } | null)?.sender?.id;
     const h = typeof id === 'number' ? held.get(id) : undefined;

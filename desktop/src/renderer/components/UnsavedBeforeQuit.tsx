@@ -11,14 +11,17 @@ import React, { useEffect, useState } from 'react';
 import { Button, Dialog } from './ui';
 import { useScreenOpen } from '../shoot-mode';
 import { clearQuitRefused, confirmDiscardForQuit, previewQuitRefused, useOfficeAlerts } from './office/office-store';
-import { discardAllUnsaved, holdUnsavedEditor, useUnsavedEdits, type UnsavedEdit } from '../state/unsaved-editors';
+import { discardUnsaved, holdUnsavedEditor, useUnsavedEdits, type UnsavedEdit } from '../state/unsaved-editors';
 
 export function UnsavedBeforeQuit() {
   const { quitRefused: r } = useOfficeAlerts();
   const edits = useUnsavedEdits();
   useScreenOpen('app/unsaved-before-quit', () => { previewFiles(); previewQuitRefused(); });
-  useScreenOpen('app/unsaved-before-quit/after-restart', () => previewQuitRefused({ afterTeardown: true, restartDropped: true }));
-  useScreenOpen('app/unsaved-before-quit/discard', () => previewQuitRefused({ confirming: true }));
+  // Each state places its files itself, so a capture opened straight onto it is never empty.
+  useScreenOpen('app/unsaved-before-quit/after-restart', () => { previewFiles(); previewQuitRefused({ afterTeardown: true, restartDropped: true }); });
+  useScreenOpen('app/unsaved-before-quit/discard', () => { previewFiles(); previewQuitRefused({ confirming: true }); });
+  // What the person saw listed when they chose to discard: only those go (fix round 12).
+  const [listed, setListed] = useState<readonly UnsavedEdit[]>([]);
   // Whether each parked draft's file can still be opened (asked when the prompt shows).
   const [available, setAvailable] = useState<ReadonlyMap<UnsavedEdit, boolean>>(new Map());
   useEffect(() => {
@@ -33,15 +36,20 @@ export function UnsavedBeforeQuit() {
   const files = n === 1 ? '1 file' : `${n} files`;
   const goOn = r?.mode === 'close' ? 'close' : 'quit';
   const discard = () => {
-    discardAllUnsaved();
+    discardUnsaved(listed.length > 0 ? listed : edits);
     clearQuitRefused();
     // Main held the quit (or close) for this: it goes ahead now (office-flush 'refused').
     window.claude?.office?.proceedClose?.();
   };
+  // Dismissed (OK, Esc, ✕, or Open it): main forgets the held quit/close (fix round 12).
+  const dismiss = () => {
+    clearQuitRefused();
+    window.claude?.office?.dismissPrompt?.();
+  };
   return (
     <Dialog
       open={r !== null}
-      onClose={clearQuitRefused}
+      onClose={dismiss}
       title={n > 1 ? `${n} files have unsaved changes.` : 'A file has unsaved changes.'}
       size="prompt"
       layer={3}
@@ -58,22 +66,24 @@ export function UnsavedBeforeQuit() {
           <li key={`${e.name}-${i}`} className="flex items-center gap-2 text-sm text-fg">
             <span className="flex-1 min-w-0 truncate">{e.name}</span>
             {e.parked && available.get(e) === true && (
-              <Button variant="secondary" size="sm" onClick={() => { clearQuitRefused(); e.parked!.open(); }}>Open it</Button>
+              <Button variant="secondary" size="sm" onClick={() => { dismiss(); e.parked!.open(); }}>Open it</Button>
             )}
             {e.parked && available.get(e) === false && <span className="text-2xs text-fg-muted">(file no longer available)</span>}
           </li>
         ))}
       </ul>
       {r?.confirming ? (
-        <div className="flex items-center gap-2 justify-end">
-          <span className="flex-1 text-sm text-fg-2">Discard unsaved changes to {files}?</span>
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-fg-2">Discard unsaved changes to {files}?</p>
+          <div className="flex gap-2 justify-end">
           <Button variant="secondary" onClick={() => confirmDiscardForQuit(false)}>Cancel</Button>
-          <Button variant="danger" onClick={discard}>Discard</Button>
+          <Button variant="danger" onClick={discard}>Discard and {goOn}</Button>
+          </div>
         </div>
       ) : (
         <div className="flex gap-2 justify-end">
-          <Button variant="secondary" onClick={() => confirmDiscardForQuit(true)}>Discard and {goOn}</Button>
-          <Button variant="primary" onClick={clearQuitRefused}>OK</Button>
+          <Button variant="secondary" onClick={() => { setListed(edits); confirmDiscardForQuit(true); }}>Discard and {goOn}</Button>
+          <Button variant="primary" onClick={dismiss}>OK</Button>
         </div>
       )}
     </Dialog>
